@@ -116,13 +116,13 @@ Launch with: `./reporting/hello-framework/start_report_server.sh`
 
 ## 👏 Acknowledgements
 
-- [@hootnot](https://github.com/hootnot): Saxo OpenAPI library
+- [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
 - [Observable Framework](https://observablehq.com/framework), [DuckDB](https://duckdb.org/), [FastAPI](https://fastapi.tiangolo.com/), [RabbitMQ](https://www.rabbitmq.com/), [Ansible](https://www.ansible.com/)
 
 ## 🛠️ Contributors
 
 - [@ioiti](https://github.com/IOITI): Project author
-- [@hootnot](https://github.com/hootnot): Saxo OpenAPI library
+- [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
 
 ## 📄 License
 
