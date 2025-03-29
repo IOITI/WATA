@@ -3,4 +3,4 @@
 /.idea/**
 .idea/**
 .idea/
-deploy/tools/inventory.ini
+deploy/tools/ansible/inventory/inventory.ini
