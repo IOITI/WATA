@@ -1,16 +1,16 @@
-# WATA - Warrant Automated Trading Assistant
+# WATA - Warrants Automated Trading Assistant
 
 An automated Python-based trading system for Knock-out warrants (Turbos) on Saxo Bank, executing trades via webhook signals.
 
-## ⚠️ Disclaimer
+## ⚠️ **Disclaimer**
 
 **This is a personal learning project and not production-ready software.**
 
 **Risk Warning: WATA can lose all your money due to:**
-- Insufficient testing
+- Insufficient code testing
 - Limited security measures
 - Lack of fail-safe mechanisms
-- No comprehensive monitoring
+- No comprehensive monitoring included
 - Absence of fail-over systems
 - Limited user experience
 
@@ -18,9 +18,20 @@ An automated Python-based trading system for Knock-out warrants (Turbos) on Saxo
 
 ## 🎯 Purpose
 
-WATA automates high-risk day-trading of Turbos (leveraged products) on Saxo Bank. It eliminates emotional decision-making by following predefined rules without human intervention.
+WATA (Warrants Automated Trading Assistant) is an algorithmic trading system compagnon, designed for automated execution of Knock-out warrants (Turbos) on Saxo Bank. It serves as a reliable bridge between trading signals and actual market execution, offering several key benefits:
 
-> Target: 1% daily profit through algorithmic trading
+- **Automated Execution**: Eliminates emotional bias and human error by executing trades based on predefined rules and signals (from TradingView, for example)
+- **Risk Management**: Implements systematic position monitoring with stop-loss and take-profit mechanisms
+- **Performance Tracking**: Provides comprehensive analytics and reporting for trade analysis
+- **Real-time Monitoring**: Delivers instant notifications via Telegram for trade execution and system status
+- **Scalability**: Built on a microservice architecture for reliable and maintainable operation
+
+The system is particularly suited for traders who:
+- Want to automate their trading strategies
+- Need reliable execution of trading signals
+- Require comprehensive trade tracking and analysis
+- Value real-time monitoring and alerts
+- Prefer systematic, rule-based trading over discretionary decisions
 
 ## 🏗️ Architecture
 
@@ -69,7 +80,7 @@ WATA uses DuckDB for fast in-memory analytics:
 OAuth 2.0 integration with Saxo Bank API:
 - Selenium-based browser authentication
 - Token management with automatic refresh
-- Secure storage of credentials
+- Storage of credentials
 
 **Known Issue**: Currently incompatible with Saxo's 2FA system
 
@@ -79,12 +90,93 @@ OAuth 2.0 integration with Saxo Bank API:
 - Ubuntu server
 - Docker and Docker Compose
 - Python 3.12+
+- Ansible (for automated deployment)
 
 ### Quick Start
-1. Configure `etc/config.json` with your credentials
-2. Build package: `./package.sh`
-3. Deploy using Ansible or manual installation
-4. Manage with aliases: `watastart`, `watastop`, `watalogs`, `watastatus`
+
+1. **Configure Inventory**
+   - Copy the example Ansible inventory file:
+     ```bash
+     cp deploy/tools/ansible/inventory/inventory_example.ini deploy/tools/ansible/inventory/inventory.ini
+     ```
+   - Edit `inventory.ini` with your server details
+
+2. **Build Application**
+   - Build the package:
+     ```bash
+     ./package.sh
+     ```
+
+3. **Deploy Application**
+   - Run the deployment script:
+     ```bash
+     cd deploy/tools
+     ./deploy_app_to_your_server.sh
+     ```
+   - The script will use Ansible to deploy the application to your server
+
+4. **Configure Application**
+   - On the server, set up your credentials in `etc/config.json` (see below in Configuration section)
+
+5. **Manage Application**
+   Use the following aliases on your server:
+   - `watastart`: Start the application
+   - `watastop`: Stop the application
+   - `watalogs`: View application logs
+   - `watastatus`: Check application status
+
+### Configuration
+
+After deployment, you need to set up your configuration:
+
+1. **Copy the Example Config**
+   ```bash
+   cp /app/etc/config_example.json /app/etc/config.json
+   ```
+
+2. **Update Configuration**
+   Edit `/app/etc/config.json` with your specific settings:
+
+   - **Saxo Bank Authentication**
+     ```json
+     "authentication": {
+       "saxo": {
+         "username": "your_saxo_username",
+         "password": "your_saxo_password",
+         "app_config_object": {
+           "AppName": "your_app_name",
+           "AppKey": "your_app_key",
+           "AppSecret": "your_app_secret"
+         }
+       }
+     }
+     ```
+
+   - **Telegram Notifications**
+     ```json
+     "telegram": {
+       "bot_token": "your_bot_token",
+       "chat_id": "your_chat_id",
+       "bot_name": "your_bot_name"
+     }
+     ```
+
+   - **Trading Rules**
+     - `allowed_indice`: Configure allowed trading indices
+     - `market_closed_dates`: Set market holidays
+     - `profit_per_days`: Define profit targets and limits
+
+   - **Other Settings**
+     - Logging configuration
+     - RabbitMQ connection details
+     - DuckDB database path
+     - Webhook authentication
+
+3. **Restart Services**
+   ```bash
+   watastop
+   watastart
+   ```
 
 ### Usage
 
@@ -112,7 +204,37 @@ WATA includes a visualization dashboard built on Observable Framework:
 - Win-rate and position duration metrics
 - Interactive data exploration
 
-Launch with: `./reporting/hello-framework/start_report_server.sh`
+### Requirements
+
+To use the reporting system, you need:
+- Node.js and npm installed
+- DuckDB CLI installed
+- Ansible configured with proper inventory (same as deployment)
+
+### Setting Up the Dashboard
+
+1. **Run the Setup Script**
+   ```bash
+   ./reporting/setup_dashboard.sh
+   ```
+   This script creates a new Observable Framework project in `reporting/trading-dashboard`.
+
+2. **Sync Trading Data**
+   ```bash
+   ./reporting/sync_reporting_data.sh
+   ```
+   This script synchronizes your trading data from the server to your local dashboard:
+   - Fetches DuckDB data from your production server
+   - Exports the database to Parquet format
+   - Generates the necessary JSON files for visualization
+   - Copies all data to the Observable Framework project
+
+3. **Start the Dashboard Server**
+   ```bash
+   ./reporting/start_report_server.sh
+   ```
+   This launches the development server on port 4321.
+   Access the dashboard at: http://localhost:4321
 
 ## 👏 Acknowledgements
 
