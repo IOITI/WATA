@@ -1,0 +1,25 @@
+---
+- name: Sync reporting data from server to local
+  hosts: localhost
+  gather_facts: false
+  vars:
+    temp_local_duckdb_path: "{{ temp_local_duckdb_path }}"
+    reporting_framework_path: "{{ reporting_framework_path }}"
+
+  tasks:
+    - name: Create local DuckDB directory
+      file:
+        path: "{{ temp_local_duckdb_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Sync DuckDB data from server
+      ansible.builtin.synchronize:
+        src: "{{ hostvars[groups['wata_server'][0]]['ansible_user'] }}@{{ groups['wata_server'][0] }}:/app/var/lib/duckdb/"
+        dest: "{{ temp_local_duckdb_path }}"
+        mode: pull
+        recursive: yes
+        delete: no
+        rsync_opts:
+          - "--exclude=*.lock"
+          - "--exclude=*.tmp"
