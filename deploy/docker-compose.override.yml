@@ -1,0 +1,55 @@
+version: '3'
+
+services:
+  # Add a setup service that will run before other services
+  setup:
+    image: alpine:latest
+    volumes:
+      - ../etc:/app/etc
+      - ./update_rabbit_password.sh:/update_rabbit_password.sh
+    environment:
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-pykvys-9nixqo-cuqvYt}
+    command: >
+      sh -c "
+        apk add --no-cache jq bash &&
+        chmod +x /update_rabbit_password.sh &&
+        bash /update_rabbit_password.sh
+      "
+    networks:
+      - trade-net
+        
+  # Make all services depend on setup
+  rabbitmq1:
+    depends_on:
+      - setup
+      
+  web_server1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+        
+  telegram1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+        
+  scheduler1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+        
+  trader1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+
+networks:
+  trade-net: 

@@ -1,0 +1,133 @@
+services:
+  rabbitmq1:
+    image: rabbitmq:3-management
+    hostname: rabbitmq1
+    container_name: 'rabbitmq'
+    environment:
+      - RABBITMQ_DEFAULT_USER=trade-app
+      - RABBITMQ_DEFAULT_PASS=pykvys-9nixqo-cuqvYt
+    volumes:
+        - ../var/lib/rabbitmq:/var/lib/rabbitmq/
+        - ../var/log/rabbitmq:/var/log/rabbitmq
+        - ../etc/rabbitmq/01-conf-custom.conf:/etc/rabbitmq/conf.d/01-conf-custom.conf
+    ports:
+      - 5672:5672
+    expose:
+      - '5672'
+    networks:
+      - trade-net
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 1024M
+
+  web_server1:
+    image: wata-base:latest
+    hostname: web_server1
+    container_name: 'web_server1'
+    environment:
+      - WATA_APP_ROLE=web_server
+    ports:
+        - 80:80
+    expose:
+      - '80'
+    volumes:
+        - ../:/app/
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 1024M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+
+  telegram1:
+    image: wata-base:latest
+    hostname: telegram1
+    container_name: 'telegram1'
+    environment:
+      - WATA_APP_ROLE=telegram
+    volumes:
+      - ../:/app/
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 1024M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+
+  scheduler1:
+    image: wata-base:latest
+    hostname: scheduler1
+    container_name: 'scheduler1'
+    environment:
+      - WATA_APP_ROLE=scheduler
+    volumes:
+      - ../:/app/
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 1024M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+
+  trader1:
+    image: wata-base:latest
+    hostname: trader1
+    container_name: 'trader1'
+    environment:
+      - WATA_APP_ROLE=trader
+    volumes:
+      - ../:/app/
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+
+networks:
+  trade-net:

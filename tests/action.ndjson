@@ -1,0 +1,4 @@
+{"action": "long", "indice": "us100", "signal_timestamp": "{{time}}", "alert_timestamp" : "{{timenow}}"}
+{"action": "close-long", "indice": "us100", "signal_timestamp": "{{time}}", "alert_timestamp" : "{{timenow}}"}
+{"action": "short", "indice": "us100", "signal_timestamp": "{{time}}", "alert_timestamp" : "{{timenow}}"}
+{"action": "close-short", "indice": "us100", "signal_timestamp": "{{time}}", "alert_timestamp" : "{{timenow}}"}

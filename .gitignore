@@ -1,0 +1,6 @@
+./wata_app*.zip
+./var/
+/.idea/**
+.idea/**
+.idea/
+deploy/tools/inventory.ini

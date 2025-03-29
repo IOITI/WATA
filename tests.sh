@@ -1,0 +1,1 @@
+PYTHONPATH=./ pytest -vv tests/test_db_position_manager.py

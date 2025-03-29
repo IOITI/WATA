@@ -1,0 +1,263 @@
+# -*- coding: utf-8 -*-
+
+"""SAXO API wrapper for SAXO Bank OpenAPI."""
+
+import json
+import requests
+import logging
+import time
+from threading import Lock
+from .exceptions import OpenAPIError
+
+ITER_LINES_CHUNKSIZE = 60
+
+TRADING_ENVIRONMENTS = {
+    'simulation': {
+        'stream': 'https://streaming.saxotrader.com',
+        'api': 'https://gateway.saxobank.com',
+        'prefix': 'sim'
+    },
+    'live': {
+        'stream': 'https://streaming.saxotrader.com',
+        'api': 'https://gateway.saxobank.com'
+    }
+}
+
+DEFAULT_HEADERS = {
+    "Accept-Encoding": "gzip, deflate"
+}
+
+logger = logging.getLogger(__name__)
+
+
+def mk_endpoint(endpoint, env, ep_type):
+    if env == 'live':
+        _endpoint = endpoint
+    elif env == 'simulation':
+        _endpoint = "{prefix}/{endpoint}".format(
+            prefix=TRADING_ENVIRONMENTS[env]['prefix'],
+            endpoint=endpoint)
+
+    return "{}/{}".format(
+        TRADING_ENVIRONMENTS[env][ep_type],
+        _endpoint)
+
+
+class RateLimiter:
+    def __init__(self):
+        self.session_remaining = 120  # Default session limit
+        self.session_reset = 0  # Time when the session limit resets
+        self.lock = Lock()
+        self.LOW_REQUESTS_THRESHOLD = 10  # Threshold for adding extra delay
+
+    def update_limits(self, headers):
+        """Update rate limits based on response headers"""
+        with self.lock:
+            if 'X-RateLimit-Session-Remaining' in headers:
+                self.session_remaining = int(headers['X-RateLimit-Session-Remaining'])
+            else:
+                self.session_remaining = 120
+            if 'X-RateLimit-Session-Reset' in headers:
+                self.session_reset = int(headers['X-RateLimit-Session-Reset'])
+            else:
+                self.session_reset = 0
+
+    def wait_if_needed(self):
+        """Wait if we're close to hitting rate limits"""
+        with self.lock:
+            if self.session_remaining <= 1:  # Leave a buffer of 1 request
+                wait_time = self.session_reset
+                logger.info(f"Rate limit near threshold. Waiting {wait_time} seconds")
+                time.sleep(wait_time)
+            elif self.session_remaining <= self.LOW_REQUESTS_THRESHOLD:  # Low threshold
+                logger.info(f"Rate limit below {self.LOW_REQUESTS_THRESHOLD} ({self.session_remaining} remaining). Adding 1 second delay")
+                time.sleep(1)
+
+
+class API(object):
+    r"""API - class to handle APIRequests objects to access API endpoints."""
+
+    def __init__(self,
+                 access_token,
+                 environment='simulation',
+                 headers=None,
+                 request_params=None):
+        """Instantiate an API-client instance of saxo_openapi API wrapper.
+
+        Parameters
+        ----------
+        access_token : string
+            Provide a valid access token.
+
+        environment : dict
+            Provide the environment for saxo_openapi REST api. Valid values:
+            {'api': 'https://gateway.saxobank.com'}
+
+        headers : dict (optional)
+            Provide request headers to be set for a request.
+
+
+        .. note::
+
+            There is no need to set the 'Content-Type: application/json'
+            for the endpoints that require this header. The API-request
+            classes covering those endpoints will take care of the header.
+
+        request_params : (optional)
+            parameters to be passed to the request. This can be used to apply
+            for instance a timeout value:
+
+               request_params={"timeout": 0.1}
+
+            See specs of the requests module for full details of possible
+            parameters.
+
+        .. warning::
+            parameters belonging to a request need to be set on the
+            requestinstance and are NOT passed via the client.
+
+        """
+        logger.info("setting up API-client for environment %s", environment)
+        try:
+            TRADING_ENVIRONMENTS[environment]
+        except KeyError as e:
+            logger.error("unknown environment %s", environment)
+            raise KeyError("Unknown environment: {}".format(environment))
+        else:
+            self.environment = environment
+
+        self.access_token = access_token
+        self.environment = environment
+        self.client = requests.Session()
+        self.client.stream = False
+        self._request_params = request_params if request_params else {}
+        self.rate_limiter = RateLimiter()
+
+        # personal token authentication
+        if self.access_token:
+            self.client.headers['Authorization'] = 'Bearer '+self.access_token
+
+        self.client.headers.update(DEFAULT_HEADERS)
+        if headers:
+            self.client.headers.update(headers)
+            logger.info("applying headers %s", ",".join(headers.keys()))
+
+    @property
+    def request_params(self):
+        """request_params property."""
+        return self._request_params
+
+    def __request(self, method, url, request_args, headers=None, stream=False):
+        """__request.
+
+        make the actual request. This method is called by the
+        request method in case of 'regular' API-calls. Or indirectly by
+        the __stream_request method if it concerns a 'streaming' call.
+        """
+        func = getattr(self.client, method)
+        headers = headers if headers else {}
+        response = None
+
+        # Check rate limits before making the request
+        self.rate_limiter.wait_if_needed()
+
+        logger.info("performing (%s) request %s", method, url)
+        try:
+            response = func(url, stream=stream, headers=headers, **request_args)
+
+            # Update rate limits from response headers
+            self.rate_limiter.update_limits(response.headers)
+
+        except requests.RequestException as err:
+            logger.error("request %s failed [%s]", url, err)
+            raise err
+
+        # Handle rate limit errors specifically
+        if response.status_code == 429:
+            reset_time = int(response.headers.get('X-RateLimit-Session-Reset', 60))
+            logger.warning(f"Rate limit exceeded. Waiting {reset_time} seconds")
+            time.sleep(reset_time)
+            # Retry the request once after waiting
+            response = func(url, stream=stream, headers=headers, **request_args)
+
+        # Handle other error responses
+        if response.status_code >= 400:
+            logger.error("request %s failed [%d,%s]",
+                         url,
+                         response.status_code,
+                         response.content.decode('utf-8'))
+            raise OpenAPIError(response.status_code,
+                               response.reason,
+                               response.content.decode('utf-8'))
+        else:
+            logger.info("request %s succeeded [%d]", url, response.status_code)
+
+        return response
+
+    def __stream_request(self, method, url, request_args, headers=None):
+        """__stream_request.
+
+        make a 'stream' request. This method is called by
+        the 'request' method after it has determined which
+        call applies: regular or streaming.
+        """
+        headers = headers if headers else {}
+        response = self.__request(method, url, request_args,
+                                  headers=headers, stream=True)
+        lines = response.iter_lines(ITER_LINES_CHUNKSIZE)
+        for line in lines:
+            if line:
+                data = json.loads(line.decode("utf-8"))
+                yield data
+
+    def request(self, endpoint):
+        """Perform a request for the APIRequest instance 'endpoint'.
+
+        Parameters
+        ----------
+        endpoint : APIRequest
+            The endpoint parameter contains an instance of an APIRequest
+            containing the endpoint, method and optionally other parameters
+            or body data.
+
+        Raises
+        ------
+            OpenAPIError in case of HTTP response code >= 400
+        """
+        method = endpoint.method.lower()
+        params = getattr(endpoint, "params", {})
+        headers = getattr(endpoint, "HEADERS", {}) if hasattr(endpoint, "HEADERS") else {}
+
+        request_args = {}
+        if method in ['get', 'delete', 'patch']:
+            request_args['params'] = params
+
+        if hasattr(endpoint, "data") and endpoint.data:
+            request_args['json'] = endpoint.data
+
+        # if any parameter for request then merge them
+        request_args.update(self._request_params)
+
+        # which API to access ?
+        if not (hasattr(endpoint, "STREAM") and getattr(endpoint, "STREAM") is True):
+            url = mk_endpoint(endpoint, self.environment, 'api')
+            response = self.__request(method, url, request_args, headers=headers)
+
+            if hasattr(endpoint, "RESPONSE_DATA") and getattr(endpoint, "RESPONSE_DATA") is None:
+                content = None
+            elif not (hasattr(endpoint, "RESPONSE_DATA") and getattr(endpoint, "RESPONSE_DATA") == 'text'):
+                # if not explicitely set to 'text' asume JSON
+                content = json.loads(response.content.decode('utf-8'))
+            else:
+                content = response.content.decode('utf-8')
+
+            # update endpoint
+            endpoint.response = content
+            endpoint.status_code = response.status_code
+
+            return content
+
+        else:
+            url = mk_endpoint(endpoint, self.environment, 'stream')
+            endpoint.response = self.__stream_request(method, url, request_args, headers=headers)
+            return endpoint.response

@@ -1,0 +1,47 @@
+---
+- name: Deploy application to server
+  hosts: wata_server
+  become: yes
+  vars:
+    version: "{{ lookup('file', '../../VERSION') }}"  # Read the version from the local file
+    package_name: "wata_app_v{{ version }}.zip"       # Define the package name with the version
+
+  tasks:
+    - name: Ensure the directory exists with specific permissions
+      ansible.builtin.file:
+        path: /app/
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Transfer the application package
+      copy:
+        src: "../../{{ package_name }}"  # Use the versioned package name
+        dest: /tmp/{{ package_name }}
+
+    - name: Stop the application
+      command: cd /app/deploy/ && docker compose down && echo "The application is stopped"
+      ignore_errors: yes
+
+    - name: Unzip the application package
+      unarchive:
+        src: /tmp/{{ package_name }}
+        dest: /app
+        keep_newer: true
+        extra_opts:
+        - -o
+        remote_src: yes
+
+    - name: Set permissions
+      file:
+        path: /app/
+        state: directory
+        mode: '0754'
+        recurse: true
+
+    - name: Run the installation script
+      command: /app/deploy/install_package.sh
+      register: install_out
+
+    - debug: var=install_out.stdout_lines
