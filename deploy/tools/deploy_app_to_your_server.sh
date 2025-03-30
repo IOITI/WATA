@@ -10,6 +10,6 @@ fi
 
 echo "Send WATA version $VERSION to server"
 
-ansible-playbook ansible/playbook/deploy_app.yml -i "$INVENTORY_FILE"
+ansible-playbook ansible/playbooks/deploy_app.yml -i "$INVENTORY_FILE"
 
 echo "WATA version $VERSION can be started on the server"

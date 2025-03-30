@@ -1,4 +1,3 @@
-version: '3'
 
 services:
   # Add a setup service that will run before other services

@@ -3,7 +3,7 @@
   hosts: wata_server
   become: yes
   vars:
-    version: "{{ lookup('file', '../../VERSION') }}"  # Read the version from the local file
+    version: "{{ lookup('file', '../../../../VERSION') }}"  # Read the version from the local file
     package_name: "wata_app_v{{ version }}.zip"       # Define the package name with the version
 
   tasks:
@@ -17,7 +17,7 @@
 
     - name: Transfer the application package
       copy:
-        src: "../../{{ package_name }}"  # Use the versioned package name
+        src: "../../../../{{ package_name }}"  # Use the versioned package name
         dest: /tmp/{{ package_name }}
 
     - name: Stop the application

@@ -1,5 +1,3 @@
-version: '3'
-
 x-common:
   rabbitmq-password: &rabbitmq_password pykvys-9nixqo-cuqvYt
 
