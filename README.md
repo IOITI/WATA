@@ -77,12 +77,21 @@ WATA uses DuckDB for fast in-memory analytics:
 
 ## 🔐 Authentication
 
-OAuth 2.0 integration with Saxo Bank API:
-- Selenium-based browser authentication
-- Token management with automatic refresh
-- Storage of credentials
+WATA uses OAuth 2.0 for Saxo Bank API integration:
 
-**Known Issue**: Currently incompatible with Saxo's 2FA system
+1. When authenticating, the application send you a URL via Telegram (or logs of container)
+2. Open this URL in your browser and log in with your Saxo credentials, and do all the steps to authorize the application (2FA, risk warning, etc.)
+3. After authorization, you'll be redirected to a page with a URL containing a `code` parameter
+4. Copy the code value and run `watasaxoauth <CODE>` on your server
+5. The application completes authentication using this code
+
+**Command Reference**:
+- `watasaxoauth <CODE>`: Submit the authorization code
+- The authorization code is valid only for a short time (typically a few minutes)
+
+**Troubleshooting**:
+- If you receive an invalid/expired code error, repeat the process
+- A "Timeout waiting for authorization code" error means the application waited for 5 minutes without receiving the code
 
 ## 🚀 Setup & Deployment
 
