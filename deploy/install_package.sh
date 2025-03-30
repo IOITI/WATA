@@ -20,7 +20,9 @@ touch /app/var/log/wata-scheduler.log
 
 sudo systemctl enable docker
 
-# Define the list of allowed IPs
+# Define the list of allowed IPs for UFW
+# https://www.tradingview.com/support/solutions/43000529348-about-webhooks/
+# IP addresses of TradingView webhook servers
 ALLOWED_IPS=(
     "127.0.0.1"
     "52.89.214.238"
