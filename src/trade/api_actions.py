@@ -57,11 +57,10 @@ class SaxoService:
         self.logging_config = config_manager.get_logging_config()
         self.percent_profit_wanted_per_days = trading_rule.get_rule_config("profit_per_days")["percent_profit_wanted_per_days"]
 
-        self.saxo_auth = SaxoAuth(config_manager)
-
         self.db_order_manager = db_order_manager
         self.db_position_manager = db_position_manager
         self.rabbit_connection = rabbit_connection
+        self.saxo_auth = SaxoAuth(config_manager,rabbit_connection)
         self.context_id = str(uuid.uuid1())
 
         try:

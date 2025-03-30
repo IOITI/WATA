@@ -50,6 +50,20 @@ chmod 700 -R /app/var/lib/
 #Build the docker image
 /app/docker_build.sh
 
+# Create the watasaxoauth command wrapper
+cat << 'EOF' > /usr/local/bin/watasaxoauth
+#!/bin/bash
+if [ -z "$1" ]; then
+    echo "Error: Authorization code is required"
+    echo "Usage: watasaxoauth <AUTH_CODE>"
+    exit 1
+fi
+
+docker exec trader1 python -m src.saxo_authen.cli "$1"
+EOF
+
+chmod +x /usr/local/bin/watasaxoauth
+
 cat << EOF > ~/.bash_aliases
 alias watastart='if [ -f /app/etc/config.json ]; then cd /app/deploy/ && docker compose up -d && echo "The application is started, get status with watastatus"; else echo "Error: /app/etc/config.json not found. Please create the config file before starting."; fi'
 alias watastop='cd /app/deploy/ && docker compose down && echo "The application is stopped"'
@@ -61,3 +75,4 @@ EOF
 source ~/.bash_aliases
 
 echo "Wata is ready to use! You can lunch it with watastart, show logs with watalogs, show status with watastatus, stop it with watastop"
+echo "To authenticate with Saxo, use the watasaxoauth command with your authorization code: watasaxoauth <AUTH_CODE>"

@@ -1,10 +1,6 @@
 import requests
 import secrets
 import urllib.parse
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import json
 import time
 import datetime
@@ -12,6 +8,7 @@ import os
 import logging
 
 from src.configuration import ConfigurationManager
+from src.mq_telegram.tools import send_message_to_mq_for_telegram
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +18,10 @@ class SaxoAuth:
     Handles authentication and token management for Saxo.
     """
 
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, rabbit_connection=None):
         self.state = secrets.token_hex(16)
         self.config_manager = config_manager
+        self.rabbit_connection = rabbit_connection
         self.username = self.config_manager.get_config_value(
             "authentication.saxo.username"
         )
@@ -36,108 +34,93 @@ class SaxoAuth:
         self.token_file_path = self.config_manager.get_config_value(
             "authentication.persistant.token_path"
         )
+        self.auth_code_path = os.path.join(os.path.dirname(self.token_file_path), "saxo_auth_code.txt")
 
-    # def load_credentials(self, config_path):
-    #     """
-    #     Load credentials from a JSON file.
-    #     """
-    #     if not os.path.exists(config_path):
-    #         logger.error(f"Config file not found: {config_path}")
-    #         raise FileNotFoundError(f"Config file not found: {config_path}")
-    #     try:
-    #         with open(config_path, "r") as file:
-    #             self.credentials = json.load(file)
-    #     except json.JSONDecodeError as e:
-    #         logger.error(f"Error loading credentials: {e}")
-    #         raise
-    #     self.username = self.credentials["authentication"]["saxo"]["username"]
-    #     self.password = self.credentials["authentication"]["saxo"]["password"]
-    #     self.app_data = self.credentials["authentication"]["saxo"]["app_config_object"]
+    def get_authorization_url(self):
+        """
+        Generate and return the authorization URL for the user to visit in their browser.
+        """
+        params = {
+            "response_type": "code",
+            "client_id": self.app_data["AppKey"],
+            "redirect_uri": self.app_data["RedirectUrls"][0],
+            "state": self.state,
+        }
+        auth_url = f"{self.app_data['AuthorizationEndpoint']}?{urllib.parse.urlencode(params)}"
+        return auth_url
+
+    def read_auth_code_from_file(self):
+        """
+        Read the authorization code from the temporary file.
+        """
+        try:
+            if os.path.exists(self.auth_code_path):
+                with open(self.auth_code_path, "r") as file:
+                    code = file.read().strip()
+                    # Remove the file after reading
+                    os.remove(self.auth_code_path)
+                    if code:
+                        logger.info("Successfully read authorization code from file")
+                        return code
+            return None
+        except Exception as e:
+            logger.error(f"Error reading authorization code from file: {e}")
+            return None
 
     def get_authorization_code(self):
         """
-        Generate an authorization code by navigating to the authorization URL and logging in.
+        Get the authorization code from the temporary file or prompt the user to obtain it.
         """
-        try:
-            params = {
-                "response_type": "code",
-                "client_id": self.app_data["AppKey"],
-                "redirect_uri": self.app_data["RedirectUrls"][0],
-                "state": self.state,
-            }
-            auth_url = f"{self.app_data['AuthorizationEndpoint']}?{urllib.parse.urlencode(params)}"
-
-            options = Options()
-            options.add_argument("--disable-gpu")
-            options.add_argument("--disable-extensions")
-            options.add_argument("--disable-infobars")
-            options.add_argument("--start-maximized")
-            options.add_argument("--disable-notifications")
-            options.add_argument("--headless")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            driver = webdriver.Chrome(options=options)
-            driver.get(auth_url)
-            time.sleep(1)
-
-            username_field = driver.find_element(By.ID, "field_userid")
-            username_field.send_keys(self.username)
-            time.sleep(1)
-
-            password_field = driver.find_element(By.ID, "field_password")
-            password_field.send_keys(self.password)
-            time.sleep(1)
-
-            login_button = driver.find_element(By.ID, "button_login")
-            login_button.click()
-            time.sleep(4)
-
-            # Scroll down in the specific div
-            driver.execute_script(
-                """
-                var element = document.querySelector("#app > div > div > div > div.grid.grid--scroll > div > div > div > div > div:nth-child(6) > p:nth-child(2)")
-                // var element = document.querySelector("#app > div > div > div.grid.tst-disclaimer-body.grid--scroll > div > div > div > p:nth-child(14)")
-                element.scrollIntoView();
-                window.scrollBy(0, 1350);
-            """
-            )
-            time.sleep(1)
-
-            # Remove the disabled attribute from the button
-            driver.execute_script(
-                """
-                    var button = document.querySelector('button[data-test-id="risk-warning-accept"]');
-                    if (button) {
-                        button.removeAttribute('disabled');
-                    }
-                """
-            )
-
-            # Click the button
-            accept_button = driver.find_element(
-                By.XPATH, '//*[@id="app"]/div/div/div/div[2]/button'
-                #By.XPATH,'// *[ @ id = "app"] / div / div / div[2] / div / div / button'
-            )
-            accept_button.click()
-            time.sleep(1)
-
-            redirect_url = driver.current_url
-            code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_url).query)[
-                "code"
-            ][0]
-            driver.quit()
-            if code:
-                logger.info("Successfully getting code from AuthorizationEndpoint")
+        # Check if we already have an auth code
+        code = self.read_auth_code_from_file()
+        if code:
             return code
-        except NoSuchElementException as e:
-            logger.error(f"Element not found: {e}")
-            raise
-        except TimeoutException as e:
-            logger.error(f"Timeout waiting for element: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unknown error: {e}")
-            raise
+
+        # Generate authorization URL for the user to visit
+        auth_url = self.get_authorization_url()
+        auth_instructions = "\nPlease follow these steps to authorize the application:"
+        auth_instructions += "\n1. Open the following URL in your browser:"
+        auth_instructions += f"\n\n{auth_url}\n"
+        auth_instructions += "\n2. Log in with your Saxo credentials and authorize the application"
+        auth_instructions += "\n3. After authorization, you will be redirected to a page with a URL containing a 'code' parameter"
+        auth_instructions += "\n4. Copy the code parameter and run the following command on the server:"
+        auth_instructions += f"\n   watasaxoauth <CODE>\n"
+        auth_instructions += "\nWaiting for authorization code..."
+        
+        print(auth_instructions)
+        
+        # Send the instructions to Telegram
+        if hasattr(self, 'rabbit_connection'):
+            try:
+                send_message_to_mq_for_telegram(self.rabbit_connection, 
+                                              f"--- SAXO AUTHORIZATION REQUIRED ---\n{auth_instructions}")
+                logger.info("Authorization instructions sent to Telegram")
+            except Exception as e:
+                logger.error(f"Failed to send authorization instructions to Telegram: {e}")
+        else:
+            logger.warning("No rabbit_connection available, can't send message to Telegram")
+        
+        # Wait for the auth code file to appear (with timeout)
+        max_wait_time = 300  # 5 minutes
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait_time:
+            code = self.read_auth_code_from_file()
+            if code:
+                if hasattr(self, 'rabbit_connection'):
+                    send_message_to_mq_for_telegram(self.rabbit_connection, 
+                                                  "✅ Authorization code received successfully!")
+                return code
+            time.sleep(5)
+        
+        error_message = "Timeout waiting for authorization code"
+        logger.error(error_message)
+        
+        if hasattr(self, 'rabbit_connection'):
+            send_message_to_mq_for_telegram(self.rabbit_connection, 
+                                          f"❌ ERROR: {error_message}")
+        
+        raise TimeoutError(error_message)
 
     def exchange_code_for_token(self, code):
         """
@@ -156,6 +139,7 @@ class SaxoAuth:
                 logger.info("Successfully exchanged code for token")
                 return response.json()
             else:
+                logger.error(f"Failed to exchange code for token: {response.text}")
                 return None
         except requests.exceptions.RequestException as e:
             logger.error(f"Error exchanging code for token: {e}")
@@ -305,7 +289,19 @@ if __name__ == "__main__":
         print("Configuring")
         # Create an instance of ConfigurationManager
         config_manager = ConfigurationManager(config_path)
-        saxo_auth = SaxoAuth(config_manager)
+        
+        # Try to initialize rabbit connection if available
+        rabbit_connection = None
+        try:
+            from src.mq_telegram.rabbit_connection import RabbitMQConnection
+            rabbit_config = config_manager.get_config_value("mq_telegram")
+            rabbit_connection = RabbitMQConnection(rabbit_config)
+            print("RabbitMQ connection established")
+        except Exception as rabbit_error:
+            print(f"Could not establish RabbitMQ connection: {rabbit_error}")
+            logger.warning(f"Could not establish RabbitMQ connection: {rabbit_error}")
+        
+        saxo_auth = SaxoAuth(config_manager, rabbit_connection)
         token = saxo_auth.get_token()
         print(f"Access Token: {token}")
     except Exception as e:
