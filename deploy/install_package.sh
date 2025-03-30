@@ -23,8 +23,6 @@ sudo systemctl enable docker
 # Define the list of allowed IPs
 ALLOWED_IPS=(
     "127.0.0.1"
-    "83.195.218.196"
-    "83.192.167.80"
     "52.89.214.238"
     "34.212.75.30"
     "54.218.53.128"
