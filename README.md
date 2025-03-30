@@ -125,16 +125,43 @@ OAuth 2.0 integration with Saxo Bank API:
    - `watalogs`: View application logs
    - `watastatus`: Check application status
 
+### Docker Compose Setup
+
+The application uses Docker Compose with an override file for enhanced configuration:
+
+1. **Environment Variables**
+   - The system uses a `.env` file in the `deploy` directory to manage sensitive configuration.
+   - The primary use is for setting the RabbitMQ password which is then synchronized with your config.json.
+
+2. **Service Dependencies**
+   - A special `setup` service runs before other services to ensure configuration is properly synchronized.
+   - This setup updates the RabbitMQ password in your config.json file to match the one set in your .env file.
+   - All other services (web_server, trader, scheduler, telegram) depend on both the setup service and the RabbitMQ service.
+
 ### Configuration
 
 After deployment, you need to set up your configuration:
 
-1. **Copy the Example Config**
+1. **Configure RabbitMQ Password**
+   ```bash
+   # Navigate to the deploy directory
+   cd /app/deploy
+   
+   # Copy the example .env file
+   cp .env.example .env
+   
+   # Edit the .env file to set your custom RabbitMQ password
+   nano .env
+   ```
+   
+   This sets the password used by RabbitMQ and automatically updates your config.json file through the setup service in docker-compose.
+
+2. **Copy the Example Config**
    ```bash
    cp /app/etc/config_example.json /app/etc/config.json
    ```
 
-2. **Update Configuration**
+3. **Update Configuration**
    Edit `/app/etc/config.json` with your specific settings:
 
    - **Saxo Bank Authentication**
@@ -172,7 +199,7 @@ After deployment, you need to set up your configuration:
      - DuckDB database path
      - Webhook authentication
 
-3. **Restart Services**
+4. **Restart Services**
    ```bash
    watastop
    watastart
