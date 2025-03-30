@@ -209,7 +209,8 @@ WATA includes a visualization dashboard built on Observable Framework:
 To use the reporting system, you need:
 - Node.js and npm installed
 - DuckDB CLI installed
-- Ansible configured with proper inventory (same as deployment)
+- Python 3.12+ (with required libraries `./reporting/requirements.txt`)
+- Ansible configured with proper inventory (same as deployment stage)
 
 ### Setting Up the Dashboard
 

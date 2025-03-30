@@ -41,7 +41,15 @@ cd $temp_local_duckdb_path
 duckdb $temp_local_duckdb_path/trading_data.duckdb "EXPORT DATABASE 'duckdb_export' (FORMAT PARQUET);"
 duckdb $temp_local_duckdb_path/trading_data.duckdb "COPY (WITH grouped_data AS ( SELECT action, instrument_name, SUM(position_profit_loss) AS total_profit_loss FROM turbo_data_position GROUP BY action, instrument_name ) SELECT action AS name, json_group_array(json_object( 'name', instrument_name, 'value', total_profit_loss )) AS children FROM grouped_data GROUP BY action) TO 'duckdb_export/treemap_data.json' (FORMAT JSON, ARRAY true);"
 
+# Run the day trading percent simulation script and pass the reporting framework path
+echo "Generating trading simulation data..."
+python "$SCRIPT_DIR/day_trading_percent_simulated.py" "$reporting_framework_path/src"
+
+# Copy files to the reporting framework path
 cp -R duckdb_export/treemap_data.json $reporting_framework_path/src/
 cp -R duckdb_export/turbo_data_order.parquet $reporting_framework_path/src/
 cp -R duckdb_export/turbo_data_position.parquet $reporting_framework_path/src/
 cp -R duckdb_export/trade_performance.parquet $reporting_framework_path/src/
+
+echo "Data synchronization complete!"
+echo "You can now start the reporting server using the start_report_server.sh script."
