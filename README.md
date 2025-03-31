@@ -66,6 +66,8 @@ WATA uses a microservice architecture with:
    - Performance metrics reporting
    - Database storage for analysis
 
+![telegram_notifcation.png](docs/images/telegram_notifcation.png)
+
 ## 💾 Database System
 
 WATA uses DuckDB for fast in-memory analytics:
@@ -208,6 +210,8 @@ After deployment, you need to set up your configuration:
      - DuckDB database path
      - Webhook authentication
 
+   For a complete and detailed explanation of all configuration options, please refer to the [CONFIGURATION Guide](docs/CONFIGURATION.md).
+
 4. **Restart Services**
    ```bash
    watastop
@@ -239,6 +243,10 @@ WATA includes a visualization dashboard built on Observable Framework:
 - Performance analysis by action type
 - Win-rate and position duration metrics
 - Interactive data exploration
+
+![reporting_example.gif](docs/images/reporting_example.gif)
+
+_(yeah, I'm still loosing money... but at least ... I know how much !)_
 
 ### Requirements
 
