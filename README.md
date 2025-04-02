@@ -1,4 +1,4 @@
-![wata_header.png](docs/images/wata_header.png)
+<img src="docs/images/wata_header.png" alt="WATA Logo" width="400"/>
 
 ---
 
