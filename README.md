@@ -1,20 +1,24 @@
+![wata_header.png](docs/images/wata_header.png)
+
+---
+
 # WATA - Warrants Automated Trading Assistant
 
 An automated Python-based trading system for Knock-out warrants (Turbos) on Saxo Bank, executing trades via webhook signals.
 
-## ⚠️ **Disclaimer**
-
-**This is a personal learning project and not production-ready software.**
-
-**Risk Warning: WATA can lose all your money due to:**
-- Insufficient code testing
-- Limited security measures
-- Lack of fail-safe mechanisms
-- No comprehensive monitoring included
-- Absence of fail-over systems
-- Limited user experience
-
-*This software is provided "as is" without warranty. The authors accept no liability for any damages arising from its use.*
+> [!WARNING]
+> 
+> **This is a personal learning project and not production-ready software.**
+> 
+> **Risk Warning: WATA can lose all your money due to:**
+> - Insufficient code testing
+> - Limited security measures
+> - Lack of fail-safe mechanisms
+> - No comprehensive monitoring included
+> - Absence of fail-over systems
+> - Limited user experience
+> 
+> *This software is provided "as is" without warranty. The authors accept no liability for any damages arising from its use.*
 
 ## 🎯 Purpose
 
