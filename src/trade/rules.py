@@ -7,19 +7,19 @@ class TradingRule:
     def __init__(self, config_manager, db_position_manager):
         self.config_manager = config_manager
         self.db_position_manager = db_position_manager
-        self.allowed_indice_rule_config = self.get_rule_config("allowed_indice")
+        self.allowed_indices_rule_config = self.get_rule_config("allowed_indices")
         self.market_closed_dates_list = self.get_rule_config("market_closed_dates")["market_closed_dates"]
         self.dont_enter_trade_if_day_profit_is_more_than = self.get_rule_config("profit_per_days")["dont_enter_trade_if_day_profit_is_more_than"]
 
-    def get_rule_config(self, rule_name):
+    def get_rule_config(self, rule_type):
         """
-        Retrieves the rule_config for a given rule_name from the configuration.
+        Retrieves the rule_config for a given rule_type from the configuration.
         """
         trade_rules = self.config_manager.get_config_value("trade.rules", [])
         for rule in trade_rules:
-            if rule.get("rule_name") == rule_name:
+            if rule.get("rule_type") == rule_type:
                 return rule.get("rule_config", {})
-        raise TradingRuleViolation(f"Rule with name '{rule_name}' not found in the configuration.")
+        raise TradingRuleViolation(f"Rule with type '{rule_type}' not found in the configuration.")
 
     @staticmethod
     def check_signal_timestamp(signal_timestamp):
@@ -44,7 +44,7 @@ class TradingRule:
         Raises a KeyError if the indice does not exist.
         """
         try:
-            return self.allowed_indice_rule_config["indice_ids"][indice]
+            return self.allowed_indices_rule_config["indice_ids"][indice]
         except KeyError:
             logging.error(f"Breaking trading rule : Indice '{indice}' does not exist in the provided dictionary.")
             raise TradingRuleViolation(f"Breaking trading rule : Indice '{indice}' does not exist in the provided dictionary.")

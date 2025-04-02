@@ -110,8 +110,8 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 "trade": {
   "rules": [
     {
-      "rule_name": "allowed_indice",
-      "rule_type": "indice",
+      "rule_name": "allowed_indices",
+      "rule_type": "allowed_indices",
       "rule_config": {
         "indice_ids": {
           "us100": "1909050"
@@ -151,9 +151,9 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 }
 ```
 
-### Trading Rules Explained
+### Trading Rules Type Explained
 
-1. **allowed_indice**:
+1. **allowed_indices**:
    - Defines which indices can be traded
    - Maps friendly names used in the webhook signal to Saxo Bank instrument IDs (As `UnderlyingUics`)
    - You can use https://www.saxoinvestor.fr/investor/page/turbos to select all the available indices, and you will find their corresponding `UnderlyingUics` in parameters URL.

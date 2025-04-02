@@ -47,8 +47,8 @@
   "trade": {
     "rules": [
       {
-        "rule_name": "allowed_indice",
-        "rule_type": "indice",
+        "rule_name": "allowed_indices",
+        "rule_type": "allowed_indices",
         "rule_config": {
           "indice_ids": {
             "us100": "1909050"

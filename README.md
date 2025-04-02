@@ -135,6 +135,8 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
    - `watastop`: Stop the application
    - `watalogs`: View application logs
    - `watastatus`: Check application status
+   - `watasaxoauth <CODE>`: Submits the authorization code to the application
+
 
 ### Docker Compose Setup
 
@@ -200,7 +202,7 @@ After deployment, you need to set up your configuration:
      ```
 
    - **Trading Rules**
-     - `allowed_indice`: Configure allowed trading indices
+     - `allowed_indices`: Configure allowed trading indices
      - `market_closed_dates`: Set market holidays
      - `profit_per_days`: Define profit targets and limits
 

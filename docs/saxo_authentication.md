@@ -4,7 +4,9 @@ This document explains how to authenticate with Saxo Bank API for the WATA appli
 
 ## Authentication Process
 
-1. When the application needs to authenticate with Saxo Bank, it will display a URL in the console that you need to open in your browser.
+1. When the application needs to authenticate with Saxo Bank, it will send you a URL via Telegram (or logs of container), that you need to open in your browser.
+
+![ask_authorization.png](images/ask_authorization.png)
 
 2. Open the provided URL in your web browser.
 
@@ -12,7 +14,7 @@ This document explains how to authenticate with Saxo Bank API for the WATA appli
 
 4. After authorization, you'll be redirected to a page with a URL containing a `code` parameter. For example:
    ```
-   https://example.com/callback?code=abc123def456ghi789&state=abcdef1234567890
+   http://localhost/callback?code=abc123def456ghi789&state=abcdef1234567890
    ```
 
 5. Copy the value of the `code` parameter (in this example, `abc123def456ghi789`).
@@ -25,9 +27,15 @@ This document explains how to authenticate with Saxo Bank API for the WATA appli
 
 7. The application will now continue with the authentication process using this code to obtain an access token.
 
+```
+2025-03-30 21:05:36,935 - saxo_auth_cli - INFO - Authorization code saved to /app/var/lib/saxo_auth/saxo_auth_code.txt
+Authorization code saved successfully! The application will now continue with the authentication process.
+```
+
+
 ## Troubleshooting
 
-- If you receive an error about an invalid or expired code, repeat the process to get a fresh authorization code.
+- If you receive an error about `Failed to obtain new tokens`, you provide an invalid or expired code, repeat the process to get a fresh authorization code.
 - The authorization code is valid only for a short time (typically a few minutes).
 - If you see a "Timeout waiting for authorization code" error, it means the application waited for 5 minutes but didn't receive the authorization code.
 
