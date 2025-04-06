@@ -99,6 +99,18 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
 - If you receive an invalid/expired code error, repeat the process
 - A "Timeout waiting for authorization code" error means the application waited for 5 minutes without receiving the code
 
+## 📖 Detailed How-To Guide
+
+For a comprehensive, step-by-step guide on setting up and using WATA, including:
+- Detailed prerequisites and estimated costs
+- Setting up Saxo Bank integration
+- Configuring Telegram notifications
+- Deploying and configuring WATA
+- Setting up TradingView webhooks
+- Starting and monitoring your trading
+
+Please refer to our detailed [HOW-TO Guide](docs/HOW-TO.md).
+
 ## 🚀 Setup & Deployment
 
 ### Prerequisites
