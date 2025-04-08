@@ -340,5 +340,5 @@ if __name__ == "__main__":
         exit(1)
 
     print(" [*] Waiting for messages in MQ. To exit press CTRL+C")
-    send_message_to_mq_for_telegram(rabbit_connection, f"Yeah! WATA Trader v{app_version} is ready to receive orders")
+    send_message_to_mq_for_telegram(rabbit_connection, f"📈 Yeah! WATA Trader v{app_version} is ready to receive orders")
     channel.start_consuming()
