@@ -25,13 +25,12 @@ Before you begin, ensure you have the following:
 While WATA itself is free and open-source, running the system involves some recurring costs:
 
 * **VPS Hosting**: This is the primary cost. Depending on the provider and the server specifications (CPU, RAM, SSD),
-  expect to pay anywhere from €5 to €20+ per month (approximately €60 - €240+ annually). Costs vary significantly based
+  expect to pay anywhere from €5 to €26+ per month (approximately €60 - €312+ annually). Costs vary significantly based
   on your chosen provider and plan.
 * **TradingView Subscription (Optional)**: If you use TradingView for generating signals via webhooks (recommended),
-  you'll need a paid plan (Pro, Pro+, or Premium) to use webhooks effectively. Costs vary depending on the plan and
-  billing cycle (check the TradingView website for current pricing). Free plans do not support webhooks reliably for
-  automation.
-    * Black Friday/Cyber Monday deals are available every year.
+  you'll need a paid plan (Essentials, Plus, or Premium) to use webhooks effectively. Costs vary depending on the plan and
+  billing cycle (check the TradingView website for current pricing), but expect to pay around €130-€260+ per year. Free plans do not support webhooks reliably for automation.
+    * Black Friday/Cyber Monday deals are available every year, likely -70% off.
 * **Saxo Bank Account**: There are typically no annual fees for holding a Saxo Bank account itself, but you will incur
   trading costs (commissions, spreads, financing costs for holding positions ...) when trades are executed. These depend
   heavily on your trading activity and the instruments traded.
@@ -39,8 +38,9 @@ While WATA itself is free and open-source, running the system involves some recu
 * **Domain Name (Optional)**: If you prefer using a domain name instead of an IP address for your server (e.g., for the
   TradingView webhook URL), you'll need to pay an annual registration fee (typically €10-€20).
 
-Therefore, the minimum essential annual cost is primarily for the VPS, ranging roughly from €60 upwards, plus any
-TradingView subscription costs if used, and trading fees incurred via Saxo.
+Therefore, the minimum essential annual cost is primarily for the VPS, ranging roughly from €200 upwards, plus any
+TradingView subscription costs if used (€130-€260+), and trading fees incurred via Saxo Bank (for non Saxo Bank
+Turbo warrants instruments).
 
 ## Step 1: Prepare Your Server
 
