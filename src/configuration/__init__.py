@@ -107,7 +107,7 @@ class ConfigurationManager:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        required_rules = ["allowed_indices", "market_closed_dates"]
+        required_rules = ["allowed_indices", "market_closed_dates", "signal_validation", "market_hours"]
         
         # Check if day_trading rule is required based on trading_mode
         trading_mode = self.get_config_value("trade.config.trading_mode")
@@ -190,6 +190,57 @@ class ConfigurationManager:
                 time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$')
                 if not time_pattern.match(close_time):
                     error_msg = f"Rule {rule_name}: Invalid time format '{close_time}'. Expected format: HH:MM"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+            elif rule_type == "signal_validation":
+                # Validate max_signal_age_minutes
+                max_age = rule_config.get("max_signal_age_minutes")
+                if max_age is None:
+                    error_msg = f"Rule {rule_name}: Missing required field 'max_signal_age_minutes'"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                
+                if not isinstance(max_age, int) or max_age <= 0:
+                    error_msg = f"Rule {rule_name}: max_signal_age_minutes must be a positive integer"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+            elif rule_type == "market_hours":
+                # Validate market hours configuration
+                required_fields = {
+                    "trading_start_hour": (int, 0, 23),
+                    "trading_end_hour": (int, 0, 23),
+                    "risky_trading_start_hour": (int, 0, 23),
+                    "risky_trading_start_minute": (int, 0, 59)
+                }
+                
+                for field, (field_type, min_val, max_val) in required_fields.items():
+                    value = rule_config.get(field)
+                    if value is None:
+                        error_msg = f"Rule {rule_name}: Missing required field '{field}'"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    if not isinstance(value, field_type):
+                        error_msg = f"Rule {rule_name}: Field '{field}' must be a {field_type.__name__}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    if not min_val <= value <= max_val:
+                        error_msg = f"Rule {rule_name}: Field '{field}' must be between {min_val} and {max_val}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                
+                # Validate that trading hours are in correct order
+                if rule_config["trading_start_hour"] >= rule_config["trading_end_hour"]:
+                    error_msg = f"Rule {rule_name}: trading_start_hour must be less than trading_end_hour"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                
+                if rule_config["risky_trading_start_hour"] < rule_config["trading_start_hour"] or \
+                   rule_config["risky_trading_start_hour"] >= rule_config["trading_end_hour"]:
+                    error_msg = f"Rule {rule_name}: risky_trading_start_hour must be between trading_start_hour and trading_end_hour"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 

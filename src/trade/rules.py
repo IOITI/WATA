@@ -10,6 +10,8 @@ class TradingRule:
         self.allowed_indices_rule_config = self.get_rule_config("allowed_indices")
         self.market_closed_dates_list = self.get_rule_config("market_closed_dates")["market_closed_dates"]
         self.dont_enter_trade_if_day_profit_is_more_than = self.get_rule_config("day_trading")["dont_enter_trade_if_day_profit_is_more_than"]
+        self.signal_validation_config = self.get_rule_config("signal_validation")
+        self.market_hours_config = self.get_rule_config("market_hours")
 
     def get_rule_config(self, rule_type):
         """
@@ -21,8 +23,7 @@ class TradingRule:
                 return rule.get("rule_config", {})
         raise TradingRuleViolation(f"Rule with type '{rule_type}' not found in the configuration.")
 
-    @staticmethod
-    def check_signal_timestamp(signal_timestamp):
+    def check_signal_timestamp(self,signal_timestamp):
         # Parse the signal_timestamp string into a datetime object
         signal_time = datetime.strptime(signal_timestamp, "%Y-%m-%dT%H:%M:%SZ")
         signal_time = signal_time.replace(tzinfo=pytz.UTC)  # Ensure it's in UTC
@@ -33,8 +34,9 @@ class TradingRule:
         # Calculate the difference between the current time and the signal_timestamp
         time_difference = current_time - signal_time
 
-        # Check if the difference is more than 5 minutes
-        if time_difference > timedelta(minutes=5):
+        # Check if the difference is more than max_signal_age_minutes
+        max_age_minutes = self.signal_validation_config["max_signal_age_minutes"]
+        if time_difference > timedelta(minutes=max_age_minutes):
             logging.error(f"The signal is too old. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal timestamp is too old")
 
@@ -65,14 +67,18 @@ class TradingRule:
             logging.error(message)
             raise TradingRuleViolation(message)
 
-        # Check if the current time is within the allowed range (08:00 to 22:00)
-        if not (8 <= current_time.hour < 22):
+        # Check if the current time is within the allowed range
+        trading_start_hour = self.market_hours_config["trading_start_hour"]
+        trading_end_hour = self.market_hours_config["trading_end_hour"]
+        if not (trading_start_hour <= current_time.hour < trading_end_hour):
             logging.error(
                 f"Breaking trading rule : The signal is outside of market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is outside of market hours.")
 
-        # Check if the current time is within the refused range (21:54 to 22:00)
-        if 21 <= current_time.hour < 22 and current_time.minute >= 54:
+        # Check if the current time is within the refused range
+        risky_start_hour = self.market_hours_config["risky_trading_start_hour"]
+        risky_start_minute = self.market_hours_config["risky_trading_start_minute"]
+        if risky_start_hour <= current_time.hour < trading_end_hour and current_time.minute >= risky_start_minute:
             logging.error(
                 f"Breaking trading rule: The signal is refused due to risky market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is refused due to risky market hours.")

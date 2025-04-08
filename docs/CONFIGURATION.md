@@ -139,6 +139,23 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
         "dont_enter_trade_if_day_profit_is_more_than": 1.25,
         "close_position_time": "21:55"
       }
+    },
+    {
+      "rule_name": "signal_validation",
+      "rule_type": "signal_validation",
+      "rule_config": {
+        "max_signal_age_minutes": 5
+      }
+    },
+    {
+      "rule_name": "market_hours",
+      "rule_type": "market_hours",
+      "rule_config": {
+        "trading_start_hour": 8,
+        "trading_end_hour": 22,
+        "risky_trading_start_hour": 21,
+        "risky_trading_start_minute": 54
+      }
     }
   ],
   "config": {
@@ -199,6 +216,20 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
      - **percent_profit_wanted_per_days**: Target daily profit percentage (1.7%)
      - **dont_enter_trade_if_day_profit_is_more_than**: Don't open new positions if daily profit exceeds this threshold (1.25%)
      - **close_position_time**: Time when all positions should be automatically closed (format: "HH:MM", default: "21:55")
+
+4. **signal_validation**:
+   - Controls validation of trading signals:
+     - **max_signal_age_minutes**: Maximum age of a signal in minutes before it's considered too old (default: 5)
+     - Signals older than this value will be rejected with a "Signal timestamp is too old" error
+
+5. **market_hours**:
+   - Defines the trading hours and restrictions:
+     - **trading_start_hour**: Hour when trading begins (24-hour format, default: 8)
+     - **trading_end_hour**: Hour when trading ends (24-hour format, default: 22)
+     - **risky_trading_start_hour**: Hour when risky trading period begins (24-hour format, default: 21)
+     - **risky_trading_start_minute**: Minute when risky trading period begins (default: 54)
+     - Trading is not allowed outside the trading hours
+     - Trading is considered risky during the period from risky_trading_start_hour:risky_trading_start_minute to trading_end_hour:00
 
 ### Trading Configuration
 

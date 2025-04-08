@@ -93,6 +93,23 @@
           "dont_enter_trade_if_day_profit_is_more_than": 1.25,
           "close_position_time": "21:55"
         }
+      },
+      {
+        "rule_name": "signal_validation",
+        "rule_type": "signal_validation",
+        "rule_config": {
+          "max_signal_age_minutes": 5
+        }
+      },
+      {
+        "rule_name": "market_hours",
+        "rule_type": "market_hours",
+        "rule_config": {
+          "trading_start_hour": 8,
+          "trading_end_hour": 22,
+          "risky_trading_start_hour": 21,
+          "risky_trading_start_minute": 54
+        }
       }
     ],
     "config": {
