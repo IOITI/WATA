@@ -101,6 +101,29 @@
         "price_range": {
           "min": 4,
           "max": 15
+        },
+        "performance_thresholds": {
+          "min": -20,
+          "max": 60
+        },
+        "api_limits": {
+          "top_instruments": 200,
+          "top_positions": 200,
+          "top_closed_positions": 500
+        },
+        "retry_config": {
+          "max_retries": 10,
+          "retry_sleep_seconds": 1
+        },
+        "position_check": {
+          "check_interval_seconds": 7,
+          "timeout_seconds": 20
+        },
+        "safety_margins": {
+          "bid_calculation": 1
+        },
+        "websocket": {
+          "refresh_rate_ms": 10000
         }
       },
       "trading_mode": "day_trading"

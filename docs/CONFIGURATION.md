@@ -147,6 +147,31 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
       "price_range": {
         "min": 4,
         "max": 15
+      },
+      "performance_thresholds": {
+          "min": -20,
+          "max": 60
+        },
+        "api_limits": {
+          "top_instruments": 200,
+          "top_positions": 200,
+          "top_closed_positions": 500
+        },
+        "retry_config": {
+          "max_retries": 10,
+          "retry_sleep_seconds": 1
+        },
+        "position_check": {
+          "check_interval_seconds": 7,
+          "timeout_seconds": 20
+        },
+        "safety_margins": {
+          "bid_calculation": 1
+        },
+        "websocket": {
+          "refresh_rate_ms": 10000
+        },
+        "trading_mode": "day_trading"
       }
     }
   },
@@ -181,6 +206,23 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 - **turbo.price_range**: Price range for filtering turbo instruments
   - **min**: Minimum price for turbo instruments (default: 4)
   - **max**: Maximum price for turbo instruments (default: 15)
+- **turbo.performance_thresholds**: Min/max performance percentages to trigger closing a position
+  - **min**: Minimum performance percentage (e.g., -20)
+  - **max**: Maximum performance percentage (e.g., 60)
+- **turbo.api_limits**: Limits for API requests
+  - **top_instruments**: Max instruments to fetch (default: 200)
+  - **top_positions**: Max open positions to fetch (default: 200)
+  - **top_closed_positions**: Max closed positions to fetch (default: 500)
+- **turbo.retry_config**: Settings for retrying actions
+  - **max_retries**: Maximum number of retries (e.g., finding position after order) (default: 10)
+  - **retry_sleep_seconds**: Seconds to wait between retries (default: 1)
+- **turbo.position_check**: Settings for periodic position performance checks
+  - **check_interval_seconds**: How often to check performance (default: 7)
+  - **timeout_seconds**: How long the check process should run before stopping (default: 20)
+- **turbo.safety_margins**: Safety margins for calculations
+  - **bid_calculation**: Margin subtracted when calculating bid amount (default: 1)
+- **turbo.websocket**: WebSocket configuration
+  - **refresh_rate_ms**: Refresh rate for WebSocket subscriptions in milliseconds (default: 10000)
 - **persistant.last_action_file**: File path to store the last trading action
 
 ## Telegram Notifications

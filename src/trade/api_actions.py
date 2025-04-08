@@ -57,8 +57,16 @@ class SaxoService:
         self.logging_config = config_manager.get_logging_config()
         self.percent_profit_wanted_per_days = trading_rule.get_rule_config("day_trading")["percent_profit_wanted_per_days"]
 
-        # Get turbo price range configuration
-        self.turbo_price_range = config_manager.get_config_value("trade.config.turbo.price_range", {"min": 4, "max": 15})
+        # Get turbo configuration
+        self.turbo_config = config_manager.get_config_value("trade.config.turbo", {})
+        self.turbo_price_range = self.turbo_config.get("price_range", {"min": 4, "max": 15})
+        self.performance_thresholds = self.turbo_config.get("performance_thresholds", {"min": -20, "max": 60})
+        self.api_limits = self.turbo_config.get("api_limits", {"top_instruments": 200, "top_positions": 200, "top_closed_positions": 500})
+        self.retry_config = self.turbo_config.get("retry_config", {"max_retries": 10, "retry_sleep_seconds": 1})
+        self.position_check = self.turbo_config.get("position_check", {"check_interval_seconds": 7, "timeout_seconds": 20})
+        self.safety_margins = self.turbo_config.get("safety_margins", {"bid_calculation": 1})
+        self.websocket_config = self.turbo_config.get("websocket", {"refresh_rate_ms": 10000})
+
         logging.info(f"Configured turbo price filtering range: Min={self.turbo_price_range['min']}, Max={self.turbo_price_range['max']}")
 
         self.db_order_manager = db_order_manager
@@ -79,7 +87,7 @@ class SaxoService:
         try:
             r = rd.instruments.Instruments(
                 params={
-                    "$top": 200,
+                    "$top": self.api_limits["top_instruments"],
                     "AccountKey": self.account_info.AccountKey,
                     "ExchangeId": ExchangeId,
                     "Keywords": Keywords,
@@ -294,7 +302,7 @@ class SaxoService:
         # request the balances
         req_positions = pf.positions.PositionsMe(
             params={
-                "$top": 200,
+                "$top": self.api_limits["top_positions"],
                 "FieldGroups": "Costs,DisplayAndFormat,ExchangeInfo,Greeks,PositionBase,PositionIdOnly,PositionView",
             }
         )
@@ -306,7 +314,9 @@ class SaxoService:
 
         return resp_positions
 
-    def get_user_closed_positions(self, skip=0, top=500):
+    def get_user_closed_positions(self, skip=0, top=None):
+        if top is None:
+            top = self.api_limits["top_closed_positions"]
         req_positions = pf.closedpositions.ClosedPositionsMe(
             params={
                 "$skip": skip,
@@ -387,7 +397,7 @@ class SaxoService:
             logging.info(f"Cash Balance: {spending_power}")
 
             # Calculate amount with safety margin
-            safety_margin = 1
+            safety_margin = self.safety_margins["bid_calculation"]
             pre_amount = (spending_power / ask_price) - safety_margin
             amount = int(math.floor(pre_amount))
 
@@ -600,7 +610,7 @@ class SaxoService:
         )
 
     def find_position_with_validated_order(self, order_validated):
-        max_retries = 10
+        max_retries = self.retry_config["max_retries"]
         retries = 0
         position_found = False
 
@@ -612,7 +622,7 @@ class SaxoService:
                         == order_validated["OrderId"]
                 ):
                     return position
-            sleep(1)
+            sleep(self.retry_config["retry_sleep_seconds"])
             retries += 1  # Increment the retry counter
 
         if not position_found:
@@ -868,7 +878,7 @@ Current today profit : {today_percent}%
                 "ContextId": self.context_id,
                 "Format": "application/json",
                 "ReferenceId": reference_id,
-                "RefreshRate": 1000,
+                "RefreshRate": self.websocket_config["refresh_rate_ms"],
             }
         )
         try:
@@ -900,10 +910,10 @@ Current today profit : {today_percent}%
             for decoded_message in stream.decode_ws_msg(result):
                 print(f"Decoded message: {decoded_message}")
 
-            # Check if the socket has been open for more than 20 seconds
+            # Check if the socket has been open for more than timeout seconds
             current_time = time.time()
-            if current_time - start_time > 60:
-                print("Socket has been open for more than 60 seconds, closing connection.")
+            if current_time - start_time > self.position_check["timeout_seconds"]:
+                logging.info(f"Checking for more than {self.position_check['timeout_seconds']} seconds, closing connection.")
                 break
 
         ws.close()  # Close the WebSocket connection when exiting the loop
@@ -951,7 +961,7 @@ Current today profit : {today_percent}%
                                 current_time_compare = datetime.now(pytz.timezone('Europe/Paris'))
 
                                 # Check if performance_percent is between stoploss and takeprofit
-                                if -20 < performance_percent <= 60:
+                                if self.performance_thresholds["min"] < performance_percent <= self.performance_thresholds["max"]:
                                     message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
                                     logging.info(message)
                                     print(message)
@@ -1068,12 +1078,12 @@ Current today profit : {today_percent}%
                                 # Stop the loop
                                 break
 
-                # Check if the socket has been open for more than 30 seconds
+                # Check if the socket has been open for more than timeout seconds
                 current_time = time.time()
-                if current_time - start_time > 20:
-                    logging.info("Checking for more than 20 seconds, closing connection.")
+                if current_time - start_time > self.position_check["timeout_seconds"]:
+                    logging.info(f"Checking for more than {self.position_check['timeout_seconds']} seconds, closing connection.")
                     break
-                sleep(7)
+                sleep(self.position_check["check_interval_seconds"])
 
         if not position_founded:
             logging.info(f"No manageable position in database can be check")

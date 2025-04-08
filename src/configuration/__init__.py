@@ -196,30 +196,84 @@ class ConfigurationManager:
         # Validate trade.config.turbo structure
         turbo_config = self.get_config_value("trade.config.turbo")
         if turbo_config:
-            required_turbo_fields = ["exchange_id", "price_range.min", "price_range.max"]
+            required_turbo_fields = [
+                "exchange_id",
+                "price_range.min",
+                "price_range.max",
+                "performance_thresholds.min",
+                "performance_thresholds.max",
+                "api_limits.top_instruments",
+                "api_limits.top_positions",
+                "api_limits.top_closed_positions",
+                "retry_config.max_retries",
+                "retry_config.retry_sleep_seconds",
+                "position_check.check_interval_seconds",
+                "position_check.timeout_seconds",
+                "safety_margins.bid_calculation",
+                "websocket.refresh_rate_ms"
+            ]
             missing_turbo_fields = []
             for field in required_turbo_fields:
                 if self.get_config_value(f"trade.config.turbo.{field}") is None:
                     missing_turbo_fields.append(field)
-            
+
             if missing_turbo_fields:
                 error_msg = f"Missing required turbo configuration fields: {', '.join(missing_turbo_fields)}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
-                
-            # Validate price range
+
+            # Validate numeric types and ranges
+            numeric_validations = {
+                "price_range.min": (float, 0, None),  # min 0
+                "price_range.max": (float, 0, None),  # min 0
+                "performance_thresholds.min": (float, None, None), # No specific range, can be negative
+                "performance_thresholds.max": (float, None, None), # No specific range
+                "api_limits.top_instruments": (int, 1, None), # min 1
+                "api_limits.top_positions": (int, 1, None), # min 1
+                "api_limits.top_closed_positions": (int, 1, None), # min 1
+                "retry_config.max_retries": (int, 0, None), # min 0
+                "retry_config.retry_sleep_seconds": (int, 0, None), # min 0
+                "position_check.check_interval_seconds": (int, 1, None), # min 1
+                "position_check.timeout_seconds": (int, 1, None), # min 1
+                "safety_margins.bid_calculation": (int, 0, None), # min 0
+                "websocket.refresh_rate_ms": (int, 100, None) # min 100ms
+            }
+
+            for field, (field_type, min_val, max_val) in numeric_validations.items():
+                value = self.get_config_value(f"trade.config.turbo.{field}")
+                if not isinstance(value, (int, float)):
+                    # Allow int for float types
+                    if field_type is float and isinstance(value, int):
+                        pass # Integer is acceptable for float fields
+                    else:
+                        error_msg = f"Turbo config field 'trade.config.turbo.{field}' must be numeric (expected {field_type.__name__})"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
+                if min_val is not None and value < min_val:
+                    error_msg = f"Turbo config field 'trade.config.turbo.{field}' ({value}) must be at least {min_val}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                if max_val is not None and value > max_val:
+                    error_msg = f"Turbo config field 'trade.config.turbo.{field}' ({value}) must be no more than {max_val}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+            # Validate price range logic
             min_price = self.get_config_value("trade.config.turbo.price_range.min")
             max_price = self.get_config_value("trade.config.turbo.price_range.max")
-            
-            if not isinstance(min_price, (int, float)) or not isinstance(max_price, (int, float)):
-                error_msg = "Price range values must be numeric"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-                
             if min_price >= max_price:
-                error_msg = f"Minimum price ({min_price}) must be less than maximum price ({max_price})"
+                error_msg = f"Minimum price ({min_price}) must be less than maximum price ({max_price}) in trade.config.turbo.price_range"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
+
+            # Validate performance threshold logic
+            min_perf = self.get_config_value("trade.config.turbo.performance_thresholds.min")
+            max_perf = self.get_config_value("trade.config.turbo.performance_thresholds.max")
+            if min_perf >= max_perf:
+                 error_msg = f"Minimum performance threshold ({min_perf}) must be less than maximum threshold ({max_perf}) in trade.config.turbo.performance_thresholds"
+                 logger.error(error_msg)
+                 raise ValueError(error_msg)
 
         # Validate telegram configuration if present
         telegram_config = self.get_config_value("telegram")
