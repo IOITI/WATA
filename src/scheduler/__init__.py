@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import pytz
 import os
 from src.logging_helper import setup_logging
+from src.trade.rules import TradingRule
 
 
 # Function to send 'ping_saxo_api' every 1 minutes
@@ -85,8 +86,8 @@ def job_daily_stats():
 #         logging.warning(f"Do not replay the signal because Current time: {now_utc}, alert time: {alert_time}")
 
 
-# Function to send 'close-position' every day at 21:55
-@repeat(every().day.at(time_str="21:55", tz="Europe/Paris"))
+# Function to send 'close-position' every day at configured time
+@repeat(every().day.at(time_str=TradingRule(config_manager, None).get_rule_config("day_trading")["close_position_time"], tz="Europe/Paris"))
 def job_close_position():
     # Get the current time in UTC
     now_utc = datetime.now(pytz.utc)

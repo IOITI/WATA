@@ -55,7 +55,11 @@ class SaxoService:
     ):
         # Retrieve logging configuration
         self.logging_config = config_manager.get_logging_config()
-        self.percent_profit_wanted_per_days = trading_rule.get_rule_config("profit_per_days")["percent_profit_wanted_per_days"]
+        self.percent_profit_wanted_per_days = trading_rule.get_rule_config("day_trading")["percent_profit_wanted_per_days"]
+
+        # Get turbo price range configuration
+        self.turbo_price_range = config_manager.get_config_value("trade.config.turbo.price_range", {"min": 4, "max": 15})
+        logging.info(f"Configured turbo price filtering range: Min={self.turbo_price_range['min']}, Max={self.turbo_price_range['max']}")
 
         self.db_order_manager = db_order_manager
         self.db_position_manager = db_position_manager
@@ -167,23 +171,28 @@ class SaxoService:
             mid_sorted_count = len(sorted_data)
             logging.debug(f"Data Count After Sorting by Mid: {mid_sorted_count}")
 
-            # Now, 'filtered_data' contains only the items where 'Mid' is between 4 and 15
+            # Now, 'filtered_data' contains only the items where 'Mid' is between min and max from configuration
+            min_price = self.turbo_price_range["min"]
+            max_price = self.turbo_price_range["max"]
             filtered_data = [
-                item for item in sorted_data if 4 <= item["Quote"]["Mid"] <= 15
+                item for item in sorted_data if min_price <= item["Quote"]["Mid"] <= max_price
             ]
 
             final_count = len(filtered_data)
-            logging.debug(f"Data Count After Filtering by Mid Range: {final_count}")
+            logging.debug(f"Data Count After Filtering by Mid Range ({min_price}-{max_price}): {final_count}")
 
             # Check if filtered_data is empty
             if not filtered_data:
                 # Raise the custom exception if no turbos are available
                 raise exceptions.NoTurbosAvailableException(
-                    "No turbos are available for the asked price."
-                    f" - Data Count After InfoPrices Request: {info_prices_count}"
-                    f" - Data Count After Cleaning NoMarket: {no_market_count}"
-                    f" - Data Count After Sorting by Mid: {mid_sorted_count}"
-                    f" - Data Count After Filtering by Mid Range: {final_count}"
+                    f"No turbos found matching the criteria."
+                    f"\nType of turbo checked: {Keywords}."
+                    f"\nPrice range checked: {min_price}-{max_price}."
+                    f"\nSearch process: {info_prices_count} instruments found initially,"
+                    f"\n{no_market_count} after removing 'NoMarket' items,"
+                    f"\n{mid_sorted_count} after sorting, and"
+                    f"\n{final_count} after filtering by price range."
+                    f"\nSo it's impossible to find a turbo {Keywords} in the price range {min_price}-{max_price}"
                 )
 
             info_price_final = deepcopy(filtered_data[0])

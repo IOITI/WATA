@@ -30,8 +30,8 @@ default_config_data = {
                 }
             },
             {
-                "rule_name": "profit_per_days",
-                "rule_type": "profit_per_days",
+                "rule_name": "day_trading",
+                "rule_type": "day_trading",
                 "rule_config": {
                     "percent_profit_wanted_per_days": 1.7
                 }

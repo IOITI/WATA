@@ -138,10 +138,10 @@ and get the `bot_token`, and `chat_id`.
    ```bash
    watastart
    watastatus # Check status
+   watasaxoauth <CODE> # Authenticate with Saxo Bank
    ```
 2. **Monitor**:
-    * Keep an eye on your Telegram channel for notifications about received signals, trade executions, errors, and daily
-      summaries.
+    * Keep an eye on your Telegram channel for notifications about received signals, trade executions, errors, and daily summaries.
     * Check logs if needed: `watalogs`.
 3. **Reporting**: Use the [Reporting tools](../README.md#📈-reporting) to analyze performance over time.
 

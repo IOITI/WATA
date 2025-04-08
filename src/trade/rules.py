@@ -9,7 +9,7 @@ class TradingRule:
         self.db_position_manager = db_position_manager
         self.allowed_indices_rule_config = self.get_rule_config("allowed_indices")
         self.market_closed_dates_list = self.get_rule_config("market_closed_dates")["market_closed_dates"]
-        self.dont_enter_trade_if_day_profit_is_more_than = self.get_rule_config("profit_per_days")["dont_enter_trade_if_day_profit_is_more_than"]
+        self.dont_enter_trade_if_day_profit_is_more_than = self.get_rule_config("day_trading")["dont_enter_trade_if_day_profit_is_more_than"]
 
     def get_rule_config(self, rule_type):
         """

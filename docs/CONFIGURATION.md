@@ -132,17 +132,22 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
       }
     },
     {
-      "rule_name": "profit_per_days",
-      "rule_type": "profit_per_days",
+      "rule_name": "day_trading",
+      "rule_type": "day_trading",
       "rule_config": {
         "percent_profit_wanted_per_days": 1.7,
-        "dont_enter_trade_if_day_profit_is_more_than": 1.25
+        "dont_enter_trade_if_day_profit_is_more_than": 1.25,
+        "close_position_time": "21:55"
       }
     }
   ],
   "config": {
     "turbo": {
-      "exchange_id": "CATS_SAXO"
+      "exchange_id": "CATS_SAXO",
+      "price_range": {
+        "min": 4,
+        "max": 15
+      }
     }
   },
   "persistant": {
@@ -164,14 +169,18 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
    - Format: "MM/DD/YYYY"
    - Trading will not occur on these dates
 
-3. **profit_per_days**:
-   - Sets daily profit targets and limits
-   - **percent_profit_wanted_per_days**: Target daily profit percentage (1.7%)
-   - **dont_enter_trade_if_day_profit_is_more_than**: Don't open new positions if daily profit exceeds this threshold (1.25%)
+3. **day_trading**:
+   - Sets day trading multiple conditions:
+     - **percent_profit_wanted_per_days**: Target daily profit percentage (1.7%)
+     - **dont_enter_trade_if_day_profit_is_more_than**: Don't open new positions if daily profit exceeds this threshold (1.25%)
+     - **close_position_time**: Time when all positions should be automatically closed (format: "HH:MM", default: "21:55")
 
 ### Trading Configuration
 
 - **turbo.exchange_id**: Exchange ID for turbo warrant instruments
+- **turbo.price_range**: Price range for filtering turbo instruments
+  - **min**: Minimum price for turbo instruments (default: 4)
+  - **max**: Maximum price for turbo instruments (default: 15)
 - **persistant.last_action_file**: File path to store the last trading action
 
 ## Telegram Notifications
