@@ -260,14 +260,26 @@ Position ID : {buy_details["position"]["position_id"]}
 
 
 if __name__ == "__main__":
+    # Initialize rabbit_connection as None to handle potential initialization errors
+    rabbit_connection = None
+    
     try:
         config_path = os.getenv("WATA_CONFIG_PATH")
+        if not config_path:
+            print("WATA_CONFIG_PATH environment variable not set")
+            exit(1)
 
         # Get the application version
         app_version = get_version()
 
-        # Create an instance of ConfigurationManager
-        config_manager = ConfigurationManager(config_path)
+        # Create an instance of ConfigurationManager with validation
+        try:
+            config_manager = ConfigurationManager(config_path)
+            print("Configuration validated successfully")
+        except Exception as e:
+            print(f"Configuration validation failed: {e}")
+            print(traceback.format_exc())  # Print the full traceback for debugging
+            exit(1)
 
         # Use the logging utility to set up logging for the trader application
         setup_logging(config_manager, "wata-trader")
@@ -317,8 +329,14 @@ if __name__ == "__main__":
         )
 
     except Exception as e:
-        logging.error(f"General error: {e}")
-        send_message_to_mq_for_telegram(rabbit_connection, f"Trader general startup error: {e}")
+        error_msg = f"General startup error: {e}"
+        logging.error(error_msg)
+        print(error_msg)
+        if rabbit_connection:
+            try:
+                send_message_to_mq_for_telegram(rabbit_connection, f"Trader general startup error: {e}")
+            except:
+                pass  # If sending the message fails, we still want to exit
         exit(1)
 
     print(" [*] Waiting for messages in MQ. To exit press CTRL+C")
