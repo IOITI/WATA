@@ -1,8 +1,6 @@
 {
   "authentication": {
     "saxo": {
-      "username": "xxxx",
-      "password": "xxxx",
       "app_config_object": {
         "AppName": "xxxx",
         "AppKey": "xxxx",

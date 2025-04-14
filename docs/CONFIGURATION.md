@@ -13,8 +13,6 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 ```json
 "authentication": {
   "saxo": {
-    "username": "xxxx",
-    "password": "xxxx",
     "app_config_object": {
       "AppName": "xxxx",
       "AppKey": "xxxx",
@@ -34,8 +32,6 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 }
 ```
 
-- **username**: Your Saxo Bank account username
-- **password**: Your Saxo Bank account password
 - **app_config_object**: OAuth 2.0 configuration for the Saxo API
   - **AppName**: Your registered application name
   - **AppKey**: Your API key from Saxo Bank Developer Portal

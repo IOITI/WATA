@@ -22,12 +22,6 @@ class SaxoAuth:
         self.state = secrets.token_hex(16)
         self.config_manager = config_manager
         self.rabbit_connection = rabbit_connection
-        self.username = self.config_manager.get_config_value(
-            "authentication.saxo.username"
-        )
-        self.password = self.config_manager.get_config_value(
-            "authentication.saxo.password"
-        )
         self.app_data = self.config_manager.get_config_value(
             "authentication.saxo.app_config_object"
         )

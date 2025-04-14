@@ -65,8 +65,6 @@ class ConfigurationManager:
         # Validate authentication.saxo structure
         saxo_config = self.get_config_value("authentication.saxo")
         required_saxo_fields = [
-            "username",
-            "password",
             "app_config_object.AppName",
             "app_config_object.AppKey",
             "app_config_object.AuthorizationEndpoint",
