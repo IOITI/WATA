@@ -354,7 +354,7 @@ Here are some of the most common questions about WATA:
 
 ### Setup
 - **What are the minimum server requirements?**  
-  A basic VPS with 1GB RAM, 1 CPU core, and 10GB storage should be sufficient for getting started.
+  A basic VPS with 2GB RAM, 50GB SSD, 2 core CPU should be sufficient for getting started.
 
 For a comprehensive list of questions and answers, please see our detailed [FAQ document](docs/FAQ.md).
 
