@@ -95,7 +95,7 @@ and get the `bot_token`, and `chat_id`.
     * Edit `/app/etc/config.json` with your details:
         * Saxo app object inside `app_config_object`
         * Telegram `bot_token` and `chat_id`.
-        * Trading rules (`allowed_indices`, etc.).
+        * Trading rules (`allowed_indices`, `day_trading` with profit targets and maximum loss limits, etc.).
         * Review other settings as needed. Refer to the [CONFIGURATION Guide](CONFIGURATION.md) for full details.
 4. **Authenticate with Saxo**:
     * Start the application (`watastart`).

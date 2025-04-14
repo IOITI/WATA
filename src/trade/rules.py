@@ -9,7 +9,9 @@ class TradingRule:
         self.db_position_manager = db_position_manager
         self.allowed_indices_rule_config = self.get_rule_config("allowed_indices")
         self.market_closed_dates_list = self.get_rule_config("market_closed_dates")["market_closed_dates"]
-        self.dont_enter_trade_if_day_profit_is_more_than = self.get_rule_config("day_trading")["dont_enter_trade_if_day_profit_is_more_than"]
+        day_trading_config = self.get_rule_config("day_trading")
+        self.dont_enter_trade_if_day_profit_is_more_than = day_trading_config["dont_enter_trade_if_day_profit_is_more_than"]
+        self.max_day_loss_percent = day_trading_config["max_day_loss_percent"]
         self.signal_validation_config = self.get_rule_config("signal_validation")
         self.market_hours_config = self.get_rule_config("market_hours")
 
@@ -90,6 +92,13 @@ class TradingRule:
                        f"allowed percentage ({self.dont_enter_trade_if_day_profit_is_more_than}), "
                        f"so no more trade are allowed for today.")
             logging.info(message)
+            raise TradingRuleViolation(message)
+        
+        if today_percent <= self.max_day_loss_percent:
+            message = (f"Breaking trading rule : The current loss percentage ({today_percent}) has reached the "
+                       f"maximum allowed loss ({self.max_day_loss_percent}), "
+                       f"so no more trade are allowed for today.")
+            logging.error(message)
             raise TradingRuleViolation(message)
 
     @staticmethod

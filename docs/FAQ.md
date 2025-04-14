@@ -57,7 +57,7 @@
 *   **Q: Can I configure trading hours or holidays?**
     *   A: Yes. Use the `market_hours` rule to set `trading_start_hour` and `trading_end_hour`. Use the `market_closed_dates` rule to list dates (MM/DD/YYYY) when trading should not occur. Both are configured in the `trade.rules` section.
 *   **Q: How do I configure daily profit targets or limits?**
-    *   A: Use the `day_trading` rule in `trade.rules`. Configure `percent_profit_wanted_per_days` for the target and `dont_enter_trade_if_day_profit_is_more_than` to prevent new trades if a profit threshold is met. You can also set `close_position_time` to automatically close positions at a specific time.
+    *   A: Use the `day_trading` rule in `trade.rules`. Configure `percent_profit_wanted_per_days` for the target and `dont_enter_trade_if_day_profit_is_more_than` to prevent new trades if a profit threshold is met. Set `max_day_loss_percent` to define the maximum loss percentage allowed for a trading day (e.g., -25%). You can also set `close_position_time` to automatically close positions at a specific time.
 
 **Saxo Bank Authentication**
 

@@ -150,6 +150,7 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
         "rule_type": "day_trading",
         "rule_config": {
           "percent_profit_wanted_per_days": 1.7,
+          "max_day_loss_percent": -25,
           "dont_enter_trade_if_day_profit_is_more_than": 1.25,
           "close_position_time": "21:55"
         }
@@ -235,6 +236,7 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 3. **day_trading**:
    - Sets day trading multiple conditions:
      - **percent_profit_wanted_per_days**: Target daily profit percentage (1.7%)
+     - **max_day_loss_percent**: Maximum loss percentage allowed for a trading day (-25%)
      - **dont_enter_trade_if_day_profit_is_more_than**: Don't open new positions if daily profit exceeds this threshold (1.25%)
      - **close_position_time**: Time when all positions should be automatically closed (format: "HH:MM", default: "21:55")
 

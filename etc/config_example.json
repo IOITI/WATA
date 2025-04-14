@@ -88,6 +88,7 @@
         "rule_type": "day_trading",
         "rule_config": {
           "percent_profit_wanted_per_days": 1.7,
+          "max_day_loss_percent": -25,
           "dont_enter_trade_if_day_profit_is_more_than": 1.25,
           "close_position_time": "21:55"
         }

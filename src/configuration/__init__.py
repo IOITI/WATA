@@ -159,7 +159,8 @@ class ConfigurationManager:
                 # Validate numeric fields
                 numeric_fields = {
                     "percent_profit_wanted_per_days": (float, 0, 100),
-                    "dont_enter_trade_if_day_profit_is_more_than": (float, 0, 100)
+                    "dont_enter_trade_if_day_profit_is_more_than": (float, 0, 100),
+                    "max_day_loss_percent": (float, -100, 0)
                 }
                 
                 for field, (field_type, min_val, max_val) in numeric_fields.items():
