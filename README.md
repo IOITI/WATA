@@ -43,6 +43,41 @@ The system is particularly suited for traders who:
 - Value real-time monitoring and alerts
 - Prefer systematic, rule-based trading over discretionary decisions
 
+## 🚀 Getting Started
+
+For those looking to quickly get started with WATA:
+
+1. **Prerequisites**
+   - Saxo Bank account with API access
+   - Dedicated Ubuntu server (on VPS or local machine)
+   - Docker and Docker Compose installed
+   - Telegram bot for notifications
+
+2. **Quick Installation**
+   ```bash
+   # Clone the repository
+   git clone https://github.com/IOITI/wata.git
+   cd wata
+   
+   # Build the package
+   ./package.sh
+   
+   # Deploy the application
+   cd deploy/tools
+   ./deploy_app_to_your_server.sh
+   ```
+
+3. **First Steps on the server**
+   - Configure `.env` file with RabbitMQ password
+   - Copy and configure the example config file:
+     ```bash
+     cp /app/etc/config_example.json /app/etc/config.json
+     ```
+   - Start the system with `watastart`
+   - Set up your trading signals from TradingView or other source
+
+For detailed setup instructions, refer to our [HOW-TO Guide](docs/HOW-TO.md).
+
 ## 🏗️ Architecture
 
 WATA uses a microservice architecture with:
@@ -205,8 +240,6 @@ After deployment, you need to set up your configuration:
      ```json
      "authentication": {
        "saxo": {
-         "username": "your_saxo_username",
-         "password": "your_saxo_password",
          "app_config_object": {
            "AppName": "your_app_name",
            "AppKey": "your_app_key",
@@ -307,15 +340,41 @@ To use the reporting system, you need:
    This launches the development server on port 4321.
    Access the dashboard at: http://localhost:4321
 
-## 👏 Acknowledgements
+## ❓ Frequently Asked Questions
+
+Here are some of the most common questions about WATA:
+
+### General
+- **Is WATA suitable for beginners?**  
+  WATA requires understanding of trading concepts, Python, and server management. It's recommended for users with intermediate technical skills.
+
+### Trading
+- **What markets can I trade with WATA?**  
+  WATA supports trading Knock-out warrants (Turbos) available on Saxo Bank, primarily focusing on major indices.
+
+### Setup
+- **What are the minimum server requirements?**  
+  A basic VPS with 1GB RAM, 1 CPU core, and 10GB storage should be sufficient for getting started.
+
+For a comprehensive list of questions and answers, please see our detailed [FAQ document](docs/FAQ.md).
+
+## 🤝 Acknowledgements
 
 - [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
 - [Observable Framework](https://observablehq.com/framework), [DuckDB](https://duckdb.org/), [FastAPI](https://fastapi.tiangolo.com/), [RabbitMQ](https://www.rabbitmq.com/), [Ansible](https://www.ansible.com/)
 
 ## 🛠️ Contributors
 
-- [@ioiti](https://github.com/IOITI): Project author
+- [@ioiti](https://github.com/IOITI): Project author and maintainer
 - [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
+
+### How to Contribute
+
+We welcome contributions to WATA! Here's how you can help:
+
+1. **Report Issues**: Submit bugs or suggest features via GitHub issues
+2. **Submit Pull Requests**: Code improvements, documentation fixes, or new features
+3. **Share Feedback**: Let us know how you're using WATA and what could be improved
 
 ## 📄 License
 
