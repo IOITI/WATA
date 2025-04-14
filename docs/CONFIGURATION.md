@@ -107,68 +107,96 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 ## Trading Rules
 
 ```json
-"trade": {
-  "rules": [
-    {
-      "rule_name": "allowed_indices",
-      "rule_type": "allowed_indices",
-      "rule_config": {
-        "indice_ids": {
-          "us100": "1909050"
+{
+  "trade": {
+    "rules": [
+      {
+        "rule_name": "allowed_indices",
+        "rule_type": "allowed_indices",
+        "rule_config": {
+          "indice_ids": {
+            "us100": "1909050"
+          }
+        }
+      },
+      {
+        "rule_name": "market_closed_dates",
+        "rule_type": "market_closed_dates",
+        "rule_config": {
+          "market_closed_dates": [
+            "04/07/2024",
+            "02/09/2024",
+            "28/11/2024",
+            "25/12/2024",
+            "03/07/2024",
+            "29/11/2024",
+            "24/12/2024",
+            "01/01/2025",
+            "09/01/2025",
+            "20/01/2025",
+            "17/02/2025",
+            "18/04/2025",
+            "26/05/2025",
+            "19/06/2025",
+            "04/07/2025",
+            "01/09/2025",
+            "27/11/2025",
+            "25/12/2025",
+            "03/07/2025",
+            "28/11/2025",
+            "24/12/2025",
+            "01/01/2026"
+          ]
+        }
+      },
+      {
+        "rule_name": "day_trading",
+        "rule_type": "day_trading",
+        "rule_config": {
+          "percent_profit_wanted_per_days": 1.7,
+          "dont_enter_trade_if_day_profit_is_more_than": 1.25,
+          "close_position_time": "21:55"
+        }
+      },
+      {
+        "rule_name": "signal_validation",
+        "rule_type": "signal_validation",
+        "rule_config": {
+          "max_signal_age_minutes": 5
+        }
+      },
+      {
+        "rule_name": "market_hours",
+        "rule_type": "market_hours",
+        "rule_config": {
+          "trading_start_hour": 8,
+          "trading_end_hour": 22,
+          "risky_trading_start_hour": 21,
+          "risky_trading_start_minute": 54
         }
       }
-    },
-    {
-      "rule_name": "market_closed_dates",
-      "rule_type": "market_closed_dates",
-      "rule_config": {
-        "market_closed_dates": [
-          "04/07/2024",
-          "02/09/2024",
-          "28/11/2024",
-          "25/12/2024",
-          // Additional dates...
-        ]
-      }
-    },
-    {
-      "rule_name": "day_trading",
-      "rule_type": "day_trading",
-      "rule_config": {
-        "percent_profit_wanted_per_days": 1.7,
-        "dont_enter_trade_if_day_profit_is_more_than": 1.25,
-        "close_position_time": "21:55"
-      }
-    },
-    {
-      "rule_name": "signal_validation",
-      "rule_type": "signal_validation",
-      "rule_config": {
-        "max_signal_age_minutes": 5
-      }
-    },
-    {
-      "rule_name": "market_hours",
-      "rule_type": "market_hours",
-      "rule_config": {
-        "trading_start_hour": 8,
-        "trading_end_hour": 22,
-        "risky_trading_start_hour": 21,
-        "risky_trading_start_minute": 54
-      }
-    }
-  ],
-  "config": {
-    "turbo": {
-      "exchange_id": "CATS_SAXO",
-      "price_range": {
-        "min": 4,
-        "max": 15
+    ],
+    "config": {
+      "turbo_preference": {
+        "exchange_id": "CATS_SAXO",
+        "price_range": {
+          "min": 4,
+          "max": 15
+        }
       },
-      "performance_thresholds": {
-          "min": -20,
-          "max": 60
-        },
+      "buying_power": {
+        "max_account_funds_to_use_percentage": 100,
+        "safety_margins": {
+          "bid_calculation": 1
+        }
+      },
+      "position_management": {
+        "performance_thresholds": {
+          "stoploss_percent": -20,
+          "max_profit_percent": 60
+        }
+      },
+      "general": {
         "api_limits": {
           "top_instruments": 200,
           "top_positions": 200,
@@ -182,18 +210,15 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
           "check_interval_seconds": 7,
           "timeout_seconds": 20
         },
-        "safety_margins": {
-          "bid_calculation": 1
-        },
         "websocket": {
           "refresh_rate_ms": 10000
-        },
-        "trading_mode": "day_trading"
-      }
+        }
+      },
+      "trading_mode": "day_trading"
+    },
+    "persistant": {
+      "last_action_file": "/app/var/lib/trade/last_action.json"
     }
-  },
-  "persistant": {
-    "last_action_file": "/app/var/lib/trade/last_action.json"
   }
 }
 ```
@@ -233,26 +258,30 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
 
 ### Trading Configuration
 
-- **turbo.exchange_id**: Exchange ID for turbo warrant instruments
-- **turbo.price_range**: Price range for filtering turbo instruments
+- **turbo_preference.exchange_id**: Exchange ID for turbo warrant instruments
+- **turbo_preference.price_range**: Price range for filtering turbo instruments
   - **min**: Minimum price for turbo instruments (default: 4)
   - **max**: Maximum price for turbo instruments (default: 15)
-- **turbo.performance_thresholds**: Min/max performance percentages to trigger closing a position
-  - **min**: Minimum performance percentage (e.g., -20)
-  - **max**: Maximum performance percentage (e.g., 60)
-- **turbo.api_limits**: Limits for API requests
+- **buying_power.max_account_funds_to_use_percentage**: Maximum percentage of account balance that can be used for trading (1-100, default: 100)
+  - Controls how much of your available Saxo account funds can be allocated to a single position
+  - Lower values provide a safety margin and limit exposure
+  - Example: Setting to 50 means only half of your available balance will be used for trading
+- **buying_power.safety_margins**: Safety margins for calculations
+  - **bid_calculation**: Margin subtracted when calculating bid amount (default: 1)
+- **position_management.performance_thresholds**: Performance percentages to trigger closing a position
+  - **stoploss_percent**: Minimum performance percentage (e.g., -20)
+  - **max_profit_percent**: Maximum performance percentage (e.g., 60)
+- **general.api_limits**: Limits for API requests
   - **top_instruments**: Max instruments to fetch (default: 200)
   - **top_positions**: Max open positions to fetch (default: 200)
   - **top_closed_positions**: Max closed positions to fetch (default: 500)
-- **turbo.retry_config**: Settings for retrying actions
+- **general.retry_config**: Settings for retrying actions
   - **max_retries**: Maximum number of retries (e.g., finding position after order) (default: 10)
   - **retry_sleep_seconds**: Seconds to wait between retries (default: 1)
-- **turbo.position_check**: Settings for periodic position performance checks
+- **general.position_check**: Settings for periodic position performance checks
   - **check_interval_seconds**: How often to check performance (default: 7)
   - **timeout_seconds**: How long the check process should run before stopping (default: 20)
-- **turbo.safety_margins**: Safety margins for calculations
-  - **bid_calculation**: Margin subtracted when calculating bid amount (default: 1)
-- **turbo.websocket**: WebSocket configuration
+- **general.websocket**: WebSocket configuration
   - **refresh_rate_ms**: Refresh rate for WebSocket subscriptions in milliseconds (default: 10000)
 - **persistant.last_action_file**: File path to store the last trading action
 

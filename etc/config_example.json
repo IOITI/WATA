@@ -113,16 +113,26 @@
       }
     ],
     "config": {
-      "turbo": {
+      "turbo_preference": {
         "exchange_id": "CATS_SAXO",
         "price_range": {
           "min": 4,
           "max": 15
-        },
+        }
+      },
+      "buying_power": {
+        "max_account_funds_to_use_percentage": 100,
+        "safety_margins": {
+          "bid_calculation": 1
+        }
+      },
+      "position_management": {
         "performance_thresholds": {
-          "min": -20,
-          "max": 60
-        },
+          "stoploss_percent": -20,
+          "max_profit_percent": 60
+        }
+      },
+      "general": {
         "api_limits": {
           "top_instruments": 200,
           "top_positions": 200,
@@ -135,9 +145,6 @@
         "position_check": {
           "check_interval_seconds": 7,
           "timeout_seconds": 20
-        },
-        "safety_margins": {
-          "bid_calculation": 1
         },
         "websocket": {
           "refresh_rate_ms": 10000
