@@ -301,7 +301,7 @@ if __name__ == "__main__":
         trading_rule = TradingRule(config_manager, db_position_manager)
 
         trade_turbo_exchange_id = config_manager.get_config_value(
-            "trade.config.turbo.exchange_id"
+            "trade.config.turbo_preference.exchange_id"
         )
         logging.info(f"Preferred exchange id for turbo is {trade_turbo_exchange_id}")
         last_action_persistant_file = config_manager.get_config_value(

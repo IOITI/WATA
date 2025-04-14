@@ -57,18 +57,24 @@ class SaxoService:
         self.logging_config = config_manager.get_logging_config()
         self.percent_profit_wanted_per_days = trading_rule.get_rule_config("day_trading")["percent_profit_wanted_per_days"]
 
-        # Get turbo configuration
-        self.turbo_config = config_manager.get_config_value("trade.config.turbo", {})
-        self.turbo_price_range = self.turbo_config.get("price_range", {"min": 4, "max": 15})
-        self.performance_thresholds = self.turbo_config.get("performance_thresholds", {"min": -20, "max": 60})
-        self.api_limits = self.turbo_config.get("api_limits", {"top_instruments": 200, "top_positions": 200, "top_closed_positions": 500})
-        self.retry_config = self.turbo_config.get("retry_config", {"max_retries": 10, "retry_sleep_seconds": 1})
-        self.position_check = self.turbo_config.get("position_check", {"check_interval_seconds": 7, "timeout_seconds": 20})
-        self.safety_margins = self.turbo_config.get("safety_margins", {"bid_calculation": 1})
-        self.websocket_config = self.turbo_config.get("websocket", {"refresh_rate_ms": 10000})
+        # Get trade configuration
+        self.turbo_preference = config_manager.get_config_value("trade.config.turbo_preference", {})
+        self.buying_power = config_manager.get_config_value("trade.config.buying_power", {})
+        self.position_management = config_manager.get_config_value("trade.config.position_management", {})
+        self.general_config = config_manager.get_config_value("trade.config.general", {})
+        
+        # Set specific configuration properties
+        self.turbo_price_range = self.turbo_preference.get("price_range", {"min": 4, "max": 15})
+        self.performance_thresholds = self.position_management.get("performance_thresholds", {"stoploss_percent": -20, "max_profit_percent": 60})
+        self.api_limits = self.general_config.get("api_limits", {"top_instruments": 200, "top_positions": 200, "top_closed_positions": 500})
+        self.retry_config = self.general_config.get("retry_config", {"max_retries": 10, "retry_sleep_seconds": 1})
+        self.position_check = self.general_config.get("position_check", {"check_interval_seconds": 7, "timeout_seconds": 20})
+        self.safety_margins = self.buying_power.get("safety_margins", {"bid_calculation": 1})
+        self.websocket_config = self.general_config.get("websocket", {"refresh_rate_ms": 10000})
 
         logging.info(f"Configured turbo price filtering range: Min={self.turbo_price_range['min']}, Max={self.turbo_price_range['max']}")
-
+        
+        # Initialize managers
         self.db_order_manager = db_order_manager
         self.db_position_manager = db_position_manager
         self.rabbit_connection = rabbit_connection
@@ -396,15 +402,20 @@ class SaxoService:
             spending_power = resp_balance["SpendingPower"]
             logging.info(f"Cash Balance: {spending_power}")
 
+            # Apply max account percentage limit
+            max_account_funds_to_use_percentage = self.buying_power.get("max_account_funds_to_use_percentage", 100)
+            available_funds = spending_power * (max_account_funds_to_use_percentage / 100)
+            logging.info(f"Available funds for trading ({max_account_funds_to_use_percentage}% of {spending_power}): {available_funds}")
+
             # Calculate amount with safety margin
             safety_margin = self.safety_margins["bid_calculation"]
-            pre_amount = (spending_power / ask_price) - safety_margin
+            pre_amount = (available_funds / ask_price) - safety_margin
             amount = int(math.floor(pre_amount))
 
             if amount <= 0:
                 raise ValueError(
                     f"Insufficient funds to buy 1 or more turbo @ {ask_price}"
-                    f" (balance: {spending_power})"
+                    f" (available: {available_funds}, total balance: {spending_power})"
                 )
 
             return amount
@@ -961,7 +972,7 @@ Current today profit : {today_percent}%
                                 current_time_compare = datetime.now(pytz.timezone('Europe/Paris'))
 
                                 # Check if performance_percent is between stoploss and takeprofit
-                                if self.performance_thresholds["min"] < performance_percent <= self.performance_thresholds["max"]:
+                                if self.performance_thresholds["stoploss_percent"] < performance_percent <= self.performance_thresholds["max_profit_percent"]:
                                     message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
                                     logging.info(message)
                                     print(message)
