@@ -84,7 +84,7 @@
 **Reporting & Monitoring**
 
 *   **Q: How can I track WATA's trading performance?**
-    *   A: WATA stores trade data in a DuckDB database. An Observable Framework-based reporting dashboard can be set up locally to visualize performance (daily/cumulative P&L, win rate, etc.). Follow the steps in the [README.md#📈-reporting](README.md#%F0%9F%93%88-reporting) section.
+    *   A: WATA stores trade data in a DuckDB database. An Observable Framework-based reporting dashboard can be set up locally to visualize performance (daily/cumulative P&L, win rate, etc.). Follow the steps in the [README.md#📈-reporting](../README.md#%F0%9F%93%88-reporting) section.
 *   **Q: How do I monitor the application's activity?**
     *   A: Check the Telegram notifications for real-time updates on signals, trades, and errors. Use the `watalogs` command on the server to view detailed logs. Use `watastatus` to check the status of the Docker containers.
 
