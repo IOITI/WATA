@@ -10,13 +10,19 @@ An automated Python-based trading system for Knock-out warrants (Turbos) on Saxo
 > 
 > **This is a personal learning project and not production-ready software.**
 > 
-> **Risk Warning: WATA can lose all your money due to:**
+>  Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
+>
+> Always start by running WATA with small money amounts to test the system and its performance. Use a secondary Saxo account if possible. Understand the risks involved in trading before you start, and do not engage money before you understand how it works and what profit/loss you should expect.
+>
+> **Risk Warning: WATA CAN LOSE ALL YOUR MONEY due to:**
 > - Insufficient code testing
-> - Limited security measures
+> - Limited security measures on your server
 > - Lack of fail-safe mechanisms
 > - No comprehensive monitoring included
 > - Absence of fail-over systems
 > - Limited user experience
+> - Change of Saxo Bank API
+> - Because trading with leverage is very risky
 > 
 > *This software is provided "as is" without warranty. The authors accept no liability for any damages arising from its use.*
 
