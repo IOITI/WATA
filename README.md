@@ -141,15 +141,15 @@ flowchart TD
     end
     
     %% Connections with styled arrows
-    TV -- "1. Webhook Signal" --> WS
-    WS -- "2. Signal Message" --> RMQ
-    RMQ -- "3. Position Request" --> TR
+    TV -- "1️⃣ Webhook Signal" --> WS
+    WS -- "2️⃣ Signal Message" --> RMQ
+    RMQ -- "3️⃣ Position Request" --> TR
     TR -- "Authentication" --> SB
     User -- "Auth Code" --> TR
-    TR -- "4. Trading Operations" --> SB
+    TR -- "4️⃣ Trading Operations" --> SB
     TR -- "Send Notification" --> RMQ
     RMQ -- "Notification Request" --> TG
-    TG -- "5. Notifications" --> User
+    TG -- "5️⃣ Notifications" --> User
     TR -- "Position Data" --> DB
     DB -- "Query Results" --> TR
     SC -- "Periodic Tasks" --> RMQ
