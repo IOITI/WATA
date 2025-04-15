@@ -104,16 +104,16 @@ WATA uses a microservice architecture with:
 ```mermaid
 flowchart TD
     %% Styling
-    classDef external fill:#f9f9f9,stroke:#aaa,stroke-width:1px
-    classDef processing fill:#e1f5fe,stroke:#03a9f4,stroke-width:1px
-    classDef execution fill:#e8f5e9,stroke:#4caf50,stroke-width:1px
-    classDef jobs fill:#fff8e1,stroke:#ffc107,stroke-width:1px
-    classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray: 5 5
-    classDef reporting fill:#ffebee,stroke:#f44336,stroke-width:1px
+    classDef external fill:#f9f9f9,stroke:#aaa,stroke-width:1px,color:#000
+    classDef processing fill:#e1f5fe,stroke:#03a9f4,stroke-width:1px,color:#000
+    classDef execution fill:#e8f5e9,stroke:#4caf50,stroke-width:1px,color:#000
+    classDef jobs fill:#fff8e1,stroke:#ffc107,stroke-width:1px,color:#000
+    classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray: 5 5,color:#000
+    classDef reporting fill:#ffebee,stroke:#f44336,stroke-width:1px,color:#000
     
     
             %% Reporting System
-    subgraph RepSys["📊 Reporting System"]
+    subgraph RepSys["📊 Reporting System(on your local machine)"]
         EX("🔄 Data Export")
         OD("📈 Observable<br>Dashboard")
     end
