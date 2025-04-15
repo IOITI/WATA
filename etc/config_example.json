@@ -147,7 +147,8 @@
         },
         "websocket": {
           "refresh_rate_ms": 10000
-        }
+        },
+        "timezone": "Europe/Paris"
       },
       "trading_mode": "day_trading"
     },

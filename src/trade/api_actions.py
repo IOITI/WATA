@@ -71,8 +71,10 @@ class SaxoService:
         self.position_check = self.general_config.get("position_check", {"check_interval_seconds": 7, "timeout_seconds": 20})
         self.safety_margins = self.buying_power.get("safety_margins", {"bid_calculation": 1})
         self.websocket_config = self.general_config.get("websocket", {"refresh_rate_ms": 10000})
+        self.timezone = self.general_config.get("timezone", "Europe/Paris")
 
         logging.info(f"Configured turbo price filtering range: Min={self.turbo_price_range['min']}, Max={self.turbo_price_range['max']}")
+        logging.info(f"Using timezone: {self.timezone}")
         
         # Initialize managers
         self.db_order_manager = db_order_manager
@@ -968,8 +970,8 @@ Current today profit : {today_percent}%
                                 performance_percent = round(((position_details["PositionView"]["Bid"] * 100) /
                                                              position_details["PositionBase"]["OpenPrice"]) - 100, 2)
 
-                                # Get the current time in French timezone
-                                current_time_compare = datetime.now(pytz.timezone('Europe/Paris'))
+                                # Get the current time in configured timezone
+                                current_time_compare = datetime.now(pytz.timezone(self.timezone))
 
                                 # Check if performance_percent is between stoploss and takeprofit
                                 if self.performance_thresholds["stoploss_percent"] < performance_percent <= self.performance_thresholds["max_profit_percent"]:
@@ -1049,10 +1051,10 @@ Current today profit : {today_percent}%
                                     "current_minute": current_time_compare.strftime("%M"),
                                     "open_hour": datetime.fromisoformat(
                                         position_details["PositionBase"]["ExecutionTimeOpen"]).astimezone(
-                                        pytz.timezone('Europe/Paris')).hour,
+                                        pytz.timezone(self.timezone)).hour,
                                     "open_minute": datetime.fromisoformat(
                                         position_details["PositionBase"]["ExecutionTimeOpen"]).astimezone(
-                                        pytz.timezone('Europe/Paris')).minute
+                                        pytz.timezone(self.timezone)).minute
                                 }
                                 self.write_to_performance_jsonl_file(performance_json)
 
@@ -1113,7 +1115,7 @@ Current today profit : {today_percent}%
 
     def write_to_performance_jsonl_file(self, performance_json):
         # Get today's date in YYYY-MM-DD format
-        today_date = datetime.now(pytz.timezone('Europe/Paris')).strftime("%Y-%m-%d")
+        today_date = datetime.now(pytz.timezone(self.timezone)).strftime("%Y-%m-%d")
 
         # Construct the filename using today's date
         filename = f"{self.logging_config['persistant']['log_path']}/performance_{today_date}.jsonl"

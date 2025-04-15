@@ -247,6 +247,24 @@ class ConfigurationManager:
         # Validate trade.config structure
         trade_config = self.get_config_value("trade.config")
         if trade_config:
+            # Validate timezone if present
+            timezone = self.get_config_value("trade.config.general.timezone")
+            if timezone:
+                try:
+                    import pytz
+                    pytz.timezone(timezone)
+                except pytz.exceptions.UnknownTimeZoneError:
+                    error_msg = f"Invalid timezone '{timezone}' in trade.config.general.timezone"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+            else:
+                logger.warning("Timezone not specified in config, using default 'Europe/Paris'")
+                # Set default timezone
+                if "general" not in trade_config:
+                    trade_config["general"] = {}
+                if "timezone" not in trade_config["general"]:
+                    trade_config["general"]["timezone"] = "Europe/Paris"
+            
             # Validate turbo_preference structure
             required_configs = {
                 "turbo_preference": [

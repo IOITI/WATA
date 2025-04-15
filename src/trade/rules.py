@@ -14,6 +14,8 @@ class TradingRule:
         self.max_day_loss_percent = day_trading_config["max_day_loss_percent"]
         self.signal_validation_config = self.get_rule_config("signal_validation")
         self.market_hours_config = self.get_rule_config("market_hours")
+        self.timezone = self.config_manager.get_config_value("trade.config.general.timezone", "Europe/Paris")
+        logging.info(f"Trading rules using timezone: {self.timezone}")
 
     def get_rule_config(self, rule_type):
         """
@@ -58,8 +60,8 @@ class TradingRule:
         signal_time = datetime.strptime(signal_timestamp, "%Y-%m-%dT%H:%M:%SZ")
         signal_time = signal_time.replace(tzinfo=pytz.UTC)  # Ensure it's in UTC
 
-        # Get the current time in French timezone
-        current_time = datetime.now(pytz.timezone('Europe/Paris'))
+        # Get the current time in configured timezone
+        current_time = datetime.now(pytz.timezone(self.timezone))
 
         # Format the current date to match the format of the list
         today_date_string = current_time.strftime("%d/%m/%Y")

@@ -12,6 +12,22 @@ from src.logging_helper import setup_logging
 from src.trade.rules import TradingRule
 
 
+config_path = os.getenv("WATA_CONFIG_PATH")
+
+config_manager = ConfigurationManager(config_path)
+
+# Retrieve logging configuration
+logging_config = config_manager.get_logging_config()
+
+# Use the logging utility to set up logging for the scheduler application
+setup_logging(config_manager, "wata-scheduler")
+
+# Get timezone configuration
+timezone = config_manager.get_config_value("trade.config.general.timezone", "Europe/Paris")
+
+# Get trading rule
+trading_rule = TradingRule(config_manager, None)
+
 # Function to send 'ping_saxo_api' every 1 minutes
 @repeat(every(1).minutes)
 def job_check_positions_on_saxo_api():
@@ -27,7 +43,7 @@ def job_check_positions_on_saxo_api():
     send_message_to_trading(message)
 
 
-@repeat(every().day.at(time_str="22:00", tz="Europe/Paris"))
+@repeat(every().day.at(time_str="22:00", tz=timezone))
 def job_daily_stats():
     # Get the current time in UTC
     now_utc = datetime.now(pytz.utc)
@@ -87,7 +103,7 @@ def job_daily_stats():
 
 
 # Function to send 'close-position' every day at configured time
-@repeat(every().day.at(time_str=TradingRule(config_manager, None).get_rule_config("day_trading")["close_position_time"], tz="Europe/Paris"))
+@repeat(every().day.at(time_str=trading_rule.get_rule_config("day_trading")["close_position_time"], tz=timezone))
 def job_close_position():
     # Get the current time in UTC
     now_utc = datetime.now(pytz.utc)
@@ -131,16 +147,6 @@ def send_message_to_trading(message):
         if "connection" in locals():
             connection.close()
 
-
-config_path = os.getenv("WATA_CONFIG_PATH")
-
-config_manager = ConfigurationManager(config_path)
-
-# Retrieve logging configuration
-logging_config = config_manager.get_logging_config()
-
-# Use the logging utility to set up logging for the scheduler application
-setup_logging(config_manager, "wata-scheduler")
 
 last_action_persistant_file = config_manager.get_config_value(
     "trade.persistant.last_action_file"
