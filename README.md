@@ -142,7 +142,8 @@ flowchart TD
     end
     
     %% Reporting System
-    subgraph RepSys["📊 Reporting System (on your local machine)"]
+    subgraph RepSys["📊 Local Reporting System"]
+        direction LR
         EX("🔄 Data Export")
         OD("📈 Observable<br>Dashboard")
     end
@@ -161,7 +162,7 @@ flowchart TD
     SC -- "Periodic Tasks" --> RMQ
     RMQ -- "Status Tasks" --> TR
     TR <-- "Performance Data" --> DB
-    DB -. "6️⃣ Data Sync" .-> EX
+    DB -. "6️⃣ Manual Data Sync" .-> EX
     EX -. "Data Transform" .-> OD
     OD -. "7️⃣ Performance<br>Visualization" .-> User
     
