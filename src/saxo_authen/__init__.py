@@ -6,9 +6,15 @@ import time
 import datetime
 import os
 import logging
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import stat
 
 from src.configuration import ConfigurationManager
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
+from src.database import DbTokenManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,60 @@ class SaxoAuth:
             "authentication.persistant.token_path"
         )
         self.auth_code_path = os.path.join(os.path.dirname(self.token_file_path), "saxo_auth_code.txt")
+        
+        # Ensure token directory exists
+        os.makedirs(os.path.dirname(self.token_file_path), exist_ok=True)
+        
+        # Initialize encryption key
+        self._initialize_encryption()
+        
+        # Initialize token database manager
+        self.token_db = DbTokenManager(config_manager)
+        self.token_id = "saxo_token"  # Unique identifier for Saxo tokens
+
+    def _initialize_encryption(self):
+        """
+        Initialize encryption for secure token storage.
+        The key is derived from APP_SECRET plus a salt stored in a separate file.
+        """
+        key_file_path = os.path.join(os.path.dirname(self.token_file_path), ".key_salt")
+        
+        # Create or load salt
+        if os.path.exists(key_file_path):
+            with open(key_file_path, "rb") as key_file:
+                salt = key_file.read()
+        else:
+            # Generate new salt if doesn't exist
+            salt = os.urandom(16)
+            with open(key_file_path, "wb") as key_file:
+                key_file.write(salt)
+            # Set restrictive permissions on the key file
+            os.chmod(key_file_path, stat.S_IRUSR | stat.S_IWUSR)
+        
+        # Derive key from app secret and salt
+        password = self.app_data["AppSecret"].encode()
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password))
+        self.cipher = Fernet(key)
+        
+    def _encrypt_data(self, data):
+        """Encrypt data before storing"""
+        json_data = json.dumps(data).encode()
+        return self.cipher.encrypt(json_data)
+    
+    def _decrypt_data(self, encrypted_data):
+        """Decrypt stored data"""
+        try:
+            decrypted_data = self.cipher.decrypt(encrypted_data)
+            return json.loads(decrypted_data)
+        except Exception as e:
+            logger.error(f"Error decrypting data: {e}")
+            return None
 
     def get_authorization_url(self):
         """
@@ -194,11 +254,29 @@ class SaxoAuth:
 
     def save_token_data(self, token_data):
         """
-        Save token data to a JSON file.
+        Save token data to database in encrypted format.
         """
         token_data["date_saved"] = datetime.datetime.now().isoformat()
-        with open(self.token_file_path, "w") as token_file:
-            json.dump(token_data, token_file)
+        
+        # Encrypt the token data
+        encrypted_data = self._encrypt_data(token_data)
+        
+        # Store in database
+        metadata = json.dumps({
+            "expires_in": token_data["expires_in"],
+            "refresh_token_expires_in": token_data.get("refresh_token_expires_in", 0),
+            "date_saved": token_data["date_saved"]
+        })
+        
+        self.token_db.store_token(
+            token_id=self.token_id,
+            token_type="saxo_oauth",
+            encrypted_data=encrypted_data,
+            metadata=metadata
+        )
+        
+        logger.info("Token data securely saved to database with encryption")
+        
 
     def is_token_expired(self, token_data):
         """
@@ -239,11 +317,27 @@ class SaxoAuth:
         Get a valid access token, either by refreshing an existing token or obtaining a new one.
         """
         try:
-            if os.path.exists(self.token_file_path):
-                with open(self.token_file_path, "r") as token_file:
-                    token_data = json.load(token_file)
-            else:
-                token_data = {}
+            token_data = {}
+            
+            # Try to get token from database first
+            encrypted_data = self.token_db.get_token(self.token_id)
+            if encrypted_data:
+                token_data = self._decrypt_data(encrypted_data) or {}
+                logger.info("Token data retrieved from database")
+            # If no token in database, try legacy file storage
+            elif os.path.exists(self.token_file_path):
+                try:
+                    with open(self.token_file_path, "rb") as token_file:
+                        encrypted_data = token_file.read()
+                    token_data = self._decrypt_data(encrypted_data) or {}
+                    logger.info("Token data retrieved from file (legacy storage)")
+                    # Migrate to database storage
+                    if token_data:
+                        self.save_token_data(token_data)
+                        logger.info("Migrated token data from file to database")
+                except Exception as e:
+                    logger.error(f"Error reading or decrypting token file: {e}")
+                    token_data = {}
 
             if self.is_token_expired(token_data):
                 if self.is_refresh_token_expired(token_data):
@@ -269,7 +363,7 @@ class SaxoAuth:
             logger.error(f"Token file not found: {e}")
             raise
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding token file: {e}")
+            logger.error(f"Error decoding token data: {e}")
             raise
         except Exception as e:
             logger.error(f"Error getting token: {e}")

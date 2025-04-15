@@ -683,3 +683,127 @@ class DbTradePerformanceManager(TradingDataDB):
                 data["max_perf_day_simulated"],
             ),
         )
+
+
+class DbTokenManager(TradingDataDB):
+    """
+    Manages encrypted token storage in DuckDB.
+    Provides secure storage for authentication tokens.
+    """
+    def __init__(self, config_manager):
+        super().__init__(config_manager)
+        self.create_schema_auth_tokens()
+
+    def create_schema_auth_tokens(self):
+        """
+        Creates the table schema for storing encrypted auth tokens.
+        """
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_tokens (
+                token_id VARCHAR PRIMARY KEY,
+                token_type VARCHAR,
+                encrypted_data BLOB,
+                creation_time TIMESTAMP,
+                last_update TIMESTAMP,
+                metadata VARCHAR
+            )
+            """
+        )
+
+    def store_token(self, token_id, token_type, encrypted_data, metadata=None):
+        """
+        Stores an encrypted token in the database.
+        
+        Args:
+            token_id (str): Unique identifier for the token (e.g., 'saxo_token')
+            token_type (str): Type of token (e.g., 'oauth', 'api_key')
+            encrypted_data (bytes): Encrypted token data
+            metadata (str, optional): Additional metadata as JSON string
+        """
+        now = datetime.now()
+        self.conn.execute(
+            """
+            INSERT INTO auth_tokens (token_id, token_type, encrypted_data, creation_time, last_update, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (token_id) DO UPDATE SET
+                encrypted_data = excluded.encrypted_data,
+                last_update = excluded.last_update,
+                metadata = excluded.metadata
+            """,
+            (token_id, token_type, encrypted_data, now, now, metadata)
+        )
+
+    def get_token(self, token_id):
+        """
+        Retrieves an encrypted token from the database.
+        
+        Args:
+            token_id (str): Unique identifier for the token
+            
+        Returns:
+            bytes or None: Encrypted token data if found, None otherwise
+        """
+        result = self.conn.execute(
+            """
+            SELECT encrypted_data
+            FROM auth_tokens
+            WHERE token_id = ?
+            """,
+            (token_id,)
+        ).fetchone()
+        
+        return result[0] if result else None
+
+    def token_exists(self, token_id):
+        """
+        Checks if a token exists in the database.
+        
+        Args:
+            token_id (str): Unique identifier for the token
+            
+        Returns:
+            bool: True if token exists, False otherwise
+        """
+        result = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM auth_tokens
+            WHERE token_id = ?
+            """,
+            (token_id,)
+        ).fetchone()
+        
+        return result[0] > 0
+
+    def delete_token(self, token_id):
+        """
+        Deletes a token from the database.
+        
+        Args:
+            token_id (str): Unique identifier for the token
+        """
+        self.conn.execute(
+            """
+            DELETE FROM auth_tokens
+            WHERE token_id = ?
+            """,
+            (token_id,)
+        )
+
+    def update_metadata(self, token_id, metadata):
+        """
+        Updates the metadata for a token.
+        
+        Args:
+            token_id (str): Unique identifier for the token
+            metadata (str): New metadata as JSON string
+        """
+        self.conn.execute(
+            """
+            UPDATE auth_tokens
+            SET metadata = ?, last_update = ?
+            WHERE token_id = ?
+            """,
+            (metadata, datetime.now(), token_id)
+        )
