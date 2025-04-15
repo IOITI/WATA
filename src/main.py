@@ -144,7 +144,7 @@ def callback(ch, method, properties, body):
         try:
             if data_from_mq["action"] == "long" or data_from_mq["action"] == "short":
                 # Check if the signal_timestamp is too old
-                TradingRule.check_signal_timestamp(data_from_mq.get("alert_timestamp"))
+                trading_rule.check_signal_timestamp(data_from_mq.get("alert_timestamp"))
                 # Check if the current time is within the allowed market hours, or dates
                 trading_rule.check_market_hours(data_from_mq.get("signal_timestamp"))
                 # Check if the indice exists in the indices dictionary and get its ID
