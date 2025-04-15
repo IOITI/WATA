@@ -1,10 +1,21 @@
-<img src="docs/images/wata_header.png" alt="WATA Logo" width="400"/>
+<div align="center">
+  <div style="display: flex; align-items: center; justify-content: center;">
+    <img src="docs/images/wata_logo.png" alt="WATA Logo" width="75"/>
+    <h1 style="margin-left: 20px; margin-top: 0; margin-bottom: 2;">WATA - Warrants Automated Trading Assistant</h1>
+  </div>
+  <p>Automated trading system for Saxo Bank's Knock-out warrants (Turbos), executing trades via webhook signals.</p>
+</div>
+
+![GitHub repo size](https://img.shields.io/github/repo-size/IOITI/wata?style=flat-square)
+![GitHub contributors](https://img.shields.io/github/contributors/IOITI/wata?style=flat-square)
+![GitHub issues](https://img.shields.io/github/issues/IOITI/wata?style=flat-square)
+![GitHub license](https://img.shields.io/github/license/IOITI/wata?style=flat-square)
+![GitHub last commit](https://img.shields.io/github/last-commit/IOITI/wata?style=flat-square)
+![GitHub Release Date](https://img.shields.io/github/release-date/IOITI/wata?style=flat-square)
+![GitHub Stars](https://img.shields.io/github/stars/IOITI/wata?style=social) 
+![GitHub Forks](https://img.shields.io/github/forks/IOITI/wata?style=social)
 
 ---
-
-# WATA - Warrants Automated Trading Assistant
-
-An automated Python-based trading system for Knock-out warrants (Turbos) on Saxo Bank, executing trades via webhook signals.
 
 > [!WARNING]
 > 
