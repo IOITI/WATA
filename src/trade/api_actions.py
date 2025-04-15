@@ -184,8 +184,8 @@ class SaxoService:
             logging.debug(f"Data Count After Cleaning NoMarket: {no_market_count}")
 
             sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Bid"])
-            mid_sorted_count = len(sorted_data)
-            logging.debug(f"Data Count After Sorting by Bid: {mid_sorted_count}")
+            bid_sorted_count = len(sorted_data)
+            logging.debug(f"Data Count After Sorting by Bid: {bid_sorted_count}")
 
             # Now, 'filtered_data' contains only the items where 'Bid' is between min and max from configuration
             min_price = self.turbo_price_range["min"]
@@ -206,7 +206,7 @@ class SaxoService:
                     f"\nPrice range checked: {min_price}-{max_price}."
                     f"\nSearch process: {info_prices_count} instruments found initially,"
                     f"\n{no_market_count} after removing 'NoMarket' items,"
-                    f"\n{mid_sorted_count} after sorting, and"
+                    f"\n{bid_sorted_count} after sorting, and"
                     f"\n{final_count} after filtering by price range."
                     f"\nSo it's impossible to find a turbo {Keywords} in the price range {min_price}-{max_price}"
                 )
