@@ -183,19 +183,19 @@ class SaxoService:
             no_market_count = len(response["Data"])
             logging.debug(f"Data Count After Cleaning NoMarket: {no_market_count}")
 
-            sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Mid"])
+            sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Bid"])
             mid_sorted_count = len(sorted_data)
-            logging.debug(f"Data Count After Sorting by Mid: {mid_sorted_count}")
+            logging.debug(f"Data Count After Sorting by Bid: {mid_sorted_count}")
 
-            # Now, 'filtered_data' contains only the items where 'Mid' is between min and max from configuration
+            # Now, 'filtered_data' contains only the items where 'Bid' is between min and max from configuration
             min_price = self.turbo_price_range["min"]
             max_price = self.turbo_price_range["max"]
             filtered_data = [
-                item for item in sorted_data if min_price <= item["Quote"]["Mid"] <= max_price
+                item for item in sorted_data if min_price <= item["Quote"]["Bid"] <= max_price
             ]
 
             final_count = len(filtered_data)
-            logging.debug(f"Data Count After Filtering by Mid Range ({min_price}-{max_price}): {final_count}")
+            logging.debug(f"Data Count After Filtering by Bid Range ({min_price}-{max_price}): {final_count}")
 
             # Check if filtered_data is empty
             if not filtered_data:
