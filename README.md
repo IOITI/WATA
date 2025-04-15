@@ -111,13 +111,6 @@ flowchart TD
     classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray: 5 5,color:#000
     classDef reporting fill:#ffebee,stroke:#f44336,stroke-width:1px,color:#000
     
-    
-            %% Reporting System
-    subgraph RepSys["📊 Reporting System(on your local machine)"]
-        EX("🔄 Data Export")
-        OD("📈 Observable<br>Dashboard")
-    end
-    
     %% External Systems
     subgraph ExtSys["🌐 External Systems"]
         direction LR
@@ -148,6 +141,11 @@ flowchart TD
         end
     end
     
+    %% Reporting System
+    subgraph RepSys["📊 Reporting System (on your local machine)"]
+        EX("🔄 Data Export")
+        OD("📈 Observable<br>Dashboard")
+    end
     
     %% Connections with styled arrows
     TV -- "1️⃣ Webhook Signal" --> WS
