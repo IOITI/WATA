@@ -101,6 +101,69 @@ WATA uses a microservice architecture with:
 | **Telegram**      | Delivers notifications and alerts                             |
 | **RabbitMQ**      | Handles inter-component messaging                             |
 
+```mermaid
+flowchart TD
+    %% Styling
+    classDef external fill:#f9f9f9,stroke:#aaa,stroke-width:1px
+    classDef processing fill:#e1f5fe,stroke:#03a9f4,stroke-width:1px
+    classDef execution fill:#e8f5e9,stroke:#4caf50,stroke-width:1px
+    classDef jobs fill:#fff8e1,stroke:#ffc107,stroke-width:1px
+    classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray: 5 5
+    
+    %% External Systems
+    subgraph ExtSys["🌐 External Systems"]
+        direction LR
+        TV("🖥️ TradingView/<br>Signal Source")
+        SB("🏦 Saxo Bank API")
+        User("👤 User/Trader")
+        TG("📱 Telegram Service")
+    end
+    
+    %% WATA Core Services
+    subgraph CoreSys["⚙️ WATA Core Services"]
+        direction TB
+        
+        subgraph SigProc["📡 Signal Processing"]
+            direction LR
+            WS("🔌 Web Server")
+            RMQ("📨 RabbitMQ<br>Message Broker")
+        end
+        
+        subgraph ExecEng["💹 Execution Engine"]
+            direction LR
+            TR("💱 Trader Service")
+            DB[("💾 DuckDB")]:::database
+        end
+        
+        subgraph JobSvc["⏱️ Jobs Orchestration"]
+            SC("🔄 Scheduler")
+        end
+    end
+    
+    %% Connections with styled arrows
+    TV -- "1. Webhook Signal" --> WS
+    WS -- "2. Signal Message" --> RMQ
+    RMQ -- "3. Position Request" --> TR
+    TR -- "Authentication" --> SB
+    User -- "Auth Code" --> TR
+    TR -- "4. Trading Operations" --> SB
+    TR -- "Send Notification" --> RMQ
+    RMQ -- "Notification Request" --> TG
+    TG -- "5. Notifications" --> User
+    TR -- "Position Data" --> DB
+    DB -- "Query Results" --> TR
+    SC -- "Periodic Tasks" --> RMQ
+    RMQ -- "Status Tasks" --> TR
+    TR -- "Performance Data" --> DB
+    
+    %% Apply styles
+    class TV,SB,User,TG external
+    class WS,RMQ processing
+    class TR,DB execution
+    class SC jobs
+```
+
+
 ## 📊 Trading Workflow
 
 1. **Signal Reception**
