@@ -209,7 +209,8 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
         },
         "websocket": {
           "refresh_rate_ms": 10000
-        }
+        },
+        "timezone": "Europe/Paris"
       },
       "trading_mode": "day_trading"
     },
@@ -281,6 +282,9 @@ WATA uses a JSON configuration file (`config.json`) located in the `etc/` direct
   - **timeout_seconds**: How long the check process should run before stopping (default: 20)
 - **general.websocket**: WebSocket configuration
   - **refresh_rate_ms**: Refresh rate for WebSocket subscriptions in milliseconds (default: 10000)
+- **general.timezone**: Timezone used for date/time operations throughout the application (default: "Europe/Paris")
+  - Uses standard timezone identifiers from the IANA Time Zone Database
+  - Examples: "America/New_York", "Europe/London", "Asia/Tokyo", "Australia/Sydney"
 - **persistant.last_action_file**: File path to store the last trading action
 
 ## Telegram Notifications
