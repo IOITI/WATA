@@ -109,6 +109,14 @@ flowchart TD
     classDef execution fill:#e8f5e9,stroke:#4caf50,stroke-width:1px
     classDef jobs fill:#fff8e1,stroke:#ffc107,stroke-width:1px
     classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray: 5 5
+    classDef reporting fill:#ffebee,stroke:#f44336,stroke-width:1px
+    
+    
+            %% Reporting System
+    subgraph RepSys["📊 Reporting System"]
+        EX("🔄 Data Export")
+        OD("📈 Observable<br>Dashboard")
+    end
     
     %% External Systems
     subgraph ExtSys["🌐 External Systems"]
@@ -140,6 +148,7 @@ flowchart TD
         end
     end
     
+    
     %% Connections with styled arrows
     TV -- "1️⃣ Webhook Signal" --> WS
     WS -- "2️⃣ Signal Message" --> RMQ
@@ -150,17 +159,20 @@ flowchart TD
     TR -- "Send Notification" --> RMQ
     RMQ -- "Notification Request" --> TG
     TG -- "5️⃣ Notifications" --> User
-    TR -- "Position Data" --> DB
-    DB -- "Query Results" --> TR
+    TR <-- "Position Data" --> DB
     SC -- "Periodic Tasks" --> RMQ
     RMQ -- "Status Tasks" --> TR
-    TR -- "Performance Data" --> DB
+    TR <-- "Performance Data" --> DB
+    DB -. "6️⃣ Data Sync" .-> EX
+    EX -. "Data Transform" .-> OD
+    OD -. "7️⃣ Performance<br>Visualization" .-> User
     
     %% Apply styles
     class TV,SB,User,TG external
     class WS,RMQ processing
     class TR,DB execution
     class SC jobs
+    class EX,OD reporting
 ```
 
 
