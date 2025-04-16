@@ -54,41 +54,6 @@ The system is particularly suited for traders who:
 - Value real-time monitoring and alerts
 - Prefer systematic, rule-based trading over discretionary decisions
 
-## 🚀 Getting Started
-
-For those looking to quickly get started with WATA:
-
-1. **Prerequisites**
-   - Saxo Bank account with API access
-   - Dedicated Ubuntu server (on VPS or local machine)
-   - Docker and Docker Compose installed
-   - Telegram bot for notifications
-
-2. **Quick Installation**
-   ```bash
-   # Clone the repository
-   git clone https://github.com/IOITI/wata.git
-   cd wata
-   
-   # Build the package
-   ./package.sh
-   
-   # Deploy the application
-   cd deploy/tools
-   ./deploy_app_to_your_server.sh
-   ```
-
-3. **First Steps on the server**
-   - Configure `.env` file with RabbitMQ password
-   - Copy and configure the example config file:
-     ```bash
-     cp /app/etc/config_example.json /app/etc/config.json
-     ```
-   - Start the system with `watastart`
-   - Set up your trading signals from TradingView or other source
-
-For detailed setup instructions, refer to our [HOW-TO Guide](docs/HOW-TO.md).
-
 ## 🏗️ Architecture
 
 WATA uses a microservice architecture with:
@@ -242,10 +207,18 @@ Please refer to our detailed [HOW-TO Guide](docs/HOW-TO.md).
 ## 🚀 Setup & Deployment
 
 ### Prerequisites
-- Ubuntu server
-- Docker and Docker Compose
-- Python 3.12+
-- Ansible (for automated deployment)
+
+   - Saxo Bank account with API access
+   - Dedicated Ubuntu server (on VPS or local machine)
+   - Docker and Docker Compose installed
+   - Python 3.12+
+   - Ansible (for automated deployment)
+   - Telegram bot for notifications
+   - _(Optional) TradingView account for webhook signals_
+
+### Detailed Setup
+
+For detailed setup instructions, refer to our [HOW-TO Guide](docs/HOW-TO.md).
 
 ### Quick Start
 
