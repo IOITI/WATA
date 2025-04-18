@@ -6,6 +6,7 @@
   <p>Automated trading system for Saxo Bank's Knock-out warrants (Turbos), executing trades via webhook signals.</p>
 </div>
 
+
 ![GitHub repo size](https://img.shields.io/github/repo-size/IOITI/wata?style=flat-square)
 ![GitHub contributors](https://img.shields.io/github/contributors/IOITI/wata?style=flat-square)
 ![GitHub issues](https://img.shields.io/github/issues/IOITI/wata?style=flat-square)
@@ -14,6 +15,10 @@
 ![GitHub Release Date](https://img.shields.io/github/release-date/IOITI/wata?style=flat-square)
 ![GitHub Stars](https://img.shields.io/github/stars/IOITI/wata?style=social) 
 ![GitHub Forks](https://img.shields.io/github/forks/IOITI/wata?style=social)
+
+<div align="center">
+  <H2><a href="https://ioiti.github.io/wata-docs/docs/intro">📚Documentation Website</a></H2>
+</div>
 
 ---
 
@@ -190,7 +195,7 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
 - If you receive an invalid/expired code error, repeat the process
 - A "Timeout waiting for authorization code" error means the application waited for 5 minutes without receiving the code
 
-Please refer to the [SAXO_AUTHENTICATION.md](docs/SAXO_AUTHENTICATION.md) for more details.
+Please refer to the [dedicated docs pages for Saxo Authentication](https://ioiti.github.io/wata-docs/docs/saxo-authentication) for more details.
 
 ## 📖 Detailed How-To Guide
 
@@ -202,7 +207,7 @@ For a comprehensive, step-by-step guide on setting up and using WATA, including:
 - Setting up TradingView webhooks
 - Starting and monitoring your trading
 
-Please refer to our detailed [HOW-TO Guide](docs/HOW-TO.md).
+Please refer to our detailed [HOW-TO Guide](https://ioiti.github.io/wata-docs/docs/how-to).
 
 ## 🚀 Setup & Deployment
 
@@ -218,7 +223,7 @@ Please refer to our detailed [HOW-TO Guide](docs/HOW-TO.md).
 
 ### Detailed Setup
 
-For detailed setup instructions, refer to our [HOW-TO Guide](docs/HOW-TO.md).
+For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.github.io/wata-docs/docs/how-to).
 
 ### Quick Start
 
@@ -327,7 +332,7 @@ After deployment, you need to set up your configuration:
      - DuckDB database path
      - Webhook authentication
 
-   For a complete and detailed explanation of all configuration options, please refer to the [CONFIGURATION Guide](docs/CONFIGURATION.md).
+   For a complete and detailed explanation of all configuration options, please refer to the [CONFIGURATION Guide](https://ioiti.github.io/wata-docs/docs/configuration).
 
 4. **Restart Services**
    ```bash
@@ -414,7 +419,7 @@ Here are some of the most common questions about WATA:
 - **What are the minimum server requirements?**  
   A basic VPS with 2GB RAM, 50GB SSD, 2 core CPU should be sufficient for getting started.
 
-For a comprehensive list of questions and answers, please see our detailed [FAQ document](docs/FAQ.md).
+For a comprehensive list of questions and answers, please see our detailed [FAQ documentation](https://ioiti.github.io/wata-docs/docs/faq).
 
 ## 🤝 Acknowledgements
 
@@ -439,3 +444,45 @@ We welcome contributions to WATA! Here's how you can help:
 MIT License
 
 Copyright (c) 2025 IOITI
+
+## Documentation Website
+
+This repository contains a Docusaurus-based documentation website for WATA. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata/](https://ioiti.github.io/wata/).
+
+### Local Development
+
+To run the documentation website locally:
+
+1. Clone this repository
+2. Navigate to the website directory:
+   ```bash
+   cd wata-website
+   ```
+3. Install dependencies:
+   ```bash
+   npm install
+   ```
+4. Start the development server:
+   ```bash
+   npm start
+   ```
+5. Open your browser to http://localhost:3000/wata/
+
+### Documentation Structure
+
+The documentation is organized into the following sections:
+
+- **Introduction**: Overview of WATA
+- **How-To Guide**: Step-by-step instructions for setting up and using WATA
+- **Configuration Guide**: Details on how to configure WATA
+- **Saxo Authentication**: Guide for authenticating with Saxo Bank's API
+- **FAQ**: Frequently asked questions about WATA
+
+### Deployment
+
+The documentation website is automatically deployed to GitHub Pages whenever changes are pushed to the main branch. You can also manually deploy by running:
+
+```bash
+cd wata-website
+npm run gh-pages
+```
