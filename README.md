@@ -1,7 +1,9 @@
 <div align="center">
-    <img src="docs/images/wata_animated_banner.gif" alt="WATA Logo"/>
+    <a href="https://ioiti.github.io/wata-docs/">
+        <img src="docs/images/wata_animated_banner.gif" alt="WATA Logo"/>
+    </a>
     <h1 style="margin-left: 20px; margin-top: 0; margin-bottom: 2;">WATA - Warrants Automated Trading Assistant</h1>
-  <p>Automated trading system for Saxo Bank's Knock-out warrants (Turbos), executing trades via webhook signals.</p>
+    <p>Automated trading system for Saxo Bank's Knock-out warrants (Turbos), executing trades via webhook signals.</p>
 </div>
 
 
