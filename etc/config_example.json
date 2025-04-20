@@ -21,7 +21,8 @@
   "webserver": {
     "persistant": {
       "token_path": "/app/var/lib/web_server/persist_token.json"
-    }
+    },
+    "app_secret": "CHANGE_THIS_TO_A_STRONG_SECRET_KEY"
   },
   "logging": {
     "persistant": {

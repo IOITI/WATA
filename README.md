@@ -177,7 +177,9 @@ WATA uses DuckDB for fast in-memory analytics:
 - **Performance analytics**: Daily statistics and trading history
 - **Advantages**: High-speed analytics, corruption prevention, SQL support
 
-## 🔐 Authentication
+## 🔐 Authentication and Security
+
+### Saxo Bank API Authentication
 
 WATA uses OAuth 2.0 for Saxo Bank API integration:
 
@@ -196,6 +198,24 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
 - A "Timeout waiting for authorization code" error means the application waited for 5 minutes without receiving the code
 
 Please refer to the [dedicated docs pages for Saxo Authentication](https://ioiti.github.io/wata-docs/docs/saxo-authentication) for more details.
+
+### Webhook Security
+
+WATA uses token-based authentication to secure webhook endpoints:
+
+1. Each webhook request must include a valid token in the URL (e.g., `/webhook?token=YOUR_TOKEN`)
+2. This token is securely generated and stored with strong encryption
+3. Manage your webhook token with the `watawebtoken` command
+
+**Command Reference**:
+- `watawebtoken`: View your current webhook token
+- `watawebtoken --new`: Generate a new webhook token
+- The command provides instructions on how to use the token in your webhook URL
+
+**Security Features**:
+- All tokens are encrypted before storage
+- File permissions are restricted to the owner only
+- IP address filtering adds an additional layer of security
 
 ## 📖 Detailed How-To Guide
 
@@ -258,6 +278,8 @@ For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.githu
    - `watalogs`: View application logs
    - `watastatus`: Check application status
    - `watasaxoauth <CODE>`: Submits the authorization code to the application
+   - `watawebtoken`: View your webhook authentication token
+   - `watawebtoken --new`: Generate a new webhook token
 
 
 ### Docker Compose Setup
@@ -312,6 +334,16 @@ After deployment, you need to set up your configuration:
      }
      ```
 
+   - **WebServer Security**
+     ```json
+     "webserver": {
+       "persistant": {
+         "token_path": "/app/var/lib/web_server/persist_token.json"
+       },
+       "app_secret": "YOUR_STRONG_SECRET_KEY"
+     }
+     ```
+
    - **Telegram Notifications**
      ```json
      "telegram": {
@@ -330,7 +362,6 @@ After deployment, you need to set up your configuration:
      - Logging configuration
      - RabbitMQ connection details
      - DuckDB database path
-     - Webhook authentication
 
    For a complete and detailed explanation of all configuration options, please refer to the [CONFIGURATION Guide](https://ioiti.github.io/wata-docs/docs/configuration).
 

@@ -39,6 +39,7 @@ class ConfigurationManager:
             "authentication.saxo",
             "authentication.persistant.token_path",
             "webserver.persistant.token_path",
+            "webserver.app_secret",
             "logging.persistant.log_path",
             "logging.level",
             "rabbitmq.hostname",
@@ -85,6 +86,11 @@ class ConfigurationManager:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
+        # Validate webserver.app_secret
+        app_secret = self.get_config_value("webserver.app_secret")
+        if app_secret == "CHANGE_THIS_TO_A_STRONG_SECRET_KEY":
+            logger.warning("webserver.app_secret is using the default value. For production, it should be changed to a strong secret key.")
+        
         # Validate logging configuration
         logging_config = self.get_config_value("logging")
         if not logging_config.get("format"):

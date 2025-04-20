@@ -64,6 +64,19 @@ EOF
 
 chmod +x /usr/local/bin/watasaxoauth
 
+# Create the watawebtoken command wrapper
+cat << 'EOF' > /usr/local/bin/watawebtoken
+#!/bin/bash
+OPTIONS=""
+if [ "$1" == "--new" ]; then
+    OPTIONS="--new"
+fi
+
+docker exec api1 python -m src.web_server.cli $OPTIONS
+EOF
+
+chmod +x /usr/local/bin/watawebtoken
+
 cat << EOF > ~/.bash_aliases
 alias watastart='if [ -f /app/etc/config.json ]; then cd /app/deploy/ && docker compose up -d && echo "The application is started, get status with watastatus"; else echo "Error: /app/etc/config.json not found. Please create the config file before starting."; fi'
 alias watastop='cd /app/deploy/ && docker compose down && echo "The application is stopped"'
@@ -76,3 +89,4 @@ source ~/.bash_aliases
 
 echo "Wata is ready to use! You can lunch it with watastart, show logs with watalogs, show status with watastatus, stop it with watastop"
 echo "To authenticate with Saxo, use the watasaxoauth command with your authorization code: watasaxoauth <AUTH_CODE>"
+echo "To view or generate a new WebServer token, use the watawebtoken command: watawebtoken [--new]"

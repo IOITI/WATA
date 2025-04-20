@@ -7,6 +7,7 @@ setup(
     entry_points={
         'console_scripts': [
             'watasaxoauth=src.saxo_authen.cli:main',
+            'watawebtoken=src.web_server.cli:main',
         ],
     },
     install_requires=[
