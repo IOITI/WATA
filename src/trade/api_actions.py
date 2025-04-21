@@ -72,26 +72,33 @@ class SaxoService:
         self.safety_margins = self.buying_power.get("safety_margins", {"bid_calculation": 1})
         self.websocket_config = self.general_config.get("websocket", {"refresh_rate_ms": 10000})
         self.timezone = self.general_config.get("timezone", "Europe/Paris")
-
-        logging.info(f"Configured turbo price filtering range: Min={self.turbo_price_range['min']}, Max={self.turbo_price_range['max']}")
-        logging.info(f"Using timezone: {self.timezone}")
         
         # Initialize managers
         self.db_order_manager = db_order_manager
         self.db_position_manager = db_position_manager
         self.rabbit_connection = rabbit_connection
-        self.saxo_auth = SaxoAuth(config_manager,rabbit_connection)
+        self.saxo_auth = SaxoAuth(config_manager, rabbit_connection)
         self.context_id = str(uuid.uuid1())
+        
+        # Initialize client
+        self.saxo_client = None
+        # Initialize token and client
+        self._ensure_valid_token()
+        self.account_info = account_info(self.saxo_client)
 
+    def _ensure_valid_token(self):
+        """Get a valid token from SaxoAuth and initialize the client"""
         try:
-            self.token = self.saxo_auth.get_token()
+            token = self.saxo_auth.get_token()
+            
+            # Initialize the client with the token
+            self.saxo_client = API(access_token=token, environment="live")
         except Exception as token_exception:
             logging.error(f"Error getting token: {token_exception}")
             raise token_exception
-        self.saxo_client = API(access_token=self.token, environment="live")
-        self.account_info = account_info(self.saxo_client)
 
     def find_turbos(self, ExchangeId, UnderlyingUics, Keywords):
+        self._ensure_valid_token()
         try:
             r = rd.instruments.Instruments(
                 params={
@@ -284,6 +291,7 @@ class SaxoService:
         return resp_single_order
 
     def get_all_order(self):
+        self._ensure_valid_token()
         reference_id = str(uuid.uuid1())
 
         req_all_order = pf.orders.CreateOpenOrdersSubscription(
@@ -307,6 +315,8 @@ class SaxoService:
         return resp_all_order
 
     def get_user_open_positions(self):
+        """Get user's open positions with token refresh check"""
+        self._ensure_valid_token()
         # request the balances
         req_positions = pf.positions.PositionsMe(
             params={
@@ -341,6 +351,7 @@ class SaxoService:
         return resp_positions
 
     def get_single_positions(self, position_id):
+        self._ensure_valid_token()
         # request the balances
         request_single_position = pf.positions.SinglePosition(
             PositionId=position_id,
@@ -427,6 +438,8 @@ class SaxoService:
             raise
 
     def buy_turbo_instrument(self, founded_turbo):
+        """Buy turbo instrument with token refresh check"""
+        self._ensure_valid_token()
         try:
             amount = self.calculate_bid_amount(founded_turbo)
 
@@ -663,6 +676,8 @@ class SaxoService:
     def check_and_act_close_on_current_positions(
             self, all_positions, preferred_action=None
     ):
+        """Check and act on closing positions with token refresh check"""
+        self._ensure_valid_token()
         if all_positions["__count"] > 0:
             logging.info(f"Found {all_positions["__count"]} positions")
 
@@ -849,6 +864,8 @@ Current today profit : {today_percent}%
                 )
 
     def check_if_db_open_position_are_closed_on_api(self):
+        """Check if DB open positions are closed on API with token refresh check"""
+        self._ensure_valid_token()
         db_open_position_ids = self.db_position_manager.get_open_positions_ids()
         all_open_positions = self.get_user_open_positions()
 
@@ -940,6 +957,8 @@ Current today profit : {today_percent}%
         print("Deleted WS subscription")
 
     def check_positions_performance(self):
+        """Check positions performance with token refresh check"""
+        self._ensure_valid_token()
         # TODO: Plus tard faire un trailing stop
         logging.info("Checking positions performance")
         db_open_position_ids = self.db_position_manager.get_open_positions_ids()

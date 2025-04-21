@@ -15,6 +15,21 @@ import json
 import logging
 from logging_helper import setup_logging
 
+# Global instance of SaxoService
+saxo_service = None
+
+def initialize_saxo_service():
+    global saxo_service
+    if saxo_service is None:
+        saxo_service = SaxoService(
+            config_manager,
+            db_order_manager,
+            db_position_manager,
+            rabbit_connection,
+            trading_rule
+        )
+    return saxo_service
+
 def get_version():
     version_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'VERSION')
     with open(version_file, 'r') as file:
@@ -42,18 +57,12 @@ def callback(ch, method, properties, body):
 
         if data_from_mq["action"] == "check_positions_on_saxo_api":
             try:
-                # Create an instance of SaxoService
-                saxo_service = SaxoService(
-                    config_manager,
-                    db_order_manager,
-                    db_position_manager,
-                    rabbit_connection,
-                    trading_rule
-                )
+                # Get the singleton instance of SaxoService
+                service = initialize_saxo_service()
 
-                saxo_service.check_positions_performance()
+                service.check_positions_performance()
                 # Check if opened positions are closed on Saxo API
-                saxo_service.check_if_db_open_position_are_closed_on_api()
+                service.check_if_db_open_position_are_closed_on_api()
 
             except Exception as e:
                 logging.error(
@@ -119,15 +128,10 @@ def callback(ch, method, properties, body):
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
         else:
+            # For all other actions that require SaxoService
             try:
-                # Create an instance of SaxoService
-                saxo_service = SaxoService(
-                    config_manager,
-                    db_order_manager,
-                    db_position_manager,
-                    rabbit_connection,
-                    trading_rule
-                )
+                # Get the singleton instance of SaxoService
+                service = initialize_saxo_service()
             except Exception as e:
                 logging.critical(f"Failed to create SaxoService : {e}")
                 send_message_to_mq_for_telegram(
@@ -168,15 +172,15 @@ def callback(ch, method, properties, body):
             try:
                 signal = data_from_mq["action"]
 
-                all_positions = saxo_service.get_user_open_positions()
+                all_positions = service.get_user_open_positions()
 
-                saxo_service.check_and_act_close_on_current_positions(all_positions)
+                service.check_and_act_close_on_current_positions(all_positions)
 
-                founded_turbo = saxo_service.find_turbos(
+                founded_turbo = service.find_turbos(
                     trade_turbo_exchange_id, indice_id, signal
                 )
 
-                buy_details = saxo_service.buy_turbo_instrument(founded_turbo)
+                buy_details = service.buy_turbo_instrument(founded_turbo)
 
                 message = f"""From the signal "{signal}"
 --- FOUND ---
@@ -218,8 +222,8 @@ Position ID : {buy_details["position"]["position_id"]}
                     action = "short"
                 else:
                     raise ValueError(f"Unknown action : {data_from_mq["action"]}")
-                all_positions = saxo_service.get_user_open_positions()
-                saxo_service.check_and_act_close_on_current_positions(all_positions, action)
+                all_positions = service.get_user_open_positions()
+                service.check_and_act_close_on_current_positions(all_positions, action)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 sleep(1)
             except Exception as e:
@@ -233,8 +237,8 @@ Position ID : {buy_details["position"]["position_id"]}
 
         elif data_from_mq["action"] == "close-position":
             try:
-                all_positions = saxo_service.get_user_open_positions()
-                saxo_service.check_and_act_close_on_current_positions(all_positions)
+                all_positions = service.get_user_open_positions()
+                service.check_and_act_close_on_current_positions(all_positions)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 sleep(1)
             except Exception as e:
