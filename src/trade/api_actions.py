@@ -943,175 +943,151 @@ Current today profit : {today_percent}%
         # TODO: Plus tard faire un trailing stop
         logging.info("Checking positions performance")
         db_open_position_ids = self.db_position_manager.get_open_positions_ids()
-        position_founded = False
         position_ids_closed = []
-        if len(db_open_position_ids) > 0:
-            start_time = time.time()  # Record the start time
-            while True:
-                all_open_positions = self.get_user_open_positions()
-                # Check if the PositionId is in any of the Data items
-                for position_id in db_open_position_ids:
-                    # Check if the position wasn't sell during the while
-                    if position_id not in position_ids_closed:
-                        # Check if the PositionId is not in any of the Data items
-                        if not any(
-                                item["PositionId"] == position_id for item in all_open_positions["Data"]
-                        ):
-                            # If not found, add it to the list of potential closed positions
-                            message = (
-                                f"The position ID {position_id} (from DB), is not in any of open position on SAXO, "
-                                f"have you resync the db before ?")
-                            logging.error(message)
-                            raise ValueError(message)
-                        for position_details in all_open_positions["Data"]:
-                            if position_details["PositionId"] == position_id:
-                                position_founded = True
-                                need_close = False
-                                performance_percent = round(((position_details["PositionView"]["Bid"] * 100) /
-                                                             position_details["PositionBase"]["OpenPrice"]) - 100, 2)
-
-                                # Get the current time in configured timezone
-                                current_time_compare = datetime.now(pytz.timezone(self.timezone))
-
-                                # Check if performance_percent is between stoploss and takeprofit
-                                if self.performance_thresholds["stoploss_percent"] < performance_percent <= self.performance_thresholds["max_profit_percent"]:
-                                    message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
-                                    logging.info(message)
-                                    print(message)
-                                else:
-                                    message = f"Close because the performance is {performance_percent}"
-                                    print(message)
-                                    logging.info(message)
-                                    need_close = True
-
-                                today_percent = self.db_position_manager.get_percent_of_the_day()
-
-                                today_profit = 1.00 * (1 + today_percent / 100)
-
-                                today_profit_and_position = today_profit * (1 + performance_percent / 100)
-
-                                today_final_percent = round((today_profit_and_position - 1) * 100 , 2)
-
-                                if today_final_percent >= self.percent_profit_wanted_per_days:
-                                    message = f"Close because the today performance can be {today_final_percent}"
-                                    print(message)
-                                    logging.info(message)
-                                    need_close = True
-
-                                # Check if the current time is within the allowed range (08:00 to 22:00)
-                                # if 7 <= current_time_compare.hour < 11:
-                                #     if -5 < performance_percent <= 0.8:
-                                #         message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
-                                #         logging.info(message)
-                                #         print(message)
-                                #     else:
-                                #         message = f"Close because the performance is {performance_percent} before 14:00"
-                                #         print(message)
-                                #         logging.info(message)
-                                #         need_close = True
-                                # elif 11 <= current_time_compare.hour < 14:
-                                #     if -5 < performance_percent <= 1:
-                                #         message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
-                                #         logging.info(message)
-                                #         print(message)
-                                #     else:
-                                #         message = f"Close because the performance is {performance_percent} before 14:00"
-                                #         print(message)
-                                #         logging.info(message)
-                                #         need_close = True
-                                # elif 19 <= current_time_compare.hour < 22:
-                                #     if -5 < performance_percent <= 1.40:
-                                #         message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
-                                #         logging.info(message)
-                                #         print(message)
-                                #     else:
-                                #         message = f"Close because the performance is {performance_percent} before 14:00"
-                                #         print(message)
-                                #         logging.info(message)
-                                #         need_close = True
-                                # else:
-                                #     # Check if performance_percent is between -5 and 3
-                                #     if -5 < performance_percent <= 3:
-                                #         message = f"Performance {performance_percent} with price bid at {position_details["PositionView"]["Bid"]} and open at {position_details["PositionBase"]["OpenPrice"]}"
-                                #         logging.info(message)
-                                #         print(message)
-                                #     else:
-                                #         message = f"Close because the performance is {performance_percent}"
-                                #         print(message)
-                                #         logging.info(message)
-                                #         need_close = True
-
-                                performance_json = {
-                                    "position_id": position_details["PositionId"],
-                                    "performance": performance_percent,
-                                    "open_price": position_details["PositionBase"]["OpenPrice"],
-                                    "bid": position_details["PositionView"]["Bid"],
-                                    "time": current_time_compare.strftime("%Y-%m-%d %H:%M:%S"),
-                                    "current_hour": current_time_compare.strftime("%H"),
-                                    "current_minute": current_time_compare.strftime("%M"),
-                                    "open_hour": datetime.fromisoformat(
-                                        position_details["PositionBase"]["ExecutionTimeOpen"]).astimezone(
-                                        pytz.timezone(self.timezone)).hour,
-                                    "open_minute": datetime.fromisoformat(
-                                        position_details["PositionBase"]["ExecutionTimeOpen"]).astimezone(
-                                        pytz.timezone(self.timezone)).minute
-                                }
-                                self.write_to_performance_jsonl_file(performance_json)
-
-                                #logging.info(f"Performance_json : {json.dumps(performance_json)}")
-
-                                max_position_percent = self.db_position_manager.get_max_position_percent(
-                                    position_details["PositionId"])
-
-                                if performance_percent > max_position_percent:
-                                    turbo_position_performance_db_data = {
-                                        "position_max_performance_percent": performance_percent
-                                    }
-                                    try:
-                                        self.db_position_manager.update_turbo_position_data(
-                                            position_id, turbo_position_performance_db_data
-                                        )
-                                    except Exception as e:
-                                        error_message = f"Failed to update performance for position {position_id} on database : {e}."
-                                        logging.error(error_message)
-                                        send_message_to_mq_for_telegram(
-                                            self.rabbit_connection, f"CRITICAL : {error_message}"
-                                        )
-
-                                if need_close:
-                                    print(f"Close position {position_details['PositionId']}")
-                                    try:
-                                        self.close_position(position_details)
-                                    except Exception as e:
-                                        logging.error(
-                                            f"Failed to close position {position_details['PositionId']} : {e}"
-                                        )
-                                        raise e
-                                    position_ids_closed.append(position_details["PositionId"])
-                                # Stop the loop
-                                break
-
-                # Check if the socket has been open for more than timeout seconds
-                current_time = time.time()
-                if current_time - start_time > self.position_check["timeout_seconds"]:
-                    logging.info(f"Checking for more than {self.position_check['timeout_seconds']} seconds, closing connection.")
-                    break
-                sleep(self.position_check["check_interval_seconds"])
-
-        if not position_founded:
-            logging.info(f"No manageable position in database can be check")
-
-        if len(position_ids_closed) > 0:
-            # Wait because some time API did'nt have the position instantly
-            sleep(2)
+        
+        if not db_open_position_ids:
+            logging.info("No manageable positions in database to check")
+            return
+            
+        try:
+            # Get positions once instead of repeated API calls
+            all_open_positions = self.get_user_open_positions()
+            
+            # Create a dictionary for efficient lookup
+            positions_dict = {position["PositionId"]: position for position in all_open_positions["Data"]}
+            
+            # Batch collect updates for DB
+            db_updates = []
+            
+            # Check each position
+            for position_id in db_open_position_ids:
+                if position_id not in positions_dict:
+                    message = (f"The position ID {position_id} (from DB), is not in any of open position on SAXO, "
+                               f"have you resync the db before?")
+                    logging.error(message)
+                    raise ValueError(message)
+                
+                position_details = positions_dict[position_id]
+                if self._check_and_close_position_if_needed(position_details):
+                    position_ids_closed.append(position_id)
+                
+                # Update performance data
+                performance_data = self._update_position_performance(position_details)
+                if performance_data:
+                    db_updates.append((position_id, performance_data))
+            
+            # Batch update DB if we have updates
+            if db_updates:
+                self._batch_update_positions(db_updates)
+                
+            # Process closed positions
+            if position_ids_closed:
+                self._handle_closed_positions(position_ids_closed)
+                
+        except Exception as e:
+            logging.error(f"Error in check_positions_performance: {e}")
+            raise
+    
+    def _check_and_close_position_if_needed(self, position_details):
+        """Check if position needs to be closed based on performance and return True if closed"""
+        position_id = position_details["PositionId"]
+        need_close = False
+        
+        # Calculate performance
+        performance_percent = round(((position_details["PositionView"]["Bid"] * 100) /
+                                    position_details["PositionBase"]["OpenPrice"]) - 100, 2)
+        
+        # Check performance thresholds
+        if not (self.performance_thresholds["stoploss_percent"] < performance_percent <= self.performance_thresholds["max_profit_percent"]):
+            message = f"Close because the performance is {performance_percent}"
+            print(message)
+            logging.info(message)
+            need_close = True
+        else:
+            message = f"Performance {performance_percent} with price bid at {position_details['PositionView']['Bid']} and open at {position_details['PositionBase']['OpenPrice']}"
+            logging.info(message)
+            print(message)
+            
+        # Check daily profit targets
+        today_percent = self.db_position_manager.get_percent_of_the_day()
+        today_profit = 1.00 * (1 + today_percent / 100)
+        today_profit_and_position = today_profit * (1 + performance_percent / 100)
+        today_final_percent = round((today_profit_and_position - 1) * 100, 2)
+        
+        if today_final_percent >= self.percent_profit_wanted_per_days:
+            message = f"Close because the today performance can be {today_final_percent}"
+            print(message)
+            logging.info(message)
+            need_close = True
+            
+        # Close position if needed
+        if need_close:
+            print(f"Close position {position_id}")
             try:
-                all_closed_positions = self.get_user_closed_positions()
+                self.close_position(position_details)
+                return True
             except Exception as e:
-                logging.error(f"Failed to get user closed positions : {e}")
-                raise e
+                logging.error(f"Failed to close position {position_id}: {e}")
+                raise
+        
+        return False
+        
+    def _update_position_performance(self, position_details):
+        """Update performance data for a position and return update data if max performance changed"""
+        position_id = position_details["PositionId"]
+        performance_percent = round(((position_details["PositionView"]["Bid"] * 100) /
+                                    position_details["PositionBase"]["OpenPrice"]) - 100, 2)
+                                    
+        # Get the current time in configured timezone
+        current_time_compare = datetime.now(pytz.timezone(self.timezone))
+        
+        # Record performance data
+        performance_json = {
+            "position_id": position_id,
+            "performance": performance_percent,
+            "open_price": position_details["PositionBase"]["OpenPrice"],
+            "bid": position_details["PositionView"]["Bid"],
+            "time": current_time_compare.strftime("%Y-%m-%d %H:%M:%S"),
+            "current_hour": current_time_compare.strftime("%H"),
+            "current_minute": current_time_compare.strftime("%M"),
+            "open_hour": datetime.fromisoformat(
+                position_details["PositionBase"]["ExecutionTimeOpen"]).astimezone(
+                pytz.timezone(self.timezone)).hour,
+            "open_minute": datetime.fromisoformat(
+                position_details["PositionBase"]["ExecutionTimeOpen"]).astimezone(
+                pytz.timezone(self.timezone)).minute
+        }
+        self.write_to_performance_jsonl_file(performance_json)
+        
+        # Check if this is a new max performance
+        max_position_percent = self.db_position_manager.get_max_position_percent(position_id)
+        if performance_percent > max_position_percent:
+            return {"position_max_performance_percent": performance_percent}
+        
+        return None
+        
+    def _batch_update_positions(self, updates):
+        """Batch update positions in database"""
+        for position_id, update_data in updates:
+            try:
+                self.db_position_manager.update_turbo_position_data(position_id, update_data)
+            except Exception as e:
+                error_message = f"Failed to update performance for position {position_id} on database: {e}"
+                logging.error(error_message)
+                send_message_to_mq_for_telegram(self.rabbit_connection, f"CRITICAL: {error_message}")
+                
+    def _handle_closed_positions(self, position_ids_closed):
+        """Handle closed positions"""
+        # Wait because sometimes API doesn't have the position instantly
+        sleep(2)
+        try:
+            all_closed_positions = self.get_user_closed_positions()
             self.act_on_db_closed_position(
                 all_closed_positions, position_ids_closed, "Performance limits exceeded"
             )
+        except Exception as e:
+            logging.error(f"Failed to get user closed positions: {e}")
+            raise
 
     def write_to_performance_jsonl_file(self, performance_json):
         # Get today's date in YYYY-MM-DD format
