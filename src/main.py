@@ -50,8 +50,10 @@ def callback(ch, method, properties, body):
                     rabbit_connection,
                     trading_rule
                 )
-                saxo_service.check_if_db_open_position_are_closed_on_api()
+
                 saxo_service.check_positions_performance()
+                # Check if opened positions are closed on Saxo API
+                saxo_service.check_if_db_open_position_are_closed_on_api()
 
             except Exception as e:
                 logging.error(
@@ -142,9 +144,10 @@ def callback(ch, method, properties, body):
             logging.error(f"Error writing to file: {e}")
 
         try:
-            if data_from_mq["action"] == "long" or data_from_mq["action"] == "short":
+            if data_from_mq["action"] == "long" or data_from_mq["action"] == "short" or data_from_mq["action"] == "check_positions_on_saxo_api" :
                 # Check if the signal_timestamp is too old
-                trading_rule.check_signal_timestamp(data_from_mq.get("alert_timestamp"))
+                trading_rule.check_signal_timestamp(data_from_mq.get("action"), data_from_mq.get("alert_timestamp"))
+            elif data_from_mq["action"] == "long" or data_from_mq["action"] == "short":
                 # Check if the current time is within the allowed market hours, or dates
                 trading_rule.check_market_hours(data_from_mq.get("signal_timestamp"))
                 # Check if the indice exists in the indices dictionary and get its ID

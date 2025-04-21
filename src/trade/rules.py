@@ -27,7 +27,7 @@ class TradingRule:
                 return rule.get("rule_config", {})
         raise TradingRuleViolation(f"Rule with type '{rule_type}' not found in the configuration.")
 
-    def check_signal_timestamp(self,signal_timestamp):
+    def check_signal_timestamp(self, signal_action, signal_timestamp):
         # Parse the signal_timestamp string into a datetime object
         signal_time = datetime.strptime(signal_timestamp, "%Y-%m-%dT%H:%M:%SZ")
         signal_time = signal_time.replace(tzinfo=pytz.UTC)  # Ensure it's in UTC
@@ -38,11 +38,16 @@ class TradingRule:
         # Calculate the difference between the current time and the signal_timestamp
         time_difference = current_time - signal_time
 
-        # Check if the difference is more than max_signal_age_minutes
-        max_age_minutes = self.signal_validation_config["max_signal_age_minutes"]
-        if time_difference > timedelta(minutes=max_age_minutes):
-            logging.error(f"The signal is too old. Current time: {current_time}, Signal time: {signal_time}")
-            raise TradingRuleViolation("Signal timestamp is too old")
+        if signal_action == "check_positions_on_saxo_api":
+            if time_difference > timedelta(seconds=30):
+                logging.error(f"The check_positions_on_saxo_api signal is too old. Current time: {current_time}, Signal time: {signal_time}")
+                raise TradingRuleViolation("Signal timestamp is too old")
+        else:
+            # Check if the difference is more than max_signal_age_minutes
+            max_age_minutes = self.signal_validation_config["max_signal_age_minutes"]
+            if time_difference > timedelta(minutes=max_age_minutes):
+                logging.error(f"The signal is too old. Current time: {current_time}, Signal time: {signal_time}")
+                raise TradingRuleViolation("Signal timestamp is too old")
 
     def get_allowed_indice_id(self, indice):
         """
