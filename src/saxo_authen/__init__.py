@@ -323,21 +323,7 @@ class SaxoAuth:
             encrypted_data = self.token_db.get_token(self.token_id)
             if encrypted_data:
                 token_data = self._decrypt_data(encrypted_data) or {}
-                logger.info("Token data retrieved from database")
-            # If no token in database, try legacy file storage
-            elif os.path.exists(self.token_file_path):
-                try:
-                    with open(self.token_file_path, "rb") as token_file:
-                        encrypted_data = token_file.read()
-                    token_data = self._decrypt_data(encrypted_data) or {}
-                    logger.info("Token data retrieved from file (legacy storage)")
-                    # Migrate to database storage
-                    if token_data:
-                        self.save_token_data(token_data)
-                        logger.info("Migrated token data from file to database")
-                except Exception as e:
-                    logger.error(f"Error reading or decrypting token file: {e}")
-                    token_data = {}
+                logger.debug("Token data retrieved from database")
 
             if self.is_token_expired(token_data):
                 if self.is_refresh_token_expired(token_data):
@@ -357,7 +343,7 @@ class SaxoAuth:
                         logger.error("Failed to renew token")
                         raise Exception("Failed to renew token")
             if token_data["access_token"]:
-                logger.info("Give token for Saxo API")
+                logger.debug("Give token for Saxo API")
             return token_data["access_token"]
         except FileNotFoundError as e:
             logger.error(f"Token file not found: {e}")
