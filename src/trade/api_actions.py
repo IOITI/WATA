@@ -82,17 +82,18 @@ class SaxoService:
         
         # Initialize client
         self.saxo_client = None
+        self.token = None
         # Initialize token and client
         self._ensure_valid_token()
+        # Initialize the client with the token
+        self.saxo_client = API(access_token=self.token, environment="live")
         self.account_info = account_info(self.saxo_client)
 
     def _ensure_valid_token(self):
-        """Get a valid token from SaxoAuth and initialize the client"""
+        """Get a valid token from SaxoAuth"""
         try:
-            token = self.saxo_auth.get_token()
-            
-            # Initialize the client with the token
-            self.saxo_client = API(access_token=token, environment="live")
+            self.token = self.saxo_auth.get_token()
+
         except Exception as token_exception:
             logging.error(f"Error getting token: {token_exception}")
             raise token_exception
