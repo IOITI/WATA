@@ -287,12 +287,14 @@ class SaxoAuth:
             or "date_saved" not in token_data
             or "expires_in" not in token_data
         ):
+            logger.debug("Token data is missing or incomplete, considered expired")
             return True
         date_saved = datetime.datetime.fromisoformat(token_data["date_saved"])
         expires_in_second = token_data["expires_in"] - 120
         expiration_time = date_saved + datetime.timedelta(
             seconds=expires_in_second
         )
+        logger.debug(f"Token wanted expiration time: {expiration_time}, current time: {datetime.datetime.now()}")
         return datetime.datetime.now() > expiration_time
 
     def is_refresh_token_expired(self, token_data):
@@ -304,12 +306,14 @@ class SaxoAuth:
             or "date_saved" not in token_data
             or "refresh_token_expires_in" not in token_data
         ):
+            logger.debug("Refresh Token data is missing or incomplete, considered expired")
             return True
         date_saved = datetime.datetime.fromisoformat(token_data["date_saved"])
         refresh_token_expires_in_second = token_data["refresh_token_expires_in"] - 60
         refresh_token_expiration_time = date_saved + datetime.timedelta(
             seconds=refresh_token_expires_in_second
         )
+        logger.debug(f"Refresh token wanted expiration time: {refresh_token_expiration_time}, current time: {datetime.datetime.now()}")
         return datetime.datetime.now() > refresh_token_expiration_time
 
     def get_token(self):

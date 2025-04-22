@@ -85,14 +85,21 @@ class SaxoService:
         self.token = None
         # Initialize token and client
         self._ensure_valid_token()
-        # Initialize the client with the token
-        self.saxo_client = API(access_token=self.token, environment="live")
         self.account_info = account_info(self.saxo_client)
 
     def _ensure_valid_token(self):
         """Get a valid token from SaxoAuth"""
         try:
+            old_token = self.token
             self.token = self.saxo_auth.get_token()
+            
+            # If token changed and client exists, update the token in client headers
+            if old_token != self.token and self.saxo_client is not None:
+                self.saxo_client.access_token = self.token
+                self.saxo_client.client.headers['Authorization'] = 'Bearer ' + self.token
+            # If client doesn't exist, create it
+            elif self.saxo_client is None:
+                self.saxo_client = API(access_token=self.token, environment="live")
 
         except Exception as token_exception:
             logging.error(f"Error getting token: {token_exception}")
@@ -177,6 +184,8 @@ class SaxoService:
                 message = f"Error while get InfoPrices : {exception}"
                 logging.error(message)
                 raise message
+
+            logging.debug(f"InfoPrices Response: {response}")
 
             info_prices_count = len(response["Data"])
             logging.debug(f"Data Count After InfoPrices Request: {info_prices_count}")
