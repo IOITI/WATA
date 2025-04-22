@@ -147,11 +147,14 @@ def callback(ch, method, properties, body):
         except IOError as e:
             logging.error(f"Error writing to file: {e}")
 
+
+        indice_id = None
+
         try:
             if data_from_mq["action"] == "long" or data_from_mq["action"] == "short" or data_from_mq["action"] == "check_positions_on_saxo_api" :
                 # Check if the signal_timestamp is too old
                 trading_rule.check_signal_timestamp(data_from_mq.get("action"), data_from_mq.get("alert_timestamp"))
-            elif data_from_mq["action"] == "long" or data_from_mq["action"] == "short":
+            if data_from_mq["action"] == "long" or data_from_mq["action"] == "short":
                 # Check if the current time is within the allowed market hours, or dates
                 trading_rule.check_market_hours(data_from_mq.get("signal_timestamp"))
                 # Check if the indice exists in the indices dictionary and get its ID
@@ -175,7 +178,7 @@ def callback(ch, method, properties, body):
                 all_positions = service.get_user_open_positions()
 
                 service.check_and_act_close_on_current_positions(all_positions)
-
+                logging.info(f"Signal is : Exchange {trade_turbo_exchange_id}, action {signal}, indice {indice_id}")
                 founded_turbo = service.find_turbos(
                     trade_turbo_exchange_id, indice_id, signal
                 )
