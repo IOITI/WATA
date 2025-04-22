@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from auth_token import WebServerToken
+from src.web_server.auth_token import WebServerToken
 import logging
 from src.configuration import ConfigurationManager
 from src.schema import SchemaLoader

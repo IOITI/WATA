@@ -72,7 +72,7 @@ if [ "$1" == "--new" ]; then
     OPTIONS="--new"
 fi
 
-docker exec api1 python -m src.web_server.cli $OPTIONS
+docker exec web_server1 python -m src.web_server.cli $OPTIONS
 EOF
 
 chmod +x /usr/local/bin/watawebtoken
