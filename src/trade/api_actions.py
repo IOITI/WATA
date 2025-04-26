@@ -200,7 +200,56 @@ class SaxoService:
             no_market_count = len(response["Data"])
             logging.debug(f"Data Count After Cleaning NoMarket: {no_market_count}")
 
-            sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Bid"])
+            # Add retry mechanism for when Bid data is missing
+            max_retries = 3
+            retries = 0
+            bid_data_missing = True
+            
+            while bid_data_missing and retries < max_retries:
+                try:
+                    # Check if any item is missing Bid data
+                    bid_missing_items = [item for item in response["Data"] if "Bid" not in item["Quote"]]
+                    if not bid_missing_items:
+                        bid_data_missing = False
+                        sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Bid"])
+                        break
+                    
+                    # If Bid data is missing, retry the request
+                    logging.warning(f"Bid data missing in {len(bid_missing_items)} items. Retrying request ({retries+1}/{max_retries})...")
+                    retries += 1
+                    
+                    # Small delay before retry
+                    time.sleep(1)
+                    
+                    # Resend the API request
+                    response = self.saxo_client.request(r)
+                    
+                    logging.debug(f"Retry {retries} InfoPrices Response: {response}")
+                    
+                    # Clean NoMarket again
+                    response["Data"] = [
+                        item
+                        for item in response["Data"]
+                        if item["Quote"]["PriceTypeAsk"] != "NoMarket"
+                    ]
+                except Exception as exception:
+                    message = f"Error during retry for InfoPrices : {exception}"
+                    logging.error(message)
+                    retries += 1
+                    if retries >= max_retries:
+                        raise message
+            
+            # If after all retries we still have missing Bid data, handle it gracefully
+            if bid_data_missing:
+                logging.error("After maximum retries, Bid data is still missing in some items")
+                # Filter out items without Bid data
+                response["Data"] = [item for item in response["Data"] if "Bid" in item["Quote"]]
+                if not response["Data"]:
+                    raise ValueError("No valid items with Bid data available after retries")
+                sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Bid"])
+            else:
+                sorted_data = sorted(response["Data"], key=lambda x: x["Quote"]["Bid"])
+            
             bid_sorted_count = len(sorted_data)
             logging.debug(f"Data Count After Sorting by Bid: {bid_sorted_count}")
 
