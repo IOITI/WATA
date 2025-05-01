@@ -190,15 +190,21 @@ class SaxoService:
             info_prices_count = len(response["Data"])
             logging.debug(f"Data Count After InfoPrices Request: {info_prices_count}")
 
-            # Clean NoMarket
+            # Clean NoMarket and Closed Market items
             response["Data"] = [
                 item
                 for item in response["Data"]
-                if item["Quote"]["PriceTypeAsk"] != "NoMarket"
+                if (item["Quote"]["PriceTypeAsk"] != "NoMarket") and (item["Quote"]["MarketState"] != "Closed")
             ]
 
             no_market_count = len(response["Data"])
-            logging.debug(f"Data Count After Cleaning NoMarket: {no_market_count}")
+            logging.debug(f"Data Count After Cleaning NoMarket and Closed Market: {no_market_count}")
+            
+            # Check if there are no markets available after cleaning
+            if no_market_count == 0:
+                raise exceptions.NoMarketAvailableException(
+                    f"No markets available after cleaning NoMarket and Closed Market for {Keywords} turbo in {ExchangeId}."
+                )
 
             # Add retry mechanism for when Bid data is missing
             max_retries = 3

@@ -4,7 +4,7 @@ from time import sleep
 from configuration import ConfigurationManager
 from trade.api_actions import SaxoService
 from trade.rules import TradingRule
-from trade.exceptions import TradingRuleViolation
+from trade.exceptions import TradingRuleViolation, NoMarketAvailableException
 from schema import SchemaLoader
 from database import DbOrderManager, DbPositionManager, DbTradePerformanceManager
 from mq_telegram.tools import send_message_to_mq_for_telegram
@@ -170,7 +170,7 @@ def callback(ch, method, properties, body):
             logging.error(message)
             ch.basic_ack(delivery_tag=method.delivery_tag)
             raise TradingRuleViolation(message)
-
+            
         if data_from_mq["action"] == "long" or data_from_mq["action"] == "short":
             try:
                 signal = data_from_mq["action"]
@@ -207,6 +207,16 @@ Position ID : {buy_details["position"]["position_id"]}
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 sleep(1)
+            
+            except NoMarketAvailableException as nmae:
+                # Handle case when no markets are available (acknowledge message but don't exit)
+                logging.warning(nmae)
+                send_message_to_mq_for_telegram(
+                    rabbit_connection, f"WARNING: {nmae}"
+                )
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+        
             except Exception as e:
                 message = f"CRITICAL: Buying action error, will exit: {e}"
                 logging.critical(message)
@@ -259,6 +269,9 @@ Position ID : {buy_details["position"]["position_id"]}
 
     except TradingRuleViolation as trv:
         print(f"Trading rule violation: {trv}")
+    except NoMarketAvailableException as nmae:
+        print(f"No market available: {nmae}")
+        # This exception has already been handled (message acknowledged) within the inner try-catch
     except Exception as e:
         logging.error(f"General error: {e}")
         logging.error(traceback.format_exc())  # Log the full traceback

@@ -1,6 +1,9 @@
-
 class NoTurbosAvailableException(Exception):
     """Raised when no turbos are available for the asked price."""
+    pass
+
+class NoMarketAvailableException(Exception):
+    """Raised when no market is available after cleaning NoMarket and Closed Market items."""
     pass
 
 class TradingRuleViolation(Exception):
