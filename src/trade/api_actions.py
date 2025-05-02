@@ -192,9 +192,9 @@ class SaxoService:
 
             # Clean NoMarket and Closed Market items
             response["Data"] = [
-                item
-                for item in response["Data"]
-                if (item["Quote"]["PriceTypeAsk"] != "NoMarket") and (item["Quote"]["MarketState"] != "Closed")
+                item for item in response["Data"]
+                if (item.get("Quote", {}).get("PriceTypeAsk") != "NoMarket" and
+                    item.get("Quote", {}).get("MarketState") != "Closed")
             ]
 
             no_market_count = len(response["Data"])
