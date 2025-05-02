@@ -55,6 +55,10 @@ def callback(ch, method, properties, body):
             ch.basic_ack(delivery_tag=method.delivery_tag)
             raise e
 
+        # Log the signal_id if present
+        if "signal_id" in data_from_mq:
+            logging.info(f"Processing signal with ID: {data_from_mq['signal_id']}")
+
         if data_from_mq["action"] == "check_positions_on_saxo_api":
             try:
                 # Get the singleton instance of SaxoService
@@ -199,6 +203,7 @@ Amount : {buy_details["position"]["position_amount"]}
 Total price : {buy_details["position"]["position_total_open_price"]}
 Time : {buy_details["position"]["execution_time_open"]}
 Position ID : {buy_details["position"]["position_id"]}
+Signal ID : {data_from_mq.get("signal_id", "N/A")}
 """
                 try:
                     send_message_to_mq_for_telegram(rabbit_connection, message)

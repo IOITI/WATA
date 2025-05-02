@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 import pytz
 import os
+import uuid
 from src.logging_helper import setup_logging
 
 
@@ -82,9 +83,13 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp):
 
         # Get the current time in UTC
         now_utc = datetime.now(pytz.utc)
+        
+        # Generate a unique identifier for this signal
+        signal_id = str(uuid.uuid4())
 
         message = json.dumps(
             {
+                "signal_id": signal_id,
                 "action": action,
                 "indice": indice,
                 "signal_timestamp": signal_timestamp,
@@ -94,6 +99,7 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp):
         )
         channel.basic_publish(exchange="", routing_key="trading-action", body=message)
         logging.info(f"Send message to channel trading-action, message {message}")
+        return signal_id
     except pika.exceptions.AMQPConnectionError as e:
         logging.error(f"Failed to connect to RabbitMQ: {e}")
     except Exception as e:
@@ -128,14 +134,14 @@ async def webhook(request: Request):
         logging.warning(f"Invalid data received from from {request.client.host}: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
     # TODO : Error handling error 500
-    send_message_to_trading(
+    signal_id = send_message_to_trading(
         data["action"],
         data["indice"],
         data["signal_timestamp"],
         data["alert_timestamp"],
     )
     logging.info(f"Received data from {request.client.host} : {data}")
-    return JSONResponse(content={"status": "success"}, status_code=200)
+    return JSONResponse(content={"status": "success", "signal_id": signal_id}, status_code=200)
 
 
 if __name__ == "__main__":
