@@ -1,3 +1,4 @@
+import os
 
 # Import the original API class
 from src.saxo_openapi.saxo_openapi import API as SaxoOpenApiLib
@@ -5,12 +6,9 @@ from src.saxo_openapi.exceptions import OpenAPIError as SaxoOpenApiLibError
 
 # Keep other necessary imports from the previous refactoring
 import logging
-import uuid
 import re
 import json
 import math
-import time # Use time.sleep
-from time import sleep # Keep explicit sleep if used directly elsewhere
 from copy import deepcopy
 from datetime import datetime
 import pytz
@@ -21,9 +19,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_t
 import src.saxo_openapi.endpoints.referencedata as rd
 import src.saxo_openapi.endpoints.trading as tr
 import src.saxo_openapi.endpoints.portfolio as pf
-from src.saxo_openapi.contrib.session import account_info as get_account_info_util
 from src.saxo_openapi.contrib.orders import MarketOrder, tie_account_to_order, direction_from_amount
-import src.saxo_openapi.contrib.orders.onfill as onfill
 from src.saxo_openapi.contrib.orders.helper import direction_invert
 import requests # Import requests exceptions if needed for translation
 
@@ -45,6 +41,9 @@ from .exceptions import (
 )
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
 from src.configuration import ConfigurationManager
+# --- Import DB Managers and TradingRule for injection ---
+from src.database import DbOrderManager, DbPositionManager # Needed for new responsibilities
+from src.trade.rules import TradingRule # Needed for PerformanceMonitor
 
 # --- Constants ---
 DEFAULT_RETRY_ATTEMPTS = 5
@@ -604,11 +603,13 @@ class PositionService:
 class TradingOrchestrator:
     """Orchestrates the process of executing a trade signal."""
 
-    def __init__(self, instrument_service: InstrumentService, order_service: OrderService, position_service: PositionService, config_manager: ConfigurationManager):
+    def __init__(self, instrument_service: InstrumentService, order_service: OrderService, position_service: PositionService, config_manager: ConfigurationManager, db_order_manager: DbOrderManager, db_position_manager: DbPositionManager):
         self.instrument_service = instrument_service
         self.order_service = order_service
         self.position_service = position_service
         self.config = config_manager
+        self.db_order_manager = db_order_manager
+        self.db_position_manager = db_position_manager
         self.buying_power_config = self.config.get_config_value("trade.config.buying_power", {})
         self.safety_margins = self.buying_power_config.get("safety_margins", {"bid_calculation": 1})
         self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": DEFAULT_RETRY_ATTEMPTS, "retry_sleep_seconds": DEFAULT_RETRY_WAIT_SECONDS})
@@ -657,104 +658,130 @@ class TradingOrchestrator:
 
 
     def execute_trade_signal(self, exchange_id: str, underlying_uics: str, keywords: str):
-        """Full workflow: Find Turbo -> Calculate Amount -> Place Order -> Confirm Position."""
-        logging.info(f"--- Executing Trade Signal: {keywords} on {underlying_uics} ---")
+        """
+        Full workflow: Find -> Calculate -> Place Order -> Confirm Position -> **Persist Order/Position**.
+        Returns details for logging/notification, not for DB persistence by caller.
+        """
+        logging.info(f"--- Executing & Recording Trade Signal: {keywords} on {underlying_uics} ---")
+        confirmed_position = None # Initialize
+        validated_order = None # Initialize
+        turbo_info = None # Initialize
 
-        # 1. Find Turbo
-        # Exceptions (NoTurbos, NoMarket, Api) handled by caller or bubble up
-        turbo_info = self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
-
-        # 2. Get Spending Power
-        # Exceptions (Api, SaxoApiError) handled by caller or bubble up
-        spending_power = self.position_service.get_spending_power()
-
-        # 3. Calculate Amount
-        # Raises InsufficientFundsException, ValueError
-        amount = self._calculate_bid_amount(turbo_info, spending_power)
-
-        # 4. Place Buy Order
-        # Raises OrderPlacementError, SaxoApiError, ApiRequestException
-        validated_order = self.order_service.place_market_order(
-            uic=turbo_info['selected_instrument']['uic'],
-            asset_type=turbo_info['selected_instrument']['asset_type'],
-            amount=amount,
-            buy_sell="Buy" # Assuming long/short keywords map to Buy action
-        )
-        order_id = validated_order['OrderId']
-
-        # 5. Confirm Position Creation (with retry)
         try:
+            # 1. Find Turbo
+            # Exceptions (NoTurbos, NoMarket, Api) handled by caller or bubble up
+            turbo_info = self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
+
+            # 2. Get Spending Power
+            # Exceptions (Api, SaxoApiError) handled by caller or bubble up
+            spending_power = self.position_service.get_spending_power()
+
+            # 3. Calculate Amount
+            # Raises InsufficientFundsException, ValueError
+            amount = self._calculate_bid_amount(turbo_info, spending_power)
+
+            # 4. Place Buy Order
+            # Raises OrderPlacementError, SaxoApiError, ApiRequestException
+            validated_order = self.order_service.place_market_order(
+                uic=turbo_info['selected_instrument']['uic'],
+                asset_type=turbo_info['selected_instrument']['asset_type'],
+                amount=amount,
+                buy_sell="Buy"
+            )
+            order_id = validated_order['OrderId']
+
+            # 5. Confirm Position Creation (with retry)
             confirmed_position = self.position_service.find_position_by_order_id_with_retry(order_id)
-        except RetryError as e:
-             logging.critical(f"CRITICAL: Position for OrderId {order_id} not found after retries. Attempting order cancel.", exc_info=True)
-             # Attempt to cancel the order
-             try:
-                  self.order_service.cancel_order(order_id)
-                  logging.info(f"Successfully cancelled orphan order {order_id}")
-                  # Raise the original PositionNotFoundException after successful cancel
-                  raise PositionNotFoundException(f"Position for order {order_id} not found. Order Cancelled.", order_id=order_id) from e
-             except Exception as cancel_err:
-                  logging.error(f"CRITICAL: Failed to cancel orphan order {order_id} after position not found: {cancel_err}")
-                   # Raise the original PositionNotFoundException, noting cancel failure
-                  raise PositionNotFoundException(f"Position for order {order_id} not found. FAILED TO CANCEL ORDER.", order_id=order_id) from e
-        except PositionNotFoundException as e: # Should be caught by RetryError now, but belt-and-suspenders
-             # This path likely won't be hit if retry logic works, but handle defensively
-             logging.critical(f"CRITICAL: Position for OrderId {order_id} not found (unexpected direct exception).", exc_info=True)
-             raise # Re-raise the critical exception
 
-        logging.info(f"Trade execution successful for OrderId {order_id}, PositionId {confirmed_position.get('PositionId')}")
+            # --- *** 6. Persist to Database *** ---
+            now_utc = datetime.now(pytz.utc)
+            # Prepare Order Data for DB
+            order_data_for_db = {
+                "action": keywords, "buy_sell": "Buy", "order_id": order_id, "order_amount": amount,
+                "order_type": "Market",
+                "order_kind": "main", "order_submit_time": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "related_order_id": [],
+                "position_id": confirmed_position.get("PositionId"),
+                "instrument_name": turbo_info['selected_instrument']['description'],
+                "instrument_symbol": turbo_info['selected_instrument']['symbol'],
+                "instrument_uic": turbo_info['selected_instrument']['uic'],
+                "instrument_price": turbo_info['selected_instrument'].get('latest_ask'),
+                "instrument_currency": turbo_info['selected_instrument']['currency'],
+                "order_cost": turbo_info['selected_instrument'].get('commissions', {}).get('CostBuy'),
+            }
+            # Prepare Position Data for DB
+            pos_base = confirmed_position.get("PositionBase", {});
+            pos_disp = confirmed_position.get("DisplayAndFormat", {})
+            position_data_for_db = {
+                "action": keywords, "position_id": confirmed_position.get("PositionId"),
+                "position_amount": pos_base.get("Amount"),
+                "position_open_price": pos_base.get("OpenPrice"),
+                "position_total_open_price": (pos_base.get("Amount", 0) * pos_base.get("OpenPrice", 0)),
+                "position_status": pos_base.get("Status", "Open"), "position_kind": "main",
+                "execution_time_open": pos_base.get("ExecutionTimeOpen"),
+                "order_id": pos_base.get("SourceOrderId"), "related_order_id": pos_base.get("RelatedOpenOrders", []),
+                "instrument_name": pos_disp.get("Description"), "instrument_symbol": pos_disp.get("Symbol"),
+                "instrument_uic": pos_base.get("Uic"), "instrument_currency": pos_disp.get("Currency"),
+            }
 
-        # 6. Return data needed for DB persistence
-        now_utc = datetime.now(pytz.utc)
-        order_data_for_db = {
-             "action": keywords,
-             "buy_sell": "Buy",
-             "order_id": order_id,
-             "order_amount": amount,
-             "order_type": "Market",
-             "order_kind": "main", # Assuming simple orders for now
-             "order_submit_time": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-             "related_order_id": [], # Handle OCO if implemented
-             "position_id": confirmed_position.get("PositionId"),
-             "instrument_name": turbo_info['selected_instrument']['description'],
-             "instrument_symbol": turbo_info['selected_instrument']['symbol'],
-             "instrument_uic": turbo_info['selected_instrument']['uic'],
-             "instrument_price": turbo_info['selected_instrument'].get('latest_ask'), # Price at time of calc/buy
-             "instrument_currency": turbo_info['selected_instrument']['currency'],
-             "order_cost": turbo_info['selected_instrument'].get('commissions', {}).get('CostBuy'), # Check field name
-        }
+            # Perform DB Inserts
+            try:
+                logging.info(f"Persisting order {order_id} to database...")
+                self.db_order_manager.insert_turbo_order_data(order_data_for_db)
+                # TODO: Handle potential sub-orders if OCO/related orders are implemented
+                logging.info(f"Persisting position {position_data_for_db['position_id']} to database...")
+                self.db_position_manager.insert_turbo_open_position_data(position_data_for_db)
+                logging.info("Order and position persisted successfully.")
+            except Exception as db_err:
+                # CRITICAL: Trade executed but failed to record in DB!
+                logging.critical(
+                    f"CRITICAL DB ERROR: Failed to persist order/position after execution! OrderID: {order_id}, PositionID: {position_data_for_db['position_id']}. Error: {db_err}",
+                    exc_info=True)
+                # Raise a specific error indicating this critical state
+                raise DatabaseOperationException(f"CRITICAL: Failed to persist executed trade OrderID {order_id}",
+                                                 operation="insert_trade_data", entity_id=order_id) from db_err
 
-        position_data_for_db = {
-            "action": keywords,
-            "position_id": confirmed_position.get("PositionId"),
-            "position_amount": confirmed_position.get("PositionBase", {}).get("Amount"),
-            "position_open_price": confirmed_position.get("PositionBase", {}).get("OpenPrice"),
-            "position_total_open_price": (
-                confirmed_position.get("PositionBase", {}).get("Amount", 0) *
-                confirmed_position.get("PositionBase", {}).get("OpenPrice", 0)
-            ),
-            "position_status": confirmed_position.get("PositionBase", {}).get("Status", "Open"), # Should be Open
-            "position_kind": "main",
-            "execution_time_open": confirmed_position.get("PositionBase", {}).get("ExecutionTimeOpen"),
-            "order_id": confirmed_position.get("PositionBase", {}).get("SourceOrderId"),
-            "related_order_id": confirmed_position.get("PositionBase", {}).get("RelatedOpenOrders", []),
-            "instrument_name": confirmed_position.get("DisplayAndFormat", {}).get("Description"),
-            "instrument_symbol": confirmed_position.get("DisplayAndFormat", {}).get("Symbol"),
-            "instrument_uic": confirmed_position.get("PositionBase", {}).get("Uic"),
-            "instrument_currency": confirmed_position.get("DisplayAndFormat", {}).get("Currency"),
-        }
+            logging.info(
+                f"Trade execution & recording successful for OrderId {order_id}, PositionId {confirmed_position.get('PositionId')}")
 
-        return {
-            "order_data": order_data_for_db,
-            "position_data": position_data_for_db,
-            "selected_turbo_info": turbo_info # Include for reference/logging if needed
-        }
+            # --- *** 7. Return Execution Details (for logging/notification) *** ---
+            # Return details that might be useful for the caller (e.g., for composer)
+            return {
+                "order_details": order_data_for_db,  # Return the prepared DB data
+                "position_details": position_data_for_db,
+                "selected_turbo_info": turbo_info,
+                "message": f"Successfully executed and recorded trade for {keywords}."
+            }
+
+        # --- Exception Handling during Execution ---
+        except PositionNotFoundException as e:
+            # This specific error already attempted order cancellation inside find_position...
+            logging.critical(
+                f"CRITICAL: Position not found for OrderId {e.order_id} after retries. Order cancellation attempted.")
+            # Re-raise the critical exception for the main callback handler
+            raise e
+        except Exception as e:
+            # Catch other errors (NoTurbos, InsufficientFunds, OrderPlacementError, DB errors, etc.)
+            logging.error(f"Trade execution failed during '{keywords}' signal: {e}", exc_info=True)
+            # Attempt cleanup if order was placed but position failed *before* confirmation loop
+            if validated_order and not confirmed_position:
+                order_id_to_cancel = validated_order.get('OrderId')
+                if order_id_to_cancel:
+                    logging.warning(
+                        f"Attempting to cancel potentially orphan order {order_id_to_cancel} due to execution failure.")
+                    try:
+                        self.order_service.cancel_order(order_id_to_cancel)
+                        logging.info(f"Successfully cancelled potentially orphan order {order_id_to_cancel}")
+                    except Exception as cancel_err:
+                        logging.error(f"Failed to cancel potentially orphan order {order_id_to_cancel}: {cancel_err}")
+            # Re-raise the original error for the main callback handler
+            raise e
 
 
 class PerformanceMonitor:
     """Monitors open positions, checks performance, triggers closures, syncs DB."""
 
-    def __init__(self, position_service: PositionService, order_service: OrderService, config_manager: ConfigurationManager, db_position_manager, trading_rule, rabbit_connection):
+    def __init__(self, position_service: PositionService, order_service: OrderService, config_manager: ConfigurationManager, db_position_manager: DbPositionManager, trading_rule: TradingRule, rabbit_connection):
         self.position_service = position_service
         self.order_service = order_service
         self.config = config_manager
@@ -1028,3 +1055,87 @@ Close Time: {update_data['execution_time_close']}"""
 
         except Exception as e:
             logging.error(f"Failed to write performance log for position {position_id}: {e}")
+
+    def close_managed_positions_by_criteria(self, action_filter: str | None = None):
+        """
+        Closes open positions managed by the app, optionally filtered by action ('long'/'short').
+        Relies on sync_db_positions_with_api for final DB updates.
+
+        Args:
+            action_filter: If 'long' or 'short', closes only positions matching that action.
+                           If None, closes all managed open positions.
+        """
+        logging.info(f"--- Closing Managed Positions by Criteria (Filter: {action_filter}) ---")
+        closed_initiated_count = 0
+        errors_count = 0
+
+        # 1. Get currently open positions managed by the app from DB
+        # Need position_id and the original action ('long'/'short')
+        try:
+            db_open_positions = self.db_position_manager.get_open_positions_details() # Assume this gets needed fields
+            if not db_open_positions:
+                 logging.info("No managed positions open in DB to close.")
+                 return {"closed_initiated_count": 0, "errors_count": 0}
+        except Exception as e:
+            logging.error(f"Failed to get open positions from DB for closure: {e}")
+            raise # Re-raise as we cannot proceed
+
+        # 2. Get currently open positions from API
+        try:
+            api_positions_response = self.position_service.get_open_positions()
+            api_positions_dict = {p["PositionId"]: p for p in api_positions_response.get("Data", [])}
+        except Exception as e:
+            logging.error(f"Failed to get open positions from API for closure: {e}")
+            raise # Re-raise as we cannot compare
+
+        # 3. Filter and Initiate Closure
+        for db_pos in db_open_positions:
+            position_id = db_pos.get('position_id')
+            db_action = db_pos.get('action') # Get action ('long'/'short') from DB data
+
+            # Apply filter
+            if action_filter and db_action != action_filter:
+                continue # Skip if action doesn't match filter
+
+            # Check if position exists and is closable on API
+            if position_id not in api_positions_dict:
+                logging.warning(f"Position {position_id} (Action: {db_action}) to be closed is not open on API. Skipping (will be synced later).")
+                continue
+
+            api_pos = api_positions_dict[position_id]
+            if not api_pos.get("PositionBase", {}).get("CanBeClosed", False):
+                logging.warning(f"Position {position_id} (Action: {db_action}) cannot be closed via API (CanBeClosed=False). Skipping.")
+                continue
+
+            # Initiate closure
+            try:
+                direction = direction_from_amount(api_pos["PositionBase"]["Amount"])
+                order_direction = direction_invert(direction)
+                logging.info(f"Initiating explicit close for {position_id} (Action: {db_action}), Filter: {action_filter}. Order: {order_direction} {api_pos['PositionBase']['Amount']}")
+
+                close_order_result = self.order_service.place_market_order(
+                    uic=api_pos["PositionBase"]["Uic"],
+                    asset_type=api_pos["PositionBase"]["AssetType"],
+                    amount=api_pos["PositionBase"]["Amount"],
+                    buy_sell=order_direction
+                )
+                closed_initiated_count += 1
+                logging.info(f"Close order placed for {position_id}. OrderId: {close_order_result.get('OrderId')}")
+
+                # Send notification
+                close_message = f"EXPLICIT CLOSE: Closing {api_pos['DisplayAndFormat']['Description']} (PosID: {position_id}, Action: {db_action}). Filter: {action_filter}. Order: {close_order_result.get('OrderId')}"
+                send_message_to_mq_for_telegram(self.rabbit_connection, close_message)
+
+            except (OrderPlacementError, SaxoApiError, ApiRequestException) as e:
+                 logging.error(f"Failed to place explicit close order for position {position_id}: {e}")
+                 error_message = f"ERROR: Failed explicit close for {position_id} (Action: {db_action}). Error: {e}"
+                 send_message_to_mq_for_telegram(self.rabbit_connection, error_message)
+                 errors_count += 1
+            except Exception as e:
+                 logging.error(f"Unexpected error during explicit close for position {position_id}: {e}", exc_info=True)
+                 error_message = f"CRITICAL ERROR: Unexpected error during explicit close for {position_id}. Error: {e}"
+                 send_message_to_mq_for_telegram(self.rabbit_connection, error_message)
+                 errors_count += 1
+
+        logging.info(f"Explicit closure process finished. Initiated: {closed_initiated_count}, Errors: {errors_count}. Final DB updates via sync.")
+        return {"closed_initiated_count": closed_initiated_count, "errors_count": errors_count}
