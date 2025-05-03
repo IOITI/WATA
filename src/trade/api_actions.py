@@ -17,6 +17,20 @@ from src.saxo_authen import SaxoAuth
 from src.saxo_openapi import API
 
 from . import exceptions
+from .exceptions import (
+    NoMarketAvailableException,
+    NoTurbosAvailableException,
+    PositionNotFoundException,
+    InsufficientFundsException,
+    ApiRequestException,
+    TokenAuthenticationException,
+    DatabaseOperationException,
+    PositionCloseException,
+    WebSocketConnectionException,
+    SaxoApiError,
+    OrderPlacementError,
+    ConfigurationError
+)
 
 import logging
 from copy import deepcopy
@@ -54,14 +68,27 @@ class SaxoService:
             self, config_manager, db_order_manager, db_position_manager, rabbit_connection, trading_rule
     ):
         # Retrieve logging configuration
-        self.logging_config = config_manager.get_logging_config()
-        self.percent_profit_wanted_per_days = trading_rule.get_rule_config("day_trading")["percent_profit_wanted_per_days"]
+        try:
+            self.logging_config = config_manager.get_logging_config()
+            trading_rule_config = trading_rule.get_rule_config("day_trading")
+            self.percent_profit_wanted_per_days = trading_rule_config["percent_profit_wanted_per_days"]
 
-        # Get trade configuration
-        self.turbo_preference = config_manager.get_config_value("trade.config.turbo_preference", {})
-        self.buying_power = config_manager.get_config_value("trade.config.buying_power", {})
-        self.position_management = config_manager.get_config_value("trade.config.position_management", {})
-        self.general_config = config_manager.get_config_value("trade.config.general", {})
+            # Get trade configuration
+            self.turbo_preference = config_manager.get_config_value("trade.config.turbo_preference", {})
+            self.buying_power = config_manager.get_config_value("trade.config.buying_power", {})
+            self.position_management = config_manager.get_config_value("trade.config.position_management", {})
+            self.general_config = config_manager.get_config_value("trade.config.general", {})
+        except KeyError as ke:
+            # Specifically for missing configuration keys
+            raise ConfigurationError(
+                f"Missing required configuration key: {ke}",
+                missing_key=str(ke)
+            )
+        except Exception as e:
+            # For other configuration related errors
+            raise ConfigurationError(
+                f"Error loading configuration: {e}"
+            )
         
         # Set specific configuration properties
         self.turbo_price_range = self.turbo_preference.get("price_range", {"min": 4, "max": 15})
@@ -103,7 +130,12 @@ class SaxoService:
 
         except Exception as token_exception:
             logging.error(f"Error getting token: {token_exception}")
-            raise token_exception
+            # Check if this is a refresh attempt (token already existed)
+            is_refresh = old_token is not None
+            raise TokenAuthenticationException(
+                f"Failed to {'refresh' if is_refresh else 'obtain'} authentication token: {token_exception}",
+                refresh_attempt=is_refresh
+            )
 
     def find_turbos(self, ExchangeId, UnderlyingUics, Keywords):
         self._ensure_valid_token()
@@ -125,7 +157,7 @@ class SaxoService:
             except Exception as exception:
                 message = f"Error while get instruments : {exception}"
                 logging.error(message)
-                raise message
+                raise ApiRequestException(message, endpoint="instruments.Instruments", params=r.params)
 
             initial_count = len(response["Data"])
             logging.debug(f"Initial Data Count: {initial_count}")
@@ -183,7 +215,7 @@ class SaxoService:
             except Exception as exception:
                 message = f"Error while get InfoPrices : {exception}"
                 logging.error(message)
-                raise message
+                raise ApiRequestException(message, endpoint="infoprices.InfoPrices", params=r.params)
 
             logging.debug(f"InfoPrices Response: {response}")
 
@@ -318,7 +350,11 @@ class SaxoService:
                 response = self.saxo_client.request(r)
             except Exception as exception:
                 logging.error(f"Error while CreatePriceSubscription : {exception}")
-                raise exception
+                raise ApiRequestException(
+                    f"Error during CreatePriceSubscription: {exception}", 
+                    endpoint="prices.CreatePriceSubscription", 
+                    params={"Uic": info_price_final["Uic"], "AccountKey": self.account_info.AccountKey}
+                )
 
             price_final = deepcopy(response["Snapshot"])
             response = {
@@ -431,41 +467,22 @@ class SaxoService:
             raise exception
         return resp_single_position
 
-    def calcul_bid_amount(self, founded_turbo):
-        # request the balances
-        req_balance = pf.balances.AccountBalances(
-            params={"ClientKey": self.account_info.ClientKey}
-        )
-        try:
-            resp_balance = self.saxo_client.request(req_balance)
-        except Exception as exception:
-            logging.error(f"Error while get account balance : {exception}")
-            raise exception
-
-        spending_power = resp_balance["SpendingPower"]
-        logging.debug(f"Cash Balance on account: {spending_power}")
-
-        pre_amount = spending_power / founded_turbo["price"]["Quote"]["Ask"]
-        # Round down and convert to integer, minus 1 to assure transaction
-        amount = int(math.floor(pre_amount)) - 1
-        if amount <= 0:
-            error_message = (
-                f"The current spending power ({spending_power}) cannot buy 1 or more turbo @ "
-                f"{founded_turbo['price']['Quote']['Ask']} (with trading security)"
-            )
-            logging.error(error_message)
-            raise ValueError(error_message)
-        return amount
 
     def calculate_bid_amount(self, founded_turbo):
         """Calculate bid amount with basic safety checks."""
+        ask_price = None # Initialize in case of early error
+        available_funds = None # Initialize
+        amount = None # Initialize
+        spending_power = None # Initialize
+
         try:
             # Validate turbo data
-            if not founded_turbo or 'price' not in founded_turbo:
-                raise ValueError("Invalid turbo data for bid calculation")
+            if not founded_turbo or 'price' not in founded_turbo or \
+               'Quote' not in founded_turbo['price'] or 'Ask' not in founded_turbo['price']['Quote']:
+                raise ValueError("Invalid turbo data for bid calculation (Missing Ask price)")
 
             ask_price = founded_turbo["price"]["Quote"]["Ask"]
-            if not ask_price or ask_price <= 0:
+            if not isinstance(ask_price, (int, float)) or ask_price <= 0:
                 raise ValueError(f"Invalid ask price for bid calculation: {ask_price}")
 
             # Get balance
@@ -478,29 +495,49 @@ class SaxoService:
                 raise ValueError("Invalid balance response for bid calculation")
 
             spending_power = resp_balance["SpendingPower"]
-            logging.info(f"Cash Balance: {spending_power}")
+            if not isinstance(spending_power, (int, float)):
+                 raise ValueError(f"Invalid SpendingPower received: {spending_power}")
+
+            logging.info(f"Cash Balance (Spending Power): {spending_power}")
 
             # Apply max account percentage limit
             max_account_funds_to_use_percentage = self.buying_power.get("max_account_funds_to_use_percentage", 100)
-            available_funds = spending_power * (max_account_funds_to_use_percentage / 100)
-            logging.info(f"Available funds for trading ({max_account_funds_to_use_percentage}% of {spending_power}): {available_funds}")
+            available_funds = spending_power * (max_account_funds_to_use_percentage / 100.0)
+            logging.info(f"Available funds for trading ({max_account_funds_to_use_percentage}% of {spending_power}): {available_funds:.2f}")
 
             # Calculate amount with safety margin
-            safety_margin = self.safety_margins["bid_calculation"]
-            pre_amount = (available_funds / ask_price) - safety_margin
+            safety_margin = self.safety_margins.get("bid_calculation", 1) # Use .get for safety
+            if available_funds < (ask_price * (1 + safety_margin)): # Check if funds cover at least one unit + margin
+                 pre_amount = -1 # Force amount to be <= 0
+            else:
+                 pre_amount = (available_funds / ask_price) - safety_margin
+
             amount = int(math.floor(pre_amount))
 
             if amount <= 0:
-                raise ValueError(
-                    f"Insufficient funds to buy 1 or more turbo @ {ask_price}"
-                    f" (available: {available_funds}, total balance: {spending_power})"
+                error_message = (
+                    f"Insufficient funds to buy required units @ {ask_price}"
+                )
+                # Raise the specific exception with context
+                raise exceptions.InsufficientFundsException(
+                    message=error_message,
+                    available_funds=available_funds,
+                    required_price=ask_price,
+                    calculated_amount=amount
                 )
 
+            logging.info(f"Calculated bid amount: {amount}")
             return amount
 
-        except Exception as e:
-            logging.error(f"Error in bid calculation: {str(e)}")
+        except exceptions.InsufficientFundsException:
+            # Re-raise if already the correct type (shouldn't happen here but safe)
             raise
+        except Exception as e:
+            # Wrap other exceptions during calculation for clarity
+            logging.error(f"Error during bid calculation: {e}")
+            # Optionally wrap in a different custom exception or re-raise ValueError
+            # For now, let's raise a ValueError to indicate a calculation problem
+            raise ValueError(f"Failed during bid calculation: {e}") from e
 
     def buy_turbo_instrument(self, founded_turbo):
         """Buy turbo instrument with token refresh check"""
@@ -539,7 +576,36 @@ class SaxoService:
                 order_validated = self.saxo_client.request(request_order)
             except Exception as exception:
                 logging.error(f"Error while send buy order with {json.dumps(final_order)}, response is : {exception}")
-                raise exception
+                
+                # Check if we can extract any useful error details from the exception
+                status_code = None
+                saxo_error_details = None
+                
+                # Try to extract error details (structure depends on the Saxo client implementation)
+                if hasattr(exception, "status_code"):
+                    status_code = exception.status_code
+                if hasattr(exception, "response") and hasattr(exception.response, "json"):
+                    try:
+                        saxo_error_details = exception.response.json()
+                    except:
+                        pass  # If we can't parse JSON, just leave it None
+                
+                # If we can identify it as an explicit order rejection, use OrderPlacementError
+                if status_code in [400, 403, 409] or (isinstance(saxo_error_details, dict) and saxo_error_details.get("ErrorCode")):
+                    raise OrderPlacementError(
+                        f"Saxo rejected order: {exception}",
+                        status_code=status_code,
+                        saxo_error_details=saxo_error_details,
+                        order_details=final_order
+                    )
+                else:
+                    # Otherwise use the more general SaxoApiError
+                    raise SaxoApiError(
+                        f"Error placing order: {exception}",
+                        status_code=status_code,
+                        saxo_error_details=saxo_error_details,
+                        request_details={"order": final_order}
+                    )
 
             if not order_validated["OrderId"]:
                 message = f"Error in buy order response there is no OrderId: {order_validated}"
@@ -669,7 +735,11 @@ class SaxoService:
 
     def close_position(self, position):
         if not position["PositionBase"]["CanBeClosed"]:
-            raise ValueError("Position already closed")
+            raise PositionCloseException(
+                "Position already closed", 
+                position_id=position.get("PositionId"),
+                reason="CanBeClosed flag is False"
+            )
 
         direction = direction_from_amount(position["PositionBase"]["Amount"])
         order_direction = direction_invert(direction)
@@ -689,12 +759,21 @@ class SaxoService:
             order_validated = self.saxo_client.request(request_close)
         except Exception as exception:
             logging.error(f"Error while send {order_direction} order : {exception}")
-            raise exception
+            raise ApiRequestException(
+                f"Error sending {order_direction} order: {exception}",
+                endpoint="orders.Order",
+                params={"position_id": position.get("PositionId")}
+            )
+            
         if not order_validated["OrderId"]:
             message = f"Error in {order_direction} order response there is no OrderId: {order_validated}"
             logging.error(message)
             send_message_to_mq_for_telegram(self.rabbit_connection, message)
-            raise ValueError(message)
+            raise PositionCloseException(
+                message,
+                position_id=position.get("PositionId"),
+                reason="Missing OrderId in response"
+            )
 
         logging.info(
             f"Successfully {order_direction} turbo position for {position['DisplayAndFormat']['Description']} with Order ID {order_validated["OrderId"]}"
@@ -704,39 +783,50 @@ class SaxoService:
         max_retries = self.retry_config["max_retries"]
         retries = 0
         position_found = False
+        order_id = order_validated.get('OrderId', 'Unknown') # Get OrderId safely
 
         while retries < max_retries:
             all_positions = self.get_user_open_positions()
-            for position in all_positions["Data"]:
-                if (
-                        position["PositionBase"]["SourceOrderId"]
-                        == order_validated["OrderId"]
-                ):
-                    return position
+            # Ensure all_positions['Data'] exists and is iterable
+            if all_positions and 'Data' in all_positions and isinstance(all_positions['Data'], list):
+                for position in all_positions["Data"]:
+                     # Check if PositionBase and SourceOrderId exist
+                    if (position and 'PositionBase' in position and
+                        position['PositionBase'].get("SourceOrderId") == order_id):
+                        logging.info(f"Position {position.get('PositionId')} found for order ID {order_id}.")
+                        return position # Return the found position
+            else:
+                 logging.warning(f"Unexpected structure or empty data in get_user_open_positions response during retry {retries+1}/{max_retries}.")
+                 # Decide if you want to retry or raise immediately based on this warning
+
             sleep(self.retry_config["retry_sleep_seconds"])
             retries += 1  # Increment the retry counter
 
-        if not position_found:
-            logging.error(
-                f"Position not found after {max_retries} retries for order ID {order_validated['OrderId']}"
-            )
-            request_cancel_order = tr.orders.CancelOrders(
-                OrderIds=order_validated["OrderId"],
-                params={"AccountKey": self.account_info.AccountKey}
-            )
-            try:
-                self.saxo_client.request(request_cancel_order)
-                logging.info(
-                    f"Successfully cancel order {order_validated['OrderId']}"
-                )
-                raise ValueError(
-                    f"Position not found after {max_retries} retries for order ID {order_validated['OrderId']},"
-                    f" Successfully cancel order {order_validated['OrderId']}"
-                )
-            except Exception as e:
-                message = f"Position not found after {max_retries} retries for order ID {order_validated['OrderId']}, failed to cancel order {order_validated['OrderId']} because of exception {e}"
-                logging.error(message)
-                raise ValueError(message)
+        # If loop finishes without returning, position was not found
+        error_message_base = f"Position not found after {max_retries} retries for order ID {order_id}"
+        logging.error(error_message_base)
+
+        # Attempt to cancel
+        request_cancel_order = tr.orders.CancelOrders(
+            OrderIds=order_id,
+            params={"AccountKey": self.account_info.AccountKey}
+        )
+        try:
+            # Ensure order_id is valid before attempting cancellation
+            if order_id == 'Unknown':
+                raise ValueError("Cannot cancel order with Unknown OrderId.")
+
+            self.saxo_client.request(request_cancel_order)
+            cancel_msg = f"✅ Successfully cancelled order {order_id}"
+            logging.info(cancel_msg)
+            # Raise the specific exception WITH the order_id
+            raise exceptions.PositionNotFoundException(f"{error_message_base}. {cancel_msg}", order_id=order_id)
+        except Exception as e:
+            cancel_fail_msg = f"❌ Failed to cancel order {order_id}: {e}"
+            logging.error(f"{error_message_base}. {cancel_fail_msg}")
+            # Raise the specific exception WITH the order_id, noting cancel failure
+            raise exceptions.PositionNotFoundException(f"{error_message_base}. {cancel_fail_msg}",
+                                                       order_id=order_id)
 
     def check_and_act_close_on_current_positions(
             self, all_positions, preferred_action=None
@@ -836,7 +926,7 @@ class SaxoService:
                     )
 
         if len(position_ids_closed) > 0:
-            # Wait because some time API did'nt have the position instantly
+            # Wait because some time API didn't have the position instantly
             sleep(2)
             try:
                 all_closed_positions = self.get_user_closed_positions()
@@ -890,10 +980,19 @@ class SaxoService:
                         self.db_position_manager.mark_database_as_corrupted(
                             error_message
                         )
-                        send_message_to_mq_for_telegram(
-                            self.rabbit_connection, f"CRITICAL : {error_message}"
+                        
+                        # Create a specific database exception with details
+                        db_exception = DatabaseOperationException(
+                            error_message,
+                            operation="update_turbo_position_data",
+                            entity_id=position_id
                         )
-                        exit(1)
+                        
+                        send_message_to_mq_for_telegram(
+                            self.rabbit_connection, f"CRITICAL : {db_exception}"
+                        )
+                        # Re-raise the custom exception so it can be caught and handled upstream
+                        raise db_exception
                     logging.info(
                         f"Successfully closed turbo position {position_id} for {api_closed_position["DisplayAndFormat"]["Description"]} on database"
                     )
@@ -980,7 +1079,11 @@ Current today profit : {today_percent}%
             resp_position_sub = self.saxo_client.request(request_position_sub)
         except Exception as exception:
             logging.error(f"Error while try to create WS subscription for position: {exception}")
-            raise exception
+            raise WebSocketConnectionException(
+                f"Failed to create WebSocket subscription: {exception}",
+                context_id=self.context_id,
+                reference_id=reference_id
+            )
 
         print("Created WS subscription")
         print(json.dumps(resp_position_sub))
