@@ -15,7 +15,7 @@
 
     - name: Sync DuckDB data from server
       ansible.builtin.synchronize:
-        src: "{{ hostvars[groups['wata_server'][0]]['ansible_user'] }}@{{ groups['wata_server'][0] }}:/app/var/lib/duckdb/"
+        src: "{{ hostvars[groups['wata_server'][0]]['ansible_user'] }}@{{ groups['wata_server'][0] }}:/app/wata/var/lib/duckdb/"
         dest: "{{ temp_local_duckdb_path }}"
         mode: pull
         recursive: yes

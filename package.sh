@@ -23,6 +23,22 @@ if [ -f "$PACKAGE_NAME" ]; then
     fi
 fi
 # Build the new package with the versioned name
-zip -r $PACKAGE_NAME ./src ./etc/rabbitmq/01-conf-custom.conf ./etc/config_example.json ./requirements.txt ./Dockerfile ./VERSION ./docker_build.sh ./deploy/docker-compose.yml ./deploy/install_package.sh ./deploy/update_rabbit_password.sh ./deploy/docker-compose.override.yml
+mkdir -p _tmp_package/wata/$VERSION
+cp -r ./src _tmp_package/wata/$VERSION/
+cp -r ./etc _tmp_package/wata/
+cp ./requirements.txt _tmp_package/wata/$VERSION/
+cp ./Dockerfile _tmp_package/wata/$VERSION/
+cp ./VERSION _tmp_package/wata/
+cp ./VERSION _tmp_package/wata/$VERSION/
+cp ./docker_build.sh _tmp_package/wata/$VERSION/
+cp -r ./deploy _tmp_package/wata/$VERSION/
+
+# Go to the temporary directory and create the zip
+cd _tmp_package
+zip -r ../$PACKAGE_NAME ./*
+cd ..
+
+# Clean up
+rm -rf _tmp_package
 
 echo "Package $PACKAGE_NAME created with version $VERSION"

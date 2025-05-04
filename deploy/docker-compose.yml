@@ -10,9 +10,9 @@ services:
       - RABBITMQ_DEFAULT_USER=trade-app
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-pykvys-9nixqo-cuqvYt}
     volumes:
-        - ../var/lib/rabbitmq:/var/lib/rabbitmq/
-        - ../var/log/rabbitmq:/var/log/rabbitmq
-        - ../etc/rabbitmq/01-conf-custom.conf:/etc/rabbitmq/conf.d/01-conf-custom.conf
+        - ../../wata/var/lib/rabbitmq:/var/lib/rabbitmq/
+        - ../../wata/var/log/rabbitmq:/var/log/rabbitmq
+        - ../../wata/etc/rabbitmq/01-conf-custom.conf:/etc/rabbitmq/conf.d/01-conf-custom.conf
     networks:
       - trade-net
     healthcheck:
@@ -42,9 +42,9 @@ services:
     expose:
       - '80'
     volumes:
-        - ../var/log:/app/var/log/
-        - ../var/lib:/app/var/lib/
-        - ../etc/config.json:/app/etc/config.json
+        - ../../wata/var/log:/app/var/log/
+        - ../../wata/var/lib:/app/var/lib/
+        - ../../wata/etc/config.json:/app/etc/config.json
     networks:
       - trade-net
     deploy:
@@ -68,8 +68,8 @@ services:
     environment:
       - WATA_APP_ROLE=telegram
     volumes:
-      - ../var/log:/app/var/log/
-      - ../etc/config.json:/app/etc/config.json
+      - ../../wata/var/log:/app/var/log/
+      - ../../wata/etc/config.json:/app/etc/config.json
     networks:
       - trade-net
     deploy:
@@ -93,8 +93,8 @@ services:
     environment:
       - WATA_APP_ROLE=scheduler
     volumes:
-      - ../var/log:/app/var/log/
-      - ../etc/config.json:/app/etc/config.json
+      - ../../wata/var/log:/app/var/log/
+      - ../../wata/etc/config.json:/app/etc/config.json
     networks:
       - trade-net
     deploy:
@@ -118,9 +118,9 @@ services:
     environment:
       - WATA_APP_ROLE=trader
     volumes:
-      - ../var/log:/app/var/log/
-      - ../var/lib:/app/var/lib/
-      - ../etc/config.json:/app/etc/config.json
+      - ../../wata/var/log:/app/var/log/
+      - ../../wata/var/lib:/app/var/lib/
+      - ../../wata/etc/config.json:/app/etc/config.json
     networks:
       - trade-net
     deploy:
