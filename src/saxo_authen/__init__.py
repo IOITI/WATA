@@ -39,7 +39,7 @@ class SaxoAuth:
         # Ensure token directory exists
         os.makedirs(os.path.dirname(self.token_file_path), exist_ok=True)
         
-        # Initialize encryption key
+        # Initialize the encryption key
         self._initialize_encryption()
         
         # Initialize token database manager
