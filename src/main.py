@@ -5,15 +5,26 @@ import logging
 import jsonschema
 import pika
 from functools import partial
-import sys # For exit
+import sys
 
 # --- Configuration and Core Components ---
 from configuration import ConfigurationManager
-from trade.api_actions import SaxoService # Assuming still used, or import specific services later
+# --- Import Saxo Services ---
+from trade.api_actions import (
+    SaxoApiClient,
+    InstrumentService,
+    OrderService,
+    PositionService,
+    TradingOrchestrator,
+    PerformanceMonitor
+)
+from src.saxo_authen import SaxoAuth
+# --- Other necessary imports ---
 from trade.rules import TradingRule
 from schema import SchemaLoader
 from database import DbOrderManager, DbPositionManager, DbTradePerformanceManager
 from mq_telegram.tools import send_message_to_mq_for_telegram
+# --- Use the Updated Message Helper ---
 from message_helper import (
     generate_daily_stats_message,
     generate_performance_stats_message,
@@ -42,7 +53,6 @@ from trade.exceptions import (
 APP_VERSION = "unknown"
 
 # --- Utility Functions ---
-
 def get_version():
     """Reads the application version from the VERSION file."""
     try:
@@ -54,32 +64,41 @@ def get_version():
         return "unknown"
 
 # --- Error Handling Helpers ---
-
+# (Use the previously provided versions of handle_exception, handle_validation_error, etc.)
+# (Make sure handle_exception uses the updated composer logic from message_helper)
 def handle_exception(
     e, composer, ch, method, body, is_critical=False, exit_code=None, log_level=logging.ERROR
 ):
     """Centralized function to handle exceptions."""
     error_type = type(e).__name__
     log_message = f"{'CRITICAL' if is_critical else 'ERROR'} ({error_type}): {e}"
-    detail_message = f"{log_message}\n{traceback.format_exc()}" # Include traceback for critical/general errors
+    detail_message = f"{log_message}\n{traceback.format_exc()}" # Include traceback
 
     logging.log(log_level, detail_message)
 
-    # Try to compose a message, fall back to raw error if composer failed early
+    # Try to compose a message using the updated composer
     if composer:
+        # Let the composer handle detailed formatting based on exception type
         composer.add_generic_error(error_type, e, is_critical=is_critical)
-        # Optionally add traceback details for critical errors
+        # Optionally add traceback snippet for severe errors
         if is_critical or log_level >= logging.ERROR:
+             # Add more specific details if available from custom exceptions
+             extra_details = {}
+             if hasattr(e, 'status_code'): extra_details['Status'] = e.status_code
+             if hasattr(e, 'saxo_error_details'): extra_details['Saxo Details'] = json.dumps(e.saxo_error_details, indent=2)
+             if hasattr(e, 'order_details'): extra_details['Order Payload'] = json.dumps(e.order_details, indent=2)
+             if hasattr(e, 'request_details'): extra_details['Request Details'] = json.dumps(e.request_details, indent=2)
+             if hasattr(e, 'order_id'): extra_details['Order ID'] = e.order_id
+             if extra_details:
+                  composer.add_dict_section("Error Details", extra_details)
              composer.add_text_section("Traceback Snippet", traceback.format_exc(limit=5))
         telegram_message = composer.get_message()
     else:
-        # If composer isn't available (e.g., error during JSON parsing/validation)
-        raw_body_str = body.decode() if isinstance(body, bytes) else str(body)
+        # Fallback if composer failed early
+        raw_body_str = body.decode(errors='ignore')
         telegram_message = f"CRITICAL ERROR ({error_type}) processing raw message: {raw_body_str}\n\nError: {e}\n\n{traceback.format_exc()}"
 
     try:
-        # Ensure rabbit_connection is accessible if needed here, or pass it in
-        # For simplicity, assume rabbit_connection is globally accessible in this scope or passed
         send_message_to_mq_for_telegram(rabbit_connection, telegram_message)
     except Exception as mq_err:
         logging.error(f"Failed to send error notification to Telegram MQ: {mq_err}")
@@ -91,37 +110,43 @@ def handle_exception(
     if not is_critical:
         try:
             ch.basic_ack(delivery_tag=method.delivery_tag)
+            logging.debug(f"Non-critical error ({error_type}) handled, message {method.delivery_tag} ACKed.")
         except Exception as ack_err:
              logging.error(f"Failed to ACK message {method.delivery_tag} after handling error: {ack_err}")
 
     # Exit for critical errors
     if is_critical and exit_code is not None:
         logging.critical(f"Terminating service due to critical error ({error_type}). Exit code: {exit_code}")
+        # Consider NACKing critical errors if a dead-letter queue is configured
+        # try:
+        #     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        # except Exception as nack_err:
+        #      logging.error(f"Failed to NACK message {method.delivery_tag} after critical error: {nack_err}")
         sys.exit(exit_code)
 
 def handle_validation_error(e, body, ch, method):
     """Handles JSON schema validation errors."""
     logging.error(f"Schema Validation Error: {e}")
-    raw_body_str = body.decode() if isinstance(body, bytes) else str(body)
+    raw_body_str = body.decode(errors='ignore')
     error_msg = f"SCHEMA ERROR: Invalid message format received.\n\nError: {e}\n\nRaw Body:\n{raw_body_str}"
     send_message_to_mq_for_telegram(rabbit_connection, error_msg)
     ch.basic_ack(delivery_tag=method.delivery_tag) # Ack invalid message
 
 def handle_rule_violation(trv, composer, ch, method):
     """Handles expected trading rule violations."""
-    logging.warning(f"Trading Rule Violation: {trv}") # Use warning for expected violations
-    composer.add_rule_violation(trv)
+    logging.warning(f"Trading Rule Violation: {trv}")
+    composer.add_rule_violation(trv) # Uses updated composer method
     send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def handle_trade_setup_issue(trade_issue, composer, ch, method):
     """Handles issues like NoTurbos, NoMarket, InsufficientFunds (pre-order)."""
-    logging.warning(f"Trade Setup Issue: {trade_issue}") # Use warning
+    logging.warning(f"Trade Setup Issue ({type(trade_issue).__name__}): {trade_issue}")
+    # Use composer methods which now handle specific exceptions better
     if isinstance(trade_issue, (NoMarketAvailableException, NoTurbosAvailableException)):
-         # Pass search context if available (might need modification in exception)
         composer.add_turbo_search_result(error=trade_issue, search_context=getattr(trade_issue, 'search_context', None))
     elif isinstance(trade_issue, InsufficientFundsException):
-         composer.add_position_result(error=trade_issue) # Or a specific pre-buy error context
+         composer.add_position_result(error=trade_issue) # Composer formats this now
     else:
          composer.add_generic_error(type(trade_issue).__name__, trade_issue)
 
@@ -131,10 +156,10 @@ def handle_trade_setup_issue(trade_issue, composer, ch, method):
 def handle_order_placement_error(ope, composer, ch, method):
     """Handles specific order rejection errors from Saxo."""
     logging.error(f"Order Placement Rejected by Saxo: {ope}")
-    composer.add_generic_error("Order Placement Rejected", ope)
-    # Add more specific details from ope if needed (e.g., ope.saxo_error_details)
+    # Composer's add_position_result or add_generic_error now handles detailed formatting
+    composer.add_position_result(error=ope) # Let composer format it
     send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
-    ch.basic_ack(delivery_tag=method.delivery_tag) # Ack, Saxo rejected it, not a system fault
+    ch.basic_ack(delivery_tag=method.delivery_tag) # Ack, Saxo rejected it
 
 def handle_unknown_action(action, composer, ch, method):
     """Handles messages with unrecognized actions."""
@@ -146,182 +171,212 @@ def handle_unknown_action(action, composer, ch, method):
 
 # --- Action Handlers ---
 
-def handle_trading_action(data, composer, ch, method, service, trading_rule, db_position_manager, trade_turbo_exchange_id, rabbit_connection):
-    """Handles 'long' and 'short' trading actions."""
+def handle_trading_action(
+    data, composer: TelegramMessageComposer, ch, method,
+    # --- Injected Services ---
+    trading_orchestrator: TradingOrchestrator,
+    performance_monitor: PerformanceMonitor,
+    trading_rule: TradingRule,
+    db_position_manager: DbPositionManager,
+    # --- Other Args ---
+    trade_turbo_exchange_id: str,
+    rabbit_connection
+):
+    """Handles 'long' and 'short' trading actions using new services."""
     action = data.get("action")
-    logging.info(f"Processing trading action: {action} for {data.get('indice')}")
+    indice = data.get("indice")
+    logging.info(f"Processing trading action: {action} for {indice}")
 
-    founded_turbo = None
-    buy_details = None
-    search_context = None
+    execution_result = None
 
     try:
         # 1. Rule Checks
         logging.debug("Checking trading rules...")
         trading_rule.check_signal_timestamp(action, data.get("alert_timestamp"))
         trading_rule.check_market_hours(data.get("signal_timestamp"))
-        indice_id = trading_rule.get_allowed_indice_id(data.get("indice"))
+        indice_id = trading_rule.get_allowed_indice_id(indice)
         TradingRule.check_if_open_position_is_same_signal(action, db_position_manager)
         trading_rule.check_profit_per_day()
         logging.debug("Trading rules passed.")
 
-        # 2. Close existing positions (if any) - Moved from inside try/except block below
-        logging.debug("Checking for existing positions to close...")
-        all_positions = service.get_user_open_positions()
-        service.check_and_act_close_on_current_positions(all_positions)
-        logging.debug("Existing positions handled.")
+        # 2. Close existing positions
+        logging.info("Attempting to close any existing managed positions before opening new one...")
+        close_result = performance_monitor.close_managed_positions_by_criteria(action_filter=None) # None closes all
+        logging.info(f"Attempted closure of existing positions. Initiated: {close_result.get('closed_initiated_count', 0)}, Errors: {close_result.get('errors_count', 0)}")
+        # Optionally add summary (consider if monitor's own messages are sufficient)
+        composer.add_text_section("Pre-Trade Closure", f"Attempted closing existing positions. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}")
 
-        # 3. Find Turbo
-        logging.info(f"Searching Turbo: Exchange {trade_turbo_exchange_id}, action {action}, indice {indice_id}")
-        search_context = { # Store context for potential error reporting
-            'Keywords': action,
-            'min_price': service.turbo_price_range.get("min"),
-            'max_price': service.turbo_price_range.get("max")
-        }
-        founded_turbo = service.find_turbos(
-            trade_turbo_exchange_id, indice_id, action
+
+        # 3. Execute Trade Signal
+        logging.info(f"Executing trade signal: Exchange {trade_turbo_exchange_id}, IndiceID {indice_id}, Action {action}")
+        execution_result = trading_orchestrator.execute_trade_signal(
+            exchange_id=trade_turbo_exchange_id,
+            underlying_uics=indice_id,
+            keywords=action
         )
-        composer.add_turbo_search_result(founded_turbo=founded_turbo)
-        logging.info(f"Found Turbo: {founded_turbo['appParsedData'].get('name', 'N/A')}")
+        # execution_result contains: {'order_details': {...}, 'position_details': {...}, 'selected_turbo_info': {...}, 'message': '...'}
 
-        # 4. Buy Turbo
-        logging.info("Attempting to buy turbo...")
-        buy_details = service.buy_turbo_instrument(founded_turbo)
-        composer.add_position_result(buy_details=buy_details)
-        logging.info(f"Successfully placed buy order {buy_details['orders_list'][0]['order_id']} and confirmed position {buy_details['position']['position_id']}")
+        # 4. Compose Success Message using updated composer methods
+        composer.add_turbo_search_result(founded_turbo=execution_result['selected_turbo_info'])
+        composer.add_position_result(buy_details=execution_result) # Pass the whole result
+
+        logging.info(f"Successfully executed and recorded trade action: {action}. OrderID: {execution_result['order_details']['order_id']}, PositionID: {execution_result['position_details']['position_id']}")
 
         # 5. Final Success Message & Ack
         send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
         ch.basic_ack(delivery_tag=method.delivery_tag)
-        logging.info(f"Successfully processed trading action: {action}")
+        logging.info(f"Message {method.delivery_tag} ACKed for successful trade action: {action}")
 
     # --- Expected/Handled Errors during Trading ---
     except TradingRuleViolation as trv:
-        handle_rule_violation(trv, composer, ch, method) # Logs, sends message, acks
-    except (NoMarketAvailableException, NoTurbosAvailableException) as e:
-        # Update composer based on where the error happened
-        if not founded_turbo:
-            composer.add_turbo_search_result(error=e, search_context=search_context)
-        else: # Should not happen if find_turbos succeeded, but defensive
-             composer.add_generic_error(f"Turbo Search Issue ({type(e).__name__})", e)
-        handle_trade_setup_issue(e, composer, ch, method) # Logs, sends message, acks
-    except InsufficientFundsException as e:
-        # Error during calculate_bid_amount or similar pre-order check
-        if founded_turbo:
-             composer.add_position_result(error=e) # Associate error with the position attempt
-        else:
-             composer.add_turbo_search_result(error=e, search_context=search_context) # If somehow funds checked before search
-        handle_trade_setup_issue(e, composer, ch, method) # Logs, sends message, acks
+        handle_rule_violation(trv, composer, ch, method)
+    except (NoMarketAvailableException, NoTurbosAvailableException, InsufficientFundsException) as setup_err:
+        # Let the specific handler format the message via the composer
+        handle_trade_setup_issue(setup_err, composer, ch, method)
     except OrderPlacementError as ope:
-        # Saxo explicitly rejected the order placement attempt
-        if founded_turbo:
-            composer.add_position_result(error=ope, order_details=ope.order_details)
-        else: # Should not happen
-            composer.add_generic_error("Order Placement Failed (Pre-Search?)", ope)
-        handle_order_placement_error(ope, composer, ch, method) # Logs specific details, sends msg, acks
+        # Let the specific handler format the message via the composer
+        handle_order_placement_error(ope, composer, ch, method)
 
-    # --- Critical Errors during Trading (Need to Re-raise for main handler) ---
-    except PositionNotFoundException as e:
-         # Critical: Order placed but position confirmation failed
-        logging.critical(f"CRITICAL: Position not found after placing order {e.order_id}: {e}")
-        composer.add_position_result(error=e, order_id=e.order_id) # Add details before raising
-        raise # Re-raise to be caught by the main callback's critical handler
-
+    # --- Critical Errors (Need to bubble up for main handler) ---
+    except PositionNotFoundException as pnfe:
+        logging.critical(f"CRITICAL: Position not found after placing order {pnfe.order_id}: {pnfe}")
+        # Composer updated by handle_exception before exit
+        raise
+    except DatabaseOperationException as dbe:
+        logging.critical(f"CRITICAL DB ERROR during trade action '{action}': {dbe}")
+        # Composer updated by handle_exception before exit
+        raise
     except ValueError as ve:
-        # Catch other ValueErrors potentially raised by SaxoService (e.g., calculation issues)
-        # Or critical errors raised explicitly within this handler
-        logging.error(f"ValueError during trading action '{action}': {ve}")
-        if founded_turbo and not buy_details:
-            composer.add_position_result(error=ve)
-        elif not founded_turbo:
-            composer.add_turbo_search_result(error=ve, search_context=search_context)
+        logging.error(f"ValueError during trading action '{action}': {ve}", exc_info=True)
+        if "CRITICAL" in str(ve).upper():
+            raise # Re-raise critical ValueErrors for main handler
         else:
+            # Treat as non-critical, let composer format and ACK
             composer.add_generic_error(f"ValueError in {action}", ve)
-        # Decide if this specific ValueError is critical. If raised explicitly for critical condition:
-        if "CRITICAL" in str(ve):
-            raise # Re-raise critical ValueErrors
-        else:
-            # Treat as non-critical for now, send message and ack
             send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    # Let other unexpected exceptions bubble up to the main handler
+    # Let other unexpected API/Config/Token errors bubble up
 
-def handle_close_action(data, composer, ch, method, service, rabbit_connection):
-    """Handles 'close-long', 'close-short', 'close-position' actions."""
+def handle_close_action(
+    data, composer: TelegramMessageComposer, ch, method,
+    # --- Injected Services ---
+    performance_monitor: PerformanceMonitor,
+    # --- Other Args ---
+    rabbit_connection
+):
+    """Handles 'close-long', 'close-short', 'close-position' using PerformanceMonitor."""
     action = data.get("action")
     logging.info(f"Processing close action: {action}")
 
     try:
-        close_action_param = None
-        if action == "close-long":
-            close_action_param = "long"
-        elif action == "close-short":
-            close_action_param = "short"
-        # "close-position" implies closing any/all managed positions (param is None)
+        close_action_filter = None
+        if action == "close-long": close_action_filter = "long"
+        elif action == "close-short": close_action_filter = "short"
 
-        logging.debug("Fetching open positions to evaluate for closure...")
-        all_positions = service.get_user_open_positions()
-        service.check_and_act_close_on_current_positions(all_positions, close_action_param)
-        logging.info(f"Successfully processed '{action}' signal and attempted closures.")
+        logging.info(f"Attempting closure via Performance Monitor. Filter: {close_action_filter}")
+        close_result = performance_monitor.close_managed_positions_by_criteria(
+            action_filter=close_action_filter
+        )
+        closed_count = close_result.get('closed_initiated_count', 0)
+        error_count = close_result.get('errors_count', 0)
+        logging.info(f"Close action '{action}' processed. Positions closed/attempted: {closed_count}, Errors: {error_count}")
 
-        # Optional: Send a summary message - depends on whether check_and_act sends enough detail
-        composer.add_text_section(f"--- {action.upper()} ACTION ---", f"Processed '{action}' signal. Check previous messages for specific closure details.")
+        composer.add_text_section(
+            f"{action.upper()} ACTION", # Simpler title
+            f"Processed signal. Attempted closure for {closed_count} position(s)."
+            f"{f' Encountered {error_count} error(s).' if error_count > 0 else ''}"
+            f" Check other messages for details."
+        )
         send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    except PositionCloseException as pce:
-         # Specific failure during closing attempt (maybe already closed, API error)
-         logging.error(f"Failed to close position during '{action}': {pce}")
-         composer.add_generic_error(f"Position Close Error ({action})", pce)
-         # Decide if this is critical. Re-raise if it should stop the service.
-         raise # Re-raise to be caught by main handler as potentially critical
-
-    # Let other unexpected exceptions bubble up
-
-def handle_check_positions(data, composer, ch, method, service, rabbit_connection):
-    """Handles 'check_positions_on_saxo_api' action."""
-    action = "check_positions_on_saxo_api" # Define action for logging/error context
-    logging.info(f"Processing action: {action}")
-    try:
-        logging.debug("Checking positions performance...")
-        # These methods might raise exceptions (API errors, DB errors, etc.)
-        service.check_positions_performance() # This might close positions and send messages
-        logging.debug("Checking if DB open positions are closed on API...")
-        service.check_if_db_open_position_are_closed_on_api() # This might update DB and send messages
-
-        logging.info(f"{action}: Position checks completed successfully.")
-        # Optional confirmation message:
-        # composer.add_text_section("Position Check", "Completed checks successfully.")
-        # send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
-
-        # Acknowledge the message ONLY if all checks were successful
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-        logging.debug(f"{action}: Message ack'd successfully.")
-
+    except (PositionCloseException, DatabaseOperationException, ApiRequestException, SaxoApiError) as e:
+         # Catch errors from monitor/services if they bubble up critically
+         logging.error(f"Error during '{action}' execution: {e}", exc_info=True)
+         # Let main callback handler manage critical error message and exit
+         raise
     except Exception as e:
-        # Log the error with context specific to this handler
-        logging.error(f"Error during '{action}': {e}", exc_info=True) # exc_info=True adds traceback to log
+        logging.error(f"Unexpected error during '{action}': {e}", exc_info=True)
+        raise # Let main callback handler manage critical error message and exit
 
-        # Add error details to the composer *before* re-raising
-        # This allows the main handler to potentially use the composer state
-        if composer:
-             composer.add_generic_error(f"Error in {action}", e)
-        else: # Should have a composer, but defensive check
-             logging.error(f"Composer object not available when handling error in {action}")
-             # Send a raw message if composer failed somehow earlier
-             send_message_to_mq_for_telegram(rabbit_connection, f"RAW ERROR in {action} (no composer): {e}")
 
-        # Re-raise the exception. It will be caught by the main callback's
-        raise e
+def handle_check_positions(
+    data, composer: TelegramMessageComposer, ch, method,
+    # --- Injected Services ---
+    performance_monitor: PerformanceMonitor,
+    db_position_manager: DbPositionManager, # Still needed to apply sync updates
+    # --- Other Args ---
+    rabbit_connection
+):
+    """Handles 'check_positions_on_saxo_api' using PerformanceMonitor."""
+    action = "check_positions_on_saxo_api"
+    logging.info(f"Processing action: {action}")
+    sync_updates_applied = 0
+    sync_errors = 0
+    perf_check_errors = 0
+    perf_closed_count = 0
 
-def handle_daily_stats(data, composer, ch, method, db_position_manager, table_trade_performance_manager, rabbit_connection):
-    """Handles 'daily_stats' action."""
+    try:
+        # 1. Check Performance
+        logging.info("Checking positions performance...")
+        perf_result = performance_monitor.check_all_positions_performance()
+        perf_check_errors = perf_result.get('errors', 0)
+        perf_closed_count = len(perf_result.get('closed_positions_processed', []))
+        logging.info(f"Performance check results: Closed={perf_closed_count}, DB Updates={len(perf_result.get('db_updates',[]))}, Errors={perf_check_errors}")
+
+        # 2. Sync DB state with API
+        logging.info("Syncing DB positions with API closed positions...")
+        sync_result = performance_monitor.sync_db_positions_with_api()
+        updates_to_apply = sync_result.get("updates_for_db", [])
+
+        # 3. Apply DB updates from sync result
+        if updates_to_apply:
+            logging.info(f"Applying {len(updates_to_apply)} DB updates from API sync...")
+            for position_id, update_data in updates_to_apply:
+                try:
+                    db_position_manager.update_turbo_position_data(position_id, update_data)
+                    sync_updates_applied += 1
+                except Exception as db_err:
+                    sync_errors += 1
+                    logging.critical(f"CRITICAL SYNC ERROR: Failed DB update for Pos {position_id}: {db_err}", exc_info=True)
+                    # Send critical notification directly
+                    send_message_to_mq_for_telegram(rabbit_connection, f"🚨 CRITICAL SYNC ERROR: Failed DB update for Pos {position_id}: {db_err}")
+                    # This might warrant raising DatabaseOperationException if critical
+                    # raise DatabaseOperationException(f"Failed sync update for {position_id}", operation="sync_update", entity_id=position_id) from db_err
+            logging.info(f"Sync DB updates applied: {sync_updates_applied}, Errors: {sync_errors}")
+        else:
+            logging.info("No DB updates required from API sync.")
+
+        total_errors = perf_check_errors + sync_errors
+        logging.info(f"{action}: Completed. Perf Closed={perf_closed_count}, Sync Updates={sync_updates_applied}, Total Errors={total_errors}")
+
+        # Acknowledge ONLY if sync DB updates were successful (or none needed)
+        # If perf check had non-critical errors, we might still ACK.
+        if sync_errors == 0:
+             ch.basic_ack(delivery_tag=method.delivery_tag)
+             logging.debug(f"{action}: Message {method.delivery_tag} ack'd successfully.")
+        else:
+             # Do not ACK if sync failed, message might need retry or dead-lettering
+             logging.error(f"{action}: Sync DB update errors occurred. Message {method.delivery_tag} NOT ACKed.")
+             # Optionally NACK: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+
+
+    except (DatabaseOperationException, ApiRequestException, SaxoApiError) as e:
+        logging.error(f"Critical Error during '{action}': {e}", exc_info=True)
+        # Let main handler format and potentially exit
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error during '{action}': {e}", exc_info=True)
+        raise # Let main handler deal with unexpected
+
+
+def handle_daily_stats(data, composer: TelegramMessageComposer, ch, method, db_position_manager, table_trade_performance_manager, rabbit_connection):
+    """Handles 'daily_stats' action. """
     logging.info("Processing action: daily_stats")
     try:
         days = 7 # Number of days for performance stats
-
         logging.debug("Fetching daily stats...")
         stats_of_the_day = db_position_manager.get_stats_of_the_day()
         message = generate_daily_stats_message(stats_of_the_day)
@@ -336,7 +391,9 @@ def handle_daily_stats(data, composer, ch, method, db_position_manager, table_tr
             message, days, last_days_percentages, last_best_days_percentages,
             last_days_percentages_on_max, last_best_days_percentages_on_max
         )
-
+        # Prepend the initial signal info from composer if desired
+        # full_message = composer.get_message() + "\n\n" + message
+        # Or just send the stats message directly
         logging.debug("Sending daily stats message...")
         send_message_to_mq_for_telegram(rabbit_connection, message)
 
@@ -348,22 +405,18 @@ def handle_daily_stats(data, composer, ch, method, db_position_manager, table_tr
 
     except DatabaseOperationException as dbe:
         logging.error(f"Database error during daily stats processing: {dbe}")
-        # Send specific error message
-        error_msg = f"ERROR processing daily stats (DB): {dbe}"
-        send_message_to_mq_for_telegram(rabbit_connection, error_msg)
-        # Re-raise as this might be critical
+        # Let main handler manage critical error
         raise
     except Exception as e:
-        logging.error(f"Failed to process daily stats: {e}")
-        # Send general error message
-        error_msg = f"ERROR processing daily stats: {e}\n{traceback.format_exc(limit=3)}"
-        send_message_to_mq_for_telegram(rabbit_connection, error_msg)
-        # Decide if general errors here are critical - let's assume not for now
+        logging.error(f"Failed to process daily stats: {e}", exc_info=True)
+        # Send general error message and ACK (non-critical)
+        composer.add_generic_error("Daily Stats Processing", e)
+        send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
 # --- Action Dispatcher ---
-
+# (Keep ACTION_HANDLERS dictionary as is)
 ACTION_HANDLERS = {
     "long": handle_trading_action,
     "short": handle_trading_action,
@@ -374,12 +427,16 @@ ACTION_HANDLERS = {
     "daily_stats": handle_daily_stats,
 }
 
-# --- Main Callback ---
+# --- Main Callback (Using Updated Signature) ---
 
 def callback(ch, method, properties, body, # RabbitMQ args first
-             # Injected dependencies follow:
-             saxo_service, trading_rule, db_position_manager,
-             table_trade_performance_manager, trade_turbo_exchange_id,
+             # --- Injected dependencies follow: ---
+             trading_orchestrator: TradingOrchestrator,
+             performance_monitor: PerformanceMonitor,
+             trading_rule: TradingRule,
+             db_position_manager: DbPositionManager,
+             table_trade_performance_manager: DbTradePerformanceManager,
+             trade_turbo_exchange_id: str,
              rabbit_conn):
     """Main callback function executed for each message."""
     composer = None
@@ -392,15 +449,10 @@ def callback(ch, method, properties, body, # RabbitMQ args first
             raw_body_str = body.decode('utf-8')
             data_from_mq = json.loads(raw_body_str)
             logging.info(f"Received action: {data_from_mq.get('action', 'N/A')}, Signal ID: {data_from_mq.get('signal_id', 'N/A')}")
-        except json.JSONDecodeError as e:
-            logging.error(f"JSON Decode Error: {e} - Raw body: {body.decode(errors='ignore')}")
-            error_msg = f"CRITICAL: Failed to decode JSON message body: {e}\n\nBody:\n{body.decode(errors='ignore')}"
-            send_message_to_mq_for_telegram(rabbit_conn, error_msg)
-            ch.basic_ack(delivery_tag=method.delivery_tag) # Ack invalid message
-            return
-        except Exception as e: # Catch other potential decoding errors
-            logging.error(f"Error decoding message body: {e}")
-            error_msg = f"CRITICAL: Unexpected error decoding message body: {e}\n\nBody:\n{body.decode(errors='ignore')}"
+        except (json.JSONDecodeError, TypeError, Exception) as e: # Broadened catch
+            logging.error(f"Error decoding message body: {e}", exc_info=True)
+            error_msg = f"CRITICAL: Error decoding message body: {e}\n\nBody:\n{body.decode(errors='ignore')}"
+            # Cannot use composer here as data_from_mq might be None
             send_message_to_mq_for_telegram(rabbit_conn, error_msg)
             ch.basic_ack(delivery_tag=method.delivery_tag) # Ack invalid message
             return
@@ -411,8 +463,8 @@ def callback(ch, method, properties, body, # RabbitMQ args first
                 instance=data_from_mq, schema=SchemaLoader.get_trading_action_schema()
             )
         except jsonschema.exceptions.ValidationError as e:
-            handle_validation_error(e, body, ch, method) # Logs, sends message, acks
-            return # Stop processing this invalid message
+            handle_validation_error(e, body, ch, method) # Uses global rabbit_connection
+            return
 
         # 3. Initialize Composer
         composer = TelegramMessageComposer(data_from_mq)
@@ -422,60 +474,61 @@ def callback(ch, method, properties, body, # RabbitMQ args first
         handler = ACTION_HANDLERS.get(action)
 
         if handler:
-            # --- *** Argument Construction Logic *** ---
-            # Start with arguments common to *most* handlers
+            # --- Argument Construction Logic (Updated) ---
             handler_args = {
-                "data": data_from_mq,
-                "composer": composer,
-                "ch": ch,
-                "method": method,
-                "rabbit_connection": rabbit_conn # Renamed from rabbit_conn for clarity within handlers
+                "data": data_from_mq, "composer": composer, "ch": ch,
+                "method": method, "rabbit_connection": rabbit_conn
             }
-
-            # Add arguments based on the specific action/handler
             if action in ["long", "short"]:
-                handler_args["service"] = saxo_service
-                handler_args["trading_rule"] = trading_rule
-                handler_args["db_position_manager"] = db_position_manager
-                handler_args["trade_turbo_exchange_id"] = trade_turbo_exchange_id
+                handler_args.update({
+                    "trading_orchestrator": trading_orchestrator,
+                    "performance_monitor": performance_monitor,
+                    "trading_rule": trading_rule,
+                    "db_position_manager": db_position_manager,
+                    "trade_turbo_exchange_id": trade_turbo_exchange_id
+                })
             elif action in ["close-long", "close-short", "close-position"]:
-                handler_args["service"] = saxo_service
+                handler_args["performance_monitor"] = performance_monitor
             elif action == "check_positions_on_saxo_api":
-                handler_args["service"] = saxo_service
+                handler_args.update({
+                    "performance_monitor": performance_monitor,
+                    "db_position_manager": db_position_manager
+                })
             elif action == "daily_stats":
-                handler_args["db_position_manager"] = db_position_manager
-                handler_args["table_trade_performance_manager"] = table_trade_performance_manager
+                handler_args.update({
+                    "db_position_manager": db_position_manager,
+                    "table_trade_performance_manager": table_trade_performance_manager
+                })
 
-            # --- *** Call the handler with tailored arguments *** ---
             logging.debug(f"Dispatching action '{action}' to handler {handler.__name__} with args: {list(handler_args.keys())}")
-            handler(**handler_args) # Use keyword argument unpacking
-
+            handler(**handler_args)
         else:
-            handle_unknown_action(action, composer, ch, method) # Logs, sends message, acks
+            handle_unknown_action(action, composer, ch, method) # Uses global rabbit_connection
 
-    # --- Outer Exception Handling (Catching errors bubbling up from handlers) ---
-    except (ConfigurationError, TokenAuthenticationException, DatabaseOperationException) as critical_config_err:
-         # These often mean the service cannot function correctly.
-        handle_exception(critical_config_err, composer, ch, method, body, is_critical=True, exit_code=2, log_level=logging.CRITICAL)
+    # --- Outer Exception Handling (Using updated handle_exception) ---
+    except (ConfigurationError, TokenAuthenticationException) as critical_config_err:
+         handle_exception(critical_config_err, composer, ch, method, body, is_critical=True, exit_code=2, log_level=logging.CRITICAL)
+    except (DatabaseOperationException) as critical_db_err:
+         # Specific handling for critical DB errors bubbled up
+         handle_exception(critical_db_err, composer, ch, method, body, is_critical=True, exit_code=12, log_level=logging.CRITICAL)
     except PositionNotFoundException as critical_runtime_err:
-         # Specific case: Order placed but position vanished. Treat as critical.
-        handle_exception(critical_runtime_err, composer, ch, method, body, is_critical=True, exit_code=3, log_level=logging.CRITICAL)
+         handle_exception(critical_runtime_err, composer, ch, method, body, is_critical=True, exit_code=3, log_level=logging.CRITICAL)
     except PositionCloseException as position_err:
-         # Error during position closure - might be critical depending on context
-         # For now, treat as critical error needing investigation
+         # If this bubbles up, treat as critical needing investigation
          handle_exception(position_err, composer, ch, method, body, is_critical=True, exit_code=4, log_level=logging.ERROR)
     except (SaxoApiError, ApiRequestException) as api_err:
-         # General API errors - could be transient or persistent. Exit might be safest.
+         # Treat persistent API errors as critical
         handle_exception(api_err, composer, ch, method, body, is_critical=True, exit_code=5, log_level=logging.ERROR)
     except ValueError as val_err:
-         # Catch ValueErrors raised explicitly as critical from handlers
-         if "CRITICAL" in str(val_err):
+         # Only treat as critical if explicitly marked
+         if "CRITICAL" in str(val_err).upper():
              handle_exception(val_err, composer, ch, method, body, is_critical=True, exit_code=6, log_level=logging.CRITICAL)
          else:
-             # Non-critical ValueError (should ideally be caught lower down)
+             # Non-critical ValueErrors should ideally be handled and ACKed lower down.
+             # If one bubbles up here, log it but don't exit. Assume prior handler failed to ACK.
              handle_exception(val_err, composer, ch, method, body, is_critical=False, log_level=logging.ERROR)
     except WebSocketConnectionException as ws_err:
-         # Usually not critical, just log and continue
+         # Non-critical
          handle_exception(ws_err, composer, ch, method, body, is_critical=False, log_level=logging.WARNING)
     except Exception as e:
         # Catch-all for truly unexpected errors
@@ -485,8 +538,6 @@ def callback(ch, method, properties, body, # RabbitMQ args first
 # --- Main Execution Block ---
 
 if __name__ == "__main__":
-    # Use global here for simplicity in error reporting before consumer starts
-    # In a class-based approach, this would be an instance variable.
     global rabbit_connection
     rabbit_connection = None
     channel = None
@@ -520,8 +571,6 @@ if __name__ == "__main__":
             logging.info("Database managers initialized.")
         except Exception as e:
             logging.critical(f"Failed to initialize database managers: {e}", exc_info=True)
-            # Attempt to notify via MQ if possible before exiting
-            # Note: MQ connection not yet established, might need rethink if early DB fails
             sys.exit(12)
 
         # --- 4. Trading Rules ---
@@ -547,66 +596,106 @@ if __name__ == "__main__":
             parameters = pika.ConnectionParameters(
                 host=rabbitmq_config["hostname"],
                 credentials=credentials,
-                heartbeat=600, # Added heartbeat for robustness
+                heartbeat=600,
                 blocked_connection_timeout=300
             )
             rabbit_connection = pika.BlockingConnection(parameters)
             channel = rabbit_connection.channel()
-            channel.queue_declare(queue="trading-action", durable=True) # Ensure queue is durable
-            channel.basic_qos(prefetch_count=1) # Process one message at a time
+            channel.queue_declare(queue="trading-action", durable=True)
+            channel.basic_qos(prefetch_count=1)
             logging.info("RabbitMQ connection established and queue declared.")
         except Exception as e:
             logging.critical(f"Failed to connect to RabbitMQ: {e}", exc_info=True)
             sys.exit(14)
 
-        # --- 6. Saxo Service Initialization ---
-        logging.info("Initializing Saxo service...")
+        # --- 6. Saxo Components Initialization ---
+        logging.info("Initializing Saxo components...")
+        account_key = None
+        client_key = None
+        # --- Add the necessary import ---
+        from src.saxo_openapi.contrib.session import account_info
+
         try:
-            # Pass the established rabbit_connection for notifications within SaxoService if needed
-            saxo_service = SaxoService(
-                config_manager,
-                db_order_manager,
-                db_position_manager,
-                rabbit_connection, # Pass connection for internal notifications
-                trading_rule
-            )
-            # Perform a quick check if possible (e.g., get account info)
-            _ = saxo_service.account_info # Trigger initial auth/account fetch
-            logging.info(f"Saxo service initialized successfully for Account: {saxo_service.account_info.AccountId}")
-        except (TokenAuthenticationException, ConfigurationError, SaxoApiError, ApiRequestException) as e:
-             logging.critical(f"Failed to initialize SaxoService: {e}", exc_info=True)
-             # Attempt to send critical failure message
-             try:
-                  send_message_to_mq_for_telegram(rabbit_connection, f"CRITICAL FAILURE: Trader failed to initialize SaxoService: {e}")
-             except Exception as mq_err:
-                  logging.error(f"Failed to send Saxo init failure to Telegram MQ: {mq_err}")
-             sys.exit(15)
-        except Exception as e: # Catch any other unexpected init error
-             logging.critical(f"Unexpected error initializing SaxoService: {e}", exc_info=True)
-             try:
-                  send_message_to_mq_for_telegram(rabbit_connection, f"CRITICAL FAILURE: Unexpected error initializing Trader SaxoService: {e}")
-             except Exception as mq_err:
-                  logging.error(f"Failed to send Saxo init failure to Telegram MQ: {mq_err}")
-             sys.exit(16)
+            # Initialize Auth and API Client first
+            saxo_auth = SaxoAuth(config_manager, rabbit_connection)
+            api_client = SaxoApiClient(config_manager, saxo_auth)
+
+            # Fetch Account/Client keys using the utility
+            logging.info("Fetching AccountKey and ClientKey using account_info utility...")
+            try:
+                acc_info = account_info(api_client)
+                account_key = acc_info.AccountKey
+                client_key = acc_info.ClientKey
+                logging.info(
+                    f"Successfully retrieved keys. Using AccountKey: {account_key}, ClientKey: {client_key}")
+            except (ApiRequestException, SaxoApiError, TokenAuthenticationException) as api_err:
+                # Catch errors specifically from the API call within account_info
+                logging.critical(f"Failed API call within account_info utility: {api_err}", exc_info=True)
+                raise ConfigurationError(
+                    f"Could not retrieve Account/Client Keys via account_info: {api_err}") from api_err
+            except (IndexError, KeyError, AttributeError) as data_err:
+                # Catch potential errors if the response structure is unexpected
+                logging.critical(
+                    f"Unexpected data structure received from account_info's underlying API call: {data_err}",
+                    exc_info=True)
+                raise ConfigurationError(
+                    f"Failed to parse account details from API response: {data_err}") from data_err
+            except Exception as e:
+                # Catch any other unexpected error during the utility call
+                logging.critical(f"Unexpected error calling account_info utility: {e}", exc_info=True)
+                raise ConfigurationError(f"Failed to get account details via account_info: {e}") from e
+
+            # Instantiate domain services with the retrieved keys
+            instrument_service = InstrumentService(api_client, config_manager, account_key)
+            order_service = OrderService(api_client, account_key, client_key)
+            position_service = PositionService(api_client, order_service, config_manager, account_key, client_key)
+
+            # Instantiate high-level orchestrators/monitors
+            trading_orchestrator = TradingOrchestrator(instrument_service, order_service, position_service,
+                                                       config_manager, db_order_manager, db_position_manager)
+            performance_monitor = PerformanceMonitor(position_service, order_service, config_manager,
+                                                     db_position_manager, trading_rule, rabbit_connection)
+
+            logging.info("Saxo services initialized successfully.")
+
+        # Keep the outer exception handling for critical init failures
+        except (ConfigurationError, TokenAuthenticationException, SaxoApiError, ApiRequestException) as e:
+            logging.critical(f"Failed to initialize Saxo components: {e}", exc_info=True)
+            if rabbit_connection and rabbit_connection.is_open:
+                try:
+                    send_message_to_mq_for_telegram(rabbit_connection,
+                                                    f"🚨 CRITICAL FAILURE: Trader failed to initialize Saxo components: {e}")
+                except Exception as mq_err:
+                    logging.error(f"Failed to send Saxo init failure to Telegram MQ: {mq_err}")
+            sys.exit(15)
+        except Exception as e:  # Catch unexpected init errors
+            logging.critical(f"Unexpected error initializing Saxo components: {e}", exc_info=True)
+            if rabbit_connection and rabbit_connection.is_open:
+                try:
+                    send_message_to_mq_for_telegram(rabbit_connection,
+                                                    f"🚨 CRITICAL FAILURE: Unexpected error initializing Trader Saxo components: {e}")
+                except Exception as mq_err:
+                    logging.error(f"Failed to send Saxo init failure to Telegram MQ: {mq_err}")
+            sys.exit(16)
 
 
         # --- 7. Setup Consumer Callback with Dependencies ---
         callback_with_deps = partial(
             callback,
-            # Inject dependencies here:
-            saxo_service=saxo_service,
+            trading_orchestrator=trading_orchestrator,
+            performance_monitor=performance_monitor,
             trading_rule=trading_rule,
             db_position_manager=db_position_manager,
             table_trade_performance_manager=table_trade_performance_manager,
             trade_turbo_exchange_id=trade_turbo_exchange_id,
-            rabbit_conn=rabbit_connection # Pass connection for handlers to use
+            rabbit_conn=rabbit_connection
         )
 
         # --- 8. Start Consuming ---
         channel.basic_consume(
             queue="trading-action",
             on_message_callback=callback_with_deps,
-            auto_ack=False # Manual acknowledgement is handled in callback/handlers
+            auto_ack=False
         )
 
         logging.info("Trader service startup complete. Waiting for messages...")
@@ -617,16 +706,12 @@ if __name__ == "__main__":
     # --- Global Exception Handling for Startup ---
     except Exception as e:
         logging.critical(f"Unhandled exception during startup: {e}", exc_info=True)
-        # Try sending a final notification if RabbitMQ connection was established
         if rabbit_connection and rabbit_connection.is_open:
-            try:
-                send_message_to_mq_for_telegram(rabbit_connection, f"🚨 CRITICAL STARTUP FAILURE: WATA Trader failed: {e}")
-            except Exception as mq_err:
-                logging.error(f"Failed to send final startup error to Telegram MQ: {mq_err}")
+            try: send_message_to_mq_for_telegram(rabbit_connection, f"🚨 CRITICAL STARTUP FAILURE: WATA Trader failed: {e}")
+            except Exception as mq_err: logging.error(f"Failed to send final startup error to Telegram MQ: {mq_err}")
         else:
              print(f"FATAL: Unhandled exception during startup: {e}", file=sys.stderr)
              print(traceback.format_exc(), file=sys.stderr)
-
         sys.exit(1) # General critical failure exit code
 
     finally:
