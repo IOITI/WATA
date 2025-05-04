@@ -1,5 +1,6 @@
 import os
-
+import uuid
+import time
 # Import the original API class
 from src.saxo_openapi.saxo_openapi import API as SaxoOpenApiLib
 from src.saxo_openapi.exceptions import OpenAPIError as SaxoOpenApiLibError
@@ -32,12 +33,9 @@ from .exceptions import (
     InsufficientFundsException,
     ApiRequestException,
     TokenAuthenticationException,
-    DatabaseOperationException, # Will likely be raised higher up now
-    PositionCloseException,
-    WebSocketConnectionException, # WebSocket logic removed for now
+    DatabaseOperationException,
     SaxoApiError,
-    OrderPlacementError,
-    ConfigurationError
+    OrderPlacementError
 )
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
 from src.configuration import ConfigurationManager
@@ -90,7 +88,7 @@ class SaxoApiClient:
             if latest_token != self._current_token or self._saxo_api_instance is None:
                 logging.info(f"SaxoApiClient: Token changed or API instance missing. Re-initializing SaxoOpenApiLib for env '{self.environment}'.")
                 # Configure request parameters if needed (e.g., timeouts)
-                request_params = {"timeout": 30} # Example timeout
+                request_params = {"timeout": 30}
                 self._saxo_api_instance = SaxoOpenApiLib(
                     access_token=latest_token,
                     environment=self.environment,
@@ -137,55 +135,75 @@ class SaxoApiClient:
             logging.debug(f"SaxoApiClient: Received response content (type: {type(response_content).__name__})")
             return response_content
 
-        # --- Exception Translation ---
         except SaxoOpenApiLibError as e:
             # Handle errors raised by the underlying saxo_openapi.API library
-            status_code = e.status_code
-            content_str = e.msg # This is the decoded error content string
+            status_code = e.code
+            content_str = e.content
+
+            # Ensure content_str is actually a string before trying to parse JSON
+            # The saxo_openapi library might pass None or other types for content
+            if not isinstance(content_str, str):
+                content_str = str(content_str)  # Convert to string representation if not already
+
             saxo_error_details = None
-            error_message = content_str
+            error_message = content_str  # Default error message is the raw content
             error_code = None
 
             try:
                 # Attempt to parse the error content as JSON for more details
                 saxo_error_details = json.loads(content_str)
-                error_message = saxo_error_details.get('Message', content_str)
+                # Use e.reason as a fallback if 'Message' is not in the JSON
+                error_message = saxo_error_details.get('Message', e.reason)  # Use e.reason as fallback
                 error_code = saxo_error_details.get('ErrorCode')
             except json.JSONDecodeError:
-                saxo_error_details = content_str # Keep the raw string if not JSON
+                # If content is not JSON, use the original content_str or e.reason
+                error_message = content_str if content_str else e.reason
+                saxo_error_details = content_str  # Keep the raw string if not JSON
+            except Exception as json_parse_err:  # Catch other potential parsing errors
+                logging.warning(f"Error parsing Saxo error content: {json_parse_err}. Content was: {content_str}",
+                                exc_info=False)
+                error_message = content_str if content_str else e.reason  # Fallback message
+                saxo_error_details = content_str  # Keep raw content
 
-            logging.error(f"Saxo API Error Wrapper: Caught OpenAPIError (Status: {status_code}, Code: {error_code}, Msg: {error_message}), Endpoint: {type(endpoint_request_obj).__name__}")
+            # Log using the correct attributes and potentially e.reason
+            logging.error(
+                f"Saxo API Error Wrapper: Caught OpenAPIError (Status: {status_code}, Reason: {e.reason}, Code: {error_code}, Msg Content: {error_message}), Endpoint: {type(endpoint_request_obj).__name__}"
+            )
 
             # Specific Error Mapping based on status code and potentially error_code/message
-            if status_code == 400 and error_code == "InsufficientFunds": # Confirm the actual ErrorCode from Saxo docs/testing
-                 raise InsufficientFundsException(
-                      message=error_message or "Insufficient funds reported by API",
-                      saxo_error_details=saxo_error_details
-                 ) from e
+            # (The rest of the logic using status_code, error_code, error_message, saxo_error_details remains the same)
+            if status_code == 400 and error_code == "InsufficientFunds":  # Confirm the actual ErrorCode from Saxo docs/testing
+                raise InsufficientFundsException(
+                    message=error_message or "Insufficient funds reported by API",
+                    saxo_error_details=saxo_error_details
+                ) from e
             # Check if it looks like an order placement error
-            # Use endpoint type or path if available from endpoint_request_obj
             endpoint_path = getattr(endpoint_request_obj, 'path', 'unknown')
             is_order_endpoint = "/trade/v2/orders" in endpoint_path
             if (status_code in [400, 403, 409] or error_code) and is_order_endpoint:
-                 order_payload = getattr(endpoint_request_obj, 'data', None)
-                 raise OrderPlacementError(
-                      f"Saxo rejected order ({status_code}): {error_message}",
-                      status_code=status_code,
-                      saxo_error_details=saxo_error_details,
-                      order_details=order_payload
-                 ) from e
-            if status_code == 401: # Should ideally be handled by token refresh, but catch if it leaks
-                 raise TokenAuthenticationException(f"API returned 401 Unauthorized: {error_message}", saxo_error_details=saxo_error_details) from e
-            if status_code == 429: # Rate limit exceeded despite underlying library's retry
-                 logging.warning(f"Persistent Rate Limit Error (429) received from API: {error_message}")
-                 raise SaxoApiError(f"Persistent Rate Limit Error (429): {error_message}", status_code=status_code, saxo_error_details=saxo_error_details) from e
+                order_payload = getattr(endpoint_request_obj, 'data', None)
+                raise OrderPlacementError(
+                    f"Saxo rejected order ({status_code}): {error_message}",
+                    status_code=status_code,
+                    saxo_error_details=saxo_error_details,
+                    order_details=order_payload
+                ) from e
+            if status_code == 401:  # Should ideally be handled by token refresh, but catch if it leaks
+                raise TokenAuthenticationException(f"API returned 401 Unauthorized: {error_message}",
+                                                   saxo_error_details=saxo_error_details) from e
+            if status_code == 429:  # Rate limit exceeded despite underlying library's retry
+                logging.warning(f"Persistent Rate Limit Error (429) received from API: {error_message}")
+                raise SaxoApiError(f"Persistent Rate Limit Error (429): {error_message}", status_code=status_code,
+                                   saxo_error_details=saxo_error_details) from e
 
             # Default to general SaxoApiError
             raise SaxoApiError(
-                f"Saxo API Error ({status_code}): {error_message}",
+                f"Saxo API Error ({status_code} - {e.reason}): {error_message}",  # Include reason for context
                 status_code=status_code,
                 saxo_error_details=saxo_error_details,
-                request_details={"endpoint_type": type(endpoint_request_obj).__name__, "params": getattr(endpoint_request_obj, 'params', {}), "data": getattr(endpoint_request_obj, 'data', None)}
+                request_details={"endpoint_type": type(endpoint_request_obj).__name__,
+                                 "params": getattr(endpoint_request_obj, 'params', {}),
+                                 "data": getattr(endpoint_request_obj, 'data', None)}
             ) from e
 
         except requests.RequestException as e:
@@ -215,6 +233,10 @@ class InstrumentService:
         self.account_key = account_key
         self.api_limits = self.config.get_config_value("trade.config.general.api_limits", {"top_instruments": 200})
         self.turbo_price_range = self.config.get_config_value("trade.config.turbo_preference.price_range", {"min": 4, "max": 15})
+        # Add retry config for the specific Bid retry
+        self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": 3, "retry_sleep_seconds": 1}) # Use specific or general config
+        self.websocket_config = self.config.get_config_value("trade.config.general.websocket", {"refresh_rate_ms": 10000})
+
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(ApiRequestException))
     def _get_instrument_details(self, identifiers_string: str, exchange_id: str):
@@ -222,12 +244,12 @@ class InstrumentService:
         logging.debug(f"Fetching InfoPrices for {identifiers_string} on {exchange_id}")
         req = tr.infoprices.InfoPrices(
             params={
-                # "$top": self.api_limits["top_instruments"], # $top might not be valid here
+                "$top": self.api_limits["top_instruments"],
                 "AccountKey": self.account_key,
                 "ExchangeId": exchange_id,
                 "FieldGroups": "Commissions,DisplayAndFormat,Greeks,HistoricalChanges,InstrumentPriceDetails,MarketDepth,PriceInfo,PriceInfoDetails,Quote",
                 "Uics": identifiers_string,
-                "AssetType": "WarrantOpenEndKnockOut", # Be specific if possible
+                "AssetType": "WarrantOpenEndKnockOut",
             }
         )
         try:
@@ -294,25 +316,78 @@ class InstrumentService:
 
         identifiers_string = ",".join(map(str, identifiers[:self.api_limits["top_instruments"]])) # Limit query size
 
-        try:
-            response_infoprices = self._get_instrument_details(identifiers_string, exchange_id)
-        except RetryError as e:
-             logging.error(f"Failed to get instrument details after multiple retries: {e}")
-             raise ApiRequestException("Failed to get instrument details after retries.") from e
+        response_infoprices = None
+        bid_data_missing = True
+        bid_retries = 0
+        max_bid_retries = self.retry_config["max_retries"]
+        retry_sleep = self.retry_config["retry_sleep_seconds"]
+
+        while bid_data_missing and bid_retries < max_bid_retries:
+            try:
+                # Attempt to get instrument details (uses tenacity for API errors)
+                response_infoprices = self._get_instrument_details(identifiers_string, exchange_id)
+
+                if not response_infoprices or not response_infoprices.get("Data"):
+                    logging.warning(f"No InfoPrice data received for identifiers: {identifiers_string}")
+                    # Break loop if no data, handled further down
+                    break
+
+                # Check if 'Bid' data is present in ALL items with a Quote
+                bid_missing_in_items = [
+                    item for item in response_infoprices["Data"]
+                    if "Quote" in item and "Bid" not in item["Quote"]
+                ]
+
+                if not bid_missing_in_items:
+                    bid_data_missing = False  # All items have Bid data (or no Quote)
+                    logging.debug("Bid data found in all relevant items.")
+                    break  # Exit the while loop
+
+                # If Bid data is missing in some items
+                logging.warning(
+                    f"Bid data missing in {len(bid_missing_in_items)} items. Retrying InfoPrices request ({bid_retries + 1}/{max_bid_retries})...")
+                bid_retries += 1
+                if bid_retries < max_bid_retries:
+                    time.sleep(retry_sleep)  # Wait before retrying the call
+                # The loop will continue and call _get_instrument_details again
+
+            except RetryError as e:
+                # This catches errors from the inner tenacity retry in _get_instrument_details
+                logging.error(f"Failed to get instrument details after multiple API retries: {e}")
+                raise ApiRequestException("Failed to get instrument details after API retries.") from e
+            except Exception as e:
+                # Catch other unexpected errors during the check
+                logging.error(f"Unexpected error during Bid check loop: {e}", exc_info=True)
+                raise  # Re-raise unexpected errors
+
+        # After the loop, check results
+        if bid_data_missing and bid_retries >= max_bid_retries:
+            logging.error("After maximum retries, Bid data is still missing in some items.")
+            # Decide how to handle: Original code filtered out items without Bid.
+            if response_infoprices and 'Data' in response_infoprices:
+                response_infoprices["Data"] = [
+                    item for item in response_infoprices["Data"] if item.get("Quote", {}).get("Bid") is not None
+                ]
+                if not response_infoprices["Data"]:
+                    logging.error("No valid items with Bid data available after retries and filtering.")
+                    raise NoMarketAvailableException("No valid items with Bid data available after retries")
+            else:
+                # If response_infoprices is None or has no data after retries
+                logging.error("No InfoPrice data obtained after all retries.")
+                raise NoMarketAvailableException("Failed to obtain InfoPrice data with Bid after retries")
 
         if not response_infoprices or not response_infoprices.get("Data"):
-            logging.warning(f"No InfoPrice data received for identifiers: {identifiers_string}")
-            raise NoTurbosAvailableException("No detailed price info received.", search_context={'Uics': identifiers_string})
+            logging.warning(f"No InfoPrice data available after retries for identifiers: {identifiers_string}")
+            raise NoTurbosAvailableException("No detailed price info received after retries.",
+                                             search_context={'Uics': identifiers_string})
 
         # 5. Filter by Market State and Availability
         available_items = [
             item for item in response_infoprices["Data"]
             if item.get("Quote") and
                item["Quote"].get("PriceTypeAsk") != "NoMarket" and
-               item["Quote"].get("PriceTypeBid") != "NoMarket" and # Check Bid too
-               item["Quote"].get("MarketState") != "Closed" and
-               "Ask" in item["Quote"] and # Ensure Ask price exists
-               "Bid" in item["Quote"] # Ensure Bid price exists
+               item["Quote"].get("PriceTypeBid") != "NoMarket" and
+               item["Quote"].get("MarketState") != "Closed"
         ]
 
         if not available_items:
@@ -347,21 +422,73 @@ class InstrumentService:
         final_sort_reverse = not sort_reverse
         final_candidates = sorted(price_filtered_items, key=lambda x: x["Quote"]["Bid"], reverse=final_sort_reverse)
 
-        selected_turbo_info = deepcopy(final_candidates[0])
+        selected_turbo_info = deepcopy(final_candidates[0])  # Use the first candidate
 
-        # 8. (Optional but recommended) Get latest snapshot price for the *selected* turbo
-        # This avoids using potentially slightly stale data from the batch InfoPrices call
+        # --- 8. Create Price Subscription to get the latest snapshot ---
+        context_id = str(uuid.uuid1())  # Generate unique IDs per call like original
+        reference_id = str(uuid.uuid1())
+        selected_uic = selected_turbo_info["Uic"]
+        selected_asset_type = selected_turbo_info["AssetType"]
+        refresh_rate = self.websocket_config["refresh_rate_ms"]  # Get from config
+
+        logging.debug(
+            f"Creating price subscription for Uic {selected_uic}, ContextId: {context_id}, RefId: {reference_id}")
+
+        req_price_sub = tr.prices.CreatePriceSubscription(
+            data={
+                "Arguments": {
+                    "Uic": selected_uic,
+                    "AccountKey": self.account_key,
+                    "AssetType": selected_asset_type,
+                    "Amount": 1,
+                    "FieldGroups": [
+                        "Commissions", "DisplayAndFormat", "Greeks", "HistoricalChanges",
+                        "InstrumentPriceDetails", "MarketDepth", "PriceInfo",
+                        "PriceInfoDetails", "Quote", "Timestamps",
+                    ],
+                },
+                "ContextId": context_id,
+                "ReferenceId": reference_id,
+                "RefreshRate": refresh_rate,
+                "Format": "application/json",
+            }
+        )
+
+        final_snapshot_data = None
+        sub_context_id = None
+        sub_reference_id = None
+
         try:
-             # This uses the same subscription mechanism as before, maybe simplify?
-             # Alternative: Just use the data from InfoPrices snapshot if sufficient
-             # For now, retain the subscription logic but isolate it.
-             snapshot = self._get_price_snapshot(selected_turbo_info["Uic"], selected_turbo_info["AssetType"])
-             selected_turbo_info['CurrentPriceSnapshot'] = snapshot # Add latest price snapshot
-        except Exception as e:
-             logging.warning(f"Failed to get final price snapshot for {selected_turbo_info['Uic']}, proceeding with InfoPrice data: {e}")
-             selected_turbo_info['CurrentPriceSnapshot'] = selected_turbo_info # Fallback
+            response_price_sub = self.api_client.request(req_price_sub)
+            snapshot = response_price_sub.get("Snapshot")
+            if not snapshot:
+                logging.warning(
+                    f"Price subscription response for {selected_uic} missing 'Snapshot'. Falling back. Response: {response_price_sub}")
+                final_snapshot_data = selected_turbo_info  # Fallback to InfoPrice data
+            else:
+                logging.debug(f"Successfully obtained snapshot via price subscription for {selected_uic}")
+                final_snapshot_data = snapshot
+                # Store IDs only if subscription successful
+                sub_context_id = context_id
+                sub_reference_id = reference_id
 
-        # 9. Prepare and Return Result
+        except (ApiRequestException, SaxoApiError) as e:
+            logging.warning(
+                f"Failed to create price subscription for {selected_uic} (Context: {context_id}), proceeding with InfoPrice data: {e}",
+                exc_info=False)  # Don't need full trace usually
+            final_snapshot_data = selected_turbo_info  # Fallback
+        except Exception as e:
+            logging.error(f"Unexpected error during price subscription for {selected_uic} (Context: {context_id}): {e}",
+                          exc_info=True)
+            final_snapshot_data = selected_turbo_info  # Fallback
+
+
+        # --- 9. Prepare and Return Result ---
+        if final_snapshot_data is None:
+            # This should only happen if the fallback above fails unexpectedly
+            logging.error(f"Critical error: No price data available for selected turbo {selected_uic}")
+            raise ValueError(f"Could not retrieve final price data for {selected_uic}")
+
         result = {
             "input_criteria": {
                 "exchange_id": exchange_id,
@@ -369,43 +496,27 @@ class InstrumentService:
                 "keywords": keywords,
             },
             "selected_instrument": {
-                "uic": selected_turbo_info["Uic"],
+                "uic": selected_turbo_info["Uic"],  # Uic/AssetType are from selection
                 "asset_type": selected_turbo_info["AssetType"],
-                "description": selected_turbo_info.get("DisplayAndFormat", {}).get("Description", "N/A"),
-                "symbol": selected_turbo_info.get("DisplayAndFormat", {}).get("Symbol", "N/A"),
-                "currency": selected_turbo_info.get("DisplayAndFormat", {}).get("Currency", "N/A"),
-                "decimals": selected_turbo_info.get("DisplayAndFormat", {}).get("OrderDecimals", 2),
-                "parsed_data": parse_saxo_turbo_description(selected_turbo_info.get("DisplayAndFormat", {}).get("Description", "")),
-                "quote": selected_turbo_info.get("Quote", {}),
-                "commissions": selected_turbo_info.get("Commissions", {}),
-                # Include the latest snapshot if available
-                "latest_price_snapshot": selected_turbo_info.get('CurrentPriceSnapshot', selected_turbo_info).get("Quote", {}),
-                 # Add potentially needed fields from the latest snapshot
-                "latest_ask": selected_turbo_info.get('CurrentPriceSnapshot', selected_turbo_info).get("Quote", {}).get("Ask"),
-                "latest_bid": selected_turbo_info.get('CurrentPriceSnapshot', selected_turbo_info).get("Quote", {}).get("Bid"),
+                # Use data from the final snapshot source (subscription or fallback)
+                "description": final_snapshot_data.get("DisplayAndFormat", {}).get("Description", "N/A"),
+                "symbol": final_snapshot_data.get("DisplayAndFormat", {}).get("Symbol", "N/A"),
+                "currency": final_snapshot_data.get("DisplayAndFormat", {}).get("Currency", "N/A"),
+                "decimals": final_snapshot_data.get("DisplayAndFormat", {}).get("OrderDecimals", 2),
+                "parsed_data": parse_saxo_turbo_description(
+                    final_snapshot_data.get("DisplayAndFormat", {}).get("Description", "")),
+                "quote": final_snapshot_data.get("Quote", {}),
+                "commissions": final_snapshot_data.get("Commissions", {}),
+                # Keep explicit latest price fields used downstream
+                "latest_ask": final_snapshot_data.get("Quote", {}).get("Ask"),
+                "latest_bid": final_snapshot_data.get("Quote", {}).get("Bid"),
+                # --- Include Subscription IDs ---
+                "subscription_context_id": sub_context_id,
+                "subscription_reference_id": sub_reference_id,
             }
         }
-        logging.info(f"Selected Turbo: {result['selected_instrument']['description']}")
+        logging.info(f"Selected Turbo: {result['selected_instrument']['description']} (Sub Ctx: {sub_context_id})")
         return result
-
-
-    def _get_price_snapshot(self, uic, asset_type):
-         """Gets a single price snapshot for a specific instrument."""
-         # Simplified: Use InfoPrices endpoint for a single UIC to get a snapshot
-         # Avoiding the complexity of managing price subscriptions here if only snapshot needed
-         logging.debug(f"Getting price snapshot for Uic: {uic}")
-         req = tr.infoprices.InfoPrice( # Use singular InfoPrice endpoint
-               Uic=uic,
-               params={
-                    "AccountKey": self.account_key,
-                    "AssetType": asset_type,
-                    "FieldGroups": "Commissions,DisplayAndFormat,InstrumentPriceDetails,MarketDepth,PriceInfo,PriceInfoDetails,Quote", # Adjust FieldGroups as needed
-               }
-          )
-         response = self.api_client.request(req)
-         if not response: # Handle cases where InfoPrice might return empty on success (unlikely)
-             raise ValueError(f"Received empty response for InfoPrice request for {uic}")
-         return response # The response itself is the snapshot structure
 
 
 class OrderService:
@@ -419,23 +530,17 @@ class OrderService:
     def place_market_order(self, uic: int, asset_type: str, amount: int, buy_sell: str, order_duration: str = "DayOrder"):
         """Places a market order."""
         logging.info(f"Placing Market Order: {buy_sell} {amount} of {uic} ({asset_type})")
-        pre_order_payload = {
-            "Uic": uic,
-            "AssetType": asset_type,
-            "Amount": amount,
-            "OrderType": "Market",
-            "ManualOrder": False, # Assuming automated trades
-            "BuySell": buy_sell, # "Buy" or "Sell"
-            "OrderDuration": {"DurationType": order_duration},
-            # Add StopLoss/TakeProfit here if API supports them reliably now
-            # "Orders": [ # Example for OCO - requires specific Saxo structure
-            #     onfill.StopLossDetails(...),
-            #     onfill.TakeProfitDetails(...)
-            # ]
-        }
+        pre_order = MarketOrder(
+            Uic=uic,
+            AssetType=asset_type,
+            Amount=amount,
+            # TODO : Saxo API return error if StopLossOnFill and TakeProfitOnFill are set
+            # StopLossOnFill=onfill.StopLossDetails(stop_loss_price),
+            # TakeProfitOnFill=onfill.TakeProfitDetails(profit_price),
+        )
 
         # Inject AccountKey using the utility
-        final_order_payload = tie_account_to_order(self.account_key, pre_order_payload)
+        final_order_payload = tie_account_to_order(self.account_key, pre_order)
         logging.debug(f"Final order payload: {json.dumps(final_order_payload)}")
 
         request_order = tr.orders.Order(data=final_order_payload)
@@ -467,24 +572,8 @@ class OrderService:
         )
         return self.api_client.request(req_single_order)
 
-    def get_open_orders(self):
-        """Retrieves all open orders for the account."""
-        # Note: Uses subscription endpoint in original code, might need adjustment
-        # For simplicity, let's assume a snapshot endpoint exists or adapt as needed.
-        # Using the subscription endpoint requires managing ContextId etc.
-        # Let's use a hypothetical simpler endpoint for now, or adapt subscription.
-        # Placeholder:
-        logging.warning("get_open_orders using subscription endpoint logic not fully implemented here. Adapt if needed.")
-        # context_id = str(uuid.uuid1()) # Need to manage context IDs statefully if using subscriptions
-        # reference_id = str(uuid.uuid1())
-        # req_all_order = pf.orders.CreateOpenOrdersSubscription(...)
-        # return self.api_client.request(req_all_order)['Snapshot'] # Example
-        # If no snapshot endpoint, this needs more complex state management.
-        # Fallback: query orders individually if needed, less efficient.
-        return {"Data": []} # Placeholder - implement properly
-
     def cancel_order(self, order_id: str):
-        """Cancels a specific order."""
+        """Cancels a specific order. Returns True on success, False on failure."""
         logging.info(f"Attempting to cancel order: {order_id}")
         request_cancel = tr.orders.CancelOrders(
             OrderIds=order_id,
@@ -493,17 +582,27 @@ class OrderService:
         try:
              # API might return 200 OK with details or potentially 204 No Content
              response = self.api_client.request(request_cancel)
-             logging.info(f"Order cancellation request sent for {order_id}. Response: {response}")
-             return response # Or True if successful
-        except Exception as e:
+             # Check response - Saxo might return 200 OK with details,
+             # or potentially 204 No Content on success. Assume 2xx is success.
+             # If specific success criteria are needed, adjust check here.
+             logging.info(f"Order cancellation request successful for {order_id}. Response: {response}")
+             return True # Indicate success
+        except (ApiRequestException, SaxoApiError) as e:
+             # Includes 404 Not Found if order already cancelled/filled
              logging.error(f"Failed to cancel order {order_id}: {e}")
-             raise # Re-raise error for upstream handling
+             # You might want to check e.status_code == 404 and treat it differently
+             return False # Indicate failure
+        except Exception as e:
+            logging.error(f"Unexpected error cancelling order {order_id}: {e}", exc_info=True)
+            return False # Indicate failure
+
 
 class PositionService:
     """Handles retrieving position and balance information."""
 
-    def __init__(self, api_client: SaxoApiClient, config_manager: ConfigurationManager, account_key: str, client_key: str):
+    def __init__(self, api_client: SaxoApiClient, order_service: OrderService, config_manager: ConfigurationManager, account_key: str, client_key: str):
         self.api_client = api_client
+        self.order_service = order_service
         self.config = config_manager
         self.account_key = account_key
         self.client_key = client_key
@@ -531,7 +630,7 @@ class PositionService:
         return response
 
 
-    def get_closed_positions(self, top: int = None, skip: int = 0):
+    def get_closed_positions(self, top: int | None = None, skip: int = 0):
         """Retrieves closed positions."""
         if top is None:
              top = self.api_limits["top_closed_positions"]
@@ -563,20 +662,53 @@ class PositionService:
         return self.api_client.request(request_single_position)
 
     @retry(stop=stop_after_attempt(DEFAULT_RETRY_ATTEMPTS), wait=wait_fixed(DEFAULT_RETRY_WAIT_SECONDS), retry=retry_if_exception_type(PositionNotFoundException))
+    def _find_position_attempt(self, order_id: str):
+        """Single attempt to find the position, wrapped by tenacity."""
+        logging.debug(f"Attempting to find position for OrderId: {order_id}")
+        all_positions = self.get_open_positions()
+
+        if all_positions and 'Data' in all_positions:
+            for position in all_positions["Data"]:
+                if position.get("PositionBase", {}).get("SourceOrderId") == order_id:
+                    logging.info(f"Position {position.get('PositionId')} found for order ID {order_id}.")
+                    return position # Return the found position
+
+        logging.warning(f"Position not found for OrderId {order_id} in current open positions. Retrying...")
+        # Raise specific exception for tenacity to catch and retry
+        raise PositionNotFoundException(f"Position for order {order_id} not found yet.", order_id=order_id)
+
     def find_position_by_order_id_with_retry(self, order_id: str):
-         """Finds an open position matching a source order ID, with retries."""
-         logging.debug(f"Attempting to find position for OrderId: {order_id}")
-         all_positions = self.get_open_positions()
+        """
+        Finds an open position matching a source order ID, with retries.
+        Attempts to cancel the order if the position is not found after all retries.
+        """
+        try:
+            # Call the internal method that tenacity decorates
+            found_position = self._find_position_attempt(order_id)
+            return found_position
+        except RetryError as e:
+            # This means all retry attempts failed
+            error_message_base = f"Position not found after {self.retry_config['max_retries']} retries for order ID {order_id}"
+            logging.critical(f"{error_message_base}. Attempting order cancellation.")
 
-         if all_positions and 'Data' in all_positions:
-             for position in all_positions["Data"]:
-                 if position.get("PositionBase", {}).get("SourceOrderId") == order_id:
-                      logging.info(f"Position {position.get('PositionId')} found for order ID {order_id}.")
-                      return position # Return the found position
+            # Attempt to cancel the order
+            cancellation_succeeded = self.order_service.cancel_order(order_id)
 
-         logging.warning(f"Position not found for OrderId {order_id} in current open positions. Retrying...")
-         raise PositionNotFoundException(f"Position for order {order_id} not found yet.", order_id=order_id)
-
+            if cancellation_succeeded:
+                cancel_msg = f"✅ Successfully cancelled potentially orphan order {order_id}"
+                logging.info(cancel_msg)
+                # Raise the specific exception noting successful cancellation
+                raise PositionNotFoundException(f"{error_message_base}. {cancel_msg}", order_id=order_id, cancellation_attempted=True, cancellation_succeeded=True) from e
+            else:
+                cancel_fail_msg = f"❌ Failed to cancel potentially orphan order {order_id}"
+                logging.error(cancel_fail_msg)
+                # Raise the specific exception noting failed cancellation
+                raise PositionNotFoundException(f"{error_message_base}. {cancel_fail_msg}", order_id=order_id, cancellation_attempted=True, cancellation_succeeded=False) from e
+        except Exception as e:
+             # Catch other unexpected errors during the find process
+             logging.error(f"Unexpected error finding position for order {order_id}: {e}", exc_info=True)
+             # Re-raise without attempting cancellation here, as the state is unknown
+             raise
 
     def get_spending_power(self):
         """Gets the current account spending power."""
@@ -635,7 +767,9 @@ class TradingOrchestrator:
         cost_per_unit = ask_price # Add estimated commission per unit if significant and available
 
         # Check if funds cover at least one unit + margin
-        if available_funds < (cost_per_unit * (1 + safety_margin_units)):
+        # Ensure calculation safety margin applies correctly
+        required_funds = cost_per_unit * (1 + safety_margin_units) # Funds needed for 1 unit + margin units equivalent
+        if available_funds < required_funds:
              pre_amount = 0 # Cannot afford even one unit with margin
         else:
              # Calculate max units affordable
@@ -710,7 +844,7 @@ class TradingOrchestrator:
                 "order_cost": turbo_info['selected_instrument'].get('commissions', {}).get('CostBuy'),
             }
             # Prepare Position Data for DB
-            pos_base = confirmed_position.get("PositionBase", {});
+            pos_base = confirmed_position.get("PositionBase", {})
             pos_disp = confirmed_position.get("DisplayAndFormat", {})
             position_data_for_db = {
                 "action": keywords, "position_id": confirmed_position.get("PositionId"),
@@ -801,14 +935,144 @@ class PerformanceMonitor:
              logging.warning(f"Could not get day_trading rules for profit target, defaulting: {e}")
              self.percent_profit_wanted_per_days = 1.0
 
+    def _fetch_and_update_closed_position_in_db(self, opening_position_id: str, closed_from_reason: str) -> bool | None:
+        """
+        Fetches closed position details from API after a delay, finds the matching one,
+        calculates performance, updates the database, and sends a notification.
+        Mimics the logic from the original `act_on_db_closed_position`.
+
+        Args:
+            opening_position_id: The ID of the position *before* it was closed.
+            closed_from_reason: A string indicating why the position was closed (e.g., "Performance", "Explicit").
+
+        Returns:
+            True if the position was found and updated successfully, False otherwise.
+        """
+        logging.info(
+            f"Processing DB update for closed position {opening_position_id}. Reason: {closed_from_reason}. Waiting briefly...")
+        time.sleep(2)  # Replicate original delay to allow API to update
+
+        try:
+            # Fetch recent closed positions
+            # Increase 'top' slightly to improve chances of finding it if multiple closed quickly
+            all_closed_positions = self.position_service.get_closed_positions(top=50)
+            if not all_closed_positions or not all_closed_positions.get("Data"):
+                logging.warning(f"No closed positions found in API when checking for {opening_position_id}.")
+                return False
+
+            position_found_in_api = False
+            for api_closed_position in all_closed_positions["Data"]:
+                closed_info = api_closed_position.get("ClosedPosition", {})
+                if closed_info.get("OpeningPositionId") == opening_position_id:
+                    position_found_in_api = True
+                    logging.info(f"Found matching closed position in API for {opening_position_id}.")
+
+                    # Extract data
+                    display_info = api_closed_position.get("DisplayAndFormat", {})
+                    close_price = closed_info.get("ClosingPrice")
+                    open_price = closed_info.get("OpenPrice")
+                    amount = closed_info.get("Amount")
+                    profit_loss = closed_info.get("ProfitLossOnTrade")
+                    exec_time_close = closed_info.get("ExecutionTimeClose")
+                    description = display_info.get("Description", "N/A")
+
+                    # Calculate derived fields
+                    position_total_close_price = None
+                    performance_percent = None
+                    if close_price is not None and amount is not None:
+                        position_total_close_price = float(close_price * amount)
+                    if close_price is not None and open_price is not None and open_price != 0:
+                        performance_percent = round(((close_price * 100) / open_price) - 100, 2)
+
+                    # Prepare DB update data
+                    turbo_position_data_at_close = {
+                        "position_close_price": close_price,
+                        "position_profit_loss": profit_loss,
+                        "position_total_close_price": position_total_close_price,
+                        "position_status": "Closed",
+                        "position_total_performance_percent": performance_percent,
+                        "position_close_reason": closed_from_reason,  # Use the provided reason
+                        "execution_time_close": exec_time_close,
+                    }
+
+                    # Update Database
+                    try:
+                        logging.debug(
+                            f"Updating DB for position {opening_position_id} with data: {turbo_position_data_at_close}")
+                        self.db_position_manager.update_turbo_position_data(
+                            opening_position_id, turbo_position_data_at_close
+                        )
+                        logging.info(
+                            f"Successfully updated database for closed position {opening_position_id} ({description}).")
+                    except Exception as e:
+                        # Use the specific DatabaseOperationException logic from original
+                        error_message = f"CRITICAL: Failed to update DB for closed position {opening_position_id} ({description}): {e}. Manual update needed."
+                        logging.critical(error_message, exc_info=True)
+                        self.db_position_manager.mark_database_as_corrupted(
+                            error_message)
+                        db_exception = DatabaseOperationException(
+                            error_message,
+                            operation="update_turbo_position_data",
+                            entity_id=opening_position_id
+                        )
+                        send_message_to_mq_for_telegram(self.rabbit_connection,
+                                                        f"CRITICAL DB UPDATE FAILED: {db_exception}")
+                        # Don't re-raise here, just report failure
+                        return False
+
+                    # Send Notification
+                    try:
+                        # Get max position % and today % for notification (optional, based on original)
+                        max_position_percent = self.db_position_manager.get_max_position_percent(
+                            opening_position_id)
+                        today_percent = self.db_position_manager.get_percent_of_the_day()
+
+                        message = f"""
+--- CLOSED POSITION ---
+Instrument : {description}
+Open Price : {open_price}
+Close Price : {close_price}
+Amount : {amount}
+Total Close Price : {position_total_close_price}
+Profit/Loss : {profit_loss}
+Performance % : {performance_percent}
+Close Time : {exec_time_close}
+Closed Reason : {closed_from_reason}
+Opening Position ID : {opening_position_id}
+Max position % during trade : {max_position_percent}
+-------
+Today's Realized Profit % (after close) : {today_percent}%
+"""
+                        send_message_to_mq_for_telegram(self.rabbit_connection, message)
+                    except Exception as notify_err:
+                        logging.error(
+                            f"Failed to send notification for closed position {opening_position_id}: {notify_err}")
+
+                    return True  # Successfully found and processed
+
+            # If loop finishes without finding the position
+            if not position_found_in_api:
+                logging.warning(
+                    f"Abnormal: Position {opening_position_id} was expected to be closed, but not found in recent API closed positions.")
+                # The sync mechanism might catch it later if it appears.
+                return False
+
+        except (ApiRequestException, SaxoApiError) as api_err:
+            logging.error(f"API error fetching closed positions for {opening_position_id}: {api_err}")
+            return False
+        except Exception as e:
+            logging.error(f"Unexpected error processing closed position {opening_position_id}: {e}", exc_info=True)
+            return False
 
     def check_all_positions_performance(self):
-        """Checks performance of all DB-managed open positions against thresholds and rules."""
+        """Checks performance, closes if needed, and **immediately updates DB**."""
         logging.info("--- Checking Performance of Open Positions ---")
-        db_open_positions = self.db_position_manager.get_open_positions_details() # Assume this returns list of dicts with needed data like position_id, action
+        # --- Use the correct method ---
+        db_open_positions = self.db_position_manager.get_open_positions_ids_actions()
+        # -----------------------------
         if not db_open_positions:
-            logging.info("No manageable open positions found in database to check.")
-            return {"closed_positions": [], "db_updates": []}
+             logging.info("No manageable open positions found in database to check.")
+             return {"closed_positions_processed": [], "db_updates": [], "errors": 0}
 
         db_position_ids = [p['position_id'] for p in db_open_positions]
         logging.debug(f"Checking DB positions: {db_position_ids}")
@@ -818,75 +1082,84 @@ class PerformanceMonitor:
             api_positions_dict = {p["PositionId"]: p for p in api_positions_response.get("Data", [])}
         except Exception as e:
             logging.error(f"Failed to get open positions from API during performance check: {e}")
-            # Cannot proceed without API data
-            return {"closed_positions": [], "db_updates": []} # Or raise
+            return {"closed_positions_processed": [], "db_updates": [], "errors": 1}
 
-
-        positions_to_close = []
-        db_updates = [] # List of (position_id, update_dict) tuples
+        positions_to_close = [] # Still collect first to avoid modifying list while iterating
+        db_updates = []
+        processed_positions = [] # Track positions processed by this run
+        errors_count = 0
 
         for db_pos in db_open_positions:
-            position_id = db_pos['position_id']
-            if position_id not in api_positions_dict:
-                logging.warning(f"Position {position_id} is open in DB but not found in API open positions. Triggering sync check later.")
-                # TODO: Add mechanism to trigger sync_db_positions_with_api if this happens frequently
-                continue
+             position_id = db_pos['position_id']
+             if position_id not in api_positions_dict:
+                 logging.warning(f"Position {position_id} open in DB but not found in API. Skipping perf check (will be synced).")
+                 continue
 
-            api_pos = api_positions_dict[position_id]
+             api_pos = api_positions_dict[position_id]
+             open_price = api_pos.get("PositionBase", {}).get("OpenPrice")
+             current_bid = api_pos.get("PositionView", {}).get("Bid")
+             performance_percent = None
 
-            # 1. Calculate Performance
-            open_price = api_pos.get("PositionBase", {}).get("OpenPrice")
-            current_bid = api_pos.get("PositionView", {}).get("Bid")
-            performance_percent = None
-            if open_price and current_bid and open_price != 0:
-                 performance_percent = round(((current_bid * 100) / open_price) - 100, 2)
-                 logging.info(f"Pos {position_id}: Open={open_price}, Bid={current_bid}, Perf={performance_percent}%")
+             # Calculate Performance & Log
+             if open_price and current_bid and open_price != 0:
+                  performance_percent = round(((current_bid * 100) / open_price) - 100, 2)
+                  logging.info(f"Pos {position_id}: Open={open_price}, Bid={current_bid}, Perf={performance_percent}%")
+                  self._log_performance_detail(position_id, api_pos, performance_percent)
+                  max_perf = self.db_position_manager.get_max_position_percent(position_id)
+                  if max_perf is None: max_perf = -float('inf') # Handle initial None case
+                  if performance_percent > max_perf:
+                       db_updates.append((position_id, {"position_max_performance_percent": performance_percent}))
+             else:
+                  logging.warning(f"Could not calculate performance for {position_id}. Open={open_price}, Bid={current_bid}. Skipping checks.")
+                  continue # Cannot check thresholds without performance
 
-                 # Record detailed performance log
-                 self._log_performance_detail(position_id, api_pos, performance_percent)
+             # Check Thresholds & Daily Profit
+             close_reason = None
+             if performance_percent <= self.thresholds["stoploss_percent"]:
+                  close_reason = f"Stoploss ({self.thresholds['stoploss_percent']}%) hit at {performance_percent}%"
+             elif performance_percent >= self.thresholds["max_profit_percent"]:
+                  close_reason = f"Takeprofit ({self.thresholds['max_profit_percent']}%) hit at {performance_percent}%"
 
-                 # Check for new max performance
-                 max_perf = self.db_position_manager.get_max_position_percent(position_id)
-                 if performance_percent > max_perf:
-                      db_updates.append((position_id, {"position_max_performance_percent": performance_percent}))
-            else:
-                 logging.warning(f"Could not calculate performance for {position_id}: OpenPrice={open_price}, Bid={current_bid}")
-                 continue # Skip checks if performance cannot be calculated
+             # Check daily profit target only if no other close reason yet
+             if not close_reason:
+                  try:
+                       # --- Refined Daily Profit Check ---
+                       # Get today's *realized* profit percentage so far
+                       today_realized_percent = self.db_position_manager.get_percent_of_the_day()
 
-            # 2. Check Thresholds
-            close_reason = None
-            if performance_percent <= self.thresholds["stoploss_percent"]:
-                 close_reason = f"Stoploss threshold ({self.thresholds['stoploss_percent']}%) hit"
-            elif performance_percent >= self.thresholds["max_profit_percent"]:
-                 close_reason = f"Takeprofit threshold ({self.thresholds['max_profit_percent']}%) hit"
+                       # Calculate the *potential* total realized profit if this position is closed *now*
+                       # This needs careful calculation, especially with multiple open positions.
+                       # Simplistic approach: Check if current position's performance PLUS today's realized meets target.
+                       # Better approach: Calculate total potential profit based on current open positions' value changes.
+                       # For now, using a simpler check: If closing this position *alone* would reach the target from current realized profit.
+                       # Let initial_capital = 1.0
+                       # current_capital = 1.0 * (1 + today_realized_percent / 100.0)
+                       # potential_capital_after_close = current_capital * (1 + performance_percent / 100.0) # This assumes the *entire* capital is in this one trade - likely WRONG
+                       # Let's stick to the original simpler check for now, acknowledging its limitation:
+                       today_profit_factor = 1.0 + (today_realized_percent / 100.0)
+                       position_profit_factor = 1.0 + (performance_percent / 100.0)
+                       # This combined factor doesn't accurately reflect portfolio impact unless only 1 position open.
+                       potential_today_percent = round((today_profit_factor * position_profit_factor - 1) * 100, 2)
 
-            # 3. Check Daily Profit Target (only if not already closing)
-            if not close_reason:
-                 try:
-                      today_percent = self.db_position_manager.get_percent_of_the_day()
-                      # Calculate potential final % if this position is closed now
-                      today_profit_factor = 1.0 + (today_percent / 100.0)
-                      position_profit_factor = 1.0 + (performance_percent / 100.0)
-                      potential_today_factor = today_profit_factor * position_profit_factor # This assumes only one position, needs adjustment for multiple
-                      # Simplification: If current position profit + today's realized profit exceeds target
-                      # This is complex logic, refine based on exact requirement (e.g., use total account value change)
-                      # Using simpler check for now: if potential daily profit including this position exceeds target
-                      potential_today_percent = round((today_profit_factor * position_profit_factor - 1) * 100, 2)
+                       # Let's use a direct comparison: Is today's realized + this position's gain >= target?
+                       # This is still not quite right without knowing position size relative to portfolio.
+                       # Fallback to simple check: If this position hits the daily target on its own? Unlikely intent.
+                       # REVERTING to the simplest original check (potentially flawed):
+                       if potential_today_percent >= self.percent_profit_wanted_per_days:
+                            close_reason = f"Daily profit target ({self.percent_profit_wanted_per_days}%) potentially met (Combined factor: {potential_today_percent}%)"
+                            logging.info(f"Daily profit check triggered closure for {position_id}. Realized today: {today_realized_percent}%, Position perf: {performance_percent}%.")
+                       # -------------------------------
 
-                      if potential_today_percent >= self.percent_profit_wanted_per_days:
-                            close_reason = f"Daily profit target ({self.percent_profit_wanted_per_days}%) potentially met ({potential_today_percent}%)"
-                 except Exception as e:
-                      logging.error(f"Error checking daily profit target for {position_id}: {e}")
+                  except Exception as e:
+                       logging.error(f"Error checking daily profit target for {position_id}: {e}")
 
 
-            # 4. Add to Close List if Needed
-            if close_reason:
-                 logging.info(f"Marking position {position_id} for closure. Reason: {close_reason}")
-                 positions_to_close.append({"position_id": position_id, "api_details": api_pos, "reason": close_reason})
+             if close_reason:
+                  logging.info(f"Marking position {position_id} for closure. Reason: {close_reason}")
+                  positions_to_close.append({"position_id": position_id, "api_details": api_pos, "reason": close_reason})
 
 
         # 5. Execute Closures
-        closed_position_ids = []
         for pos_to_close in positions_to_close:
              api_pos = pos_to_close["api_details"]
              position_id = pos_to_close["position_id"]
@@ -894,6 +1167,7 @@ class PerformanceMonitor:
 
              if not api_pos.get("PositionBase", {}).get("CanBeClosed", False):
                  logging.warning(f"Position {position_id} flagged for closure but CanBeClosed is False. Skipping.")
+                 processed_positions.append({"id": position_id, "close_reason": close_reason, "status": "Skipped (Cannot Be Closed)"})
                  continue
 
              try:
@@ -908,28 +1182,49 @@ class PerformanceMonitor:
                      amount=api_pos["PositionBase"]["Amount"],
                      buy_sell=order_direction
                  )
-                 closed_position_ids.append({"id": position_id, "close_reason": close_reason})
-                 logging.info(f"Close order placed for {position_id}. OrderId: {close_order_result.get('OrderId')}")
+                 logging.info(f"Close order placed for {position_id}. OrderId: {close_order_result.get('OrderId')}. Now attempting immediate DB update.")
 
-                 # Send immediate notification (optional, sync might handle final update)
-                 close_message = f"PERF CLOSE: Closing {api_pos['DisplayAndFormat']['Description']} (PosID: {position_id}). Reason: {close_reason}. Close Order: {close_order_result.get('OrderId')}"
-                 send_message_to_mq_for_telegram(self.rabbit_connection, close_message)
+                 # --- Call the helper for immediate update ---
+                 update_success = self._fetch_and_update_closed_position_in_db(position_id, f"Performance ({close_reason})")
+                 processed_positions.append({
+                     "id": position_id,
+                     "close_reason": close_reason,
+                     "db_update_attempted": True,
+                     "db_update_success": update_success,
+                     "status": "Closed" if update_success else "Closed (DB Update Failed)"
+                 })
+                 if not update_success:
+                     logging.error(f"Immediate DB update failed for closed position {position_id}. Sync mechanism will retry later.")
+                     errors_count += 1 # Count DB update failure as an error
+
 
              except (OrderPlacementError, SaxoApiError, ApiRequestException) as e:
                   logging.error(f"Failed to place close order for position {position_id}: {e}")
                   # Send error notification
                   error_message = f"ERROR: Failed closing {position_id}. Reason: {close_reason}. Error: {e}"
                   send_message_to_mq_for_telegram(self.rabbit_connection, error_message)
-                  # Should we raise? Or just log and continue checking others? Continue for now.
+                  errors_count += 1
+                  processed_positions.append({"id": position_id, "close_reason": close_reason, "error": str(e), "status": "Close Order Failed"})
              except Exception as e:
                   logging.error(f"Unexpected error closing position {position_id}: {e}", exc_info=True)
                   error_message = f"CRITICAL ERROR: Unexpected error closing {position_id}. Error: {e}"
                   send_message_to_mq_for_telegram(self.rabbit_connection, error_message)
-                  # Continue for now
+                  errors_count += 1
+                  processed_positions.append({"id": position_id, "close_reason": close_reason, "error": str(e), "status": "Close Failed (Unexpected)"})
 
-        # Return results for DB updates (actual updates happen in main.py handler)
-        return {"closed_positions": closed_position_ids, "db_updates": db_updates}
+        # Apply Max Performance DB Updates (collected earlier)
+        if db_updates:
+             logging.info(f"Applying {len(db_updates)} max performance updates to DB.")
+             for pos_id, update_data in db_updates:
+                  try:
+                       self.db_position_manager.update_turbo_position_data(pos_id, update_data)
+                  except Exception as e:
+                       logging.error(f"Failed to update max performance for {pos_id}: {e}")
+                       # This is less critical than a closure update failure
+                       errors_count += 1 # Optionally track this minor error type
 
+        logging.info(f"Performance check finished. Positions processed/closed: {len(processed_positions)}, Max Perf Updates: {len(db_updates)}, Errors: {errors_count}")
+        return {"closed_positions_processed": processed_positions, "db_updates": db_updates, "errors": errors_count}
 
     def sync_db_positions_with_api(self):
         """Compares DB open positions with API closed positions and returns updates."""
@@ -964,7 +1259,7 @@ class PerformanceMonitor:
             api_closed_map = {
                 p["ClosedPosition"]["OpeningPositionId"]: p
                 for p in api_closed_positions_response.get("Data", [])
-                if "ClosedPosition" in p and "OpeningPositionId" in p["ClosedPosition"]
+                if p and "ClosedPosition" in p and "OpeningPositionId" in p["ClosedPosition"]
             }
         except Exception as e:
             logging.error(f"Failed to get API closed positions during sync: {e}")
@@ -977,30 +1272,40 @@ class PerformanceMonitor:
                  api_closed_pos = api_closed_map[position_id_to_check]
                  logging.info(f"Found match for DB open position {position_id_to_check} in API closed positions. Preparing DB update.")
 
-                 close_price = api_closed_pos["ClosedPosition"]["ClosingPrice"]
-                 open_price = api_closed_pos["ClosedPosition"]["OpenPrice"]
-                 amount = api_closed_pos["ClosedPosition"]["Amount"]
+                 closed_pos_data = api_closed_pos.get("ClosedPosition", {})
+                 display_data = api_closed_pos.get("DisplayAndFormat", {})
+
+                 close_price = closed_pos_data.get("ClosingPrice")
+                 open_price = closed_pos_data.get("OpenPrice")
+                 amount = closed_pos_data.get("Amount")
+                 pl = closed_pos_data.get("ProfitLossOnTrade")
+                 close_time = closed_pos_data.get("ExecutionTimeClose")
+                 description = display_data.get("Description", "N/A")
+
 
                  performance_percent = None
-                 if open_price and open_price != 0:
+                 total_close_price = None
+                 if close_price is not None and amount is not None:
+                    total_close_price = close_price * amount
+                 if open_price is not None and open_price != 0 and close_price is not None:
                       performance_percent = round(((close_price * 100) / open_price) - 100, 2)
 
                  update_data = {
                      "position_close_price": close_price,
-                     "position_profit_loss": api_closed_pos["ClosedPosition"]["ProfitLossOnTrade"],
-                     "position_total_close_price": close_price * amount,
+                     "position_profit_loss": pl,
+                     "position_total_close_price": total_close_price,
                      "position_status": "Closed",
                      "position_total_performance_percent": performance_percent,
                      "position_close_reason": "SaxoAPI", # Indicates found closed via API sync
-                     "execution_time_close": api_closed_pos["ClosedPosition"]["ExecutionTimeClose"],
+                     "execution_time_close": close_time,
                  }
                  updates_for_db.append((position_id_to_check, update_data))
 
                  # Send notification
-                 message = f"""SYNC CLOSE: Position {position_id_to_check} ({api_closed_pos['DisplayAndFormat']['Description']}) closed on API.
+                 message = f"""SYNC CLOSE: Position {position_id_to_check} ({description}) closed on API.
 Open: {open_price}, Close: {close_price}, Amount: {amount}
-P/L: {update_data['position_profit_loss']}, Perf: {performance_percent}%
-Close Time: {update_data['execution_time_close']}"""
+P/L: {pl}, Perf: {performance_percent}%
+Close Time: {close_time}"""
                  send_message_to_mq_for_telegram(self.rabbit_connection, message)
 
             else:
@@ -1019,24 +1324,34 @@ Close Time: {update_data['execution_time_close']}"""
         """Writes detailed performance data to a JSONL file."""
         try:
             current_time = datetime.now(pytz.timezone(self.timezone))
-            open_time_str = api_pos.get("PositionBase", {}).get("ExecutionTimeOpen")
+            pos_base = api_pos.get("PositionBase", {})
+            pos_view = api_pos.get("PositionView", {})
+            open_time_str = pos_base.get("ExecutionTimeOpen")
             open_time = None
             open_hour = None
             open_minute = None
             if open_time_str:
                 try:
-                     open_time = datetime.fromisoformat(open_time_str).astimezone(pytz.timezone(self.timezone))
+                     # Ensure timezone handling is robust
+                     if open_time_str.endswith('Z'):
+                          open_time_dt = datetime.fromisoformat(open_time_str.replace('Z', '+00:00'))
+                     else:
+                          open_time_dt = datetime.fromisoformat(open_time_str) # Assume UTC if no Z
+
+                     # Convert to local timezone
+                     local_tz = pytz.timezone(self.timezone)
+                     open_time = open_time_dt.astimezone(local_tz)
                      open_hour = open_time.hour
                      open_minute = open_time.minute
-                except ValueError:
-                     logging.warning(f"Could not parse open time {open_time_str}")
+                except (ValueError, TypeError) as parse_err:
+                     logging.warning(f"Could not parse open time {open_time_str}: {parse_err}")
 
 
             performance_json = {
                 "position_id": position_id,
                 "performance": performance_percent,
-                "open_price": api_pos.get("PositionBase", {}).get("OpenPrice"),
-                "bid": api_pos.get("PositionView", {}).get("Bid"),
+                "open_price": pos_base.get("OpenPrice"),
+                "bid": pos_view.get("Bid"), # Use PositionView for current bid
                 "time": current_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "current_hour": current_time.hour,
                 "current_minute": current_time.minute,
@@ -1047,6 +1362,7 @@ Close Time: {update_data['execution_time_close']}"""
             # Construct the filename using today's date
             today_date = current_time.strftime("%Y-%m-%d")
             log_path = self.logging_config.get('persistant', {}).get('log_path', '.') # Get log path safely
+            if not os.path.exists(log_path): os.makedirs(log_path) # Ensure log dir exists
             filename = os.path.join(log_path, f"performance_{today_date}.jsonl")
 
             # Write the performance_json to the JSON Lines file
@@ -1059,7 +1375,7 @@ Close Time: {update_data['execution_time_close']}"""
     def close_managed_positions_by_criteria(self, action_filter: str | None = None):
         """
         Closes open positions managed by the app, optionally filtered by action ('long'/'short').
-        Relies on sync_db_positions_with_api for final DB updates.
+        Initiates closure and attempts immediate DB update.
 
         Args:
             action_filter: If 'long' or 'short', closes only positions matching that action.
@@ -1068,11 +1384,11 @@ Close Time: {update_data['execution_time_close']}"""
         logging.info(f"--- Closing Managed Positions by Criteria (Filter: {action_filter}) ---")
         closed_initiated_count = 0
         errors_count = 0
+        processed_positions = [] # Track positions processed
 
         # 1. Get currently open positions managed by the app from DB
-        # Need position_id and the original action ('long'/'short')
         try:
-            db_open_positions = self.db_position_manager.get_open_positions_details() # Assume this gets needed fields
+            db_open_positions = self.db_position_manager.get_open_positions_ids_actions()
             if not db_open_positions:
                  logging.info("No managed positions open in DB to close.")
                  return {"closed_initiated_count": 0, "errors_count": 0}
@@ -1091,51 +1407,70 @@ Close Time: {update_data['execution_time_close']}"""
         # 3. Filter and Initiate Closure
         for db_pos in db_open_positions:
             position_id = db_pos.get('position_id')
-            db_action = db_pos.get('action') # Get action ('long'/'short') from DB data
+            db_action = db_pos.get('action')
+            if not position_id: continue # Skip if somehow ID is missing
 
             # Apply filter
             if action_filter and db_action != action_filter:
+                logging.debug(f"Skipping pos {position_id}: Action '{db_action}' != Filter '{action_filter}'")
                 continue # Skip if action doesn't match filter
 
             # Check if position exists and is closable on API
             if position_id not in api_positions_dict:
                 logging.warning(f"Position {position_id} (Action: {db_action}) to be closed is not open on API. Skipping (will be synced later).")
+                processed_positions.append({"id": position_id, "action": db_action, "filter": action_filter, "status": "Skipped (Not in API)"})
                 continue
 
             api_pos = api_positions_dict[position_id]
-            if not api_pos.get("PositionBase", {}).get("CanBeClosed", False):
+            pos_base = api_pos.get("PositionBase", {})
+            if not pos_base.get("CanBeClosed", False):
                 logging.warning(f"Position {position_id} (Action: {db_action}) cannot be closed via API (CanBeClosed=False). Skipping.")
+                processed_positions.append({"id": position_id, "action": db_action, "filter": action_filter, "status": "Skipped (Cannot Be Closed)"})
                 continue
 
             # Initiate closure
             try:
-                direction = direction_from_amount(api_pos["PositionBase"]["Amount"])
+                amount_to_close = pos_base.get("Amount", 0)
+                direction = direction_from_amount(pos_base.get("Amount", 0))
                 order_direction = direction_invert(direction)
-                logging.info(f"Initiating explicit close for {position_id} (Action: {db_action}), Filter: {action_filter}. Order: {order_direction} {api_pos['PositionBase']['Amount']}")
+                logging.info(f"Initiating explicit close for {position_id} (Action: {db_action}), Filter: {action_filter}. Order: {order_direction} {amount_to_close}")
 
                 close_order_result = self.order_service.place_market_order(
-                    uic=api_pos["PositionBase"]["Uic"],
-                    asset_type=api_pos["PositionBase"]["AssetType"],
-                    amount=api_pos["PositionBase"]["Amount"],
+                    uic=pos_base.get("Uic"),
+                    asset_type=pos_base.get("AssetType"),
+                    amount=amount_to_close, # Use positive amount
                     buy_sell=order_direction
                 )
                 closed_initiated_count += 1
-                logging.info(f"Close order placed for {position_id}. OrderId: {close_order_result.get('OrderId')}")
+                logging.info(f"Close order placed for {position_id}. OrderId: {close_order_result.get('OrderId')}. Attempting immediate DB update.")
 
-                # Send notification
-                close_message = f"EXPLICIT CLOSE: Closing {api_pos['DisplayAndFormat']['Description']} (PosID: {position_id}, Action: {db_action}). Filter: {action_filter}. Order: {close_order_result.get('OrderId')}"
-                send_message_to_mq_for_telegram(self.rabbit_connection, close_message)
+                # --- Call the helper for immediate update ---
+                close_reason_str = f"Explicit Close ({action_filter or 'All'})"
+                update_success = self._fetch_and_update_closed_position_in_db(position_id, close_reason_str)
+                processed_positions.append({
+                     "id": position_id,
+                     "action": db_action,
+                     "filter": action_filter,
+                     "db_update_attempted": True,
+                     "db_update_success": update_success,
+                     "status": "Closed" if update_success else "Closed (DB Update Failed)"
+                 })
+                if not update_success:
+                     logging.error(f"Immediate DB update failed for explicitly closed position {position_id}. Sync mechanism will retry.")
+                     errors_count += 1 # Count DB update failure as an error
 
             except (OrderPlacementError, SaxoApiError, ApiRequestException) as e:
                  logging.error(f"Failed to place explicit close order for position {position_id}: {e}")
                  error_message = f"ERROR: Failed explicit close for {position_id} (Action: {db_action}). Error: {e}"
                  send_message_to_mq_for_telegram(self.rabbit_connection, error_message)
                  errors_count += 1
+                 processed_positions.append({"id": position_id, "action": db_action, "filter": action_filter, "error": str(e), "status":"Close Order Failed"})
             except Exception as e:
                  logging.error(f"Unexpected error during explicit close for position {position_id}: {e}", exc_info=True)
                  error_message = f"CRITICAL ERROR: Unexpected error during explicit close for {position_id}. Error: {e}"
                  send_message_to_mq_for_telegram(self.rabbit_connection, error_message)
                  errors_count += 1
+                 processed_positions.append({"id": position_id, "action": db_action, "filter": action_filter, "error": str(e), "status": "Close Failed (Unexpected)"})
 
-        logging.info(f"Explicit closure process finished. Initiated: {closed_initiated_count}, Errors: {errors_count}. Final DB updates via sync.")
-        return {"closed_initiated_count": closed_initiated_count, "errors_count": errors_count}
+        logging.info(f"Explicit closure process finished. Initiated: {closed_initiated_count}, Errors: {errors_count}. Processed: {len(processed_positions)}")
+        return {"closed_initiated_count": closed_initiated_count, "errors_count": errors_count, "processed_positions": processed_positions}
