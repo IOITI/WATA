@@ -7,9 +7,17 @@
     package_name: "wata_app_v{{ version }}.zip"       # Define the package name with the version
 
   tasks:
-    - name: Ensure the directory exists with specific permissions
+    - name: Ensure the base directory exists with specific permissions
       ansible.builtin.file:
         path: /app/
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+        
+    - name: Ensure the wata directory exists with specific permissions
+      ansible.builtin.file:
+        path: /app/wata/
         state: directory
         owner: root
         group: root
@@ -21,7 +29,7 @@
         dest: /tmp/{{ package_name }}
 
     - name: Stop the application
-      command: cd /app/deploy/ && docker compose down && echo "The application is stopped"
+      command: cd /app/wata/{{ version }}/deploy/ && docker compose down && echo "The application is stopped"
       ignore_errors: yes
 
     - name: Unzip the application package
@@ -35,13 +43,13 @@
 
     - name: Set permissions
       file:
-        path: /app/
+        path: /app/wata/
         state: directory
         mode: '0754'
         recurse: true
 
     - name: Run the installation script
-      command: /app/deploy/install_package.sh
+      command: /app/wata/{{ version }}/deploy/install_package.sh
       register: install_out
 
     - debug: var=install_out.stdout_lines
