@@ -44,9 +44,7 @@ class TelegramMessageComposer:
         try:
             # Attempt to parse common ISO formats
             dt_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            # Convert to a user-friendly format (e.g., Europe/Paris if configured)
-            # Replace 'Europe/Paris' with your configured timezone if available
-            # TODO: Get timezone from config if possible/needed
+            # TODO: Get timezone from config
             tz = pytz.timezone('Europe/Paris')
             dt_local = dt_obj.astimezone(tz)
             return dt_local.strftime('%Y-%m-%d %H:%M:%S %Z')
