@@ -35,7 +35,23 @@ class TelegramMessageComposer:
         """
         self.signal_data = signal_data
         self.sections = []
+        # Store timestamps for later calculations
+        self.signal_timestamp_raw = self.signal_data.get("alert_timestamp") or self.signal_data.get("signal_timestamp")
+        self.signal_timestamp_dt = self._parse_timestamp(self.signal_timestamp_raw)
+        self.ask_time_dt = None
+        self.exec_time_dt = None
         self._add_signal_section()  # Always add the signal section first
+
+    def _parse_timestamp(self, timestamp_str: str | None) -> datetime | None:
+        """Parse a timestamp string to datetime object, handling None."""
+        if not timestamp_str:
+            return None
+        try:
+            # Attempt to parse common ISO formats
+            return datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            logging.warning(f"Could not parse timestamp: {timestamp_str}")
+            return None
 
     def _format_timestamp(self, timestamp_str: str | None) -> str:
         """Helper to format timestamps consistently, handling None."""
@@ -52,13 +68,28 @@ class TelegramMessageComposer:
             logging.warning(f"Could not parse timestamp: {timestamp_str}")
             return timestamp_str  # Return original if parsing fails
 
+    def _calculate_time_diff(self, start_dt: datetime, end_dt: datetime) -> str:
+        """Calculate and format the time difference between two datetimes."""
+        if not start_dt or not end_dt:
+            return "N/A"
+        
+        diff_seconds = (end_dt - start_dt).total_seconds()
+        if diff_seconds < 0:
+            return f"Invalid (-{abs(diff_seconds):.2f}s)"
+        
+        if diff_seconds < 60:
+            return f"{diff_seconds:.2f}s"
+        else:
+            minutes = int(diff_seconds // 60)
+            seconds = diff_seconds % 60
+            return f"{minutes}m {seconds:.2f}s"
+
     def _add_signal_section(self):
         """Adds the initial signal information section."""
         signal = self.signal_data.get("action", "N/A")
         signal_id = self.signal_data.get("signal_id", "N/A")
         # Use alert_timestamp if available, otherwise signal_timestamp
-        signal_timestamp_raw = self.signal_data.get("alert_timestamp") or self.signal_data.get("signal_timestamp")
-        signal_timestamp = self._format_timestamp(signal_timestamp_raw)
+        signal_timestamp = self._format_timestamp(self.signal_timestamp_raw)
 
         message = f"""\
         --- SIGNAL ---
@@ -102,6 +133,14 @@ class TelegramMessageComposer:
                     # Example: ask_time_raw = selected_instrument.get("timestamps", {}).get("AskTime")
                     pass  # Adjust fallback as necessary based on actual structure
                 ask_time = self._format_timestamp(ask_time_raw)
+                
+                # Store ask_time for time difference calculations
+                self.ask_time_dt = self._parse_timestamp(ask_time_raw)
+                
+                # Calculate time difference between signal and ask
+                signal_to_ask_diff = "N/A"
+                if self.signal_timestamp_dt and self.ask_time_dt:
+                    signal_to_ask_diff = self._calculate_time_diff(self.signal_timestamp_dt, self.ask_time_dt)
 
                 cost_buy = selected_instrument.get("commissions", {}).get("CostBuy", "N/A")
                 cost_sell = selected_instrument.get("commissions", {}).get("CostSell", "N/A")
@@ -111,6 +150,7 @@ class TelegramMessageComposer:
                 Symbol: {symbol}
                 Price (Ask): {ask_price} {currency}
                 Price Timestamp: {ask_time}
+                Signal to Ask Time: {signal_to_ask_diff}
                 Est. Cost BUY/SELL: {cost_buy}/{cost_sell}
                 """
             except Exception as e:
@@ -179,6 +219,24 @@ class TelegramMessageComposer:
                 total_price = position_data.get("position_total_open_price", "N/A")
                 exec_time_raw = position_data.get("execution_time_open")
                 exec_time = self._format_timestamp(exec_time_raw)
+                
+                # Store exec_time for time difference calculations
+                self.exec_time_dt = self._parse_timestamp(exec_time_raw)
+                
+                # Calculate time differences
+                signal_to_exec_diff = "N/A"
+                ask_to_exec_diff = "N/A"
+                signal_to_ask_diff = "N/A"
+                
+                if self.signal_timestamp_dt and self.exec_time_dt:
+                    signal_to_exec_diff = self._calculate_time_diff(self.signal_timestamp_dt, self.exec_time_dt)
+                
+                if self.ask_time_dt and self.exec_time_dt:
+                    ask_to_exec_diff = self._calculate_time_diff(self.ask_time_dt, self.exec_time_dt)
+                
+                if self.signal_timestamp_dt and self.ask_time_dt:
+                    signal_to_ask_diff = self._calculate_time_diff(self.signal_timestamp_dt, self.ask_time_dt)
+                
                 position_id = position_data.get("position_id", "N/A")
                 actual_order_id = order_data.get("order_id", "N/A")  # Use ID from order_details
                 order_cost = order_data.get("order_cost", "N/A")
@@ -193,6 +251,9 @@ class TelegramMessageComposer:
                 Total price: {total_price}
                 Order Cost: {order_cost} {currency}
                 Time: {exec_time}
+                Signal to Ask Time: {signal_to_ask_diff}
+                Ask to Exec Time: {ask_to_exec_diff}
+                Total Signal to Exec Time: {signal_to_exec_diff}
                 Position ID: {position_id}
                 Order ID: {actual_order_id}
                 Signal ID: {signal_id}
