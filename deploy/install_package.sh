@@ -17,7 +17,13 @@ VERSION_DIR="$APP_BASE_DIR/$VERSION"
 
 # Stop existing application if running
 if [ -d "$VERSION_DIR/deploy" ]; then
-    cd "$VERSION_DIR/deploy/" && docker compose down && echo "The application is stopped"
+    # Only attempt to cd if the directory exists to avoid errors with set -e
+    if cd "$VERSION_DIR/deploy/"; then
+        docker compose down && echo "The application is stopped"
+        cd - > /dev/null # Go back to previous directory
+    else
+        echo "Warning: Could not cd to $VERSION_DIR/deploy/, skipping docker compose down."
+    fi
 else
     echo "Version directory $VERSION_DIR/deploy not found, skipping docker compose down."
 fi
@@ -111,7 +117,7 @@ cat << 'EOF' > /usr/local/bin/watawebtoken
 #!/bin/bash
 set -euo pipefail
 OPTIONS=""
-if [ "$1" == "--new" ]; then
+if [ "$#" -gt 0 ] && [ "$1" == "--new" ]; then
     OPTIONS="--new"
 fi
 
@@ -119,39 +125,155 @@ docker exec web_server1 python -m src.web_server.cli $OPTIONS
 EOF
 chmod +x /usr/local/bin/watawebtoken
 
-# Create Bash aliases
-echo "Setting up Bash aliases..."
-BASH_ALIASES_FILE="$HOME/.bash_aliases"
-MARKER="# WATA Aliases - Do not modify this line"
+# Create the watastart command wrapper
+cat << 'EOF' > /usr/local/bin/watastart
+#!/bin/bash
+set -euo pipefail
 
-# Check if aliases already exist
-if ! grep -q "$MARKER" "$BASH_ALIASES_FILE" 2>/dev/null; then
-    echo "Adding Wata aliases to $BASH_ALIASES_FILE..."
-    cat << 'EOF' >> "$BASH_ALIASES_FILE"
+APP_BASE="/app/wata"
+CONFIG_FILE="$APP_BASE/etc/config.json"
+ENV_FILE="$APP_BASE/.env" # Define ENV_FILE here
 
-# WATA Aliases - Do not modify this line
-# Dynamic version path resolution
 wata_get_version_dir() {
-    local app_base="/app/wata"
-    local version=$(cat "$app_base/VERSION" 2>/dev/null)
-    if [ -z "$version" ]; then
-        echo "Error: Could not determine current version" >&2
+    local app_base_func="/app/wata" # Use a different name to avoid conflict or just use APP_BASE
+    local version_file_func="$app_base_func/VERSION"
+    if [ ! -f "$version_file_func" ]; then
+        echo "Error: Version file not found at $version_file_func" >&2
         return 1
     fi
-    echo "$app_base/$version"
+    local version
+    version=$(cat "$version_file_func" 2>/dev/null)
+    if [ -z "$version" ]; then
+        echo "Error: Could not determine current version from $version_file_func" >&2
+        return 1
+    fi
+    echo "$app_base_func/$version"
+    return 0
 }
 
-alias watastart='app_base="/app/wata"; if [ -f "$app_base/etc/config.json" ]; then version_dir=$(wata_get_version_dir) && cd "$version_dir/deploy/" && docker compose --env-file="$app_base/.env" up -d && echo "The application is started, get status with watastatus"; else echo "Error: $app_base/etc/config.json not found. Please create the config file before starting." >&2; fi'
-alias watastop='version_dir=$(wata_get_version_dir) && cd "$version_dir/deploy/" && docker compose down && echo "The application is stopped"'
-alias watalogs='tail -f -n 50 "/app/wata/var/log/*/*.log"'
-alias watastatus='version_dir=$(wata_get_version_dir) && cd "$version_dir/deploy/" && docker compose ps --all'
-# End WATA Aliases
-EOF
-    echo "Aliases added. Please run 'source ~/.bash_aliases' or open a new terminal for changes to take effect."
-else
-    echo "Wata aliases already exist in $BASH_ALIASES_FILE. Skipping alias creation."
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: $CONFIG_FILE not found. Please create the config file before starting." >&2
+    exit 1
 fi
 
+VERSION_DIR=$(wata_get_version_dir)
+if [ -z "$VERSION_DIR" ]; then
+    # Error message already printed by wata_get_version_dir
+    exit 1
+fi
+
+DEPLOY_DIR="$VERSION_DIR/deploy"
+
+if [ ! -d "$DEPLOY_DIR" ]; then
+    echo "Error: Deployment directory $DEPLOY_DIR not found." >&2
+    exit 1
+fi
+
+cd "$DEPLOY_DIR"
+echo "Starting application in $DEPLOY_DIR..."
+docker compose --env-file="$ENV_FILE" up -d
+echo "The application is started. Get status with watastatus."
+EOF
+chmod +x /usr/local/bin/watastart
+
+# Create the watastop command wrapper
+cat << 'EOF' > /usr/local/bin/watastop
+#!/bin/bash
+set -euo pipefail
+
+APP_BASE="/app/wata" # Define APP_BASE for consistency
+
+wata_get_version_dir() {
+    local app_base_func="/app/wata"
+    local version_file_func="$app_base_func/VERSION"
+    if [ ! -f "$version_file_func" ]; then
+        echo "Error: Version file not found at $version_file_func" >&2
+        return 1
+    fi
+    local version
+    version=$(cat "$version_file_func" 2>/dev/null)
+    if [ -z "$version" ]; then
+        echo "Error: Could not determine current version from $version_file_func" >&2
+        return 1
+    fi
+    echo "$app_base_func/$version"
+    return 0
+}
+
+VERSION_DIR=$(wata_get_version_dir)
+if [ -z "$VERSION_DIR" ]; then
+    exit 1
+fi
+
+DEPLOY_DIR="$VERSION_DIR/deploy"
+
+if [ ! -d "$DEPLOY_DIR" ]; then
+    echo "Error: Deployment directory $DEPLOY_DIR not found." >&2
+    exit 1
+fi
+
+cd "$DEPLOY_DIR"
+echo "Stopping application in $DEPLOY_DIR..."
+docker compose down
+echo "The application is stopped."
+EOF
+chmod +x /usr/local/bin/watastop
+
+# Create the watalogs command wrapper
+cat << 'EOF' > /usr/local/bin/watalogs
+#!/bin/bash
+set -euo pipefail
+LOG_DIR="/app/wata/var/log"
+# Check if any log files exist to avoid error with tail if glob doesn't match
+if ! ls "$LOG_DIR"/*/*.log &> /dev/null; then
+    echo "No log files found in $LOG_DIR/*/*.log" >&2
+    exit 1
+fi
+tail -f -n 50 "$LOG_DIR"/*/*.log
+EOF
+chmod +x /usr/local/bin/watalogs
+
+# Create the watastatus command wrapper
+cat << 'EOF' > /usr/local/bin/watastatus
+#!/bin/bash
+set -euo pipefail
+
+APP_BASE="/app/wata" # Define APP_BASE for consistency
+
+wata_get_version_dir() {
+    local app_base_func="/app/wata"
+    local version_file_func="$app_base_func/VERSION"
+    if [ ! -f "$version_file_func" ]; then
+        echo "Error: Version file not found at $version_file_func" >&2
+        return 1
+    fi
+    local version
+    version=$(cat "$version_file_func" 2>/dev/null)
+    if [ -z "$version" ]; then
+        echo "Error: Could not determine current version from $version_file_func" >&2
+        return 1
+    fi
+    echo "$app_base_func/$version"
+    return 0
+}
+
+VERSION_DIR=$(wata_get_version_dir)
+if [ -z "$VERSION_DIR" ]; then
+    exit 1
+fi
+
+DEPLOY_DIR="$VERSION_DIR/deploy"
+
+if [ ! -d "$DEPLOY_DIR" ]; then
+    echo "Error: Deployment directory $DEPLOY_DIR not found." >&2
+    exit 1
+fi
+
+cd "$DEPLOY_DIR"
+echo "Getting application status from $DEPLOY_DIR..."
+docker compose ps --all
+EOF
+chmod +x /usr/local/bin/watastatus
 
 # Link .env file
 echo "Checking for .env file..."
@@ -175,10 +297,8 @@ echo "---------------------------------------------------------------------"
 echo "WATA installation/update complete!"
 echo "---------------------------------------------------------------------"
 echo "Next Steps:"
-echo "1. If aliases were added/updated, run: source ~/.bash_aliases"
-echo "   (Or open a new terminal session)"
-echo "2. Ensure '$APP_BASE_DIR/.env' exists and is configured."
-echo "3. Ensure '$APP_BASE_DIR/etc/config.json' exists and is configured."
+echo "1. Ensure '$APP_BASE_DIR/.env' exists and is configured."
+echo "2. Ensure '$APP_BASE_DIR/etc/config.json' exists and is configured."
 echo ""
 echo "You can manage the application using the following commands:"
 echo "  - watastart:   Start the application"
