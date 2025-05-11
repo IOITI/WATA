@@ -186,11 +186,11 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
 1. When authenticating, the application send you a URL via Telegram (or logs of container)
 2. Open this URL in your browser and log in with your Saxo credentials, and do all the steps to authorize the application (2FA, risk warning, etc.)
 3. After authorization, you'll be redirected to a page with a URL containing a `code` parameter
-4. Copy the code value and run `watasaxoauth <CODE>` on your server
+4. Copy the code and run `watasaxoauth` on your server (you will be prompted to enter the code securely)
 5. The application completes authentication using this code
 
 **Command Reference**:
-- `watasaxoauth <CODE>`: Submit the authorization code
+- `watasaxoauth`: Run this command and you'll be prompted to enter the authorization code securely (the code won't be visible when typing)
 - The authorization code is valid only for a short time (typically a few minutes)
 
 **Troubleshooting**:
@@ -277,7 +277,7 @@ For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.githu
    - `watastop`: Stop the application
    - `watalogs`: View application logs
    - `watastatus`: Check application status
-   - `watasaxoauth <CODE>`: Submits the authorization code to the application
+   - `watasaxoauth`: Launch the secure authorization code submission process
    - `watawebtoken`: View your webhook authentication token
    - `watawebtoken --new`: Generate a new webhook token
 
