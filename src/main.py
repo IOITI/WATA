@@ -288,7 +288,9 @@ def handle_close_action(
             f"{f' Encountered {error_count} error(s).' if error_count > 0 else ''}"
             f" Check other messages for details."
         )
-        send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
+
+        if closed_count > 0:
+            send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
