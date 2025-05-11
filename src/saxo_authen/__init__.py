@@ -138,8 +138,11 @@ class SaxoAuth:
         auth_instructions += "\n2. Log in with your Saxo credentials and authorize the application"
         auth_instructions += "\n3. After authorization, you will be redirected to a page with a URL containing a 'code' parameter"
         auth_instructions += "\n4. Copy the code parameter and run the following command on the server:"
-        auth_instructions += f"\n   watasaxoauth <CODE>\n"
-        auth_instructions += "\nWaiting for authorization code..."
+        auth_instructions += f"\n   watasaxoauth\n"
+        auth_instructions += "\n5. Paste the code when prompted (the code won't be visible when typing)"
+        auth_instructions += "\n6. The application will then continue with the authentication process"
+        auth_instructions += "\n\nNote: The authorization code will be saved to a temporary file for further processing, then it will be deleted."
+        auth_instructions += "\n\n⏳ Waiting for authorization code..."
         
         print(auth_instructions)
         
@@ -147,7 +150,7 @@ class SaxoAuth:
         if hasattr(self, 'rabbit_connection'):
             try:
                 send_message_to_mq_for_telegram(self.rabbit_connection, 
-                                              f"--- SAXO AUTHORIZATION REQUIRED ---\n{auth_instructions}")
+                                              f"--- 🔐 SAXO AUTHORIZATION REQUIRED ---\n{auth_instructions}")
                 logger.info("Authorization instructions sent to Telegram")
             except Exception as e:
                 logger.error(f"Failed to send authorization instructions to Telegram: {e}")
