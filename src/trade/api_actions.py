@@ -311,81 +311,191 @@ class InstrumentService:
         # 4. Get Detailed Price Info for Sorted Instruments
         identifiers = [item["Identifier"] for item in sorted_instruments]
         if not identifiers:
-             # Should be caught earlier, but defensive check
-             raise NoTurbosAvailableException("No identifiers found after sorting.", search_context=req_instruments.params)
+            # Should be caught earlier, but defensive check
+            raise NoTurbosAvailableException("No identifiers found after sorting.",
+                                             search_context=req_instruments.params)
 
-        identifiers_string = ",".join(map(str, identifiers[:self.api_limits["top_instruments"]])) # Limit query size
+        identifiers_string = ",".join(
+            map(str, identifiers[:self.api_limits["top_instruments"]]))  # Limit query size
 
         response_infoprices = None
-        bid_data_missing = True
+        bid_data_missing = True  # Initial state for the loop, indicates we need to check/retry for bid data
         bid_retries = 0
         max_bid_retries = self.retry_config["max_retries"]
         retry_sleep = self.retry_config["retry_sleep_seconds"]
 
         while bid_data_missing and bid_retries < max_bid_retries:
+            current_attempt = bid_retries + 1
+            logging.debug(
+                f"Bid check loop: Attempt {current_attempt}/{max_bid_retries} for identifiers: {identifiers_string}")
             try:
-                # Attempt to get instrument details (uses tenacity for API errors)
+                # Attempt to get instrument details (this method has its own internal tenacity retries for API errors)
                 response_infoprices = self._get_instrument_details(identifiers_string, exchange_id)
 
                 if not response_infoprices or not response_infoprices.get("Data"):
-                    logging.warning(f"No InfoPrice data received for identifiers: {identifiers_string}")
-                    # Break loop if no data, handled further down
-                    break
+                    logging.warning(
+                        f"No InfoPrice data received from _get_instrument_details. "
+                        f"Bid check attempt {current_attempt}/{max_bid_retries}."
+                    )
+                    # This situation means we couldn't get data to check bids. Consume a bid_retry.
+                    bid_retries += 1
+                    if bid_retries < max_bid_retries:
+                        time.sleep(retry_sleep)
+                    # bid_data_missing remains True. Loop will re-evaluate.
+                    continue  # Go to next iteration of the while loop
 
-                # Check if 'Bid' data is present in ALL items with a Quote
-                bid_missing_in_items = [
-                    item for item in response_infoprices["Data"]
-                    if "Quote" in item and "Bid" not in item["Quote"]
+                # Filter items that have a "Quote" field, as only these are candidates for having a "Bid"
+                items_with_quote_field = [
+                    item for item in response_infoprices["Data"] if "Quote" in item
                 ]
 
-                if not bid_missing_in_items:
-                    bid_data_missing = False  # All items have Bid data (or no Quote)
-                    logging.debug("Bid data found in all relevant items.")
+                if not items_with_quote_field:
+                    # If no items have a "Quote" field, then no "Bid" can be missing from within a "Quote".
+                    # Thus, the specific condition for retrying (missing Bids) is not met.
+                    logging.debug(
+                        "No instruments found with a 'Quote' field in InfoPrices response. "
+                        "Stopping Bid-specific retries as no Bids can be considered missing."
+                    )
+                    bid_data_missing = False  # Condition for bid-specific retry not met.
                     break  # Exit the while loop
 
-                # If Bid data is missing in some items
-                logging.warning(
-                    f"Bid data missing in {len(bid_missing_in_items)} items. Retrying InfoPrices request ({bid_retries + 1}/{max_bid_retries})...")
-                bid_retries += 1
-                if bid_retries < max_bid_retries:
-                    time.sleep(retry_sleep)  # Wait before retrying the call
-                # The loop will continue and call _get_instrument_details again
+                num_total_items_with_quote = len(items_with_quote_field)
 
-            except RetryError as e:
-                # This catches errors from the inner tenacity retry in _get_instrument_details
-                logging.error(f"Failed to get instrument details after multiple API retries: {e}")
-                raise ApiRequestException("Failed to get instrument details after API retries.") from e
-            except Exception as e:
-                # Catch other unexpected errors during the check
-                logging.error(f"Unexpected error during Bid check loop: {e}", exc_info=True)
-                raise  # Re-raise unexpected errors
-
-        # After the loop, check results
-        if bid_data_missing and bid_retries >= max_bid_retries:
-            logging.error("After maximum retries, Bid data is still missing in some items.")
-            # Decide how to handle: Original code filtered out items without Bid.
-            if response_infoprices and 'Data' in response_infoprices:
-                response_infoprices["Data"] = [
-                    item for item in response_infoprices["Data"] if item.get("Quote", {}).get("Bid") is not None
+                # Count how many of these items (that have a "Quote") are missing the "Bid" attribute
+                items_missing_bid_attr = [
+                    item for item in items_with_quote_field if "Bid" not in item["Quote"]
                 ]
-                if not response_infoprices["Data"]:
-                    logging.error("No valid items with Bid data available after retries and filtering.")
-                    raise NoMarketAvailableException("No valid items with Bid data available after retries")
-            else:
-                # If response_infoprices is None or has no data after retries
-                logging.error("No InfoPrice data obtained after all retries.")
-                raise NoMarketAvailableException("Failed to obtain InfoPrice data with Bid after retries")
+                num_items_missing_bid_attr = len(items_missing_bid_attr)
+
+                # Calculate percentage of items missing "Bid" out of those that have "Quote"
+                # Avoid division by zero if num_total_items_with_quote is somehow 0 (though caught by 'if not items_with_quote_field')
+                percentage_missing_bid = 0.0
+                if num_total_items_with_quote > 0:
+                    percentage_missing_bid = (num_items_missing_bid_attr / num_total_items_with_quote) * 100
+
+                if percentage_missing_bid > 50:
+                    logging.warning(
+                        f"{percentage_missing_bid:.2f}% ({num_items_missing_bid_attr}/{num_total_items_with_quote}) of "
+                        f"items with a 'Quote' field are missing the 'Bid' attribute. "
+                        f"Retrying InfoPrices. Bid check attempt {current_attempt}/{max_bid_retries}."
+                    )
+                    bid_retries += 1  # Consume a retry for the "missing bid" condition
+                    if bid_retries < max_bid_retries:
+                        time.sleep(retry_sleep)
+                    # bid_data_missing remains True. Loop will re-evaluate.
+                else:
+                    # Percentage missing is <= 50% (or 0% if all bids present)
+                    if num_items_missing_bid_attr > 0:
+                        logging.info(
+                            f"{percentage_missing_bid:.2f}% ({num_items_missing_bid_attr}/{num_total_items_with_quote}) of "
+                            f"items with 'Quote' field are missing 'Bid' attribute. This is within tolerance. Proceeding."
+                        )
+                    else:
+                        logging.debug(
+                            "All items with a 'Quote' field have the 'Bid' attribute. Bid data check passed."
+                        )
+                    bid_data_missing = False  # Condition met, stop retrying for *this specific reason*.
+                    # Loop will terminate as bid_data_missing is False.
+
+            except RetryError as e:  # Raised by tenacity in _get_instrument_details if it exhausts its retries
+                logging.error(
+                    f"Persistent failure in _get_instrument_details after its internal retries during bid check "
+                    f"(Attempt {current_attempt}/{max_bid_retries}): {e}"
+                )
+                response_infoprices = None  # Ensure no stale data is used
+                # This is a critical failure to get data; re-raise appropriately.
+                # Exiting the bid_data_missing loop.
+                raise ApiRequestException(
+                    "Failed to get instrument details for bid checking after underlying API call retries.", cause=e
+                ) from e
+            except Exception as e:  # Catch other unexpected errors during the bid check logic itself
+                logging.error(
+                    f"Unexpected error during Bid check logic (Attempt {current_attempt}/{max_bid_retries}): {e}",
+                    exc_info=True
+                )
+                bid_retries += 1  # Consume a retry for this unexpected error
+                if bid_retries < max_bid_retries:
+                    logging.info(f"Retrying bid check loop after unexpected error. Sleeping for {retry_sleep}s.")
+                    time.sleep(retry_sleep)
+                    # bid_data_missing remains True. Loop will re-evaluate.
+                    continue
+                else:
+                    logging.error("Max retries reached for bid check loop due to unexpected errors.")
+                    # bid_data_missing remains True, loop will terminate due to bid_retries condition.
+                    # Re-raise the last error to indicate failure of this stage.
+                    raise  # Or wrap in a custom exception like ApiRequestException
+
+        # Case 1: Loop terminated because bid_retries >= max_bid_retries AND bid_data_missing is still True.
+        # This means the condition (>50% missing bids, or no data from API) persisted through all retries.
+        if bid_data_missing and bid_retries >= max_bid_retries:
+            logging.error(
+                f"After {max_bid_retries} retries, the condition for fetching Bid data "
+                f"(e.g., >50% missing 'Bid' or no data from API) was not resolved."
+            )
+            # If response_infoprices is None here, it means the last attempt also failed to get data.
+            # If it has data, it's data where the >50% condition was met.
+
+        # Case 2: Loop terminated because bid_data_missing became False.
+        # This means either all Bids were present, or <=50% were missing, or no items had "Quote".
+
+        # Case 3: An exception (like RetryError from _get_instrument_details) caused an early exit by re-raising.
+        # In this case, the code below won't be reached if the exception wasn't caught and suppressed by find_turbos.
+        # Our RetryError catch re-raises, so this part is skipped for that.
+
+        # --- Consistently handle response_infoprices state and filter items ---
 
         if not response_infoprices or not response_infoprices.get("Data"):
-            logging.warning(f"No InfoPrice data available after retries for identifiers: {identifiers_string}")
-            raise NoTurbosAvailableException("No detailed price info received after retries.",
-                                             search_context={'Uics': identifiers_string})
+            # This covers:
+            # 1. _get_instrument_details consistently failed to return data through all bid_retries.
+            # 2. An exception within the loop (not re-raised out of find_turbos) led to response_infoprices being None.
+            logging.error("No InfoPrice data is available after all attempts to fetch and check Bid attributes.")
+            raise NoMarketAvailableException(
+                "Failed to obtain valid InfoPrice data with Bid attributes after all retries."
+            )
+
+        # Filter out any remaining items that do not have a 'Bid' attribute in their 'Quote'.
+        # This is crucial regardless of why the loop exited, to ensure downstream code only gets items with 'Bid'.
+        logging.debug("Final filtering of InfoPrices items to ensure 'Bid' attribute is present in 'Quote'.")
+
+        initial_item_count_before_final_filter = len(response_infoprices["Data"])
+        valid_items_with_bid = []
+        for item in response_infoprices["Data"]:
+            # Check for 'Quote' and then 'Bid' within 'Quote'
+            if item.get("Quote") and item["Quote"].get("Bid") is not None:
+                valid_items_with_bid.append(item)
+            else:
+                logging.debug(
+                    f"Item Uic:{item.get('Uic', 'N/A')} (Identifier: {item.get('Identifier', 'N/A')}) "
+                    f"is being filtered out due to missing 'Bid' in 'Quote' after retry loop."
+                )
+
+        response_infoprices["Data"] = valid_items_with_bid
+        num_filtered_out_in_final_step = initial_item_count_before_final_filter - len(valid_items_with_bid)
+
+        if num_filtered_out_in_final_step > 0:
+            logging.info(
+                f"Filtered out an additional {num_filtered_out_in_final_step} items from InfoPrices "
+                f"due to missing 'Bid' attribute in the final filtering step."
+            )
+
+        # After final filtering, if no items remain, it's an issue.
+        if not response_infoprices.get("Data"):
+            logging.error(
+                "No instruments with a valid 'Bid' attribute found after all retries and final filtering."
+            )
+            raise NoMarketAvailableException(
+                "No instruments with Bid data available after retries and final filtering."
+            )
+
+        logging.info(
+            f"Proceeding with {len(response_infoprices['Data'])} instruments that have 'Bid' data "
+            f"after retry and filtering logic."
+        )
 
         # 5. Filter by Market State and Availability
         available_items = [
             item for item in response_infoprices["Data"]
-            if item.get("Quote") and
-               item["Quote"].get("PriceTypeAsk") != "NoMarket" and
+            if item["Quote"].get("PriceTypeAsk") != "NoMarket" and
                item["Quote"].get("PriceTypeBid") != "NoMarket" and
                item["Quote"].get("MarketState") != "Closed"
         ]
