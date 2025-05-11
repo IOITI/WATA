@@ -3,7 +3,7 @@ services:
   setup:
     image: alpine:latest
     volumes:
-      - ../../wata/etc:/app/etc
+      - ../../etc:/app/etc
       - ./update_rabbit_password.sh:/update_rabbit_password.sh
     environment:
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-pykvys-9nixqo-cuqvYt}

@@ -18,7 +18,7 @@ COPY ./requirements.txt /app/requirements.txt
 COPY ./VERSION /app/VERSION
 
 ENV PYTHONPATH "${PYTHONPATH}:/app"
-ENV WATA_CONFIG_PATH="/app/wata/etc/config.json"
+ENV WATA_CONFIG_PATH="/app/etc/config.json"
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
