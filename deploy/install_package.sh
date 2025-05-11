@@ -44,13 +44,6 @@ mkdir -p "$APP_BASE_DIR/var/log/wata-trader"
 mkdir -p "$APP_BASE_DIR/var/log/wata-telegram"
 mkdir -p "$APP_BASE_DIR/var/log/wata-scheduler"
 
-# Create log files
-echo "Touching log files..."
-touch "$APP_BASE_DIR/var/log/wata-api.log"
-touch "$APP_BASE_DIR/var/log/wata-trader.log"
-touch "$APP_BASE_DIR/var/log/wata-telegram.log"
-touch "$APP_BASE_DIR/var/log/wata-scheduler.log"
-
 # Ensure docker service is enabled
 echo "Ensuring Docker service is enabled..."
 sudo systemctl enable docker
