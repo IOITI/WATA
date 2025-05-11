@@ -2,7 +2,7 @@
 
 # Set default password if not provided
 RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-pykvys-9nixqo-cuqvYt}
-WATA_CONFIG_FILE="/app/wata/etc/config.json"
+WATA_CONFIG_FILE="/app/etc/config.json"
 
 # Update the RabbitMQ password in config.json
 if [[ -f "$WATA_CONFIG_FILE" ]]; then

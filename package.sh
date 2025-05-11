@@ -31,10 +31,11 @@ cp ./Dockerfile _tmp_package/wata/$VERSION/
 cp ./VERSION _tmp_package/wata/
 cp ./VERSION _tmp_package/wata/$VERSION/
 cp ./docker_build.sh _tmp_package/wata/$VERSION/
-cp ./deploy/docker-compose.yml _tmp_package/wata/$VERSION/
-cp ./deploy/docker-compose.override.yml _tmp_package/wata/$VERSION/
-cp ./deploy/install_package.sh _tmp_package/wata/$VERSION/
-cp ./deploy/update_rabbit_password.sh _tmp_package/wata/$VERSION/
+mkdir -p _tmp_package/wata/$VERSION/deploy
+cp -r ./deploy/docker-compose.yml _tmp_package/wata/$VERSION/deploy/
+cp -r ./deploy/docker-compose.override.yml _tmp_package/wata/$VERSION/deploy/
+cp -r ./deploy/install_package.sh _tmp_package/wata/$VERSION/deploy/
+cp -r ./deploy/update_rabbit_password.sh _tmp_package/wata/$VERSION/deploy/
 
 # Go to the temporary directory and create the zip
 cd _tmp_package
