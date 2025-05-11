@@ -601,8 +601,7 @@ if __name__ == "__main__":
             )
             rabbit_connection = pika.BlockingConnection(parameters)
             channel = rabbit_connection.channel()
-            channel.queue_declare(queue="trading-action", durable=True)
-            channel.basic_qos(prefetch_count=1)
+            channel.queue_declare(queue="trading-action")
             logging.info("RabbitMQ connection established and queue declared.")
         except Exception as e:
             logging.critical(f"Failed to connect to RabbitMQ: {e}", exc_info=True)
