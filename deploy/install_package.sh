@@ -96,13 +96,8 @@ echo "Creating command wrappers..."
 cat << 'EOF' > /usr/local/bin/watasaxoauth
 #!/bin/bash
 set -euo pipefail
-if [ -z "$1" ]; then
-    echo "Error: Authorization code is required" >&2
-    echo "Usage: watasaxoauth <AUTH_CODE>" >&2
-    exit 1
-fi
 
-docker exec trader1 python -m src.saxo_authen.cli "$1"
+docker exec -it trader1 python -m src.saxo_authen.cli
 EOF
 chmod +x /usr/local/bin/watasaxoauth
 

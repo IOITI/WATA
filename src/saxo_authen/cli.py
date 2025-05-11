@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
-import argparse
+import getpass
 import logging
 from pathlib import Path
 from src.configuration import ConfigurationManager
@@ -25,10 +25,6 @@ def save_auth_code(auth_code, config_manager):
     print(f"Authorization code saved successfully! The application will now continue with the authentication process.")
 
 def main():
-    parser = argparse.ArgumentParser(description='Save Saxo Bank authentication code')
-    parser.add_argument('auth_code', help='The authorization code from Saxo Bank')
-    args = parser.parse_args()
-    
     try:
         # Get config path from environment variable
         config_path = os.getenv("WATA_CONFIG_PATH")
@@ -40,13 +36,24 @@ def main():
         # Create a ConfigurationManager instance
         config_manager = ConfigurationManager(config_path)
         
-        # Save the authorization code
-        save_auth_code(args.auth_code, config_manager)
+        print("Please enter the Saxo Bank authorization code (will not be shown in terminal):")
+        auth_code = getpass.getpass("")
         
+        if not auth_code:
+            logger.error("No authorization code provided")
+            print("Error: Authorization code is required")
+            sys.exit(1)
+        
+        # Save the authorization code
+        save_auth_code(auth_code, config_manager)
+        
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         print(f"Error: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    main() 
+    main()
