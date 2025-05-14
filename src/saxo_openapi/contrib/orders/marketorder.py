@@ -17,6 +17,7 @@ class MarketOrder(BaseOrder, OnFillHnd):
                  Uic,
                  Amount,
                  AssetType,
+                 BuySell=None,
                  ManualOrder=False,
                  AmountType=OD.AmountType.Quantity,
                  TakeProfitOnFill=None,
@@ -106,7 +107,7 @@ class MarketOrder(BaseOrder, OnFillHnd):
         self._data.update({"Uic": Uic})
         self._data.update({"AssetType": AssetType})
         self._data.update({"Amount": abs(Amount)})
-        self._data.update({"BuySell": direction_from_amount(Amount)})
+        self._data.update({"BuySell": BuySell})
         self._data.update({"ManualOrder": ManualOrder})
         self._data.update(da)
 
