@@ -135,8 +135,9 @@ def handle_validation_error(e, body, ch, method):
 def handle_rule_violation(trv, composer, ch, method):
     """Handles expected trading rule violations."""
     logging.warning(f"Trading Rule Violation: {trv}")
-    composer.add_rule_violation(trv) # Uses updated composer method
-    send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
+    # TODO: Add a config param for notification delivery
+    #composer.add_rule_violation(trv) # Uses updated composer method
+    #send_message_to_mq_for_telegram(rabbit_connection, composer.get_message())
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def handle_trade_setup_issue(trade_issue, composer, ch, method):
