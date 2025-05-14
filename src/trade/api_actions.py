@@ -644,6 +644,7 @@ class OrderService:
             Uic=uic,
             AssetType=asset_type,
             Amount=amount,
+            BuySell=buy_sell
             # TODO : Saxo API return error if StopLossOnFill and TakeProfitOnFill are set
             # StopLossOnFill=onfill.StopLossDetails(stop_loss_price),
             # TakeProfitOnFill=onfill.TakeProfitDetails(profit_price),
@@ -1340,9 +1341,6 @@ Today's Realized Profit % (after close) : {today_percent}%
         """Compares DB open positions with API closed positions and returns updates."""
         logging.info("--- Syncing DB Positions with API Closed Positions ---")
         db_open_positions = self.db_position_manager.get_open_positions_ids() # Get only IDs
-        if not db_open_positions:
-            logging.info("No open positions in DB to sync.")
-            return {"updates_for_db": []}
 
         try:
             api_open_positions_response = self.position_service.get_open_positions()
@@ -1350,6 +1348,11 @@ Today's Realized Profit % (after close) : {today_percent}%
         except Exception as e:
             logging.error(f"Failed to get API open positions during sync: {e}")
             return {"updates_for_db": []} # Cannot proceed
+
+        # This statement can be made before the API request, but WATA need to maintain the auth token up to date (with the request)
+        if not db_open_positions:
+            logging.info("No open positions in DB to sync.")
+            return {"updates_for_db": []}
 
         potential_closed_in_db = []
         for db_pos_id in db_open_positions:
