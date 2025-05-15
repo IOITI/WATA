@@ -64,8 +64,6 @@ def get_version():
         return "unknown"
 
 # --- Error Handling Helpers ---
-# (Use the previously provided versions of handle_exception, handle_validation_error, etc.)
-# (Make sure handle_exception uses the updated composer logic from message_helper)
 def handle_exception(
     e, composer, ch, method, body, is_critical=False, exit_code=None, log_level=logging.ERROR
 ):
@@ -117,11 +115,6 @@ def handle_exception(
     # Exit for critical errors
     if is_critical and exit_code is not None:
         logging.critical(f"Terminating service due to critical error ({error_type}). Exit code: {exit_code}")
-        # Consider NACKing critical errors if a dead-letter queue is configured
-        # try:
-        #     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-        # except Exception as nack_err:
-        #      logging.error(f"Failed to NACK message {method.delivery_tag} after critical error: {nack_err}")
         sys.exit(exit_code)
 
 def handle_validation_error(e, body, ch, method):
@@ -394,9 +387,6 @@ def handle_daily_stats(data, composer: TelegramMessageComposer, ch, method, db_p
             message, days, last_days_percentages, last_best_days_percentages,
             last_days_percentages_on_max, last_best_days_percentages_on_max
         )
-        # Prepend the initial signal info from composer if desired
-        # full_message = composer.get_message() + "\n\n" + message
-        # Or just send the stats message directly
         logging.debug("Sending daily stats message...")
         send_message_to_mq_for_telegram(rabbit_connection, message)
 
@@ -419,7 +409,6 @@ def handle_daily_stats(data, composer: TelegramMessageComposer, ch, method, db_p
 
 
 # --- Action Dispatcher ---
-# (Keep ACTION_HANDLERS dictionary as is)
 ACTION_HANDLERS = {
     "long": handle_trading_action,
     "short": handle_trading_action,
@@ -430,7 +419,7 @@ ACTION_HANDLERS = {
     "daily_stats": handle_daily_stats,
 }
 
-# --- Main Callback (Using Updated Signature) ---
+# --- Main Callback ---
 
 def callback(ch, method, properties, body, # RabbitMQ args first
              # --- Injected dependencies follow: ---
@@ -508,7 +497,7 @@ def callback(ch, method, properties, body, # RabbitMQ args first
         else:
             handle_unknown_action(action, composer, ch, method) # Uses global rabbit_connection
 
-    # --- Outer Exception Handling (Using updated handle_exception) ---
+    # --- Outer Exception Handling ---
     except (ConfigurationError, TokenAuthenticationException) as critical_config_err:
          handle_exception(critical_config_err, composer, ch, method, body, is_critical=True, exit_code=2, log_level=logging.CRITICAL)
     except (DatabaseOperationException) as critical_db_err:
@@ -614,7 +603,6 @@ if __name__ == "__main__":
         logging.info("Initializing Saxo components...")
         account_key = None
         client_key = None
-        # --- Add the necessary import ---
         from src.saxo_openapi.contrib.session import account_info
 
         try:

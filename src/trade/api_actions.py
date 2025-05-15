@@ -5,7 +5,6 @@ import time
 from src.saxo_openapi.saxo_openapi import API as SaxoOpenApiLib
 from src.saxo_openapi.exceptions import OpenAPIError as SaxoOpenApiLibError
 
-# Keep other necessary imports from the previous refactoring
 import logging
 import re
 import json
@@ -16,7 +15,6 @@ import pytz
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, RetryError
 
 # --- Saxo OpenApi Components ---
-# Assume these endpoint definitions exist and work as before
 import src.saxo_openapi.endpoints.referencedata as rd
 import src.saxo_openapi.endpoints.trading as tr
 import src.saxo_openapi.endpoints.portfolio as pf
@@ -1254,8 +1252,6 @@ Today's Realized Profit % (after close) : {today_percent}%
 
                        # Let's use a direct comparison: Is today's realized + this position's gain >= target?
                        # This is still not quite right without knowing position size relative to portfolio.
-                       # Fallback to simple check: If this position hits the daily target on its own? Unlikely intent.
-                       # REVERTING to the simplest original check (potentially flawed):
                        if potential_today_percent >= self.percent_profit_wanted_per_days:
                             close_reason = f"Daily profit target ({self.percent_profit_wanted_per_days}%) potentially met (Combined factor: {potential_today_percent}%)"
                             logging.info(f"Daily profit check triggered closure for {position_id}. Realized today: {today_realized_percent}%, Position perf: {performance_percent}%.")
@@ -1425,7 +1421,7 @@ Close Time: {close_time}"""
                  # Position is open in DB, not in API open, not in recent API closed.
                  # This is an anomaly. Maybe closed long ago, or error state.
                  logging.warning(f"ANOMALY: Position {position_id_to_check} open in DB, not found in API open or recent closed positions.")
-                 # Consider marking it as 'Unknown' or 'SyncError' in DB? For now, just log.
+                 # TODO: Consider marking it as 'Unknown' or 'SyncError' in DB? For now, just log.
                  # updates_for_db.append((position_id_to_check, {"position_status": "SyncError", "position_close_reason": "SyncAnomaly"}))
 
 
