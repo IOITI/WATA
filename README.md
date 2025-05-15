@@ -478,26 +478,7 @@ Copyright (c) 2025 IOITI
 
 ## Documentation Website
 
-This repository contains a Docusaurus-based documentation website for WATA. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata/](https://ioiti.github.io/wata/).
-
-### Local Development
-
-To run the documentation website locally:
-
-1. Clone this repository
-2. Navigate to the website directory:
-   ```bash
-   cd wata-website
-   ```
-3. Install dependencies:
-   ```bash
-   npm install
-   ```
-4. Start the development server:
-   ```bash
-   npm start
-   ```
-5. Open your browser to http://localhost:3000/wata/
+WATA have a Docusaurus-based documentation website. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata/](https://ioiti.github.io/wata/).
 
 ### Documentation Structure
 
@@ -509,11 +490,7 @@ The documentation is organized into the following sections:
 - **Saxo Authentication**: Guide for authenticating with Saxo Bank's API
 - **FAQ**: Frequently asked questions about WATA
 
-### Deployment
+### Contributing to Documentation
 
-The documentation website is automatically deployed to GitHub Pages whenever changes are pushed to the main branch. You can also manually deploy by running:
+We welcome contributions to the documentation! If you find any errors or have suggestions for improvements, please submit a pull request or open an issue on [this GitHub repository.](https://github.com/IOITI/wata-docs)
 
-```bash
-cd wata-website
-npm run gh-pages
-```
