@@ -478,7 +478,7 @@ Copyright (c) 2025 IOITI
 
 ## Documentation Website
 
-WATA have a Docusaurus-based documentation website. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata/](https://ioiti.github.io/wata/).
+WATA have a Docusaurus-based documentation website. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata-docs/](https://ioiti.github.io/wata-docs/).
 
 ### Documentation Structure
 
