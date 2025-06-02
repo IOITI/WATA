@@ -49,7 +49,7 @@ func NewTradingDB(config *configuration.Config, useInMemory bool) (*TradingDB, e
 			}
 		}
 	}
-
+	
 	// Connect to DuckDB
 	// The connection string can include parameters like ?access_mode=READ_WRITE
 	connStr := dbPath
@@ -93,7 +93,7 @@ func NewTradingDB(config *configuration.Config, useInMemory bool) (*TradingDB, e
 			return nil, fmt.Errorf("failed to apply initial config '%s': %w", confSQL, err)
 		}
 	}
-
+	
 	return &TradingDB{db: db, dbPath: dbPath, isTestDB: useInMemory}, nil
 }
 

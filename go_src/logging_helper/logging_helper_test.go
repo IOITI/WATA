@@ -156,11 +156,11 @@ func TestSetupLogging_InvalidLogLevel(t *testing.T) {
 	scanner := bufio.NewScanner(file)
 	foundWarning := false
 	// This is the message that is logged AFTER SetOutput has been called.
-	expectedWarningMsg := "Invalid log level 'NOT_A_LEVEL' (from config) was overridden to 'info'."
+	expectedWarningMsg := "Invalid log level 'NOT_A_LEVEL' (from config) was overridden to 'info'." 
 	// The full message includes an "Error: <details>" part, so Contains should work.
 	// Example: "level=warning msg="Invalid log level 'NOT_A_LEVEL' (from config) was overridden to 'info'. Error: logrus: level not_a_level not found"
 	// We are checking for the core part of the message.
-
+	
 	for scanner.Scan() {
 		line := scanner.Text()
 		// t.Logf("Log line: %s", line) // For debugging test
@@ -195,7 +195,7 @@ func TestSetupLogging_CannotCreateLogDir(t *testing.T) {
 	// A safer way is to make a file with the same name as intended dir.
 	tempDir := t.TempDir()
 	appName := "DirCreateFailApp"
-
+	
 	// Create a file where a directory is supposed to be created
 	conflictingFilePath := filepath.Join(tempDir, appName)
 	file, err := os.Create(conflictingFilePath)

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"pymath/go_src/configuration"
+	"pymath/go_src/configuration" 
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -85,7 +85,7 @@ func SetupLogging(config *configuration.Config, appName string) error {
 	// These warnings should now go to the configured logger (file/console).
 	if logConfig.RotationSize <= 0 {
 		actualDefaultSize := 2 // The default we apply
-		lumberjackLogger.MaxSize = actualDefaultSize
+		lumberjackLogger.MaxSize = actualDefaultSize 
 		logrus.Warnf("logConfig.RotationSize is invalid (%d), defaulting to %dMB", logConfig.RotationSize, actualDefaultSize)
 	}
 	if logConfig.MaxBackups <= 0 {
@@ -93,7 +93,7 @@ func SetupLogging(config *configuration.Config, appName string) error {
 		lumberjackLogger.MaxBackups = actualDefaultBackups
 		logrus.Warnf("logConfig.MaxBackups is invalid (%d), defaulting to %d", logConfig.MaxBackups, actualDefaultBackups)
 	}
-
+	
 	// 7. Re-log the level parsing error if it happened, to ensure it's in the configured file log.
 	if errLogrus != nil {
 		logrus.Warnf("Invalid log level '%s' (from config) was overridden to 'info'. Error: %v", logConfig.Level, errLogrus)

@@ -100,7 +100,7 @@ func TestNewTradingDB_File(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to remove corruption marker file for test setup: %v", err)
 	}
-
+	
 	// Re-initialize tdb for RemoveCorruptionMark test
 	tdb, err = NewTradingDB(config, false)
 	if err != nil {
@@ -122,7 +122,7 @@ func TestNewTradingDB_File(t *testing.T) {
 	if tdb.IsDatabaseCorrupted() {
 		t.Error("Database should not be marked as corrupted after removing the mark")
 	}
-
+	
 	// Verify marker file is gone
 	if _, statErr := os.Stat(filepath.Join(tempDir, corruptionMarkerFile)); !os.IsNotExist(statErr) {
 		t.Error("Corruption marker file still exists after RemoveCorruptionMark")

@@ -54,7 +54,7 @@ func TestOrderManager_InsertTurboOrderData_Valid(t *testing.T) {
 	testID := uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	// Example with a single quote that needs escaping for SQL, but stored as is.
-	relatedIDsInput := []string{uuid.NewString(), "item_with_'single_quote"}
+	relatedIDsInput := []string{uuid.NewString(), "item_with_'single_quote"} 
 
 	order := &TurboOrderData{
 		ID:             testID,
@@ -70,7 +70,7 @@ func TestOrderManager_InsertTurboOrderData_Valid(t *testing.T) {
 	}
 
 	var retrievedOrder TurboOrderData
-	var retrievedRelatedOrderIDsInterface interface{}
+	var retrievedRelatedOrderIDsInterface interface{} 
 
 	query := `SELECT id, action_type, created_at, related_order_id, user_id FROM turbo_data_order WHERE id = ?;`
 	row := om.tdb.DB().QueryRow(query, testID)
@@ -81,7 +81,7 @@ func TestOrderManager_InsertTurboOrderData_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to query and scan inserted order: %v", err)
 	}
-
+	
 	var finalRetrievedRelatedOrderIDs []string
 	if retrievedRelatedOrderIDsInterface != nil {
 		if interfaceSlice, ok := retrievedRelatedOrderIDsInterface.([]interface{}); ok {
@@ -117,9 +117,9 @@ func TestOrderManager_InsertTurboOrderData_Valid(t *testing.T) {
 	}
 
 	sort.Strings(finalRetrievedRelatedOrderIDs)
-	sort.Strings(expectedRetrievedFormat)
+	sort.Strings(expectedRetrievedFormat) 
 	if !reflect.DeepEqual(finalRetrievedRelatedOrderIDs, expectedRetrievedFormat) {
-		t.Errorf("RelatedOrderID mismatch:\nExpected (driver format): %v\nGot:                  %v\nOriginal Input:       %v",
+		t.Errorf("RelatedOrderID mismatch:\nExpected (driver format): %v\nGot:                  %v\nOriginal Input:       %v", 
 			expectedRetrievedFormat, finalRetrievedRelatedOrderIDs, relatedIDsInput)
 	}
 }
@@ -147,12 +147,12 @@ func TestOrderManager_InsertTurboOrderData_MinimalFields(t *testing.T) {
 	_, om, cleanup := setupOrderManagerTest(t)
 	defer cleanup()
 	testID := uuid.NewString()
-	order := &TurboOrderData{ID: testID, RelatedOrderID: []string{}}
+	order := &TurboOrderData{ID: testID, RelatedOrderID: []string{}} 
 	err := om.InsertTurboOrderData(order)
 	if err != nil {
 		t.Fatalf("InsertTurboOrderData failed for minimal order (empty RelatedOrderID): %v", err)
 	}
-
+	
 	var relatedIDsInterface interface{}
 	err = om.tdb.DB().QueryRow("SELECT related_order_id FROM turbo_data_order WHERE id = ?", testID).Scan(&relatedIDsInterface)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestOrderManager_InsertTurboOrderData_MinimalFields(t *testing.T) {
     var finalRelatedIDs []string
 	if relatedIDsInterface != nil {
         if interfaceSlice, ok := relatedIDsInterface.([]interface{}); ok {
-            if len(interfaceSlice) != 0 {
+            if len(interfaceSlice) != 0 { 
                  t.Errorf("Expected empty RelatedOrderID from DB, got %v items", len(interfaceSlice))
             }
         } else if strSlice, okStrSlice := relatedIDsInterface.([]string); okStrSlice {
@@ -172,13 +172,13 @@ func TestOrderManager_InsertTurboOrderData_MinimalFields(t *testing.T) {
             t.Fatalf("Retrieved related_order_id for empty list is not []interface{} or []string, but %T", relatedIDsInterface)
         }
     }
-	if finalRelatedIDs != nil && len(finalRelatedIDs) != 0 {
+	if finalRelatedIDs != nil && len(finalRelatedIDs) != 0 { 
 		t.Errorf("Expected empty RelatedOrderID, got %v", finalRelatedIDs)
 	}
 
 
 	testIDNil := uuid.NewString()
-	orderNil := &TurboOrderData{ID: testIDNil, RelatedOrderID: nil}
+	orderNil := &TurboOrderData{ID: testIDNil, RelatedOrderID: nil} 
 	err = om.InsertTurboOrderData(orderNil)
 	if err != nil {
 		t.Fatalf("InsertTurboOrderData failed for minimal order (nil RelatedOrderID): %v", err)
@@ -223,8 +223,8 @@ func TestOrderManager_InsertTurboOrderData_ArrayTypes(t *testing.T) {
 	}{
 		{"WithRelatedOrders", []string{uuid.NewString(), uuid.NewString()}},
 		{"WithSpecialCharInID", []string{uuid.NewString(), "id_with_'single_quote"}},
-		{"EmptyRelatedOrders", []string{}},
-		{"NilRelatedOrders", nil},
+		{"EmptyRelatedOrders", []string{}}, 
+		{"NilRelatedOrders", nil},         
 	}
 
 	for _, tc := range testCases {
@@ -242,7 +242,7 @@ func TestOrderManager_InsertTurboOrderData_ArrayTypes(t *testing.T) {
 
 			var retrievedRelatedIDsInterface interface{}
 			err = om.tdb.DB().QueryRow("SELECT related_order_id FROM turbo_data_order WHERE id = ?", currentID).Scan(&retrievedRelatedIDsInterface)
-
+			
 			var finalRetrievedRelatedOrderIDs []string
 			if err != nil {
 				if !(tc.relatedOrders == nil && retrievedRelatedIDsInterface == nil) {
@@ -266,7 +266,7 @@ func TestOrderManager_InsertTurboOrderData_ArrayTypes(t *testing.T) {
 				}
 			}
 
-
+			
 			expectedForComparison := make([]string, len(tc.relatedOrders))
 			if tc.relatedOrders != nil {
 				for i, s := range tc.relatedOrders {
@@ -276,21 +276,21 @@ func TestOrderManager_InsertTurboOrderData_ArrayTypes(t *testing.T) {
 			}
 
 
-			if tc.relatedOrders == nil {
+			if tc.relatedOrders == nil { 
 				if !(finalRetrievedRelatedOrderIDs == nil || len(finalRetrievedRelatedOrderIDs) == 0) {
 					t.Errorf("For %s (nil input): expected nil or empty slice from DB, got %v", tc.name, finalRetrievedRelatedOrderIDs)
 				}
 			} else if len(tc.relatedOrders) == 0 {  // Input was []string{}
 				// Expect nil OR non-nil empty slice
 				if !(finalRetrievedRelatedOrderIDs == nil || (finalRetrievedRelatedOrderIDs != nil && len(finalRetrievedRelatedOrderIDs) == 0)) {
-					t.Errorf("For %s (empty input): expected nil or non-nil empty slice from DB, got %v (is nil: %t, len: %d)",
+					t.Errorf("For %s (empty input): expected nil or non-nil empty slice from DB, got %v (is nil: %t, len: %d)", 
                         tc.name, finalRetrievedRelatedOrderIDs, finalRetrievedRelatedOrderIDs == nil, len(finalRetrievedRelatedOrderIDs))
 				}
-			} else {
+			} else { 
 				sort.Strings(expectedForComparison)
 				sort.Strings(finalRetrievedRelatedOrderIDs)
 				if !reflect.DeepEqual(finalRetrievedRelatedOrderIDs, expectedForComparison) {
-					t.Errorf("For %s: related_order_id mismatch.\nExpected (driver format): %v\nGot:                      %v\nOriginal Input:           %v",
+					t.Errorf("For %s: related_order_id mismatch.\nExpected (driver format): %v\nGot:                      %v\nOriginal Input:           %v", 
 						tc.name, expectedForComparison, finalRetrievedRelatedOrderIDs, tc.relatedOrders)
 				}
 			}

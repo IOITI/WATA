@@ -21,7 +21,7 @@ func setupTokenManagerTest(t *testing.T) (*TradingDB, *TokenManager, func()) {
 		cleanupMain()
 		t.Fatalf("Failed to create auth_tokens schema: %v", err)
 	}
-
+	
 	cleanup := func() {
 		// tdb.DB().Exec("DROP TABLE IF EXISTS auth_tokens;")
 		cleanupMain()
@@ -120,7 +120,7 @@ func TestTokenManager_StoreAndGetToken(t *testing.T) {
 func TestTokenManager_StoreToken_Validations(t *testing.T) {
 	_, tm, cleanup := setupTokenManagerTest(t)
 	defer cleanup()
-
+	
 	validHash := "validHash"
 	validUser := "validUser"
 	validPayload := []byte("payload")
@@ -334,8 +334,8 @@ func TestTokenManager_UpdateLastUsed(t *testing.T) {
 	}
 
 	// Small delay to ensure timestamp changes
-	time.Sleep(10 * time.Millisecond)
-
+	time.Sleep(10 * time.Millisecond) 
+	
 	err = tm.UpdateLastUsed(tokenHash)
 	if err != nil {
 		t.Fatalf("UpdateLastUsed failed: %v", err)
@@ -343,7 +343,7 @@ func TestTokenManager_UpdateLastUsed(t *testing.T) {
 
 	tokenAfter, err := tm.GetToken(tokenHash)
 	if err != nil { t.Fatalf("GetToken after UpdateLastUsed failed: %v", err) }
-
+	
 	if !tokenAfter.LastUsedAt.Valid {
 		t.Fatal("LastUsedAt should be valid after update")
 	}
@@ -370,19 +370,19 @@ func TestTokenManager_UpdateLastUsed(t *testing.T) {
 	lastUsedTimestampBeforeInactive := tokenBeforeInactive.LastUsedAt.Time
 
 	// Deactivate the token
-	tm.DeleteToken(inactiveHash)
-
+	tm.DeleteToken(inactiveHash) 
+	
 	// Try to update last_used again (should not happen)
 	// Wait a bit to ensure timestamp would be different if updated
 	time.Sleep(10 * time.Millisecond)
-	err = tm.UpdateLastUsed(inactiveHash)
+	err = tm.UpdateLastUsed(inactiveHash) 
 	if err != nil {
 		t.Fatalf("Second UpdateLastUsed (on inactive token) failed unexpectedly: %v", err)
 	}
-
+	
 	tokenAfterInactiveUpdateAttempt, err := tm.GetToken(inactiveHash)
-	if err != nil {
-		t.Fatalf("GetToken for inactiveHash after deactivation and update attempt failed: %v", err)
+	if err != nil { 
+		t.Fatalf("GetToken for inactiveHash after deactivation and update attempt failed: %v", err) 
 	}
 
 	if !tokenAfterInactiveUpdateAttempt.LastUsedAt.Valid {
@@ -402,14 +402,14 @@ func TestTokenManager_MetadataJsonNumbers(t *testing.T) {
 	userID := "userJsonNum"
 	expiresAt := time.Now().Add(time.Hour)
 	payload := []byte("data")
-
+	
 	// Metadata with integer and float
 	meta := map[string]interface{}{
 		"integer_val": 100,          // This will become float64(100) when unmarshalled
 		"float_val":   100.5,
 		"string_val":  "hello",
 	}
-
+	
 	err := tm.StoreToken(tokenHash, userID, payload, expiresAt, "", "", meta)
 	if err != nil {
 		t.Fatalf("StoreToken failed: %v", err)
@@ -427,7 +427,7 @@ func TestTokenManager_MetadataJsonNumbers(t *testing.T) {
 	}
 
 	if !reflect.DeepEqual(retrievedToken.Metadata, expectedMeta) {
-		t.Errorf("Metadata (numbers) mismatch:\nExpected: %+v (types: %T, %T)\nGot:      %+v (types: %T, %T)",
+		t.Errorf("Metadata (numbers) mismatch:\nExpected: %+v (types: %T, %T)\nGot:      %+v (types: %T, %T)", 
 			expectedMeta, expectedMeta["integer_val"], expectedMeta["float_val"],
 			retrievedToken.Metadata, retrievedToken.Metadata["integer_val"], retrievedToken.Metadata["float_val"])
 
