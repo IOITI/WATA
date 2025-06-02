@@ -7,14 +7,18 @@
 </div>
 
 
-![GitHub repo size](https://img.shields.io/github/repo-size/IOITI/wata?style=flat-square)
-![GitHub contributors](https://img.shields.io/github/contributors/IOITI/wata?style=flat-square)
-![GitHub issues](https://img.shields.io/github/issues/IOITI/wata?style=flat-square)
-![GitHub license](https://img.shields.io/github/license/IOITI/wata?style=flat-square)
-![GitHub last commit](https://img.shields.io/github/last-commit/IOITI/wata?style=flat-square)
-![GitHub Release Date](https://img.shields.io/github/release-date/IOITI/wata?style=flat-square)
-![GitHub Stars](https://img.shields.io/github/stars/IOITI/wata?style=social) 
-![GitHub Forks](https://img.shields.io/github/forks/IOITI/wata?style=social)
+<p align="center">
+  <img alt="GitHub repo size" src="https://img.shields.io/github/repo-size/IOITI/wata?style=flat-square">
+  <img alt="GitHub contributors" src="https://img.shields.io/github/contributors/IOITI/wata?style=flat-square">
+  <img alt="GitHub issues" src="https://img.shields.io/github/issues/IOITI/wata?style=flat-square">
+  <img alt="GitHub license" src="https://img.shields.io/github/license/IOITI/wata?style=flat-square">
+  <img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/IOITI/wata?style=flat-square">
+  <img alt="GitHub Release Date" src="https://img.shields.io/github/release-date/IOITI/wata?style=flat-square">
+</p>
+<p align="center">
+  <a href="https://github.com/IOITI/wata/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/IOITI/wata?style=social"></a>
+  <a href="https://github.com/IOITI/wata/forks"><img alt="GitHub Forks" src="https://img.shields.io/github/forks/IOITI/wata?style=social"></a>
+</p>
 
 <div align="center">
   <H2><a href="https://ioiti.github.io/wata-docs/docs/intro">📚Documentation Website</a></H2>
@@ -26,7 +30,7 @@
 > 
 > **This is a personal learning project and not production-ready software.**
 > 
->  Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
+>  Do not risk money you cannot afford to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
 >
 > Always start by running WATA with small money amounts to test the system and its performance. Use a secondary Saxo account if possible. Understand the risks involved in trading before you start, and do not engage money before you understand how it works and what profit/loss you should expect.
 >
@@ -192,10 +196,6 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
 **Command Reference**:
 - `watasaxoauth`: Run this command and you'll be prompted to enter the authorization code securely (the code won't be visible when typing)
 - The authorization code is valid only for a short time (typically a few minutes)
-
-**Troubleshooting**:
-- If you receive an invalid/expired code error, repeat the process
-- A "Timeout waiting for authorization code" error means the application waited for 5 minutes without receiving the code
 
 Please refer to the [dedicated docs pages for Saxo Authentication](https://ioiti.github.io/wata-docs/docs/saxo-authentication) for more details.
 
@@ -452,6 +452,58 @@ Here are some of the most common questions about WATA:
 
 For a comprehensive list of questions and answers, please see our detailed [FAQ documentation](https://ioiti.github.io/wata-docs/docs/faq).
 
+## 🔍 Troubleshooting
+
+This section provides solutions to common issues you might encounter while setting up or running WATA.
+
+### Saxo Bank API Authentication
+
+-   **Invalid/Expired Authorization Code**: If you receive an error message about an invalid or expired authorization code during the `watasaxoauth` process, try the following:
+    *   Ensure you are copying the entire code correctly from the redirect URL.
+    *   The authorization code is short-lived (typically a few minutes). Generate a new URL and try the process again promptly.
+    *   Check your system clock to ensure it's synchronized, as significant time differences can sometimes affect OAuth 2.0 flows.
+-   **Timeout Waiting for Authorization Code**: This error indicates that the `watasaxoauth` command did not receive the authorization code within its 5-minute waiting period.
+    *   Ensure you are pasting the code into the correct terminal prompt.
+    *   If running WATA on a remote server, ensure your SSH session is stable.
+-   **"Invalid Grant" or Similar Authentication Errors After Successful Setup**:
+    *   This might indicate that the refresh token has expired or been revoked. You may need to re-run the `watasaxoauth` process to obtain a new set of tokens.
+    *   Verify that the AppKey and AppSecret in your `config.json` match exactly with what Saxo Bank provided for your application.
+
+### Docker & Deployment
+
+-   **Docker Daemon Not Running**: Ensure the Docker service is active on your server. You can usually check with `sudo systemctl status docker` and start it with `sudo systemctl start docker`.
+-   **Port Conflicts**: If a service fails to start due to a port already being in use (e.g., for RabbitMQ or the Web Server):
+    *   Identify the conflicting service using `sudo netstat -tulnp | grep <port_number>`.
+    *   Either stop the conflicting service or change the port WATA uses in the `docker-compose.yml` and relevant `config.json` settings.
+-   **Build Failures (`./package.sh` or `docker-compose build`)**:
+    *   Check for detailed error messages in the build logs.
+    *   Ensure you have a stable internet connection to download dependencies.
+    *   Make sure Docker has sufficient resources (CPU, RAM, disk space).
+-   **Containers Not Starting or Restarting**:
+    *   Use `watalogs` or `docker logs <container_name>` (e.g., `docker logs wata-trader-1`) to check for specific error messages.
+    *   Verify all necessary configuration files (e.g., `config.json`, `.env`) are present and correctly formatted.
+    *   Ensure RabbitMQ is running before other services that depend on it. The `setup` service in Docker Compose should handle this, but manual checks can be useful.
+
+### Application Configuration
+
+-   **Incorrect `config.json` Format**: If the application fails to start or behaves unexpectedly, validate your `config.json` file.
+    *   Ensure it's valid JSON. You can use an online JSON validator.
+    *   Double-check all required fields are present as per `config_example.json`.
+    *   Pay attention to commas, brackets, and quotes.
+-   **Missing Credentials**: Ensure all sensitive information like API keys, tokens, and passwords are correctly entered in `config.json` and the `deploy/.env` file for RabbitMQ.
+-   **Webhook Token Issues**:
+    *   If webhook signals are not being processed, verify that the token in your TradingView alert matches the one generated by `watawebtoken`.
+    *   Ensure the `web_server` component is running and accessible from TradingView's IP addresses.
+
+### General Tips
+
+-   **Check Logs**: The first step in troubleshooting is always to check the logs. Use `watalogs` (which aggregates logs from all services) or `docker logs <container_name>` for individual service logs.
+-   **Restart Services**: Sometimes, a simple restart can resolve transient issues: `watastop` followed by `watastart`.
+-   **Consult Documentation**: Refer to the [detailed documentation website](https://ioiti.github.io/wata-docs/) for more in-depth explanations of components and configurations.
+-   **Check System Resources**: Ensure your server has enough RAM, CPU, and disk space available.
+
+If you encounter an issue not listed here, consider [reporting an issue](https://github.com/IOITI/wata/issues) with detailed logs and steps to reproduce.
+
 ## 🤝 Acknowledgements
 
 - [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
@@ -462,13 +514,46 @@ For a comprehensive list of questions and answers, please see our detailed [FAQ 
 - [@ioiti](https://github.com/IOITI): Project author and maintainer
 - [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
 
-### How to Contribute
+## 🛠️ How to Contribute
 
-We welcome contributions to WATA! Here's how you can help:
+We welcome contributions to WATA! Whether you're fixing a bug, improving documentation, or proposing a new feature, your help is appreciated. Please follow these guidelines to make the process smoother for everyone.
 
-1. **Report Issues**: Submit bugs or suggest features via GitHub issues
-2. **Submit Pull Requests**: Code improvements, documentation fixes, or new features
-3. **Share Feedback**: Let us know how you're using WATA and what could be improved
+### Reporting Issues
+
+- **Check Existing Issues**: Before submitting a new issue, please search the existing issues (open and closed) to see if your problem or suggestion has already been reported.
+- **Provide Detailed Information**: When reporting an issue, especially a bug, include as much detail as possible:
+    - Steps to reproduce the bug.
+    - Expected behavior and what actually happened.
+    - Your WATA version, operating system, and relevant environment details.
+    - Any error messages or logs.
+- **Use Issue Templates**: If available, use the provided issue templates (e.g., for bug reports or feature requests).
+
+### Submitting Pull Requests
+
+- **Fork the Repository**: Start by forking the repository to your own GitHub account.
+- **Create a Feature Branch**: Create a new branch from the `main` (or `develop` if applicable) branch for your changes. Use a descriptive branch name (e.g., `feat/add-new-exchange` or `fix/resolve-login-bug`).
+- **Coding Standards**:
+    - Follow the existing code style and conventions.
+    - Ensure your code is well-commented, especially for complex logic.
+    - Update or add documentation as needed.
+- **Testing**:
+    - Write unit tests for any new functionality.
+    - Ensure all existing tests pass with your changes.
+    - If you're fixing a bug, consider adding a test that reproduces the bug to prevent regressions.
+- **Commit Messages**: Write clear and concise commit messages, following conventional commit formats if possible (e.g., `fix: Correct handling of API rate limits`).
+- **Rebase Before Submitting**: Before submitting your pull request, rebase your feature branch onto the latest `main` (or `develop`) branch to ensure a clean merge.
+- **Submit the Pull Request**: Push your changes to your fork and submit a pull request to the main WATA repository. Provide a clear description of your changes in the PR.
+- **Code Review**: Be prepared to address feedback and make changes during the code review process.
+
+### Suggesting Features
+
+- **Use GitHub Issues**: The best way to suggest a new feature or an enhancement is to open an issue.
+- **Provide Context**: Clearly explain the feature, why it would be useful, and how it might be implemented.
+- **Discuss First**: For significant changes or new features, it's often a good idea to discuss it in an issue before you start working on a pull request. This helps ensure that your contribution aligns with the project's goals.
+
+### Share Feedback
+
+We're always open to feedback! Let us know how you're using WATA, what you like, and what could be improved. You can do this by opening an issue or participating in discussions.
 
 ## 📄 License
 
@@ -478,7 +563,7 @@ Copyright (c) 2025 IOITI
 
 ## 📚 Documentation Website
 
-WATA have a Docusaurus-based documentation website. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata-docs/](https://ioiti.github.io/wata-docs/).
+WATA has a Docusaurus-based documentation website. The website is hosted on GitHub Pages and can be accessed at [https://ioiti.github.io/wata-docs/](https://ioiti.github.io/wata-docs/).
 
 ### Documentation Structure
 
