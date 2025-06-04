@@ -31,7 +31,6 @@ type OpenAPIError struct {
 	MessageID    string // From parsed SaxoErrorMessage.MessageID
 	ErrorCode    string // From parsed SaxoErrorMessage.ErrorCode
 	ErrorMessage string // From parsed SaxoErrorMessage.Message (top-level human-readable message)
-	// DetailedSaxoErrors []SaxoErrorDetail // Optional: if we parse ErrorDetails into struct
 }
 
 // Error implements the error interface for OpenAPIError.
@@ -45,11 +44,10 @@ func (e *OpenAPIError) Error() string {
 		specificDetails += fmt.Sprintf("MessageID: %s", e.MessageID)
 	}
 
-	// Use the parsed ErrorMessage if available, otherwise fallback to RawContent for context
 	finalMessageContent := e.ErrorMessage
 	if finalMessageContent == "" {
 		finalMessageContent = e.RawContent
-		if len(finalMessageContent) > 100 { // Truncate raw content if too long
+		if len(finalMessageContent) > 100 {
 			finalMessageContent = finalMessageContent[:100] + "..."
 		}
 	}
@@ -65,20 +63,13 @@ func (e *OpenAPIError) Error() string {
 var StreamTerminated = errors.New("saxo openapi: stream terminated")
 
 // tryParseSaxoError attempts to parse the raw error content into the OpenAPIError fields.
-// This function is called internally when an OpenAPIError is constructed.
 func tryParseSaxoError(rawContent string, openAPIErr *OpenAPIError) {
 	var saxoErr SaxoErrorMessage
-	// It's possible the rawContent is not a JSON or not the expected SaxoErrorMessage structure.
 	if err := json.Unmarshal([]byte(rawContent), &saxoErr); err == nil {
 		openAPIErr.MessageID = saxoErr.MessageID
 		openAPIErr.ErrorCode = saxoErr.ErrorCode
 		openAPIErr.ErrorMessage = saxoErr.Message
-		// Note: saxoErr.ErrorDetails is json.RawMessage.
-		// Further parsing into []SaxoErrorDetail or string could be done here if needed
-		// and stored in OpenAPIError if it had a dedicated field for structured details.
 	}
-	// If unmarshalling fails, ErrorMessage, ErrorCode, MessageID will remain empty
-	// and the RawContent will be the primary source of info in the Error() string.
 }
 
 // NewOpenAPIError creates a new OpenAPIError, attempting to parse Saxo-specific details from content.
@@ -88,6 +79,6 @@ func NewOpenAPIError(code int, reason string, rawContent string) *OpenAPIError {
 		Reason:     reason,
 		RawContent: rawContent,
 	}
-	tryParseSaxoError(rawContent, err) // Populate MessageID, ErrorCode, ErrorMessage
+	tryParseSaxoError(rawContent, err)
 	return err
 }

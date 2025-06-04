@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"pymath/go_src/saxo_authen"
 	"reflect"
-	"strconv" // Now needed for paramsToQueryValues
-	"strings" // Now needed for paramsToQueryValues
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -22,9 +22,9 @@ const (
 	EnvironmentSimulation = "sim"
 
 	liveAPIBaseURL        = "https://gateway.saxobank.com"
-	liveStreamBaseURL     = "https://streaming.saxobank.com"
+	liveStreamBaseURL     = "https://streaming.saxobank.com" // For WebSocket
 	simulationAPIBaseURL  = "https://gateway.saxobank.com"
-	liveAPIOpenAPIPath    = "/openapi"
+	liveAPIOpenAPIPath    = "/openapi" // Base path for REST API
 	simAPIOpenAPIPath     = "/sim/openapi"
 	defaultTimeoutSeconds = 10
 )
@@ -33,8 +33,8 @@ type Client struct {
 	httpClient           *http.Client
 	Authenticator        *saxo_authen.SaxoAuth
 	Environment          string
-	apiBaseURL           string
-	streamBaseURL        string
+	apiBaseURL           string // Full base URL for REST API, e.g., "https://gateway.saxobank.com/openapi"
+	streamBaseURL        string // Base URL for streaming, e.g., "wss://streaming.saxobank.com"
 	rateLimiter          *RateLimiter
 	defaultHeaders       http.Header
 }
@@ -44,15 +44,19 @@ func NewClient(authenticator *saxo_authen.SaxoAuth, environment string, clientTi
 		return nil, fmt.Errorf("authenticator cannot be nil")
 	}
 
-	var apiBasePath, streamBasePath string
+	var apiBase, streamBase string // These are the hostnames
+	var apiPath string
+
 	switch strings.ToLower(environment) {
 	case EnvironmentLive:
-		apiBasePath = liveAPIBaseURL + liveAPIOpenAPIPath
-		streamBasePath = liveStreamBaseURL
+		apiBase = liveAPIBaseURL
+		streamBase = liveStreamBaseURL
+		apiPath = liveAPIOpenAPIPath
 	case EnvironmentSimulation, "simdemo":
 		environment = EnvironmentSimulation
-		apiBasePath = simulationAPIBaseURL + simAPIOpenAPIPath
-		streamBasePath = liveStreamBaseURL
+		apiBase = simulationAPIBaseURL
+		streamBase = liveStreamBaseURL // Saxo uses the same streaming host for SIM
+		apiPath = simAPIOpenAPIPath
 	default:
 		return nil, fmt.Errorf("invalid environment: '%s'. Must be '%s' or '%s'",
 			environment, EnvironmentLive, EnvironmentSimulation)
@@ -66,36 +70,46 @@ func NewClient(authenticator *saxo_authen.SaxoAuth, environment string, clientTi
 		httpClient:           &http.Client{Timeout: clientTimeout},
 		Authenticator:        authenticator,
 		Environment:          environment,
-		apiBaseURL:           apiBasePath,
-		streamBaseURL:        streamBasePath,
+		apiBaseURL:           apiBase + apiPath, // Store the full base path for API calls
+		streamBaseURL:        streamBase,        // Store just the host for streaming
 		rateLimiter:          NewRateLimiter(DefaultLowRequestsThreshold),
 		defaultHeaders:       make(http.Header),
 	}
 
 	client.defaultHeaders.Set("Accept-Encoding", "gzip, deflate")
 	client.defaultHeaders.Set("Cache-Control", "no-cache")
+	// Other client-wide default headers can be set here if needed.
 
 	return client, nil
 }
 
+// SetAPIBaseURL allows overriding the API base URL, primarily for testing purposes.
 func (c *Client) SetAPIBaseURL(baseURL string) {
 	c.apiBaseURL = baseURL
 }
 
+// SetStreamBaseURL allows overriding the Stream base URL, primarily for testing purposes.
+func (c *Client) SetStreamBaseURL(baseURL string) {
+	c.streamBaseURL = baseURL
+}
+
+
+// doRequest is a private helper method to make HTTP requests to the Saxo API.
 func (c *Client) doRequest(
 	ctx context.Context,
 	method string,
-	path string,
+	path string, // Relative path to the specific endpoint, e.g., "port/v1/accounts"
 	queryParams url.Values,
 	requestBody io.Reader,
 	responseBodyType reflect.Type,
 ) (interface{}, *http.Response, error) {
 
-	fullURL, err := url.Parse(c.apiBaseURL)
+	// Construct full URL: c.apiBaseURL already includes /openapi or /sim/openapi
+	fullURLString := strings.TrimRight(c.apiBaseURL, "/") + "/" + strings.TrimLeft(path, "/")
+	fullURL, err := url.Parse(fullURLString)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse base API URL '%s': %w", c.apiBaseURL, err)
+		return nil, nil, fmt.Errorf("failed to construct URL from base '%s' and path '%s': %w", c.apiBaseURL, path, err)
 	}
-	fullURL.Path = strings.TrimRight(fullURL.Path, "/") + "/" + strings.TrimLeft(path, "/")
 
 	if queryParams != nil {
 		fullURL.RawQuery = queryParams.Encode()
@@ -118,14 +132,15 @@ func (c *Client) doRequest(
 			return nil, nil, fmt.Errorf("failed to create HTTP request for %s %s: %w", method, fullURL.String(), err)
 		}
 
-		for key, values := range c.defaultHeaders {
+		for key, values := range c.defaultHeaders { // Apply client-wide default headers
 			for _, value := range values {
 				req.Header.Add(key, value)
 			}
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
-		if requestBody != nil && method != http.MethodGet && method != http.MethodDelete {
-			if req.Header.Get("Content-Type") == "" {
+		// Set Content-Type for relevant methods if a body is present and Content-Type not already set
+		if requestBody != nil && (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) {
+			if req.Header.Get("Content-Type") == "" { // Don't override if already set (e.g. by defaultHeaders)
 				req.Header.Set("Content-Type", "application/json; charset=utf-8")
 			}
 		}
@@ -134,7 +149,7 @@ func (c *Client) doRequest(
 
 		httpResp, reqErr = c.httpClient.Do(req)
 		if reqErr != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil { // Check if the context was cancelled
 				return nil, nil, fmt.Errorf("HTTP request context cancelled for %s %s: %w", method, fullURL.String(), ctx.Err())
 			}
 			return nil, nil, fmt.Errorf("HTTP request execution failed for %s %s: %w", method, fullURL.String(), reqErr)
@@ -149,13 +164,16 @@ func (c *Client) doRequest(
 				httpResp.Body.Close()
 			}
 			c.rateLimiter.WaitIfNeeded()
+			// Re-fetch token in case the previous one caused an issue or for long waits.
+			// GetToken() should handle internal refresh if necessary.
 			token, err = c.Authenticator.GetToken()
 			if err != nil {
-				return nil, httpResp, fmt.Errorf("failed to get authentication token for retry: %w", err)
+				// Return the 429 response if token re-fetch fails, as we can't retry.
+				return nil, httpResp, fmt.Errorf("failed to get authentication token for retry after 429: %w", err)
 			}
 			continue
 		}
-		break
+		break // Exit loop if not 429 or if it's the second attempt
 	}
 
 	if reqErr != nil {
@@ -168,9 +186,11 @@ func (c *Client) doRequest(
 		if err != nil {
 			return nil, httpResp, fmt.Errorf("failed to read response body for %s %s: %w", method, fullURL.String(), err)
 		}
-		httpResp.Body.Close()
+		defer httpResp.Body.Close() // Close the original body
+		// Replace Body with a new reader for the read bytes, so it can be "re-read" by callers if they need raw response
+		httpResp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	}
-	httpResp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 
 	if httpResp.StatusCode >= 400 {
 		return nil, httpResp, NewOpenAPIError(httpResp.StatusCode, httpResp.Status, string(bodyBytes))
@@ -179,6 +199,7 @@ func (c *Client) doRequest(
 	if responseBodyType != nil && httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
 		if httpResp.StatusCode == http.StatusNoContent || len(bodyBytes) == 0 {
 			logrus.Debugf("Response status %d or empty body, returning zero-value for type %v for %s %s", httpResp.StatusCode, responseBodyType, method, fullURL.String())
+			// Create a new zero-value instance of the target type (which is a pointer to struct)
 			return reflect.New(responseBodyType).Interface(), httpResp, nil
 		}
 
@@ -191,7 +212,7 @@ func (c *Client) doRequest(
 		return targetInstance, httpResp, nil
 	}
 
-	return nil, httpResp, nil
+	return nil, httpResp, nil // Success status but no target type or not 2xx that implies unmarshalling
 }
 
 // paramsToQueryValues converts a struct with `url` tags to url.Values.
@@ -203,6 +224,9 @@ func paramsToQueryValues(paramsStruct interface{}) (url.Values, error) {
 
 	v := reflect.ValueOf(paramsStruct)
 	if v.Kind() == reflect.Ptr {
+		if v.IsNil() { // If pointer is nil, treat as empty params
+			return values, nil
+		}
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
@@ -227,7 +251,7 @@ func paramsToQueryValues(paramsStruct interface{}) (url.Values, error) {
 
 		if fieldValue.Kind() == reflect.Ptr {
 			if fieldValue.IsNil() {
-				continue
+				continue // Omit if nil pointer
 			}
 			fieldValue = fieldValue.Elem()
 		}
@@ -243,9 +267,7 @@ func paramsToQueryValues(paramsStruct interface{}) (url.Values, error) {
 		case reflect.Float32, reflect.Float64:
 			valStr = strconv.FormatFloat(fieldValue.Float(), 'f', -1, 64)
 		case reflect.Bool:
-			// For bools with omitempty, only include if true.
-			// If not omitempty, always include.
-			if isOptional && !fieldValue.Bool() {
+			if isOptional && !fieldValue.Bool() { // omitempty for bool means omit if false
 				continue
 			}
 			valStr = strconv.FormatBool(fieldValue.Bool())
@@ -256,32 +278,20 @@ func paramsToQueryValues(paramsStruct interface{}) (url.Values, error) {
 					strSlice = append(strSlice, fieldValue.Index(j).String())
 				}
 				valStr = strings.Join(strSlice, ",")
-			} else {
-				continue
-			}
-		default:
-			continue
+			} else { continue }
+		default: continue
 		}
 
-		// Add if not optional and value is "zero" (e.g. empty string for string type, 0 for int, false for bool)
+		// Add if not optional and value is "zero" (e.g. empty string for string type)
 		// OR if it has a non-zero value.
-		// This handles omitempty correctly for required fields that might have a "zero" value.
-		if !isOptional || !reflect.DeepEqual(fieldValue.Interface(), reflect.Zero(fieldValue.Type()).Interface()) || (fieldValue.Kind() == reflect.Bool && fieldValue.Bool()){
-			// The last condition `(fieldValue.Kind() == reflect.Bool && fieldValue.Bool())` is to ensure `false` with `omitempty` is not added,
-            // but `true` is. If omitempty is not present, false should be added.
-            // The DeepEqual check handles most zero values correctly for omitempty.
-            // For bools, if omitempty and false, it's skipped by the DeepEqual. If omitempty and true, it's added.
-            // If not omitempty, it's added regardless of value.
-            // This logic is getting complex; go-querystring handles this better.
-            // Simplified: if isOptional and it's the zero value (and not a bool true), skip.
-             if isOptional && reflect.DeepEqual(fieldValue.Interface(), reflect.Zero(fieldValue.Type()).Interface()) && fieldValue.Kind() != reflect.Bool {
-                continue
-            }
-             if isOptional && fieldValue.Kind() == reflect.Bool && !fieldValue.Bool() { // omitempty for bool means omit if false
-                continue
-            }
-			values.Set(paramName, valStr)
-		}
+		// This logic for omitempty needs to be robust:
+		// - For pointers, handled by IsNil.
+		// - For value types, if isOptional and it's the zero value, omit.
+		// - Bool with omitempty: omit if false (handled above).
+		if isOptional && valStr == "" && fieldValue.Kind() != reflect.Bool { // For non-bools, if optional and empty string, omit.
+            continue
+        }
+		values.Set(paramName, valStr)
 	}
 	return values, nil
 }

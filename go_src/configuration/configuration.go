@@ -18,6 +18,43 @@ type Config struct {
 	Logging           Logging           `json:"logging"`
 	RabbitMQ          RabbitMQ          `json:"rabbitmq"`
 	SchedulerSettings SchedulerSettings `json:"scheduler_settings"`
+	Trade             TradeConfig       `json:"trade,omitempty"` // Added Trade config
+}
+
+// --- Trade Configuration Structs ---
+
+// TradeRuleConfig holds specific configuration for a trading rule.
+type TradeRuleConfig struct {
+	// For day_trading
+	ClosePositionTime                   string   `json:"close_position_time,omitempty"` // HH:MM
+	DontEnterTradeIfDayProfitIsMoreThan *float64 `json:"dont_enter_trade_if_day_profit_is_more_than,omitempty"`
+	MaxDayLossPercent                   *float64 `json:"max_day_loss_percent,omitempty"`
+	TradingStartHour                    *int     `json:"trading_start_hour,omitempty"`    // Using pointers for optionality
+	TradingEndHour                      *int     `json:"trading_end_hour,omitempty"`
+	RiskyTradingStartHour               *int     `json:"risky_trading_start_hour,omitempty"`
+	RiskyTradingStartMinute             *int     `json:"risky_trading_start_minute,omitempty"`
+
+	// For allowed_indices
+	IndiceIDs map[string]interface{} `json:"indice_ids,omitempty"` // e.g. {"CAC40": "FRA40", "DAX40": "GER40"}
+
+	// For market_closed_dates
+	DatesList []string `json:"dates_list,omitempty"` // e.g. ["2023-12-25", "2024-01-01"]
+
+	// For signal_validation
+	MaxAgeMinutes *float64 `json:"max_age_minutes,omitempty"` // Using float64 to match JSON number type
+}
+
+// TradeRule defines a single trading rule.
+type TradeRule struct {
+	RuleType   string          `json:"rule_type"`
+	RuleConfig TradeRuleConfig `json:"rule_config"`
+}
+
+// TradeConfig holds all trading related configurations.
+type TradeConfig struct {
+	Timezone string      `json:"timezone,omitempty"` // e.g. "Europe/Paris"
+	Rules    []TradeRule `json:"rules,omitempty"`
+	// Add other general trade settings here
 }
 
 // GlobalSettings struct
