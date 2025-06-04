@@ -145,7 +145,7 @@ func (tm *TokenManager) GetToken(tokenHash string) (*AuthTokenData, error) {
 	} else {
 		data.Metadata = make(map[string]interface{}) // Ensure it's not nil
 	}
-	
+
 	// Optionally, update last_used_at, but this means GetToken modifies state.
 	// Consider a separate UpdateLastUsed method if preferred.
 	// For now, let's not update it here to keep GetToken read-only for the main data.
@@ -198,7 +198,7 @@ func (tm *TokenManager) UpdateMetadata(tokenHash string, newMetadata map[string]
 	if err != nil {
 		return fmt.Errorf("failed to marshal new metadata to JSON: %w", err)
 	}
-	
+
 	var metadataArg interface{}
 	if len(newMetadata) > 0 {
 		metadataArg = metadataJSON

@@ -157,7 +157,7 @@ func (c *Config) ValidateConfig() error {
 			return fmt.Errorf("api_services.%s.retries cannot be negative", fieldName)
 		}
 	}
-	
+
 	// Validate Database
 	if c.Database.Type == "" {
 		return fmt.Errorf("database.type is required")
