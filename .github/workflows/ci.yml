@@ -1,0 +1,59 @@
+name: Python CI
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # Trigger on version tags like v1.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.9' # Specify your project's Python version
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        # Install pytest if not in requirements.txt, or ensure it is
+        pip install pytest pytest-mock # Ensure testing tools are available
+
+    - name: Create dummy config for tests
+      run: |
+        mkdir -p /tmp/test_logs/wata-api # For logging
+        # Create a minimal valid JSON config for ConfigurationManager and WebServerToken
+        echo '{
+          "logging": {
+            "level": "INFO",
+            "persistant": {
+              "log_path": "/tmp/test_logs"
+            },
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+          },
+          "webserver": {
+            "persistant": {
+              "token_path": "/tmp/dummy_web_token.json"
+            }
+          },
+          "network": {
+            "allowed_ips": ["127.0.0.1", "testclient"]
+          }
+        }' > /tmp/ci_test_config.json
+      env:
+        ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
+
+
+    - name: Run tests
+      run: |
+        pytest tests/
+      env:
+        PYTHONPATH: ./src # Allows tests to import src modules
+        WATA_CONFIG_PATH: /tmp/ci_test_config.json # Point to the dummy config
+        TEST_SECRET_TOKEN: "ci_test_secret_token" # For test_web_server.py
+        ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
