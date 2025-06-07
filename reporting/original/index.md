@@ -1,7 +1,7 @@
 ---
 title: Trading Stats
 toc: false
-theme: [ alt, wide, light ]
+theme: [ alt, wide, dark ]
 sql:
   turbo_data_position: ./turbo_data_position.parquet
   turbo_data_order: ./turbo_data_order.parquet
@@ -385,38 +385,6 @@ function candle_profit_loss_over_time() {
         })
     );
 }
-
-function graph_simulated_profit_performance_loss_bar_chart() {
-    return resize((width) => 
-        Plot.plot({
-            width,
-            height: 250,
-            title: "Profit / Loss in € by Day based on day performance",
-            caption: `Displays daily profit/loss for the past ${time_picked} days`,
-            x: {label: "Date", grid: true, interval: d3.utcDay},
-            y: {label: "Profit / Loss (€)", grid: true},
-            marks: [
-                Plot.crosshairX(cumulative_simulated_performance_time_picked, {x: "date_day_format", y: "dollar_value", color: d => d.dollar_value >= 0 ? "green" : "red", opacity: 0.5}),
-                Plot.rectY(cumulative_simulated_performance_time_picked, {
-                    x: "date_day_format",
-                    y: "dollar_value",
-                    r: 2,
-                    fill: d => d.dollar_value >= 0 ? "green" : "red",
-                    fillOpacity: 0.8,
-                    tip: true,
-                }),
-                Plot.textY(cumulative_simulated_performance_time_picked, {
-                    x: "date_day_format",
-                    y: d => d.dollar_value / 2,
-                    text: d => `${d.dollar_value.toFixed(2)}\n€`,
-                    fill: "white",
-                    fontSize: time_picked > 60 ? 0 : 9,
-                    textAnchor: "middle"
-                })
-            ]
-        })
-    );
-}
 ```
 
 <div class="grid grid-cols-4">
@@ -458,8 +426,6 @@ const simulated = Generators.input(simulated_toggle);
     ${graph_cumulative_profit_loss_bar_chart()}</div>
   <div class="card">${graph_profit_loss_bar_chart()}</div>
   <div class="card">${candle_profit_loss_over_time()}</div>
-  <h1>FAKE Profit/Loss Simulated based on performance</h1>
-  <div class="card">${graph_simulated_profit_performance_loss_bar_chart()}</div>
 </div>
 
 # Trading & performance stats
@@ -524,7 +490,7 @@ function performance_card() {
         const stroke = color.apply(`color1`);
 
         return html.fragment`
-        <h2 style="color: ${stroke}">C'EST FAUX CORRIGE 1 year avg performance per day</h2>
+        <h2 style="color: ${stroke}">This week average performance per day</h2>
         <h1>${formatPercent(lastWeek["avg(perf_day_real)"])}</h1>
         <table>
           <tr>
@@ -554,11 +520,11 @@ function performance_card() {
                 stroke,
                 insetTop: 10,
                 insetBottom: 10,
-                title: (d) => `${d["date_day_string"]}: ${d["perf_day_real"]}%`,
+                title: (d) => `${d["date_day_string"]}: ${d["perf_day_real"].toFixed(2)}%`,
                 tip: {anchor: "bottom"}
               }),
-              Plot.text([`${range[0]}%`], {frameAnchor: "left"}),
-              Plot.text([`${range[1]}%`], {frameAnchor: "right"})
+              Plot.text([`${Math.round(range[0])}%`], {frameAnchor: "left"}),
+              Plot.text([`${Math.round(range[1])}%`], {frameAnchor: "right"})
             ]
           })
         )}
@@ -601,188 +567,6 @@ function trend(v) {
   </div>
 </div>
 
-```js
-const treemap_data_core = FileAttachment("treemap_data.json").json();
-```
-
-```js
-// Function to transform data
-function addValuePositiveField(data) {
-  data.forEach(group => {
-    group.children.forEach(item => {
-      // Check if value is positive or negative and set the `value_positive` field
-      item.value_positive = item.value >= 0;
-      // Ensure all values are positive for layout purposes
-      item.value = Math.abs(item.value);
-    });
-  });
-}
-
-// Transform the data
-addValuePositiveField(treemap_data_core);
-```
-
-```js
-const treemap_data = {
-    name: "Positions",
-    children: treemap_data_core  
-};
-```
-
-```js
-function treemap() {
-  // Initialize dimensions.
-  let width = 800;   // Starting width, will be adjusted dynamically
-  const height = 400;
-
-  // Select the container element
-  const container = document.querySelector('.treemap');
-
-  // Dynamically update width using ResizeObserver
-  const resizeObserver = new ResizeObserver(entries => {
-    for (let entry of entries) {
-      if (entry.contentBoxSize) {
-        // Set width based on container's width
-        width = entry.contentRect.width;
-        
-        // Update x scale and viewBox based on the new width
-        x.rangeRound([0, width]);
-        svg.attr("viewBox", [0.5, -30.5, width, height + 30]).attr("width", width);
-        
-        // Redraw treemap with new width
-        group.call(position, root);
-      }
-    }
-  });
-  
-  // Observe the container's size
-  resizeObserver.observe(container);
-
-  // Custom tiling function for aspect ratio adaptation during zoom.
-  function tile(node, x0, y0, x1, y1) {
-    d3.treemapBinary(node, 0, 0, width, height);
-    for (const child of node.children) {
-      child.x0 = x0 + (child.x0 / width) * (x1 - x0);
-      child.x1 = x0 + (child.x1 / width) * (x1 - x0);
-      child.y0 = y0 + (child.y0 / height) * (y1 - y0);
-      child.y1 = y0 + (child.y1 / height) * (y1 - y0);
-    }
-  }
-
-  // Data from SQL query.
-  const data = treemap_data;
-
-  // Compute the layout.
-  const hierarchy = d3.hierarchy(data)
-    .sum(d => d.value)
-    .sort((a, b) => b.value - a.value);
-
-  const root = d3.treemap().tile(tile)(hierarchy);
-
-  // Create scales.
-  const x = d3.scaleLinear().rangeRound([0, width]);
-  const y = d3.scaleLinear().rangeRound([0, height]);
-
-  // Format utility.
-  const format = d3.format(",.2f");
-  const name = d => d.ancestors().reverse().map(d => d.data.name).join("/");
-
-  // Create SVG container.
-  const svg = d3.create("svg")
-    .attr("viewBox", [0.5, -30.5, width, height + 30])
-    .attr("width", width)
-    .attr("height", height + 30)
-    .attr("style", "max-width: 100%; height: auto;")
-    .style("font", "10px sans-serif");
-
-  // Display the root.
-  let group = svg.append("g").call(render, root);
-
-  function uid(prefix) {
-    return `${prefix}-${Math.random().toString(36).substr(2, 9)}`;
-  }
-  
-  function render(group, root) {
-    const node = group
-      .selectAll("g")
-      .data(root.children.concat(root))
-      .join("g");
-
-    node.filter(d => d === root ? d.parent : d.children)
-      .attr("cursor", "pointer")
-      .on("click", (event, d) => d === root ? zoomout(root) : zoomin(d));
-
-    node.append("title")
-      .text(d => `${name(d)}\n${format(d.value)}`);
-
-    node.append("rect")
-      .attr("id", d => (d.leafUid = uid("leaf")))
-      .attr("fill", d => d === root ? "#fff" : d.children ? "#ccc" : "#ddd")
-      .attr("stroke", "#fff");
-
-    node.append("clipPath")
-      .attr("id", d => (d.clipUid = uid("clip")))
-      .append("use")
-      .attr("xlink:href", d => `#${d.leafUid}`);
-
-    node.append("text")
-      .attr("clip-path", d => d.clipUid)
-      .attr("font-weight", d => d === root ? "bold" : null)
-      .selectAll("tspan")
-      .data(d => (d === root ? name(d) : d.data.name).split(/(?=[A-Z][^A-Z])/g).concat(format(d.value)))
-      .join("tspan")
-      .attr("x", 3)
-      .attr("y", (d, i, nodes) => `${(i === nodes.length - 1) * 0.3 + 1.1 + i * 0.9}em`)
-      .attr("fill-opacity", (d, i, nodes) => i === nodes.length - 1 ? 0.7 : null)
-      .attr("font-weight", (d, i, nodes) => i === nodes.length - 1 ? "normal" : null)
-      .text(d => d);
-
-    group.call(position, root);
-  }
-
-  function position(group, root) {
-    group.selectAll("g")
-      .attr("transform", d => d === root ? `translate(0,-30)` : `translate(${x(d.x0)},${y(d.y0)})`)
-      .select("rect")
-      .attr("width", d => d === root ? width : x(d.x1) - x(d.x0))
-      .attr("height", d => d === root ? 30 : y(d.y1) - y(d.y0));
-  }
-
-  function zoomin(d) {
-    const group0 = group.attr("pointer-events", "none");
-    const group1 = group = svg.append("g").call(render, d);
-
-    x.domain([d.x0, d.x1]);
-    y.domain([d.y0, d.y1]);
-
-    svg.transition()
-      .duration(750)
-      .call(t => group0.transition(t).remove().call(position, d.parent))
-      .call(t => group1.transition(t).attrTween("opacity", () => d3.interpolate(0, 1)).call(position, d));
-  }
-
-  function zoomout(d) {
-    const group0 = group.attr("pointer-events", "none");
-    const group1 = group = svg.insert("g", "*").call(render, d.parent);
-
-    x.domain([d.parent.x0, d.parent.x1]);
-    y.domain([d.parent.y0, d.parent.y1]);
-
-    svg.transition()
-      .duration(750)
-      .call(t => group0.transition(t).remove().attrTween("opacity", () => d3.interpolate(1, 0)).call(position, d))
-      .call(t => group1.transition(t).call(position, d.parent));
-  }
-
-  return svg.node();
-}
-```
-
-<div class="grid grid-cols-1">
-  <div class="card treemap">
-    ${treemap()}
-  </div>
-</div>
 
 ```js
 function winrate_by_day() {
@@ -816,6 +600,7 @@ function winrate_by_day() {
         x: d => new Date(d["day_date"]).getUTCDate(),
         y: d => getMonth(d.day_date),
         fill: d => Math.round(d["profitable_percentage"]),
+        fillOpacity: 0.8,
         inset: 1,
         tip: true,
         title: d => `Profitability: ${Math.round(d["profitable_percentage"])}%\nProfitable Trades: ${d["profit_count"]}\nLoss Trades: ${d["loss_count"]}`
@@ -837,7 +622,7 @@ function winrate_by_day() {
         x: d => new Date(d["date_day_format"]).getUTCDate(),
         y: d => getMonth(d.date_day_format),
         text: d => `${d["perf_day_real"].toFixed(2)}%`,
-        fill: "black",
+        fill: "white",
         textAnchor: "middle",
         fillOpacity: 0.6,
         dy: 8
@@ -902,6 +687,59 @@ function graph_position_duration_scatter() {
   </div>
 </div>
 
+```sql id=trade_profitability_by_price_range_data
+CREATE OR REPLACE TEMP TABLE trade_profitability AS
+SELECT
+    FLOOR(position_open_price / 2) * 2 AS price_bin_start,
+    (COUNT_IF(position_profit_loss > 0) * 100.0 / COUNT(*)) AS profitability_percentage,
+    (COUNT_IF(position_profit_loss <= 0) * 100.0 / COUNT(*)) AS loss_percentage,
+    COUNT(*) AS total_trades,
+FROM turbo_data_position
+WHERE position_status = 'Closed'
+GROUP BY price_bin_start
+ORDER BY price_bin_start;
+
+SELECT
+    price_bin_start,
+    total_trades,
+    CONCAT(price_bin_start, '€ - ', price_bin_start + 2, '€') as price_range,
+    ROUND(profitability_percentage, 0) AS profitability_percentage,
+    loss_percentage
+FROM trade_profitability;
+```
+
+```js
+// Function to create a bar chart for trade profitability by price range
+function trade_profitability_by_price_range() {
+    return resize((width) => 
+        Plot.plot({
+            width,
+          axis: null,
+          label: null,
+          height: 260,
+          marginTop: 20,
+          marginBottom: 70,
+          //title: "Trade Profitability by Price Range",
+          marks: [
+            Plot.axisFx(trade_profitability_by_price_range_data, {fx: "price_bin_start", text: (d) => `${d.total_trades} trades`, frameAnchor: "top", lineAnchor: "top", dy: 2, fill: "green", fontSize: 24, fontWeight: "bold", }),
+            Plot.waffleY({length: 1}, {y: 100, fillOpacity: 0.4, rx: 3, dy: 20}),
+            Plot.waffleY(trade_profitability_by_price_range_data, {fx: "price_bin_start", y: "profitability_percentage", rx: 3, fill: "green", fillOpacity: 0.8, dy: 20}),
+            Plot.text(trade_profitability_by_price_range_data, {fx: "price_bin_start", text: (d) => `${d.profitability_percentage}% 📈`, frameAnchor: "bottom", lineAnchor: "top", dy: 26, fill: "green", fillOpacity: 0.7, fontSize: 24, fontWeight: "bold"}),
+            Plot.axisFx(trade_profitability_by_price_range_data, {fx: "price_bin_start", lineWidth: 10, anchor: "bottom", dy: 42, fontSize: 14, fontWeight: "bold", fillOpacity: 0.6, text: (d) => `${d.price_range}`})
+          ]
+        })
+    );
+}
+```
+
+<div class="grid grid-cols-1">
+  <div class="card">
+    <h2>Trade Profitability by Price Range</h2>
+    <span class="small muted"><i>Bar chart showing trade profitability percentage by price range.</i></span>
+    ${trade_profitability_by_price_range()}
+  </div>
+</div>
+
 
 # Day performance %
 
@@ -939,7 +777,8 @@ function performance_by_day() {
         y: d => getMonth(d.date_day_format),
         fill: "perf_day_real",
         inset: 1,
-        title: d => `Performance: ${d["perf_day_real"].toFixed(2)}%` // Added % to tooltip
+        title: d => `Performance: ${d["perf_day_real"].toFixed(2)}%`, // Added % to tooltip
+        fillOpacity: 0.8,
       })),
       
       // Text inside each cell showing `perf_day_real` value
@@ -1068,43 +907,79 @@ function dream() {
 <!-- Custom styling -->
 <style>
 
-.toggle-container {
+:root {
+  /* Funky Primary Colors */
+  --ifm-color-primary: #6a0dad;
+  --ifm-color-primary-dark: #5c0c93;
+  --ifm-color-primary-darker: #4c0a7a;
+  --ifm-color-primary-darkest: #3c0861;
+  --ifm-color-primary-light: #7c0fc8;
+  --ifm-color-primary-lighter: #8f14e0;
+  --ifm-color-primary-lightest: #a01ff7;
+
+  /* Vibrant Accent Colors */
+  --wata-color-profit: #00ffaa;  /* Neon Green */
+  --wata-color-loss: #ff3864;    /* Hot Pink */
+  --wata-color-neutral: #c5b4e3; /* Lavender */
+
+  /* Funky Accents */
+  --wata-color-accent-1: #ffae00; /* Electric Yellow */
+  --wata-color-accent-2: #ff00cc; /* Magenta */
+  --wata-color-accent-3: #00eddb; /* Cyan */
+  --wata-color-accent-4: #b967ff; /* Purple */
+
+  /* UI Elements */
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(106, 13, 173, 0.1);
+
+  --ifm-navbar-background-color: rgba(0, 0, 0, 0.8);
+  --ifm-navbar-link-hover-color: var(--wata-color-accent-2);
+  
+  --ifm-footer-background-color: #120458;
+  --ifm-footer-title-color: #ffffff;
+  --ifm-footer-link-color: #d1d1d1;
+
+  /* Typography */
+  --ifm-font-family-base: 'Archivo', sans-serif;
+  --ifm-heading-font-family: 'Poppins', sans-serif;
+  --ifm-heading-font-weight: 700;
+
+  /* Card & UI Component Styling */
+  --ifm-card-background-color: rgba(255, 255, 255, 0.8);
+  --ifm-card-border-radius: 16px;
+  --ifm-global-radius: 8px;
+  --ifm-global-shadow-md: 0 8px 20px rgba(106, 13, 173, 0.15);
+
+  --ifm-alert-border-radius: 12px;
+  --ifm-alert-padding-vertical: 1rem;
+
+  /* Funky Extras */
+  --wata-gradient-primary: linear-gradient(45deg, #6a0dad, #ff3864, #fd0);
+  --wata-gradient-text: linear-gradient(to right, #ff00cc, #3399ff, #00ffd5);
+  --wata-gradient-secondary: linear-gradient(45deg, #ff00cc, #3399ff, #00ffd5);
+  --wata-button-shadow: 5px 5px 0px rgba(0,0,0,0.2);
+  --wata-skew-angle: -5deg;
+  
+  /* Set proper z-index values */
+  --ifm-z-index-dropdown: 100;
+  --ifm-z-index-fixed: 200;
+  --ifm-z-index-overlay: 400;
+}
+
+
+.card {
+  border: 0.2px solid transparent;
+  border-radius: 15px;
+  background:
+    linear-gradient(var(--ifm-navbar-background-color), var(--ifm-navbar-background-color)) padding-box,
+    var(--wata-gradient-primary) border-box;
+  animation: rainbow-text 3s ease infinite;
+  transition: all 0.3s ease;
+  filter: drop-shadow(0 0 40px rgba(255, 0, 204, 0.1)) drop-shadow(0 0 40px rgba(255, 234, 0, 0.1));
+}
+
+h1, h2, h3 {
   position: relative;
-  right: 0%; /* Adjust for desired spacing */
-  left: 85%; /* Adjust for desired spacing */
-}
-
-.hero {
-  display: flex;
-  align-items: center;
-  font-family: var(--sans-serif);
-  text-wrap: balance;
-  text-align: left;
-}
-
-.hero h1 {
-  max-width: none;
-  font-weight: 900;
-  background: linear-gradient(30deg, red, green, black, black, black);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.hero h2 {
-  margin: 0;
-  max-width: 34em;
-  font-size: 20px;
-  font-style: initial;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--theme-foreground-muted);
-}
-
-@media (min-width: 640px) {
-  .hero h1 {
-    font-size: 90px;
-  }
 }
 
 </style>
