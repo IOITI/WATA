@@ -786,8 +786,12 @@ function treemap() {
 
 ```js
 function winrate_by_day() {
-  const start = d3.utcDay.offset(d3.min(profit_loss_data_full_time, (d) => d.day_date)); // exclusive
-  const end = d3.utcDay.offset(d3.max(profit_loss_data_full_time, (d) => d.day_date)); // exclusive
+  const start = d3.utcDay.offset(d3.min(profit_loss_data_full_time, (d) => d.day_date));
+  const end = d3.utcDay.offset(d3.max(profit_loss_data_full_time, (d) => d.day_date));
+  
+  // A helper function to get the start of the month from a date string
+  const getMonth = (dateStr) => d3.utcMonth.floor(new Date(dateStr));
+
   return resize((width) => Plot.plot({
     width,
     height: (d3.utcMonth.count(start, end) + 1) * 62,
@@ -795,47 +799,48 @@ function winrate_by_day() {
     title: `Trade Win-rate by Day`,
     caption: "For each cell, Primary value is trade Win-rate by day, The second value is profit made on this day.",
     y: { 
-      tickFormat: Plot.formatMonth("en", "short"),
-      paddingTop: 3,   // Add extra spacing above each row
-      paddingBottom: 3 // Add extra spacing below each row
+      // CORRECTED: Use d3.utcFormat directly.
+      tickFormat: d3.utcFormat("%b %Y"),
+      paddingTop: 3,
+      paddingBottom: 3
     },
     color: {
-      type: "linear",               // Linear color scale for continuous percentage values
-      legend: true,                 // Show legend for color
-      scheme: "RdYlGn",             // Red-to-green color scheme for low to high profitability
-      label: "Trade Win rate (%)"   // Legend label
+      type: "linear",
+      legend: true,
+      scheme: "RdYlGn",
+      label: "Trade Win rate (%)"
     },
     marks: [
-      // Cell with color and tooltip based on `profitable_percentage`
+      // Cell with color and tooltip
       Plot.cell(profit_loss_data_full_time, Plot.group({ fill: "max" }, {
         x: d => new Date(d["day_date"]).getUTCDate(),
-        y: d => new Date(d["day_date"]).getUTCMonth(),
-        fill: d => Math.round(d["profitable_percentage"]),  // Round to nearest integer
+        y: d => getMonth(d.day_date),
+        fill: d => Math.round(d["profitable_percentage"]),
         inset: 1,
         tip: true,
-        title: d => `Profitability: ${Math.round(d["profitable_percentage"])}%\nProfitable Trades: ${d["profit_count"]}\nLoss Trades: ${d["loss_count"]}`  // Tooltip text with detailed info
+        title: d => `Profitability: ${Math.round(d["profitable_percentage"])}%\nProfitable Trades: ${d["profit_count"]}\nLoss Trades: ${d["loss_count"]}`
       })),
       
-      // Text inside each cell showing `profitable_percentage` value as an integer, with conditional color for readability
+      // Text for profitable_percentage
       Plot.text(profit_loss_data_full_time, Plot.group({ text: "max" }, {
         x: d => new Date(d["day_date"]).getUTCDate(),
-        y: d => new Date(d["day_date"]).getUTCMonth(),
-        text: d => `${Math.round(d["profitable_percentage"])}%`,  // Round to integer
+        y: d => getMonth(d.day_date),
+        text: d => `${Math.round(d["profitable_percentage"])}%`,
         fontSize: 13,
-        fill: d => (Math.round(d["profitable_percentage"]) >= 25 && Math.round(d["profitable_percentage"]) <= 70) ? "black" : "white",  // Conditional text color
-        textAnchor: "middle",                // Center-align the text
-        dy: -6                               // Adjust positioning to be higher in the cell
+        fill: d => (Math.round(d["profitable_percentage"]) >= 25 && Math.round(d["profitable_percentage"]) <= 70) ? "black" : "white",
+        textAnchor: "middle",
+        dy: -6
       })),
       
-      // Additional text inside each cell showing `perf_day_real` value, placed slightly lower
+      // Text for perf_day_real
       Plot.text(day_performance, Plot.group({ text: "max" }, {
         x: d => new Date(d["date_day_format"]).getUTCDate(),
-        y: d => new Date(d["date_day_format"]).getUTCMonth(),
-        text: d => `${d["perf_day_real"].toFixed(2)}%`,  // Format to 2 decimal places if needed
-        fill: "black",                              // Text color
-        textAnchor: "middle",                       // Center-align the text
+        y: d => getMonth(d.date_day_format),
+        text: d => `${d["perf_day_real"].toFixed(2)}%`,
+        fill: "black",
+        textAnchor: "middle",
         fillOpacity: 0.6,
-        dy: 8                                       // Position below the first text
+        dy: 8
       }))
     ]
   }));
@@ -902,42 +907,51 @@ function graph_position_duration_scatter() {
 
 ```js
 function performance_by_day() {
-  const start = d3.utcDay.offset(d3.min(profit_loss_data_full_time, (d) => d.day_date)); // exclusive
-  const end = d3.utcDay.offset(d3.max(profit_loss_data_full_time, (d) => d.day_date)); // exclusive
+  const start = d3.utcDay.offset(d3.min(profit_loss_data_full_time, (d) => d.day_date));
+  const end = d3.utcDay.offset(d3.max(profit_loss_data_full_time, (d) => d.day_date));
+
+  // Helper function to get the start of the month from a date string.
+  // This ensures all days in the same month map to the same y-position.
+  const getMonth = (dateStr) => d3.utcMonth.floor(new Date(dateStr));
+
   return resize((width) => Plot.plot({
     width,
+    // The height calculation is already correct and will work with this change.
     height: (d3.utcMonth.count(start, end) + 1) * 62,
     padding: 0,
+    title: "Trade Performance by Day", // Added a title for clarity
+    caption: "Each cell represents the percentage profit or loss for that day.", // Added a caption
     y: { 
-      tickFormat: Plot.formatMonth("en", "short"),
-      paddingTop: 3,   // Add extra spacing above each row
-      paddingBottom: 3 // Add extra spacing below each row
+      tickFormat: d3.utcFormat("%b %Y"),
+      paddingTop: 3,
+      paddingBottom: 3
     },
     color: {
-      type: "linear",         // Use a linear color scale for continuous values
-      legend: true,           // Show legend for color
-      scheme: "RdYlGn",       // Color scheme, e.g., red-to-green
-      label: "Performance"    // Legend label
+      type: "linear",
+      legend: true,
+      scheme: "RdYlGn",
+      label: "Performance (%)" // Changed label to match content
     },
     marks: [
       // Cell with color and tooltip based on `perf_day_real`
       Plot.cell(day_performance, Plot.group({ fill: "max" }, {
         x: d => new Date(d["date_day_format"]).getUTCDate(),
-        y: d => new Date(d["date_day_format"]).getUTCMonth(),
+        y: d => getMonth(d.date_day_format),
         fill: "perf_day_real",
         inset: 1,
-        title: d => `Value: ${d["perf_day_real"].toFixed(2)}` // Tooltip text
+        title: d => `Performance: ${d["perf_day_real"].toFixed(2)}%` // Added % to tooltip
       })),
       
       // Text inside each cell showing `perf_day_real` value
       Plot.text(day_performance, Plot.group({ text: "max" }, {
         x: d => new Date(d["date_day_format"]).getUTCDate(),
-        y: d => new Date(d["date_day_format"]).getUTCMonth(),
-        text: d => `${d["perf_day_real"].toFixed(2)}%`,  // Format to 2 decimal places if needed
+        // UPDATED: Use the same time mapping for y.
+        y: d => getMonth(d.date_day_format),
+        text: d => `${d["perf_day_real"].toFixed(2)}%`,
         fontSize: 10,
-        fill: "black",                       // Text color
-        textAnchor: "middle",                // Center-align the text
-        dy: 0                                // Adjust vertical positioning
+        fill: "black",
+        textAnchor: "middle",
+        dy: 0
       }))
     ]
   }));
