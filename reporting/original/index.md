@@ -933,6 +933,7 @@ function dream() {
   --docusaurus-highlighted-code-line-bg: rgba(106, 13, 173, 0.1);
 
   --ifm-navbar-background-color: rgba(0, 0, 0, 0.8);
+  --ifm-navbar-background-hover-color: rgba(0, 0, 0, 0.8);
   --ifm-navbar-link-hover-color: var(--wata-color-accent-2);
   
   --ifm-footer-background-color: #120458;
@@ -971,11 +972,18 @@ function dream() {
   border: 0.2px solid transparent;
   border-radius: 15px;
   background:
-    linear-gradient(var(--ifm-navbar-background-color), var(--ifm-navbar-background-color)) padding-box,
+    linear-gradient(var(--ifm-navbar-background-color)) padding-box,
     var(--wata-gradient-primary) border-box;
-  animation: rainbow-text 3s ease infinite;
-  transition: all 0.3s ease;
+  transition: all 0.3s;
   filter: drop-shadow(0 0 40px rgba(255, 0, 204, 0.1)) drop-shadow(0 0 40px rgba(255, 234, 0, 0.1));
+}
+
+.card:hover {
+  border: 4px solid transparent;
+  background:
+    linear-gradient(var(--ifm-navbar-background-hover-color)) padding-box,
+    var(--wata-gradient-secondary) border-box;
+      filter: drop-shadow(0 0 40px rgba(255, 0, 204, 0.2)) drop-shadow(0 0 40px rgba(0, 255, 213, 0.2));
 }
 
 h1, h2, h3 {
