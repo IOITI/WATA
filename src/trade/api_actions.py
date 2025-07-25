@@ -13,6 +13,7 @@ from copy import deepcopy
 from datetime import datetime
 import pytz
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, RetryError
+from collections import defaultdict
 
 # --- Saxo OpenApi Components ---
 import src.saxo_openapi.endpoints.referencedata as rd
@@ -48,7 +49,6 @@ DEFAULT_RETRY_WAIT_SECONDS = 2
 # --- Utilities ---
 
 def parse_saxo_turbo_description(description):
-    # (Keep the existing utility function)
     pattern = r"(.*) (\w+) (\w+) (\d+(?:\.\d+)?) (\w+)$"
     match = re.match(pattern, description)
     if match:
@@ -237,9 +237,9 @@ class InstrumentService:
 
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(ApiRequestException))
-    def _get_instrument_details(self, identifiers_string: str, exchange_id: str):
-        """Helper to get InfoPrices with retry."""
-        logging.debug(f"Fetching InfoPrices for {identifiers_string} on {exchange_id}")
+    def _get_infoprices_for_asset_type(self, identifiers_string: str, exchange_id: str, asset_type: str):
+        """Helper to get InfoPrices for a specific asset type with retry."""
+        logging.debug(f"Fetching InfoPrices for {asset_type} on {exchange_id} for UICs: {identifiers_string[:100]}...") # Log sample
         req = tr.infoprices.InfoPrices(
             params={
                 "$top": self.api_limits["top_instruments"],
@@ -247,13 +247,13 @@ class InstrumentService:
                 "ExchangeId": exchange_id,
                 "FieldGroups": "Commissions,DisplayAndFormat,Greeks,HistoricalChanges,InstrumentPriceDetails,MarketDepth,PriceInfo,PriceInfoDetails,Quote",
                 "Uics": identifiers_string,
-                "AssetType": "WarrantOpenEndKnockOut",
+                "AssetType": asset_type, # --- MODIFIED: Use the passed asset_type
             }
         )
         try:
             return self.api_client.request(req)
         except ApiRequestException as e:
-             logging.warning(f"ApiRequestException during _get_instrument_details (will retry): {e}")
+             logging.warning(f"ApiRequestException during _get_infoprices_for_asset_type (will retry): {e}")
              raise # Re-raise for tenacity
 
     def find_turbos(self, exchange_id: str, underlying_uics: str, keywords: str):
@@ -269,7 +269,7 @@ class InstrumentService:
                 "Keywords": keywords,
                 "IncludeNonTradable": False,
                 "UnderlyingUics": underlying_uics,
-                "AssetTypes": "WarrantKnockOut,WarrantOpenEndKnockOut",
+                "AssetTypes": "WarrantKnockOut,WarrantOpenEndKnockOut,MiniFuture,WarrantDoubleKnockOut",
             }
         )
         response_instruments = self.api_client.request(req_instruments)
@@ -306,16 +306,17 @@ class InstrumentService:
             logging.error(f"Error sorting instruments by parsed price: {e}")
             raise ValueError("Could not sort instruments by parsed price.") from e
 
-        # 4. Get Detailed Price Info for Sorted Instruments
-        identifiers = [item["Identifier"] for item in sorted_instruments]
-        if not identifiers:
-            # Should be caught earlier, but defensive check
-            raise NoTurbosAvailableException("No identifiers found after sorting.",
-                                             search_context=req_instruments.params)
+        # 4. Group instruments by AssetType to handle multiple types correctly
+        instrument_groups = defaultdict(list)
+        for item in sorted_instruments:
+            # We only care about the top N instruments in total
+            if len(instrument_groups) < self.api_limits["top_instruments"]:
+                instrument_groups[item['AssetType']].append(item)
 
-        identifiers_string = ",".join(
-            map(str, identifiers[:self.api_limits["top_instruments"]]))  # Limit query size
+        if not instrument_groups:
+             raise NoTurbosAvailableException("No identifiers found after sorting.", search_context=req_instruments.params)
 
+        # 5. Get Detailed Price Info for Sorted Instruments
         response_infoprices = None
         bid_data_missing = True  # Initial state for the loop, indicates we need to check/retry for bid data
         bid_retries = 0
@@ -324,15 +325,33 @@ class InstrumentService:
 
         while bid_data_missing and bid_retries < max_bid_retries:
             current_attempt = bid_retries + 1
-            logging.debug(
-                f"Bid check loop: Attempt {current_attempt}/{max_bid_retries} for identifiers: {identifiers_string}")
+            logging.debug(f"Bid check loop: Attempt {current_attempt}/{max_bid_retries}")
+
+            # This list will hold aggregated price data from all groups
+            all_infoprices_data = []
+
             try:
-                # Attempt to get instrument details (this method has its own internal tenacity retries for API errors)
-                response_infoprices = self._get_instrument_details(identifiers_string, exchange_id)
+                for asset_type, instruments_in_group in instrument_groups.items():
+                    identifiers = [item["Identifier"] for item in instruments_in_group]
+                    identifiers_string = ",".join(map(str, identifiers))
+
+                    logging.debug(f"Attempting to fetch InfoPrices for AssetType '{asset_type}' ({len(instruments_in_group)} instruments)")
+                    group_response = self._get_infoprices_for_asset_type(identifiers_string, exchange_id, asset_type)
+
+                    if group_response and group_response.get("Data"):
+                        all_infoprices_data.extend(group_response["Data"])
+                    else:
+                        logging.warning(f"No InfoPrice data received for group {asset_type}.")
+
+                # After fetching for all groups, create a single response object to check
+                if all_infoprices_data:
+                    response_infoprices = {"Data": all_infoprices_data}
+                else:
+                    response_infoprices = None # Ensure it's None if all groups fail
 
                 if not response_infoprices or not response_infoprices.get("Data"):
                     logging.warning(
-                        f"No InfoPrice data received from _get_instrument_details. "
+                        f"No InfoPrice data received from any group. "
                         f"Bid check attempt {current_attempt}/{max_bid_retries}."
                     )
                     # This situation means we couldn't get data to check bids. Consume a bid_retry.
@@ -397,7 +416,7 @@ class InstrumentService:
 
             except RetryError as e:  # Raised by tenacity in _get_instrument_details if it exhausts its retries
                 logging.error(
-                    f"Persistent failure in _get_instrument_details after its internal retries during bid check "
+                    f"Persistent failure in _get_infoprices_for_asset_type after its internal retries during bid check "
                     f"(Attempt {current_attempt}/{max_bid_retries}): {e}"
                 )
                 response_infoprices = None  # Ensure no stale data is used
@@ -490,7 +509,7 @@ class InstrumentService:
             f"after retry and filtering logic."
         )
 
-        # 5. Filter by Market State and Availability
+        # 6. Filter by Market State and Availability
         available_items = [
             item for item in response_infoprices["Data"]
             if item["Quote"].get("PriceTypeAsk") != "NoMarket" and
@@ -504,7 +523,7 @@ class InstrumentService:
 
         logging.debug(f"{len(available_items)} instruments available after market state filtering.")
 
-        # 6. Filter by Price Range (using Bid price for selection consistency)
+        # 7. Filter by Price Range (using Bid price for selection consistency)
         min_price = self.turbo_price_range["min"]
         max_price = self.turbo_price_range["max"]
         price_filtered_items = [
@@ -521,7 +540,7 @@ class InstrumentService:
 
         logging.debug(f"{len(price_filtered_items)} instruments available after price filtering.")
 
-        # 7. Select the Best Match (first one after filtering)
+        # 8. Select the Best Match (first one after filtering)
         # Re-sort based on original criteria (knock-out price) before selecting
         # This ensures we pick the one with the best knock-out among the price-valid ones.
         # Need to merge parsed data back or re-parse. Simpler: select based on Bid price for now.
@@ -532,7 +551,7 @@ class InstrumentService:
 
         selected_turbo_info = deepcopy(final_candidates[0])  # Use the first candidate
 
-        # --- 8. Create Price Subscription to get the latest snapshot ---
+        # --- 9. Create Price Subscription to get the latest snapshot ---
         context_id = str(uuid.uuid1())  # Generate unique IDs per call like original
         reference_id = str(uuid.uuid1())
         selected_uic = selected_turbo_info["Uic"]
@@ -591,7 +610,7 @@ class InstrumentService:
             final_snapshot_data = selected_turbo_info  # Fallback
 
 
-        # --- 9. Prepare and Return Result ---
+        # --- 10. Prepare and Return Result ---
         if final_snapshot_data is None:
             # This should only happen if the fallback above fails unexpectedly
             logging.error(f"Critical error: No price data available for selected turbo {selected_uic}")
