@@ -278,6 +278,9 @@ class InstrumentService:
              logging.warning("No instruments found in initial search.")
              raise NoTurbosAvailableException("No instruments found in initial search.", search_context=req_instruments.params)
 
+        logging.debug(f"Found {len(response_instruments['Data'])} instruments in initial search for keywords '{keywords}'.")
+        logging.debug(f"Phase 1 : Initial search response: {json.dumps(response_instruments)}")
+
         # 2. Parse and Filter Initial List
         valid_items = []
         for item in response_instruments["Data"]:
@@ -293,6 +296,7 @@ class InstrumentService:
             raise NoTurbosAvailableException("No instruments found with parsable descriptions.", search_context=req_instruments.params)
 
         logging.debug(f"Found {len(valid_items)} instruments with valid descriptions.")
+        logging.debug(f"Phase 2 : Valid items after parsing: {json.dumps(valid_items)}")
 
         # 3. Sort by Knock-out Price (from parsed data)
         sort_reverse = keywords.lower() != "short" # True for long (higher price first), False for short (lower price first)
@@ -315,6 +319,8 @@ class InstrumentService:
 
         if not instrument_groups:
              raise NoTurbosAvailableException("No identifiers found after sorting.", search_context=req_instruments.params)
+
+        logging.debug(f"Phase 3 : Sorted instruments grouped by AssetType: {json.dumps(instrument_groups)}")
 
         # 5. Get Detailed Price Info for Sorted Instruments
         response_infoprices = None
@@ -509,6 +515,8 @@ class InstrumentService:
             f"after retry and filtering logic."
         )
 
+        logging.debug(f"Phase 5 : Final InfoPrices response after bid checks: {json.dumps(response_infoprices)}")
+
         # 6. Filter by Market State and Availability
         available_items = [
             item for item in response_infoprices["Data"]
@@ -522,6 +530,7 @@ class InstrumentService:
             raise NoMarketAvailableException(f"No markets available for {keywords} turbo in {exchange_id}.")
 
         logging.debug(f"{len(available_items)} instruments available after market state filtering.")
+        logging.debug(f"Phase 6 : Available items after market state filtering: {json.dumps(available_items)}")
 
         # 7. Filter by Price Range (using Bid price for selection consistency)
         min_price = self.turbo_price_range["min"]
@@ -539,6 +548,7 @@ class InstrumentService:
             )
 
         logging.debug(f"{len(price_filtered_items)} instruments available after price filtering.")
+        logging.debug(f"Phase 7 : Price filtered items: {json.dumps(price_filtered_items)}")
 
         # 8. Select the Best Match (first one after filtering)
         # Re-sort based on original criteria (knock-out price) before selecting
