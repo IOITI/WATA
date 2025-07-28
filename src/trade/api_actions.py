@@ -551,13 +551,7 @@ class InstrumentService:
         logging.debug(f"Phase 7 : Price filtered items: {json.dumps(price_filtered_items)}")
 
         # 8. Select the Best Match (first one after filtering)
-        # Re-sort based on original criteria (knock-out price) before selecting
-        # This ensures we pick the one with the best knock-out among the price-valid ones.
-        # Need to merge parsed data back or re-parse. Simpler: select based on Bid price for now.
-        # If selection MUST be based on knock-out, need more complex merging/lookup.
-        # Let's sort the final candidates by Bid price (opposite of initial KO sort logic)
-        final_sort_reverse = not sort_reverse
-        final_candidates = sorted(price_filtered_items, key=lambda x: x["Quote"]["Bid"], reverse=final_sort_reverse)
+        final_candidates = sorted(price_filtered_items, key=lambda x: x["Quote"]["Bid"])
 
         selected_turbo_info = deepcopy(final_candidates[0])  # Use the first candidate
 
