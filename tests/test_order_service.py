@@ -38,6 +38,17 @@ class TestOrderService:
         with pytest.raises(OrderPlacementError):
             order_service.place_market_order(uic=1, asset_type="FxSpot", amount=100, buy_sell="Buy")
 
+    def test_place_market_order_missing_order_id(self, order_service, mock_api_client):
+        """Test that an error is raised if the API response is missing the OrderId."""
+        # Arrange
+        # The response is successful, but malformed (missing OrderId)
+        malformed_response = {"Status": "Success", "SomeOtherKey": "value"}
+        mock_api_client.request.return_value = malformed_response
+
+        # Act & Assert
+        with pytest.raises(OrderPlacementError, match="Order placement response missing OrderId"):
+            order_service.place_market_order(uic=1, asset_type="FxSpot", amount=100, buy_sell="Buy")
+
     def test_cancel_order_success(self, order_service, mock_api_client):
         # Arrange
         mock_api_client.request.return_value = {"Status": "Cancelled"} # Simulate a success response

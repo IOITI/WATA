@@ -66,6 +66,18 @@ class TestPositionService:
         with pytest.raises(SaxoApiError, match="Invalid SpendingPower value received"):
             position_service.get_spending_power()
 
+    def test_get_spending_power_handles_string_value(self, position_service, mock_api_client):
+        """Test that spending power is correctly parsed even if returned as a string."""
+        # Arrange
+        mock_api_client.request.return_value = {"SpendingPower": "50000.0"}
+
+        # Act
+        result = position_service.get_spending_power()
+
+        # Assert
+        assert result == 50000.0
+        assert isinstance(result, float)
+
     @patch.object(PositionService, 'get_open_positions')
     def test_find_position_by_order_id_with_retry_found_first_try(self, mock_get_open_positions, position_service):
         # Arrange

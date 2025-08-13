@@ -215,3 +215,53 @@ class TestInstrumentService:
         else:
             with pytest.raises(NoTurbosAvailableException, match="No turbos found in price range"):
                 instrument_service.find_turbos("exchange1", "underlying1", "long")
+
+    def test_should_filter_out_closed_market_instruments(self, instrument_service, mock_api_client):
+        """Test that instruments with MarketState 'Closed' are filtered out."""
+        # Arrange
+        initial_instrument = TestDataFactory.create_saxo_instrument(identifier=1)
+        # This instrument is tradable, but the market is closed.
+        infoprice_closed = TestDataFactory.create_saxo_infoprice(uic=101, identifier=1, market_state="Closed")
+
+        mock_api_client.request.side_effect = [
+            {"Data": [initial_instrument]},
+            {"Data": [infoprice_closed]},
+        ]
+
+        # Act & Assert
+        with pytest.raises(NoMarketAvailableException, match="No markets available"):
+            instrument_service.find_turbos("exchange1", "underlying1", "long")
+
+    @patch('time.sleep', return_value=None)
+    def test_should_proceed_if_exactly_50_percent_bids_missing(self, mock_sleep, instrument_service, mock_api_client):
+        """Test bid retry logic proceeds without retrying if exactly 50% of bids are missing."""
+        # Arrange
+        initial_instruments = [TestDataFactory.create_saxo_instrument(identifier=i) for i in range(4)]
+
+        # Exactly 50% (2/4) are missing bids
+        infoprice1 = TestDataFactory.create_saxo_infoprice(uic=1, identifier=1)
+        infoprice2 = TestDataFactory.create_saxo_infoprice(uic=2, identifier=2)
+        infoprice_no_bid_1 = TestDataFactory.create_saxo_infoprice(uic=3, identifier=3)
+        del infoprice_no_bid_1['Quote']['Bid']
+        infoprice_no_bid_2 = TestDataFactory.create_saxo_infoprice(uic=4, identifier=4)
+        del infoprice_no_bid_2['Quote']['Bid']
+        infoprices = [infoprice1, infoprice2, infoprice_no_bid_1, infoprice_no_bid_2]
+
+        price_snapshot = TestDataFactory.create_price_subscription_snapshot(uic=1)
+
+        mock_api_client.request.side_effect = [
+            {"Data": initial_instruments},
+            {"Data": infoprices},
+            {"Snapshot": price_snapshot}
+        ]
+
+        # Act
+        result = instrument_service.find_turbos("exchange1", "underlying1", "long")
+
+        # Assert
+        # The process should continue as the condition is >50%
+        assert result is not None
+        assert result['selected_instrument']['uic'] == 1
+        # No retry should be triggered
+        mock_sleep.assert_not_called()
+        assert mock_api_client.request.call_count == 3

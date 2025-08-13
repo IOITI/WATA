@@ -232,3 +232,39 @@ class TestPerformanceMonitor:
         # A notification should have been sent
         mock_send_message.assert_called_once()
         assert "SYNC CLOSE: Position pos1" in mock_send_message.call_args[0][1]
+
+    @patch.object(PerformanceMonitor, '_log_performance_detail')
+    def test_should_skip_closing_if_canbeclosed_is_false(self, mock_log_perf, performance_monitor, mock_db_position_manager, mock_position_service, mock_order_service):
+        """Test that a position is not closed if it hits a threshold but CanBeClosed is False."""
+        # Arrange
+        mock_db_position_manager.get_open_positions_ids_actions.return_value = [{"position_id": "pos1"}]
+        # Position hits stoploss, but is marked as not closable
+        position = TestDataFactory.create_saxo_position(position_id="pos1", open_price=100, current_bid=70, can_be_closed=False)
+        mock_position_service.get_open_positions.return_value = {"Data": [position]}
+        mock_db_position_manager.get_max_position_percent.return_value = 1.0
+
+        # Act
+        result = performance_monitor.check_all_positions_performance()
+
+        # Assert
+        # No close order should have been attempted
+        assert len(result["closed_positions_processed"]) == 1
+        assert result["closed_positions_processed"][0]['status'] == "Skipped (Cannot Be Closed)"
+        mock_order_service.place_market_order.assert_not_called()
+
+    def test_sync_anomaly_position_is_not_in_open_or_closed(self, performance_monitor, mock_db_position_manager, mock_position_service):
+        """Test the sync anomaly case where a position from the DB is not found anywhere in the API."""
+        # Arrange
+        # DB thinks pos_vanished is open
+        mock_db_position_manager.get_open_positions_ids.return_value = ["pos_vanished"]
+        # API returns no open positions
+        mock_position_service.get_open_positions.return_value = {"Data": []}
+        # And the position is also not in the recently closed list
+        mock_position_service.get_closed_positions.return_value = {"Data": []}
+
+        # Act
+        result = performance_monitor.sync_db_positions_with_api()
+
+        # Assert
+        # No updates should be generated for the DB
+        assert len(result["updates_for_db"]) == 0

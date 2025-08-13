@@ -190,3 +190,40 @@ class TestTradingOrchestrator:
         assert mock_position_service.get_spending_power.call_count == 2
         # The order placement should NOT have been called a second time
         assert mock_order_service.place_market_order.call_count == 1
+
+    def test_execute_trade_signal_with_zero_fund_percentage(self, trading_orchestrator, mock_instrument_service, mock_position_service):
+        """Test that trade execution fails if max_account_funds_to_use_percentage is 0."""
+        # Arrange
+        turbo_info = { "selected_instrument": { "uic": 1, "asset_type": "TypeA", "latest_ask": 10.0, "decimals": 2, "description": "T1", "symbol": "T1", "currency": "EUR", "commissions": {} } }
+        mock_instrument_service.find_turbos.return_value = turbo_info
+        mock_position_service.get_spending_power.return_value = 1000.0
+        # Override the configuration for this test
+        trading_orchestrator.buying_power_config['max_account_funds_to_use_percentage'] = 0
+
+        # Act & Assert
+        with pytest.raises(InsufficientFundsException):
+            trading_orchestrator.execute_trade_signal("e1", "u1", "long")
+
+    def test_execute_trade_signal_handles_unexpected_position_error(self, trading_orchestrator, mock_instrument_service, mock_position_service, mock_order_service):
+        """
+        Test that if an unexpected error occurs during position finding, the order
+        is cancelled and the original error is re-raised.
+        """
+        # Arrange
+        turbo_info = { "selected_instrument": { "uic": 1, "asset_type": "TypeA", "latest_ask": 10.0, "decimals": 2, "description": "T1", "symbol": "T1", "currency": "EUR", "commissions": {} } }
+        order_response = TestDataFactory.create_order_response(order_id="order1")
+        # This is the unexpected error we want to simulate
+        simulated_error = ValueError("A surprising error in the position service")
+
+        mock_instrument_service.find_turbos.return_value = turbo_info
+        mock_position_service.get_spending_power.return_value = 1000.0
+        mock_order_service.place_market_order.return_value = order_response
+        # The position finding step will raise an unexpected error
+        mock_position_service.find_position_by_order_id_with_retry.side_effect = simulated_error
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="A surprising error in the position service"):
+            trading_orchestrator.execute_trade_signal("e1", "u1", "long")
+
+        # Crucially, assert that cleanup was attempted
+        mock_order_service.cancel_order.assert_called_once_with("order1")
