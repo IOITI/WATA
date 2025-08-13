@@ -44,7 +44,7 @@ ALLOWED_IPS = [
 
 @app.middleware("http")
 async def check_ip(request: Request, call_next):
-    client_ip = request.client.host
+    client_ip = request.headers.get("x-forwarded-for", request.client.host)
     print(f"HERE {client_ip}")
     if client_ip not in ALLOWED_IPS:
         logging.warning(f"Forbidden access attempt from IP: {client_ip}")

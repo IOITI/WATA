@@ -1,6 +1,7 @@
 # logging_utils.py
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 
 
 def setup_logging(config_manager, app_name):
@@ -15,6 +16,9 @@ def setup_logging(config_manager, app_name):
 
     # Configure logging with file name based on app_name
     log_file_name = f"{logging_config['persistant']['log_path']}/{app_name}/{app_name}.log"
+
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(log_file_name), exist_ok=True)
 
     # Create a RotatingFileHandler
     handler = RotatingFileHandler(log_file_name, maxBytes=2097152, backupCount=31)

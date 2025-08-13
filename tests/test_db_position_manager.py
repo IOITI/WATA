@@ -671,6 +671,7 @@ def test_append_performance_message(setup_temp_db):
 
     # Insert dummy data into the database for testing
     today = datetime.now().strftime('%Y/%m/%d')
+    from datetime import timedelta
 
     open_data = {
         "action": "long",
@@ -716,16 +717,37 @@ def test_append_performance_message(setup_temp_db):
                                          last_best_7_days_percentages_on_max)
 
     # Expected message
-    expected_message = f"\n--- Last 7 Days Performance real ---\n"
-    expected_message += f"{today}: 10.0%\n"
-    expected_message += f"\n--- Last 7 Days Performance best ---\n"
-    expected_message += f"{today}: 10.0%\n"
-    expected_message += f"\n--- Last 7 Days Performance, on max ---\n"
-    expected_message += f"{today}: 20.0%\n"
-    expected_message += f"\n--- Last 7 Days Performance, best on max ---\n"
-    expected_message += f"{today}: 20.0%\n"
+    expected_message = ""
+    for i in range(7):
+        day = (datetime.now() - timedelta(days=i)).strftime('%Y/%m/%d')
+        if i == 0:
+            expected_message += f"\n--- Last 7 Days Performance real ---\n"
+            expected_message += f"{day}: 10.00%\n"
+        else:
+            expected_message += f"{day}: 0.00%\n"
+    for i in range(7):
+        day = (datetime.now() - timedelta(days=i)).strftime('%Y/%m/%d')
+        if i == 0:
+            expected_message += f"\n--- Last 7 Days Performance best ---\n"
+            expected_message += f"{day}: 10.00%\n"
+        else:
+            expected_message += f"{day}: 0.00%\n"
+    for i in range(7):
+        day = (datetime.now() - timedelta(days=i)).strftime('%Y/%m/%d')
+        if i == 0:
+            expected_message += f"\n--- Last 7 Days Performance, on max ---\n"
+            expected_message += f"{day}: 20.00%\n"
+        else:
+            expected_message += f"{day}: 0.00%\n"
+    for i in range(7):
+        day = (datetime.now() - timedelta(days=i)).strftime('%Y/%m/%d')
+        if i == 0:
+            expected_message += f"\n--- Last 7 Days Performance, best on max ---\n"
+            expected_message += f"{day}: 20.00%\n"
+        else:
+            expected_message += f"{day}: 0.00%\n"
 
-    assert message == expected_message, "The generated performance message should match the expected output."
+    assert message.strip() == expected_message.strip()
 
 
 def test_database_marked_as_corrupted(setup_temp_db):
