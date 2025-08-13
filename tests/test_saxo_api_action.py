@@ -169,6 +169,42 @@ def test_saxo_api_client_request_connection_error(mock_saxo_lib, mock_config_man
     with pytest.raises(ApiRequestException, match="Underlying request failed: Connection failed"):
         client.request("some_endpoint")
 
+@patch('src.trade.api_actions.SaxoOpenApiLib')
+def test_saxo_api_client_request_non_string_error_content(mock_saxo_lib, mock_config_manager, mock_saxo_auth):
+    """Test error handling when error content is not a string."""
+    mock_api_instance = mock_saxo_lib.return_value
+    # Simulate error content being a dictionary instead of a string
+    mock_api_instance.request.side_effect = SaxoOpenApiLibError(code=500, content={"error": "detail"}, reason="Server Error")
+    client = SaxoApiClient(mock_config_manager, mock_saxo_auth)
+    with pytest.raises(SaxoApiError) as excinfo:
+        client.request("some_endpoint")
+    assert str({"error": "detail"}) in str(excinfo.value)
+
+@patch('src.trade.api_actions.SaxoOpenApiLib')
+def test_saxo_api_client_request_invalid_json_error(mock_saxo_lib, mock_config_manager, mock_saxo_auth):
+    """Test error handling with invalid JSON content."""
+    mock_api_instance = mock_saxo_lib.return_value
+    mock_api_instance.request.side_effect = SaxoOpenApiLibError(code=500, content="Not a valid JSON", reason="Server Error")
+    client = SaxoApiClient(mock_config_manager, mock_saxo_auth)
+    with pytest.raises(SaxoApiError, match="Not a valid JSON"):
+        client.request("some_endpoint")
+
+@patch('src.trade.api_actions.SaxoOpenApiLib')
+def test_saxo_api_client_request_token_auth_exception_reraised(mock_saxo_lib, mock_config_manager, mock_saxo_auth):
+    """Test that TokenAuthenticationException is re-raised."""
+    mock_saxo_auth.get_token.side_effect = TokenAuthenticationException("Token machine broke")
+    with pytest.raises(TokenAuthenticationException):
+        SaxoApiClient(mock_config_manager, mock_saxo_auth)
+
+@patch('src.trade.api_actions.SaxoOpenApiLib')
+def test_saxo_api_client_unexpected_exception(mock_saxo_lib, mock_config_manager, mock_saxo_auth):
+    """Test wrapping of unexpected exceptions."""
+    mock_api_instance = mock_saxo_lib.return_value
+    mock_api_instance.request.side_effect = Exception("Something totally unexpected")
+    client = SaxoApiClient(mock_config_manager, mock_saxo_auth)
+    with pytest.raises(ApiRequestException, match="Unexpected wrapper error: Something totally unexpected"):
+        client.request("some_endpoint")
+
 # endregion
 
 # region Test InstrumentService
@@ -206,6 +242,55 @@ class TestInstrumentService:
         with pytest.raises(NoTurbosAvailableException):
             instrument_service.find_turbos("e1", "u1", "long")
 
+    @patch('src.trade.api_actions.parse_saxo_turbo_description')
+    def test_find_turbos_sorting_error(self, mock_parse_description, instrument_service, mock_api_client):
+        # Simulate data that will cause a sorting error
+        mock_api_client.request.return_value = {"Data": [{"Identifier": 1, "Description": "A valid description"}]}
+        # Mock the parsing result to have a non-numeric price
+        mock_parse_description.return_value = {"price": "not_a_number"}
+        with pytest.raises(ValueError, match="Could not sort instruments by parsed price"):
+            instrument_service.find_turbos("e1", "u1", "long")
+
+    @patch('time.sleep', return_value=None)
+    def test_find_turbos_price_subscription_fails(self, mock_sleep, instrument_service, mock_api_client):
+        # Happy path until the last step (price subscription)
+        mock_api_client.request.side_effect = [
+            {"Data": [{"Identifier": 1, "Description": "TURBO LONG DAX 15000 CITI", "AssetType": "WarrantKnockOut"}]},
+            {"Data": [{"Uic": 101, "Identifier": 1, "AssetType": "WarrantKnockOut", "Quote": {"Bid": 10, "Ask": 10.1, "PriceTypeAsk": "Tradable", "PriceTypeBid": "Tradable", "MarketState": "Open"}}]},
+            # This time, the subscription fails
+            ApiRequestException("Subscription failed")
+        ]
+
+        result = instrument_service.find_turbos("e1", "u1", "long")
+        # Should fall back to using the InfoPrice data
+        assert result is not None
+        assert result['selected_instrument']['uic'] == 101
+        # latest_ask should be from the InfoPrice response, not the (failed) subscription
+        assert result['selected_instrument']['latest_ask'] == 10.1
+        assert result['selected_instrument']['subscription_context_id'] is None # Should be None on failure
+
+    @patch('time.sleep', return_value=None)
+    def test_find_turbos_no_infoprice_data(self, mock_sleep, instrument_service, mock_api_client):
+        # First call to get instruments succeeds
+        mock_api_client.request.side_effect = [
+            {"Data": [{"Identifier": 1, "Description": "TURBO LONG DAX 15000 CITI", "AssetType": "WarrantKnockOut"}]},
+            # Subsequent calls to get infoprices fail
+            None, None, None
+        ]
+        with pytest.raises(NoMarketAvailableException, match="Failed to obtain valid InfoPrice data"):
+            instrument_service.find_turbos("e1", "u1", "long")
+
+    @patch('time.sleep', return_value=None)
+    def test_find_turbos_no_quote_in_infoprice_data(self, mock_sleep, instrument_service, mock_api_client):
+        # The bid check loop should exit gracefully if no items have a "Quote" field
+        mock_api_client.request.side_effect = [
+            {"Data": [{"Identifier": 1, "Description": "TURBO LONG DAX 15000 CITI", "AssetType": "WarrantKnockOut"}]},
+            # InfoPrice data is missing the "Quote" field
+            {"Data": [{"Uic": 101, "Identifier": 1, "AssetType": "WarrantKnockOut"}]},
+        ]
+        with pytest.raises(NoMarketAvailableException, match="No instruments with Bid data available after retries and final filtering."):
+            instrument_service.find_turbos("e1", "u1", "long")
+
 # endregion
 
 # region Test OrderService
@@ -227,6 +312,12 @@ class TestOrderService:
         with pytest.raises(OrderPlacementError):
             order_service.place_market_order(uic=1, asset_type="FxSpot", amount=100, buy_sell="Buy")
 
+    @patch('src.trade.api_actions.tr.orders.CancelOrders')
+    def test_cancel_order_unexpected_exception(self, mock_cancel_req, order_service, mock_api_client):
+        mock_api_client.request.side_effect = Exception("Unexpected error")
+        result = order_service.cancel_order("123")
+        assert result is False
+
 # endregion
 
 # region Test PositionService
@@ -246,6 +337,18 @@ class TestPositionService:
         result = position_service.get_open_positions()
         assert result["__count"] == 1
         assert result["Data"][0]["PositionId"] == "pos1"
+
+    @patch('src.trade.api_actions.pf.closedpositions.ClosedPositionsMe')
+    def test_get_closed_positions_success(self, mock_closed_positions_req, position_service, mock_api_client):
+        mock_api_client.request.return_value = {"Data": [{"PositionId": "pos1"}]}
+        result = position_service.get_closed_positions()
+        assert result["Data"][0]["PositionId"] == "pos1"
+
+    @patch('src.trade.api_actions.pf.positions.SinglePosition')
+    def test_get_single_position_success(self, mock_single_position_req, position_service, mock_api_client):
+        mock_api_client.request.return_value = {"PositionId": "pos1"}
+        result = position_service.get_single_position("pos1")
+        assert result["PositionId"] == "pos1"
 
     @patch.object(PositionService, 'get_open_positions')
     def test_find_position_by_order_id_with_retry_found_first_try(self, mock_get_open_positions, position_service):
@@ -268,6 +371,25 @@ class TestPositionService:
         assert excinfo.value.cancellation_succeeded is True
         assert mock_get_open_positions.call_count == 5
         mock_cancel_order.assert_called_once_with("order1")
+
+    @patch('time.sleep', return_value=None)
+    @patch.object(PositionService, 'get_open_positions')
+    @patch.object(OrderService, 'cancel_order')
+    def test_find_position_by_order_id_with_retry_not_found_and_cancel_fail(self, mock_cancel_order, mock_get_open_positions, mock_sleep, position_service):
+        mock_get_open_positions.return_value = {"Data": []}
+        mock_cancel_order.return_value = False
+
+        with pytest.raises(PositionNotFoundException) as excinfo:
+            position_service.find_position_by_order_id_with_retry("order1")
+
+        assert "Failed to cancel" in str(excinfo.value)
+        assert excinfo.value.cancellation_succeeded is False
+
+    @patch('src.trade.api_actions.pf.balances.AccountBalances')
+    def test_get_spending_power_invalid_value(self, mock_balances_req, position_service, mock_api_client):
+        mock_api_client.request.return_value = {"SpendingPower": "not a number"}
+        with pytest.raises(SaxoApiError, match="Invalid SpendingPower value received"):
+            position_service.get_spending_power()
 
 # endregion
 
@@ -310,6 +432,26 @@ class TestTradingOrchestrator:
         assert result is not None
         mock_db_order_manager.insert_turbo_order_data.assert_called_once()
         mock_db_position_manager.insert_turbo_open_position_data.assert_called_once()
+
+    def test_calculate_bid_amount_invalid_ask_price(self, trading_orchestrator):
+        turbo_info = {"selected_instrument": {"latest_ask": None, "decimals": 2}}
+        with pytest.raises(ValueError, match="Invalid ask price for bid calculation"):
+            trading_orchestrator._calculate_bid_amount(turbo_info, 1000)
+
+    def test_execute_trade_signal_db_error(self, trading_orchestrator, mock_db_order_manager):
+        trading_orchestrator.instrument_service.find_turbos.return_value = {
+            "selected_instrument": {"uic": 123, "asset_type": "TypeA", "latest_ask": 10, "decimals": 2, "description": "Desc", "symbol": "Sym", "currency": "EUR", "commissions": {}}
+        }
+        trading_orchestrator.position_service.get_spending_power.return_value = 1000
+        trading_orchestrator.order_service.place_market_order.return_value = {"OrderId": "order1"}
+        trading_orchestrator.position_service.find_position_by_order_id_with_retry.return_value = {
+            "PositionId": "pos1", "PositionBase": {}, "DisplayAndFormat": {}
+        }
+        mock_db_order_manager.insert_turbo_order_data.side_effect = Exception("DB Error")
+
+        from src.trade.exceptions import DatabaseOperationException
+        with pytest.raises(DatabaseOperationException):
+            trading_orchestrator.execute_trade_signal("e1", "u1", "long")
 
 # endregion
 
@@ -355,5 +497,84 @@ class TestPerformanceMonitor:
         result = performance_monitor.check_all_positions_performance()
         performance_monitor.order_service.place_market_order.assert_called_once()
         mock_update_db.assert_called_once()
+
+    def test_check_all_positions_performance_no_positions(self, performance_monitor):
+        performance_monitor.db_position_manager.get_open_positions_ids_actions.return_value = []
+        result = performance_monitor.check_all_positions_performance()
+        assert result == {"closed_positions_processed": [], "db_updates": [], "errors": 0}
+
+    @patch('src.trade.api_actions.send_message_to_mq_for_telegram')
+    def test_close_managed_positions_by_criteria(self, mock_send_message, performance_monitor):
+        performance_monitor.db_position_manager.get_open_positions_ids_actions.return_value = [
+            {"position_id": "pos1", "action": "long"},
+            {"position_id": "pos2", "action": "short"},
+        ]
+        performance_monitor.position_service.get_open_positions.return_value = {
+            "Data": [
+                {"PositionId": "pos1", "PositionBase": {"Amount": 10, "CanBeClosed": True, "Uic": 1, "AssetType": "T"}},
+                {"PositionId": "pos2", "PositionBase": {"Amount": -10, "CanBeClosed": True, "Uic": 2, "AssetType": "T"}},
+            ]
+        }
+        performance_monitor.order_service.place_market_order.return_value = {"OrderId": "close_order"}
+        with patch.object(performance_monitor, '_fetch_and_update_closed_position_in_db', return_value=True):
+            result = performance_monitor.close_managed_positions_by_criteria(action_filter="long")
+
+        assert result["closed_initiated_count"] == 1
+        assert performance_monitor.order_service.place_market_order.call_count == 1
+
+    @patch('src.trade.api_actions.send_message_to_mq_for_telegram')
+    def test_sync_db_positions_with_api_success(self, mock_send_message, performance_monitor):
+        performance_monitor.db_position_manager.get_open_positions_ids.return_value = ["pos1_closed", "pos2_open"]
+        performance_monitor.position_service.get_open_positions.return_value = {"Data": [{"PositionId": "pos2_open"}]}
+        performance_monitor.position_service.get_closed_positions.return_value = {
+            "Data": [{"ClosedPosition": {"OpeningPositionId": "pos1_closed"}, "DisplayAndFormat": {}}]
+        }
+        result = performance_monitor.sync_db_positions_with_api()
+        assert len(result["updates_for_db"]) == 1
+        assert result["updates_for_db"][0][0] == "pos1_closed"
+
+    @patch('os.path.exists', return_value=True)
+    @patch('builtins.open', new_callable=MagicMock)
+    def test_log_performance_detail(self, mock_open, mock_path_exists, performance_monitor):
+        api_pos = {
+            "PositionBase": {"ExecutionTimeOpen": "2023-01-01T12:00:00Z"},
+            "PositionView": {}
+        }
+        performance_monitor._log_performance_detail("pos1", api_pos, 1.23)
+        mock_open.assert_called_once()
+        handle = mock_open.return_value.__enter__()
+        handle.write.assert_called_once()
+        written_content = handle.write.call_args[0][0]
+        import json
+        log_data = json.loads(written_content)
+        assert log_data["position_id"] == "pos1"
+        assert log_data["performance"] == 1.23
+
+    @patch('time.sleep', return_value=None)
+    def test_fetch_and_update_closed_position_in_db_not_found(self, mock_sleep, performance_monitor):
+        performance_monitor.position_service.get_closed_positions.return_value = {"Data": []}
+        result = performance_monitor._fetch_and_update_closed_position_in_db("pos1", "Test Close")
+        assert result is False
+
+    def test_check_all_positions_performance_api_fail(self, performance_monitor):
+        performance_monitor.db_position_manager.get_open_positions_ids_actions.return_value = [{"position_id": "pos1"}]
+        performance_monitor.position_service.get_open_positions.side_effect = ApiRequestException("API Error")
+        result = performance_monitor.check_all_positions_performance()
+        assert result["errors"] == 1
+
+    def test_close_managed_positions_no_filter(self, performance_monitor):
+        performance_monitor.db_position_manager.get_open_positions_ids_actions.return_value = [
+            {"position_id": "pos1", "action": "long"},
+        ]
+        performance_monitor.position_service.get_open_positions.return_value = {
+            "Data": [
+                {"PositionId": "pos1", "PositionBase": {"Amount": 10, "CanBeClosed": True, "Uic": 1, "AssetType": "T"}},
+            ]
+        }
+        performance_monitor.order_service.place_market_order.return_value = {"OrderId": "close_order"}
+        with patch.object(performance_monitor, '_fetch_and_update_closed_position_in_db', return_value=True):
+            result = performance_monitor.close_managed_positions_by_criteria()
+
+        assert result["closed_initiated_count"] == 1
 
 # endregion
