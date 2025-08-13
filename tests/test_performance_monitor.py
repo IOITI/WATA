@@ -164,3 +164,71 @@ class TestPerformanceMonitor:
         # Check for notification
         mock_send_message.assert_called_once()
         assert "SYNC CLOSE: Position pos1_closed" in mock_send_message.call_args[0][1]
+
+    @patch.object(PerformanceMonitor, '_log_performance_detail')
+    def test_should_calculate_daily_profit_with_multiple_open_positions(self, mock_log_perf, performance_monitor, mock_db_position_manager, mock_position_service, mock_order_service):
+        """
+        Tests the daily profit calculation with multiple positions.
+        NOTE: This test characterizes the *current* logic, which is known to be
+        a simplistic and potentially incorrect way to calculate portfolio profit.
+        It serves as a baseline for future refactoring.
+        """
+        # Arrange
+        # Daily profit target is 5%
+        performance_monitor.percent_profit_wanted_per_days = 5.0
+        # DB reports 2% of realized profit for the day so far
+        mock_db_position_manager.get_percent_of_the_day.return_value = 2.0
+
+        db_positions = [{"position_id": "pos1"}, {"position_id": "pos2"}]
+        # Both positions are up 2%
+        pos1 = TestDataFactory.create_saxo_position(position_id="pos1", open_price=100, current_bid=102)
+        pos2 = TestDataFactory.create_saxo_position(position_id="pos2", open_price=100, current_bid=102)
+
+        mock_db_position_manager.get_open_positions_ids_actions.return_value = db_positions
+        mock_position_service.get_open_positions.return_value = {"Data": [pos1, pos2]}
+        mock_db_position_manager.get_max_position_percent.return_value = 2.0
+
+        # Act
+        result = performance_monitor.check_all_positions_performance()
+
+        # Assert
+        # The current flawed logic is: (1 + realized_profit) * (1 + position_profit) - 1
+        # (1.02 * 1.02) - 1 = 0.0404, or 4.04%, which is less than the 5% target.
+        # Therefore, no positions should be closed.
+        assert len(result["closed_positions_processed"]) == 0
+        mock_order_service.place_market_order.assert_not_called()
+
+    @patch('src.trade.api_actions.send_message_to_mq_for_telegram')
+    def test_should_handle_api_position_sync_race_conditions(self, mock_send_message, performance_monitor, mock_db_position_manager, mock_position_service):
+        """
+        Tests the sync logic when a position is closed on the API while the sync
+        is in progress.
+        """
+        # Arrange
+        # DB thinks pos1 and pos2 are open
+        mock_db_position_manager.get_open_positions_ids.return_value = ["pos1", "pos2"]
+
+        # By the time we check, the API only reports pos2 as open (pos1 was just closed)
+        mock_position_service.get_open_positions.return_value = {
+            "Data": [TestDataFactory.create_saxo_position("pos2")]
+        }
+        # And pos1 now appears in the list of recently closed positions
+        closed_pos1 = TestDataFactory.create_saxo_closed_position(opening_position_id="pos1")
+        mock_position_service.get_closed_positions.return_value = {"Data": [closed_pos1]}
+
+        # Act
+        result = performance_monitor.sync_db_positions_with_api()
+
+        # Assert
+        # The sync logic should have found one position to update
+        assert len(result["updates_for_db"]) == 1
+        position_id, update_data = result["updates_for_db"][0]
+
+        # It should be pos1
+        assert position_id == "pos1"
+        # It should be marked as Closed
+        assert update_data["position_status"] == "Closed"
+        assert update_data["position_close_reason"] == "SaxoAPI"
+        # A notification should have been sent
+        mock_send_message.assert_called_once()
+        assert "SYNC CLOSE: Position pos1" in mock_send_message.call_args[0][1]

@@ -152,3 +152,41 @@ class TestTradingOrchestrator:
         mock_db_order_manager.insert_turbo_order_data.assert_called_once()
         # The position insert should not be called if the order insert fails
         trading_orchestrator.db_position_manager.insert_turbo_open_position_data.assert_not_called()
+
+    def test_should_handle_concurrent_trade_execution(self, trading_orchestrator, mock_instrument_service, mock_position_service, mock_order_service):
+        """
+        Tests that the system correctly handles multiple trade signals in sequence,
+        updating the spending power between trades.
+        """
+        # Arrange
+        # First trade
+        turbo_info_1 = { "selected_instrument": { "uic": 1, "asset_type": "TypeA", "latest_ask": 10.0, "decimals": 2, "description": "T1", "symbol": "T1", "currency": "EUR", "commissions": {} } }
+        order_response_1 = TestDataFactory.create_order_response(order_id="order1")
+        position_data_1 = TestDataFactory.create_saxo_position(position_id="pos1")
+
+        # Second trade
+        turbo_info_2 = { "selected_instrument": { "uic": 2, "asset_type": "TypeB", "latest_ask": 8.0, "decimals": 2, "description": "T2", "symbol": "T2", "currency": "EUR", "commissions": {} } }
+
+
+        # Mock the chained calls
+        mock_instrument_service.find_turbos.side_effect = [turbo_info_1, turbo_info_2]
+        # First trade is based on 1000, second on the remainder
+        mock_position_service.get_spending_power.side_effect = [1000.0, 10.0]
+        mock_order_service.place_market_order.return_value = order_response_1
+        mock_position_service.find_position_by_order_id_with_retry.return_value = position_data_1
+
+        # --- Act & Assert: First Trade ---
+        # With spending power 1000 and price 10, amount is 99, cost is 990. Remainder is 10.
+        result_1 = trading_orchestrator.execute_trade_signal("e1", "u1", "long")
+        assert result_1 is not None
+        mock_order_service.place_market_order.assert_called_once() # Ensure it was called for the first trade
+
+        # --- Act & Assert: Second Trade ---
+        # With spending power 10 and price 8, it should fail as it can't even buy 1 unit with safety margin.
+        with pytest.raises(InsufficientFundsException):
+            trading_orchestrator.execute_trade_signal("e2", "u2", "short")
+
+        # Final assertions
+        assert mock_position_service.get_spending_power.call_count == 2
+        # The order placement should NOT have been called a second time
+        assert mock_order_service.place_market_order.call_count == 1

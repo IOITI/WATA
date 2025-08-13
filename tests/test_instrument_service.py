@@ -185,3 +185,33 @@ class TestInstrumentService:
         # Instruments (1) + InfoPrices (5 retries) = 6 calls
         assert mock_api_client.request.call_count == 6
         assert mock_sleep.call_count == 4 # Sleeps between retries
+
+    @pytest.mark.parametrize("bid_price, should_be_found", [
+        (4.0, True),   # Exactly at min price
+        (15.0, True),  # Exactly at max price
+        (9.5, True),   # Comfortably in the middle
+        (3.99, False), # Just below min price
+        (15.01, False) # Just above max price
+    ])
+    def test_should_validate_turbo_price_range_boundaries(self, bid_price, should_be_found, instrument_service, mock_api_client, mock_config_manager):
+        """Test behavior at exact min/max price range boundaries."""
+        # Arrange
+        # The config fixture sets the range to min: 4, max: 15
+        initial_instrument = TestDataFactory.create_saxo_instrument(identifier=1)
+        infoprice = TestDataFactory.create_saxo_infoprice(uic=101, identifier=1, bid=bid_price, ask=bid_price + 0.1)
+        price_snapshot = TestDataFactory.create_price_subscription_snapshot(uic=101)
+
+        mock_api_client.request.side_effect = [
+            {"Data": [initial_instrument]},
+            {"Data": [infoprice]},
+            {"Snapshot": price_snapshot}
+        ]
+
+        # Act & Assert
+        if should_be_found:
+            result = instrument_service.find_turbos("exchange1", "underlying1", "long")
+            assert result is not None
+            assert result['selected_instrument']['uic'] == 101
+        else:
+            with pytest.raises(NoTurbosAvailableException, match="No turbos found in price range"):
+                instrument_service.find_turbos("exchange1", "underlying1", "long")
