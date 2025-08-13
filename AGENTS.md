@@ -50,6 +50,21 @@ WATA uses a microservice architecture orchestrated with Docker Compose. A centra
 - `requirements.txt`: A complete list of all Python dependencies.
 - `setup.py`: Defines project metadata and, importantly, the console script entry points.
 
+### 3.1. Deep Dive: `src/trade/api_actions.py`
+
+This file is the primary interface between the application's business logic and the Saxo Bank API. It abstracts the API's complexity into a set of reusable classes:
+
+-   **`SaxoApiClient`**: The foundational client for making HTTP requests to the Saxo API. It handles authentication, headers, and basic error handling.
+
+-   **Service-Oriented Classes**:
+    -   **`InstrumentService`**: Responsible for searching for tradable instruments (e.g., finding a specific Turbo Warrant).
+    -   **`OrderService`**: Responsible for creating and placing trade orders.
+    -   **`PositionService`**: Manages open positions, including fetching their status and performance.
+
+-   **High-Level Orchestrators**:
+    -   **`TradingOrchestrator`**: Manages the end-to-end process of opening a new trade, from finding an instrument to placing the order and confirming the position.
+    -   **`PerformanceMonitor`**: Continuously monitors open positions, checking them against stop-loss/take-profit rules and closing them if necessary.
+
 ## 4. Configuration (`etc/config.json`)
 
 All services are configured via a single JSON file, typically located at `/app/etc/config.json` inside the containers.
