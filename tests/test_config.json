@@ -1,0 +1,123 @@
+{
+  "authentication": {
+    "saxo": {
+      "app_config_object": {
+        "AppName": "test_app",
+        "AppKey": "test_key",
+        "AppSecret": "test_secret",
+        "AuthorizationEndpoint": "https://sim.logonvalidation.net/authorize",
+        "TokenEndpoint": "https://sim.logonvalidation.net/token",
+        "GrantType": "Code",
+        "OpenApiBaseUrl": "https://gateway.saxobank.com",
+        "RedirectUrls": [
+          "http://localhost:8080/redirect"
+        ]
+      }
+    },
+    "persistant": {
+      "token_path": "/tmp/token.json"
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "persistant": {
+      "log_path": "/tmp/logs"
+    }
+  },
+  "webserver": {
+    "persistant": {
+      "token_path": "/tmp/token.json"
+    },
+    "app_secret": "test_secret"
+  },
+  "rabbitmq": {
+    "hostname": "localhost",
+    "authentication": {
+      "username": "user",
+      "password": "password"
+    }
+  },
+  "duckdb": {
+    "persistant": {
+      "db_path": "/tmp/test.db"
+    }
+  },
+  "trade": {
+    "rules": [
+      {
+        "rule_type": "allowed_indices",
+        "rule_name": "allowed_indices",
+        "rule_config": {
+          "indice_ids": {}
+        }
+      },
+      {
+        "rule_type": "market_closed_dates",
+        "rule_name": "market_closed_dates",
+        "rule_config": {
+          "market_closed_dates": []
+        }
+      },
+      {
+        "rule_type": "signal_validation",
+        "rule_name": "signal_validation",
+        "rule_config": {
+          "max_signal_age_minutes": 10
+        }
+      },
+      {
+        "rule_type": "market_hours",
+        "rule_name": "market_hours",
+        "rule_config": {
+          "trading_start_hour": 8,
+          "trading_end_hour": 22,
+          "risky_trading_start_hour": 9,
+          "risky_trading_start_minute": 30
+        }
+      }
+    ],
+    "config": {
+      "general": {
+        "timezone": "Europe/Paris",
+        "api_limits": {
+          "top_instruments": 200,
+          "top_positions": 200,
+          "top_closed_positions": 500
+        },
+        "retry_config": {
+          "max_retries": 3,
+          "retry_sleep_seconds": 1
+        },
+        "position_check": {
+            "check_interval_seconds": 60,
+            "timeout_seconds": 300
+        },
+        "websocket": {
+            "refresh_rate_ms": 1000
+        }
+      },
+      "turbo_preference": {
+        "exchange_id": "test_exchange",
+        "price_range": {
+          "min": 4,
+          "max": 15
+        }
+      },
+      "buying_power": {
+        "max_account_funds_to_use_percentage": 100,
+        "safety_margins": {
+          "bid_calculation": 1
+        }
+      },
+      "position_management": {
+        "performance_thresholds": {
+          "stoploss_percent": -20,
+          "max_profit_percent": 60
+        }
+      }
+    },
+    "persistant": {
+      "last_action_file": "/tmp/last_action.json"
+    }
+  }
+}

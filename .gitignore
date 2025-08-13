@@ -5,3 +5,10 @@
 .idea/
 deploy/tools/ansible/inventory/inventory.ini
 reporting/trading-dashboard
+
+# Python
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
+.pytest_cache/

@@ -1,1 +1,1 @@
-PYTHONPATH=./ pytest -vv tests/test_db_position_manager.py
+PYTHONPATH=./:src/ pytest --cov=src --cov-report=term-missing --cov-report=html -vv tests/
