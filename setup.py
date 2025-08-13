@@ -3,7 +3,8 @@ from setuptools import setup, find_packages
 setup(
     name="wata",
     version="0.1",
-    packages=find_packages(),
+    package_dir={'': 'src'},
+    packages=find_packages(where='src'),
     entry_points={
         'console_scripts': [
             'watasaxoauth=src.saxo_authen.cli:main',

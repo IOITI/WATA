@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: wata
+Version: 0.1
+License-File: LICENSE
+Requires-Dist: requests
+Requires-Dist: python-dotenv
+Dynamic: license-file
+Dynamic: requires-dist
