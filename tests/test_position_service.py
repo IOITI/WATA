@@ -136,3 +136,32 @@ class TestPositionService:
         assert excinfo.value.cancellation_succeeded is False
         assert mock_get_open_positions.call_count == 5 # DEFAULT_RETRY_ATTEMPTS is 5
         order_service.cancel_order.assert_called_once_with("order1")
+
+    def test_get_closed_positions_success(self, position_service, mock_api_client):
+        """Test that getting closed positions works correctly."""
+        # Arrange
+        closed_position = TestDataFactory.create_saxo_closed_position(opening_position_id="pos1")
+        mock_api_client.request.return_value = {"Data": [closed_position]}
+
+        # Act
+        result = position_service.get_closed_positions()
+
+        # Assert
+        assert result["Data"][0]["ClosedPosition"]["OpeningPositionId"] == "pos1"
+        mock_api_client.request.assert_called_once()
+
+    def test_get_single_position_success(self, position_service, mock_api_client):
+        """Test that getting a single position works correctly."""
+        # Arrange
+        position = TestDataFactory.create_saxo_position(position_id="pos1")
+        mock_api_client.request.return_value = position
+
+        # Act
+        result = position_service.get_single_position("pos1")
+
+        # Assert
+        assert result["PositionId"] == "pos1"
+        mock_api_client.request.assert_called_once()
+        request_object = mock_api_client.request.call_args[0][0]
+        # The PositionId is formatted into the endpoint URL
+        assert "pos1" in request_object._endpoint

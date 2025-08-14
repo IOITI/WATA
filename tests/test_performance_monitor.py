@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock, call, ANY, mock_open
 
 from src.trade.api_actions import PerformanceMonitor, PositionService, OrderService
 from src.database import DbPositionManager
@@ -268,3 +268,103 @@ class TestPerformanceMonitor:
         # Assert
         # No updates should be generated for the DB
         assert len(result["updates_for_db"]) == 0
+
+
+class TestCloseManagedPositions:
+
+    @patch.object(PerformanceMonitor, '_fetch_and_update_closed_position_in_db', return_value=True)
+    def test_close_all_positions_no_filter(self, mock_update_db, performance_monitor, mock_db_position_manager, mock_position_service, mock_order_service):
+        """Test that all managed positions are closed when no filter is provided."""
+        # Arrange
+        db_positions = [
+            {"position_id": "pos_long", "action": "long"},
+            {"position_id": "pos_short", "action": "short"},
+        ]
+        api_positions = [
+            TestDataFactory.create_saxo_position(position_id="pos_long", amount=100),
+            TestDataFactory.create_saxo_position(position_id="pos_short", amount=-100),
+        ]
+        mock_db_position_manager.get_open_positions_ids_actions.return_value = db_positions
+        mock_position_service.get_open_positions.return_value = {"Data": api_positions}
+        mock_order_service.place_market_order.return_value = TestDataFactory.create_order_response()
+
+        # Act
+        result = performance_monitor.close_managed_positions_by_criteria(action_filter=None)
+
+        # Assert
+        assert result["closed_initiated_count"] == 2
+        assert mock_order_service.place_market_order.call_count == 2
+        # Called once for each closed position
+        assert mock_update_db.call_count == 2
+
+    @patch.object(PerformanceMonitor, '_fetch_and_update_closed_position_in_db', return_value=True)
+    def test_close_positions_with_long_filter(self, mock_update_db, performance_monitor, mock_db_position_manager, mock_position_service, mock_order_service):
+        """Test that only 'long' positions are closed when the filter is 'long'."""
+        # Arrange
+        db_positions = [
+            {"position_id": "pos_long", "action": "long"},
+            {"position_id": "pos_short", "action": "short"},
+        ]
+        api_positions = [
+            TestDataFactory.create_saxo_position(position_id="pos_long", amount=100),
+            TestDataFactory.create_saxo_position(position_id="pos_short", amount=-100),
+        ]
+        mock_db_position_manager.get_open_positions_ids_actions.return_value = db_positions
+        mock_position_service.get_open_positions.return_value = {"Data": api_positions}
+        mock_order_service.place_market_order.return_value = TestDataFactory.create_order_response()
+
+        # Act
+        result = performance_monitor.close_managed_positions_by_criteria(action_filter="long")
+
+        # Assert
+        assert result["closed_initiated_count"] == 1
+        # Should only be called for the 'long' position
+        assert mock_order_service.place_market_order.call_count == 1
+        # The argument passed to place_market_order should be for the long position (a Sell order)
+        call_kwargs = mock_order_service.place_market_order.call_args.kwargs
+        assert call_kwargs['uic'] == api_positions[0]['PositionBase']['Uic']
+        assert call_kwargs['buy_sell'] == 'Sell'
+        assert mock_update_db.call_count == 1
+
+
+class TestPerformanceMonitorHelpers:
+
+    @patch('time.sleep', return_value=None)
+    def test_fetch_and_update_closed_position_in_db_api_fails(self, mock_sleep, performance_monitor, mock_position_service):
+        """Test the error handling when fetching closed positions fails."""
+        # Arrange
+        mock_position_service.get_closed_positions.side_effect = ApiRequestException("API Error")
+
+        # Act
+        result = performance_monitor._fetch_and_update_closed_position_in_db("pos1", "Test Close")
+
+        # Assert
+        # The method should fail gracefully and return False
+        assert result is False
+
+    @patch('os.path.exists', return_value=True)
+    @patch('builtins.open', new_callable=mock_open)
+    def test_log_performance_detail(self, mock_open, mock_path_exists, performance_monitor):
+        """Test that the performance logger writes a valid JSON line to a file."""
+        # Arrange
+        api_pos = TestDataFactory.create_saxo_position(
+            position_id="pos_log",
+            overrides={"PositionBase": {"ExecutionTimeOpen": "2023-01-01T12:00:00Z"}}
+        )
+        performance_percent = 5.5
+
+        # Act
+        performance_monitor._log_performance_detail("pos_log", api_pos, performance_percent)
+
+        # Assert
+        mock_open.assert_called_once()
+        # The handle is the return value of the call to open()
+        handle = mock_open()
+        handle.write.assert_called_once()
+        # Check the content that was written
+        written_content = handle.write.call_args[0][0]
+        import json
+        log_data = json.loads(written_content)
+        assert log_data["position_id"] == "pos_log"
+        assert log_data["performance"] == 5.5
+        assert "open_hour" in log_data

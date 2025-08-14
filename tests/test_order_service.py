@@ -75,6 +75,23 @@ class TestOrderService:
         # Assert
         assert result is False
 
+    def test_get_single_order_success(self, order_service, mock_api_client):
+        """Test that getting a single order works correctly."""
+        # Arrange
+        expected_order = {"OrderId": "order1", "Status": "Working"}
+        mock_api_client.request.return_value = expected_order
+
+        # Act
+        result = order_service.get_single_order("order1")
+
+        # Assert
+        assert result == expected_order
+        mock_api_client.request.assert_called_once()
+        request_object = mock_api_client.request.call_args[0][0]
+        # Both OrderId and ClientKey are part of the endpoint URL
+        assert "order1" in request_object._endpoint
+        assert "client_key" in request_object._endpoint
+
     def test_cancel_order_unexpected_exception(self, order_service, mock_api_client):
         # Arrange
         mock_api_client.request.side_effect = Exception("Unexpected error")
