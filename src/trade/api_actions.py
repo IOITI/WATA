@@ -853,10 +853,12 @@ class PositionService:
         if not resp_balance or "SpendingPower" not in resp_balance:
              logging.error(f"Invalid balance response: {resp_balance}")
              raise SaxoApiError("Invalid balance response received, missing SpendingPower.")
-        spending_power = resp_balance["SpendingPower"]
-        if not isinstance(spending_power, (int, float)):
-             logging.error(f"Invalid SpendingPower value: {spending_power}")
-             raise SaxoApiError(f"Invalid SpendingPower value received: {spending_power}")
+        spending_power_raw = resp_balance["SpendingPower"]
+        try:
+            spending_power = float(spending_power_raw)
+        except (ValueError, TypeError):
+            logging.error(f"Invalid SpendingPower value: {spending_power_raw}")
+            raise SaxoApiError(f"Invalid SpendingPower value received: {spending_power_raw}")
 
         logging.info(f"Spending Power retrieved: {spending_power}")
         return spending_power
