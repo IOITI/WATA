@@ -265,3 +265,17 @@ class TestInstrumentService:
         # No retry should be triggered
         mock_sleep.assert_not_called()
         assert mock_api_client.request.call_count == 3
+
+    @patch('src.trade.api_actions.parse_saxo_turbo_description')
+    def test_find_turbos_handles_key_error_on_sort(self, mock_parse, instrument_service, mock_api_client):
+        """Test that a KeyError during sorting is handled gracefully."""
+        # Arrange
+        instrument = TestDataFactory.create_saxo_instrument()
+        # The parsed data is missing the 'price' key required for sorting
+        malformed_parsed_data = {"name": "TURBO", "kind": "LONG"}
+        mock_parse.return_value = malformed_parsed_data
+        mock_api_client.request.return_value = {"Data": [instrument]}
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="Could not sort instruments by parsed price"):
+            instrument_service.find_turbos("e1", "u1", "long")

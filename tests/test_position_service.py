@@ -165,3 +165,30 @@ class TestPositionService:
         request_object = mock_api_client.request.call_args[0][0]
         # The PositionId is formatted into the endpoint URL
         assert "pos1" in request_object._endpoint
+
+    def test_get_open_positions_handles_none_response(self, position_service, mock_api_client):
+        """Test that get_open_positions handles a None response from the API."""
+        # Arrange
+        mock_api_client.request.return_value = None
+
+        # Act
+        result = position_service.get_open_positions()
+
+        # Assert
+        # Should return an empty structure instead of crashing
+        assert result == {'__count': 0, 'Data': []}
+
+    @patch.object(PositionService, '_find_position_attempt')
+    def test_find_position_by_order_id_handles_unexpected_error(self, mock_find_attempt, position_service, order_service):
+        """Test the generic exception handler in find_position_by_order_id_with_retry."""
+        # Arrange
+        simulated_error = ValueError("Unexpected error during position find")
+        mock_find_attempt.side_effect = simulated_error
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="Unexpected error during position find"):
+            position_service.find_position_by_order_id_with_retry("order1")
+
+        # Ensure that in case of an unexpected error, order cancellation is NOT attempted
+        # because the state of the order/position is unknown.
+        order_service.cancel_order.assert_not_called()

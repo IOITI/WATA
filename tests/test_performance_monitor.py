@@ -269,6 +269,36 @@ class TestPerformanceMonitor:
         # No updates should be generated for the DB
         assert len(result["updates_for_db"]) == 0
 
+    def test_check_performance_handles_position_not_in_api(self, performance_monitor, mock_db_position_manager, mock_position_service):
+        """Test that a position open in the DB but not in the API is skipped during performance checks."""
+        # Arrange
+        # DB thinks pos1 is open
+        mock_db_position_manager.get_open_positions_ids_actions.return_value = [{"position_id": "pos1"}]
+        # But the API returns no open positions
+        mock_position_service.get_open_positions.return_value = {"Data": []}
+
+        # Act
+        result = performance_monitor.check_all_positions_performance()
+
+        # Assert
+        # Nothing should be processed or closed
+        assert len(result["closed_positions_processed"]) == 0
+        assert len(result["db_updates"]) == 0
+        assert result["errors"] == 0
+
+    def test_sync_db_handles_api_failure(self, performance_monitor, mock_db_position_manager, mock_position_service):
+        """Test that the sync process handles an API failure gracefully."""
+        # Arrange
+        mock_db_position_manager.get_open_positions_ids.return_value = ["pos1"]
+        mock_position_service.get_open_positions.side_effect = ApiRequestException("API Error")
+
+        # Act
+        result = performance_monitor.sync_db_positions_with_api()
+
+        # Assert
+        # The process should return an empty list of updates without crashing
+        assert result["updates_for_db"] == []
+
 
 class TestCloseManagedPositions:
 
@@ -341,6 +371,31 @@ class TestPerformanceMonitorHelpers:
         # Assert
         # The method should fail gracefully and return False
         assert result is False
+
+    @patch('time.sleep', return_value=None)
+    def test_fetch_and_update_closed_position_in_db_no_positions_found(self, mock_sleep, performance_monitor, mock_position_service):
+        """Test the case where the API returns no closed positions."""
+        # Arrange
+        mock_position_service.get_closed_positions.return_value = {"Data": []}
+
+        # Act
+        result = performance_monitor._fetch_and_update_closed_position_in_db("pos1", "Test Close")
+
+        # Assert
+        assert result is False
+
+    def test_log_performance_detail_handles_bad_date(self, performance_monitor):
+        """Test that the logger handles an invalid date format without crashing."""
+        # Arrange
+        api_pos = TestDataFactory.create_saxo_position(
+            position_id="pos_log",
+            overrides={"PositionBase": {"ExecutionTimeOpen": "Invalid Date Format"}}
+        )
+        # We need to patch open for this test so it doesn't write to the filesystem
+        with patch('builtins.open', mock_open()):
+            # Act
+            # The method should execute without raising an exception
+            performance_monitor._log_performance_detail("pos_log", api_pos, 5.5)
 
     @patch('os.path.exists', return_value=True)
     @patch('builtins.open', new_callable=mock_open)
