@@ -12,7 +12,13 @@ case $WATA_APP_ROLE in
         python -u src/web_server/__init__.py
         ;;
     "trader")
+        python -u /app/src/trader/__init__.py
+        ;;
+    "trader_legacy")
         python -u /app/src/main.py
+        ;;
+    "position_monitor")
+        python -u /app/src/position_monitor/__init__.py
         ;;
     "scheduler")
         python -u /app/src/scheduler/__init__.py

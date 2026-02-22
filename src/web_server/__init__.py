@@ -79,7 +79,7 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, c
             )
         )
         channel = connection.channel()
-        channel.queue_declare(queue="trading-action")
+        channel.queue_declare(queue="trading-signals", durable=True)
 
         # Get the current time in UTC
         now_utc = datetime.now(pytz.utc)
@@ -99,8 +99,8 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, c
             msg_payload["confidence"] = confidence
 
         message = json.dumps(msg_payload)
-        channel.basic_publish(exchange="", routing_key="trading-action", body=message)
-        logging.info(f"Send message to channel trading-action, message {message}")
+        channel.basic_publish(exchange="", routing_key="trading-signals", body=message)
+        logging.info(f"Send message to channel trading-signals, message {message}")
         return signal_id
     except pika.exceptions.AMQPConnectionError as e:
         logging.error(f"Failed to connect to RabbitMQ: {e}")

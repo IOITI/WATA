@@ -43,6 +43,11 @@
       "db_path": "/app/var/lib/duckdb/trading_data.duckdb"
     }
   },
+  "postgresql": {
+    "dsn": "postgresql://wata:wata_secret_change_me@postgres1:5432/wata",
+    "pool_min_size": 2,
+    "pool_max_size": 10
+  },
   "trade": {
     "rules": [
       {
@@ -222,6 +227,12 @@
         },
         "websocket": {
           "refresh_rate_ms": 10000
+        },
+        "streaming": {
+          "refresh_rate_ms": 1000,
+          "reconnect_delay_seconds": 1.0,
+          "max_reconnect_delay_seconds": 30.0,
+          "reauth_interval_seconds": 900
         },
         "timezone": "Europe/Paris"
       },

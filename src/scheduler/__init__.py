@@ -28,19 +28,11 @@ timezone = config_manager.get_config_value("trade.config.general.timezone", "Eur
 # Get trading rule
 trading_rule = TradingRule(config_manager, None)
 
-# Function to send 'ping_saxo_api' every 1 minutes
-@repeat(every(7).seconds)
-def job_check_positions_on_saxo_api():
-    # Get the current time in UTC
-    now_utc = datetime.now(pytz.utc)
-    message = {
-        "action": "check_positions_on_saxo_api",
-        "indice": "n/a",
-        "signal_timestamp": "2024-05-09T12:26:00Z",
-        "alert_timestamp": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "mqsend_timestamp": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    send_message_to_trading(message)
+# NOTE: Position monitoring is now handled by the Position Monitor's
+# WebSocket streaming connection.  The old 7-second polling job
+# (job_check_positions_on_saxo_api) has been removed.
+# A fallback REST check can still be triggered manually via
+# the trading-ops queue if needed.
 
 
 @repeat(every().day.at(time_str="22:00", tz=timezone))
@@ -118,6 +110,17 @@ def job_close_position():
 
 
 def send_message_to_trading(message):
+    """Send a message to the appropriate RabbitMQ queue based on action type."""
+    action = message.get("action", "")
+
+    # Route operational messages to trading-ops, trade signals to trading-signals
+    if action in ("check_positions_on_saxo_api", "daily_stats"):
+        queue_name = "trading-ops"
+    elif action in ("long", "short", "close-long", "close-short", "close-position"):
+        queue_name = "trading-signals"
+    else:
+        queue_name = "trading-signals"  # Default
+
     try:
         # Retrieve RabbitMQ credentials from the configuration
         rabbitmq_config = config_manager.get_rabbitmq_config()
@@ -133,11 +136,11 @@ def send_message_to_trading(message):
             )
         )
         channel = connection.channel()
-        channel.queue_declare(queue="trading-action")
+        channel.queue_declare(queue=queue_name, durable=True)
 
         body = json.dumps(message)
-        channel.basic_publish(exchange="", routing_key="trading-action", body=body)
-        logging.info(f"Send message to channel trading-action, message {body}")
+        channel.basic_publish(exchange="", routing_key=queue_name, body=body)
+        logging.info(f"Send message to channel {queue_name}, message {body}")
     except pika.exceptions.AMQPConnectionError as e:
         logging.error(f"Failed to connect to RabbitMQ: {e}")
     except Exception as e:
