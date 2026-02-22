@@ -234,6 +234,9 @@ class InstrumentService:
         # Add retry config for the specific Bid retry
         self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": 3, "retry_sleep_seconds": 1}) # Use specific or general config
         self.websocket_config = self.config.get_config_value("trade.config.general.websocket", {"refresh_rate_ms": 10000})
+        # Turbo cache configuration
+        self.cache_config = self.config.get_config_value("trade.config.turbo_cache", {"enabled": False, "ttl_seconds": 30})
+        self._turbo_cache = {}  # key: (exchange_id, underlying_uics, keywords) -> {"result": ..., "timestamp": ...}
 
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(ApiRequestException))
@@ -257,7 +260,32 @@ class InstrumentService:
              raise # Re-raise for tenacity
 
     def find_turbos(self, exchange_id: str, underlying_uics: str, keywords: str):
-        """Finds suitable turbo warrants based on criteria."""
+        """Finds suitable turbo warrants based on criteria. Uses cache if available."""
+        # Check cache first
+        if self.cache_config.get("enabled", False):
+            cache_key = (exchange_id, underlying_uics, keywords)
+            cached = self._turbo_cache.get(cache_key)
+            if cached:
+                cache_age = time.time() - cached["timestamp"]
+                ttl = self.cache_config.get("ttl_seconds", 30)
+                if cache_age < ttl:
+                    logging.info(f"Turbo cache HIT for {cache_key} (age: {cache_age:.1f}s, ttl: {ttl}s)")
+                    return deepcopy(cached["result"])
+                else:
+                    logging.debug(f"Turbo cache EXPIRED for {cache_key} (age: {cache_age:.1f}s)")
+
+        result = self._find_turbos_uncached(exchange_id, underlying_uics, keywords)
+
+        # Store in cache
+        if self.cache_config.get("enabled", False):
+            cache_key = (exchange_id, underlying_uics, keywords)
+            self._turbo_cache[cache_key] = {"result": deepcopy(result), "timestamp": time.time()}
+            logging.debug(f"Turbo cache STORED for {cache_key}")
+
+        return result
+
+    def _find_turbos_uncached(self, exchange_id: str, underlying_uics: str, keywords: str):
+        """Finds suitable turbo warrants based on criteria (no cache)."""
         logging.info(f"Finding turbos: Exchange={exchange_id}, Underlying={underlying_uics}, Keywords={keywords}")
 
         # 1. Initial Instrument Search
@@ -876,11 +904,62 @@ class TradingOrchestrator:
         self.db_position_manager = db_position_manager
         self.buying_power_config = self.config.get_config_value("trade.config.buying_power", {})
         self.safety_margins = self.buying_power_config.get("safety_margins", {"bid_calculation": 1})
+        self.reserve_cash_percent = self.buying_power_config.get("reserve_cash_percent", 0)
         self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": DEFAULT_RETRY_ATTEMPTS, "retry_sleep_seconds": DEFAULT_RETRY_WAIT_SECONDS})
+        self.timezone = self.config.get_config_value("trade.config.general.timezone", "Europe/Paris")
+        # Position sizing configs
+        self.time_of_day_config = self.config.get_config_value("trade.config.position_sizing.time_of_day_scaling", {"enabled": False})
+        self.confidence_config = self.config.get_config_value("trade.config.position_sizing.confidence_scaling", {"enabled": False})
+
+    def _get_time_of_day_scale(self):
+        """Returns position size scaling percentage (0-100) based on current time of day."""
+        if not self.time_of_day_config.get("enabled", False):
+            return 100  # No scaling
+
+        current_time = datetime.now(pytz.timezone(self.timezone))
+        current_minutes = current_time.hour * 60 + current_time.minute
+
+        for period in self.time_of_day_config.get("periods", []):
+            start_minutes = period["start_hour"] * 60 + period.get("start_minute", 0)
+            end_minutes = period["end_hour"] * 60 + period.get("end_minute", 0)
+            if start_minutes <= current_minutes < end_minutes:
+                scale = period.get("scale_percent", 100)
+                logging.info(f"Time-of-day scaling: {period.get('label', 'Unknown')} -> {scale}%")
+                return scale
+
+        logging.debug("Time-of-day scaling: no matching period, using 100%")
+        return 100
+
+    def _get_confidence_scale(self, confidence):
+        """Returns position size scaling percentage (0-100) based on signal confidence."""
+        if not self.confidence_config.get("enabled", False):
+            return 100  # No scaling
+
+        if confidence is None:
+            default_conf = self.confidence_config.get("default_confidence", 1.0)
+            logging.debug(f"No confidence provided, using default: {default_conf}")
+            confidence = default_conf
+
+        for rule in self.confidence_config.get("scaling_rules", []):
+            if rule["min_confidence"] <= confidence < rule["max_confidence"]:
+                scale = rule.get("scale_percent", 100)
+                logging.info(f"Confidence scaling: {rule.get('label', 'Unknown')} (conf={confidence:.2f}) -> {scale}%")
+                return scale
+
+        logging.debug(f"Confidence scaling: no matching rule for {confidence}, using 100%")
+        return 100
+
+    def _calculate_position_scale(self, confidence=None):
+        """Calculates the combined position size scale factor (0.0 to 1.0)."""
+        tod_scale = self._get_time_of_day_scale() / 100.0
+        conf_scale = self._get_confidence_scale(confidence) / 100.0
+        combined = tod_scale * conf_scale
+        logging.info(f"Position scale: time_of_day={tod_scale:.2f} x confidence={conf_scale:.2f} = {combined:.2f}")
+        return combined
 
 
-    def _calculate_bid_amount(self, turbo_info: dict, spending_power: float):
-        """Calculates the amount to buy based on turbo price and spending power."""
+    def _calculate_bid_amount(self, turbo_info: dict, spending_power: float, position_scale: float = 1.0):
+        """Calculates the amount to buy based on turbo price, spending power, and position scale."""
         # Use the latest snapshot Ask price if available, otherwise fallback
         ask_price = turbo_info['selected_instrument'].get('latest_ask')
         if ask_price is None:
@@ -889,11 +968,18 @@ class TradingOrchestrator:
         if ask_price is None or not isinstance(ask_price, (int, float)) or ask_price <= 0:
             raise ValueError(f"Invalid ask price for bid calculation: {ask_price}")
 
-        logging.info(f"Calculating amount: SpendingPower={spending_power}, AskPrice={ask_price}")
+        logging.info(f"Calculating amount: SpendingPower={spending_power}, AskPrice={ask_price}, PositionScale={position_scale:.2f}")
 
         max_account_percent = self.buying_power_config.get("max_account_funds_to_use_percentage", 100)
-        available_funds = spending_power * (max_account_percent / 100.0)
-        logging.info(f"Available funds for trading ({max_account_percent}% of {spending_power}): {available_funds:.2f}")
+        # Reserve cash: reduce available funds by reserve percentage
+        reserve_percent = self.reserve_cash_percent
+        effective_percent = max(0, max_account_percent - reserve_percent)
+        available_funds = spending_power * (effective_percent / 100.0)
+        logging.info(f"Available funds for trading ({effective_percent}% of {spending_power}, reserve={reserve_percent}%): {available_funds:.2f}")
+
+        # Apply position scale (time-of-day + confidence)
+        available_funds = available_funds * position_scale
+        logging.info(f"Funds after position scaling ({position_scale:.2f}): {available_funds:.2f}")
 
         safety_margin_units = self.safety_margins.get("bid_calculation", 1)
         cost_per_unit = ask_price # Add estimated commission per unit if significant and available
@@ -923,28 +1009,37 @@ class TradingOrchestrator:
         return amount
 
 
-    def execute_trade_signal(self, exchange_id: str, underlying_uics: str, keywords: str):
+    def execute_trade_signal(self, exchange_id: str, underlying_uics: str, keywords: str, confidence: float = None):
         """
         Full workflow: Find -> Calculate -> Place Order -> Confirm Position -> **Persist Order/Position**.
         Returns details for logging/notification, not for DB persistence by caller.
+        Includes execution timing instrumentation.
         """
-        logging.info(f"--- Executing & Recording Trade Signal: {keywords} on {underlying_uics} ---")
+        logging.info(f"--- Executing & Recording Trade Signal: {keywords} on {underlying_uics} (confidence={confidence}) ---")
         confirmed_position = None # Initialize
         validated_order = None # Initialize
         turbo_info = None # Initialize
+        execution_timestamps = {"start": time.time()}
 
         try:
+            # 0. Calculate position scale
+            position_scale = self._calculate_position_scale(confidence)
+            execution_timestamps["scale_calculated"] = time.time()
+
             # 1. Find Turbo
             # Exceptions (NoTurbos, NoMarket, Api) handled by caller or bubble up
             turbo_info = self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
+            execution_timestamps["turbo_found"] = time.time()
 
             # 2. Get Spending Power
             # Exceptions (Api, SaxoApiError) handled by caller or bubble up
             spending_power = self.position_service.get_spending_power()
+            execution_timestamps["spending_power_fetched"] = time.time()
 
-            # 3. Calculate Amount
+            # 3. Calculate Amount (with position scaling)
             # Raises InsufficientFundsException, ValueError
-            amount = self._calculate_bid_amount(turbo_info, spending_power)
+            amount = self._calculate_bid_amount(turbo_info, spending_power, position_scale)
+            execution_timestamps["amount_calculated"] = time.time()
 
             # 4. Place Buy Order
             # Raises OrderPlacementError, SaxoApiError, ApiRequestException
@@ -955,9 +1050,11 @@ class TradingOrchestrator:
                 buy_sell="Buy"
             )
             order_id = validated_order['OrderId']
+            execution_timestamps["order_placed"] = time.time()
 
             # 5. Confirm Position Creation (with retry)
             confirmed_position = self.position_service.find_position_by_order_id_with_retry(order_id)
+            execution_timestamps["position_confirmed"] = time.time()
 
             # --- *** 6. Persist to Database *** ---
             now_utc = datetime.now(pytz.utc)
@@ -1009,6 +1106,14 @@ class TradingOrchestrator:
 
             logging.info(
                 f"Trade execution & recording successful for OrderId {order_id}, PositionId {confirmed_position.get('PositionId')}")
+            execution_timestamps["db_persisted"] = time.time()
+
+            # --- Build execution timing summary ---
+            timing_summary = self._build_timing_summary(execution_timestamps)
+            logging.info(f"Execution timing: {timing_summary}")
+
+            # --- Log execution timing to file ---
+            self._log_execution_timing(keywords, execution_timestamps, confidence, position_scale)
 
             # --- *** 7. Return Execution Details (for logging/notification) *** ---
             # Return details that might be useful for the caller (e.g., for composer)
@@ -1016,6 +1121,9 @@ class TradingOrchestrator:
                 "order_details": order_data_for_db,  # Return the prepared DB data
                 "position_details": position_data_for_db,
                 "selected_turbo_info": turbo_info,
+                "execution_timing": timing_summary,
+                "position_scale": position_scale,
+                "confidence": confidence,
                 "message": f"Successfully executed and recorded trade for {keywords}."
             }
 
@@ -1043,6 +1151,61 @@ class TradingOrchestrator:
             # Re-raise the original error for the main callback handler
             raise e
 
+    @staticmethod
+    def _build_timing_summary(timestamps: dict) -> dict:
+        """Builds a human-readable timing summary from execution timestamps."""
+        summary = {}
+        start = timestamps.get("start")
+        if not start:
+            return summary
+
+        ordered_steps = [
+            ("scale_calculated", "Scale Calc"),
+            ("turbo_found", "Find Turbo"),
+            ("spending_power_fetched", "Get Balance"),
+            ("amount_calculated", "Calc Amount"),
+            ("order_placed", "Place Order"),
+            ("position_confirmed", "Confirm Pos"),
+            ("db_persisted", "DB Persist"),
+        ]
+        prev_ts = start
+        for key, label in ordered_steps:
+            ts = timestamps.get(key)
+            if ts:
+                summary[label] = f"{(ts - prev_ts) * 1000:.0f}ms"
+                prev_ts = ts
+
+        total = timestamps.get("db_persisted", timestamps.get("position_confirmed", start))
+        summary["TOTAL"] = f"{(total - start) * 1000:.0f}ms"
+        return summary
+
+    def _log_execution_timing(self, action: str, timestamps: dict, confidence, position_scale: float):
+        """Writes execution timing data to a JSONL file."""
+        try:
+            tz = pytz.timezone(self.timezone)
+            current_time = datetime.now(tz)
+            log_path = self.config.get_config_value("logging.persistant.log_path", ".")
+            if not os.path.exists(log_path):
+                os.makedirs(log_path)
+
+            timing_data = {
+                "action": action,
+                "confidence": confidence,
+                "position_scale": position_scale,
+                "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "steps": {},
+            }
+            start = timestamps.get("start", 0)
+            for key, ts in timestamps.items():
+                if key != "start":
+                    timing_data["steps"][key] = round((ts - start) * 1000)  # ms from start
+
+            filename = os.path.join(log_path, f"execution_timing_{current_time.strftime('%Y-%m-%d')}.jsonl")
+            with open(filename, 'a') as f:
+                f.write(json.dumps(timing_data) + '\n')
+        except Exception as e:
+            logging.error(f"Failed to log execution timing: {e}")
+
 
 class PerformanceMonitor:
     """Monitors open positions, checks performance, triggers closures, syncs DB."""
@@ -1055,7 +1218,9 @@ class PerformanceMonitor:
         self.trading_rule = trading_rule # Needed for daily profit target
         self.rabbit_connection = rabbit_connection # For notifications
         self.perf_config = self.config.get_config_value("trade.config.position_management", {})
-        self.thresholds = self.perf_config.get("performance_thresholds", {"stoploss_percent": -20, "max_profit_percent": 60})
+        self.thresholds = self.perf_config.get("performance_thresholds", {"stoploss_percent": -15, "max_profit_percent": 60})
+        # Trailing stop config
+        self.trailing_stop_config = self.thresholds.get("trailing_stop", {"enabled": False, "activation_percent": 5, "drawdown_percent": 8})
         self.general_config = self.config.get_config_value("trade.config.general", {})
         self.timezone = self.general_config.get("timezone", "Europe/Paris")
         self.logging_config = self.config.get_logging_config()
@@ -1066,6 +1231,9 @@ class PerformanceMonitor:
         except Exception as e:
              logging.warning(f"Could not get day_trading rules for profit target, defaulting: {e}")
              self.percent_profit_wanted_per_days = 1.0
+        logging.info(f"PerformanceMonitor: Trailing stop enabled={self.trailing_stop_config.get('enabled', False)}, "
+                     f"activation={self.trailing_stop_config.get('activation_percent')}%, "
+                     f"drawdown={self.trailing_stop_config.get('drawdown_percent')}%")
 
     def _fetch_and_update_closed_position_in_db(self, opening_position_id: str, closed_from_reason: str) -> bool | None:
         """
@@ -1159,6 +1327,13 @@ class PerformanceMonitor:
                             opening_position_id)
                         today_percent = self.db_position_manager.get_percent_of_the_day()
 
+                        # Record loss if position was a loser (for cooldown tracking)
+                        if performance_percent is not None and performance_percent < 0:
+                            try:
+                                self.trading_rule.record_loss()
+                            except Exception as e:
+                                logging.warning(f"Failed to record loss for cooldown: {e}")
+
                         message = f"""
 --- CLOSED POSITION ---
 Instrument : {description}
@@ -1249,8 +1424,24 @@ Today's Realized Profit % (after close) : {today_percent}%
              close_reason = None
              if performance_percent <= self.thresholds["stoploss_percent"]:
                   close_reason = f"Stoploss ({self.thresholds['stoploss_percent']}%) hit at {performance_percent}%"
+                  # Record loss for cooldown tracking
+                  try:
+                      self.trading_rule.record_loss()
+                  except Exception as e:
+                      logging.warning(f"Failed to record loss for cooldown: {e}")
              elif performance_percent >= self.thresholds["max_profit_percent"]:
                   close_reason = f"Takeprofit ({self.thresholds['max_profit_percent']}%) hit at {performance_percent}%"
+
+             # Trailing stop check
+             if not close_reason and self.trailing_stop_config.get("enabled", False):
+                  activation_pct = self.trailing_stop_config.get("activation_percent", 5)
+                  drawdown_pct = self.trailing_stop_config.get("drawdown_percent", 8)
+                  if max_perf is not None and max_perf >= activation_pct:
+                      drawdown_from_peak = max_perf - performance_percent
+                      if drawdown_from_peak >= drawdown_pct:
+                          close_reason = (f"Trailing Stop: Peak was {max_perf:.1f}%, now {performance_percent:.1f}% "
+                                          f"(drawdown: {drawdown_from_peak:.1f}% >= {drawdown_pct}%)")
+                          logging.info(f"Trailing stop triggered for {position_id}: {close_reason}")
 
              # Check daily profit target only if no other close reason yet
              if not close_reason:
@@ -1504,7 +1695,7 @@ Close Time: {close_time}"""
         except Exception as e:
             logging.error(f"Failed to write performance log for position {position_id}: {e}")
 
-    def close_managed_positions_by_criteria(self, action_filter: str | None = None):
+    def close_managed_positions_by_criteria(self, action_filter: str | None = None, exclude_position_id: str | None = None):
         """
         Closes open positions managed by the app, optionally filtered by action ('long'/'short').
         Initiates closure and attempts immediate DB update.
@@ -1512,8 +1703,9 @@ Close Time: {close_time}"""
         Args:
             action_filter: If 'long' or 'short', closes only positions matching that action.
                            If None, closes all managed open positions.
+            exclude_position_id: If provided, skip this position ID (used to avoid closing a just-opened position).
         """
-        logging.info(f"--- Closing Managed Positions by Criteria (Filter: {action_filter}) ---")
+        logging.info(f"--- Closing Managed Positions by Criteria (Filter: {action_filter}, Exclude: {exclude_position_id}) ---")
         closed_initiated_count = 0
         errors_count = 0
         processed_positions = [] # Track positions processed
@@ -1546,6 +1738,11 @@ Close Time: {close_time}"""
             if action_filter and db_action != action_filter:
                 logging.debug(f"Skipping pos {position_id}: Action '{db_action}' != Filter '{action_filter}'")
                 continue # Skip if action doesn't match filter
+
+            # Skip excluded position (e.g., a just-opened position in decoupled mode)
+            if exclude_position_id and str(position_id) == str(exclude_position_id):
+                logging.debug(f"Skipping pos {position_id}: excluded by exclude_position_id parameter")
+                continue
 
             # Check if position exists and is closable on API
             if position_id not in api_positions_dict:

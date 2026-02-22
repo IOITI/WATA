@@ -29,7 +29,7 @@ timezone = config_manager.get_config_value("trade.config.general.timezone", "Eur
 trading_rule = TradingRule(config_manager, None)
 
 # Function to send 'ping_saxo_api' every 1 minutes
-@repeat(every(15).seconds)
+@repeat(every(7).seconds)
 def job_check_positions_on_saxo_api():
     # Get the current time in UTC
     now_utc = datetime.now(pytz.utc)

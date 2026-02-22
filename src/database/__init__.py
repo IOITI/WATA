@@ -276,6 +276,43 @@ class DbPositionManager(TradingDataDB):
             result_list.append(result_schema)
         return result_list
 
+    def get_today_trade_count(self):
+        """
+        Returns the number of trades (positions opened) today.
+        Counts both open and closed positions opened today.
+        """
+        formatted_date = datetime.now().strftime('%Y/%m/%d')
+        result = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM turbo_data_position
+            WHERE strftime(execution_time_open, '%Y/%m/%d') = ?
+            """,
+            (formatted_date,),
+        ).fetchone()
+        return result[0] if result else 0
+
+    def get_last_closed_position_performance(self):
+        """
+        Returns the performance percent and close time of the last closed position today.
+        Returns None if no position was closed today.
+        """
+        formatted_date = datetime.now().strftime('%Y/%m/%d')
+        result = self.conn.execute(
+            """
+            SELECT position_total_performance_percent, execution_time_close
+            FROM turbo_data_position
+            WHERE position_status = 'Closed'
+              AND strftime(execution_time_close, '%Y/%m/%d') = ?
+            ORDER BY execution_time_close DESC
+            LIMIT 1
+            """,
+            (formatted_date,),
+        ).fetchone()
+        if result:
+            return {"performance_percent": result[0], "close_time": result[1]}
+        return None
+
     def get_max_position_percent(self, position_id):
         """
         Retrieves the maximum position percentage for a position.

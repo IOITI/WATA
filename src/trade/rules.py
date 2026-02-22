@@ -15,7 +15,20 @@ class TradingRule:
         self.signal_validation_config = self.get_rule_config("signal_validation")
         self.market_hours_config = self.get_rule_config("market_hours")
         self.timezone = self.config_manager.get_config_value("trade.config.general.timezone", "Europe/Paris")
+        # Risk management config (optional rule)
+        self.risk_management_config = self.get_rule_config_safe("risk_management")
+        self.cooldown_after_loss_minutes = self.risk_management_config.get("cooldown_after_loss_minutes", 0) if self.risk_management_config else 0
+        self.max_trades_per_day = self.risk_management_config.get("max_trades_per_day", 0) if self.risk_management_config else 0
+        # Confidence scaling config (optional)
+        self.confidence_config = self.config_manager.get_config_value("trade.config.position_sizing.confidence_scaling", {})
+        self.min_confidence_threshold = self.confidence_config.get("min_confidence_threshold", 0.0)
+        # Track last loss timestamp for cooldown
+        self._last_loss_timestamp = None
         logging.info(f"Trading rules using timezone: {self.timezone}")
+        if self.cooldown_after_loss_minutes > 0:
+            logging.info(f"Cooldown after loss: {self.cooldown_after_loss_minutes} minutes")
+        if self.max_trades_per_day > 0:
+            logging.info(f"Max trades per day: {self.max_trades_per_day}")
 
     def get_rule_config(self, rule_type):
         """
@@ -26,6 +39,16 @@ class TradingRule:
             if rule.get("rule_type") == rule_type:
                 return rule.get("rule_config", {})
         raise TradingRuleViolation(f"Rule with type '{rule_type}' not found in the configuration.")
+
+    def get_rule_config_safe(self, rule_type):
+        """
+        Retrieves the rule_config for a given rule_type, returning None if not found.
+        """
+        trade_rules = self.config_manager.get_config_value("trade.rules", [])
+        for rule in trade_rules:
+            if rule.get("rule_type") == rule_type:
+                return rule.get("rule_config", {})
+        return None
 
     def check_signal_timestamp(self, signal_action, signal_timestamp):
         # Parse the signal_timestamp string into a datetime object
@@ -120,3 +143,59 @@ class TradingRule:
                                f" with the same action {action}.")
                     logging.info(message)
                     raise TradingRuleViolation(message)
+
+    def check_cooldown_after_loss(self):
+        """
+        Checks if we are still in a cooldown period after the last losing trade.
+        Prevents entering trades too quickly after a loss.
+        """
+        if self.cooldown_after_loss_minutes <= 0:
+            return  # Cooldown disabled
+
+        if self._last_loss_timestamp is None:
+            return  # No loss recorded yet
+
+        current_time = datetime.now(pytz.utc)
+        cooldown_end = self._last_loss_timestamp + timedelta(minutes=self.cooldown_after_loss_minutes)
+
+        if current_time < cooldown_end:
+            remaining = (cooldown_end - current_time).total_seconds()
+            message = (f"Breaking trading rule: Cooldown active after last loss. "
+                       f"Remaining: {remaining:.0f}s (cooldown: {self.cooldown_after_loss_minutes}min)")
+            logging.info(message)
+            raise TradingRuleViolation(message)
+
+    def record_loss(self):
+        """Records the timestamp of a losing trade for cooldown tracking."""
+        self._last_loss_timestamp = datetime.now(pytz.utc)
+        logging.info(f"Loss recorded at {self._last_loss_timestamp}. Cooldown of {self.cooldown_after_loss_minutes} minutes activated.")
+
+    def check_max_trades_per_day(self):
+        """
+        Checks if the maximum number of trades per day has been reached.
+        """
+        if self.max_trades_per_day <= 0:
+            return  # Limit disabled
+
+        if self.db_position_manager is None:
+            return  # No DB manager available
+
+        today_trades = self.db_position_manager.get_today_trade_count()
+        if today_trades >= self.max_trades_per_day:
+            message = (f"Breaking trading rule: Maximum trades per day reached "
+                       f"({today_trades}/{self.max_trades_per_day}).")
+            logging.info(message)
+            raise TradingRuleViolation(message)
+
+    def check_confidence_threshold(self, confidence):
+        """
+        Checks if the signal confidence meets the minimum threshold.
+        """
+        if not self.confidence_config.get("enabled", False):
+            return  # Confidence checking disabled
+
+        if confidence is not None and confidence < self.min_confidence_threshold:
+            message = (f"Breaking trading rule: Signal confidence ({confidence:.2f}) is below "
+                       f"minimum threshold ({self.min_confidence_threshold:.2f}).")
+            logging.info(message)
+            raise TradingRuleViolation(message)

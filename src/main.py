@@ -179,9 +179,13 @@ def handle_trading_action(
     """Handles 'long' and 'short' trading actions using new services."""
     action = data.get("action")
     indice = data.get("indice")
-    logging.info(f"Processing trading action: {action} for {indice}")
+    confidence = data.get("confidence")
+    logging.info(f"Processing trading action: {action} for {indice} (confidence={confidence})")
 
     execution_result = None
+
+    # Determine if reserve cash mode is active (allows decoupled order flow)
+    reserve_cash_percent = trading_orchestrator.reserve_cash_percent
 
     try:
         # 1. Rule Checks
@@ -191,28 +195,64 @@ def handle_trading_action(
         indice_id = trading_rule.get_allowed_indice_id(indice)
         TradingRule.check_if_open_position_is_same_signal(action, db_position_manager)
         trading_rule.check_profit_per_day()
+        # New rule checks
+        trading_rule.check_cooldown_after_loss()
+        trading_rule.check_max_trades_per_day()
+        if confidence is not None:
+            trading_rule.check_confidence_threshold(confidence)
         logging.debug("Trading rules passed.")
 
-        # 2. Close existing positions
-        logging.info("Attempting to close any existing managed positions before opening new one...")
-        close_result = performance_monitor.close_managed_positions_by_criteria(action_filter=None) # None closes all
-        logging.info(f"Attempted closure of existing positions. Initiated: {close_result.get('closed_initiated_count', 0)}, Errors: {close_result.get('errors_count', 0)}")
-        # Optionally add summary (consider if monitor's own messages are sufficient)
-        composer.add_text_section("Pre-Trade Closure", f"Attempted closing existing positions. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}")
+        # 2. Pre-trade closure strategy depends on reserve_cash_percent
+        if reserve_cash_percent > 0:
+            # Decoupled mode: execute new trade FIRST (using reserved cash), then close old positions
+            logging.info(f"Reserve cash mode active ({reserve_cash_percent}%). Executing new trade before closing old positions.")
 
+            # 2a. Execute Trade Signal first
+            logging.info(f"Executing trade signal: Exchange {trade_turbo_exchange_id}, IndiceID {indice_id}, Action {action}")
+            execution_result = trading_orchestrator.execute_trade_signal(
+                exchange_id=trade_turbo_exchange_id,
+                underlying_uics=indice_id,
+                keywords=action,
+                confidence=confidence
+            )
 
-        # 3. Execute Trade Signal
-        logging.info(f"Executing trade signal: Exchange {trade_turbo_exchange_id}, IndiceID {indice_id}, Action {action}")
-        execution_result = trading_orchestrator.execute_trade_signal(
-            exchange_id=trade_turbo_exchange_id,
-            underlying_uics=indice_id,
-            keywords=action
-        )
-        # execution_result contains: {'order_details': {...}, 'position_details': {...}, 'selected_turbo_info': {...}, 'message': '...'}
+            # 2b. Now close old positions (non-blocking for the new trade)
+            logging.info("Closing old positions after new trade execution...")
+            close_result = performance_monitor.close_managed_positions_by_criteria(
+                action_filter=None,
+                exclude_position_id=execution_result['position_details']['position_id']
+            )
+            logging.info(f"Post-trade closure. Initiated: {close_result.get('closed_initiated_count', 0)}, Errors: {close_result.get('errors_count', 0)}")
+            composer.add_text_section("Post-Trade Closure", f"Closed existing positions after new trade. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}")
+        else:
+            # Classic mode: close existing positions BEFORE opening new one
+            logging.info("Attempting to close any existing managed positions before opening new one...")
+            close_result = performance_monitor.close_managed_positions_by_criteria(action_filter=None)
+            logging.info(f"Attempted closure of existing positions. Initiated: {close_result.get('closed_initiated_count', 0)}, Errors: {close_result.get('errors_count', 0)}")
+            composer.add_text_section("Pre-Trade Closure", f"Attempted closing existing positions. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}")
+
+            # 3. Execute Trade Signal
+            logging.info(f"Executing trade signal: Exchange {trade_turbo_exchange_id}, IndiceID {indice_id}, Action {action}")
+            execution_result = trading_orchestrator.execute_trade_signal(
+                exchange_id=trade_turbo_exchange_id,
+                underlying_uics=indice_id,
+                keywords=action,
+                confidence=confidence
+            )
 
         # 4. Compose Success Message using updated composer methods
         composer.add_turbo_search_result(founded_turbo=execution_result['selected_turbo_info'])
-        composer.add_position_result(buy_details=execution_result) # Pass the whole result
+        composer.add_position_result(buy_details=execution_result)
+
+        # Add execution timing info if available
+        if 'execution_timing' in execution_result:
+            composer.add_text_section("Execution Timing", execution_result['execution_timing'])
+        # Add position scale info if available
+        if execution_result.get('position_scale') is not None:
+            scale_info = f"Scale: {execution_result['position_scale']}%"
+            if confidence is not None:
+                scale_info += f" (confidence: {confidence})"
+            composer.add_text_section("Position Sizing", scale_info)
 
         logging.info(f"Successfully executed and recorded trade action: {action}. OrderID: {execution_result['order_details']['order_id']}, PositionID: {execution_result['position_details']['position_id']}")
 
