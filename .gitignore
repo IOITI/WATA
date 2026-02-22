@@ -12,3 +12,7 @@ __pycache__/
 .coverage
 htmlcov/
 .pytest_cache/
+
+wata_app*.zip
+
+.DS_Store
