@@ -16,3 +16,5 @@ htmlcov/
 wata_app*.zip
 
 .DS_Store
+
+execution_timing_*.jsonl
