@@ -98,16 +98,30 @@ class AsyncAPI:
         if headers:
             _headers.update(headers)
 
-        self._client = httpx.AsyncClient(
-            headers=_headers,
-            timeout=httpx.Timeout(timeout),
-            http2=True,          # Enable HTTP/2 for lower latency
-            limits=httpx.Limits(
+        client_kwargs = {
+            "headers": _headers,
+            "timeout": httpx.Timeout(timeout),
+            "limits": httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
                 keepalive_expiry=60,
             ),
-        )
+        }
+
+        try:
+            self._client = httpx.AsyncClient(
+                http2=True,
+                **client_kwargs,
+            )
+        except ImportError:
+            logger.warning(
+                "HTTP/2 support is unavailable because the optional 'h2' dependency "
+                "is not installed. Falling back to HTTP/1.1."
+            )
+            self._client = httpx.AsyncClient(
+                http2=False,
+                **client_kwargs,
+            )
 
     def update_token(self, new_token: str):
         """Hot-swap the access token without recreating the client."""
