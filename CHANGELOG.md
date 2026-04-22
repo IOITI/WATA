@@ -125,11 +125,19 @@ TradingView → Webhook → RabbitMQ [trading-signals] → Async Trader (httpx/H
 - Access to your current `config.json` and DuckDB database file
 - A brief maintenance window (services will be restarted)
 
-## Step 1: Update Configuration
+## Step 1: Set PostgreSQL Password
+
+In `/app/wata/.env` in your server, set a secure postgres password:
+
+```bash
+POSTGRES_PASSWORD="your_secure_password_here"
+```
+
+## Step 2: Update Configuration
 
 Add the following sections to your `etc/config.json`:
 
-### 1a. PostgreSQL connection
+### 2a. PostgreSQL connection
 
 Add at the top level (next to `duckdb`):
 
@@ -141,9 +149,9 @@ Add at the top level (next to `duckdb`):
 }
 ```
 
-> **Important:** Replace `YOUR_PASSWORD` with a strong password. Set the same password as the `POSTGRES_PASSWORD` environment variable in `docker-compose.yml`.
+> **Important:** Replace `YOUR_PASSWORD` with a strong password. Set the same password as the `POSTGRES_PASSWORD` environment variable in `/app/wata/.env`.
 
-### 1b. Streaming configuration
+### 2b. Streaming configuration
 
 Add inside `trade.config.general`:
 
@@ -163,19 +171,9 @@ Add inside `trade.config.general`:
 | `max_reconnect_delay_seconds` | Cap for exponential-backoff reconnection | `30.0` |
 | `reauth_interval_seconds` | How often to re-authorise the WS connection | `900` (15 min) |
 
-### 1c. Keep existing sections
+### 2c. Keep existing sections
 
 The `duckdb`, `websocket`, and `position_check` config sections can remain - they are not used by the new services but won't cause errors.
-
-## Step 2: Set PostgreSQL Password
-
-In `deploy/docker-compose.yml`, set a secure postgres password:
-
-```bash
-export POSTGRES_PASSWORD="your_secure_password_here"
-```
-
-Or edit the `docker-compose.yml` directly (the `postgres1` service `POSTGRES_PASSWORD` environment variable).
 
 ## Step 3: Rebuild the Docker Image
 
