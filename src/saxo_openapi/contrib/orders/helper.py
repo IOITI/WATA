@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from datetime import datetime
-import saxo_openapi.definitions.orders as OD
+from ...definitions import orders as OD
 
 
 def direction_from_amount(Amount):

@@ -2,8 +2,8 @@
 
 """Utility classes and/or functions."""
 
-from saxo_openapi.definitions.orders import AssetType
-import saxo_openapi.endpoints.referencedata as rd
+from ...definitions.orders import AssetType
+from ...endpoints import referencedata as rd
 
 
 def InstrumentToUic(client, AccountKey, spec, assettype=AssetType.FxSpot):

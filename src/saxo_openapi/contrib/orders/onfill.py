@@ -160,7 +160,7 @@ Now the order can be placed:
 
 from abc import abstractmethod
 from .baseorder import BaseOrder
-import saxo_openapi.definitions.orders as OD
+from ...definitions import orders as OD
 from .helper import order_duration_spec
 
 

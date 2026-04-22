@@ -38,7 +38,7 @@ _doc = """
 
 def make_definition_classes(mod):
     """Dynamically create the definition classes from module 'mod'."""
-    rootpath = "saxo_openapi"
+    rootpath = __name__.rpartition(".")[0]
     PTH = "{}.definitions.{}".format(rootpath, mod)
 
     M = import_module(PTH)
