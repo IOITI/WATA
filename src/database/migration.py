@@ -149,7 +149,8 @@ async def run_migration(config_manager: ConfigurationManager):
 
     # Connect to PostgreSQL
     logger.info("Connecting to PostgreSQL...")
-    pg = await PostgresConnectionManager.from_config(config_manager)
+    pg = PostgresConnectionManager.from_config(config_manager)
+    await pg.connect()
     await init_schema(pg)
 
     try:

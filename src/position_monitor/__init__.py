@@ -179,13 +179,16 @@ async def main():
     await telegram.connect()
 
     stream_client: SaxoStreamClient | None = None
+    pg = None
+    api_client = None
 
     try:
         # PostgreSQL
-        pg = await PostgresConnectionManager.from_config(config_manager)
+        pg = PostgresConnectionManager.from_config(config_manager)
+        await pg.connect()
         await init_schema(pg)
-        db_position_manager = AsyncDbPositionManager(pg, config_manager)
-        db_perf_manager = AsyncDbTradePerformanceManager(pg, config_manager)
+        db_position_manager = AsyncDbPositionManager(pg)
+        db_perf_manager = AsyncDbTradePerformanceManager(pg)
 
         # Saxo API client
         saxo_auth = SaxoAuth(config_manager)
@@ -273,8 +276,10 @@ async def main():
         logger.info("--- Shutting down WATA Position Monitor ---")
         if stream_client:
             await stream_client.stop()
-        await api_client.close()
-        await pg.close()
+        if api_client is not None:
+            await api_client.close()
+        if pg is not None:
+            await pg.close()
         await telegram.close()
 
 

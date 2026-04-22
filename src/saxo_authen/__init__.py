@@ -7,6 +7,7 @@ import datetime
 import os
 import logging
 import base64
+import pika
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -14,7 +15,6 @@ import stat
 
 from src.configuration import ConfigurationManager
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
-from src.database import DbTokenManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,6 @@ class SaxoAuth:
         
         # Initialize the encryption key
         self._initialize_encryption()
-        
-        # Initialize token database manager
-        self.token_db = DbTokenManager(config_manager)
-        self.token_id = "saxo_token"  # Unique identifier for Saxo tokens
 
     def _initialize_encryption(self):
         """
@@ -89,6 +85,63 @@ class SaxoAuth:
         except Exception as e:
             logger.error(f"Error decrypting data: {e}")
             return None
+
+    def _write_encrypted_token_file(self, encrypted_data):
+        """Persist encrypted token bytes to the configured token file."""
+        with open(self.token_file_path, "wb") as token_file:
+            token_file.write(encrypted_data)
+        os.chmod(self.token_file_path, stat.S_IRUSR | stat.S_IWUSR)
+
+    def _read_encrypted_token_file(self):
+        """Read encrypted token bytes from the configured token file."""
+        if not os.path.exists(self.token_file_path):
+            return None
+
+        with open(self.token_file_path, "rb") as token_file:
+            return token_file.read()
+
+    def _send_telegram_notification(self, message):
+        """
+        Send a Telegram notification via RabbitMQ.
+
+        If a pre-existing blocking RabbitMQ connection was provided, reuse it.
+        Otherwise open a short-lived synchronous connection from config so
+        notifications still work during async service startup.
+        """
+        if self.rabbit_connection is not None:
+            try:
+                send_message_to_mq_for_telegram(self.rabbit_connection, message)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to send Telegram notification via existing RabbitMQ connection: {e}")
+
+        connection = None
+        try:
+            rabbitmq_config = self.config_manager.get_rabbitmq_config()
+            connection = pika.BlockingConnection(
+                pika.ConnectionParameters(
+                    host=rabbitmq_config["hostname"],
+                    credentials=pika.PlainCredentials(
+                        rabbitmq_config["authentication"]["username"],
+                        rabbitmq_config["authentication"]["password"],
+                    ),
+                )
+            )
+            channel = connection.channel()
+            channel.queue_declare(queue="telegram_channel")
+            payload = json.dumps({"message": message})
+            channel.basic_publish(
+                exchange="",
+                routing_key="telegram_channel",
+                body=payload,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send Telegram notification: {e}")
+            return False
+        finally:
+            if connection is not None and connection.is_open:
+                connection.close()
 
     def get_authorization_url(self):
         """
@@ -145,17 +198,13 @@ class SaxoAuth:
         auth_instructions += "\n\n⏳ Waiting for authorization code..."
         
         print(auth_instructions)
-        
-        # Send the instructions to Telegram
-        if hasattr(self, 'rabbit_connection'):
-            try:
-                send_message_to_mq_for_telegram(self.rabbit_connection, 
-                                              f"--- 🔐 SAXO AUTHORIZATION REQUIRED ---\n{auth_instructions}")
-                logger.info("Authorization instructions sent to Telegram")
-            except Exception as e:
-                logger.error(f"Failed to send authorization instructions to Telegram: {e}")
+
+        if self._send_telegram_notification(
+            f"--- 🔐 SAXO AUTHORIZATION REQUIRED ---\n{auth_instructions}"
+        ):
+            logger.info("Authorization instructions sent to Telegram")
         else:
-            logger.warning("No rabbit_connection available, can't send message to Telegram")
+            logger.warning("Unable to send authorization instructions to Telegram")
         
         # Wait for the auth code file to appear (with timeout)
         max_wait_time = 300  # 5 minutes
@@ -164,18 +213,16 @@ class SaxoAuth:
         while time.time() - start_time < max_wait_time:
             code = self.read_auth_code_from_file()
             if code:
-                if hasattr(self, 'rabbit_connection'):
-                    send_message_to_mq_for_telegram(self.rabbit_connection, 
-                                                  "✅ Authorization code received successfully!")
+                self._send_telegram_notification(
+                    "✅ Authorization code received successfully!"
+                )
                 return code
             time.sleep(5)
         
         error_message = "Timeout waiting for authorization code"
         logger.error(error_message)
-        
-        if hasattr(self, 'rabbit_connection'):
-            send_message_to_mq_for_telegram(self.rabbit_connection, 
-                                          f"❌ ERROR: {error_message}")
+
+        self._send_telegram_notification(f"❌ ERROR: {error_message}")
         
         raise TimeoutError(error_message)
 
@@ -257,28 +304,16 @@ class SaxoAuth:
 
     def save_token_data(self, token_data):
         """
-        Save token data to database in encrypted format.
+        Save token data to the configured file in encrypted format.
         """
         token_data["date_saved"] = datetime.datetime.now().isoformat()
         
         # Encrypt the token data
         encrypted_data = self._encrypt_data(token_data)
-        
-        # Store in database
-        metadata = json.dumps({
-            "expires_in": token_data["expires_in"],
-            "refresh_token_expires_in": token_data.get("refresh_token_expires_in", 0),
-            "date_saved": token_data["date_saved"]
-        })
-        
-        self.token_db.store_token(
-            token_id=self.token_id,
-            token_type="saxo_oauth",
-            encrypted_data=encrypted_data,
-            metadata=metadata
-        )
-        
-        logger.info("Token data securely saved to database with encryption")
+
+        self._write_encrypted_token_file(encrypted_data)
+
+        logger.info("Token data securely saved to encrypted file")
         
 
     def is_token_expired(self, token_data):
@@ -325,12 +360,11 @@ class SaxoAuth:
         """
         try:
             token_data = {}
-            
-            # Try to get token from database first
-            encrypted_data = self.token_db.get_token(self.token_id)
+
+            encrypted_data = self._read_encrypted_token_file()
             if encrypted_data:
                 token_data = self._decrypt_data(encrypted_data) or {}
-                logger.debug("Token data retrieved from database")
+                logger.debug("Token data retrieved from encrypted file")
 
             if self.is_token_expired(token_data):
                 if self.is_refresh_token_expired(token_data):
@@ -370,19 +404,8 @@ if __name__ == "__main__":
         print("Configuring")
         # Create an instance of ConfigurationManager
         config_manager = ConfigurationManager(config_path)
-        
-        # Try to initialize rabbit connection if available
-        rabbit_connection = None
-        try:
-            from src.mq_telegram.rabbit_connection import RabbitMQConnection
-            rabbit_config = config_manager.get_config_value("mq_telegram")
-            rabbit_connection = RabbitMQConnection(rabbit_config)
-            print("RabbitMQ connection established")
-        except Exception as rabbit_error:
-            print(f"Could not establish RabbitMQ connection: {rabbit_error}")
-            logger.warning(f"Could not establish RabbitMQ connection: {rabbit_error}")
-        
-        saxo_auth = SaxoAuth(config_manager, rabbit_connection)
+
+        saxo_auth = SaxoAuth(config_manager)
         token = saxo_auth.get_token()
         print(f"Access Token: {token}")
     except Exception as e:

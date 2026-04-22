@@ -367,15 +367,19 @@ async def main():
     telegram = AsyncTelegramSender(config_manager)
     await telegram.connect()
 
+    pg = None
+    api_client = None
+
     try:
         # 3. PostgreSQL
         logger.info("Connecting to PostgreSQL...")
-        pg = await PostgresConnectionManager.from_config(config_manager)
+        pg = PostgresConnectionManager.from_config(config_manager)
+        await pg.connect()
         await init_schema(pg)
 
-        db_order_manager = AsyncDbOrderManager(pg, config_manager)
-        db_position_manager = AsyncDbPositionManager(pg, config_manager)
-        db_perf_manager = AsyncDbTradePerformanceManager(pg, config_manager)
+        db_order_manager = AsyncDbOrderManager(pg)
+        db_position_manager = AsyncDbPositionManager(pg)
+        db_perf_manager = AsyncDbTradePerformanceManager(pg)
 
         # 4. Trading rules (sync TradingRule — uses async DB wrapper below)
         trading_rule = TradingRule(config_manager, None)  # db_position_manager passed separately
@@ -452,8 +456,10 @@ async def main():
 
     finally:
         logger.info("--- Shutting down WATA Async Trader ---")
-        await api_client.close()
-        await pg.close()
+        if api_client is not None:
+            await api_client.close()
+        if pg is not None:
+            await pg.close()
         await telegram.close()
 
 
