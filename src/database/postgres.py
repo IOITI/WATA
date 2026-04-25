@@ -7,7 +7,7 @@ Uses asyncpg connection pool for high-performance async I/O.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -202,6 +202,10 @@ class AsyncDbPositionManager:
     def __init__(self, conn_mgr: PostgresConnectionManager):
         self.db = conn_mgr
 
+    @staticmethod
+    def _today() -> date:
+        return date.today()
+
     async def insert_turbo_open_position_data(self, data: dict):
         await self.db.execute(
             """
@@ -255,7 +259,7 @@ class AsyncDbPositionManager:
         return [{"position_id": r["position_id"], "action": r["action"]} for r in rows]
 
     async def get_today_trade_count(self) -> int:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._today()
         val = await self.db.fetchval(
             """
             SELECT COUNT(*) FROM turbo_data_position
@@ -266,7 +270,7 @@ class AsyncDbPositionManager:
         return val or 0
 
     async def get_percent_of_the_day(self) -> float:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._today()
         rows = await self.db.fetch(
             """
             SELECT position_total_performance_percent
@@ -286,7 +290,7 @@ class AsyncDbPositionManager:
         return val if val is not None else 0.0
 
     async def get_last_closed_position_performance(self) -> dict | None:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._today()
         row = await self.db.fetchrow(
             """
             SELECT position_total_performance_percent, execution_time_close
@@ -316,7 +320,7 @@ class AsyncDbPositionManager:
         return result
 
     async def get_stats_of_the_day(self) -> dict:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._today()
 
         general = await self.db.fetch(
             """
@@ -375,8 +379,8 @@ class AsyncDbPositionManager:
     async def _get_percentages_for_n_days(self, n: int, column: str, calc_fn) -> dict:
         results = {}
         for i in range(n):
-            d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-            display_date = (datetime.now() - timedelta(days=i)).strftime("%Y/%m/%d")
+            d = date.today() - timedelta(days=i)
+            display_date = d.strftime("%Y/%m/%d")
             rows = await self.db.fetch(
                 f"""
                 SELECT {column}
@@ -429,7 +433,7 @@ class AsyncDbTradePerformanceManager:
         )
 
     async def create_last_day_trade_performance_data(self):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = date.today()
         row = await self.db.fetchrow(
             """
             SELECT

@@ -216,6 +216,7 @@ async def main():
         refresh_rate_ms = streaming_config.get("refresh_rate_ms", 1000)
         reconnect_delay = streaming_config.get("reconnect_delay_seconds", 1.0)
         max_reconnect_delay = streaming_config.get("max_reconnect_delay_seconds", 30.0)
+        reauth_interval_seconds = streaming_config.get("reauth_interval_seconds", 900)
 
         # Build the streaming callback (closes over service objects)
         async def _stream_callback(positions: dict[str, dict]):
@@ -225,7 +226,7 @@ async def main():
 
         # Create streaming client
         stream_client = SaxoStreamClient(
-            api_client=api_client._api,
+            api_client=api_client,
             account_key=account_key,
             client_key=client_key,
             on_positions_update=_stream_callback,
@@ -234,6 +235,7 @@ async def main():
             refresh_rate_ms=refresh_rate_ms,
             reconnect_delay=reconnect_delay,
             max_reconnect_delay=max_reconnect_delay,
+            reauth_interval_seconds=reauth_interval_seconds,
         )
 
         # ── RabbitMQ — still consume trading-ops for daily_stats etc. ──

@@ -29,6 +29,7 @@ import copy
 import json
 import logging
 import time
+from urllib.parse import urlencode
 import uuid
 from typing import Any, Callable, Coroutine
 
@@ -73,9 +74,10 @@ class SaxoStreamClient:
 
     Parameters
     ----------
-    api_client : AsyncAPI
-        An already-initialised async HTTP client (used for REST subscription
-        calls and token refresh).
+    api_client : AsyncAPI | compatible wrapper
+        An already-initialised async HTTP client or wrapper exposing
+        ``request()``. The position monitor passes ``AsyncSaxoApiClient`` so
+        token refreshes are handled consistently for REST subscription calls.
     account_key : str
         Saxo account key.
     client_key : str
@@ -94,13 +96,15 @@ class SaxoStreamClient:
         Base delay in seconds before attempting to reconnect after a WS drop.
     max_reconnect_delay : float
         Cap for exponential-backoff reconnection delay.
+    reauth_interval_seconds : int
+        Interval between WebSocket re-authorisation calls.
     """
 
     # ── Construction ──────────────────────────────────────────────
 
     def __init__(
         self,
-        api_client: AsyncAPI,
+        api_client,
         account_key: str,
         client_key: str,
         on_positions_update: PositionUpdateCallback,
@@ -109,6 +113,7 @@ class SaxoStreamClient:
         refresh_rate_ms: int = 1000,
         reconnect_delay: float = 1.0,
         max_reconnect_delay: float = 30.0,
+        reauth_interval_seconds: int = 15 * 60,
     ):
         self._api = api_client
         self._account_key = account_key
@@ -119,6 +124,7 @@ class SaxoStreamClient:
         self._refresh_rate_ms = refresh_rate_ms
         self._reconnect_delay = reconnect_delay
         self._max_reconnect_delay = max_reconnect_delay
+        self._reauth_interval_seconds = reauth_interval_seconds
 
         # Connection state
         self._context_id: str = ""
@@ -128,6 +134,7 @@ class SaxoStreamClient:
         self._running = False
         self._receive_task: asyncio.Task | None = None
         self._reauth_task: asyncio.Task | None = None
+        self._subscription_ready = False
 
         # Snapshot cache:  {position_id: full_position_dict}
         self._positions: dict[str, dict] = {}
@@ -179,9 +186,11 @@ class SaxoStreamClient:
 
     async def _connect_and_subscribe(self):
         """Open WS, create position subscription, start reauth timer."""
-        # 1. Generate fresh IDs
-        self._context_id = _short_id("ctx")
-        self._pos_ref_id = _short_id("pos")
+        # 1. Generate IDs once and reuse them across reconnects.
+        if not self._context_id:
+            self._context_id = _short_id("ctx")
+        if not self._pos_ref_id:
+            self._pos_ref_id = _short_id("pos")
 
         # 2. Build WS URL
         token = self._current_token()
@@ -191,7 +200,6 @@ class SaxoStreamClient:
         logger.info("Connecting to Saxo WebSocket (contextId=%s) …", self._context_id)
         self._ws = await websockets.connect(
             ws_url,
-            additional_headers={"Authorization": f"Bearer {token}"},
             ping_interval=20,
             ping_timeout=20,
             close_timeout=5,
@@ -199,8 +207,10 @@ class SaxoStreamClient:
         )
         logger.info("WebSocket connected.")
 
-        # 4. Position subscription (REST call, snapshot returned)
-        await self._create_position_subscription()
+        # 4. Position subscription (REST call, snapshot returned) — only when needed.
+        if not self._subscription_ready:
+            await self._create_position_subscription()
+            self._subscription_ready = True
 
         # 5. Periodic re-authorisation in background
         if self._reauth_task and not self._reauth_task.done():
@@ -209,6 +219,8 @@ class SaxoStreamClient:
 
     async def _create_position_subscription(self):
         """Create a position list subscription via REST and seed the cache."""
+        self._sync_api_token()
+
         data = {
             "Arguments": {
                 "AccountKey": self._account_key,
@@ -227,7 +239,7 @@ class SaxoStreamClient:
         }
 
         req = pf.positions.PositionListSubscription(data=data)
-        resp = await self._api.request(req)
+        resp = await self._request(req)
 
         # Seed snapshot cache
         self._positions.clear()
@@ -252,11 +264,13 @@ class SaxoStreamClient:
         if not self._context_id:
             return
         try:
+            self._sync_api_token()
             req = pf.positions.PositionSubscriptionRemoveMultiple(
                 ContextId=self._context_id
             )
-            await self._api.request(req)
+            await self._request(req)
             logger.info("Subscriptions for context %s removed.", self._context_id)
+            self._subscription_ready = False
         except Exception as e:
             logger.warning("Failed to clean up subscriptions: %s", e)
 
@@ -407,18 +421,21 @@ class SaxoStreamClient:
             logger.warning("Resetting position subscription (requested by server).")
             # Delete old subscription, create new one
             try:
+                self._sync_api_token()
                 old_ref = self._pos_ref_id
                 self._pos_ref_id = _short_id("pos")
+                self._subscription_ready = False
 
                 req = pf.positions.PositionSubscriptionRemove(
                     ContextId=self._context_id,
                     ReferenceId=old_ref,
                 )
-                await self._api.request(req)
+                await self._request(req)
             except Exception as e:
                 logger.warning("Failed to delete old subscription: %s", e)
 
             await self._create_position_subscription()
+            self._subscription_ready = True
 
     # ── Re-authorisation loop ─────────────────────────────────────
 
@@ -428,9 +445,8 @@ class SaxoStreamClient:
         refreshes.  Saxo's access tokens typically last 20 minutes, so we
         re-authorise every 15 minutes.
         """
-        reauth_interval = 15 * 60  # 15 minutes
         while self._running:
-            await asyncio.sleep(reauth_interval)
+            await asyncio.sleep(self._reauth_interval_seconds)
             if not self._running:
                 break
             try:
@@ -445,7 +461,7 @@ class SaxoStreamClient:
                     if resp.status_code == 202:
                         logger.info("WebSocket re-authorised successfully.")
                         # Also update the REST client's token
-                        self._api.update_token(token)
+                        self._update_rest_client_token(token)
                     else:
                         logger.warning(
                             "Re-auth returned %d: %s", resp.status_code, resp.text[:200]
@@ -462,22 +478,25 @@ class SaxoStreamClient:
         Build the WebSocket connection URL.
 
         Format:
-          wss://streaming.saxotrader.com/[sim/]openapi/streamingws/connect?contextId=X
+          wss://sim-streaming.saxobank.com/sim/oapi/streaming/ws/connect?authorization=BEARER%20TOKEN&contextId=X
         """
         env = TRADING_ENVIRONMENTS[self._environment]
         stream_base = env["stream"].replace("https://", "wss://")
 
         if self._environment == "simulation":
             prefix = env.get("prefix", "sim")
-            path = f"/{prefix}/openapi/streamingws/connect"
+            path = f"/{prefix}/oapi/streaming/ws/connect"
         else:
-            path = "/openapi/streamingws/connect"
+            path = "/oapi/streaming/ws/connect"
 
-        url = f"{stream_base}{path}?contextId={self._context_id}"
+        params = {
+            "authorization": f"BEARER {token}",
+            "contextId": self._context_id,
+        }
         if self._last_message_id is not None:
-            url += f"&messageid={self._last_message_id}"
+            params["messageid"] = str(self._last_message_id)
 
-        return url
+        return f"{stream_base}{path}?{urlencode(params)}"
 
     def _build_reauth_url(self) -> str:
         """Build the re-authorisation PUT URL."""
@@ -485,13 +504,42 @@ class SaxoStreamClient:
         base = env["stream"]
         if self._environment == "simulation":
             prefix = env.get("prefix", "sim")
-            return f"{base}/{prefix}/openapi/streamingws/authorize?contextid={self._context_id}"
-        return f"{base}/openapi/streamingws/authorize?contextid={self._context_id}"
+            return f"{base}/{prefix}/oapi/streaming/ws/authorize?contextid={self._context_id}"
+        return f"{base}/oapi/streaming/ws/authorize?contextid={self._context_id}"
 
     def _current_token(self) -> str:
-        if self._get_token:
-            return self._get_token()
-        return self._api.access_token
+        token = self._get_token() if self._get_token else self._rest_client_access_token
+        if token and token != self._rest_client_access_token:
+            self._update_rest_client_token(token)
+            logger.info("Updated Saxo streaming REST client with refreshed access token.")
+        return token
+
+    def _sync_api_token(self) -> str:
+        """Ensure the underlying AsyncAPI client uses the freshest access token."""
+        return self._current_token()
+
+    async def _request(self, endpoint):
+        """Dispatch a REST request through the configured async API client/wrapper."""
+        return await self._api.request(endpoint)
+
+    @property
+    def _rest_client_access_token(self) -> str | None:
+        if hasattr(self._api, "access_token"):
+            return self._api.access_token
+        nested_api = getattr(self._api, "_api", None)
+        if nested_api is not None and hasattr(nested_api, "access_token"):
+            return nested_api.access_token
+        return None
+
+    def _update_rest_client_token(self, token: str):
+        """Update the underlying REST client's bearer token when supported."""
+        if hasattr(self._api, "update_token"):
+            self._api.update_token(token)
+            return
+
+        nested_api = getattr(self._api, "_api", None)
+        if nested_api is not None and hasattr(nested_api, "update_token"):
+            nested_api.update_token(token)
 
 
 # ── Helpers ───────────────────────────────────────────────────────
