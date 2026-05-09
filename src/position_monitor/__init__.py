@@ -51,7 +51,7 @@ def get_version() -> str:
 
 
 # ─────────────────────────────────────────────────────
-#  Streaming callback — replaces the old 7-second poll
+#  Streaming callback
 # ─────────────────────────────────────────────────────
 
 async def on_positions_update(

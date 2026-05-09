@@ -16,6 +16,81 @@ from src.configuration import ConfigurationManager
 
 logger = logging.getLogger(__name__)
 
+_DATETIME_FIELDS = frozenset({
+    "order_submit_time",
+    "order_time",
+    "execution_time_open",
+    "execution_time_close",
+})
+_DATE_FIELDS = frozenset({"date_day"})
+
+
+def _parse_datetime_value(value: Any, field_name: str) -> Any:
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    if not isinstance(value, str):
+        return value
+
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
+
+    try:
+        return datetime.fromisoformat(candidate)
+    except ValueError:
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(candidate, fmt)
+        except ValueError:
+            continue
+
+    raise ValueError(f"Unsupported datetime value for {field_name}: {value!r}")
+
+
+def _parse_date_value(value: Any, field_name: str) -> Any:
+    if value is None:
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return value
+
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    try:
+        return date.fromisoformat(candidate)
+    except ValueError:
+        parsed_datetime = _parse_datetime_value(candidate, field_name)
+        if isinstance(parsed_datetime, datetime):
+            return parsed_datetime.date()
+        raise ValueError(f"Unsupported date value for {field_name}: {value!r}")
+
+
+def _normalize_temporal_fields(
+    data: dict[str, Any],
+    *,
+    datetime_fields: frozenset[str] = frozenset(),
+    date_fields: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    normalized = dict(data)
+    for field_name in datetime_fields:
+        if field_name in normalized:
+            normalized[field_name] = _parse_datetime_value(normalized[field_name], field_name)
+    for field_name in date_fields:
+        if field_name in normalized:
+            normalized[field_name] = _parse_date_value(normalized[field_name], field_name)
+    return normalized
+
 
 # ──────────────────────────────────────────────
 #  Connection Pool Manager
@@ -168,6 +243,7 @@ class AsyncDbOrderManager:
         self.db = conn_mgr
 
     async def insert_turbo_order_data(self, data: dict):
+        normalized_data = _normalize_temporal_fields(data, datetime_fields=_DATETIME_FIELDS)
         await self.db.execute(
             """
             INSERT INTO turbo_data_order
@@ -178,21 +254,21 @@ class AsyncDbOrderManager:
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
             ON CONFLICT (order_id) DO NOTHING
             """,
-            data["action"],
-            data["buy_sell"],
-            data["order_id"],
-            data["order_amount"],
-            data["order_type"],
-            data["order_kind"],
-            data.get("order_submit_time") or data.get("order_time"),
-            data.get("related_order_id", []),
-            data["position_id"],
-            data["instrument_name"],
-            data["instrument_symbol"],
-            data["instrument_uic"],
-            data["instrument_price"],
-            data["instrument_currency"],
-            data.get("order_cost"),
+            normalized_data["action"],
+            normalized_data["buy_sell"],
+            normalized_data["order_id"],
+            normalized_data["order_amount"],
+            normalized_data["order_type"],
+            normalized_data["order_kind"],
+            normalized_data.get("order_submit_time") or normalized_data.get("order_time"),
+            normalized_data.get("related_order_id", []),
+            normalized_data["position_id"],
+            normalized_data["instrument_name"],
+            normalized_data["instrument_symbol"],
+            normalized_data["instrument_uic"],
+            normalized_data["instrument_price"],
+            normalized_data["instrument_currency"],
+            normalized_data.get("order_cost"),
         )
 
 
@@ -207,6 +283,7 @@ class AsyncDbPositionManager:
         return date.today()
 
     async def insert_turbo_open_position_data(self, data: dict):
+        normalized_data = _normalize_temporal_fields(data, datetime_fields=_DATETIME_FIELDS)
         await self.db.execute(
             """
             INSERT INTO turbo_data_position
@@ -218,28 +295,29 @@ class AsyncDbPositionManager:
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
             ON CONFLICT (position_id) DO NOTHING
             """,
-            data["action"],
-            data["position_id"],
-            data["position_amount"],
-            data["position_open_price"],
-            data["position_total_open_price"],
-            data.get("position_status", "Open"),
-            data["position_kind"],
-            data.get("execution_time_open"),
-            data["order_id"],
-            data.get("related_order_id", []),
-            data["instrument_name"],
-            data["instrument_symbol"],
-            data["instrument_uic"],
-            data["instrument_currency"],
+            normalized_data["action"],
+            normalized_data["position_id"],
+            normalized_data["position_amount"],
+            normalized_data["position_open_price"],
+            normalized_data["position_total_open_price"],
+            normalized_data.get("position_status", "Open"),
+            normalized_data["position_kind"],
+            normalized_data.get("execution_time_open"),
+            normalized_data["order_id"],
+            normalized_data.get("related_order_id", []),
+            normalized_data["instrument_name"],
+            normalized_data["instrument_symbol"],
+            normalized_data["instrument_uic"],
+            normalized_data["instrument_currency"],
         )
 
     async def update_turbo_position_data(self, position_id: str, update_data: dict):
         if not update_data:
             return
+        normalized_update_data = _normalize_temporal_fields(update_data, datetime_fields=_DATETIME_FIELDS)
         set_parts = []
         values = []
-        for idx, (key, val) in enumerate(update_data.items(), start=1):
+        for idx, (key, val) in enumerate(normalized_update_data.items(), start=1):
             set_parts.append(f"{key} = ${idx}")
             values.append(val)
         values.append(position_id)
@@ -419,17 +497,18 @@ class AsyncDbTradePerformanceManager:
         self.db = conn_mgr
 
     async def insert_trade_performance_data(self, data: dict):
+        normalized_data = _normalize_temporal_fields(data, date_fields=_DATE_FIELDS)
         await self.db.execute(
             """
             INSERT INTO trade_performance (date_day, perf_day_real, money_made_real, trade_number_real, max_perf_day_simulated)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (date_day) DO NOTHING
             """,
-            data["date_day"],
-            data["perf_day_real"],
-            data["money_made_real"],
-            data["trade_number_real"],
-            data.get("max_perf_day_simulated"),
+            normalized_data["date_day"],
+            normalized_data["perf_day_real"],
+            normalized_data["money_made_real"],
+            normalized_data["trade_number_real"],
+            normalized_data.get("max_perf_day_simulated"),
         )
 
     async def create_last_day_trade_performance_data(self):

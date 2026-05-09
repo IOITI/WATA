@@ -984,12 +984,12 @@ class AsyncPerformanceMonitor:
                 logger.error("Failed max-perf update for %s: %s", pid, e)
                 errors += 1
 
-        logger.info("Perf check done. Closed=%d, MaxPerf updates=%d, Errors=%d", len(processed), len(db_updates), errors)
+        logger.debug("Perf check done. Closed=%d, MaxPerf updates=%d, Errors=%d", len(processed), len(db_updates), errors)
         return {"closed_positions_processed": processed, "db_updates": db_updates, "errors": errors}
 
     async def sync_db_positions_with_api(self) -> dict:
         """Compare DB open positions vs API, return updates for positions closed externally."""
-        logger.info("--- Syncing DB positions with API ---")
+        logger.debug("--- Syncing DB positions with API ---")
         db_open_ids = await self.db_position_manager.get_open_positions_ids()
 
         try:
@@ -1004,7 +1004,7 @@ class AsyncPerformanceMonitor:
 
         potentially_closed = [pid for pid in db_open_ids if pid not in api_open_ids]
         if not potentially_closed:
-            logger.info("All DB-open positions are still open on API.")
+            logger.debug("All DB-open positions are still open on API.")
             return {"updates_for_db": []}
 
         try:

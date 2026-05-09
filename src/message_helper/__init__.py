@@ -407,10 +407,14 @@ class TelegramMessageComposer:
         full_section = f"{section_title}\n{textwrap.dedent(message_body)}"
         self.sections.append(full_section)
 
-    def add_text_section(self, title: str, text: str):
-        """Adds a custom text section."""
+    def add_text_section(self, title: str, text):
+        """Adds a custom section, coercing structured values safely."""
+        if isinstance(text, dict):
+            self.add_dict_section(title, text)
+            return
+
         section_title = f"--- {title.upper()} ---"  # Standardize title format
-        message_body = textwrap.dedent(text)
+        message_body = "" if text is None else textwrap.dedent(str(text))
         full_section = f"{section_title}\n{message_body}"
         self.sections.append(full_section)
 
