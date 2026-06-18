@@ -6,6 +6,7 @@ import jsonschema
 import pika
 from functools import partial
 import sys
+from datetime import date, timedelta
 
 # --- Configuration and Core Components ---
 from configuration import ConfigurationManager
@@ -26,8 +27,7 @@ from database import DbOrderManager, DbPositionManager, DbTradePerformanceManage
 from mq_telegram.tools import send_message_to_mq_for_telegram
 # --- Use the Updated Message Helper ---
 from message_helper import (
-    generate_daily_stats_message,
-    generate_performance_stats_message,
+    build_daily_trading_report_message,
     TelegramMessageComposer
 )
 from logging_helper import setup_logging
@@ -412,20 +412,24 @@ def handle_daily_stats(data, composer: TelegramMessageComposer, ch, method, db_p
     """Handles 'daily_stats' action. """
     logging.info("Processing action: daily_stats")
     try:
-        days = 7 # Number of days for performance stats
-        logging.debug("Fetching daily stats...")
-        stats_of_the_day = db_position_manager.get_stats_of_the_day()
-        message = generate_daily_stats_message(stats_of_the_day)
+        days = 7 # Number of days for the merged daily performance table
+        report_date = date.today()
+        history_start = date(report_date.year - 4, 1, 1)
 
-        logging.debug(f"Fetching performance stats for last {days} days...")
+        logging.debug("Fetching daily report data...")
+        closed_trades = db_position_manager.get_closed_trade_history(start_date=history_start, end_date=report_date)
+        daily_profit_history = db_position_manager.get_daily_profit_history(end_date=report_date)
         last_days_percentages = db_position_manager.get_percent_of_last_n_days(days)
         last_best_days_percentages = db_position_manager.get_best_percent_of_last_n_days(days)
         last_days_percentages_on_max = db_position_manager.get_theoretical_percent_of_last_n_days_on_max(days)
-        last_best_days_percentages_on_max = db_position_manager.get_best_theoretical_percent_of_last_n_days_on_max(days)
 
-        message = generate_performance_stats_message(
-            message, days, last_days_percentages, last_best_days_percentages,
-            last_days_percentages_on_max, last_best_days_percentages_on_max
+        message = build_daily_trading_report_message(
+            report_date=report_date,
+            closed_trades=closed_trades,
+            daily_profit_history=daily_profit_history,
+            daily_real=last_days_percentages,
+            daily_best=last_best_days_percentages,
+            daily_max=last_days_percentages_on_max,
         )
         logging.debug("Sending daily stats message...")
         send_message_to_mq_for_telegram(rabbit_connection, message)

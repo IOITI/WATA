@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import traceback
+from datetime import date, timedelta
 
 import aio_pika
 import jsonschema
@@ -41,8 +42,7 @@ from src.trade.rules import TradingRule
 from src.schema import SchemaLoader
 from src.message_helper import (
     TelegramMessageComposer,
-    generate_daily_stats_message,
-    generate_performance_stats_message,
+    build_daily_trading_report_message,
 )
 from src.trade.exceptions import (
     TradingRuleViolation,
@@ -237,17 +237,25 @@ async def handle_daily_stats(
     telegram: AsyncTelegramSender,
 ):
     days = 7
-    stats = await db_position_manager.get_stats_of_the_day()
-    message = generate_daily_stats_message(stats)
+    report_date = date.today()
+    history_start = date(report_date.year - 4, 1, 1)
 
-    # Fetch all stats in parallel
-    results = await asyncio.gather(
+    closed_trades, daily_profit_history, real_daily, best_daily, max_daily = await asyncio.gather(
+        db_position_manager.get_closed_trade_history(start_date=history_start, end_date=report_date),
+        db_position_manager.get_daily_profit_history(end_date=report_date),
         db_position_manager.get_percent_of_last_n_days(days),
         db_position_manager.get_best_percent_of_last_n_days(days),
         db_position_manager.get_theoretical_percent_of_last_n_days_on_max(days),
-        db_position_manager.get_best_theoretical_percent_of_last_n_days_on_max(days),
     )
-    message = generate_performance_stats_message(message, days, *results)
+
+    message = build_daily_trading_report_message(
+        report_date=report_date,
+        closed_trades=closed_trades,
+        daily_profit_history=daily_profit_history,
+        daily_real=real_daily,
+        daily_best=best_daily,
+        daily_max=max_daily,
+    )
     await telegram.send(message)
     await db_perf_manager.create_last_day_trade_performance_data()
     logger.info("Daily stats sent.")

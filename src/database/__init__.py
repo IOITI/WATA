@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import duckdb
 import os
@@ -398,6 +398,78 @@ class DbPositionManager(TradingDataDB):
 
         final = {"general": stats_list, "detail_stats": detail_stats_list}
         return final
+
+    def get_closed_trade_history(self, start_date=None, end_date=None):
+        """Return closed trades for reporting over an optional date range."""
+        conditions = ["position_status = 'Closed'", "execution_time_close IS NOT NULL"]
+        params = []
+
+        if start_date is not None:
+            conditions.append("CAST(execution_time_close AS DATE) >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("CAST(execution_time_close AS DATE) <= ?")
+            params.append(end_date)
+
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                action,
+                position_id,
+                position_total_performance_percent AS performance_percent,
+                position_max_performance_percent AS max_performance_percent,
+                position_profit_loss AS profit_loss,
+                execution_time_close
+            FROM turbo_data_position
+            WHERE {' AND '.join(conditions)}
+            ORDER BY execution_time_close ASC, position_id ASC
+            """,
+            params,
+        ).fetchall()
+
+        return [
+            {
+                "action": row[0],
+                "position_id": row[1],
+                "performance_percent": row[2],
+                "max_performance_percent": row[3],
+                "profit_loss": row[4],
+                "execution_time_close": row[5],
+            }
+            for row in rows
+        ]
+
+    def get_daily_profit_history(self, end_date=None):
+        """Return daily realized P/L history for winning-streak calculations."""
+        conditions = ["position_status = 'Closed'", "execution_time_close IS NOT NULL"]
+        params = []
+
+        if end_date is not None:
+            conditions.append("CAST(execution_time_close AS DATE) <= ?")
+            params.append(end_date)
+
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                CAST(execution_time_close AS DATE) AS day_date,
+                COALESCE(SUM(position_profit_loss), 0.0) AS sum_profit,
+                COUNT(*) AS trade_count
+            FROM turbo_data_position
+            WHERE {' AND '.join(conditions)}
+            GROUP BY day_date
+            ORDER BY day_date ASC
+            """,
+            params,
+        ).fetchall()
+
+        return [
+            {
+                "day_date": row[0],
+                "sum_profit": row[1],
+                "trade_count": row[2],
+            }
+            for row in rows
+        ]
 
     def _apply_percentage_change(self, value, p_percentage):
         """

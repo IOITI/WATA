@@ -440,6 +440,60 @@ class AsyncDbPositionManager:
             "detail_stats": [dict(r) for r in detail],
         }
 
+    async def get_closed_trade_history(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[dict]:
+        conditions = ["position_status = 'Closed'"]
+        args: list[Any] = []
+
+        if start_date is not None:
+            args.append(start_date)
+            conditions.append(f"execution_time_close::date >= ${len(args)}::date")
+        if end_date is not None:
+            args.append(end_date)
+            conditions.append(f"execution_time_close::date <= ${len(args)}::date")
+
+        rows = await self.db.fetch(
+            f"""
+            SELECT
+                action,
+                position_id,
+                position_total_performance_percent AS performance_percent,
+                position_max_performance_percent AS max_performance_percent,
+                position_profit_loss AS profit_loss,
+                execution_time_close
+            FROM turbo_data_position
+            WHERE {' AND '.join(conditions)}
+            ORDER BY execution_time_close ASC, position_id ASC
+            """,
+            *args,
+        )
+        return [dict(r) for r in rows]
+
+    async def get_daily_profit_history(self, end_date: date | None = None) -> list[dict]:
+        args: list[Any] = []
+        end_date_clause = ""
+        if end_date is not None:
+            args.append(end_date)
+            end_date_clause = f" AND execution_time_close::date <= ${len(args)}::date"
+
+        rows = await self.db.fetch(
+            f"""
+            SELECT
+                execution_time_close::date AS day_date,
+                SUM(position_profit_loss) AS sum_profit,
+                COUNT(*) AS trade_count
+            FROM turbo_data_position
+            WHERE position_status = 'Closed'{end_date_clause}
+            GROUP BY execution_time_close::date
+            ORDER BY day_date ASC
+            """,
+            *args,
+        )
+        return [dict(r) for r in rows]
+
     async def get_percent_of_last_n_days(self, n: int) -> dict:
         return await self._get_percentages_for_n_days(n, "position_total_performance_percent", self._calculate_final_percentage)
 
