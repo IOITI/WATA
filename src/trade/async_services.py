@@ -331,16 +331,17 @@ class AsyncInstrumentService:
                     await asyncio.sleep(retry_backoffs[attempt])
                 continue
 
-            in_range_candidates = [
-                item for item in all_data
-                if item.get("Quote")
+            has_valid_candidate = any(
+                item.get("Quote")
                 and item["Quote"].get("Bid") is not None
                 and item["Quote"].get("PriceTypeAsk") != "NoMarket"
                 and item["Quote"].get("PriceTypeBid") != "NoMarket"
                 and item["Quote"].get("MarketState") != "Closed"
                 and min_price <= item["Quote"]["Bid"] <= max_price
-            ]
-            if in_range_candidates:
+                for item in all_data
+            )
+            
+            if has_valid_candidate:
                 response_infoprices = {"Data": all_data}
                 break
 
