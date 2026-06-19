@@ -18,9 +18,7 @@ import math
 import os
 import re
 import time
-import uuid
 from collections import defaultdict
-from copy import deepcopy
 from datetime import datetime
 
 import pytz
@@ -55,14 +53,18 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
+TURBO_DESCRIPTION_PATTERN = re.compile(r"(.*) (\w+) (\w+) (\d+(?:\.\d+)?) (\w+)$")
+INITIAL_TURBO_SEARCH_LIMIT = 60
+INFO_PRICE_CANDIDATE_LIMIT = 20
+INFO_PRICE_RETRY_BACKOFFS = (0.2, 0.4, 0.8)
+
 
 # ──────────────────────────────────────────────
 #  Utilities
 # ──────────────────────────────────────────────
 
 def parse_saxo_turbo_description(description: str) -> dict | None:
-    pattern = r"(.*) (\w+) (\w+) (\d+(?:\.\d+)?) (\w+)$"
-    match = re.match(pattern, description)
+    match = TURBO_DESCRIPTION_PATTERN.match(description)
     if match:
         return {
             "name": match.group(1),
@@ -193,17 +195,23 @@ class AsyncInstrumentService:
         self.api_limits = self.config.get_config_value("trade.config.general.api_limits", {"top_instruments": 200})
         self.turbo_price_range = self.config.get_config_value("trade.config.turbo_preference.price_range", {"min": 4, "max": 15})
         self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": 3, "retry_sleep_seconds": 1})
-        self.websocket_config = self.config.get_config_value("trade.config.general.websocket", {"refresh_rate_ms": 10000})
         self.cache_config = self.config.get_config_value("trade.config.turbo_cache", {"enabled": False, "ttl_seconds": 30})
         self._turbo_cache: dict = {}
 
-    async def _get_infoprices_for_asset_type(self, identifiers_string: str, exchange_id: str, asset_type: str):
+    async def _get_infoprices_for_asset_type(
+        self,
+        identifiers_string: str,
+        exchange_id: str,
+        asset_type: str,
+        field_groups: str,
+        top: int | None = None,
+    ):
         req = tr.infoprices.InfoPrices(
             params={
-                "$top": self.api_limits["top_instruments"],
+                "$top": top or len(identifiers_string.split(",")),
                 "AccountKey": self.account_key,
                 "ExchangeId": exchange_id,
-                "FieldGroups": "Commissions,DisplayAndFormat,Greeks,HistoricalChanges,InstrumentPriceDetails,MarketDepth,PriceInfo,PriceInfoDetails,Quote",
+                "FieldGroups": field_groups,
                 "Uics": identifiers_string,
                 "AssetType": asset_type,
             }
@@ -227,13 +235,13 @@ class AsyncInstrumentService:
                 ttl = self.cache_config.get("ttl_seconds", 30)
                 if age < ttl:
                     logger.info("Turbo cache HIT (age=%.1fs)", age)
-                    return deepcopy(cached["result"])
+                    return cached["result"]
 
         result = await self._find_turbos_uncached(exchange_id, underlying_uics, keywords)
 
         if self.cache_config.get("enabled", False):
             self._turbo_cache[(exchange_id, underlying_uics, keywords)] = {
-                "result": deepcopy(result),
+                "result": result,
                 "timestamp": time.time(),
             }
         return result
@@ -242,9 +250,10 @@ class AsyncInstrumentService:
         logger.info("Finding turbos: Exchange=%s, Underlying=%s, Keywords=%s", exchange_id, underlying_uics, keywords)
 
         # 1. Instrument search
+        initial_search_limit = min(self.api_limits.get("top_instruments", INITIAL_TURBO_SEARCH_LIMIT), INITIAL_TURBO_SEARCH_LIMIT)
         req = rd.instruments.Instruments(
             params={
-                "$top": self.api_limits["top_instruments"],
+                "$top": initial_search_limit,
                 "AccountKey": self.account_key,
                 "ExchangeId": exchange_id,
                 "Keywords": keywords,
@@ -268,26 +277,45 @@ class AsyncInstrumentService:
         if not valid_items:
             raise NoTurbosAvailableException("No instruments with parsable descriptions.", search_context=req.params)
 
+        initial_instruments_by_identifier = {
+            item["Identifier"]: item
+            for item in valid_items
+            if item.get("Identifier") is not None
+        }
+
         # 3. Sort
         sort_reverse = keywords.lower() != "short"
         sorted_instruments = sorted(valid_items, key=lambda x: float(x["appParsedData"]["price"]), reverse=sort_reverse)
 
+        candidate_instruments = sorted_instruments[:INFO_PRICE_CANDIDATE_LIMIT]
+        if not candidate_instruments:
+            raise NoTurbosAvailableException("No identifiers found after sorting.", search_context=req.params)
+
         # 4. Group by AssetType
         instrument_groups: dict[str, list] = defaultdict(list)
-        for item in sorted_instruments:
+        for item in candidate_instruments:
             instrument_groups[item["AssetType"]].append(item)
 
-        # 5. Fetch InfoPrices — parallelize across asset types
-        max_retries = self.retry_config["max_retries"]
-        retry_sleep = self.retry_config["retry_sleep_seconds"]
+        # 5. Fetch quote-only InfoPrices for the top candidates
+        max_retries = min(self.retry_config.get("max_retries", len(INFO_PRICE_RETRY_BACKOFFS)), len(INFO_PRICE_RETRY_BACKOFFS))
+        retry_backoffs = INFO_PRICE_RETRY_BACKOFFS[:max_retries]
+        min_price = self.turbo_price_range["min"]
+        max_price = self.turbo_price_range["max"]
 
         response_infoprices = None
         for attempt in range(max_retries):
-            # Fire all asset-type requests in parallel
             tasks = []
             for asset_type, instruments in instrument_groups.items():
                 ids_str = ",".join(str(i["Identifier"]) for i in instruments)
-                tasks.append(self._get_infoprices_for_asset_type(ids_str, exchange_id, asset_type))
+                tasks.append(
+                    self._get_infoprices_for_asset_type(
+                        ids_str,
+                        exchange_id,
+                        asset_type,
+                        field_groups="Quote",
+                        top=len(instruments),
+                    )
+                )
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
             all_data = []
@@ -300,8 +328,21 @@ class AsyncInstrumentService:
             if not all_data:
                 logger.warning("No InfoPrice data (attempt %d/%d)", attempt + 1, max_retries)
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_sleep)
+                    await asyncio.sleep(retry_backoffs[attempt])
                 continue
+
+            in_range_candidates = [
+                item for item in all_data
+                if item.get("Quote")
+                and item["Quote"].get("Bid") is not None
+                and item["Quote"].get("PriceTypeAsk") != "NoMarket"
+                and item["Quote"].get("PriceTypeBid") != "NoMarket"
+                and item["Quote"].get("MarketState") != "Closed"
+                and min_price <= item["Quote"]["Bid"] <= max_price
+            ]
+            if in_range_candidates:
+                response_infoprices = {"Data": all_data}
+                break
 
             # Check bid availability
             with_quote = [i for i in all_data if "Quote" in i]
@@ -314,7 +355,7 @@ class AsyncInstrumentService:
             if pct_missing > 50:
                 logger.warning("%.1f%% missing Bid (attempt %d/%d)", pct_missing, attempt + 1, max_retries)
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_sleep)
+                    await asyncio.sleep(retry_backoffs[attempt])
                 continue
 
             response_infoprices = {"Data": all_data}
@@ -342,72 +383,53 @@ class AsyncInstrumentService:
             raise NoMarketAvailableException(f"No markets available for {keywords} in {exchange_id}.")
 
         # 7. Price range filter
-        mn, mx = self.turbo_price_range["min"], self.turbo_price_range["max"]
-        price_filtered = [i for i in available_items if mn <= i["Quote"]["Bid"] <= mx]
+        price_filtered = [i for i in available_items if min_price <= i["Quote"]["Bid"] <= max_price]
         if not price_filtered:
             raise NoTurbosAvailableException(
-                f"No turbos in price range {mn}-{mx}.",
-                search_context={"PriceRange": (mn, mx), "AvailableCount": len(available_items)},
+                f"No turbos in price range {min_price}-{max_price}.",
+                search_context={"PriceRange": (min_price, max_price), "AvailableCount": len(available_items)},
             )
 
         # 8. Select best
         final_candidates = sorted(price_filtered, key=lambda x: x["Quote"]["Bid"])
-        selected = deepcopy(final_candidates[0])
-
-        # 9. Price subscription (non-blocking, with fallback)
-        ctx_id = str(uuid.uuid1())
-        ref_id = str(uuid.uuid1())
-        sub_ctx = None
-        sub_ref = None
-        final_snapshot = selected
-
-        try:
-            sub_req = tr.prices.CreatePriceSubscription(
-                data={
-                    "Arguments": {
-                        "Uic": selected["Uic"],
-                        "AccountKey": self.account_key,
-                        "AssetType": selected["AssetType"],
-                        "Amount": 1,
-                        "FieldGroups": [
-                            "Commissions", "DisplayAndFormat", "Greeks", "HistoricalChanges",
-                            "InstrumentPriceDetails", "MarketDepth", "PriceInfo",
-                            "PriceInfoDetails", "Quote", "Timestamps",
-                        ],
-                    },
-                    "ContextId": ctx_id,
-                    "ReferenceId": ref_id,
-                    "RefreshRate": self.websocket_config["refresh_rate_ms"],
-                    "Format": "application/json",
-                }
-            )
-            resp = await self.api_client.request(sub_req)
-            snapshot = resp.get("Snapshot") if resp else None
-            if snapshot:
-                final_snapshot = snapshot
-                sub_ctx = ctx_id
-                sub_ref = ref_id
-        except Exception as e:
-            logger.warning("Price subscription failed (fallback to InfoPrice): %s", e)
+        selected = final_candidates[0]
+        selected_source = initial_instruments_by_identifier.get(selected.get("Identifier"), {})
+        detail_response = await self._get_infoprices_for_asset_type(
+            str(selected["Uic"]),
+            exchange_id,
+            selected["AssetType"],
+            field_groups="Commissions,DisplayAndFormat,InstrumentPriceDetails",
+            top=1,
+        )
+        detail_rows = (detail_response or {}).get("Data") or []
+        detail_snapshot = detail_rows[0] if detail_rows else {}
+        display_and_format = detail_snapshot.get("DisplayAndFormat", {})
+        commissions = detail_snapshot.get("Commissions", {})
+        description = display_and_format.get("Description", selected_source.get("Description", "N/A"))
+        final_snapshot = {
+            "Quote": selected.get("Quote", {}),
+            "DisplayAndFormat": display_and_format,
+            "Commissions": commissions,
+        }
 
         return {
             "input_criteria": {"exchange_id": exchange_id, "underlying_uics": underlying_uics, "keywords": keywords},
             "selected_instrument": {
                 "uic": selected["Uic"],
                 "asset_type": selected["AssetType"],
-                "description": final_snapshot.get("DisplayAndFormat", {}).get("Description", "N/A"),
-                "symbol": final_snapshot.get("DisplayAndFormat", {}).get("Symbol", "N/A"),
-                "currency": final_snapshot.get("DisplayAndFormat", {}).get("Currency", "N/A"),
-                "decimals": final_snapshot.get("DisplayAndFormat", {}).get("OrderDecimals", 2),
+                "description": description,
+                "symbol": display_and_format.get("Symbol", "N/A"),
+                "currency": display_and_format.get("Currency", "N/A"),
+                "decimals": display_and_format.get("OrderDecimals", 2),
                 "parsed_data": parse_saxo_turbo_description(
-                    final_snapshot.get("DisplayAndFormat", {}).get("Description", "")
+                    description
                 ),
                 "quote": final_snapshot.get("Quote", {}),
-                "commissions": final_snapshot.get("Commissions", {}),
+                "commissions": commissions,
                 "latest_ask": final_snapshot.get("Quote", {}).get("Ask"),
                 "latest_bid": final_snapshot.get("Quote", {}).get("Bid"),
-                "subscription_context_id": sub_ctx,
-                "subscription_reference_id": sub_ref,
+                "subscription_context_id": None,
+                "subscription_reference_id": None,
             },
         }
 
