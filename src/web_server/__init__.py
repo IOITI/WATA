@@ -63,7 +63,7 @@ async def verify_token(token: str):
     return token
 
 
-def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp):
+def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, confidence=None):
     try:
         # Retrieve RabbitMQ credentials from the configuration
         rabbitmq_config = config_manager.get_rabbitmq_config()
@@ -79,7 +79,7 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp):
             )
         )
         channel = connection.channel()
-        channel.queue_declare(queue="trading-action")
+        channel.queue_declare(queue="trading-signals", durable=True)
 
         # Get the current time in UTC
         now_utc = datetime.now(pytz.utc)
@@ -87,18 +87,20 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp):
         # Generate a unique identifier for this signal
         signal_id = str(uuid.uuid4())
 
-        message = json.dumps(
-            {
+        msg_payload = {
                 "signal_id": signal_id,
                 "action": action,
                 "indice": indice,
                 "signal_timestamp": signal_timestamp,
                 "alert_timestamp": alert_timestamp,
                 "mqsend_timestamp": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            }
-        )
-        channel.basic_publish(exchange="", routing_key="trading-action", body=message)
-        logging.info(f"Send message to channel trading-action, message {message}")
+        }
+        if confidence is not None:
+            msg_payload["confidence"] = confidence
+
+        message = json.dumps(msg_payload)
+        channel.basic_publish(exchange="", routing_key="trading-signals", body=message)
+        logging.info(f"Send message to channel trading-signals, message {message}")
         return signal_id
     except pika.exceptions.AMQPConnectionError as e:
         logging.error(f"Failed to connect to RabbitMQ: {e}")
@@ -139,6 +141,7 @@ async def webhook(request: Request):
         data["indice"],
         data["signal_timestamp"],
         data["alert_timestamp"],
+        confidence=data.get("confidence"),
     )
     logging.info(f"Received data from {request.client.host} : {data}")
     return JSONResponse(content={"status": "success", "signal_id": signal_id}, status_code=200)

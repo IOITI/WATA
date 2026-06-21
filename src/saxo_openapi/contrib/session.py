@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import saxo_openapi.endpoints.portfolio as pf
+from ..endpoints import portfolio as pf
 from collections import namedtuple
 
 

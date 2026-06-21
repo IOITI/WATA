@@ -43,6 +43,11 @@
       "db_path": "/app/var/lib/duckdb/trading_data.duckdb"
     }
   },
+  "postgresql": {
+    "dsn": "postgresql://wata:wata_secret_change_me@postgres1:5432/wata",
+    "pool_min_size": 2,
+    "pool_max_size": 10
+  },
   "trade": {
     "rules": [
       {
@@ -110,6 +115,14 @@
           "risky_trading_start_hour": 21,
           "risky_trading_start_minute": 54
         }
+      },
+      {
+        "rule_name": "risk_management",
+        "rule_type": "risk_management",
+        "rule_config": {
+          "cooldown_after_loss_minutes": 10,
+          "max_trades_per_day": 8
+        }
       }
     ],
     "config": {
@@ -122,15 +135,81 @@
       },
       "buying_power": {
         "max_account_funds_to_use_percentage": 100,
+        "reserve_cash_percent": 0,
         "safety_margins": {
           "bid_calculation": 1
         }
       },
       "position_management": {
         "performance_thresholds": {
-          "stoploss_percent": -20,
-          "max_profit_percent": 60
+          "stoploss_percent": -15,
+          "max_profit_percent": 60,
+          "trailing_stop": {
+            "enabled": true,
+            "activation_percent": 5,
+            "drawdown_percent": 8
+          }
         }
+      },
+      "position_sizing": {
+        "time_of_day_scaling": {
+          "enabled": true,
+          "periods": [
+            {
+              "start_hour": 8,
+              "start_minute": 0,
+              "end_hour": 14,
+              "end_minute": 30,
+              "scale_percent": 100,
+              "label": "European Session"
+            },
+            {
+              "start_hour": 14,
+              "start_minute": 30,
+              "end_hour": 16,
+              "end_minute": 0,
+              "scale_percent": 50,
+              "label": "US Open (volatile)"
+            },
+            {
+              "start_hour": 16,
+              "start_minute": 0,
+              "end_hour": 22,
+              "end_minute": 0,
+              "scale_percent": 75,
+              "label": "US Session"
+            }
+          ]
+        },
+        "confidence_scaling": {
+          "enabled": true,
+          "default_confidence": 1.0,
+          "min_confidence_threshold": 0.3,
+          "scaling_rules": [
+            {
+              "min_confidence": 0.0,
+              "max_confidence": 0.5,
+              "scale_percent": 50,
+              "label": "Low confidence"
+            },
+            {
+              "min_confidence": 0.5,
+              "max_confidence": 0.8,
+              "scale_percent": 75,
+              "label": "Medium confidence"
+            },
+            {
+              "min_confidence": 0.8,
+              "max_confidence": 2.0,
+              "scale_percent": 100,
+              "label": "High confidence"
+            }
+          ]
+        }
+      },
+      "turbo_cache": {
+        "enabled": true,
+        "ttl_seconds": 30
       },
       "general": {
         "api_limits": {
@@ -148,6 +227,12 @@
         },
         "websocket": {
           "refresh_rate_ms": 10000
+        },
+        "streaming": {
+          "refresh_rate_ms": 1000,
+          "reconnect_delay_seconds": 1.0,
+          "max_reconnect_delay_seconds": 30.0,
+          "reauth_interval_seconds": 900
         },
         "timezone": "Europe/Paris"
       },

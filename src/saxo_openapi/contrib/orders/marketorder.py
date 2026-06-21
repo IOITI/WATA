@@ -2,7 +2,7 @@
 
 from .baseorder import BaseOrder
 from .helper import direction_from_amount
-import saxo_openapi.definitions.orders as OD
+from ...definitions import orders as OD
 from .mixin import OnFillHnd
 
 

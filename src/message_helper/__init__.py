@@ -1,8 +1,10 @@
 import logging
 import textwrap
-from datetime import datetime
-import pytz
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 import json  # Import json for formatting details
+
+import pytz
 
 from src.trade.exceptions import (
     TradingRuleViolation,
@@ -407,10 +409,14 @@ class TelegramMessageComposer:
         full_section = f"{section_title}\n{textwrap.dedent(message_body)}"
         self.sections.append(full_section)
 
-    def add_text_section(self, title: str, text: str):
-        """Adds a custom text section."""
+    def add_text_section(self, title: str, text):
+        """Adds a custom section, coercing structured values safely."""
+        if isinstance(text, dict):
+            self.add_dict_section(title, text)
+            return
+
         section_title = f"--- {title.upper()} ---"  # Standardize title format
-        message_body = textwrap.dedent(text)
+        message_body = "" if text is None else textwrap.dedent(str(text))
         full_section = f"{section_title}\n{message_body}"
         self.sections.append(full_section)
 
@@ -428,6 +434,610 @@ class TelegramMessageComposer:
         """Composes the final message string."""
         # Join sections, ensuring proper spacing
         return "\n\n".join(self.sections).strip()
+
+
+def _coerce_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return datetime.fromisoformat(candidate.replace("Z", "+00:00")).date()
+        except ValueError:
+            pass
+        for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(candidate, fmt).date()
+            except ValueError:
+                continue
+    return None
+
+
+def _coerce_datetime(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            try:
+                return datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_trade_value(trade: dict, *keys: str, default=None):
+    for key in keys:
+        if key in trade and trade[key] is not None:
+            return trade[key]
+    return default
+
+
+def _get_trade_close_dt(trade: dict) -> datetime | None:
+    return _coerce_datetime(_get_trade_value(trade, "execution_time_close"))
+
+
+def _get_trade_close_date(trade: dict) -> date | None:
+    close_dt = _get_trade_close_dt(trade)
+    if close_dt is not None:
+        return close_dt.date()
+    return _coerce_date(_get_trade_value(trade, "day_date"))
+
+
+def _get_trade_percent(trade: dict) -> float:
+    return _as_float(
+        _get_trade_value(trade, "performance_percent", "position_total_performance_percent"),
+        0.0,
+    )
+
+
+def _get_trade_max_percent(trade: dict) -> float:
+    return _as_float(
+        _get_trade_value(trade, "max_performance_percent", "position_max_performance_percent"),
+        0.0,
+    )
+
+
+def _get_trade_profit(trade: dict) -> float:
+    return _as_float(_get_trade_value(trade, "profit_loss", "position_profit_loss"), 0.0)
+
+
+def _sort_trades_chronologically(trades: list[dict]) -> list[dict]:
+    return sorted(
+        trades,
+        key=lambda trade: (
+            _get_trade_close_dt(trade) or datetime.min,
+            str(_get_trade_value(trade, "position_id", default="")),
+        ),
+    )
+
+
+def format_signed_percent(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    numeric = _as_float(value)
+    sign = "+" if numeric > 0 else ""
+    return f"{sign}{numeric:.2f}%"
+
+
+def format_percent(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{_as_float(value):.2f}%"
+
+
+def format_signed_currency(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    numeric = _as_float(value)
+    sign = "+" if numeric > 0 else ""
+    return f"{sign}{numeric:.2f}"
+
+
+def format_profit_factor(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if value == float("inf"):
+        return "∞"
+    return f"{_as_float(value):.2f}"
+
+
+def classify_trade_outcome(trade: dict) -> str:
+    performance_percent = _get_trade_percent(trade)
+    if performance_percent > 0:
+        return "win"
+    if performance_percent < 0:
+        return "loss"
+    return "break_even"
+
+
+def calculate_win_loss_break_even_counts(trades: list[dict]) -> dict:
+    counts = {
+        "wins": 0,
+        "losses": 0,
+        "break_even": 0,
+        "total": len(trades),
+    }
+    for trade in trades:
+        outcome = classify_trade_outcome(trade)
+        if outcome == "win":
+            counts["wins"] += 1
+        elif outcome == "loss":
+            counts["losses"] += 1
+        else:
+            counts["break_even"] += 1
+
+    counts["win_rate"] = (counts["wins"] / counts["total"] * 100.0) if counts["total"] else 0.0
+    return counts
+
+
+def calculate_profit_factor(trades: list[dict]) -> float:
+    gross_profit = sum(max(_get_trade_profit(trade), 0.0) for trade in trades)
+    gross_loss = abs(sum(min(_get_trade_profit(trade), 0.0) for trade in trades))
+    if gross_loss == 0:
+        return float("inf") if gross_profit > 0 else 0.0
+    return gross_profit / gross_loss
+
+
+def calculate_average_win_vs_loss(trades: list[dict]) -> dict:
+    performance_values = [_get_trade_percent(trade) for trade in trades]
+    win_values = [value for value in performance_values if value > 0]
+    loss_values = [value for value in performance_values if value < 0]
+
+    return {
+        "avg_trade": sum(performance_values) / len(performance_values) if performance_values else 0.0,
+        "avg_win": sum(win_values) / len(win_values) if win_values else None,
+        "avg_loss": sum(loss_values) / len(loss_values) if loss_values else None,
+        "best_trade": max(performance_values) if performance_values else 0.0,
+        "worst_trade": min(performance_values) if performance_values else 0.0,
+    }
+
+
+def calculate_compounded_return(trades: list[dict], *, use_max_performance: bool = False) -> float:
+    equity = 1.0
+    ordered_trades = _sort_trades_chronologically(trades)
+    for trade in ordered_trades:
+        performance_percent = _get_trade_max_percent(trade) if use_max_performance else _get_trade_percent(trade)
+        multiplier = 1 + performance_percent / 100.0
+        if multiplier <= 0:
+            return -100.0
+        equity *= multiplier
+    return round((equity - 1.0) * 100.0, 2)
+
+
+def calculate_best_case_return(trades: list[dict]) -> float:
+    ordered_trades = _sort_trades_chronologically(trades)
+    equity = 1.0
+    peak_return = 0.0
+    for trade in ordered_trades:
+        multiplier = 1 + _get_trade_percent(trade) / 100.0
+        if multiplier <= 0:
+            return -100.0
+        equity *= multiplier
+        peak_return = max(peak_return, (equity - 1.0) * 100.0)
+    return round(peak_return, 2)
+
+
+def calculate_daily_max_drawdown(trades: list[dict]) -> float:
+    equity = 1.0
+    equity_peak = 1.0
+    max_drawdown = 0.0
+
+    for trade in _sort_trades_chronologically(trades):
+        multiplier = 1 + _get_trade_percent(trade) / 100.0
+        if multiplier <= 0:
+            return -100.0
+        equity *= multiplier
+        equity_peak = max(equity_peak, equity)
+        drawdown = ((equity / equity_peak) - 1.0) * 100.0 if equity_peak else 0.0
+        max_drawdown = min(max_drawdown, drawdown)
+
+    return round(max_drawdown, 2)
+
+
+def calculate_winning_streak(daily_profit_history: list[dict]) -> dict:
+    normalized_rows = []
+    for row in daily_profit_history:
+        day_date = _coerce_date(_get_trade_value(row, "day_date"))
+        if day_date is None:
+            continue
+        profit_value = _as_float(_get_trade_value(row, "sum_profit", "net_profit"), 0.0)
+        normalized_rows.append({"day_date": day_date, "sum_profit": profit_value})
+
+    normalized_rows.sort(key=lambda row: row["day_date"])
+    best_streak = 0
+    running_streak = 0
+    last_win_date = None
+
+    for row in normalized_rows:
+        if row["sum_profit"] > 0:
+            running_streak += 1
+            best_streak = max(best_streak, running_streak)
+            last_win_date = row["day_date"]
+        else:
+            running_streak = 0
+
+    current_streak = 0
+    for row in reversed(normalized_rows):
+        if row["sum_profit"] > 0:
+            current_streak += 1
+        else:
+            break
+
+    return {
+        "current_streak": current_streak,
+        "best_streak": best_streak,
+        "last_win_date": last_win_date,
+    }
+
+
+def calculate_trade_summary(trades: list[dict]) -> dict:
+    counts = calculate_win_loss_break_even_counts(trades)
+    averages = calculate_average_win_vs_loss(trades)
+    net_profit = round(sum(_get_trade_profit(trade) for trade in trades), 2)
+
+    return {
+        **counts,
+        **averages,
+        "trade_count": len(trades),
+        "net_profit": net_profit,
+        "profit_factor": calculate_profit_factor(trades),
+        "max_drawdown": calculate_daily_max_drawdown(trades),
+        "compounded_percent": calculate_compounded_return(trades),
+    }
+
+
+def calculate_timeframe_aggregation(trades: list[dict], report_date: date, days: int) -> dict:
+    start_date = report_date - timedelta(days=days - 1)
+    period_trades = [
+        trade for trade in trades
+        if (trade_date := _get_trade_close_date(trade)) is not None and start_date <= trade_date <= report_date
+    ]
+    summary = calculate_trade_summary(period_trades)
+    return {
+        **summary,
+        "days": days,
+        "start_date": start_date,
+        "end_date": report_date,
+    }
+
+
+def calculate_weekly_aggregations(trades: list[dict], report_date: date, weeks: int = 10) -> list[dict]:
+    trades_by_week: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for trade in trades:
+        trade_date = _get_trade_close_date(trade)
+        if trade_date is None:
+            continue
+        iso_year, iso_week, _ = trade_date.isocalendar()
+        trades_by_week[(iso_year, iso_week)].append(trade)
+
+    current_week_start = report_date - timedelta(days=report_date.weekday())
+    weekly_rows = []
+    for offset in range(weeks):
+        week_start = current_week_start - timedelta(weeks=offset)
+        iso_year, iso_week, _ = week_start.isocalendar()
+        week_trades = trades_by_week.get((iso_year, iso_week), [])
+        summary = calculate_trade_summary(week_trades)
+        weekly_rows.append(
+            {
+                **summary,
+                "week_start": week_start,
+                "iso_year": iso_year,
+                "iso_week": iso_week,
+                "week_label": f"W{iso_week:02d}",
+            }
+        )
+    return weekly_rows
+
+
+def _month_start(value: date) -> date:
+    return value.replace(day=1)
+
+
+def _shift_month(value: date, months: int) -> date:
+    year = value.year + ((value.month - 1 + months) // 12)
+    month = ((value.month - 1 + months) % 12) + 1
+    return date(year, month, 1)
+
+
+def calculate_monthly_aggregations(trades: list[dict], report_date: date, months: int = 12) -> list[dict]:
+    trades_by_month: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for trade in trades:
+        trade_date = _get_trade_close_date(trade)
+        if trade_date is None:
+            continue
+        trades_by_month[(trade_date.year, trade_date.month)].append(trade)
+
+    current_month_start = _month_start(report_date)
+    monthly_rows = []
+    for offset in range(months):
+        month_start = _shift_month(current_month_start, -offset)
+        month_trades = trades_by_month.get((month_start.year, month_start.month), [])
+        if not month_trades:
+            continue
+        summary = calculate_trade_summary(month_trades)
+        monthly_rows.append(
+            {
+                **summary,
+                "month_start": month_start,
+                "year": month_start.year,
+                "month": month_start.month,
+                "month_label": month_start.strftime("%B"),
+            }
+        )
+    return monthly_rows
+
+
+def calculate_yearly_aggregations(trades: list[dict], report_date: date, years: int = 5) -> list[dict]:
+    trades_by_year: dict[int, list[dict]] = defaultdict(list)
+    for trade in trades:
+        trade_date = _get_trade_close_date(trade)
+        if trade_date is None:
+            continue
+        trades_by_year[trade_date.year].append(trade)
+
+    yearly_rows = []
+    for year in range(report_date.year, report_date.year - years, -1):
+        year_trades = trades_by_year.get(year, [])
+        if not year_trades:
+            continue
+        summary = calculate_trade_summary(year_trades)
+        yearly_rows.append(
+            {
+                **summary,
+                "year": year,
+            }
+        )
+    return yearly_rows
+
+
+def merge_daily_performance_series(
+    daily_real: dict,
+    daily_best: dict,
+    daily_max: dict,
+    *,
+    report_date: date,
+    days: int = 7,
+) -> list[dict]:
+    rows = []
+    for offset in range(days):
+        day = report_date - timedelta(days=offset)
+        day_key = day.strftime("%Y/%m/%d")
+        rows.append(
+            {
+                "day_date": day,
+                "day_key": day_key,
+                "real": _as_float(daily_real.get(day_key), 0.0),
+                "best": _as_float(daily_best.get(day_key), 0.0),
+                "max": _as_float(daily_max.get(day_key), 0.0),
+            }
+        )
+    return rows
+
+
+def build_daily_trading_report_payload(
+    *,
+    report_date: date | datetime | str | None,
+    closed_trades: list[dict],
+    daily_profit_history: list[dict],
+    daily_real: dict,
+    daily_best: dict,
+    daily_max: dict,
+) -> dict:
+    normalized_report_date = _coerce_date(report_date) or datetime.utcnow().date()
+    ordered_closed_trades = _sort_trades_chronologically(closed_trades)
+    daily_trades = [
+        trade for trade in ordered_closed_trades
+        if _get_trade_close_date(trade) == normalized_report_date
+    ]
+
+    return {
+        "report_date": normalized_report_date,
+        "streak": calculate_winning_streak(daily_profit_history),
+        "daily_summary": calculate_trade_summary(daily_trades),
+        "by_direction": {
+            "long": calculate_trade_summary([trade for trade in daily_trades if str(trade.get("action", "")).lower() == "long"]),
+            "short": calculate_trade_summary([trade for trade in daily_trades if str(trade.get("action", "")).lower() == "short"]),
+        },
+        "cumulative": {
+            days: calculate_timeframe_aggregation(ordered_closed_trades, normalized_report_date, days)
+            for days in (7, 30, 60)
+        },
+        "last_7_days": merge_daily_performance_series(
+            daily_real,
+            daily_best,
+            daily_max,
+            report_date=normalized_report_date,
+            days=7,
+        ),
+        "last_10_weeks": calculate_weekly_aggregations(ordered_closed_trades, normalized_report_date, weeks=10),
+        "last_12_months": calculate_monthly_aggregations(ordered_closed_trades, normalized_report_date, months=12),
+        "last_5_years": calculate_yearly_aggregations(ordered_closed_trades, normalized_report_date, years=5),
+    }
+
+
+def _format_direction_title(direction: str) -> str:
+    if direction == "long":
+        return "🟢 LONGS"
+    return "🔴 SHORTS"
+
+
+def _format_direction_counts(summary: dict) -> str:
+    trade_count = summary["trade_count"]
+    trade_label = "trade" if trade_count == 1 else "trades"
+    base = f"{trade_count} {trade_label} | {summary['wins']}W - {summary['losses']}L"
+    if summary["break_even"]:
+        base += f" - {summary['break_even']}BE"
+    return base
+
+
+def _format_date_label(value: date | None) -> str:
+    if value is None:
+        return "N/A"
+    return value.strftime("%Y/%m/%d")
+
+
+def format_daily_trading_report(payload: dict) -> str:
+    report_date = payload["report_date"]
+    streak = payload["streak"]
+    daily_summary = payload["daily_summary"]
+    long_summary = payload["by_direction"]["long"]
+    short_summary = payload["by_direction"]["short"]
+
+    cumulative_lines = []
+    for days in (7, 30, 60):
+        summary = payload["cumulative"][days]
+        period_label = f"{days:>2} Days"
+        percent_text = format_signed_percent(summary["compounded_percent"]).rjust(8)
+        money_text = f"{format_signed_currency(summary['net_profit'])} €".rjust(10)
+        win_rate_text = format_percent(summary["win_rate"]).rjust(7)
+        cumulative_lines.append(
+            f"⏱ {period_label}: {percent_text} | {money_text} (🎯 {win_rate_text} WR)"
+        )
+
+    last_seven_day_lines = []
+    for row in payload["last_7_days"]:
+        day_label = row["day_date"].strftime("%m/%d")
+        real_text = format_signed_percent(row["real"]).rjust(8)
+        best_text = format_signed_percent(row["best"]).rjust(8)
+        max_text = format_signed_percent(row["max"]).rjust(8)
+        last_seven_day_lines.append(f"{day_label}: {real_text} | {best_text} | {max_text}")
+
+    weekly_lines = []
+    for row in payload["last_10_weeks"]:
+        performance_text = format_signed_percent(row["compounded_percent"]).rjust(8)
+        money_text = f"{format_signed_currency(row['net_profit'])} €".rjust(10)
+        win_rate_text = format_percent(row["win_rate"]).rjust(7)
+        weekly_lines.append(
+            f"{row['week_label']}: {performance_text} ({money_text}) | 🎯 {win_rate_text}"
+        )
+
+    monthly_lines = []
+    for row in payload["last_12_months"]:
+        month_label = f"{row['month_label']}:".ljust(11)
+        performance_text = format_signed_percent(row["compounded_percent"]).rjust(8)
+        money_text = f"{format_signed_currency(row['net_profit'])} €".rjust(10)
+        win_rate_text = format_percent(row["win_rate"]).rjust(7)
+        monthly_lines.append(
+            f"{month_label} {performance_text} ({money_text}) | 🎯 {win_rate_text}"
+        )
+
+    yearly_lines = []
+    for row in payload["last_5_years"]:
+        year_label = f"{row['year']}:"
+        performance_text = format_signed_percent(row["compounded_percent"]).rjust(8)
+        money_text = f"{format_signed_currency(row['net_profit'])} €".rjust(10)
+        win_rate_text = format_percent(row["win_rate"]).rjust(7)
+        yearly_lines.append(
+            f"{year_label} {performance_text} ({money_text}) | 🎯 {win_rate_text}"
+        )
+
+    lines = [
+        f"📊 Trading Report | {report_date.strftime('%Y/%m/%d')}",
+        f"🔥 Winning Streak: {streak['current_streak']} Days (Last win: {_format_date_label(streak['last_win_date'])})",
+        "",
+        "--- 📝 DAILY SUMMARY ---",
+        f"💰 Net Profit: {format_signed_currency(daily_summary['net_profit'])} €",
+        (
+            f"🎯 Win Rate: {format_percent(daily_summary['win_rate'])} "
+            f"({daily_summary['wins']}W | {daily_summary['losses']}L | {daily_summary['break_even']}BE)"
+        ),
+        f"⚖️ Profit Factor: {format_profit_factor(daily_summary['profit_factor'])}",
+        f"📉 Daily Max Drawdown: {format_signed_percent(daily_summary['max_drawdown'])}",
+        "",
+        f"📊 Avg Trade: {format_signed_percent(daily_summary['avg_trade'])}",
+        (
+            f"🟩 Avg Win: {format_signed_percent(daily_summary['avg_win'])} | "
+            f"🟥 Avg Loss: {format_signed_percent(daily_summary['avg_loss'])}"
+        ),
+        (
+            f"📈 Best: {format_signed_percent(daily_summary['best_trade'])} | "
+            f"📉 Worst: {format_signed_percent(daily_summary['worst_trade'])}"
+        ),
+        "",
+        "--- 🔍 BY DIRECTION ---",
+        f"{_format_direction_title('long')} ({_format_direction_counts(long_summary)})",
+        (
+            f"Avg: {format_signed_percent(long_summary['avg_trade'])} | "
+            f"Max: {format_signed_percent(long_summary['best_trade'])} | "
+            f"Min: {format_signed_percent(long_summary['worst_trade'])}"
+        ),
+        "",
+        f"{_format_direction_title('short')} ({_format_direction_counts(short_summary)})",
+        (
+            f"Avg: {format_signed_percent(short_summary['avg_trade'])} | "
+            f"Max: {format_signed_percent(short_summary['best_trade'])} | "
+            f"Min: {format_signed_percent(short_summary['worst_trade'])}"
+        ),
+        "",
+        "--- 🗓 CUMULATIVE P/L ---",
+        *cumulative_lines,
+        "",
+        "--- 📊 LAST 7 DAYS (Real | Best | Max) ---",
+        *last_seven_day_lines,
+        "",
+        "--- 📅 LAST 10 WEEKS ---",
+        *weekly_lines,
+    ]
+
+    if monthly_lines:
+        lines.extend([
+            "",
+            "--- 📅 LAST 12 MONTHS ---",
+            *monthly_lines,
+        ])
+
+    if yearly_lines:
+        lines.extend([
+            "",
+            "--- 📅 LAST 5 YEARS ---",
+            *yearly_lines,
+        ])
+
+    return "\n".join(lines).strip()
+
+
+def build_daily_trading_report_message(
+    *,
+    report_date: date | datetime | str | None,
+    closed_trades: list[dict],
+    daily_profit_history: list[dict],
+    daily_real: dict,
+    daily_best: dict,
+    daily_max: dict,
+) -> str:
+    payload = build_daily_trading_report_payload(
+        report_date=report_date,
+        closed_trades=closed_trades,
+        daily_profit_history=daily_profit_history,
+        daily_real=daily_real,
+        daily_best=daily_best,
+        daily_max=daily_max,
+    )
+    return format_daily_trading_report(payload)
 
 
 # --- Standalone Helper Functions (No changes needed for these) ---

@@ -14,6 +14,11 @@ webhook_schema = {
             "type": "string",
             "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
         },
+        "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2.0,
+        },
     },
     "required": ["action", "indice", "signal_timestamp", "alert_timestamp"],
 }
@@ -47,6 +52,11 @@ trading_action_schema = {
         "mqsend_timestamp": {
             "type": "string",
             "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2.0,
         },
     },
     "required": ["action", "indice", "signal_timestamp", "alert_timestamp"],
