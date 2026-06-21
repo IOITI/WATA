@@ -29,6 +29,7 @@ from src.trade.async_services import (
     AsyncTradingOrchestrator,
     AsyncPerformanceMonitor,
 )
+from src.trade.watchlist_client import AsyncWatchlistClient
 from src.database.postgres import (
     PostgresConnectionManager,
     AsyncDbOrderManager,
@@ -409,9 +410,11 @@ async def main():
         instrument_service = AsyncInstrumentService(api_client, config_manager, account_key)
         order_service = AsyncOrderService(api_client, account_key, client_key)
         position_service = AsyncPositionService(api_client, order_service, config_manager, account_key, client_key)
+        watchlist_client = AsyncWatchlistClient(config_manager)
         trading_orchestrator = AsyncTradingOrchestrator(
             instrument_service, order_service, position_service,
             config_manager, db_order_manager, db_position_manager,
+            watchlist_client=watchlist_client,
         )
         performance_monitor = AsyncPerformanceMonitor(
             position_service, order_service, config_manager,

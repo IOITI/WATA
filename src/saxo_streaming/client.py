@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # Type alias for the user-supplied position-update callback.
 # Signature: async def on_update(positions: dict[str, dict]) -> None
 PositionUpdateCallback = Callable[[dict[str, dict]], Coroutine[Any, Any, None]]
+InfoPriceSubscriptionUpdateCallback = Callable[[dict, list[dict], str | None], Coroutine[Any, Any, None]]
 
 
 def _deep_merge(base: dict, delta: dict) -> dict:
@@ -107,18 +108,20 @@ class SaxoStreamClient:
         api_client,
         account_key: str,
         client_key: str,
-        on_positions_update: PositionUpdateCallback,
+        on_positions_update: PositionUpdateCallback | None,
         environment: str = "live",
         access_token_getter: Callable[[], str] | None = None,
         refresh_rate_ms: int = 1000,
         reconnect_delay: float = 1.0,
         max_reconnect_delay: float = 30.0,
         reauth_interval_seconds: int = 15 * 60,
+        on_info_price_subscription_update: InfoPriceSubscriptionUpdateCallback | None = None,
     ):
         self._api = api_client
         self._account_key = account_key
         self._client_key = client_key
         self._on_positions_update = on_positions_update
+        self._on_info_price_subscription_update = on_info_price_subscription_update
         self._environment = environment
         self._get_token = access_token_getter
         self._refresh_rate_ms = refresh_rate_ms
@@ -138,6 +141,9 @@ class SaxoStreamClient:
 
         # Snapshot cache:  {position_id: full_position_dict}
         self._positions: dict[str, dict] = {}
+        self._desired_info_price_subscriptions: dict[str, dict] = {}
+        self._active_info_price_subscriptions: dict[str, dict] = {}
+        self._info_price_subscriptions_lock = asyncio.Lock()
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -182,6 +188,38 @@ class SaxoStreamClient:
         """Return a **deep copy** of the current position snapshot cache."""
         return copy.deepcopy(self._positions)
 
+    @property
+    def context_id(self) -> str | None:
+        return self._context_id or None
+
+    @property
+    def active_subscription_count(self) -> int:
+        return len(self._active_info_price_subscriptions)
+
+    @property
+    def desired_subscription_count(self) -> int:
+        return len(self._desired_info_price_subscriptions)
+
+    async def set_subscriptions(self, definitions: list[dict]):
+        """Set grouped InfoPrice subscriptions to maintain alongside position streaming."""
+        normalized = {}
+        for definition in definitions:
+            reference_id = definition.get("reference_id") or _short_id("wlp")
+            normalized_definition = copy.deepcopy(definition)
+            normalized_definition["reference_id"] = reference_id
+            normalized_definition["uics"] = [int(uic) for uic in normalized_definition.get("uics", [])]
+            normalized_definition["field_groups"] = normalized_definition.get(
+                "field_groups",
+                ["Quote", "DisplayAndFormat", "InstrumentPriceDetails", "Commissions"],
+            )
+            normalized[reference_id] = normalized_definition
+
+        async with self._info_price_subscriptions_lock:
+            self._desired_info_price_subscriptions = normalized
+
+        if self._ws is not None and not self._ws.closed:
+            await self._sync_desired_info_price_subscriptions()
+
     # ── Connection ────────────────────────────────────────────────
 
     async def _connect_and_subscribe(self):
@@ -189,7 +227,7 @@ class SaxoStreamClient:
         # 1. Generate IDs once and reuse them across reconnects.
         if not self._context_id:
             self._context_id = _short_id("ctx")
-        if not self._pos_ref_id:
+        if self._on_positions_update is not None and not self._pos_ref_id:
             self._pos_ref_id = _short_id("pos")
 
         # 2. Build WS URL
@@ -208,9 +246,11 @@ class SaxoStreamClient:
         logger.info("WebSocket connected.")
 
         # 4. Position subscription (REST call, snapshot returned) — only when needed.
-        if not self._subscription_ready:
+        if self._on_positions_update is not None and not self._subscription_ready:
             await self._create_position_subscription()
             self._subscription_ready = True
+
+        await self._sync_desired_info_price_subscriptions()
 
         # 5. Periodic re-authorisation in background
         if self._reauth_task and not self._reauth_task.done():
@@ -259,20 +299,99 @@ class SaxoStreamClient:
         if self._positions:
             await self._fire_callback()
 
+    async def _create_info_price_subscription(self, definition: dict):
+        if not definition.get("uics"):
+            return
+
+        self._sync_api_token()
+
+        request_data = {
+            "Arguments": {
+                "AccountKey": self._account_key,
+                "AssetType": definition["asset_type"],
+                "FieldGroups": definition.get("field_groups", []),
+                "Uics": ",".join(str(uic) for uic in definition["uics"]),
+            },
+            "ContextId": self._context_id,
+            "ReferenceId": definition["reference_id"],
+            "RefreshRate": self._refresh_rate_ms,
+            "Format": "application/json",
+        }
+
+        response = await self._request(tr.infoprices.CreateInfoPriceSubscription(data=request_data))
+        snapshot_rows = (response or {}).get("Snapshot", {}).get("Data", []) or []
+        snapshot_by_uic = {
+            row["Uic"]: row
+            for row in snapshot_rows
+            if row.get("Uic") is not None
+        }
+        self._active_info_price_subscriptions[definition["reference_id"]] = {
+            "definition": copy.deepcopy(definition),
+            "snapshot_by_uic": snapshot_by_uic,
+        }
+
+        if snapshot_by_uic:
+            await self._fire_info_price_callback(
+                definition,
+                copy.deepcopy(list(snapshot_by_uic.values())),
+            )
+
+    async def _sync_desired_info_price_subscriptions(self):
+        async with self._info_price_subscriptions_lock:
+            desired_subscriptions = copy.deepcopy(self._desired_info_price_subscriptions)
+
+        active_reference_ids = list(self._active_info_price_subscriptions.keys())
+        for reference_id in active_reference_ids:
+            desired_definition = desired_subscriptions.get(reference_id)
+            active_definition = self._active_info_price_subscriptions.get(reference_id, {}).get("definition")
+            if desired_definition is None or active_definition != desired_definition:
+                await self._remove_info_price_subscription(reference_id)
+
+        for reference_id, definition in desired_subscriptions.items():
+            if reference_id not in self._active_info_price_subscriptions:
+                await self._create_info_price_subscription(definition)
+
+    async def _remove_info_price_subscription(self, reference_id: str):
+        if not self._context_id:
+            self._active_info_price_subscriptions.pop(reference_id, None)
+            return
+        try:
+            await self._request(
+                tr.infoprices.RemoveInfoPriceSubscriptionById(
+                    ContextId=self._context_id,
+                    ReferenceId=reference_id,
+                )
+            )
+        except Exception as exc:
+            logger.warning("Failed to remove info price subscription %s: %s", reference_id, exc)
+        finally:
+            self._active_info_price_subscriptions.pop(reference_id, None)
+
     async def _cleanup_subscriptions(self):
         """Delete active subscriptions (best-effort)."""
         if not self._context_id:
             return
+        if self._active_info_price_subscriptions:
+            try:
+                self._sync_api_token()
+                req = tr.infoprices.RemoveInfoPriceSubscriptionsByTag(ContextId=self._context_id)
+                await self._request(req)
+                logger.info("InfoPrice subscriptions for context %s removed.", self._context_id)
+            except Exception as e:
+                logger.warning("Failed to clean up info price subscriptions: %s", e)
+            finally:
+                self._active_info_price_subscriptions.clear()
         try:
-            self._sync_api_token()
-            req = pf.positions.PositionSubscriptionRemoveMultiple(
-                ContextId=self._context_id
-            )
-            await self._request(req)
-            logger.info("Subscriptions for context %s removed.", self._context_id)
-            self._subscription_ready = False
+            if self._subscription_ready:
+                self._sync_api_token()
+                req = pf.positions.PositionSubscriptionRemoveMultiple(
+                    ContextId=self._context_id
+                )
+                await self._request(req)
+                logger.info("Position subscriptions for context %s removed.", self._context_id)
+                self._subscription_ready = False
         except Exception as e:
-            logger.warning("Failed to clean up subscriptions: %s", e)
+            logger.warning("Failed to clean up position subscriptions: %s", e)
 
     # ── Receive loop ──────────────────────────────────────────────
 
@@ -299,6 +418,8 @@ class SaxoStreamClient:
                         await self._handle_control_message(ref_id, payload)
                     elif ref_id == self._pos_ref_id:
                         await self._handle_position_update(payload)
+                    elif ref_id in self._active_info_price_subscriptions:
+                        await self._handle_info_price_subscription_update(ref_id, payload)
                     else:
                         logger.debug("Ignoring message with unknown refId=%s", ref_id)
 
@@ -364,10 +485,57 @@ class SaxoStreamClient:
 
     async def _fire_callback(self):
         """Invoke the user callback with the full position snapshot."""
+        if self._on_positions_update is None:
+            return
         try:
             await self._on_positions_update(copy.deepcopy(self._positions))
         except Exception as e:
             logger.error("Error in positions-update callback: %s", e, exc_info=True)
+
+    async def _handle_info_price_subscription_update(self, reference_id: str, payload: dict | list | Any):
+        updates: list[dict] = []
+
+        if isinstance(payload, dict):
+            if "Data" in payload:
+                updates = payload["Data"]
+            elif "Uic" in payload:
+                updates = [payload]
+            else:
+                updates = [payload]
+        elif isinstance(payload, list):
+            updates = payload
+        else:
+            logger.warning("Unexpected info price payload type: %s", type(payload))
+            return
+
+        active_subscription = self._active_info_price_subscriptions.get(reference_id)
+        if active_subscription is None:
+            return
+
+        changed = False
+        for delta in updates:
+            uic = delta.get("Uic")
+            if uic is None:
+                continue
+            if uic in active_subscription["snapshot_by_uic"]:
+                _deep_merge(active_subscription["snapshot_by_uic"][uic], delta)
+            else:
+                active_subscription["snapshot_by_uic"][uic] = delta
+            changed = True
+
+        if changed:
+            await self._fire_info_price_callback(
+                active_subscription["definition"],
+                copy.deepcopy(list(active_subscription["snapshot_by_uic"].values())),
+            )
+
+    async def _fire_info_price_callback(self, definition: dict, snapshot_rows: list[dict]):
+        if self._on_info_price_subscription_update is None:
+            return
+        try:
+            await self._on_info_price_subscription_update(copy.deepcopy(definition), snapshot_rows, self.context_id)
+        except Exception as exc:
+            logger.error("Error in info-price subscription callback: %s", exc, exc_info=True)
 
     # ── Control messages ──────────────────────────────────────────
 
@@ -413,7 +581,7 @@ class SaxoStreamClient:
         if isinstance(payload, dict):
             target_refs = payload.get("TargetReferenceIds", [])
 
-        should_reset_positions = (
+        should_reset_positions = self._on_positions_update is not None and (
             not target_refs or self._pos_ref_id in target_refs
         )
 
@@ -436,6 +604,21 @@ class SaxoStreamClient:
 
             await self._create_position_subscription()
             self._subscription_ready = True
+
+        refs_to_reset = list(self._active_info_price_subscriptions.keys())
+        if target_refs:
+            refs_to_reset = [ref_id for ref_id in refs_to_reset if ref_id in target_refs]
+
+        if refs_to_reset:
+            logger.warning("Resetting %d info-price subscription(s).", len(refs_to_reset))
+            async with self._info_price_subscriptions_lock:
+                desired_subscriptions = copy.deepcopy(self._desired_info_price_subscriptions)
+
+            for ref_id in refs_to_reset:
+                await self._remove_info_price_subscription(ref_id)
+                definition = desired_subscriptions.get(ref_id)
+                if definition is not None:
+                    await self._create_info_price_subscription(definition)
 
     # ── Re-authorisation loop ─────────────────────────────────────
 

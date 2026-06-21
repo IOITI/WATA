@@ -194,5 +194,30 @@ services:
       postgres1:
         condition: service_healthy
 
+  watchlist_manager1:
+    image: wata-base:latest
+    hostname: watchlist_manager1
+    container_name: 'watchlist_manager1'
+    environment:
+      - WATA_APP_ROLE=watchlist_manager
+    expose:
+      - '8081'
+    volumes:
+      - ../../var/log:/app/var/log/
+      - ../../var/lib:/app/var/lib/
+      - ../../etc/config.json:/app/etc/config.json
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 1024M
+
 networks:
   trade-net:

@@ -17,6 +17,9 @@ case $WATA_APP_ROLE in
     "position_monitor")
         python -u /app/src/position_monitor/__init__.py
         ;;
+    "watchlist_manager")
+        python -u /app/src/watchlist_manager/__init__.py
+        ;;
     "scheduler")
         python -u /app/src/scheduler/__init__.py
         ;;

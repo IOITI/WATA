@@ -13,7 +13,7 @@ asyncpg_stub.Record = dict
 asyncpg_stub.create_pool = AsyncMock()
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 
-from src.trade.async_services import AsyncInstrumentService
+from src.trade.async_services import AsyncInstrumentService, AsyncTradingOrchestrator
 
 
 @pytest.fixture
@@ -228,3 +228,178 @@ def test_find_turbos_handles_empty_stage_two_details(instrument_service, mock_ap
     assert result["selected_instrument"]["description"] == "TURBO LONG DAX 15000 CITI"
     assert result["selected_instrument"]["latest_bid"] == 10.0
     assert result["selected_instrument"]["parsed_data"]["price"] == "15000"
+
+
+def test_build_watchlist_candidates_returns_grouped_snapshots(instrument_service, mock_api_client):
+    mock_api_client.request.side_effect = [
+        {
+            "Data": [
+                {
+                    "Identifier": 1,
+                    "Description": "TURBO LONG DAX 15000 CITI",
+                    "AssetType": "WarrantKnockOut",
+                },
+                {
+                    "Identifier": 2,
+                    "Description": "TURBO LONG DAX 14900 CITI",
+                    "AssetType": "WarrantKnockOut",
+                },
+            ]
+        },
+        {
+            "Data": [
+                {
+                    "Uic": 101,
+                    "Identifier": 1,
+                    "AssetType": "WarrantKnockOut",
+                    "Quote": {
+                        "Bid": 10.0,
+                        "Ask": 10.1,
+                        "PriceTypeAsk": "Tradable",
+                        "PriceTypeBid": "Tradable",
+                        "MarketState": "Open",
+                    },
+                },
+                {
+                    "Uic": 102,
+                    "Identifier": 2,
+                    "AssetType": "WarrantKnockOut",
+                    "Quote": {
+                        "Bid": 10.5,
+                        "Ask": 10.6,
+                        "PriceTypeAsk": "Tradable",
+                        "PriceTypeBid": "Tradable",
+                        "MarketState": "Open",
+                    },
+                },
+            ]
+        },
+        {
+            "Data": [
+                {
+                    "Uic": 101,
+                    "DisplayAndFormat": {
+                        "Description": "Final TURBO LONG DAX 15000 CITI",
+                        "Symbol": "DAXL1",
+                        "Currency": "EUR",
+                        "OrderDecimals": 2,
+                    },
+                    "Commissions": {"CostBuy": 0.25},
+                    "InstrumentPriceDetails": {"LotSize": 1},
+                },
+                {
+                    "Uic": 102,
+                    "DisplayAndFormat": {
+                        "Description": "Final TURBO LONG DAX 14900 CITI",
+                        "Symbol": "DAXL2",
+                        "Currency": "EUR",
+                        "OrderDecimals": 2,
+                    },
+                    "Commissions": {"CostBuy": 0.30},
+                    "InstrumentPriceDetails": {"LotSize": 1},
+                },
+            ]
+        },
+    ]
+
+    result = asyncio.run(instrument_service.build_watchlist_candidates("exchange1", "underlying1", "long"))
+
+    assert result["selected_result"]["selected_instrument"]["uic"] == 101
+    assert len(result["candidate_snapshots"]) == 2
+    assert result["candidate_snapshots"][0]["DisplayAndFormat"]["Symbol"] == "DAXL1"
+    assert result["subscription_groups"] == [{"asset_type": "WarrantKnockOut", "uics": [101, 102]}]
+
+
+def test_execute_trade_signal_uses_watchlist_before_live_search():
+    config_manager = MagicMock(spec=ConfigurationManager)
+
+    def get_config_value(key, default=None):
+        configs = {
+            "trade.config.buying_power": {
+                "max_account_funds_to_use_percentage": 100,
+                "reserve_cash_percent": 0,
+                "safety_margins": {"bid_calculation": 1},
+            },
+            "trade.config.general.timezone": "Europe/Paris",
+            "trade.config.position_sizing.time_of_day_scaling": {"enabled": False},
+            "trade.config.position_sizing.confidence_scaling": {"enabled": False},
+            "logging.persistant.log_path": ".",
+        }
+        return configs.get(key, default)
+
+    config_manager.get_config_value.side_effect = get_config_value
+
+    instrument_service = MagicMock()
+    instrument_service.find_turbos = AsyncMock(side_effect=AssertionError("live turbo search should not run on watchlist hit"))
+
+    order_service = MagicMock()
+    order_service.place_market_order = AsyncMock(return_value={"OrderId": "order-1"})
+
+    position_service = MagicMock()
+    position_service.get_spending_power = AsyncMock(return_value=1000.0)
+    position_service.find_position_by_order_id_with_retry = AsyncMock(
+        return_value={
+            "PositionId": "position-1",
+            "PositionBase": {
+                "Amount": 98,
+                "OpenPrice": 10.1,
+                "Status": "Open",
+                "ExecutionTimeOpen": "2026-06-19T10:00:00Z",
+                "SourceOrderId": "order-1",
+                "RelatedOpenOrders": [],
+                "Uic": 101,
+            },
+            "DisplayAndFormat": {
+                "Description": "Cached Turbo",
+                "Symbol": "CACHED",
+                "Currency": "EUR",
+            },
+        }
+    )
+
+    db_order_manager = MagicMock()
+    db_order_manager.insert_turbo_order_data = AsyncMock()
+
+    db_position_manager = MagicMock()
+    db_position_manager.insert_turbo_open_position_data = AsyncMock()
+
+    watchlist_client = MagicMock()
+    watchlist_client.get_best_turbo = AsyncMock(
+        return_value={
+            "input_criteria": {"exchange_id": "exchange1", "underlying_uics": "1909050", "keywords": "long"},
+            "selected_instrument": {
+                "uic": 101,
+                "asset_type": "WarrantKnockOut",
+                "description": "Cached Turbo",
+                "symbol": "CACHED",
+                "currency": "EUR",
+                "quote": {"Ask": 10.1, "Bid": 10.0},
+                "commissions": {"CostBuy": 0.25},
+                "latest_ask": 10.1,
+                "latest_bid": 10.0,
+            },
+            "watchlist": {"stale": False},
+        }
+    )
+
+    orchestrator = AsyncTradingOrchestrator(
+        instrument_service=instrument_service,
+        order_service=order_service,
+        position_service=position_service,
+        config_manager=config_manager,
+        db_order_manager=db_order_manager,
+        db_position_manager=db_position_manager,
+        watchlist_client=watchlist_client,
+    )
+
+    result = asyncio.run(
+        orchestrator.execute_trade_signal(
+            exchange_id="exchange1",
+            underlying_uics="1909050",
+            keywords="long",
+        )
+    )
+
+    assert result["selected_turbo_info"]["selected_instrument"]["uic"] == 101
+    watchlist_client.get_best_turbo.assert_awaited_once()
+    instrument_service.find_turbos.assert_not_awaited()

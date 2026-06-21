@@ -76,6 +76,182 @@ def parse_saxo_turbo_description(description: str) -> dict | None:
     return None
 
 
+def annotate_parsed_turbos(instruments: list[dict]) -> list[dict]:
+    """Attach parsed description metadata to valid turbo search rows."""
+    valid_items = []
+    for item in instruments:
+        parsed = parse_saxo_turbo_description(item.get("Description", ""))
+        if parsed:
+            item["appParsedData"] = parsed
+            valid_items.append(item)
+    return valid_items
+
+
+def build_identifier_lookup(instruments: list[dict]) -> dict:
+    return {
+        item["Identifier"]: item
+        for item in instruments
+        if item.get("Identifier") is not None
+    }
+
+
+def select_candidate_instruments(valid_items: list[dict], keywords: str, limit: int = INFO_PRICE_CANDIDATE_LIMIT) -> list[dict]:
+    sort_reverse = keywords.lower() != "short"
+    sorted_instruments = sorted(valid_items, key=lambda item: float(item["appParsedData"]["price"]), reverse=sort_reverse)
+    return sorted_instruments[:limit]
+
+
+def group_instruments_by_asset_type(candidate_instruments: list[dict]) -> dict[str, list]:
+    instrument_groups: dict[str, list] = defaultdict(list)
+    for item in candidate_instruments:
+        instrument_groups[item["AssetType"]].append(item)
+    return instrument_groups
+
+
+def has_tradable_bid_in_price_range(item: dict, min_price: float, max_price: float) -> bool:
+    quote = item.get("Quote")
+    return (
+        bool(quote)
+        and quote.get("Bid") is not None
+        and quote.get("PriceTypeAsk") != "NoMarket"
+        and quote.get("PriceTypeBid") != "NoMarket"
+        and quote.get("MarketState") != "Closed"
+        and min_price <= quote["Bid"] <= max_price
+    )
+
+
+def filter_items_with_valid_bid(items: list[dict]) -> list[dict]:
+    return [
+        item for item in items
+        if item.get("Quote") and item["Quote"].get("Bid") is not None
+    ]
+
+
+def filter_tradable_market_items(items: list[dict]) -> list[dict]:
+    return [
+        item for item in items
+        if item["Quote"].get("PriceTypeAsk") != "NoMarket"
+        and item["Quote"].get("PriceTypeBid") != "NoMarket"
+        and item["Quote"].get("MarketState") != "Closed"
+    ]
+
+
+def filter_items_in_price_range(items: list[dict], min_price: float, max_price: float) -> list[dict]:
+    return [item for item in items if min_price <= item["Quote"]["Bid"] <= max_price]
+
+
+def select_best_price_candidate(items: list[dict]) -> dict:
+    return sorted(items, key=lambda item: item["Quote"]["Bid"])[0]
+
+
+def merge_detail_rows_into_candidate_snapshots(candidate_quote_rows: list[dict], detail_rows: list[dict]) -> list[dict]:
+    details_by_uic = {
+        detail_row["Uic"]: detail_row
+        for detail_row in detail_rows
+        if detail_row.get("Uic") is not None
+    }
+    merged_rows = []
+    for quote_row in candidate_quote_rows:
+        merged_row = dict(quote_row)
+        detail_row = details_by_uic.get(quote_row.get("Uic"), {})
+        if detail_row.get("DisplayAndFormat"):
+            merged_row["DisplayAndFormat"] = detail_row["DisplayAndFormat"]
+        if detail_row.get("Commissions"):
+            merged_row["Commissions"] = detail_row["Commissions"]
+        if detail_row.get("InstrumentPriceDetails"):
+            merged_row["InstrumentPriceDetails"] = detail_row["InstrumentPriceDetails"]
+        merged_rows.append(merged_row)
+    return merged_rows
+
+
+def build_selected_turbo_from_candidate_snapshots(
+    *,
+    exchange_id: str,
+    underlying_uics: str,
+    keywords: str,
+    candidate_snapshots: list[dict],
+    selected_source_lookup: dict,
+    min_price: float,
+    max_price: float,
+    subscription_context_id: str | None = None,
+    subscription_reference_id: str | None = None,
+    uic_to_subscription_reference_id: dict | None = None,
+) -> dict:
+    valid_bid_items = filter_items_with_valid_bid(candidate_snapshots)
+    if not valid_bid_items:
+        raise NoMarketAvailableException("No instruments with Bid data after filtering.")
+
+    available_items = filter_tradable_market_items(valid_bid_items)
+    if not available_items:
+        raise NoMarketAvailableException(f"No markets available for {keywords} in {exchange_id}.")
+
+    price_filtered = filter_items_in_price_range(available_items, min_price, max_price)
+    if not price_filtered:
+        raise NoTurbosAvailableException(
+            f"No turbos in price range {min_price}-{max_price}.",
+            search_context={"PriceRange": (min_price, max_price), "AvailableCount": len(available_items)},
+        )
+
+    selected = select_best_price_candidate(price_filtered)
+    selected_source = selected_source_lookup.get(selected.get("Identifier"), {})
+    resolved_subscription_reference_id = subscription_reference_id
+    if resolved_subscription_reference_id is None and uic_to_subscription_reference_id is not None:
+        resolved_subscription_reference_id = (
+            uic_to_subscription_reference_id.get(selected.get("Uic"))
+            or uic_to_subscription_reference_id.get(str(selected.get("Uic")))
+        )
+    return build_selected_turbo_result(
+        exchange_id=exchange_id,
+        underlying_uics=underlying_uics,
+        keywords=keywords,
+        selected=selected,
+        selected_source=selected_source,
+        detail_snapshot=selected,
+        subscription_context_id=subscription_context_id,
+        subscription_reference_id=resolved_subscription_reference_id,
+    )
+
+
+def build_selected_turbo_result(
+    *,
+    exchange_id: str,
+    underlying_uics: str,
+    keywords: str,
+    selected: dict,
+    selected_source: dict,
+    detail_snapshot: dict,
+    subscription_context_id: str | None = None,
+    subscription_reference_id: str | None = None,
+) -> dict:
+    display_and_format = detail_snapshot.get("DisplayAndFormat", {})
+    commissions = detail_snapshot.get("Commissions", {})
+    description = display_and_format.get("Description", selected_source.get("Description", "N/A"))
+    quote = selected.get("Quote", {})
+
+    return {
+        "input_criteria": {
+            "exchange_id": exchange_id,
+            "underlying_uics": underlying_uics,
+            "keywords": keywords,
+        },
+        "selected_instrument": {
+            "uic": selected["Uic"],
+            "asset_type": selected["AssetType"],
+            "description": description,
+            "symbol": display_and_format.get("Symbol", "N/A"),
+            "currency": display_and_format.get("Currency", "N/A"),
+            "decimals": display_and_format.get("OrderDecimals", 2),
+            "parsed_data": parse_saxo_turbo_description(description),
+            "quote": quote,
+            "commissions": commissions,
+            "latest_ask": quote.get("Ask"),
+            "latest_bid": quote.get("Bid"),
+            "subscription_context_id": subscription_context_id,
+            "subscription_reference_id": subscription_reference_id,
+        },
+    }
+
+
 # ──────────────────────────────────────────────
 #  Async SaxoApiClient
 # ──────────────────────────────────────────────
@@ -225,6 +401,169 @@ class AsyncInstrumentService:
                 else:
                     raise
 
+    async def _fetch_candidate_quote_rows(self, exchange_id: str, instrument_groups: dict[str, list]) -> list[dict]:
+        max_retries = min(self.retry_config.get("max_retries", len(INFO_PRICE_RETRY_BACKOFFS)), len(INFO_PRICE_RETRY_BACKOFFS))
+        retry_backoffs = INFO_PRICE_RETRY_BACKOFFS[:max_retries]
+        min_price = self.turbo_price_range["min"]
+        max_price = self.turbo_price_range["max"]
+
+        for attempt in range(max_retries):
+            tasks = []
+            for asset_type, instruments in instrument_groups.items():
+                ids_str = ",".join(str(item["Identifier"]) for item in instruments)
+                tasks.append(
+                    self._get_infoprices_for_asset_type(
+                        ids_str,
+                        exchange_id,
+                        asset_type,
+                        field_groups="Quote",
+                        top=len(instruments),
+                    )
+                )
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_data = []
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("InfoPrices group failed: %s", result)
+                elif result and result.get("Data"):
+                    all_data.extend(result["Data"])
+
+            if not all_data:
+                logger.warning("No InfoPrice data (attempt %d/%d)", attempt + 1, max_retries)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_backoffs[attempt])
+                continue
+
+            if any(has_tradable_bid_in_price_range(item, min_price, max_price) for item in all_data):
+                return all_data
+
+            with_quote = [item for item in all_data if "Quote" in item]
+            if not with_quote:
+                return all_data
+
+            missing_bid = [item for item in with_quote if "Bid" not in item["Quote"]]
+            pct_missing = (len(missing_bid) / len(with_quote)) * 100 if with_quote else 0
+
+            if pct_missing > 50:
+                logger.warning("%.1f%% missing Bid (attempt %d/%d)", pct_missing, attempt + 1, max_retries)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_backoffs[attempt])
+                continue
+
+            return all_data
+
+        raise NoMarketAvailableException("Failed to obtain InfoPrice data after retries.")
+
+    async def _hydrate_candidate_snapshots(self, exchange_id: str, candidate_quote_rows: list[dict]) -> list[dict]:
+        if not candidate_quote_rows:
+            return []
+
+        instrument_groups: dict[str, list] = defaultdict(list)
+        for row in candidate_quote_rows:
+            instrument_groups[row["AssetType"]].append(row)
+
+        detail_tasks = []
+        for asset_type, rows in instrument_groups.items():
+            uics_string = ",".join(str(row["Uic"]) for row in rows if row.get("Uic") is not None)
+            detail_tasks.append(
+                self._get_infoprices_for_asset_type(
+                    uics_string,
+                    exchange_id,
+                    asset_type,
+                    field_groups="Commissions,DisplayAndFormat,InstrumentPriceDetails",
+                    top=len(rows),
+                )
+            )
+
+        detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
+        detail_rows = []
+        for result in detail_results:
+            if isinstance(result, Exception):
+                logger.warning("Failed to load candidate details: %s", result)
+            elif result and result.get("Data"):
+                detail_rows.extend(result["Data"])
+
+        return merge_detail_rows_into_candidate_snapshots(candidate_quote_rows, detail_rows)
+
+    async def build_watchlist_candidates(self, exchange_id: str, underlying_uics: str, keywords: str) -> dict:
+        logger.info(
+            "Building watchlist candidates: Exchange=%s, Underlying=%s, Keywords=%s",
+            exchange_id,
+            underlying_uics,
+            keywords,
+        )
+
+        initial_search_limit = min(self.api_limits.get("top_instruments", INITIAL_TURBO_SEARCH_LIMIT), INITIAL_TURBO_SEARCH_LIMIT)
+        req = rd.instruments.Instruments(
+            params={
+                "$top": initial_search_limit,
+                "AccountKey": self.account_key,
+                "ExchangeId": exchange_id,
+                "Keywords": keywords,
+                "IncludeNonTradable": False,
+                "UnderlyingUics": underlying_uics,
+                "AssetTypes": "WarrantKnockOut,WarrantOpenEndKnockOut,MiniFuture,WarrantDoubleKnockOut",
+            }
+        )
+        response = await self.api_client.request(req)
+        if not response or not response.get("Data"):
+            raise NoTurbosAvailableException("No instruments found.", search_context=req.params)
+
+        valid_items = annotate_parsed_turbos(response["Data"])
+        if not valid_items:
+            raise NoTurbosAvailableException("No instruments with parsable descriptions.", search_context=req.params)
+
+        source_lookup = build_identifier_lookup(valid_items)
+        candidate_instruments = select_candidate_instruments(valid_items, keywords)
+        if not candidate_instruments:
+            raise NoTurbosAvailableException("No identifiers found after sorting.", search_context=req.params)
+
+        candidate_groups = group_instruments_by_asset_type(candidate_instruments)
+        candidate_quote_rows = await self._fetch_candidate_quote_rows(exchange_id, candidate_groups)
+        candidate_snapshots = await self._hydrate_candidate_snapshots(exchange_id, candidate_quote_rows)
+
+        selected_result = None
+        try:
+            selected_result = build_selected_turbo_from_candidate_snapshots(
+                exchange_id=exchange_id,
+                underlying_uics=underlying_uics,
+                keywords=keywords,
+                candidate_snapshots=candidate_snapshots,
+                selected_source_lookup=source_lookup,
+                min_price=self.turbo_price_range["min"],
+                max_price=self.turbo_price_range["max"],
+            )
+        except (NoMarketAvailableException, NoTurbosAvailableException) as exc:
+            logger.info(
+                "Watchlist candidates built without an immediately tradable winner for %s/%s: %s",
+                underlying_uics,
+                keywords,
+                exc,
+            )
+
+        subscription_groups = []
+        snapshots_by_asset_type = group_instruments_by_asset_type(candidate_snapshots)
+        for asset_type, snapshots in snapshots_by_asset_type.items():
+            subscription_groups.append(
+                {
+                    "asset_type": asset_type,
+                    "uics": [snapshot["Uic"] for snapshot in snapshots if snapshot.get("Uic") is not None],
+                }
+            )
+
+        return {
+            "input_criteria": {
+                "exchange_id": exchange_id,
+                "underlying_uics": underlying_uics,
+                "keywords": keywords,
+            },
+            "selected_result": selected_result,
+            "candidate_snapshots": candidate_snapshots,
+            "selected_source_lookup": source_lookup,
+            "subscription_groups": subscription_groups,
+        }
+
     async def find_turbos(self, exchange_id: str, underlying_uics: str, keywords: str) -> dict:
         """Finds turbos — uses cache if enabled, otherwise fetches fresh."""
         if self.cache_config.get("enabled", False):
@@ -267,34 +606,20 @@ class AsyncInstrumentService:
             raise NoTurbosAvailableException("No instruments found.", search_context=req.params)
 
         # 2. Parse & filter
-        valid_items = []
-        for item in response["Data"]:
-            parsed = parse_saxo_turbo_description(item.get("Description", ""))
-            if parsed:
-                item["appParsedData"] = parsed
-                valid_items.append(item)
+        valid_items = annotate_parsed_turbos(response["Data"])
 
         if not valid_items:
             raise NoTurbosAvailableException("No instruments with parsable descriptions.", search_context=req.params)
 
-        initial_instruments_by_identifier = {
-            item["Identifier"]: item
-            for item in valid_items
-            if item.get("Identifier") is not None
-        }
+        initial_instruments_by_identifier = build_identifier_lookup(valid_items)
 
         # 3. Sort
-        sort_reverse = keywords.lower() != "short"
-        sorted_instruments = sorted(valid_items, key=lambda x: float(x["appParsedData"]["price"]), reverse=sort_reverse)
-
-        candidate_instruments = sorted_instruments[:INFO_PRICE_CANDIDATE_LIMIT]
+        candidate_instruments = select_candidate_instruments(valid_items, keywords)
         if not candidate_instruments:
             raise NoTurbosAvailableException("No identifiers found after sorting.", search_context=req.params)
 
         # 4. Group by AssetType
-        instrument_groups: dict[str, list] = defaultdict(list)
-        for item in candidate_instruments:
-            instrument_groups[item["AssetType"]].append(item)
+        instrument_groups = group_instruments_by_asset_type(candidate_instruments)
 
         # 5. Fetch quote-only InfoPrices for the top candidates
         max_retries = min(self.retry_config.get("max_retries", len(INFO_PRICE_RETRY_BACKOFFS)), len(INFO_PRICE_RETRY_BACKOFFS))
@@ -332,12 +657,7 @@ class AsyncInstrumentService:
                 continue
 
             has_valid_candidate = any(
-                item.get("Quote")
-                and item["Quote"].get("Bid") is not None
-                and item["Quote"].get("PriceTypeAsk") != "NoMarket"
-                and item["Quote"].get("PriceTypeBid") != "NoMarket"
-                and item["Quote"].get("MarketState") != "Closed"
-                and min_price <= item["Quote"]["Bid"] <= max_price
+                has_tradable_bid_in_price_range(item, min_price, max_price)
                 for item in all_data
             )
             
@@ -366,25 +686,17 @@ class AsyncInstrumentService:
             raise NoMarketAvailableException("Failed to obtain InfoPrice data after retries.")
 
         # Filter items with valid Bid
-        valid_bid_items = [
-            i for i in response_infoprices["Data"]
-            if i.get("Quote") and i["Quote"].get("Bid") is not None
-        ]
+        valid_bid_items = filter_items_with_valid_bid(response_infoprices["Data"])
         if not valid_bid_items:
             raise NoMarketAvailableException("No instruments with Bid data after filtering.")
 
         # 6. Market state filter
-        available_items = [
-            i for i in valid_bid_items
-            if i["Quote"].get("PriceTypeAsk") != "NoMarket"
-            and i["Quote"].get("PriceTypeBid") != "NoMarket"
-            and i["Quote"].get("MarketState") != "Closed"
-        ]
+        available_items = filter_tradable_market_items(valid_bid_items)
         if not available_items:
             raise NoMarketAvailableException(f"No markets available for {keywords} in {exchange_id}.")
 
         # 7. Price range filter
-        price_filtered = [i for i in available_items if min_price <= i["Quote"]["Bid"] <= max_price]
+        price_filtered = filter_items_in_price_range(available_items, min_price, max_price)
         if not price_filtered:
             raise NoTurbosAvailableException(
                 f"No turbos in price range {min_price}-{max_price}.",
@@ -392,8 +704,7 @@ class AsyncInstrumentService:
             )
 
         # 8. Select best
-        final_candidates = sorted(price_filtered, key=lambda x: x["Quote"]["Bid"])
-        selected = final_candidates[0]
+        selected = select_best_price_candidate(price_filtered)
         selected_source = initial_instruments_by_identifier.get(selected.get("Identifier"), {})
         detail_response = await self._get_infoprices_for_asset_type(
             str(selected["Uic"]),
@@ -404,35 +715,14 @@ class AsyncInstrumentService:
         )
         detail_rows = (detail_response or {}).get("Data") or []
         detail_snapshot = detail_rows[0] if detail_rows else {}
-        display_and_format = detail_snapshot.get("DisplayAndFormat", {})
-        commissions = detail_snapshot.get("Commissions", {})
-        description = display_and_format.get("Description", selected_source.get("Description", "N/A"))
-        final_snapshot = {
-            "Quote": selected.get("Quote", {}),
-            "DisplayAndFormat": display_and_format,
-            "Commissions": commissions,
-        }
-
-        return {
-            "input_criteria": {"exchange_id": exchange_id, "underlying_uics": underlying_uics, "keywords": keywords},
-            "selected_instrument": {
-                "uic": selected["Uic"],
-                "asset_type": selected["AssetType"],
-                "description": description,
-                "symbol": display_and_format.get("Symbol", "N/A"),
-                "currency": display_and_format.get("Currency", "N/A"),
-                "decimals": display_and_format.get("OrderDecimals", 2),
-                "parsed_data": parse_saxo_turbo_description(
-                    description
-                ),
-                "quote": final_snapshot.get("Quote", {}),
-                "commissions": commissions,
-                "latest_ask": final_snapshot.get("Quote", {}).get("Ask"),
-                "latest_bid": final_snapshot.get("Quote", {}).get("Bid"),
-                "subscription_context_id": None,
-                "subscription_reference_id": None,
-            },
-        }
+        return build_selected_turbo_result(
+            exchange_id=exchange_id,
+            underlying_uics=underlying_uics,
+            keywords=keywords,
+            selected=selected,
+            selected_source=selected_source,
+            detail_snapshot=detail_snapshot,
+        )
 
 
 # ──────────────────────────────────────────────
@@ -589,6 +879,7 @@ class AsyncTradingOrchestrator:
         config_manager: ConfigurationManager,
         db_order_manager: AsyncDbOrderManager,
         db_position_manager: AsyncDbPositionManager,
+        watchlist_client=None,
     ):
         self.instrument_service = instrument_service
         self.order_service = order_service
@@ -596,6 +887,7 @@ class AsyncTradingOrchestrator:
         self.config = config_manager
         self.db_order_manager = db_order_manager
         self.db_position_manager = db_position_manager
+        self.watchlist_client = watchlist_client
         self.buying_power_config = self.config.get_config_value("trade.config.buying_power", {})
         self.safety_margins = self.buying_power_config.get("safety_margins", {"bid_calculation": 1})
         self.reserve_cash_percent = self.buying_power_config.get("reserve_cash_percent", 0)
@@ -664,6 +956,18 @@ class AsyncTradingOrchestrator:
         logger.info("Calculated bid amount: %d (available=%.2f, ask=%.4f, scale=%.2f)", amount, available, ask_price, position_scale)
         return amount
 
+    async def _get_watchlist_turbo(self, underlying_uics: str, keywords: str) -> dict | None:
+        if self.watchlist_client is None:
+            return None
+
+        turbo_info = await self.watchlist_client.get_best_turbo(
+            underlying_uic=underlying_uics,
+            direction=keywords,
+        )
+        if turbo_info is not None:
+            logger.info("Using watchlist-managed turbo for underlying=%s direction=%s", underlying_uics, keywords)
+        return turbo_info
+
     async def execute_trade_signal(self, exchange_id: str, underlying_uics: str, keywords: str, confidence: float = None) -> dict:
         """
         Full async trade workflow.
@@ -680,15 +984,23 @@ class AsyncTradingOrchestrator:
             position_scale = self._calculate_position_scale(confidence)
             timestamps["scale_calculated"] = time.time()
 
-            # 1+2. PARALLEL: find turbo + get spending power
-            turbo_task = asyncio.create_task(
-                self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
-            )
+            # 1. Try the fast watchlist path first, then fall back to the live Saxo search.
+            turbo_info = await self._get_watchlist_turbo(underlying_uics, keywords)
+            if turbo_info is not None:
+                timestamps["turbo_found"] = time.time()
+
+            # 2. Fetch spending power in parallel with the live search when needed.
             balance_task = asyncio.create_task(
                 self.position_service.get_spending_power()
             )
-            turbo_info, spending_power = await asyncio.gather(turbo_task, balance_task)
-            timestamps["turbo_found"] = time.time()
+            if turbo_info is None:
+                turbo_task = asyncio.create_task(
+                    self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
+                )
+                turbo_info, spending_power = await asyncio.gather(turbo_task, balance_task)
+                timestamps["turbo_found"] = time.time()
+            else:
+                spending_power = await balance_task
             timestamps["spending_power_fetched"] = time.time()
 
             # 3. Calculate amount

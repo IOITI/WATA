@@ -211,6 +211,21 @@
         "enabled": true,
         "ttl_seconds": 30
       },
+      "watchlist_manager": {
+        "enabled": true,
+        "api_host": "0.0.0.0",
+        "api_port": 8081,
+        "service_url": "http://watchlist_manager1:8081",
+        "request_timeout_seconds": 1,
+        "refresh_interval_seconds": 300,
+        "stale_after_seconds": 330,
+        "startup_refresh": true,
+        "accept_stale": false,
+        "directions": [
+          "long",
+          "short"
+        ]
+      },
       "general": {
         "api_limits": {
           "top_instruments": 200,
