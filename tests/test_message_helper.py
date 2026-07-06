@@ -4,6 +4,8 @@ from src.message_helper import (
     TelegramMessageComposer,
     build_daily_trading_report_message,
     calculate_winning_streak,
+    calculate_average_period_return,
+    calculate_milestone_projections,
     merge_daily_performance_series,
 )
 
@@ -230,3 +232,98 @@ def test_build_daily_trading_report_message_omits_monthly_and_yearly_sections_wi
 
     assert "--- 📅 LAST 12 MONTHS ---" not in message
     assert "--- 📅 LAST 5 YEARS ---" not in message
+    assert "--- 🚀 AVERAGES & MILESTONES ---" not in message
+
+
+def test_calculate_average_period_return_includes_zero_return_periods():
+    trades = [
+        {"action": "long", "position_id": "w1", "performance_percent": 10.0, "execution_time_close": "2026-06-01T10:00:00Z"},
+        {"action": "long", "position_id": "w3", "performance_percent": 5.0, "execution_time_close": "2026-06-15T10:00:00Z"},
+    ]
+
+    # Weeks of 06/01 and 06/15 have trades, the week in between has none (0%).
+    avg_weekly = calculate_average_period_return(trades, date(2026, 6, 15), "week")
+
+    assert avg_weekly == round((10.0 + 0.0 + 5.0) / 3, 2)
+
+
+def test_calculate_milestone_projections_skips_already_surpassed_milestones():
+    projections = calculate_milestone_projections(
+        current_balance=600_000,
+        avg_period_percent=2.0,
+        milestones=[100_000, 500_000, 1_000_000],
+        period_kind="week",
+        report_date=date(2026, 6, 4),
+        horizon_periods=260,
+    )
+
+    milestones_shown = [row["milestone"] for row in projections]
+    assert 100_000 not in milestones_shown
+    assert 500_000 not in milestones_shown
+    assert milestones_shown == [1_000_000]
+
+
+def test_calculate_milestone_projections_labels_beyond_horizon_as_not_within_horizon():
+    projections = calculate_milestone_projections(
+        current_balance=100.0,
+        avg_period_percent=0.5,
+        milestones=[1_000_000],
+        period_kind="week",
+        report_date=date(2026, 6, 4),
+        horizon_periods=10,
+    )
+
+    assert len(projections) == 1
+    assert projections[0]["within_horizon"] is False
+
+
+def test_calculate_milestone_projections_returns_empty_without_positive_growth():
+    projections = calculate_milestone_projections(
+        current_balance=1000.0,
+        avg_period_percent=0.0,
+        milestones=[100_000],
+        period_kind="week",
+        report_date=date(2026, 6, 4),
+        horizon_periods=260,
+    )
+
+    assert projections == []
+
+
+def test_build_daily_trading_report_message_includes_balance_and_milestones():
+    closed_trades = [
+        {
+            "action": "long",
+            "position_id": "m1",
+            "performance_percent": 5.0,
+            "max_performance_percent": 5.0,
+            "profit_loss": 2.0,
+            "execution_time_close": "2026-06-01T10:00:00Z",
+        },
+        {
+            "action": "long",
+            "position_id": "m2",
+            "performance_percent": 3.0,
+            "max_performance_percent": 3.0,
+            "profit_loss": 1.5,
+            "execution_time_close": "2026-06-04T10:00:00Z",
+        },
+    ]
+
+    message = build_daily_trading_report_message(
+        report_date=date(2026, 6, 4),
+        closed_trades=closed_trades,
+        daily_profit_history=[{"day_date": "2026/06/04", "sum_profit": 1.5}],
+        daily_real={},
+        daily_best={},
+        daily_max={},
+        current_balance=27.54,
+        milestones_eur=[100_000, 500_000],
+    )
+
+    assert "💵 Current Account Balance: 27.54 €" in message
+    assert "--- 🚀 AVERAGES & MILESTONES ---" in message
+    assert "📈 Avg P/L per Week:" in message
+    assert "Milestones (simu per week) :" in message
+    assert "100,000 €:" in message
+    assert "500,000 €:" in message

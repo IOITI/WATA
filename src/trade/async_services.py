@@ -860,6 +860,16 @@ class AsyncPositionService:
         logger.info("Spending power: %s", power)
         return float(power)
 
+    async def get_current_account_balance(self) -> float:
+        """Fetch the current total account value (cash + open positions) for reporting."""
+        req = pf.balances.AccountBalances(params={"ClientKey": self.client_key})
+        resp = await self.api_client.request(req)
+        if not resp or "TotalValue" not in resp:
+            raise SaxoApiError("Invalid balance response, missing TotalValue.")
+        total_value = resp["TotalValue"]
+        logger.info("Current account balance: %s", total_value)
+        return float(total_value)
+
 
 # ──────────────────────────────────────────────
 #  Async TradingOrchestrator

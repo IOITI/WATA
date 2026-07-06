@@ -44,6 +44,7 @@ from src.schema import SchemaLoader
 from src.message_helper import (
     TelegramMessageComposer,
     build_daily_trading_report_message,
+    DEFAULT_MILESTONES_EUR,
 )
 from src.trade.exceptions import (
     TradingRuleViolation,
@@ -236,6 +237,8 @@ async def handle_daily_stats(
     db_position_manager: AsyncDbPositionManager,
     db_perf_manager: AsyncDbTradePerformanceManager,
     telegram: AsyncTelegramSender,
+    position_service: AsyncPositionService,
+    milestones_eur: list[float],
 ):
     days = 7
     report_date = date.today()
@@ -249,6 +252,12 @@ async def handle_daily_stats(
         db_position_manager.get_theoretical_percent_of_last_n_days_on_max(days),
     )
 
+    try:
+        current_balance = await position_service.get_current_account_balance()
+    except Exception as e:
+        logger.error("Failed to fetch account balance for daily report: %s", e)
+        current_balance = None
+
     message = build_daily_trading_report_message(
         report_date=report_date,
         closed_trades=closed_trades,
@@ -256,6 +265,8 @@ async def handle_daily_stats(
         daily_real=real_daily,
         daily_best=best_daily,
         daily_max=max_daily,
+        current_balance=current_balance,
+        milestones_eur=milestones_eur,
     )
     await telegram.send(message)
     await db_perf_manager.create_last_day_trade_performance_data()
@@ -281,6 +292,8 @@ async def dispatch_message(
     db_perf_manager: AsyncDbTradePerformanceManager,
     trade_turbo_exchange_id: str,
     telegram: AsyncTelegramSender,
+    position_service: AsyncPositionService,
+    milestones_eur: list[float],
 ):
     async with message.process(requeue=False):
         try:
@@ -312,7 +325,10 @@ async def dispatch_message(
             elif action in CLOSE_ACTIONS:
                 await handle_close_signal(body, performance_monitor, telegram)
             elif action == "daily_stats":
-                await handle_daily_stats(body, db_position_manager, db_perf_manager, telegram)
+                await handle_daily_stats(
+                    body, db_position_manager, db_perf_manager, telegram,
+                    position_service, milestones_eur,
+                )
             elif action == "check_positions_on_saxo_api":
                 # Position checks are handled by position_monitor service
                 # If message arrives here by mistake, just log and skip
@@ -393,6 +409,7 @@ async def main():
         # 4. Trading rules (sync TradingRule — uses async DB wrapper below)
         trading_rule = TradingRule(config_manager, None)  # db_position_manager passed separately
         trade_turbo_exchange_id = config_manager.get_config_value("trade.config.turbo_preference.exchange_id")
+        milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))
 
         # 5. Saxo auth + API client
         logger.info("Initialising Saxo API client...")
@@ -443,6 +460,8 @@ async def main():
                 db_perf_manager=db_perf_manager,
                 trade_turbo_exchange_id=trade_turbo_exchange_id,
                 telegram=telegram,
+                position_service=position_service,
+                milestones_eur=milestones_eur,
             )
 
         await signals_queue.consume(on_message)

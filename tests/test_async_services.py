@@ -13,7 +13,7 @@ asyncpg_stub.Record = dict
 asyncpg_stub.create_pool = AsyncMock()
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 
-from src.trade.async_services import AsyncInstrumentService, AsyncTradingOrchestrator
+from src.trade.async_services import AsyncInstrumentService, AsyncTradingOrchestrator, AsyncPositionService
 
 
 @pytest.fixture
@@ -38,6 +38,17 @@ def mock_api_client():
     client = MagicMock()
     client.request = AsyncMock()
     return client
+
+
+def test_get_current_account_balance_returns_total_value(mock_config_manager, mock_api_client):
+    mock_api_client.request = AsyncMock(return_value={"TotalValue": 27.54, "SpendingPower": 20.0})
+    position_service = AsyncPositionService(
+        mock_api_client, MagicMock(), mock_config_manager, "account-1", "client-1",
+    )
+
+    balance = asyncio.run(position_service.get_current_account_balance())
+
+    assert balance == 27.54
 
 
 @pytest.fixture

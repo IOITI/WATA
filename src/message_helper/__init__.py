@@ -1,4 +1,5 @@
 import logging
+import math
 import textwrap
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -814,6 +815,119 @@ def calculate_yearly_aggregations(trades: list[dict], report_date: date, years: 
     return yearly_rows
 
 
+# ── Averages & Milestones ──
+
+DEFAULT_MILESTONES_EUR = (100_000, 500_000, 1_000_000, 5_000_000, 10_000_000)
+MILESTONE_WEEKLY_HORIZON_PERIODS = 260  # ~5 years of weeks
+MILESTONE_MONTHLY_HORIZON_PERIODS = 60  # 5 years of months
+
+
+def _week_start(value: date) -> date:
+    return value - timedelta(days=value.weekday())
+
+
+def calculate_average_period_return(trades: list[dict], report_date: date, period: str) -> float:
+    # Average compounded return percent across every period (week/month/year)
+    # from the first trade's close date through report_date, inclusive.
+    # Periods without any closed trades contribute 0% to the average.
+    if not trades:
+        return 0.0
+
+    ordered_trades = _sort_trades_chronologically(trades)
+    first_date = _get_trade_close_date(ordered_trades[0])
+    if first_date is None or first_date > report_date:
+        return 0.0
+
+    period_returns: list[float] = []
+
+    if period == "week":
+        bucketed: dict[date, list[dict]] = defaultdict(list)
+        for trade in trades:
+            trade_date = _get_trade_close_date(trade)
+            if trade_date is not None:
+                bucketed[_week_start(trade_date)].append(trade)
+
+        cursor = _week_start(first_date)
+        end = _week_start(report_date)
+        while cursor <= end:
+            period_returns.append(calculate_compounded_return(bucketed.get(cursor, [])))
+            cursor += timedelta(weeks=1)
+
+    elif period == "month":
+        bucketed_months: dict[tuple[int, int], list[dict]] = defaultdict(list)
+        for trade in trades:
+            trade_date = _get_trade_close_date(trade)
+            if trade_date is not None:
+                bucketed_months[(trade_date.year, trade_date.month)].append(trade)
+
+        cursor_month = _month_start(first_date)
+        end_month = _month_start(report_date)
+        while cursor_month <= end_month:
+            period_returns.append(calculate_compounded_return(bucketed_months.get((cursor_month.year, cursor_month.month), [])))
+            cursor_month = _shift_month(cursor_month, 1)
+
+    elif period == "year":
+        bucketed_years: dict[int, list[dict]] = defaultdict(list)
+        for trade in trades:
+            trade_date = _get_trade_close_date(trade)
+            if trade_date is not None:
+                bucketed_years[trade_date.year].append(trade)
+
+        for year in range(first_date.year, report_date.year + 1):
+            period_returns.append(calculate_compounded_return(bucketed_years.get(year, [])))
+
+    else:
+        raise ValueError(f"Unknown period: {period}")
+
+    if not period_returns:
+        return 0.0
+    return round(sum(period_returns) / len(period_returns), 2)
+
+
+def calculate_milestone_projections(
+    current_balance: float | None,
+    avg_period_percent: float,
+    milestones: list[float],
+    period_kind: str,
+    report_date: date,
+    horizon_periods: int,
+) -> list[dict]:
+    # Project the date each not-yet-reached milestone would be hit by compounding
+    # current_balance at avg_period_percent per week/month. Milestones already
+    # surpassed by current_balance are omitted entirely from the result.
+    if current_balance is None or current_balance <= 0:
+        return []
+
+    growth_rate = avg_period_percent / 100.0
+    if growth_rate <= 0:
+        return []
+
+    growth_factor = 1 + growth_rate
+    projections = []
+    for milestone in milestones:
+        if milestone <= current_balance:
+            continue
+
+        periods_needed = max(1, math.ceil(math.log(milestone / current_balance) / math.log(growth_factor)))
+
+        if period_kind == "week":
+            projected_date = report_date + timedelta(weeks=periods_needed)
+        elif period_kind == "month":
+            projected_date = _shift_month(_month_start(report_date), periods_needed)
+        else:
+            raise ValueError(f"Unknown period_kind: {period_kind}")
+
+        projections.append(
+            {
+                "milestone": milestone,
+                "date": projected_date,
+                "periods_needed": periods_needed,
+                "within_horizon": periods_needed <= horizon_periods,
+            }
+        )
+    return projections
+
+
 def merge_daily_performance_series(
     daily_real: dict,
     daily_best: dict,
@@ -846,6 +960,8 @@ def build_daily_trading_report_payload(
     daily_real: dict,
     daily_best: dict,
     daily_max: dict,
+    current_balance: float | None = None,
+    milestones_eur: list[float] | None = None,
 ) -> dict:
     normalized_report_date = _coerce_date(report_date) or datetime.utcnow().date()
     ordered_closed_trades = _sort_trades_chronologically(closed_trades)
@@ -853,11 +969,17 @@ def build_daily_trading_report_payload(
         trade for trade in ordered_closed_trades
         if _get_trade_close_date(trade) == normalized_report_date
     ]
+    milestones = list(milestones_eur) if milestones_eur else list(DEFAULT_MILESTONES_EUR)
+
+    weekly_avg_percent = calculate_average_period_return(ordered_closed_trades, normalized_report_date, "week")
+    monthly_avg_percent = calculate_average_period_return(ordered_closed_trades, normalized_report_date, "month")
+    yearly_avg_percent = calculate_average_period_return(ordered_closed_trades, normalized_report_date, "year")
 
     return {
         "report_date": normalized_report_date,
         "streak": calculate_winning_streak(daily_profit_history),
         "daily_summary": calculate_trade_summary(daily_trades),
+        "current_balance": current_balance,
         "by_direction": {
             "long": calculate_trade_summary([trade for trade in daily_trades if str(trade.get("action", "")).lower() == "long"]),
             "short": calculate_trade_summary([trade for trade in daily_trades if str(trade.get("action", "")).lower() == "short"]),
@@ -876,6 +998,22 @@ def build_daily_trading_report_payload(
         "last_10_weeks": calculate_weekly_aggregations(ordered_closed_trades, normalized_report_date, weeks=10),
         "last_12_months": calculate_monthly_aggregations(ordered_closed_trades, normalized_report_date, months=12),
         "last_5_years": calculate_yearly_aggregations(ordered_closed_trades, normalized_report_date, years=5),
+        "has_trade_history": bool(ordered_closed_trades),
+        "averages": {
+            "weekly_percent": weekly_avg_percent,
+            "monthly_percent": monthly_avg_percent,
+            "yearly_percent": yearly_avg_percent,
+        },
+        "milestones": {
+            "weekly": calculate_milestone_projections(
+                current_balance, weekly_avg_percent, milestones, "week",
+                normalized_report_date, MILESTONE_WEEKLY_HORIZON_PERIODS,
+            ),
+            "monthly": calculate_milestone_projections(
+                current_balance, monthly_avg_percent, milestones, "month",
+                normalized_report_date, MILESTONE_MONTHLY_HORIZON_PERIODS,
+            ),
+        },
     }
 
 
@@ -898,6 +1036,55 @@ def _format_date_label(value: date | None) -> str:
     if value is None:
         return "N/A"
     return value.strftime("%Y/%m/%d")
+
+
+def format_currency_amount(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{_as_float(value):,.2f} €"
+
+
+def _align_label_value_rows(rows: list[tuple[str, str]]) -> list[str]:
+    """Right-pad each label so values line up, matching the widest 'label value' row."""
+    if not rows:
+        return []
+    base_lengths = [len(label) + 1 + len(value) for label, value in rows]
+    max_width = max(base_lengths)
+    lines = []
+    for (label, value), base_len in zip(rows, base_lengths):
+        spacer = " " * (1 + (max_width - base_len))
+        lines.append(f"{label}{spacer}{value}")
+    return lines
+
+
+def _format_average_return_lines(averages: dict) -> list[str]:
+    rows = [
+        ("📈 Avg P/L per Week:", format_signed_percent(averages["weekly_percent"])),
+        ("📈 Avg P/L per Month:", format_signed_percent(averages["monthly_percent"])),
+        ("📈 Avg P/L per Year:", format_signed_percent(averages["yearly_percent"])),
+    ]
+    return _align_label_value_rows(rows)
+
+
+def _format_milestone_rows(projections: list[dict]) -> list[str]:
+    if not projections:
+        return []
+
+    entries = []
+    for row in projections:
+        icon = "🏆" if row["within_horizon"] else "⏳"
+        label = "Reached" if row["within_horizon"] else "Proj."
+        amount_text = f"{row['milestone']:,.0f}"
+        date_text = row["date"].strftime("%Y-%m-%d")
+        entries.append((icon, label, amount_text, date_text))
+
+    max_width = max(len(label) + 1 + len(amount_text) for _, label, amount_text, _ in entries)
+    lines = []
+    for icon, label, amount_text, date_text in entries:
+        base_len = len(label) + 1 + len(amount_text)
+        spacer = " " * (1 + (max_width - base_len))
+        lines.append(f"{icon} {label}{spacer}{amount_text} €:  {date_text}")
+    return lines
 
 
 def format_daily_trading_report(payload: dict) -> str:
@@ -967,6 +1154,12 @@ def format_daily_trading_report(payload: dict) -> str:
         ),
         f"⚖️ Profit Factor: {format_profit_factor(daily_summary['profit_factor'])}",
         f"📉 Daily Max Drawdown: {format_signed_percent(daily_summary['max_drawdown'])}",
+    ]
+
+    if payload.get("current_balance") is not None:
+        lines.append(f"💵 Current Account Balance: {format_currency_amount(payload['current_balance'])}")
+
+    lines += [
         "",
         f"📊 Avg Trade: {format_signed_percent(daily_summary['avg_trade'])}",
         (
@@ -1017,6 +1210,29 @@ def format_daily_trading_report(payload: dict) -> str:
             *yearly_lines,
         ])
 
+    averages_and_milestones_lines: list[str] = []
+    if payload.get("has_trade_history"):
+        averages_and_milestones_lines.extend(_format_average_return_lines(payload["averages"]))
+
+        weekly_milestone_lines = _format_milestone_rows(payload["milestones"]["weekly"])
+        if weekly_milestone_lines:
+            averages_and_milestones_lines.append("")
+            averages_and_milestones_lines.append("Milestones (simu per week) :")
+            averages_and_milestones_lines.extend(weekly_milestone_lines)
+
+        monthly_milestone_lines = _format_milestone_rows(payload["milestones"]["monthly"])
+        if monthly_milestone_lines:
+            averages_and_milestones_lines.append("")
+            averages_and_milestones_lines.append("Milestones (simu per month) :")
+            averages_and_milestones_lines.extend(monthly_milestone_lines)
+
+    if averages_and_milestones_lines:
+        lines.extend([
+            "",
+            "--- 🚀 AVERAGES & MILESTONES ---",
+            *averages_and_milestones_lines,
+        ])
+
     return "\n".join(lines).strip()
 
 
@@ -1028,6 +1244,8 @@ def build_daily_trading_report_message(
     daily_real: dict,
     daily_best: dict,
     daily_max: dict,
+    current_balance: float | None = None,
+    milestones_eur: list[float] | None = None,
 ) -> str:
     payload = build_daily_trading_report_payload(
         report_date=report_date,
@@ -1036,6 +1254,8 @@ def build_daily_trading_report_message(
         daily_real=daily_real,
         daily_best=daily_best,
         daily_max=daily_max,
+        current_balance=current_balance,
+        milestones_eur=milestones_eur,
     )
     return format_daily_trading_report(payload)
 

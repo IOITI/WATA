@@ -257,6 +257,15 @@
       "last_action_file": "/app/var/lib/trade/last_action.json"
     }
   },
+  "reporting": {
+    "milestones_eur": [
+      100000,
+      500000,
+      1000000,
+      5000000,
+      10000000
+    ]
+  },
   "telegram": {
     "bot_token": "xxxx",
     "chat_id": "xxxx",

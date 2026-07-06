@@ -35,7 +35,7 @@ from src.mq_telegram.async_tools import AsyncTelegramSender
 from src.saxo_authen import SaxoAuth
 from src.saxo_streaming.client import SaxoStreamClient
 from src.trade.rules import TradingRule
-from src.message_helper import build_daily_trading_report_message
+from src.message_helper import build_daily_trading_report_message, DEFAULT_MILESTONES_EUR
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,8 @@ async def handle_daily_stats(
     db_position_manager: AsyncDbPositionManager,
     db_perf_manager: AsyncDbTradePerformanceManager,
     telegram: AsyncTelegramSender,
+    position_service: AsyncPositionService,
+    milestones_eur: list[float],
 ):
     """Generate and send daily performance stats."""
     days = 7
@@ -118,6 +120,12 @@ async def handle_daily_stats(
         db_position_manager.get_theoretical_percent_of_last_n_days_on_max(days),
     )
 
+    try:
+        current_balance = await position_service.get_current_account_balance()
+    except Exception as e:
+        logger.error("Failed to fetch account balance for daily report: %s", e)
+        current_balance = None
+
     message = build_daily_trading_report_message(
         report_date=report_date,
         closed_trades=closed_trades,
@@ -125,6 +133,8 @@ async def handle_daily_stats(
         daily_real=real_daily,
         daily_best=best_daily,
         daily_max=max_daily,
+        current_balance=current_balance,
+        milestones_eur=milestones_eur,
     )
     await telegram.send(message)
     await db_perf_manager.create_last_day_trade_performance_data()
@@ -141,6 +151,8 @@ async def dispatch_ops_message(
     db_position_manager: AsyncDbPositionManager,
     db_perf_manager: AsyncDbTradePerformanceManager,
     telegram: AsyncTelegramSender,
+    position_service: AsyncPositionService,
+    milestones_eur: list[float],
 ):
     async with message.process(requeue=False):
         try:
@@ -154,7 +166,10 @@ async def dispatch_ops_message(
 
         try:
             if action == "daily_stats":
-                await handle_daily_stats(db_position_manager, db_perf_manager, telegram)
+                await handle_daily_stats(
+                    db_position_manager, db_perf_manager, telegram,
+                    position_service, milestones_eur,
+                )
             elif action == "check_positions_on_saxo_api":
                 # Legacy — streaming handles this now; run a one-off check as fallback
                 logger.info("Legacy check_positions_on_saxo_api received — running REST fallback.")
@@ -215,6 +230,7 @@ async def main():
         order_service = AsyncOrderService(api_client, account_key, client_key)
         position_service = AsyncPositionService(api_client, order_service, config_manager, account_key, client_key)
         trading_rule = TradingRule(config_manager, None)
+        milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))
         performance_monitor = AsyncPerformanceMonitor(
             position_service, order_service, config_manager,
             db_position_manager, trading_rule, telegram.send,
@@ -260,6 +276,7 @@ async def main():
             await dispatch_ops_message(
                 msg, performance_monitor, db_position_manager,
                 db_perf_manager, telegram,
+                position_service, milestones_eur,
             )
 
         await ops_queue.consume(on_message)
