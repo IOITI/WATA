@@ -2,6 +2,45 @@ x-common:
   rabbitmq-password: &rabbitmq_password pykvys-9nixqo-cuqvYt
 
 services:
+  traefik:
+    image: traefik:v3.7.7
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api=true" 
+      - "--ping=true"
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      # Set up HTTP (port 80) and HTTPS (port 443) entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Global HTTP to HTTPS redirection
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      # Let's Encrypt configuration
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    expose:
+      - '80'
+      - '443'
+    networks:
+      - trade-net
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "../../var/lib/traefik/letsencrypt:/letsencrypt"
+    healthcheck:
+      # Traefik has a native CLI command for health checks
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s       # Check every 10 seconds
+      timeout: 3s         # Consider it failed if no response in 3 seconds
+      retries: 3          # Fail after 3 consecutive failures
+      start_period: 5s    # Give Traefik 5 seconds to boot up before checking
   postgres1:
     image: postgres:16-alpine
     hostname: postgres1
@@ -65,14 +104,25 @@ services:
     container_name: 'web_server1'
     environment:
       - WATA_APP_ROLE=web_server
-    ports:
-        - 80:80
-    expose:
-      - '80'
     volumes:
         - ../../var/log:/app/var/log/
         - ../../var/lib:/app/var/lib/
         - ../../etc/config.json:/app/etc/config.json
+    labels:
+      - "traefik.enable=true"
+      # Define the domain name for the application
+      - "traefik.http.routers.fastapi.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.fastapi.entrypoints=websecure"
+      # Tell Traefik to secure this route using Let's Encrypt
+      - "traefik.http.routers.fastapi.tls.certresolver=myresolver"
+      # Tell Traefik which port the container is listening on internally
+      - "traefik.http.services.fastapi.loadbalancer.server.port=80"
+      # Define the middleware and list allowed IPs (add /32 to the end of single IPs)
+      # https://www.tradingview.com/support/solutions/43000529348-about-webhooks/
+      # IP addresses of TradingView webhook servers
+      - "traefik.http.middlewares.api-ip-whitelist.ipallowlist.sourcerange=127.0.0.1/32, 83.195.218.196/32, 52.89.214.238/32, 34.212.75.30/32, 54.218.53.128/32, 52.32.178.7/32"
+      # Apply the middleware to FastAPI router
+      - "traefik.http.routers.fastapi.middlewares=api-ip-whitelist"
     networks:
       - trade-net
     deploy:
@@ -90,7 +140,8 @@ services:
         condition: service_healthy
       postgres1:
         condition: service_healthy
-
+      traefik:
+        condition: service_healthy
   telegram1:
     image: wata-base:latest
     hostname: telegram1

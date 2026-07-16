@@ -200,15 +200,15 @@ class ConfigurationManager:
                     raise ValueError(error_msg)
 
             elif rule_type == "signal_validation":
-                # Validate max_signal_age_minutes
-                max_age = rule_config.get("max_signal_age_minutes")
+                # Validate max_signal_age_seconds
+                max_age = rule_config.get("max_signal_age_seconds")
                 if max_age is None:
-                    error_msg = f"Rule {rule_name}: Missing required field 'max_signal_age_minutes'"
+                    error_msg = f"Rule {rule_name}: Missing required field 'max_signal_age_seconds'"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
                 
                 if not isinstance(max_age, int) or max_age <= 0:
-                    error_msg = f"Rule {rule_name}: max_signal_age_minutes must be a positive integer"
+                    error_msg = f"Rule {rule_name}: max_signal_age_seconds must be a positive integer"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 

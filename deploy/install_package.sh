@@ -37,6 +37,8 @@ mkdir -p "$APP_BASE_DIR/var/lib/saxo_auth"
 mkdir -p "$APP_BASE_DIR/var/lib/web_server"
 mkdir -p "$APP_BASE_DIR/var/lib/rabbitmq"
 mkdir -p "$APP_BASE_DIR/var/lib/trade"
+mkdir -p "$APP_BASE_DIR/var/lib/traefik"
+mkdir -p "$APP_BASE_DIR/var/lib/traefik/letsencrypt"
 mkdir -p "$APP_BASE_DIR/var/log/"
 mkdir -p "$APP_BASE_DIR/var/log/rabbitmq"
 mkdir -p "$APP_BASE_DIR/var/log/wata-api"
@@ -49,30 +51,17 @@ echo "Ensuring Docker service is enabled..."
 sudo systemctl enable docker
 
 # Configure UFW firewall rules
-# Define the list of allowed IPs for UFW
-# https://www.tradingview.com/support/solutions/43000529348-about-webhooks/
-# IP addresses of TradingView webhook servers
-ALLOWED_IPS=(
-    "127.0.0.1"
-    "52.89.214.238"
-    "34.212.75.30"
-    "54.218.53.128"
-    "52.32.178.7"
-)
-
 echo "Configuring UFW rules..."
 # Allow all connections to the SSH server
 sudo ufw allow ssh
-
-# Loop through each IP in the ALLOWED_IPS array
-for IP in "${ALLOWED_IPS[@]}"; do
-    # Add a UFW rule to allow traffic on TCP port 80 from the current IP
-    echo "Allowing traffic from $IP on port 80..."
-    sudo ufw allow from "$IP" to any port 80 proto tcp
-done
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
 
 echo "UFW rules added successfully."
 sudo ufw --force enable
+
+# Reload UFW to apply changes
+sudo ufw reload
 
 # Set permissions
 echo "Setting permissions..."

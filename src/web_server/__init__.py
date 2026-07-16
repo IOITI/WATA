@@ -43,7 +43,7 @@ ALLOWED_IPS = [
 
 
 @app.middleware("http")
-async def check_ip(request: Request, call_next):
+async def check_ip_old(request: Request, call_next):
     client_ip = request.headers.get("x-forwarded-for", request.client.host)
     print(f"HERE {client_ip}")
     if client_ip not in ALLOWED_IPS:
@@ -51,6 +51,24 @@ async def check_ip(request: Request, call_next):
         raise HTTPException(status_code=403, detail="Forbidden")
     return await call_next(request)
 
+@app.middleware("http")
+async def check_ip(request: Request, call_next):
+    # Traefik will pass the real IP in the X-Forwarded-For header
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    
+    if x_forwarded_for:
+        # X-Forwarded-For can be a comma-separated list of IPs. The first one is the original client.
+        client_ip = x_forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host
+
+    print(f"Incoming request from IP: {client_ip}")
+    
+    if client_ip not in ALLOWED_IPS:
+        logging.warning(f"Forbidden access attempt from IP: {client_ip}")
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    return await call_next(request)
 
 # Define a dependency for HTTP Bearer Authentication
 bearer_scheme = HTTPBearer()

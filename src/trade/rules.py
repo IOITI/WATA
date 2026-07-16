@@ -66,9 +66,9 @@ class TradingRule:
                 logging.error(f"The check_positions_on_saxo_api signal is too old. Current time: {current_time}, Signal time: {signal_time}")
                 raise TradingRuleViolation("Signal timestamp is too old")
         else:
-            # Check if the difference is more than max_signal_age_minutes
-            max_age_minutes = self.signal_validation_config["max_signal_age_minutes"]
-            if time_difference > timedelta(minutes=max_age_minutes):
+            # Check if the difference is more than max_signal_age_seconds
+            max_age_seconds = self.signal_validation_config["max_signal_age_seconds"]
+            if time_difference > timedelta(seconds=max_age_seconds):
                 logging.error(f"The signal is too old. Current time: {current_time}, Signal time: {signal_time}")
                 raise TradingRuleViolation("Signal timestamp is too old")
 
