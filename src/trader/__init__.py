@@ -488,9 +488,17 @@ async def main():
             config_manager, db_order_manager, db_position_manager,
             watchlist_client=watchlist_client,
         )
+        async def _trigger_daily_stats():
+            await handle_daily_stats(
+                {"action": "daily_stats", "indice": "n/a"},
+                db_position_manager, db_perf_manager, telegram,
+                position_service, milestones_eur,
+            )
+
         performance_monitor = AsyncPerformanceMonitor(
             position_service, order_service, config_manager,
             db_position_manager, trading_rule, telegram.send,
+            trigger_daily_stats_fn=_trigger_daily_stats,
         )
 
         # 8. RabbitMQ consumer (aio-pika)

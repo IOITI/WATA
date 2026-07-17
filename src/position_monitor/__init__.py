@@ -231,9 +231,17 @@ async def main():
         position_service = AsyncPositionService(api_client, order_service, config_manager, account_key, client_key)
         trading_rule = TradingRule(config_manager, None)
         milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))
+
+        async def _trigger_daily_stats():
+            await handle_daily_stats(
+                db_position_manager, db_perf_manager, telegram,
+                position_service, milestones_eur,
+            )
+
         performance_monitor = AsyncPerformanceMonitor(
             position_service, order_service, config_manager,
             db_position_manager, trading_rule, telegram.send,
+            trigger_daily_stats_fn=_trigger_daily_stats,
         )
 
         # ── Streaming configuration ──

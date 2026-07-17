@@ -1161,6 +1161,7 @@ class AsyncPerformanceMonitor:
         db_position_manager: AsyncDbPositionManager,
         trading_rule,  # TradingRule instance (sync is fine — it's pure computation)
         send_telegram_fn,  # async callable(message: str) -> None
+        trigger_daily_stats_fn=None,  # optional async callable() -> None
     ):
         self.position_service = position_service
         self.order_service = order_service
@@ -1168,6 +1169,8 @@ class AsyncPerformanceMonitor:
         self.db_position_manager = db_position_manager
         self.trading_rule = trading_rule
         self.send_telegram = send_telegram_fn
+        self.trigger_daily_stats = trigger_daily_stats_fn
+        self._last_daily_stats_trigger_date = None
         self.perf_config = self.config.get_config_value("trade.config.position_management", {})
         self.thresholds = self.perf_config.get("performance_thresholds", {"stoploss_percent": -15, "max_profit_percent": 60})
         self.trailing_stop_config = self.thresholds.get("trailing_stop", {"enabled": False, "activation_percent": 5, "drawdown_percent": 8})
@@ -1493,6 +1496,7 @@ Perf: {perf}% | Max during trade: {max_perf}%
 Reason: {reason}
 Today realized: {today_pct}%"""
                     await self.send_telegram(msg)
+                    await self._maybe_trigger_daily_stats(today_pct)
                     return True
 
             logger.warning("Closed position %s not found in API.", position_id)
@@ -1501,6 +1505,35 @@ Today realized: {today_pct}%"""
         except Exception as e:
             logger.error("Error updating closed position %s: %s", position_id, e, exc_info=True)
             return False
+
+    async def _maybe_trigger_daily_stats(self, today_pct: float) -> None:
+        """
+        If today's realized profit has reached/exceeded the
+        ``dont_enter_trade_if_day_profit_is_more_than`` threshold, fire the
+        daily stats report early (normally only sent at 22:00 by the
+        scheduler). Triggered at most once per day.
+        """
+        if self.trigger_daily_stats is None or today_pct is None:
+            return
+
+        threshold = getattr(self.trading_rule, "dont_enter_trade_if_day_profit_is_more_than", None)
+        if threshold is None or today_pct < threshold:
+            return
+
+        tz = pytz.timezone(self.timezone)
+        today = datetime.now(tz).date()
+        if self._last_daily_stats_trigger_date == today:
+            return
+        self._last_daily_stats_trigger_date = today
+
+        logger.info(
+            "Daily profit %.2f%% reached target (%.2f%%) — triggering early daily stats.",
+            today_pct, threshold,
+        )
+        try:
+            await self.trigger_daily_stats()
+        except Exception as e:
+            logger.error("Failed to trigger early daily stats: %s", e, exc_info=True)
 
     def _log_performance_detail(self, position_id, api_pos, perf_pct):
         try:
