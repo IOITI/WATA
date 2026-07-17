@@ -81,7 +81,12 @@ async def verify_token(token: str):
     return token
 
 
-def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, confidence=None):
+def _format_timestamp_ms(dt: datetime) -> str:
+    """Format a UTC datetime with millisecond precision, e.g. 2026-07-16T08:08:53.821Z."""
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, confidence=None, received_timestamp=None):
     try:
         # Retrieve RabbitMQ credentials from the configuration
         rabbitmq_config = config_manager.get_rabbitmq_config()
@@ -111,10 +116,12 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, c
                 "indice": indice,
                 "signal_timestamp": signal_timestamp,
                 "alert_timestamp": alert_timestamp,
-                "mqsend_timestamp": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "mqsend_timestamp": _format_timestamp_ms(now_utc),
         }
         if confidence is not None:
             msg_payload["confidence"] = confidence
+        if received_timestamp is not None:
+            msg_payload["received_timestamp"] = received_timestamp
 
         message = json.dumps(msg_payload)
         channel.basic_publish(exchange="", routing_key="trading-signals", body=message)
@@ -132,6 +139,9 @@ def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, c
 
 @app.post("/webhook")
 async def webhook(request: Request):
+    # Capture the real time this request reached the API, as early as possible.
+    received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
+
     # Extract the token from the query parameters
     token = request.query_params.get('token')
 
@@ -160,6 +170,7 @@ async def webhook(request: Request):
         data["signal_timestamp"],
         data["alert_timestamp"],
         confidence=data.get("confidence"),
+        received_timestamp=received_timestamp,
     )
     logging.info(f"Received data from {request.client.host} : {data}")
     return JSONResponse(content={"status": "success", "signal_id": signal_id}, status_code=200)

@@ -228,17 +228,8 @@ class TelegramMessageComposer:
                 
                 # Calculate time differences
                 signal_to_exec_diff = "N/A"
-                ask_to_exec_diff = "N/A"
-                signal_to_ask_diff = "N/A"
-                
                 if self.signal_timestamp_dt and self.exec_time_dt:
                     signal_to_exec_diff = self._calculate_time_diff(self.signal_timestamp_dt, self.exec_time_dt)
-                
-                if self.ask_time_dt and self.exec_time_dt:
-                    ask_to_exec_diff = self._calculate_time_diff(self.ask_time_dt, self.exec_time_dt)
-                
-                if self.signal_timestamp_dt and self.ask_time_dt:
-                    signal_to_ask_diff = self._calculate_time_diff(self.signal_timestamp_dt, self.ask_time_dt)
                 
                 position_id = position_data.get("position_id", "N/A")
                 actual_order_id = order_data.get("order_id", "N/A")  # Use ID from order_details
@@ -254,8 +245,6 @@ class TelegramMessageComposer:
                 Total price: {total_price}
                 Order Cost: {order_cost} {currency}
                 Time: {exec_time}
-                Signal to Ask Time: {signal_to_ask_diff}
-                Ask to Exec Time: {ask_to_exec_diff}
                 Total Signal to Exec Time: {signal_to_exec_diff}
                 Position ID: {position_id}
                 Order ID: {actual_order_id}
@@ -425,7 +414,7 @@ class TelegramMessageComposer:
         """Adds a section formatting a dictionary."""
         section_title = f"--- {title.upper()} ---"
         try:
-            message_body = json.dumps(data, indent=2, sort_keys=True)
+            message_body = json.dumps(data, indent=2, sort_keys=False)
         except Exception:
             message_body = str(data)  # Fallback
         full_section = f"{section_title}\n```json\n{message_body}\n```"  # Use markdown code block

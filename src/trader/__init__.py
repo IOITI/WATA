@@ -11,10 +11,11 @@ import logging
 import os
 import sys
 import traceback
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import aio_pika
 import jsonschema
+import pytz
 
 # --- Configuration & Logging ---
 from src.configuration import ConfigurationManager
@@ -77,6 +78,38 @@ def get_version() -> str:
 
 
 # ─────────────────────────────────────────────────────
+#  Timing helpers
+# ─────────────────────────────────────────────────────
+
+def _parse_iso_timestamp(ts: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp (with or without fractional seconds) to a tz-aware datetime."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _format_ms(delta_seconds: float | None) -> str:
+    if delta_seconds is None:
+        return "N/A"
+    return f"{delta_seconds * 1000:.0f}ms"
+
+
+def _delta_ms(start_dt: datetime | None, end_dt: datetime | None) -> str:
+    if start_dt is None or end_dt is None:
+        return "N/A"
+    return _format_ms((end_dt - start_dt).total_seconds())
+
+
+def _delta_ms_from_epoch(start_dt: datetime | None, end_epoch: float | None) -> str:
+    if start_dt is None or end_epoch is None:
+        return "N/A"
+    return _format_ms(end_epoch - start_dt.timestamp())
+
+
+# ─────────────────────────────────────────────────────
 #  Signal handler (long / short)
 # ─────────────────────────────────────────────────────
 
@@ -94,6 +127,8 @@ async def handle_trading_signal(
     indice = data["indice"]
     confidence = data.get("confidence")
     composer = TelegramMessageComposer(data)
+
+    handle_start_dt = datetime.now(pytz.utc)
 
     try:
         # 1. Rule checks (sync — pure computation + quick DB reads via asyncio.to_thread)
@@ -114,6 +149,8 @@ async def handle_trading_signal(
         trading_rule.check_max_trades_per_day()
         if confidence is not None:
             trading_rule.check_confidence_threshold(confidence)
+
+        rule_check_end_dt = datetime.now(pytz.utc)
 
         reserve_cash_pct = trading_orchestrator.reserve_cash_percent
 
@@ -152,7 +189,25 @@ async def handle_trading_signal(
         composer.add_turbo_search_result(founded_turbo=result["selected_turbo_info"])
         composer.add_position_result(buy_details=result)
         if "execution_timing" in result:
-            composer.add_text_section("Execution Timing", result["execution_timing"])
+            signal_dt = _parse_iso_timestamp(data.get("signal_timestamp"))
+            received_dt = _parse_iso_timestamp(data.get("received_timestamp"))
+            mqsend_dt = _parse_iso_timestamp(data.get("mqsend_timestamp"))
+            position_confirmed_epoch = (result.get("raw_timestamps") or {}).get("position_confirmed")
+
+            timing_payload = {
+                "api": {
+                    "signal_to_mqsend": _delta_ms(signal_dt, mqsend_dt),
+                    "received_to_mqsend": _delta_ms(received_dt, mqsend_dt),
+                },
+                "trader": {
+                    "handle_from_mqsend": _delta_ms(mqsend_dt, handle_start_dt),
+                    "rule_check": _delta_ms(handle_start_dt, rule_check_end_dt),
+                    "execution_details": result["execution_timing"],
+                },
+                "signal_to_position": _delta_ms_from_epoch(signal_dt, position_confirmed_epoch),
+                "received_to_position": _delta_ms_from_epoch(received_dt, position_confirmed_epoch),
+            }
+            composer.add_text_section("Execution Timing", timing_payload)
         if result.get("position_scale") is not None:
             scale_info = f"Scale: {result['position_scale']}%"
             if confidence is not None:

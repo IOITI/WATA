@@ -1083,6 +1083,7 @@ class AsyncTradingOrchestrator:
                 "position_details": position_data,
                 "selected_turbo_info": turbo_info,
                 "execution_timing": timing,
+                "raw_timestamps": timestamps,
                 "position_scale": position_scale,
                 "confidence": confidence,
                 "message": f"Successfully executed trade for {keywords}.",
