@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 from src.configuration import ConfigurationManager
-from src.web_server.auth_token import WebServerToken
+from src.web_server_token import WebServerToken
 import logging
 
 logging.basicConfig(level=logging.INFO)

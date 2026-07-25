@@ -1,14 +1,12 @@
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from src.web_server.auth_token import WebServerToken
+from src.web_server_token import WebServerToken
+from src.web_server.signal_store import SignalStore
 import logging
 from src.configuration import ConfigurationManager
 from src.schema import SchemaLoader
 import jsonschema
-import pika
-from pika.exceptions import AMQPConnectionError
-import json
 from datetime import datetime
 import pytz
 import os
@@ -30,6 +28,15 @@ app = FastAPI()
 web_server_token = WebServerToken(config_manager)
 SECRET_TOKEN = web_server_token.get_token()
 
+# In-memory "latest signal per indice" store, polled by the async trader and fed
+# by both the public /webhook and the internal /internal/signal endpoints.
+SIGNAL_STORE = SignalStore()
+
+# Paths that are only ever called by other WATA containers on the internal Docker
+# network (trader polling, scheduler EOD close). They are exempt from the IP
+# allowlist below but still require the Bearer token (see verify_bearer_token).
+INTERNAL_ONLY_PATHS = {"/latest-signals", "/internal/signal"}
+
 # List of allowed IP addresses
 ALLOWED_IPS = [
     "127.0.0.1",
@@ -43,16 +50,13 @@ ALLOWED_IPS = [
 
 
 @app.middleware("http")
-async def check_ip_old(request: Request, call_next):
-    client_ip = request.headers.get("x-forwarded-for", request.client.host)
-    print(f"HERE {client_ip}")
-    if client_ip not in ALLOWED_IPS:
-        logging.warning(f"Forbidden access attempt from IP: {client_ip}")
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return await call_next(request)
-
-@app.middleware("http")
 async def check_ip(request: Request, call_next):
+    # Internal-only endpoints are never routed from the internet (Traefik's own
+    # IP allowlist covers the whole domain already) and are protected by the
+    # Bearer token instead, so skip the IP check for them.
+    if request.url.path in INTERNAL_ONLY_PATHS:
+        return await call_next(request)
+
     # Traefik will pass the real IP in the X-Forwarded-For header
     x_forwarded_for = request.headers.get("x-forwarded-for")
     
@@ -81,60 +85,37 @@ async def verify_token(token: str):
     return token
 
 
+async def verify_bearer_token(credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)):
+    """Auth dependency for internal-only endpoints (trader polling, scheduler EOD close)."""
+    await verify_token(credentials.credentials)
+
+
 def _format_timestamp_ms(dt: datetime) -> str:
     """Format a UTC datetime with millisecond precision, e.g. 2026-07-16T08:08:53.821Z."""
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def send_message_to_trading(action, indice, signal_timestamp, alert_timestamp, confidence=None, received_timestamp=None):
-    try:
-        # Retrieve RabbitMQ credentials from the configuration
-        rabbitmq_config = config_manager.get_rabbitmq_config()
-        rabbitmq_hostname = rabbitmq_config["hostname"]
-        rabbitmq_username = rabbitmq_config["authentication"]["username"]
-        rabbitmq_password = rabbitmq_config["authentication"]["password"]
+async def _ingest_and_store_signal(data: dict, received_timestamp: str) -> str:
+    """Validate-agnostic signal ingestion shared by /webhook and /internal/signal.
 
-        # Establish a connection to RabbitMQ with the provided credentials
-        connection = pika.BlockingConnection(
-            pika.ConnectionParameters(
-                host=rabbitmq_hostname,
-                credentials=pika.PlainCredentials(rabbitmq_username, rabbitmq_password),
-            )
-        )
-        channel = connection.channel()
-        channel.queue_declare(queue="trading-signals", durable=True)
+    Builds the record stored in SIGNAL_STORE (keyed by indice, latest
+    signal_timestamp wins) and returns the generated signal_uuid.
+    """
+    signal_uuid = str(uuid.uuid4())
+    record = {
+        "action": data["action"],
+        "indice": data["indice"],
+        "signal_uuid": signal_uuid,
+        "signal_timestamp": data["signal_timestamp"],
+        "alert_timestamp": data["alert_timestamp"],
+        "received_timestamp": received_timestamp,
+    }
+    if data.get("confidence") is not None:
+        record["confidence"] = data["confidence"]
 
-        # Get the current time in UTC
-        now_utc = datetime.now(pytz.utc)
-        
-        # Generate a unique identifier for this signal
-        signal_id = str(uuid.uuid4())
-
-        msg_payload = {
-                "signal_id": signal_id,
-                "action": action,
-                "indice": indice,
-                "signal_timestamp": signal_timestamp,
-                "alert_timestamp": alert_timestamp,
-                "mqsend_timestamp": _format_timestamp_ms(now_utc),
-        }
-        if confidence is not None:
-            msg_payload["confidence"] = confidence
-        if received_timestamp is not None:
-            msg_payload["received_timestamp"] = received_timestamp
-
-        message = json.dumps(msg_payload)
-        channel.basic_publish(exchange="", routing_key="trading-signals", body=message)
-        logging.info(f"Send message to channel trading-signals, message {message}")
-        return signal_id
-    except pika.exceptions.AMQPConnectionError as e:
-        logging.error(f"Failed to connect to RabbitMQ: {e}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred while sending the message: {e}")
-    finally:
-        # Ensure the connection is closed even if an error occurs
-        if "connection" in locals():
-            connection.close()
+    await SIGNAL_STORE.upsert(record)
+    logging.info(f"Stored signal for indice={data['indice']}: {record}")
+    return signal_uuid
 
 
 @app.post("/webhook")
@@ -164,16 +145,37 @@ async def webhook(request: Request):
         logging.warning(f"Invalid data received from from {request.client.host}: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
     # TODO : Error handling error 500
-    signal_id = send_message_to_trading(
-        data["action"],
-        data["indice"],
-        data["signal_timestamp"],
-        data["alert_timestamp"],
-        confidence=data.get("confidence"),
-        received_timestamp=received_timestamp,
-    )
+    signal_uuid = await _ingest_and_store_signal(data, received_timestamp)
     logging.info(f"Received data from {request.client.host} : {data}")
-    return JSONResponse(content={"status": "success", "signal_id": signal_id}, status_code=200)
+    return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+
+
+@app.post("/internal/signal", include_in_schema=False)
+async def internal_signal(request: Request, _: None = Depends(verify_bearer_token)):
+    """Internal-only signal ingestion (e.g. scheduler's EOD close-position).
+
+    Same payload shape and storage as /webhook, but authenticated with a Bearer
+    token instead of a query-param token, and exempt from the IP allowlist.
+    """
+    received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
+    data = await request.json()
+    try:
+        jsonschema.validate(instance=data, schema=SchemaLoader.get_webhook_schema())
+    except jsonschema.exceptions.ValidationError as e:
+        logging.warning(f"Invalid internal signal payload: {e}")
+        return JSONResponse(content={"error": "Bad Request"}, status_code=400)
+    signal_uuid = await _ingest_and_store_signal(data, received_timestamp)
+    logging.info(f"Received internal signal: {data}")
+    return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+
+
+@app.get("/latest-signals", include_in_schema=False)
+async def latest_signals(_: None = Depends(verify_bearer_token)):
+    """Polled by the async trader every trade.config.signal_polling.interval_ms.
+
+    Returns the latest stored signal per indice (list, one entry per indice).
+    """
+    return JSONResponse(content=await SIGNAL_STORE.get_all(), status_code=200)
 
 
 if __name__ == "__main__":

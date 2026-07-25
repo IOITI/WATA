@@ -1,19 +1,18 @@
 """
-Async Trader Service — consumes from ``trading-signals`` queue via aio-pika.
+Async Trader Service — polls the web_server's /latest-signals endpoint for the
+latest signal per indice (HTTP polling, replaces the old RabbitMQ
+``trading-signals`` queue consumption via aio-pika).
 
 Replaces the synchronous ``src/main.py`` Trader for signal processing.
 Position monitoring is now handled by the separate Position Monitor service.
 """
 
 import asyncio
-import json
 import logging
 import os
 import sys
-import traceback
 from datetime import date, datetime, timedelta
 
-import aio_pika
 import jsonschema
 import pytz
 
@@ -31,11 +30,13 @@ from src.trade.async_services import (
     AsyncPerformanceMonitor,
 )
 from src.trade.watchlist_client import AsyncWatchlistClient
+from src.trade.signal_polling_client import SignalPollingClient
 from src.database.postgres import (
     PostgresConnectionManager,
     AsyncDbOrderManager,
     AsyncDbPositionManager,
     AsyncDbTradePerformanceManager,
+    AsyncDbRiskStateManager,
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
@@ -143,10 +144,10 @@ async def handle_trading_signal(
                 raise TradingRuleViolation(f"Duplicate signal: {action} position already open")
 
         # Async profit check
-        await _async_check_profit_per_day(trading_rule, db_position_manager)
+        await trading_rule.check_profit_per_day()
 
-        trading_rule.check_cooldown_after_loss()
-        trading_rule.check_max_trades_per_day()
+        await trading_rule.check_cooldown_after_loss()
+        await trading_rule.check_max_trades_per_day()
         if confidence is not None:
             trading_rule.check_confidence_threshold(confidence)
 
@@ -190,17 +191,17 @@ async def handle_trading_signal(
         composer.add_position_result(buy_details=result)
         if "execution_timing" in result:
             signal_dt = _parse_iso_timestamp(data.get("signal_timestamp"))
+            alert_dt = _parse_iso_timestamp(data.get("alert_timestamp"))
             received_dt = _parse_iso_timestamp(data.get("received_timestamp"))
-            mqsend_dt = _parse_iso_timestamp(data.get("mqsend_timestamp"))
             position_confirmed_epoch = (result.get("raw_timestamps") or {}).get("position_confirmed")
 
             timing_payload = {
                 "api": {
-                    "signal_to_mqsend": _delta_ms(signal_dt, mqsend_dt),
-                    "received_to_mqsend": _delta_ms(received_dt, mqsend_dt),
+                    "signal_to_received": _delta_ms(signal_dt, received_dt),
+                    "alert_to_received": _delta_ms(alert_dt, received_dt),
                 },
                 "trader": {
-                    "handle_from_mqsend": _delta_ms(mqsend_dt, handle_start_dt),
+                    "received_to_handle": _delta_ms(received_dt, handle_start_dt),
                     "rule_check": _delta_ms(handle_start_dt, rule_check_end_dt),
                     "execution_details": result["execution_timing"],
                 },
@@ -239,24 +240,6 @@ async def handle_trading_signal(
         composer.add_generic_error("DatabaseOperationException", e, is_critical=True)
         await telegram.send(composer.get_message())
         raise
-
-
-async def _async_check_profit_per_day(trading_rule: TradingRule, db_pm: AsyncDbPositionManager):
-    """Async version of TradingRule.check_profit_per_day using async DB."""
-    try:
-        day_config = trading_rule.get_rule_config("day_trading")
-        threshold = day_config.get("dont_enter_trade_if_day_profit_is_more_than")
-        if threshold is None:
-            return
-        today_pct = await db_pm.get_percent_of_the_day()
-        if today_pct >= threshold:
-            raise TradingRuleViolation(
-                f"Daily profit {today_pct}% >= limit {threshold}%"
-            )
-    except TradingRuleViolation:
-        raise
-    except Exception as e:
-        logger.error("Error checking daily profit: %s", e)
 
 
 # ─────────────────────────────────────────────────────
@@ -338,7 +321,7 @@ OPS_ACTIONS = {"check_positions_on_saxo_api", "daily_stats"}
 
 
 async def dispatch_message(
-    message: aio_pika.IncomingMessage,
+    body: dict,
     # injected dependencies
     trading_orchestrator: AsyncTradingOrchestrator,
     performance_monitor: AsyncPerformanceMonitor,
@@ -350,60 +333,52 @@ async def dispatch_message(
     position_service: AsyncPositionService,
     milestones_eur: list[float],
 ):
-    async with message.process(requeue=False):
-        try:
-            body = json.loads(message.body.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.error("Cannot decode message: %s", e)
-            await telegram.send(f"ERROR: Cannot decode MQ message: {e}")
-            return
+    # Validate schema
+    try:
+        jsonschema.validate(instance=body, schema=SchemaLoader.get_trading_action_schema())
+    except jsonschema.exceptions.ValidationError as e:
+        logger.error("Schema validation failed: %s", e.message)
+        await telegram.send(f"SCHEMA ERROR: {e.message}")
+        return
 
-        # Validate schema
-        try:
-            jsonschema.validate(instance=body, schema=SchemaLoader.get_trading_action_schema())
-        except jsonschema.exceptions.ValidationError as e:
-            logger.error("Schema validation failed: %s", e.message)
-            await telegram.send(f"SCHEMA ERROR: {e.message}")
-            return
+    action = body.get("action")
+    signal_uuid = body.get("signal_uuid", "N/A")
+    logger.info("Dispatching action=%s signal_uuid=%s", action, signal_uuid)
 
-        action = body.get("action")
-        signal_id = body.get("signal_id", "N/A")
-        logger.info("Dispatching action=%s signal_id=%s", action, signal_id)
+    try:
+        if action in SIGNAL_ACTIONS:
+            await handle_trading_signal(
+                body, trading_orchestrator, performance_monitor,
+                trading_rule, db_position_manager,
+                trade_turbo_exchange_id, telegram,
+            )
+        elif action in CLOSE_ACTIONS:
+            await handle_close_signal(body, performance_monitor, telegram)
+        elif action == "daily_stats":
+            await handle_daily_stats(
+                body, db_position_manager, db_perf_manager, telegram,
+                position_service, milestones_eur,
+            )
+        elif action == "check_positions_on_saxo_api":
+            # Position checks are handled by position_monitor service
+            # If message arrives here by mistake, just log and skip
+            logger.warning("check_positions_on_saxo_api should go to trading-ops queue. Skipping.")
+        else:
+            logger.error("Unknown action: %s", action)
+            await telegram.send(f"ERROR: Unknown action '{action}'")
 
-        try:
-            if action in SIGNAL_ACTIONS:
-                await handle_trading_signal(
-                    body, trading_orchestrator, performance_monitor,
-                    trading_rule, db_position_manager,
-                    trade_turbo_exchange_id, telegram,
-                )
-            elif action in CLOSE_ACTIONS:
-                await handle_close_signal(body, performance_monitor, telegram)
-            elif action == "daily_stats":
-                await handle_daily_stats(
-                    body, db_position_manager, db_perf_manager, telegram,
-                    position_service, milestones_eur,
-                )
-            elif action == "check_positions_on_saxo_api":
-                # Position checks are handled by position_monitor service
-                # If message arrives here by mistake, just log and skip
-                logger.warning("check_positions_on_saxo_api should go to trading-ops queue. Skipping.")
-            else:
-                logger.error("Unknown action: %s", action)
-                await telegram.send(f"ERROR: Unknown action '{action}'")
-
-        except (PositionNotFoundException, DatabaseOperationException) as critical:
-            logger.critical("CRITICAL error processing %s: %s", action, critical, exc_info=True)
-            await telegram.send(f"CRITICAL ERROR ({type(critical).__name__}): {critical}")
-            # For critical errors, we may want to restart
-            raise
-        except (TokenAuthenticationException, ConfigurationError) as fatal:
-            logger.critical("FATAL: %s", fatal, exc_info=True)
-            await telegram.send(f"FATAL ({type(fatal).__name__}): {fatal}")
-            raise
-        except Exception as e:
-            logger.error("Error processing action %s: %s", action, e, exc_info=True)
-            await telegram.send(f"ERROR processing {action}: {type(e).__name__}: {e}")
+    except (PositionNotFoundException, DatabaseOperationException) as critical:
+        logger.critical("CRITICAL error processing %s: %s", action, critical, exc_info=True)
+        await telegram.send(f"CRITICAL ERROR ({type(critical).__name__}): {critical}")
+        # For critical errors, we may want to restart
+        raise
+    except (TokenAuthenticationException, ConfigurationError) as fatal:
+        logger.critical("FATAL: %s", fatal, exc_info=True)
+        await telegram.send(f"FATAL ({type(fatal).__name__}): {fatal}")
+        raise
+    except Exception as e:
+        logger.error("Error processing action %s: %s", action, e, exc_info=True)
+        await telegram.send(f"ERROR processing {action}: {type(e).__name__}: {e}")
 
 
 # ─────────────────────────────────────────────────────
@@ -449,6 +424,7 @@ async def main():
 
     pg = None
     api_client = None
+    signal_client = None
 
     try:
         # 3. PostgreSQL
@@ -460,9 +436,10 @@ async def main():
         db_order_manager = AsyncDbOrderManager(pg)
         db_position_manager = AsyncDbPositionManager(pg)
         db_perf_manager = AsyncDbTradePerformanceManager(pg)
+        db_risk_state_manager = AsyncDbRiskStateManager(pg)
 
-        # 4. Trading rules (sync TradingRule — uses async DB wrapper below)
-        trading_rule = TradingRule(config_manager, None)  # db_position_manager passed separately
+        # 4. Trading rules (async DB-backed checks; risk state shared with position_monitor)
+        trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
         trade_turbo_exchange_id = config_manager.get_config_value("trade.config.turbo_preference.exchange_id")
         milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))
 
@@ -501,41 +478,47 @@ async def main():
             trigger_daily_stats_fn=_trigger_daily_stats,
         )
 
-        # 8. RabbitMQ consumer (aio-pika)
-        logger.info("Connecting to RabbitMQ...")
-        rmq_config = config_manager.get_rabbitmq_config()
-        rmq_url = f"amqp://{rmq_config['authentication']['username']}:{rmq_config['authentication']['password']}@{rmq_config['hostname']}/"
-        connection = await aio_pika.connect_robust(rmq_url)
-        channel = await connection.channel()
-        await channel.set_qos(prefetch_count=1)
+        # 8. Signal polling client (replaces the RabbitMQ trading-signals consumer)
+        signal_client = SignalPollingClient(config_manager)
+        await signal_client.start()
+        poll_interval_seconds = signal_client.interval_ms / 1000
 
-        # Declare both queues — this service consumes from trading-signals
-        signals_queue = await channel.declare_queue("trading-signals", durable=True)
-        await channel.declare_queue("trading-ops", durable=True)
-
-        async def on_message(msg: aio_pika.IncomingMessage):
-            await dispatch_message(
-                msg,
-                trading_orchestrator=trading_orchestrator,
-                performance_monitor=performance_monitor,
-                trading_rule=trading_rule,
-                db_position_manager=db_position_manager,
-                db_perf_manager=db_perf_manager,
-                trade_turbo_exchange_id=trade_turbo_exchange_id,
-                telegram=telegram,
-                position_service=position_service,
-                milestones_eur=milestones_eur,
-            )
-
-        await signals_queue.consume(on_message)
-
-        startup_msg = f"WATA Async Trader v{APP_VERSION} is running (trading-signals queue)."
+        startup_msg = (
+            f"WATA Async Trader v{APP_VERSION} is running "
+            f"(polling {signal_client.service_url}/latest-signals every {signal_client.interval_ms}ms)."
+        )
         await telegram.send(startup_msg)
-        logger.info("Trader startup complete. Consuming from trading-signals...")
+        logger.info("Trader startup complete. Polling for latest signals every %sms...", signal_client.interval_ms)
 
-        # Keep running
+        # Keep polling forever — each cycle waits for the previous one to fully
+        # finish before fetching again, and signals within a cycle are handled
+        # sequentially (one indice's close/open doesn't run concurrently with another's).
         try:
-            await asyncio.Future()  # Run forever
+            while True:
+                try:
+                    signals = await signal_client.get_latest_signals()
+                except Exception as e:
+                    logger.error("Error polling for latest signals: %s", e, exc_info=True)
+                    signals = []
+
+                for signal in signals:
+                    try:
+                        await dispatch_message(
+                            signal,
+                            trading_orchestrator=trading_orchestrator,
+                            performance_monitor=performance_monitor,
+                            trading_rule=trading_rule,
+                            db_position_manager=db_position_manager,
+                            db_perf_manager=db_perf_manager,
+                            trade_turbo_exchange_id=trade_turbo_exchange_id,
+                            telegram=telegram,
+                            position_service=position_service,
+                            milestones_eur=milestones_eur,
+                        )
+                    except Exception as e:
+                        logger.error("Error dispatching signal %s: %s", signal, e, exc_info=True)
+
+                await asyncio.sleep(poll_interval_seconds)
         except asyncio.CancelledError:
             pass
 
@@ -549,6 +532,8 @@ async def main():
 
     finally:
         logger.info("--- Shutting down WATA Async Trader ---")
+        if signal_client is not None:
+            await signal_client.close()
         if api_client is not None:
             await api_client.close()
         if pg is not None:

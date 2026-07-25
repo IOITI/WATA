@@ -4,9 +4,10 @@ import logging
 from .exceptions import TradingRuleViolation
 
 class TradingRule:
-    def __init__(self, config_manager, db_position_manager):
+    def __init__(self, config_manager, db_position_manager, db_risk_state_manager=None):
         self.config_manager = config_manager
         self.db_position_manager = db_position_manager
+        self.db_risk_state_manager = db_risk_state_manager
         self.allowed_indices_rule_config = self.get_rule_config("allowed_indices")
         self.market_closed_dates_list = self.get_rule_config("market_closed_dates")["market_closed_dates"]
         day_trading_config = self.get_rule_config("day_trading")
@@ -115,8 +116,15 @@ class TradingRule:
                 f"Breaking trading rule: The signal is refused due to risky market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is refused due to risky market hours.")
 
-    def check_profit_per_day(self):
-        today_percent = self.db_position_manager.get_percent_of_the_day()
+    async def check_profit_per_day(self):
+        try:
+            today_percent = await self.db_position_manager.get_percent_of_the_day()
+        except TradingRuleViolation:
+            raise
+        except Exception as e:
+            logging.error(f"Error checking daily profit: {e}")
+            return
+
         if today_percent >= self.dont_enter_trade_if_day_profit_is_more_than:
             message = (f"Breaking trading rule : The current profit percentage ({today_percent}) is more than the "
                        f"allowed percentage ({self.dont_enter_trade_if_day_profit_is_more_than}), "
@@ -144,19 +152,26 @@ class TradingRule:
                     logging.info(message)
                     raise TradingRuleViolation(message)
 
-    def check_cooldown_after_loss(self):
+    async def check_cooldown_after_loss(self):
         """
         Checks if we are still in a cooldown period after the last losing trade.
-        Prevents entering trades too quickly after a loss.
+        Prevents entering trades too quickly after a loss. Backed by a shared DB
+        table when available, since the loss may have been recorded by the
+        position_monitor process rather than this one.
         """
         if self.cooldown_after_loss_minutes <= 0:
             return  # Cooldown disabled
 
-        if self._last_loss_timestamp is None:
+        if self.db_risk_state_manager is not None:
+            last_loss_timestamp = await self.db_risk_state_manager.get_last_loss_timestamp()
+        else:
+            last_loss_timestamp = self._last_loss_timestamp
+
+        if last_loss_timestamp is None:
             return  # No loss recorded yet
 
         current_time = datetime.now(pytz.utc)
-        cooldown_end = self._last_loss_timestamp + timedelta(minutes=self.cooldown_after_loss_minutes)
+        cooldown_end = last_loss_timestamp + timedelta(minutes=self.cooldown_after_loss_minutes)
 
         if current_time < cooldown_end:
             remaining = (cooldown_end - current_time).total_seconds()
@@ -165,12 +180,16 @@ class TradingRule:
             logging.info(message)
             raise TradingRuleViolation(message)
 
-    def record_loss(self):
+    async def record_loss(self):
         """Records the timestamp of a losing trade for cooldown tracking."""
-        self._last_loss_timestamp = datetime.now(pytz.utc)
-        logging.info(f"Loss recorded at {self._last_loss_timestamp}. Cooldown of {self.cooldown_after_loss_minutes} minutes activated.")
+        now = datetime.now(pytz.utc)
+        if self.db_risk_state_manager is not None:
+            await self.db_risk_state_manager.record_loss_timestamp(now)
+        else:
+            self._last_loss_timestamp = now
+        logging.info(f"Loss recorded at {now}. Cooldown of {self.cooldown_after_loss_minutes} minutes activated.")
 
-    def check_max_trades_per_day(self):
+    async def check_max_trades_per_day(self):
         """
         Checks if the maximum number of trades per day has been reached.
         """
@@ -180,7 +199,7 @@ class TradingRule:
         if self.db_position_manager is None:
             return  # No DB manager available
 
-        today_trades = self.db_position_manager.get_today_trade_count()
+        today_trades = await self.db_position_manager.get_today_trade_count()
         if today_trades >= self.max_trades_per_day:
             message = (f"Breaking trading rule: Maximum trades per day reached "
                        f"({today_trades}/{self.max_trades_per_day}).")

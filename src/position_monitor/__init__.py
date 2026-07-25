@@ -29,6 +29,7 @@ from src.database.postgres import (
     PostgresConnectionManager,
     AsyncDbPositionManager,
     AsyncDbTradePerformanceManager,
+    AsyncDbRiskStateManager,
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
@@ -214,6 +215,7 @@ async def main():
         await init_schema(pg)
         db_position_manager = AsyncDbPositionManager(pg)
         db_perf_manager = AsyncDbTradePerformanceManager(pg)
+        db_risk_state_manager = AsyncDbRiskStateManager(pg)
 
         # Saxo API client
         saxo_auth = SaxoAuth(config_manager)
@@ -229,7 +231,7 @@ async def main():
         # Services
         order_service = AsyncOrderService(api_client, account_key, client_key)
         position_service = AsyncPositionService(api_client, order_service, config_manager, account_key, client_key)
-        trading_rule = TradingRule(config_manager, None)
+        trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
         milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))
 
         async def _trigger_daily_stats():

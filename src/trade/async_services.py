@@ -1258,7 +1258,7 @@ class AsyncPerformanceMonitor:
             if perf_pct <= self.thresholds["stoploss_percent"]:
                 close_reason = f"Stoploss ({self.thresholds['stoploss_percent']}%) hit at {perf_pct}%"
                 try:
-                    self.trading_rule.record_loss()
+                    await self.trading_rule.record_loss()
                 except Exception:
                     pass
 
@@ -1481,7 +1481,7 @@ class AsyncPerformanceMonitor:
 
                     if perf is not None and perf < 0:
                         try:
-                            self.trading_rule.record_loss()
+                            await self.trading_rule.record_loss()
                         except Exception:
                             pass
 

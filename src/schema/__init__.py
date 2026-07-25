@@ -26,7 +26,7 @@ webhook_schema = {
 trading_action_schema = {
     "type": "object",
     "properties": {
-        "signal_id": {"type": "string", "format": "uuid"},
+        "signal_uuid": {"type": "string", "format": "uuid"},
         "action": {
             "type": "string",
             "enum": [
