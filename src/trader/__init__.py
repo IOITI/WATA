@@ -68,6 +68,10 @@ logger = logging.getLogger(__name__)
 # --- Global version ---
 APP_VERSION = "unknown"
 
+# Dedup set for daily_stats signals (bounded to prevent memory leak)
+_processed_daily_stats_uuids: set[str] = set()
+_MAX_PROCESSED_DAILY_UUIDS = 3
+
 
 def get_version() -> str:
     try:
@@ -355,6 +359,14 @@ async def dispatch_message(
         elif action in CLOSE_ACTIONS:
             await handle_close_signal(body, performance_monitor, telegram)
         elif action == "daily_stats":
+            uuid = body.get("signal_uuid")
+            if uuid:
+                if uuid in _processed_daily_stats_uuids:
+                    logger.debug("Skipping already-processed daily_stats signal_uuid=%s", uuid)
+                    return
+                _processed_daily_stats_uuids.add(uuid)
+                if len(_processed_daily_stats_uuids) > _MAX_PROCESSED_DAILY_UUIDS:
+                    _processed_daily_stats_uuids.clear()
             await handle_daily_stats(
                 body, db_position_manager, db_perf_manager, telegram,
                 position_service, milestones_eur,

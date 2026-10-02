@@ -90,14 +90,14 @@ class TelegramMessageComposer:
     def _add_signal_section(self):
         """Adds the initial signal information section."""
         signal = self.signal_data.get("action", "N/A")
-        signal_id = self.signal_data.get("signal_id", "N/A")
+        signal_uuid = self.signal_data.get("signal_uuid", "N/A")
         # Use alert_timestamp if available, otherwise signal_timestamp
         signal_timestamp = self._format_timestamp(self.signal_timestamp_raw)
 
         message = f"""\
         --- SIGNAL ---
         Signal kind: "{signal}"
-        Signal ID: "{signal_id}"
+        Signal ID: "{signal_uuid}"
         Signal timestamp: "{signal_timestamp}"
         """
         self.sections.append(textwrap.dedent(message))
@@ -234,8 +234,8 @@ class TelegramMessageComposer:
                 position_id = position_data.get("position_id", "N/A")
                 actual_order_id = order_data.get("order_id", "N/A")  # Use ID from order_details
                 order_cost = order_data.get("order_cost", "N/A")
-                # Re-fetch signal_id from original data for consistency
-                signal_id = self.signal_data.get("signal_id", "N/A")
+                # Re-fetch signal_uuid from original data for consistency
+                signal_uuid = self.signal_data.get("signal_uuid", "N/A")
 
                 message_body = f"""
                 ✅ Position Opened Successfully
@@ -248,7 +248,7 @@ class TelegramMessageComposer:
                 Total Signal to Exec Time: {signal_to_exec_diff}
                 Position ID: {position_id}
                 Order ID: {actual_order_id}
-                Signal ID: {signal_id}
+                Signal ID: {signal_uuid}
                 """
             except Exception as e:
                 logging.error(f"Error formatting successful position result: {e}", exc_info=True)

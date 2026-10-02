@@ -38,9 +38,7 @@ def test_forbidden_ip(client):
             client.get("/webhook?token=test_token", headers={"X-Forwarded-For": "1.2.3.4"})
         assert exc_info.value.status_code == 403
 
-@patch("src.web_server.send_message_to_trading")
-def test_webhook_success_with_allowed_ip(mock_send_message, client):
-    mock_send_message.return_value = "signal_id_123"
+def test_webhook_success_with_allowed_ip(client):
     response = client.post(
         "/webhook?token=test_token",
         json={
@@ -52,4 +50,7 @@ def test_webhook_success_with_allowed_ip(mock_send_message, client):
         headers={"X-Forwarded-For": "127.0.0.1"},
     )
     assert response.status_code == 200
-    assert response.json() == {"status": "success", "signal_id": "signal_id_123"}
+    data = response.json()
+    assert data["status"] == "success"
+    assert "signal_uuid" in data
+    assert isinstance(data["signal_uuid"], str)

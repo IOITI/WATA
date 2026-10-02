@@ -103,7 +103,7 @@
         "rule_name": "signal_validation",
         "rule_type": "signal_validation",
         "rule_config": {
-          "max_signal_age_seconds": 8
+          "max_signal_age_seconds": 3600
         }
       },
       {
@@ -251,7 +251,12 @@
         },
         "timezone": "Europe/Paris"
       },
-      "trading_mode": "day_trading"
+      "trading_mode": "day_trading",
+      "signal_polling": {
+        "service_url": "http://web_server1:80",
+        "interval_ms": 500,
+        "request_timeout_seconds": 2
+      }
     },
     "persistant": {
       "last_action_file": "/app/var/lib/trade/last_action.json"

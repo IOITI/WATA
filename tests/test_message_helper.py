@@ -13,7 +13,7 @@ from src.message_helper import (
 def test_add_text_section_accepts_execution_timing_dict():
     composer = TelegramMessageComposer({
         "action": "long",
-        "signal_id": "signal-123",
+        "signal_uuid": "signal-123",
         "signal_timestamp": "2026-04-30T18:46:44Z",
     })
 
