@@ -106,7 +106,7 @@ flowchart TD
     end
 
     TV -->|HTTPS webhook| Proxy --> WS
-    TR -->|GET /latest-signals every 500 ms| WS
+    TR -->|GET /latest-signals long-poll| WS
     WS -->|newest signal per indice| TR
     TR -->|instrument search and orders| SaxoREST
     TR -->|read and write trading data| DB
@@ -132,7 +132,9 @@ flowchart TD
 1. **Signal Reception**
    - Receive webhook traffic through Traefik HTTPS and validate the token and payload schema
    - Keep the newest signal for each `indice` in the Web Server's in-memory store
-   - The Trader polls `/latest-signals` every 500 ms by default; older signals for an `indice` are ignored
+   - The Trader long-polls `/latest-signals`, so a signal reaches it as soon as it is stored; older signals for an `indice` are ignored
+   - Each signal is executed once: the store keeps serving it until a newer one replaces it, and the Trader skips any `signal_uuid` it has already handled
+   - After a Trader restart, signals received more than `startup_replay_max_age_seconds` ago (10 s by default) are not replayed
 
 2. **Rule Validation**
    - Verify market hours and timestamp freshness
@@ -146,6 +148,10 @@ flowchart TD
 4. **Real-Time Position Monitoring**
    - The Position Monitor consumes Saxo WebSocket updates instead of relying on the old 7-second REST polling loop
    - Evaluate stop-loss, take-profit, and trailing-stop rules; receive scheduled operational events through `trading-ops`
+   - Each price update is checked on its own task, always on the latest prices; a slow check or a closure in progress never delays reading the stream
+   - Stop-loss checks keep working from the last known state if PostgreSQL is slow or unreachable
+   - The database is reconciled with Saxo when a position leaves the stream and every `reconcile_interval_seconds` (30 s by default), not on every update
+   - Optionally, a wider sell stop is left at the broker for each new position (`protective_stop`, off by default) so that a Position Monitor outage is survivable
 
 5. **Reporting and Notifications**
    - Generate daily statistics and trade reports, including closed-trade and daily-profit history
@@ -342,9 +348,12 @@ After deployment, you need to set up your configuration:
      - Logging configuration
      - RabbitMQ connection details
      - PostgreSQL DSN and pool sizing (`postgresql`)
-     - Saxo streaming refresh and reconnect settings (`trade.config.general.streaming`)
+     - Saxo streaming refresh, reconnect and reconciliation settings (`trade.config.general.streaming`)
+     - Optional broker-side protective stop (`trade.config.position_management.protective_stop`): `percent` must be wider than `stoploss_percent`; verify it in Saxo's simulation environment before enabling it live
      - Cached candidate settings (`trade.config.watchlist_manager`)
-     - Signal polling endpoint and interval (`trade.config.signal_polling`)
+     - Signal polling endpoint, long-poll wait (`long_poll_wait_ms`, `0` falls back to polling every `interval_ms`) and startup replay window (`trade.config.signal_polling`)
+     - Saxo keep-warm call between signals (`trade.config.general.keep_warm_interval_seconds`, `0` disables it)
+     - Optional spending-power cache for order sizing (`trade.config.buying_power.balance_cache_max_age_seconds`, `0` = ask Saxo on every trade)
 
    The `duckdb` configuration is retained for the one-time migration source and legacy reporting export; it is not the live trading database. See the [v0.6.x migration notes](CHANGELOG.md) for the DuckDB-to-PostgreSQL migration steps.
 

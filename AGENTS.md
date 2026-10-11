@@ -49,8 +49,12 @@ PYTHONPATH=./:src/ pytest tests/test_web_server.py -vv
 
 ## Architecture notes
 
-- **Trader does NOT consume RabbitMQ** for trade signals — it HTTP-polls `web_server:80/latest-signals` via `SignalPollingClient`. Old RabbitMQ `trading-signals` queue consumption was removed.
+- **Trader does NOT consume RabbitMQ** for trade signals — it long-polls `web_server:80/latest-signals` via `SignalPollingClient`. Old RabbitMQ `trading-signals` queue consumption was removed.
+- **Signals are executed once.** The web_server store keeps the latest signal per indice until a newer one replaces it, so the trader dedups on `signal_uuid` (`select_signals_to_dispatch` in `src/trader/__init__.py`).
 - **Position Monitor** uses Saxo WebSocket streaming (replaces old 7s REST polling). Still consumes `trading-ops` for `daily_stats` and fallback `check_positions_on_saxo_api`.
+- **Stream reader and position checks are decoupled.** `SaxoStreamClient` only merges deltas and flags a change; a separate task calls the callback with the latest snapshot (updates during a slow callback are coalesced). Don't await slow work in the receive loop.
+- **Closures are recorded in the background** (`_record_closed_position_in_background`); `_closing_position_ids` keeps a position from being sold twice meanwhile. DB↔Saxo reconciliation (`StreamPositionHandler`) runs when a position leaves the stream and on a timer, not per tick.
+- **Broker-side protective stop** (`position_management.protective_stop`) is opt-in and untested against Saxo; closes cancel a position's `RelatedOpenOrders` before selling.
 - **Scheduler** sends `close-position` via HTTP POST to `web_server:80/internal/signal` (Bearer token), and `daily_stats` via RabbitMQ `trading-ops`.
 - **Two auth schemes**: webhook uses `?token=...` query param; internal endpoints use HTTP Bearer token.
 - **`uvloop.install()`** at startup of trader and position_monitor.
