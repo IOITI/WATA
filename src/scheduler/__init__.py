@@ -1,5 +1,7 @@
 from schedule import every, repeat, run_pending
 from src.configuration import ConfigurationManager
+from src.web_server_token import WebServerToken
+import httpx
 import pika
 from pika.exceptions import AMQPConnectionError
 import time
@@ -99,27 +101,43 @@ def job_daily_stats():
 def job_close_position():
     # Get the current time in UTC
     now_utc = datetime.now(pytz.utc)
+    now_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     message = {
         "action": "close-position",
         "indice": "n/a",
-        "signal_timestamp": "2024-05-09T12:26:00Z",
-        "alert_timestamp": "2024-05-09T12:26:00Z",
-        "mqsend_timestamp": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "signal_timestamp": now_str,
+        "alert_timestamp": now_str,
     }
-    send_message_to_trading(message)
+    send_signal_to_web_server(message)
+
+
+def send_signal_to_web_server(message):
+    """
+    POST a signal to the web_server's internal ingestion endpoint. Replaces
+    publishing to the trading-signals queue, which the async trader no longer
+    consumes (it now polls web_server's /latest-signals instead).
+    """
+    signal_polling_config = config_manager.get_config_value("trade.config.signal_polling", {})
+    service_url = signal_polling_config.get("service_url", "http://web_server1:80").rstrip("/")
+    request_timeout_seconds = signal_polling_config.get("request_timeout_seconds", 2)
+    token = WebServerToken(config_manager).get_token()
+
+    try:
+        response = httpx.post(
+            f"{service_url}/internal/signal",
+            json=message,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=request_timeout_seconds,
+        )
+        response.raise_for_status()
+        logging.info(f"Sent internal signal to web_server: {message}")
+    except httpx.HTTPError as e:
+        logging.error(f"Failed to send internal signal to web_server: {e}")
 
 
 def send_message_to_trading(message):
-    """Send a message to the appropriate RabbitMQ queue based on action type."""
-    action = message.get("action", "")
-
-    # Route operational messages to trading-ops, trade signals to trading-signals
-    if action in ("check_positions_on_saxo_api", "daily_stats"):
-        queue_name = "trading-ops"
-    elif action in ("long", "short", "close-long", "close-short", "close-position"):
-        queue_name = "trading-signals"
-    else:
-        queue_name = "trading-signals"  # Default
+    """Send an operational message (daily_stats, check_positions_on_saxo_api) to the trading-ops queue."""
+    queue_name = "trading-ops"
 
     try:
         # Retrieve RabbitMQ credentials from the configuration

@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
 import pytz
 from src.trade.rules import TradingRule
@@ -36,7 +37,7 @@ class TestTradingRule(unittest.TestCase):
                 {
                     "rule_type": "signal_validation",
                     "rule_config": {
-                        "max_signal_age_minutes": 5
+                        "max_signal_age_seconds": 8
                     }
                 },
                 {
@@ -69,11 +70,11 @@ class TestTradingRule(unittest.TestCase):
 
     def test_check_signal_timestamp(self):
         trading_rule = self._get_trading_rule_instance()
-        # Test valid timestamp
-        valid_timestamp = (datetime.now(pytz.utc) - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Test valid timestamp (within 8 seconds)
+        valid_timestamp = (datetime.now(pytz.utc) - timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
         trading_rule.check_signal_timestamp("long", valid_timestamp) # Should not raise
         # Test old timestamp
-        old_timestamp = (datetime.now(pytz.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        old_timestamp = (datetime.now(pytz.utc) - timedelta(seconds=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.assertRaises(TradingRuleViolation):
             trading_rule.check_signal_timestamp("long", old_timestamp)
         # Test special case for check_positions_on_saxo_api
@@ -127,18 +128,18 @@ class TestTradingRule(unittest.TestCase):
         trading_rule = self._get_trading_rule_instance()
 
         # Test within profit/loss limits
-        self.db_position_manager.get_percent_of_the_day.return_value = 1.0
-        trading_rule.check_profit_per_day() # Should not raise
+        self.db_position_manager.get_percent_of_the_day = AsyncMock(return_value=1.0)
+        asyncio.run(trading_rule.check_profit_per_day()) # Should not raise
 
         # Test profit limit exceeded
-        self.db_position_manager.get_percent_of_the_day.return_value = 1.6
+        self.db_position_manager.get_percent_of_the_day = AsyncMock(return_value=1.6)
         with self.assertRaisesRegex(TradingRuleViolation, "profit percentage"):
-            trading_rule.check_profit_per_day()
+            asyncio.run(trading_rule.check_profit_per_day())
 
         # Test loss limit exceeded
-        self.db_position_manager.get_percent_of_the_day.return_value = -2.5
+        self.db_position_manager.get_percent_of_the_day = AsyncMock(return_value=-2.5)
         with self.assertRaisesRegex(TradingRuleViolation, "loss percentage"):
-            trading_rule.check_profit_per_day()
+            asyncio.run(trading_rule.check_profit_per_day())
 
     def test_check_if_open_position_is_same_signal(self):
         # Test with no open positions

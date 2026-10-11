@@ -62,7 +62,7 @@
         "rule_type": "signal_validation",
         "rule_name": "signal_validation",
         "rule_config": {
-          "max_signal_age_minutes": 10
+          "max_signal_age_seconds": 8
         }
       },
       {

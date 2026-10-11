@@ -200,15 +200,15 @@ class ConfigurationManager:
                     raise ValueError(error_msg)
 
             elif rule_type == "signal_validation":
-                # Validate max_signal_age_minutes
-                max_age = rule_config.get("max_signal_age_minutes")
+                # Validate max_signal_age_seconds
+                max_age = rule_config.get("max_signal_age_seconds")
                 if max_age is None:
-                    error_msg = f"Rule {rule_name}: Missing required field 'max_signal_age_minutes'"
+                    error_msg = f"Rule {rule_name}: Missing required field 'max_signal_age_seconds'"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
                 
                 if not isinstance(max_age, int) or max_age <= 0:
-                    error_msg = f"Rule {rule_name}: max_signal_age_minutes must be a positive integer"
+                    error_msg = f"Rule {rule_name}: max_signal_age_seconds must be a positive integer"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
@@ -362,6 +362,79 @@ class ConfigurationManager:
                  error_msg = f"Stoploss percentage ({stoploss_percent}) must be less than max profit percentage ({max_profit_percent}) in trade.config.position_management.performance_thresholds"
                  logger.error(error_msg)
                  raise ValueError(error_msg)
+
+            watchlist_config = self.get_config_value("trade.config.watchlist_manager")
+            if watchlist_config:
+                watchlist_numeric_validations = {
+                    "api_port": (int, 1, 65535),
+                    "refresh_interval_seconds": (int, 1, None),
+                    "stale_after_seconds": (int, 1, None),
+                    "request_timeout_seconds": ((int, float), 0, None),
+                }
+
+                for field, (field_type, min_val, max_val) in watchlist_numeric_validations.items():
+                    value = watchlist_config.get(field)
+                    if value is None:
+                        continue
+
+                    if not isinstance(value, field_type):
+                        if isinstance(field_type, tuple):
+                            expected_type = ", ".join(item.__name__ for item in field_type)
+                        else:
+                            expected_type = field_type.__name__
+                        error_msg = f"Config field 'trade.config.watchlist_manager.{field}' must be a {expected_type}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
+                    if min_val is not None and value < min_val:
+                        error_msg = f"Config field 'trade.config.watchlist_manager.{field}' ({value}) must be at least {min_val}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    if max_val is not None and value > max_val:
+                        error_msg = f"Config field 'trade.config.watchlist_manager.{field}' ({value}) must be no more than {max_val}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
+                directions = watchlist_config.get("directions")
+                if directions is not None:
+                    if not isinstance(directions, list) or not directions:
+                        error_msg = "Config field 'trade.config.watchlist_manager.directions' must be a non-empty list"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
+                    invalid_directions = [direction for direction in directions if direction not in ("long", "short")]
+                    if invalid_directions:
+                        error_msg = (
+                            "Config field 'trade.config.watchlist_manager.directions' contains invalid entries: "
+                            f"{', '.join(invalid_directions)}"
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
+                api_host = watchlist_config.get("api_host")
+                if api_host is not None and not isinstance(api_host, str):
+                    error_msg = "Config field 'trade.config.watchlist_manager.api_host' must be a string"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                service_url = watchlist_config.get("service_url")
+                if service_url is not None and not isinstance(service_url, str):
+                    error_msg = "Config field 'trade.config.watchlist_manager.service_url' must be a string"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                startup_refresh = watchlist_config.get("startup_refresh")
+                if startup_refresh is not None and not isinstance(startup_refresh, bool):
+                    error_msg = "Config field 'trade.config.watchlist_manager.startup_refresh' must be a boolean"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                for field in ("enabled", "accept_stale"):
+                    value = watchlist_config.get(field)
+                    if value is not None and not isinstance(value, bool):
+                        error_msg = f"Config field 'trade.config.watchlist_manager.{field}' must be a boolean"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
 
         # Validate telegram configuration if present
         telegram_config = self.get_config_value("telegram")

@@ -26,7 +26,7 @@ webhook_schema = {
 trading_action_schema = {
     "type": "object",
     "properties": {
-        "signal_id": {"type": "string", "format": "uuid"},
+        "signal_uuid": {"type": "string", "format": "uuid"},
         "action": {
             "type": "string",
             "enum": [
@@ -51,7 +51,11 @@ trading_action_schema = {
         },
         "mqsend_timestamp": {
             "type": "string",
-            "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+            "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z",
+        },
+        "received_timestamp": {
+            "type": "string",
+            "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z",
         },
         "confidence": {
             "type": "number",

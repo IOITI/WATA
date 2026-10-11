@@ -218,6 +218,14 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     metadata       TEXT
 );
 
+-- Shared risk-management state (e.g. cooldown-after-loss) across the trader and
+-- position_monitor processes, which run as separate containers and therefore
+-- cannot share in-memory state.
+CREATE TABLE IF NOT EXISTS trade_risk_state (
+    key         VARCHAR(64) PRIMARY KEY,
+    value_time  TIMESTAMPTZ
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_position_status ON turbo_data_position (position_status);
 CREATE INDEX IF NOT EXISTS idx_position_close_time ON turbo_data_position (execution_time_close);
@@ -634,3 +642,33 @@ class AsyncDbTokenManager:
 
     async def delete_token(self, token_id: str):
         await self.db.execute("DELETE FROM auth_tokens WHERE token_id = $1", token_id)
+
+
+class AsyncDbRiskStateManager:
+    """
+    Shared risk-management state across processes (trader + position_monitor run
+    as separate containers, so this can't live in Python instance attributes).
+
+    Currently backs TradingRule's cooldown-after-loss check: position_monitor
+    records the loss, trader reads it back before allowing a new trade.
+    """
+
+    LAST_LOSS_KEY = "last_loss_timestamp"
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record_loss_timestamp(self, ts: datetime):
+        await self.db.execute(
+            """
+            INSERT INTO trade_risk_state (key, value_time) VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value_time = EXCLUDED.value_time
+            """,
+            self.LAST_LOSS_KEY, ts,
+        )
+
+    async def get_last_loss_timestamp(self) -> datetime | None:
+        return await self.db.fetchval(
+            "SELECT value_time FROM trade_risk_state WHERE key = $1",
+            self.LAST_LOSS_KEY,
+        )
