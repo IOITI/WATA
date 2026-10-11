@@ -175,6 +175,7 @@ services:
       - WATA_APP_ROLE=scheduler
     volumes:
       - ../../var/log:/app/var/log/
+      - ../../var/lib:/app/var/lib/
       - ../../etc/config.json:/app/etc/config.json
     networks:
       - trade-net

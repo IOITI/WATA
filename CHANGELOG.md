@@ -1,5 +1,91 @@
 # Changelog
 
+## v0.10.0 - Exactly-Once Signals, Faster Execution & Resilient Monitoring
+
+**Release date:** 2026-10-11
+
+This release fixes how signals travel from the webhook to the Trader, removes fixed waits from the trade path, keeps the Saxo session ready between signals, and makes the Position Monitor independent of slow callbacks and of the database. No configuration change or database migration is required to upgrade.
+
+**Verification status:** covered by unit tests, a local run of the real Web Server with the Trader's polling loop, and a simulation of the Position Monitor against fake Saxo latencies. The changes had not yet been exercised against Saxo's API when this release was cut. The broker-side protective stop in particular must be verified in Saxo's simulation environment before it is enabled on a live account.
+
+---
+
+### Behaviour Changes
+
+- **Each signal is executed once.** The Web Server keeps the latest signal per `indice` until a newer one replaces it, and the Trader used to process every stored signal again on every poll. It now skips any `signal_uuid` it has already handled. Before this, a stored `long`/`short` stayed executable for `max_signal_age_seconds`, a stored `close-position` would have closed every later position, and the Trader log was flooded (two lines per stored signal every 500 ms).
+- **The end-of-day close now works.** In v0.9.0 the Scheduler container did not mount `var/lib`, so it could not read the Web Server token: every `close-position` it sent at `close_position_time` was rejected with `401 Unauthorized`, and positions stayed open overnight and over weekends. After this upgrade, open positions are closed at `close_position_time` every day.
+- **A restarted Trader does not replay old signals.** Signals the Web Server received more than `startup_replay_max_age_seconds` (10 s) before the first poll are ignored.
+- **The Position Monitor reconciles the database with Saxo less often.** It used to call Saxo's REST API on every price update. It now reconciles when a position leaves the stream and every `reconcile_interval_seconds` (30 s).
+- **The loss cooldown also applies to positions closed outside WATA** (for example in the Saxo platform, or by the protective stop) when they closed at a loss.
+
+---
+
+### New Features
+
+#### Long-Polling Signal Delivery
+- `/latest-signals` accepts `after=<seq>` and `wait_ms`: the request is held until a newer signal is stored. The Trader receives a signal as soon as the webhook stores it instead of on the next 500 ms poll.
+- The Trader falls back to interval polling by itself if the Web Server does not support long-polling.
+
+#### Saxo Session Kept Ready
+- The Trader calls Saxo every `keep_warm_interval_seconds` (30 s) between signals. This keeps the HTTP connection open and renews the access token away from the trade path.
+- Optional spending-power cache for order sizing (`balance_cache_max_age_seconds`, off by default).
+
+#### Broker-Side Protective Stop (opt-in)
+- With `position_management.protective_stop.enabled`, each new position gets a resting sell stop at Saxo, so that a Position Monitor outage is survivable.
+- `percent` must be wider than `stoploss_percent`: the Position Monitor's own stop acts first in normal operation.
+- The stop is placed after the entry and rounded down to a valid tick. Nothing is sent if the instrument does not list the order type as supported; the trade notification says whether the stop was placed.
+- Any order resting on a position is cancelled before WATA closes that position.
+
+---
+
+### Changed
+
+#### Trade Path
+- On a reversal, the sell is sent and its bookkeeping (closed-position lookup, database update, notification) runs in the background. In close-then-open mode the Trader waits only until Saxo shows the old position closed, capped at the previous 1.5 s.
+- Position confirmation after an order checks immediately instead of sleeping 300 ms first, then backs off within the same overall patience.
+- The balance request starts alongside the turbo selection, and the watchlist lookup reuses one HTTP connection.
+
+#### Saxo Authentication
+- A renewed access token is swapped into the existing HTTP client instead of rebuilding the client.
+- Token handling no longer runs on the event loop, and token requests have a 10 s timeout.
+
+#### Position Monitor
+- Reading the stream and checking positions are separate tasks. A slow check or a closure in progress no longer delays reading price updates, and updates that arrive meanwhile are merged so the next check works on current prices.
+- Stop-loss, take-profit and trailing-stop sells are sent first; the closure is recorded in the background.
+- Position checks keep working when PostgreSQL is slow or unreachable, using the last state read.
+- The trailing-stop peak is kept in memory and saved when it rises.
+
+---
+
+### Fixed
+
+- The Scheduler's end-of-day `close-position` never reached the Trader (missing `var/lib` volume on `scheduler1` in `deploy/docker-compose.yml`).
+- Trader, Position Monitor and Watchlist Manager could renew the Saxo token at the same time with the same single-use refresh token. Renewal now takes a lock shared by the services, and the token file is written atomically.
+- A position with a sell order in flight could be sold a second time.
+- A closed position not yet listed by Saxo after 1.5 s was left open in the database; the lookup now retries.
+- The database was not reconciled when the last open position left the stream.
+
+---
+
+### Configuration and Deployment
+
+All new settings are optional; `etc/config_example.json` lists them with their defaults.
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `trade.config.signal_polling.long_poll_wait_ms` | 1000 | Long-poll wait; `0` restores polling every `interval_ms` |
+| `trade.config.signal_polling.startup_replay_max_age_seconds` | 10 | Replay window after a Trader restart |
+| `trade.config.general.keep_warm_interval_seconds` | 30 | Saxo keep-warm call; `0` disables it |
+| `trade.config.general.streaming.reconcile_interval_seconds` | 30 | Period of the safety-net reconciliation |
+| `trade.config.buying_power.balance_cache_max_age_seconds` | 0 | Spending-power cache for sizing; `0` asks Saxo on every trade |
+| `trade.config.position_management.protective_stop` | disabled | `enabled`, `percent`, `order_type` (default `StopIfTraded`) |
+
+- Deploy the Web Server and the Trader together to get long-polling.
+- Use the `deploy/docker-compose.yml` of this release: it adds the `var/lib` volume to `scheduler1`. Do not apply that volume to v0.9.0 on its own, where a delivered `close-position` would be executed again on every poll.
+- The Saxo token directory gains a `.token_refresh.lock` file.
+
+---
+
 ## v0.9.0 - Async Architecture, PostgreSQL & Streaming
 
 **Release date:** 2026-10-11

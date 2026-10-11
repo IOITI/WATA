@@ -136,6 +136,7 @@
       "buying_power": {
         "max_account_funds_to_use_percentage": 100,
         "reserve_cash_percent": 0,
+        "balance_cache_max_age_seconds": 0,
         "safety_margins": {
           "bid_calculation": 1
         }
@@ -149,6 +150,11 @@
             "activation_percent": 5,
             "drawdown_percent": 8
           }
+        },
+        "protective_stop": {
+          "enabled": false,
+          "percent": -30,
+          "order_type": "StopIfTraded"
         }
       },
       "position_sizing": {
@@ -247,14 +253,18 @@
           "refresh_rate_ms": 1000,
           "reconnect_delay_seconds": 1.0,
           "max_reconnect_delay_seconds": 30.0,
-          "reauth_interval_seconds": 900
+          "reauth_interval_seconds": 900,
+          "reconcile_interval_seconds": 30
         },
+        "keep_warm_interval_seconds": 30,
         "timezone": "Europe/Paris"
       },
       "trading_mode": "day_trading",
       "signal_polling": {
         "service_url": "http://web_server1:80",
         "interval_ms": 500,
+        "long_poll_wait_ms": 1000,
+        "startup_replay_max_age_seconds": 10,
         "request_timeout_seconds": 2
       }
     },
