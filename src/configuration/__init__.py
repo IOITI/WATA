@@ -363,6 +363,36 @@ class ConfigurationManager:
                  logger.error(error_msg)
                  raise ValueError(error_msg)
 
+            # Validate the optional broker-side protective stop
+            protective_stop = self.get_config_value("trade.config.position_management.protective_stop")
+            if protective_stop:
+                enabled = protective_stop.get("enabled", False)
+                if not isinstance(enabled, bool):
+                    error_msg = "Config field 'trade.config.position_management.protective_stop.enabled' must be a boolean"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                order_type = protective_stop.get("order_type")
+                if order_type is not None and not isinstance(order_type, str):
+                    error_msg = "Config field 'trade.config.position_management.protective_stop.order_type' must be a string"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                if enabled:
+                    percent = protective_stop.get("percent")
+                    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+                        error_msg = "Config field 'trade.config.position_management.protective_stop.percent' must be numeric"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    # Wider than the monitor's stop-loss, so that it only acts when the monitor didn't
+                    if not -100 < percent < stoploss_percent:
+                        error_msg = (
+                            f"Protective stop percentage ({percent}) must be between -100 and the stoploss percentage "
+                            f"({stoploss_percent}) in trade.config.position_management"
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
             watchlist_config = self.get_config_value("trade.config.watchlist_manager")
             if watchlist_config:
                 watchlist_numeric_validations = {

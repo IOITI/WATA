@@ -20,6 +20,10 @@ class SignalStore:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._signals: dict[str, dict] = {}
+        # Stamped on every stored signal (as ``seq``) so a poller can ask only for
+        # what arrived after the last one it saw, and wait for it (long-poll).
+        self._seq = 0
+        self._changed = asyncio.Condition(self._lock)
 
     @staticmethod
     def _parse_signal_timestamp(signal_timestamp: str) -> datetime:
@@ -43,9 +47,33 @@ class SignalStore:
                         indice, signal["signal_timestamp"], existing["signal_timestamp"],
                     )
                     return
+            self._seq += 1
+            signal["seq"] = self._seq
             self._signals[indice] = signal
+            self._changed.notify_all()
 
     async def get_all(self) -> list[dict]:
         """Return a snapshot list of the latest signal for each indice."""
         async with self._lock:
             return list(self._signals.values())
+
+    async def get_newer(self, after_seq: int, timeout: float = 0) -> list[dict]:
+        """
+        Return the signals stored after ``after_seq``. When there is none yet, wait
+        up to ``timeout`` seconds for one to arrive (long-poll) before returning [].
+
+        An ``after_seq`` ahead of this store's counter means the caller's cursor
+        predates a web_server restart, so everything stored here is new to it.
+        """
+        async with self._changed:
+            if after_seq > self._seq:
+                after_seq = 0
+            if timeout > 0 and self._seq <= after_seq:
+                try:
+                    await asyncio.wait_for(
+                        self._changed.wait_for(lambda: self._seq > after_seq),
+                        timeout,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+            return [signal for signal in self._signals.values() if signal["seq"] > after_seq]
