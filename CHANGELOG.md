@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.9.0 - Cached Watchlists & Secure Signal Delivery
+
+**Release date:** 2026-10-11
+
+This release builds on the async architecture introduced in v0.7.0 with cached instrument selection, a streamlined signal handoff, more complete trading reports, and secure HTTPS webhook deployment.
+
+---
+
+### Breaking Changes
+
+- **Signal delivery no longer uses the `trading-signals` RabbitMQ queue.** The web server keeps the newest signal per `indice` in memory, and the async Trader polls `/latest-signals` (500 ms by default). Older signals for an `indice` are ignored; only the latest is retained.
+- **Legacy synchronous Saxo trading services have been removed.** Integrations must use the async services in `src/trade/async_services.py`.
+
+---
+
+### New Features
+
+#### Background Turbo Watchlists
+- Added a dedicated `watchlist_manager1` service that periodically selects the best turbo candidates for configured indices and directions.
+- Candidate prices are refreshed from Saxo's streaming API and cached for the Trader. The manager exposes health and best-candidate endpoints and reports whether cached prices are stale.
+
+#### Secure Webhook Deployment
+- Added Traefik as the public webhook ingress, with HTTP-to-HTTPS redirection and automatic Let's Encrypt certificates.
+- Added an IP allowlist for TradingView webhook traffic.
+
+#### Trading Reports and Monitoring
+- Daily reports now include account balance, milestone projections, closed-trade history, and daily profit history.
+- Added signal timing details and an optional early trigger for daily statistics.
+
+---
+
+### Changed
+
+- Improved async turbo candidate discovery and validation to reduce unnecessary work during instrument selection.
+- Improved Saxo streaming and PostgreSQL handling, including consistent normalization of date and datetime values.
+- Updated trading simulation and risk-rule logic, and expanded reporting calculations.
+- Improved deployment and package-install scripts, HTTP/2 support for the async API client, and configuration handling.
+
+---
+
+### Configuration and Deployment
+
+- Add the `trade.config.watchlist_manager` and `trade.config.signal_polling` settings from `etc/config_example.json` to the deployment configuration.
+- Set `ACME_EMAIL` and `API_DOMAIN` in `deploy/.env` to enable HTTPS certificate issuance for the webhook endpoint.
+- Deploy the new `watchlist_manager1` service with the updated Compose configuration.
+
+---
+
 ## v0.7.0 - Async Architecture & Real-Time Streaming
 
 **Release date:** 2026-03-29
