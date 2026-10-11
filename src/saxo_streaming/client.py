@@ -141,6 +141,10 @@ class SaxoStreamClient:
 
         # Snapshot cache:  {position_id: full_position_dict}
         self._positions: dict[str, dict] = {}
+        # Set by the receive loop when the cache changes. The callback runs in its
+        # own task, so a slow callback never holds up reading the socket.
+        self._positions_changed = asyncio.Event()
+        self._positions_delivery_task: asyncio.Task | None = None
         self._desired_info_price_subscriptions: dict[str, dict] = {}
         self._active_info_price_subscriptions: dict[str, dict] = {}
         self._info_price_subscriptions_lock = asyncio.Lock()
@@ -151,29 +155,35 @@ class SaxoStreamClient:
         """Start the streaming loop (run forever until ``stop()`` is called)."""
         self._running = True
         backoff = self._reconnect_delay
+        if self._on_positions_update is not None:
+            self._positions_delivery_task = asyncio.create_task(self._deliver_position_updates())
 
-        while self._running:
-            try:
-                await self._connect_and_subscribe()
-                backoff = self._reconnect_delay  # reset on success
-                await self._receive_loop()
-            except asyncio.CancelledError:
-                break
-            except websockets.exceptions.ConnectionClosed as e:
-                logger.warning("WebSocket closed: code=%s reason=%s", e.code, e.reason)
-            except Exception as e:
-                logger.error("Stream error: %s", e, exc_info=True)
+        try:
+            while self._running:
+                try:
+                    await self._connect_and_subscribe()
+                    backoff = self._reconnect_delay  # reset on success
+                    await self._receive_loop()
+                except asyncio.CancelledError:
+                    break
+                except websockets.exceptions.ConnectionClosed as e:
+                    logger.warning("WebSocket closed: code=%s reason=%s", e.code, e.reason)
+                except Exception as e:
+                    logger.error("Stream error: %s", e, exc_info=True)
 
-            if not self._running:
-                break
+                if not self._running:
+                    break
 
-            logger.info("Reconnecting in %.1fs …", backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, self._max_reconnect_delay)
+                logger.info("Reconnecting in %.1fs …", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, self._max_reconnect_delay)
+        finally:
+            self._stop_position_delivery()
 
     async def stop(self):
         """Gracefully tear down the connection & subscriptions."""
         self._running = False
+        self._stop_position_delivery()
         if self._reauth_task and not self._reauth_task.done():
             self._reauth_task.cancel()
         if self._receive_task and not self._receive_task.done():
@@ -297,7 +307,7 @@ class SaxoStreamClient:
 
         # Fire initial callback with snapshot
         if self._positions:
-            await self._fire_callback()
+            self._fire_callback()
 
     async def _create_info_price_subscription(self, definition: dict):
         if not definition.get("uics"):
@@ -481,16 +491,31 @@ class SaxoStreamClient:
             changed = True
 
         if changed:
-            await self._fire_callback()
+            self._fire_callback()
 
-    async def _fire_callback(self):
-        """Invoke the user callback with the full position snapshot."""
-        if self._on_positions_update is None:
-            return
-        try:
-            await self._on_positions_update(copy.deepcopy(self._positions))
-        except Exception as e:
-            logger.error("Error in positions-update callback: %s", e, exc_info=True)
+    def _fire_callback(self):
+        """Flag the position snapshot as changed; the delivery task calls the user callback."""
+        self._positions_changed.set()
+
+    async def _deliver_position_updates(self):
+        """
+        Invoke the user callback with the full position snapshot each time it changed.
+
+        Changes arriving while the callback is still running are coalesced: it is
+        then called once more with the newest snapshot, not once per change, so a
+        slow callback always works on current prices instead of a backlog.
+        """
+        while True:
+            await self._positions_changed.wait()
+            self._positions_changed.clear()
+            try:
+                await self._on_positions_update(copy.deepcopy(self._positions))
+            except Exception as e:
+                logger.error("Error in positions-update callback: %s", e, exc_info=True)
+
+    def _stop_position_delivery(self):
+        if self._positions_delivery_task and not self._positions_delivery_task.done():
+            self._positions_delivery_task.cancel()
 
     async def _handle_info_price_subscription_update(self, reference_id: str, payload: dict | list | Any):
         updates: list[dict] = []

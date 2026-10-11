@@ -20,6 +20,7 @@ import re
 import time
 from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal, ROUND_FLOOR
 
 import pytz
 
@@ -57,11 +58,62 @@ TURBO_DESCRIPTION_PATTERN = re.compile(r"(.*) (\w+) (\w+) (\d+(?:\.\d+)?) (\w+)$
 INITIAL_TURBO_SEARCH_LIMIT = 60
 INFO_PRICE_CANDIDATE_LIMIT = 20
 INFO_PRICE_RETRY_BACKOFFS = (0.2, 0.4, 0.8)
+# How long a token returned by SaxoAuth is trusted before asking it again. SaxoAuth
+# renews tokens 120s before they expire, so a few seconds of reuse is safe.
+TOKEN_RECHECK_INTERVAL_SECONDS = 5
+# Waits before each lookup of a just-closed position in Saxo's closed positions
+# (1.5s in total). The background variant keeps trying for longer since nothing
+# is waiting on it.
+CLOSED_POSITION_LOOKUP_DELAYS = (0.2, 0.3, 0.5, 0.5)
+CLOSED_POSITION_BACKGROUND_LOOKUP_DELAYS = CLOSED_POSITION_LOOKUP_DELAYS + (1.0, 2.0, 3.0)
+# Saxo keeps a sold position listed with one of these statuses on accounts that
+# net positions at end of day.
+CLOSED_POSITION_STATUSES = ("Closed", "Closing")
+# How long a position check waits for the database. Past that it carries on with
+# what it last read, so stop-losses keep working while the DB is slow or down,
+# and it leaves the DB alone for a while instead of paying that wait on each check.
+MANAGED_STATE_DB_TIMEOUT_SECONDS = 1.0
+DB_RETRY_AFTER_FAILURE_SECONDS = 5.0
 
 
 # ──────────────────────────────────────────────
 #  Utilities
 # ──────────────────────────────────────────────
+
+def backoff_gaps(total_seconds: float, first_gap: float = 0.1, max_gap: float = 1.0) -> list[float]:
+    """Doubling waits (capped at ``max_gap``) that add up to ``total_seconds``."""
+    gaps = []
+    gap = first_gap
+    remaining = total_seconds
+    while remaining > 1e-9:
+        step = min(gap, remaining)
+        gaps.append(step)
+        remaining -= step
+        gap = min(gap * 2, max_gap)
+    return gaps
+
+
+def stop_order_tick_size(instrument_details: dict, price: float) -> float | None:
+    """Price increment Saxo accepts for a stop order at ``price`` (None when it isn't published)."""
+    scheme = instrument_details.get("TickSizeScheme") or {}
+    for element in sorted(scheme.get("Elements") or [], key=lambda element: element["HighPrice"]):
+        if price <= element["HighPrice"]:
+            return element["TickSize"]
+    return (
+        scheme.get("DefaultTickSize")
+        or instrument_details.get("TickSizeStopOrder")
+        or instrument_details.get("TickSize")
+    )
+
+
+def round_down_to_tick(price: float, tick_size: float) -> float:
+    """Largest multiple of ``tick_size`` that is not above ``price``."""
+    tick = Decimal(str(tick_size))
+    # Rounded first: 10.1 * 0.7 is 7.069999999999999 in floating point, which
+    # would otherwise land one tick below the 7.07 that was meant.
+    exact_price = Decimal(str(round(price, 9)))
+    return float((exact_price / tick).to_integral_value(rounding=ROUND_FLOOR) * tick)
+
 
 def parse_saxo_turbo_description(description: str) -> dict | None:
     match = TURBO_DESCRIPTION_PATTERN.match(description)
@@ -268,20 +320,41 @@ class AsyncSaxoApiClient:
         self.environment = config_manager.get_config_value("saxo_auth.env", "live")
         self._api: AsyncAPI | None = None
         self._current_token: str | None = None
+        self._token_checked_at = 0.0
+        self._ready_lock = asyncio.Lock()
+
+    def _token_recently_checked(self) -> bool:
+        return (
+            self._api is not None
+            and time.monotonic() - self._token_checked_at < TOKEN_RECHECK_INTERVAL_SECONDS
+        )
 
     async def ensure_ready(self):
-        """Initialize or refresh the underlying AsyncAPI instance."""
-        latest_token = self.saxo_auth.get_token()
-        if latest_token != self._current_token or self._api is None:
-            if self._api:
-                await self._api.close()
-            logger.info("AsyncSaxoApiClient: (re)initializing AsyncAPI for env '%s'", self.environment)
-            self._api = AsyncAPI(
-                access_token=latest_token,
-                environment=self.environment,
-                timeout=30.0,
-            )
+        """Initialize the underlying AsyncAPI instance and keep its access token current."""
+        if self._token_recently_checked():
+            return
+
+        async with self._ready_lock:
+            if self._token_recently_checked():
+                return
+
+            # SaxoAuth is synchronous (file read, decryption, and an HTTP call when
+            # the token needs renewing), so it runs in a thread to keep the loop free.
+            latest_token = await asyncio.to_thread(self.saxo_auth.get_token)
+            if self._api is None:
+                logger.info("AsyncSaxoApiClient: initializing AsyncAPI for env '%s'", self.environment)
+                self._api = AsyncAPI(
+                    access_token=latest_token,
+                    environment=self.environment,
+                    timeout=30.0,
+                )
+            elif latest_token != self._current_token:
+                # Swapped in place: rebuilding the client would drop its open
+                # connection and break any request still in flight on it.
+                logger.info("AsyncSaxoApiClient: access token refreshed")
+                self._api.update_token(latest_token)
             self._current_token = latest_token
+            self._token_checked_at = time.monotonic()
 
     async def close(self):
         if self._api:
@@ -335,6 +408,8 @@ class AsyncSaxoApiClient:
                 ) from e
 
             if status_code == 401:
+                # Don't keep trusting this token until the next periodic recheck.
+                self._token_checked_at = 0.0
                 raise TokenAuthenticationException(
                     f"API returned 401: {error_message}",
                     saxo_error_details=saxo_error_details,
@@ -373,6 +448,15 @@ class AsyncInstrumentService:
         self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": 3, "retry_sleep_seconds": 1})
         self.cache_config = self.config.get_config_value("trade.config.turbo_cache", {"enabled": False, "ttl_seconds": 30})
         self._turbo_cache: dict = {}
+        self._instrument_details: dict[tuple, dict] = {}
+
+    async def get_instrument_details(self, uic: int, asset_type: str) -> dict:
+        """Reference data of one instrument (supported order types, tick sizes...), fetched once."""
+        key = (uic, asset_type)
+        if key not in self._instrument_details:
+            req = rd.instruments.InstrumentDetails(Uic=uic, AssetType=asset_type, params={"AccountKey": self.account_key})
+            self._instrument_details[key] = await self.api_client.request(req) or {}
+        return self._instrument_details[key]
 
     async def _get_infoprices_for_asset_type(
         self,
@@ -756,6 +840,43 @@ class AsyncOrderService:
         logger.info("Order placed — OrderId: %s", result["OrderId"])
         return result
 
+    async def place_related_stop_order(
+        self,
+        position_id: str,
+        uic: int,
+        asset_type: str,
+        amount: int,
+        stop_price: float,
+        order_type: str,
+    ) -> str:
+        """
+        Attach a resting stop order to an open position and return its OrderId.
+
+        Being related to the position, it is listed in the position's
+        ``RelatedOpenOrders`` and is sized to close it.
+        """
+        logger.info("Placing %s at %s on position %s (%d of %d)", order_type, stop_price, position_id, amount, uic)
+        stop_order = {
+            "Uic": uic,
+            "AssetType": asset_type,
+            "Amount": abs(amount),
+            "BuySell": direction_invert(direction_from_amount(amount)),
+            "OrderType": order_type,
+            "OrderPrice": stop_price,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+            "ManualOrder": False,
+        }
+        final_payload = tie_account_to_order(self.account_key, {"PositionId": position_id, "Orders": [stop_order]})
+        result = await self.api_client.request(tr.orders.Order(data=final_payload)) or {}
+
+        order_ids = [result.get("OrderId")] + [related.get("OrderId") for related in result.get("Orders") or []]
+        order_id = next((order_id for order_id in order_ids if order_id), None)
+        if not order_id:
+            raise OrderPlacementError("Response missing OrderId.", order_details=final_payload, saxo_error_details=result)
+
+        logger.info("Stop order placed on position %s — OrderId: %s", position_id, order_id)
+        return order_id
+
     async def cancel_order(self, order_id: str) -> bool:
         logger.info("Cancelling order: %s", order_id)
         req = tr.orders.CancelOrders(OrderIds=order_id, params={"AccountKey": self.account_key})
@@ -826,14 +947,20 @@ class AsyncPositionService:
 
     async def find_position_by_order_id_with_retry(self, order_id: str) -> dict:
         """
-        Finds position with exponential backoff (non-blocking).
+        Finds position, checking straight away and then with exponential backoff
+        (non-blocking).
         Attempts order cancellation if not found after all retries.
         """
-        delays = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]  # ~10.8s total max
-        max_attempts = min(len(delays), self.max_retries)
+        # Time allowed per configured retry (~10.8s total max). It is spent as an
+        # immediate check followed by short, growing waits: Saxo usually lists the
+        # position within milliseconds of accepting a market order.
+        allowances = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+        waits = [0, *backoff_gaps(sum(allowances[:self.max_retries]))]
+        max_attempts = len(waits)
 
         for attempt in range(max_attempts):
-            await asyncio.sleep(delays[attempt])
+            if waits[attempt]:
+                await asyncio.sleep(waits[attempt])
             positions = await self.get_open_positions()
             for p in positions.get("Data", []):
                 if p.get("PositionBase", {}).get("SourceOrderId") == order_id:
@@ -857,7 +984,7 @@ class AsyncPositionService:
         if not resp or "SpendingPower" not in resp:
             raise SaxoApiError("Invalid balance response, missing SpendingPower.")
         power = resp["SpendingPower"]
-        logger.info("Spending power: %s", power)
+        logger.debug("Spending power: %s", power)
         return float(power)
 
     async def get_current_account_balance(self) -> float:
@@ -901,6 +1028,12 @@ class AsyncTradingOrchestrator:
         self.buying_power_config = self.config.get_config_value("trade.config.buying_power", {})
         self.safety_margins = self.buying_power_config.get("safety_margins", {"bid_calculation": 1})
         self.reserve_cash_percent = self.buying_power_config.get("reserve_cash_percent", 0)
+        # 0 = always ask Saxo for the balance when sizing an order.
+        self.balance_cache_max_age_seconds = self.buying_power_config.get("balance_cache_max_age_seconds", 0)
+        self._cached_spending_power: tuple[float, float] | None = None  # (value, monotonic time)
+        self.protective_stop_config = self.config.get_config_value(
+            "trade.config.position_management.protective_stop", {"enabled": False}
+        )
         self.timezone = self.config.get_config_value("trade.config.general.timezone", "Europe/Paris")
         self.time_of_day_config = self.config.get_config_value("trade.config.position_sizing.time_of_day_scaling", {"enabled": False})
         self.confidence_config = self.config.get_config_value("trade.config.position_sizing.confidence_scaling", {"enabled": False})
@@ -978,10 +1111,83 @@ class AsyncTradingOrchestrator:
             logger.info("Using watchlist-managed turbo for underlying=%s direction=%s", underlying_uics, keywords)
         return turbo_info
 
+    async def place_protective_stop(self, trade_result: dict) -> dict | None:
+        """
+        Attach a resting sell stop at the broker to the position just opened, when
+        ``position_management.protective_stop`` is enabled.
+
+        It is a safety net for when the position monitor can't act (outage,
+        stream down). Set wider than the monitor's own stop-loss, it only
+        triggers if the monitor didn't close the position first.
+
+        Never raises. Returns None when disabled, otherwise the order id and
+        price, or the reason why no stop could be placed.
+        """
+        if not self.protective_stop_config.get("enabled", False):
+            return None
+
+        position = trade_result["position_details"]
+        instrument = trade_result["selected_turbo_info"]["selected_instrument"]
+        position_id = position["position_id"]
+        percent = self.protective_stop_config.get("percent")
+        order_type = self.protective_stop_config.get("order_type", "StopIfTraded")
+
+        try:
+            details = await self.instrument_service.get_instrument_details(instrument["uic"], instrument["asset_type"])
+            supported_order_types = details.get("SupportedOrderTypes") or []
+            if order_type not in supported_order_types:
+                raise ValueError(f"{order_type} orders are not supported on this instrument (supported: {supported_order_types})")
+
+            target_price = position["position_open_price"] * (1 + percent / 100.0)
+            tick_size = stop_order_tick_size(details, target_price) or 10 ** -instrument.get("decimals", 2)
+            stop_price = round_down_to_tick(target_price, tick_size)
+            if stop_price <= 0:
+                raise ValueError(f"stop price {stop_price} is not a valid price")
+
+            order_id = await self.order_service.place_related_stop_order(
+                position_id=position_id,
+                uic=instrument["uic"],
+                asset_type=instrument["asset_type"],
+                amount=position["position_amount"],
+                stop_price=stop_price,
+                order_type=order_type,
+            )
+        except Exception as e:
+            logger.error("Protective stop NOT placed on position %s: %s", position_id, e)
+            return {"error": f"{type(e).__name__}: {e}"}
+
+        try:
+            await self.db_position_manager.update_turbo_position_data(position_id, {"related_order_id": [order_id]})
+        except Exception as e:
+            logger.warning("Could not record protective stop %s of position %s: %s", order_id, position_id, e)
+
+        return {"order_id": order_id, "price": stop_price, "percent": percent}
+
+    async def refresh_spending_power(self) -> float:
+        """Fetch the spending power from Saxo and remember it for the balance cache."""
+        spending_power = await self.position_service.get_spending_power()
+        self._cached_spending_power = (spending_power, time.monotonic())
+        return spending_power
+
+    def invalidate_spending_power(self):
+        """Forget the cached spending power (call after anything that moves cash)."""
+        self._cached_spending_power = None
+
+    async def _get_spending_power(self) -> float:
+        cached = self._cached_spending_power
+        if (
+            cached is not None
+            and self.balance_cache_max_age_seconds > 0
+            and time.monotonic() - cached[1] <= self.balance_cache_max_age_seconds
+        ):
+            logger.info("Using cached spending power %s (age=%.1fs)", cached[0], time.monotonic() - cached[1])
+            return cached[0]
+        return await self.refresh_spending_power()
+
     async def execute_trade_signal(self, exchange_id: str, underlying_uics: str, keywords: str, confidence: float = None) -> dict:
         """
         Full async trade workflow.
-        Key optimisation: find_turbos and get_spending_power run **in parallel**.
+        Key optimisation: the turbo selection and get_spending_power run **in parallel**.
         """
         logger.info("--- Executing trade signal: %s on %s (conf=%s) ---", keywords, underlying_uics, confidence)
         timestamps = {"start": time.time()}
@@ -995,22 +1201,18 @@ class AsyncTradingOrchestrator:
             timestamps["scale_calculated"] = time.time()
 
             # 1. Try the fast watchlist path first, then fall back to the live Saxo search.
-            turbo_info = await self._get_watchlist_turbo(underlying_uics, keywords)
-            if turbo_info is not None:
+            async def _select_turbo():
+                selected = await self._get_watchlist_turbo(underlying_uics, keywords)
+                if selected is None:
+                    selected = await self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
                 timestamps["turbo_found"] = time.time()
+                return selected
 
-            # 2. Fetch spending power in parallel with the live search when needed.
-            balance_task = asyncio.create_task(
-                self.position_service.get_spending_power()
+            # 2. Fetch spending power in parallel with the turbo selection.
+            turbo_info, spending_power = await asyncio.gather(
+                _select_turbo(),
+                self._get_spending_power(),
             )
-            if turbo_info is None:
-                turbo_task = asyncio.create_task(
-                    self.instrument_service.find_turbos(exchange_id, underlying_uics, keywords)
-                )
-                turbo_info, spending_power = await asyncio.gather(turbo_task, balance_task)
-                timestamps["turbo_found"] = time.time()
-            else:
-                spending_power = await balance_task
             timestamps["spending_power_fetched"] = time.time()
 
             # 3. Calculate amount
@@ -1024,6 +1226,7 @@ class AsyncTradingOrchestrator:
                 amount=amount,
                 buy_sell="Buy",
             )
+            self.invalidate_spending_power()
             order_id = validated_order["OrderId"]
             timestamps["order_placed"] = time.time()
 
@@ -1171,6 +1374,20 @@ class AsyncPerformanceMonitor:
         self.send_telegram = send_telegram_fn
         self.trigger_daily_stats = trigger_daily_stats_fn
         self._last_daily_stats_trigger_date = None
+        # Positions with a sell order sent whose closure isn't recorded in the DB
+        # yet; they still read as open there and must not be sold a second time.
+        self._closing_position_ids: set[str] = set()
+        # Strong references to background bookkeeping (the loop only holds weak ones).
+        self._background_tasks: set[asyncio.Task] = set()
+        # What the DB last said about managed positions (see _load_managed_state).
+        self._last_managed_positions: list[dict] | None = None
+        self._last_today_pct: float | None = None
+        # Highest performance seen per open position. Only position checks write
+        # it, so it is read from the DB once and then kept here; values the DB
+        # hasn't accepted yet wait in the pending map.
+        self._max_perf_by_position: dict[str, float] = {}
+        self._max_perf_pending_save: dict[str, float] = {}
+        self._db_unavailable_until = 0.0
         self.perf_config = self.config.get_config_value("trade.config.position_management", {})
         self.thresholds = self.perf_config.get("performance_thresholds", {"stoploss_percent": -15, "max_profit_percent": 60})
         self.trailing_stop_config = self.thresholds.get("trailing_stop", {"enabled": False, "activation_percent": 5, "drawdown_percent": 8})
@@ -1214,27 +1431,128 @@ class AsyncPerformanceMonitor:
 
         return await self._evaluate_positions(api_dict)
 
+    def _db_usable(self) -> bool:
+        return time.monotonic() >= self._db_unavailable_until
+
+    def _mark_db_unavailable(self):
+        self._db_unavailable_until = time.monotonic() + DB_RETRY_AFTER_FAILURE_SECONDS
+
+    async def _load_managed_state(self) -> tuple[list[dict], float | None]:
+        """
+        Read the open managed positions and today's realized percent from the DB.
+
+        When the DB fails or doesn't answer in time, the values read last are
+        returned instead (the very first read has nothing to fall back on).
+        """
+        if not self._db_usable() and self._last_managed_positions is not None:
+            return self._last_managed_positions, self._last_today_pct
+
+        try:
+            db_positions, today_pct = await asyncio.wait_for(
+                asyncio.gather(
+                    self.db_position_manager.get_open_positions_ids_actions(),
+                    self.db_position_manager.get_percent_of_the_day(),
+                    return_exceptions=True,
+                ),
+                MANAGED_STATE_DB_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as e:
+            db_positions = today_pct = e
+
+        if isinstance(db_positions, Exception):
+            self._mark_db_unavailable()
+            if self._last_managed_positions is None:
+                raise db_positions
+            logger.warning("Could not read open positions from DB (%r); using the last known ones.", db_positions)
+            db_positions = self._last_managed_positions
+        else:
+            self._last_managed_positions = db_positions
+
+        if isinstance(today_pct, Exception):
+            logger.warning("Could not read today's realized percent from DB (%r); using the last known one.", today_pct)
+            today_pct = self._last_today_pct
+        else:
+            self._last_today_pct = today_pct
+
+        return db_positions, today_pct
+
+    async def _get_max_perf(self, position_id: str) -> float | None:
+        """Highest performance seen for a position so far (None while it can't be read)."""
+        if position_id not in self._max_perf_by_position:
+            if not self._db_usable():
+                return None
+            try:
+                self._max_perf_by_position[position_id] = await asyncio.wait_for(
+                    self.db_position_manager.get_max_position_percent(position_id),
+                    MANAGED_STATE_DB_TIMEOUT_SECONDS,
+                )
+            except Exception as e:
+                self._mark_db_unavailable()
+                logger.warning("Could not read max performance of %s: %r", position_id, e)
+                return None
+        return self._max_perf_by_position[position_id]
+
+    async def _save_pending_max_perf(self) -> tuple[list, int]:
+        """Write to the DB the max performances it doesn't have yet; returns (saved, error count)."""
+        saved = []
+        for pid, max_perf in list(self._max_perf_pending_save.items()):
+            if not self._db_usable():
+                break
+            data = {"position_max_performance_percent": max_perf}
+            try:
+                await asyncio.wait_for(
+                    self.db_position_manager.update_turbo_position_data(pid, data),
+                    MANAGED_STATE_DB_TIMEOUT_SECONDS,
+                )
+            except Exception as e:
+                self._mark_db_unavailable()
+                logger.error("Failed max-perf update for %s: %r", pid, e)
+                return saved, 1
+            saved.append((pid, data))
+            if self._max_perf_pending_save.get(pid) == max_perf:
+                del self._max_perf_pending_save[pid]
+        return saved, 0
+
+    async def _record_loss(self):
+        try:
+            await self.trading_rule.record_loss()
+        except Exception:
+            pass
+
+    def _run_in_background(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     async def _evaluate_positions(self, api_dict: dict[str, dict]) -> dict:
         """
         Shared evaluation logic used by both REST-polled and stream-fed paths.
+
+        Sell orders for positions that hit a threshold are sent before this
+        returns; recording those closures in the DB happens in the background.
 
         Parameters
         ----------
         api_dict : dict[str, dict]
             ``{PositionId: position_dict}`` — from either API response or stream cache.
         """
-        db_positions = await self.db_position_manager.get_open_positions_ids_actions()
+        db_positions, today_pct = await self._load_managed_state()
+        managed_ids = {db_pos["position_id"] for db_pos in db_positions}
+        for known in (self._max_perf_by_position, self._max_perf_pending_save):
+            for pid in list(known):
+                if pid not in managed_ids:
+                    del known[pid]
+
         if not db_positions:
             logger.info("No open positions to check.")
             return {"closed_positions_processed": [], "db_updates": [], "errors": 0}
 
         positions_to_close = []
-        db_updates = []
         errors = 0
 
         for db_pos in db_positions:
             pid = db_pos["position_id"]
-            if pid not in api_dict:
+            if pid not in api_dict or pid in self._closing_position_ids:
                 continue
 
             api_pos = api_dict[pid]
@@ -1248,26 +1566,25 @@ class AsyncPerformanceMonitor:
 
             self._log_performance_detail(pid, api_pos, perf_pct)
 
-            max_perf = await self.db_position_manager.get_max_position_percent(pid)
-            if perf_pct > max_perf:
-                db_updates.append((pid, {"position_max_performance_percent": perf_pct}))
+            max_perf = await self._get_max_perf(pid)
+            if max_perf is not None and perf_pct > max_perf:
+                self._max_perf_by_position[pid] = perf_pct
+                self._max_perf_pending_save[pid] = perf_pct
 
             close_reason = None
 
             # Stop-loss
             if perf_pct <= self.thresholds["stoploss_percent"]:
                 close_reason = f"Stoploss ({self.thresholds['stoploss_percent']}%) hit at {perf_pct}%"
-                try:
-                    await self.trading_rule.record_loss()
-                except Exception:
-                    pass
+                # Not awaited: the sell must not wait for this DB write.
+                self._run_in_background(self._record_loss())
 
             # Take-profit
             elif perf_pct >= self.thresholds["max_profit_percent"]:
                 close_reason = f"Takeprofit ({self.thresholds['max_profit_percent']}%) hit at {perf_pct}%"
 
             # Trailing stop
-            if not close_reason and self.trailing_stop_config.get("enabled", False):
+            if not close_reason and max_perf is not None and self.trailing_stop_config.get("enabled", False):
                 act_pct = self.trailing_stop_config.get("activation_percent", 5)
                 dd_pct = self.trailing_stop_config.get("drawdown_percent", 8)
                 if max_perf >= act_pct:
@@ -1276,15 +1593,11 @@ class AsyncPerformanceMonitor:
                         close_reason = f"Trailing Stop: peak {max_perf:.1f}%, now {perf_pct:.1f}% (dd {drawdown:.1f}% >= {dd_pct}%)"
 
             # Daily profit target
-            if not close_reason:
-                try:
-                    today_pct = await self.db_position_manager.get_percent_of_the_day()
-                    factor = (1 + today_pct / 100.0) * (1 + perf_pct / 100.0) - 1
-                    potential = round(factor * 100, 2)
-                    if potential >= self.percent_profit_wanted:
-                        close_reason = f"Daily profit target ({self.percent_profit_wanted}%) potentially met ({potential}%)"
-                except Exception as e:
-                    logger.error("Daily profit check error for %s: %s", pid, e)
+            if not close_reason and today_pct is not None:
+                factor = (1 + today_pct / 100.0) * (1 + perf_pct / 100.0) - 1
+                potential = round(factor * 100, 2)
+                if potential >= self.percent_profit_wanted:
+                    close_reason = f"Daily profit target ({self.percent_profit_wanted}%) potentially met ({potential}%)"
 
             if close_reason:
                 positions_to_close.append({"position_id": pid, "api_details": api_pos, "reason": close_reason})
@@ -1303,53 +1616,59 @@ class AsyncPerformanceMonitor:
                 if not api_pos.get("PositionBase", {}).get("CanBeClosed", False):
                     processed.append({"id": pid, "status": "Skipped (Cannot Be Closed)"})
                     return
+                # Checked again here: another position check may have started
+                # closing it while this one was deciding.
+                if pid in self._closing_position_ids:
+                    return
 
+                self._closing_position_ids.add(pid)
                 try:
-                    direction = direction_from_amount(api_pos["PositionBase"]["Amount"])
-                    sell_dir = direction_invert(direction)
-                    await self.order_service.place_market_order(
-                        uic=api_pos["PositionBase"]["Uic"],
-                        asset_type=api_pos["PositionBase"]["AssetType"],
-                        amount=api_pos["PositionBase"]["Amount"],
-                        buy_sell=sell_dir,
-                    )
-                    ok = await self._fetch_and_update_closed_position(pid, f"Performance ({reason})")
-                    processed.append({"id": pid, "status": "Closed" if ok else "Closed (DB Update Failed)"})
-                    if not ok:
-                        errors += 1
+                    await self._send_close_order(api_pos)
                 except Exception as e:
+                    self._closing_position_ids.discard(pid)
                     logger.error("Failed to close %s: %s", pid, e, exc_info=True)
                     await self.send_telegram(f"ERROR closing {pid}: {e}")
                     errors += 1
                     processed.append({"id": pid, "status": f"Failed: {e}"})
+                    return
+
+                # Not awaited: the next price update must not wait for Saxo to
+                # list this closure before the other positions are checked again.
+                self._record_closed_position_in_background(pid, f"Performance ({reason})")
+                processed.append({"id": pid, "status": "Close order sent"})
 
         await asyncio.gather(*[_close_one(p) for p in positions_to_close])
 
         # Apply max-perf DB updates
-        for pid, data in db_updates:
-            try:
-                await self.db_position_manager.update_turbo_position_data(pid, data)
-            except Exception as e:
-                logger.error("Failed max-perf update for %s: %s", pid, e)
-                errors += 1
+        db_updates, save_errors = await self._save_pending_max_perf()
+        errors += save_errors
 
         logger.debug("Perf check done. Closed=%d, MaxPerf updates=%d, Errors=%d", len(processed), len(db_updates), errors)
         return {"closed_positions_processed": processed, "db_updates": db_updates, "errors": errors}
 
-    async def sync_db_positions_with_api(self) -> dict:
-        """Compare DB open positions vs API, return updates for positions closed externally."""
+    async def sync_db_positions_with_api(self, open_position_ids: set[str] | None = None) -> dict:
+        """
+        Compare DB open positions vs API, return updates for positions closed externally.
+
+        ``open_position_ids`` are the positions known to be open at Saxo (e.g. from
+        the position stream); when omitted they are fetched from the API.
+        """
         logger.debug("--- Syncing DB positions with API ---")
         db_open_ids = await self.db_position_manager.get_open_positions_ids()
-
-        try:
-            api_resp = await self.position_service.get_open_positions()
-            api_open_ids = {p["PositionId"] for p in api_resp.get("Data", [])}
-        except Exception as e:
-            logger.error("Failed to get API open positions: %s", e)
-            return {"updates_for_db": []}
-
+        # A closure this monitor has in flight is recorded by its own bookkeeping.
+        db_open_ids = [pid for pid in db_open_ids if pid not in self._closing_position_ids]
         if not db_open_ids:
             return {"updates_for_db": []}
+
+        if open_position_ids is not None:
+            api_open_ids = open_position_ids
+        else:
+            try:
+                api_resp = await self.position_service.get_open_positions()
+                api_open_ids = {p["PositionId"] for p in api_resp.get("Data", [])}
+            except Exception as e:
+                logger.error("Failed to get API open positions: %s", e)
+                return {"updates_for_db": []}
 
         potentially_closed = [pid for pid in db_open_ids if pid not in api_open_ids]
         if not potentially_closed:
@@ -1388,19 +1707,36 @@ class AsyncPerformanceMonitor:
                     "execution_time_close": cp.get("ExecutionTimeClose"),
                 }
                 updates.append((pid, update))
+                if perf is not None and perf < 0:
+                    # e.g. the broker-side stop was hit: the cooldown applies too
+                    try:
+                        await self.trading_rule.record_loss()
+                    except Exception:
+                        pass
                 await self.send_telegram(f"SYNC CLOSE: {pid} ({dp.get('Description','N/A')})\nPerf: {perf}%")
             else:
                 logger.warning("ANOMALY: %s open in DB, not in API open or closed.", pid)
 
         return {"updates_for_db": updates}
 
-    async def close_managed_positions_by_criteria(self, action_filter: str | None = None, exclude_position_id: str | None = None) -> dict:
-        """Close open positions, optionally filtered by action, with concurrency."""
+    async def close_managed_positions_by_criteria(
+        self,
+        action_filter: str | None = None,
+        exclude_position_id: str | None = None,
+        defer_bookkeeping: bool = False,
+    ) -> dict:
+        """
+        Close open positions, optionally filtered by action, with concurrency.
+
+        With ``defer_bookkeeping`` this returns as soon as the sell orders are
+        accepted: looking up the closed positions, updating the DB and notifying
+        run in the background, so the caller's next order isn't held up by them.
+        """
         logger.info("--- Closing positions (filter=%s, exclude=%s) ---", action_filter, exclude_position_id)
 
         db_positions = await self.db_position_manager.get_open_positions_ids_actions()
         if not db_positions:
-            return {"closed_initiated_count": 0, "errors_count": 0}
+            return {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": []}
 
         try:
             api_resp = await self.position_service.get_open_positions()
@@ -1411,6 +1747,7 @@ class AsyncPerformanceMonitor:
 
         closed_count = 0
         error_count = 0
+        closed_position_ids = []
         sem = asyncio.Semaphore(3)
 
         async def _close_one(db_pos):
@@ -1425,82 +1762,175 @@ class AsyncPerformanceMonitor:
                     return
                 if pid not in api_dict:
                     return
+                if pid in self._closing_position_ids:
+                    return
 
                 api_pos = api_dict[pid]
                 pos_base = api_pos.get("PositionBase", {})
                 if not pos_base.get("CanBeClosed", False):
                     return
 
+                self._closing_position_ids.add(pid)
                 try:
-                    direction = direction_from_amount(pos_base["Amount"])
-                    sell_dir = direction_invert(direction)
-                    await self.order_service.place_market_order(
-                        uic=pos_base["Uic"],
-                        asset_type=pos_base["AssetType"],
-                        amount=pos_base["Amount"],
-                        buy_sell=sell_dir,
-                    )
+                    await self._send_close_order(api_pos)
                     closed_count += 1
+                    closed_position_ids.append(pid)
                     reason = f"Explicit Close ({action_filter or 'All'})"
-                    await self._fetch_and_update_closed_position(pid, reason)
+                    if defer_bookkeeping:
+                        self._record_closed_position_in_background(pid, reason)
+                    else:
+                        await self._record_closed_position(pid, reason)
                 except Exception as e:
+                    self._closing_position_ids.discard(pid)
                     logger.error("Failed closing %s: %s", pid, e)
                     await self.send_telegram(f"ERROR closing {pid}: {e}")
                     error_count += 1
 
         await asyncio.gather(*[_close_one(p) for p in db_positions])
         logger.info("Closure done. Initiated=%d, Errors=%d", closed_count, error_count)
-        return {"closed_initiated_count": closed_count, "errors_count": error_count}
+        return {
+            "closed_initiated_count": closed_count,
+            "errors_count": error_count,
+            "closed_position_ids": closed_position_ids,
+        }
 
-    async def _fetch_and_update_closed_position(self, position_id: str, reason: str) -> bool:
-        """Fetch closed position from API after brief delay and update DB."""
-        await asyncio.sleep(1.5)  # Non-blocking wait for API to reflect closure
+    async def _send_close_order(self, api_pos: dict) -> None:
+        """Sell a position at market, after cancelling any order resting on it (e.g. its protective stop)."""
+        pos_base = api_pos["PositionBase"]
+        related_order_ids = [
+            related["OrderId"]
+            for related in pos_base.get("RelatedOpenOrders") or []
+            if related.get("OrderId")
+        ]
+        if related_order_ids:
+            # Left working, that order would compete with this sell for the same holding.
+            await self.order_service.cancel_order(",".join(related_order_ids))
 
+        direction = direction_from_amount(pos_base["Amount"])
+        await self.order_service.place_market_order(
+            uic=pos_base["Uic"],
+            asset_type=pos_base["AssetType"],
+            amount=pos_base["Amount"],
+            buy_sell=direction_invert(direction),
+        )
+
+    async def wait_for_background_tasks(self, timeout: float = 10.0) -> None:
+        """Give closures still being recorded in the background a chance to finish (used at shutdown)."""
+        if self._background_tasks:
+            await asyncio.wait(set(self._background_tasks), timeout=timeout)
+
+    async def wait_for_positions_closed(self, position_ids: list[str], timeout: float = 1.5) -> bool:
+        """
+        Poll Saxo until none of ``position_ids`` is open any more, waiting at most
+        ``timeout`` seconds in total. Returns whether they were all seen closed.
+
+        Used between selling and buying, so the new order is sized on a balance
+        that already includes the proceeds of the sale.
+        """
+        pending = set(position_ids)
+        if not pending:
+            return True
+
+        for wait in [0, *backoff_gaps(timeout)]:
+            if wait:
+                await asyncio.sleep(wait)
+            try:
+                api_resp = await self.position_service.get_open_positions()
+            except Exception as e:
+                logger.warning("Could not check whether %s are closed: %s", sorted(pending), e)
+                continue
+            pending &= {
+                p["PositionId"]
+                for p in api_resp.get("Data", [])
+                if p.get("PositionBase", {}).get("Status") not in CLOSED_POSITION_STATUSES
+            }
+            if not pending:
+                return True
+
+        logger.warning("Positions %s still reported open %.1fs after their sell order.", sorted(pending), timeout)
+        return False
+
+    async def _record_closed_position(
+        self,
+        position_id: str,
+        reason: str,
+        lookup_delays: tuple[float, ...] = CLOSED_POSITION_LOOKUP_DELAYS,
+    ) -> bool:
+        """Record a closure whose sell order was just sent, then stop treating it as in flight."""
         try:
-            closed = await self.position_service.get_closed_positions(top=50)
-            for item in closed.get("Data", []):
-                cp = item.get("ClosedPosition", {})
-                if cp.get("OpeningPositionId") == position_id:
-                    dp = item.get("DisplayAndFormat", {})
-                    close_price = cp.get("ClosingPrice")
-                    open_price = cp.get("OpenPrice")
-                    amount = cp.get("Amount")
-                    perf = round(((close_price * 100) / open_price) - 100, 2) if open_price and close_price and open_price != 0 else None
-                    total_close = close_price * amount if close_price and amount else None
+            return await self._fetch_and_update_closed_position(position_id, reason, lookup_delays)
+        finally:
+            self._closing_position_ids.discard(position_id)
 
-                    update = {
-                        "position_close_price": close_price,
-                        "position_profit_loss": cp.get("ProfitLossOnTrade"),
-                        "position_total_close_price": total_close,
-                        "position_status": "Closed",
-                        "position_total_performance_percent": perf,
-                        "position_close_reason": reason,
-                        "execution_time_close": cp.get("ExecutionTimeClose"),
-                    }
-                    await self.db_position_manager.update_turbo_position_data(position_id, update)
+    def _record_closed_position_in_background(self, position_id: str, reason: str) -> None:
+        self._run_in_background(
+            self._record_closed_position(position_id, reason, CLOSED_POSITION_BACKGROUND_LOOKUP_DELAYS)
+        )
 
-                    if perf is not None and perf < 0:
-                        try:
-                            await self.trading_rule.record_loss()
-                        except Exception:
-                            pass
+    async def _find_closed_position(self, position_id: str) -> dict | None:
+        closed = await self.position_service.get_closed_positions(top=50)
+        for item in closed.get("Data", []):
+            if item.get("ClosedPosition", {}).get("OpeningPositionId") == position_id:
+                return item
+        return None
 
-                    max_perf = await self.db_position_manager.get_max_position_percent(position_id)
-                    today_pct = await self.db_position_manager.get_percent_of_the_day()
+    async def _fetch_and_update_closed_position(
+        self,
+        position_id: str,
+        reason: str,
+        lookup_delays: tuple[float, ...] = CLOSED_POSITION_LOOKUP_DELAYS,
+    ) -> bool:
+        """Fetch closed position from API (retrying while it isn't listed yet) and update DB."""
+        try:
+            item = None
+            for delay in lookup_delays:
+                await asyncio.sleep(delay)  # Non-blocking wait for API to reflect closure
+                item = await self._find_closed_position(position_id)
+                if item is not None:
+                    break
 
-                    msg = f"""--- CLOSED POSITION ---
+            if item is None:
+                logger.warning("Closed position %s not found in API.", position_id)
+                return False
+
+            cp = item.get("ClosedPosition", {})
+            dp = item.get("DisplayAndFormat", {})
+            close_price = cp.get("ClosingPrice")
+            open_price = cp.get("OpenPrice")
+            amount = cp.get("Amount")
+            perf = round(((close_price * 100) / open_price) - 100, 2) if open_price and close_price and open_price != 0 else None
+            total_close = close_price * amount if close_price and amount else None
+
+            update = {
+                "position_close_price": close_price,
+                "position_profit_loss": cp.get("ProfitLossOnTrade"),
+                "position_total_close_price": total_close,
+                "position_status": "Closed",
+                "position_total_performance_percent": perf,
+                "position_close_reason": reason,
+                "execution_time_close": cp.get("ExecutionTimeClose"),
+            }
+            await self.db_position_manager.update_turbo_position_data(position_id, update)
+
+            if perf is not None and perf < 0:
+                try:
+                    await self.trading_rule.record_loss()
+                except Exception:
+                    pass
+
+            max_perf = await self.db_position_manager.get_max_position_percent(position_id)
+            today_pct = await self.db_position_manager.get_percent_of_the_day()
+
+            msg = f"""--- CLOSED POSITION ---
 Instrument: {dp.get('Description', 'N/A')}
 Open: {open_price} → Close: {close_price}
 Amount: {amount} | P/L: {cp.get('ProfitLossOnTrade')}
 Perf: {perf}% | Max during trade: {max_perf}%
 Reason: {reason}
 Today realized: {today_pct}%"""
-                    await self.send_telegram(msg)
-                    await self._maybe_trigger_daily_stats(today_pct)
-                    return True
-
-            logger.warning("Closed position %s not found in API.", position_id)
-            return False
+            await self.send_telegram(msg)
+            await self._maybe_trigger_daily_stats(today_pct)
+            return True
 
         except Exception as e:
             logger.error("Error updating closed position %s: %s", position_id, e, exc_info=True)

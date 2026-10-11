@@ -16,6 +16,8 @@ class AsyncWatchlistClient:
         self.service_url = config.get("service_url", "http://watchlist_manager1:8081").rstrip("/")
         self.request_timeout_seconds = config.get("request_timeout_seconds", 1)
         self.accept_stale = config.get("accept_stale", False)
+        # Kept open between lookups: this call sits on the path of every trade.
+        self._client: httpx.AsyncClient | None = None
 
     async def get_best_turbo(
         self,
@@ -36,8 +38,9 @@ class AsyncWatchlistClient:
             params["underlying_uic"] = underlying_uic
 
         try:
-            async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
-                response = await client.get(f"{self.service_url}/watchlist/best", params=params)
+            if self._client is None:
+                self._client = httpx.AsyncClient(timeout=self.request_timeout_seconds)
+            response = await self._client.get(f"{self.service_url}/watchlist/best", params=params)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -50,3 +53,8 @@ class AsyncWatchlistClient:
             logger.info("Ignoring stale watchlist entry for params=%s", params)
             return None
         return payload
+
+    async def close(self):
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None

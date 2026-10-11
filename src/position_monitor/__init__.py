@@ -5,6 +5,10 @@ Uses Saxo's WebSocket Streaming API for instant position monitoring
 (replaces the 7-second polling approach).  Still consumes ``trading-ops``
 for time-triggered events like ``daily_stats``.
 
+Each streamed position update is checked against the exit rules. Reconciling
+the DB with Saxo is separate and rarer: it runs when a position leaves the
+stream and on a timer.
+
 Runs as a separate Docker container (WATA_APP_ROLE=position_monitor).
 """
 
@@ -52,53 +56,103 @@ def get_version() -> str:
         return "unknown"
 
 
+# How long after a position leaves the stream the DB is reconciled. Whoever
+# closed it (this monitor or the trader) records the closure itself within
+# moments; what is still open in the DB after that was closed from outside.
+RECONCILE_SETTLE_SECONDS = 3.0
+
+
 # ─────────────────────────────────────────────────────
 #  Streaming callback
 # ─────────────────────────────────────────────────────
 
-async def on_positions_update(
-    positions: dict[str, dict],
-    performance_monitor: AsyncPerformanceMonitor,
-    db_position_manager: AsyncDbPositionManager,
-    telegram: AsyncTelegramSender,
-):
+class StreamPositionHandler:
     """
-    Called by :class:`SaxoStreamClient` every time the position snapshot
-    changes.  Runs the same SL/TP/trailing-stop checks that the old
-    ``handle_check_positions`` did, but without any API polling.
+    Handles the position snapshots pushed by :class:`SaxoStreamClient`.
+
+    Every snapshot goes through the SL/TP/trailing-stop checks, without any API
+    polling. The DB is reconciled with Saxo (to catch closures done outside
+    WATA, e.g. a broker-side stop) only when a position leaves the stream, and
+    periodically as a safety net.
     """
-    if not positions:
-        return
 
-    try:
-        perf_result = await performance_monitor.check_positions_from_stream(positions)
-        perf_errors = perf_result.get("errors", 0)
-        perf_closed = len(perf_result.get("closed_positions_processed", []))
+    def __init__(
+        self,
+        performance_monitor: AsyncPerformanceMonitor,
+        db_position_manager: AsyncDbPositionManager,
+        telegram: AsyncTelegramSender,
+        reconcile_settle_seconds: float = RECONCILE_SETTLE_SECONDS,
+    ):
+        self.performance_monitor = performance_monitor
+        self.db_position_manager = db_position_manager
+        self.telegram = telegram
+        self.reconcile_settle_seconds = reconcile_settle_seconds
+        self._last_position_ids: set[str] = set()
+        self._reconcile_requested = False
+        self._pending_reconcile: asyncio.Task | None = None
 
-        # DB sync is less critical with streaming (we see closures in real-time)
-        # but we still reconcile to catch anything done externally
-        sync_result = await performance_monitor.sync_db_positions_with_api()
-        updates = sync_result.get("updates_for_db", [])
+    async def on_positions_update(self, positions: dict[str, dict]):
+        """Called by the stream client with the latest position snapshot."""
+        position_ids = set(positions)
+        if self._last_position_ids - position_ids:
+            self._reconcile_soon()
+        self._last_position_ids = position_ids
 
-        sync_applied = 0
-        sync_errors = 0
-        for position_id, update_data in updates:
+        if not positions:
+            return
+
+        try:
+            perf_result = await self.performance_monitor.check_positions_from_stream(positions)
+            perf_errors = perf_result.get("errors", 0)
+            perf_closed = len(perf_result.get("closed_positions_processed", []))
+            if perf_errors > 0:
+                logger.warning("Stream position check: closed=%d, errors=%d", perf_closed, perf_errors)
+            else:
+                logger.debug("Stream position check: closed=%d, errors=%d", perf_closed, perf_errors)
+        except Exception as e:
+            logger.error("Error in streaming position callback: %s", e, exc_info=True)
+
+    def _reconcile_soon(self):
+        """Plan a reconciliation for a position that just left the stream."""
+        self._reconcile_requested = True
+        if self._pending_reconcile is None or self._pending_reconcile.done():
+            self._pending_reconcile = asyncio.create_task(self._reconcile_after_settling())
+
+    async def _reconcile_after_settling(self):
+        while self._reconcile_requested:
+            self._reconcile_requested = False
+            await asyncio.sleep(self.reconcile_settle_seconds)
+            # The stream already says what is open at Saxo: no API call needed for that.
+            await self.reconcile(open_position_ids=self._last_position_ids)
+
+    async def reconcile(self, open_position_ids: set[str] | None = None):
+        """Mark as closed in the DB the positions that were closed at Saxo behind WATA's back."""
+        try:
+            sync_result = await self.performance_monitor.sync_db_positions_with_api(open_position_ids)
+        except Exception as e:
+            logger.error("Position reconciliation failed: %s", e, exc_info=True)
+            return
+
+        for position_id, update_data in sync_result.get("updates_for_db", []):
             try:
-                await db_position_manager.update_turbo_position_data(position_id, update_data)
-                sync_applied += 1
+                await self.db_position_manager.update_turbo_position_data(position_id, update_data)
+                logger.info("Reconciled position %s as closed at Saxo.", position_id)
             except Exception as e:
-                sync_errors += 1
                 logger.critical("SYNC ERROR: Failed DB update for Pos %s: %s", position_id, e, exc_info=True)
-                await telegram.send(f"CRITICAL SYNC ERROR: Failed DB update for Pos {position_id}: {e}")
+                await self.telegram.send(f"CRITICAL SYNC ERROR: Failed DB update for Pos {position_id}: {e}")
 
-        total_errors = perf_errors + sync_errors
-        if total_errors > 0:
-            logger.warning("Stream position check: closed=%d, synced=%d, errors=%d", perf_closed, sync_applied, total_errors)
-        else:
-            logger.debug("Stream position check: closed=%d, synced=%d, errors=%d", perf_closed, sync_applied, total_errors)
+    async def reconcile_periodically(self, interval_seconds: float):
+        """
+        Reconcile at startup and then every ``interval_seconds``, asking Saxo's
+        REST API what is open so that it doesn't rely on the stream being healthy.
+        """
+        while True:
+            await self.reconcile()
+            await asyncio.sleep(interval_seconds)
 
-    except Exception as e:
-        logger.error("Error in streaming position callback: %s", e, exc_info=True)
+    def stop(self):
+        if self._pending_reconcile is not None and not self._pending_reconcile.done():
+            self._pending_reconcile.cancel()
 
 
 async def handle_daily_stats(
@@ -207,6 +261,9 @@ async def main():
     stream_client: SaxoStreamClient | None = None
     pg = None
     api_client = None
+    performance_monitor = None
+    stream_handler = None
+    reconcile_task = None
 
     try:
         # PostgreSQL
@@ -253,19 +310,16 @@ async def main():
         reconnect_delay = streaming_config.get("reconnect_delay_seconds", 1.0)
         max_reconnect_delay = streaming_config.get("max_reconnect_delay_seconds", 30.0)
         reauth_interval_seconds = streaming_config.get("reauth_interval_seconds", 900)
+        reconcile_interval_seconds = streaming_config.get("reconcile_interval_seconds", 30)
 
-        # Build the streaming callback (closes over service objects)
-        async def _stream_callback(positions: dict[str, dict]):
-            await on_positions_update(
-                positions, performance_monitor, db_position_manager, telegram,
-            )
+        stream_handler = StreamPositionHandler(performance_monitor, db_position_manager, telegram)
 
         # Create streaming client
         stream_client = SaxoStreamClient(
             api_client=api_client,
             account_key=account_key,
             client_key=client_key,
-            on_positions_update=_stream_callback,
+            on_positions_update=stream_handler.on_positions_update,
             environment=environment,
             access_token_getter=lambda: saxo_auth.get_token(),
             refresh_rate_ms=refresh_rate_ms,
@@ -301,6 +355,8 @@ async def main():
             environment,
         )
 
+        reconcile_task = asyncio.create_task(stream_handler.reconcile_periodically(reconcile_interval_seconds))
+
         # Run the streaming client (blocks until stop() or fatal error)
         await stream_client.start()
 
@@ -313,8 +369,14 @@ async def main():
         sys.exit(1)
     finally:
         logger.info("--- Shutting down WATA Position Monitor ---")
+        if reconcile_task is not None:
+            reconcile_task.cancel()
+        if stream_handler is not None:
+            stream_handler.stop()
         if stream_client:
             await stream_client.stop()
+        if performance_monitor is not None:
+            await performance_monitor.wait_for_background_tasks()
         if api_client is not None:
             await api_client.close()
         if pg is not None:
