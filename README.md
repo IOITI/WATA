@@ -48,9 +48,10 @@ WATA (Warrants Automated Trading Assistant) is an algorithmic trading system com
 
 - **Automated Execution**: Eliminates emotional bias and human error by executing trades based on predefined rules and signals (from TradingView, for example)
 - **Risk Management**: Implements systematic position monitoring with stop-loss and take-profit mechanisms
+- **Cached Instrument Selection**: Maintains a background watchlist of candidate turbos for configured indices and directions
 - **Performance Tracking**: Provides comprehensive analytics and reporting for trade analysis
-- **Real-time Monitoring**: Delivers instant notifications via Telegram for trade execution and system status
-- **Scalability**: Built on a microservice architecture for reliable and maintainable operation
+- **Real-time Monitoring**: Uses Saxo WebSocket updates for open positions and delivers notifications via Telegram
+- **Scalability**: Uses asynchronous services, PostgreSQL, and a microservice architecture
 
 The system is particularly suited for traders who:
 - Want to automate their trading strategies
@@ -61,121 +62,105 @@ The system is particularly suited for traders who:
 
 ## 🏗️ Architecture
 
-WATA uses a microservice architecture with:
+WATA runs as a set of Docker Compose services:
 
-| Component (roles) | Purpose                                                       |
-|-------------------|---------------------------------------------------------------|
-| **Web Server**    | Receives webhook signals from third party (like: TradingView) |
-| **Trader**        | Executes Saxo Bank API operations                             |
-| **Scheduler**     | Manages job orchestrations                                    |
-| **Telegram**      | Delivers notifications and alerts                             |
-| **RabbitMQ**      | Handles inter-component messaging                             |
+| Component (role) | Purpose |
+|------------------|---------|
+| **Traefik** | Routes public webhook traffic over HTTPS, obtains TLS certificates, and applies the configured IP allowlist |
+| **Web Server** (`web_server`) | Validates webhook signals and keeps the newest signal per `indice` in an in-memory store |
+| **Trader** (`trader`) | Polls the Web Server for signals, applies trading rules, calls Saxo asynchronously, and persists trading data |
+| **Watchlist Manager** (`watchlist_manager`) | Builds and refreshes cached best-turbo candidates for configured indices and directions |
+| **Position Monitor** (`position_monitor`) | Monitors live Saxo position updates and handles stop-loss, take-profit, trailing-stop, and operational events |
+| **Scheduler** (`scheduler`) | Sends scheduled operations to `trading-ops` and scheduled close signals to the Web Server |
+| **PostgreSQL** | Primary runtime database for orders, positions, and trade performance |
+| **RabbitMQ** | Carries `trading-ops` messages and Telegram notifications; the Trader no longer consumes trade signals from a RabbitMQ queue |
+| **Telegram** (`telegram`) | Delivers trade and service notifications |
 
 ```mermaid
 flowchart TD
-    %% Styling
     classDef external fill:#f9f9f9,stroke:#aaa,stroke-width:1px,color:#000
-    classDef processing fill:#e1f5fe,stroke:#03a9f4,stroke-width:1px,color:#000
+    classDef service fill:#e1f5fe,stroke:#03a9f4,stroke-width:1px,color:#000
     classDef execution fill:#e8f5e9,stroke:#4caf50,stroke-width:1px,color:#000
-    classDef jobs fill:#fff8e1,stroke:#ffc107,stroke-width:1px,color:#000
-    classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray: 5 5,color:#000
-    classDef reporting fill:#ffebee,stroke:#f44336,stroke-width:1px,color:#000
-    
-    %% External Systems
-    subgraph ExtSys["🌐 External Systems"]
-        direction LR
-        TV("🖥️ TradingView/<br>Signal Source")
-        SB("🏦 Saxo Bank API")
-        User("👤 User/Trader")
-        TG("📱 Telegram Service")
-    end
-    
-    %% WATA Core Services
-    subgraph CoreSys["⚙️ WATA Core Services"]
-        direction TB
-        
-        subgraph SigProc["📡 Signal Processing"]
-            direction LR
-            WS("🔌 Web Server")
-            RMQ("📨 RabbitMQ<br>Message Broker")
-        end
-        
-        subgraph ExecEng["💹 Execution Engine"]
-            direction LR
-            TR("💱 Trader Service")
-            DB[("💾 DuckDB")]:::database
-        end
-        
-        subgraph JobSvc["⏱️ Jobs Orchestration"]
-            SC("🔄 Scheduler")
-        end
-    end
-    
-    %% Reporting System
-    subgraph RepSys["📊 Local Reporting System"]
-        direction LR
-        EX("🔄 Data Export")
-        OD("📈 Observable<br>Dashboard")
-    end
-    
-    %% Connections with styled arrows
-    TV -- "1️⃣ Webhook Signal" --> WS
-    WS -- "2️⃣ Signal Message" --> RMQ
-    RMQ -- "3️⃣ Position Request" --> TR
-    TR -- "Authentication" --> SB
-    User -- "Auth Code" --> TR
-    TR -- "4️⃣ Trading Operations" --> SB
-    TR -- "Send Notification" --> RMQ
-    RMQ -- "Notification Request" --> TG
-    TG -- "5️⃣ Notifications" --> User
-    TR <-- "Position Data" --> DB
-    SC -- "Periodic Tasks" --> RMQ
-    RMQ -- "Status Tasks" --> TR
-    TR <-- "Performance Data" --> DB
-    DB -. "6️⃣ Manual Data Sync" .-> EX
-    EX -. "Data Transform" .-> OD
-    OD -. "7️⃣ Performance<br>Visualization" .-> User
-    
-    %% Apply styles
-    class TV,SB,User,TG external
-    class WS,RMQ processing
-    class TR,DB execution
-    class SC jobs
-    class EX,OD reporting
-```
+    classDef queue fill:#fff8e1,stroke:#ffc107,stroke-width:1px,color:#000
+    classDef database fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,stroke-dasharray:5 5,color:#000
 
+    subgraph ExtSys["External Systems"]
+        direction LR
+        TV["TradingView"]
+        SaxoREST["Saxo Bank REST API"]
+        SaxoWS["Saxo Bank WebSocket"]
+        TG["Telegram"]
+    end
+
+    subgraph CoreSys["WATA Services"]
+        direction TB
+
+        Proxy["Traefik<br>HTTPS ingress"]:::service
+        WS["Web Server<br>latest-signal store"]:::service
+        TR["Async Trader<br>polls /latest-signals"]:::execution
+        WM["Watchlist Manager<br>best-turbo cache"]:::service
+        PM["Position Monitor"]:::execution
+        SC["Scheduler"]:::service
+        RMQ["RabbitMQ<br>trading-ops + telegram_channel"]:::queue
+        DB[("PostgreSQL 16")]:::database
+    end
+
+    TV -->|HTTPS webhook| Proxy --> WS
+    TR -->|GET /latest-signals every 500 ms| WS
+    WS -->|newest signal per indice| TR
+    TR -->|instrument search and orders| SaxoREST
+    TR -->|read and write trading data| DB
+    TR -->|cached candidate lookup| WM
+    WM -->|candidate search| SaxoREST
+    SaxoWS -->|live quote updates| WM
+    SaxoWS -->|position updates| PM
+    PM -->|position and performance data| DB
+    SC -->|scheduled operational messages| RMQ
+    RMQ -->|trading-ops| PM
+    SC -->|scheduled close signal| WS
+    TR -->|notifications| RMQ
+    PM -->|notifications| RMQ
+    RMQ -->|telegram_channel| TG
+
+    class TV,SaxoREST,SaxoWS,TG external
+    class Proxy,WS,WM,SC service
+    class TR,PM execution
+```
 
 ## 📊 Trading Workflow
 
 1. **Signal Reception**
-   - Validate incoming webhooks (authentication, schema)
-   - Parse action type (long, short, close)
+   - Receive webhook traffic through Traefik HTTPS and validate the token and payload schema
+   - Keep the newest signal for each `indice` in the Web Server's in-memory store
+   - The Trader polls `/latest-signals` every 500 ms by default; older signals for an `indice` are ignored
 
 2. **Rule Validation**
-   - Verify market hours, timestamp freshness
-   - Check allowed indices and position duplicates
-   - Apply daily profit limits
+   - Verify market hours and timestamp freshness
+   - Check allowed indices, duplicate positions, and configured risk limits
+   - Use the Watchlist Manager's cached candidates when available and validate instrument eligibility
 
 3. **Trade Execution**
-   - For new positions: instrument search, order calculation, position confirmation
-   - For closing: position retrieval, order creation, performance reporting
-   - Automatic position monitoring with stop-loss/take-profit handling
+   - Use asynchronous Saxo API calls for instrument search, order calculation, placement, and confirmation
+   - Persist orders, positions, and performance data in PostgreSQL
 
-4. **Performance Tracking**
-   - Daily statistics generation
-   - Performance metrics reporting
-   - Database storage for analysis
+4. **Real-Time Position Monitoring**
+   - The Position Monitor consumes Saxo WebSocket updates instead of relying on the old 7-second REST polling loop
+   - Evaluate stop-loss, take-profit, and trailing-stop rules; receive scheduled operational events through `trading-ops`
+
+5. **Reporting and Notifications**
+   - Generate daily statistics and trade reports, including closed-trade and daily-profit history
+   - Send trade and service notifications through the Telegram service
 
 ![telegram_notifcation.png](docs/images/telegram_notifcation.png)
 
 ## 💾 Database System
 
-WATA uses DuckDB for fast in-memory analytics:
+PostgreSQL 16 is the primary runtime database. The application uses an `asyncpg` connection pool and creates its schema on startup.
 
-- **Order tracking**: Complete order and positions history with execution details
-- **Position management**: P&L calculations and performance metrics 
-- **Performance analytics**: Daily statistics and trading history
-- **Advantages**: High-speed analytics, corruption prevention, SQL support
+- **Order tracking**: Orders and execution details
+- **Position management**: Open and closed positions, including profit/loss data
+- **Performance analytics**: Trade performance and daily statistics
+- **DuckDB migration**: `src/database/migration.py` imports existing DuckDB data into PostgreSQL. DuckDB is no longer used by the live trading services.
 
 ## 🔐 Authentication and Security
 
@@ -215,7 +200,9 @@ WATA uses token-based authentication to secure webhook endpoints:
 **Security Features**:
 - All tokens are encrypted before storage
 - File permissions are restricted to the owner only
-- IP address filtering adds an additional layer of security
+- The deployed Traefik route applies an IP allowlist for TradingView webhook traffic
+
+In the Docker Compose deployment, Traefik redirects HTTP to HTTPS and obtains certificates through Let's Encrypt. Configure `API_DOMAIN` and `ACME_EMAIL` in `deploy/.env`, point the domain at the server, and allow inbound ports 80 and 443. HTTPS and the IP allowlist supplement the webhook token; they do not replace it.
 
 ## 📖 Detailed How-To Guide
 
@@ -284,22 +271,15 @@ For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.githu
 
 ### Docker Compose Setup
 
-The application uses Docker Compose with an override file for enhanced configuration:
+The current stack is defined in `deploy/docker-compose.yml`; it does not use the old setup service or a separate Compose override. It includes Traefik, PostgreSQL, RabbitMQ, the Web Server, Trader, Scheduler, Telegram, Position Monitor, and Watchlist Manager.
 
-1. **Environment Variables**
-   - The system uses a `.env` file in the `deploy` directory to manage sensitive configuration.
-   - The primary use is for setting the RabbitMQ password which is then synchronized with your config.json.
-
-2. **Service Dependencies**
-   - A special `setup` service runs before other services to ensure configuration is properly synchronized.
-   - This setup updates the RabbitMQ password in your config.json file to match the one set in your .env file.
-   - All other services (web_server, trader, scheduler, telegram) depend on both the setup service and the RabbitMQ service.
+The Compose file uses health checks and service dependencies for PostgreSQL, RabbitMQ, and Traefik. Traefik is the public HTTPS ingress; the other application services communicate over the internal Compose network.
 
 ### Configuration
 
 After deployment, you need to set up your configuration:
 
-1. **Configure RabbitMQ Password**
+1. **Configure Environment Variables**
    ```bash
    # Navigate to the deploy directory
    cd /app/deploy
@@ -307,11 +287,11 @@ After deployment, you need to set up your configuration:
    # Copy the example .env file
    cp .env.example .env
    
-   # Edit the .env file to set your custom RabbitMQ password
+   # Edit passwords and the public API hostname
    nano .env
    ```
    
-   This sets the password used by RabbitMQ and automatically updates your config.json file through the setup service in docker-compose.
+   Set `RABBITMQ_PASSWORD`, `ACME_EMAIL`, and `API_DOMAIN`. Also set a strong `POSTGRES_PASSWORD` in `.env`; the Compose file has a fallback if it is omitted, but it should not be used for a real deployment. Point `API_DOMAIN` to the server so Traefik can issue the HTTPS certificate.
 
 2. **Copy the Example Config**
    ```bash
@@ -361,7 +341,12 @@ After deployment, you need to set up your configuration:
    - **Other Settings**
      - Logging configuration
      - RabbitMQ connection details
-     - DuckDB database path
+     - PostgreSQL DSN and pool sizing (`postgresql`)
+     - Saxo streaming refresh and reconnect settings (`trade.config.general.streaming`)
+     - Cached candidate settings (`trade.config.watchlist_manager`)
+     - Signal polling endpoint and interval (`trade.config.signal_polling`)
+
+   The `duckdb` configuration is retained for the one-time migration source and legacy reporting export; it is not the live trading database. See the [v0.6.x migration notes](CHANGELOG.md) for the DuckDB-to-PostgreSQL migration steps.
 
    For a complete and detailed explanation of all configuration options, please refer to the [CONFIGURATION Guide](https://ioiti.github.io/wata-docs/docs/configuration).
 
@@ -372,6 +357,8 @@ After deployment, you need to set up your configuration:
    ```
 
 ### Usage
+
+For a deployed instance, send TradingView signals to the HTTPS hostname configured by `API_DOMAIN`. The Web Server stores only the newest signal per `indice` in memory; older timestamps for that index are ignored, and pending signals are not persisted across a Web Server restart. The Trader polls this store internally.
 
 Send trading signals to:
 ```
@@ -390,22 +377,26 @@ Payload:
 
 ## 📈 Reporting
 
-WATA includes a visualization dashboard built on Observable Framework:
+WATA generates trading reports and also includes a local visualization dashboard built on Observable Framework:
 
 - Daily/cumulative profit tracking
 - Performance analysis by action type
 - Win-rate and position duration metrics
+- Closed-trade and daily-profit history
+- Current account balance and milestone projections in daily reports
 - Interactive data exploration
 
 ![reporting_example.gif](docs/images/reporting_example.gif)
 
 _(yeah, I'm still loosing money... but at least ... I know how much !)_
 
+**Data-source note:** PostgreSQL is the live runtime database, but the current Observable dashboard sync scripts still download the legacy DuckDB file from `/app/wata/var/lib/duckdb/` and export it with the DuckDB CLI. They do not export records written to PostgreSQL after the migration. Treat this dashboard sync as a legacy DuckDB export until a PostgreSQL export path is added; application-generated daily reports use the runtime database.
+
 ### Requirements
 
 To use the reporting system, you need:
 - Node.js and npm installed
-- DuckDB CLI installed
+- DuckDB CLI for the existing legacy dashboard export
 - Python 3.12+ (with required libraries `./reporting/requirements.txt`)
 - Ansible configured with proper inventory (same as deployment stage)
 
@@ -422,7 +413,7 @@ To use the reporting system, you need:
    ./reporting/sync_reporting_data.sh
    ```
    This script synchronizes your trading data from the server to your local dashboard:
-   - Fetches DuckDB data from your production server
+   - Fetches the legacy DuckDB file from your production server
    - Exports the database to Parquet format
    - Generates the necessary JSON files for visualization
    - Copies all data to the Observable Framework project
@@ -455,7 +446,7 @@ For a comprehensive list of questions and answers, please see our detailed [FAQ 
 ## 🤝 Acknowledgements
 
 - [@hootnot](https://github.com/hootnot): [Saxo OpenAPI library](https://github.com/hootnot/saxo_openapi)
-- [Observable Framework](https://observablehq.com/framework), [DuckDB](https://duckdb.org/), [FastAPI](https://fastapi.tiangolo.com/), [RabbitMQ](https://www.rabbitmq.com/), [Ansible](https://www.ansible.com/)
+- [PostgreSQL](https://www.postgresql.org/), [asyncpg](https://github.com/MagicStack/asyncpg), [HTTPX](https://www.python-httpx.org/), [Observable Framework](https://observablehq.com/framework), [DuckDB](https://duckdb.org/) (migration and legacy reporting), [FastAPI](https://fastapi.tiangolo.com/), [RabbitMQ](https://www.rabbitmq.com/), [Traefik](https://traefik.io/), [Ansible](https://www.ansible.com/)
 
 ## 🛠️ Contributors
 
@@ -493,4 +484,3 @@ The documentation is organized into the following sections:
 ### Contributing to Documentation
 
 We welcome contributions to the documentation! If you find any errors or have suggestions for improvements, please submit a pull request or open an issue on [this GitHub repository.](https://github.com/IOITI/wata-docs)
-
