@@ -14,12 +14,13 @@ Automated trading assistant for Saxo Bank Knock-out warrants (Turbos). Python 3.
 | `scheduler`        | `src/scheduler/`            | Publishes to `trading-ops` / web_server   |
 | `telegram`         | `src/mq_telegram/`          | Consumes `telegram` queue                 |
 | `watchlist_manager`| `src/watchlist_manager/`    | REST API on `:8081`                       |
+| `admin`            | `src/admin/`                | FastAPI on `:8082`, cookie session; serves the React UI built from `admin_ui/` |
 
 Each service runs as a Docker container; `WATA_APP_ROLE` env var selects which `__init__.py` runs via `src/start_python_script.sh`.
 
 ## Infrastructure
 
-- **RabbitMQ** — queues: `trading-signals` (trade actions), `trading-ops` (ops/daily_stats), `telegram` (notifications)
+- **RabbitMQ** — queues: `trading-signals` (trade actions, no longer consumed), `trading-ops` (ops/daily_stats), `telegram_channel` (notifications)
 - **PostgreSQL 16** — replaces DuckDB (migrated in v0.7.0). DuckDB config is dead.
 - **Traefik** — reverse proxy, Let's Encrypt, TradingView IP allowlist
 - **Config** — JSON at `WATA_CONFIG_PATH` path, validated strictly by `ConfigurationManager`
@@ -33,8 +34,13 @@ PYTHONPATH=./:src/ pytest --cov=src --cov-report=term-missing --cov-report=html 
 # Run a single test file
 PYTHONPATH=./:src/ pytest tests/test_web_server.py -vv
 
-# Build deployable zip
+# Build deployable zip (also builds admin_ui/ into src/admin/static; needs Node, see admin_ui/.nvmrc)
 ./package.sh          # creates wata_app_v<VERSION>.zip
+
+# Admin interface (in admin_ui/)
+npm run lint && npm run typecheck && npm test && npm run build
+npm run dev:api       # the real admin app over fake data on 127.0.0.1:8082 (password printed at start)
+npm run dev           # Vite dev server, proxies /api to it
 
 # Deploy (via Ansible)
 ./deploy/tools/deploy_app_to_your_server.sh
@@ -59,6 +65,15 @@ PYTHONPATH=./:src/ pytest tests/test_web_server.py -vv
 - **Two auth schemes**: webhook uses `?token=...` query param; internal endpoints use HTTP Bearer token.
 - **`uvloop.install()`** at startup of trader and position_monitor.
 - **Schema** defined as plain dicts in `src/schema/__init__.py` (not pydantic), validated with `jsonschema`.
+- **Admin is opt-in** (compose profile `admin`). It reads PostgreSQL through a read-only pool, reaches the other services through what they expose (`/latest-signals`, `/internal/signal`, watchlist endpoints, RabbitMQ, the Saxo token files) and has no Docker socket. Its only DB write is the pause of new entries (`trade_risk_state`, separate connection). All its outside access goes through `AdminContext` (`src/admin/context.py`), which tests replace with fakes.
+- **What the trading services do for the admin** (all additive, none may block or fail a trade): the trader checks `TradingRule.check_entries_paused()` before opening and journals each signal's outcome in the background (`SignalJournal`, table `signal_journal`); the position monitor publishes `AsyncPerformanceMonitor.live_values()` to `position_live_value` on a timer and handles the `close_position` ops message (ignored when older than 60 s); both record the account balance with the daily report (`account_balance_history`).
+- **Admin config edits only touch `trade.rules`, `trade.config`, `reporting`, `logging.level`** (`src/admin/config_editor.py`); everything else is merged back from disk, on save and on backup restore alike (both go through `merge_editable`). `PROTECTED_PATHS` lists the infrastructure keys inside those sections (service URLs, listen address): a new key there that says where a service connects must be added to it. Services read the config at start, so a saved change applies at each service's next start.
+- **The dashboard's "Next entry" tile repeats the trader's entry rules** (`admin_ui/src/features/dashboard/entryState.ts`: pause, closed date, trading and risky hours, day target and stop, trade limit, cooldown) on what `/api/overview` returns. A change to those rules in `src/trade/rules.py` must be made there too, with its test (`entryState.test.ts`), or the tile says "Open" for a signal the trader refuses.
+- **Admin health summary** (`src/admin/health.py`) has a `saxo` entry that is not a service: it is "down" when the refresh token is missing or expired, which turns the top bar's summary and the "Saxo: authorise" chip on every page.
+- **Admin dialogs** render in `document.body` (`components/ui/settle-modal.tsx`) with focus moved in and trapped; a component test that opens one needs a data router only if it uses `LeaveGuard` (`useBlocker`).
+- **Admin live events** (`/api/events`, SSE): uvicorn does not tell the app that a browser left and writing to it does not fail, so the stream asks `request.is_disconnected()` itself. Keep `SecurityHeadersMiddleware` a plain ASGI middleware (`@app.middleware("http")` hides the disconnect from a streamed response) and keep `timeout_graceful_shutdown` on `uvicorn.run`, or an open page keeps the container from stopping. `tests/test_admin_api.py` checks both on a real socket (`RunningAdmin`), which the in-memory `TestClient` cannot show.
+- **Admin client address** (`client_ip` in `src/admin/auth.py`): `X-Forwarded-For` is believed only from `admin.trusted_proxy_hosts` (default `["traefik"]`); other containers can reach `admin1:8082` directly and are known by their own address.
+- **`admin_ui/src/components/ui/` is copied from EasyUI** (shadcn-style, MIT). Add components with `npx shadcn@latest add Surajmaurya1/easyui/<slug>`; local changes are listed in `admin_ui/README.md`.
 
 ## Database migration
 

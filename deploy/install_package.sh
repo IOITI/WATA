@@ -37,6 +37,7 @@ mkdir -p "$APP_BASE_DIR/var/lib/saxo_auth"
 mkdir -p "$APP_BASE_DIR/var/lib/web_server"
 mkdir -p "$APP_BASE_DIR/var/lib/rabbitmq"
 mkdir -p "$APP_BASE_DIR/var/lib/trade"
+mkdir -p "$APP_BASE_DIR/var/lib/admin"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik/letsencrypt"
 mkdir -p "$APP_BASE_DIR/var/log/"
@@ -45,6 +46,7 @@ mkdir -p "$APP_BASE_DIR/var/log/wata-api"
 mkdir -p "$APP_BASE_DIR/var/log/wata-trader"
 mkdir -p "$APP_BASE_DIR/var/log/wata-telegram"
 mkdir -p "$APP_BASE_DIR/var/log/wata-scheduler"
+mkdir -p "$APP_BASE_DIR/var/log/wata-admin"
 
 # Ensure docker service is enabled
 echo "Ensuring Docker service is enabled..."
@@ -102,6 +104,28 @@ fi
 docker exec web_server1 python -m src.web_server.cli $OPTIONS
 EOF
 chmod +x /usr/local/bin/watawebtoken
+
+# Create the wataadminpasswd command wrapper
+cat << 'EOF' > /usr/local/bin/wataadminpasswd
+#!/bin/bash
+set -euo pipefail
+
+docker exec -it admin1 python -m src.admin.cli --set-password
+EOF
+chmod +x /usr/local/bin/wataadminpasswd
+
+# Create the wataadmintotp command wrapper (second factor of the admin login)
+cat << 'EOF' > /usr/local/bin/wataadmintotp
+#!/bin/bash
+set -euo pipefail
+OPTIONS="--enable-totp"
+if [ "$#" -gt 0 ] && [ "$1" == "--disable" ]; then
+    OPTIONS="--disable-totp"
+fi
+
+docker exec -it admin1 python -m src.admin.cli $OPTIONS
+EOF
+chmod +x /usr/local/bin/wataadmintotp
 
 # --- Helper function definition for other scripts ---
 # Note: This is a string that will be embedded into other scripts.
@@ -277,4 +301,9 @@ echo "  - watasaxoauth <AUTH_CODE>"
 echo ""
 echo "To manage the WebServer token:"
 echo "  - watawebtoken [--new]"
+echo ""
+echo "To set the password of the admin web interface (when enabled in .env):"
+echo "  - wataadminpasswd"
+echo "To require a one-time code from an authenticator app as well:"
+echo "  - wataadmintotp [--disable]"
 echo "---------------------------------------------------------------------"
