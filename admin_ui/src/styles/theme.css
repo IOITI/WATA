@@ -1,0 +1,47 @@
+/* -----------------------------------------------------------------------------
+   WATA additions to the EasyUI tokens.
+
+   EasyUI has no status colours of its own; its components use Tailwind's
+   emerald / red / amber on dark surfaces, so the trading colours (profit,
+   loss, warning) come from the same families.
+
+   Text and chart marks use different steps on purpose. Text needs contrast
+   against the surface; filled marks need to sit in a narrower lightness band
+   and stay apart for colour-blind readers. The chart pair was checked with the
+   dataviz palette validator against the dark card surface (#18181b).
+   --------------------------------------------------------------------------- */
+
+:root {
+  --focus-ring: #2563eb;
+  --positive: #059669;
+  --negative: #dc2626;
+  --warning: #d97706;
+  --info: #0284c7;
+
+  --chart-series: #2563eb;
+  --chart-positive: #059669;
+  --chart-negative: #dc2626;
+  --chart-muted: #a1a1aa;
+  --chart-grid: #e4e4e7;
+  --chart-axis: #d4d4d8;
+}
+
+.dark {
+  /* EasyUI's own values for these two (#6F6F75, #4D4D52) are 3.9:1 and 2.0:1
+     on the dark surfaces: under what small text needs (4.5:1). Raised here,
+     tokens.css staying the unchanged copy. */
+  --text-muted: #9a9aa3;
+  --text-subtle: #85858e;
+  --focus-ring: #60a5fa;
+  --positive: #34d399;
+  --negative: #f87171;
+  --warning: #fbbf24;
+  --info: #38bdf8;
+
+  --chart-series: #3b82f6;
+  --chart-positive: #059669;
+  --chart-negative: #ef4444;
+  --chart-muted: #52525b;
+  --chart-grid: #27272a;
+  --chart-axis: #3f3f46;
+}

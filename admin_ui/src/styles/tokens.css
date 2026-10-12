@@ -1,0 +1,121 @@
+/* -----------------------------------------------------------------------------
+   EasyUI design tokens.
+
+   `:root` is the LIGHT palette (the default page theme).
+   `.dark`  is the DARK palette (the legacy / default for component previews).
+   Component previews that need to stay dark in a light page wrap themselves in
+   a `dark` div, which activates the `.dark` token values inside that subtree.
+   --------------------------------------------------------------------------- */
+
+:root {
+  /* Surfaces & Background (light) */
+  --bg: #FAFAFA;
+  --surface: #FFFFFF;
+  --surface-hover: #F4F4F5;
+  --surface-raised: #F1F1F2;
+
+  /* Borders (light) */
+  --border: #E4E4E7;
+  --border-hover: #D4D4D8;
+  --border-subtle: #EDEDEF;
+
+  /* Typography Tokens (theme-agnostic) */
+  --font-sans: 'Geist', 'Geist Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Geist', 'Geist Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-body: 'Geist', 'Geist Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  --tracking-tighter: -0.04em;
+  --tracking-tight-heading: -0.035em;
+  --tracking-snug: -0.02em;
+  --tracking-body: -0.011em;
+
+  /* Text (light) */
+  --text-primary: #0A0A0A;
+  --text-secondary: #52525B;
+  --text-muted: #71717A;
+  --text-subtle: #A1A1AA;
+
+  /* Accent (light) */
+  --accent: #0A0A0A;
+  --accent-subtle: rgba(10, 10, 10, 0.05);
+  --accent-glow: rgba(10, 10, 10, 0.06);
+  --accent-ring: rgba(10, 10, 10, 0.15);
+  --indicator-active: #3B82F6;
+
+  /* Navbar pill tokens (light) — used by framer-motion animate props in Navbar */
+  --pill-bg-scrolled: rgba(255, 255, 255, 0.85);
+  --pill-bg-idle: rgba(255, 255, 255, 0);
+  --pill-border-scrolled: rgba(228, 228, 231, 1);
+  --pill-border-idle: rgba(228, 228, 231, 0);
+  --pill-shadow-scrolled: 0 12px 28px -8px rgba(15, 15, 20, 0.18), 0 0 0 1px rgba(15, 15, 20, 0.04);
+  --pill-shadow-idle: 0 0 0 0 rgba(0, 0, 0, 0);
+
+  /* Radius Tokens (theme-agnostic) */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* Shadows (light) */
+  --shadow-subtle: 0 1px 2px 0 rgba(15, 15, 20, 0.06), 0 0 0 1px rgba(15, 15, 20, 0.04);
+  --shadow-elevated: 0 10px 25px -8px rgba(15, 15, 20, 0.12), 0 0 0 1px rgba(15, 15, 20, 0.05);
+  --shadow-glow: 0 0 15px -3px rgba(15, 15, 20, 0.08);
+}
+
+/* Dark palette — applied when an ancestor (typically <html> or a preview
+   wrapper) has the `.dark` class. */
+.dark {
+  --bg: #111113;
+  --surface: #1C1C1F;
+  --surface-hover: #202023;
+  --surface-raised: #18181A;
+
+  --border: #29292C;
+  --border-hover: #343438;
+  --border-subtle: #18181A;
+
+  --text-primary: #F2F2F3;
+  --text-secondary: #A1A1A6;
+  --text-muted: #6F6F75;
+  --text-subtle: #4D4D52;
+
+  --accent: #F2F2F3;
+  --accent-subtle: rgba(242, 242, 243, 0.06);
+  --accent-glow: rgba(242, 242, 243, 0.08);
+  --accent-ring: rgba(242, 242, 243, 0.20);
+  --indicator-active: #3B82F6;
+
+  --pill-bg-scrolled: rgba(17, 17, 19, 0.85);
+  --pill-bg-idle: rgba(17, 17, 19, 0);
+  --pill-border-scrolled: rgba(41, 41, 44, 1);
+  --pill-border-idle: rgba(41, 41, 44, 0);
+  --pill-shadow-scrolled: 0 12px 28px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(242, 242, 243, 0.04);
+  --pill-shadow-idle: 0 0 0 0 rgba(0, 0, 0, 0);
+
+  --shadow-subtle: 0 1px 2px 0 rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(242, 242, 243, 0.02);
+  --shadow-elevated: 0 10px 25px -8px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(242, 242, 243, 0.04);
+  --shadow-glow: 0 0 15px -3px rgba(242, 242, 243, 0.08);
+}
+
+/* -----------------------------------------------------------------------------
+   Custom Scrollbar
+   --------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
