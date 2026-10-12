@@ -57,7 +57,11 @@ async def check_ip(request: Request, call_next):
     # Internal-only endpoints are never routed from the internet (Traefik's own
     # IP allowlist covers the whole domain already) and are protected by the
     # Bearer token instead, so skip the IP check for them.
-    if request.url.path in INTERNAL_ONLY_PATHS:
+    # The path comes from the ASGI scope, which is what the router dispatches on.
+    # request.url is rebuilt from the Host header: with a Host such as
+    # "x/latest-signals?" its path named an internal endpoint for a request
+    # routed to /webhook, which then skipped the IP check (Starlette before 1.0.1).
+    if request.scope["path"] in INTERNAL_ONLY_PATHS:
         return await call_next(request)
 
     # Traefik will pass the real IP in the X-Forwarded-For header

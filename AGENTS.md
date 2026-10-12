@@ -64,6 +64,8 @@ npm run dev           # Vite dev server, proxies /api to it
 - **Broker-side protective stop** (`position_management.protective_stop`) is opt-in and untested against Saxo; closes cancel a position's `RelatedOpenOrders` before selling.
 - **Scheduler** sends `close-position` via HTTP POST to `web_server:80/internal/signal` (Bearer token), and `daily_stats` via RabbitMQ `trading-ops`.
 - **Two auth schemes**: webhook uses `?token=...` query param; internal endpoints use HTTP Bearer token.
+- **An access check reads the path from `request.scope["path"]`, not from `request.url`**: the URL is rebuilt from the `Host` header, which the caller writes. The web server's IP allowlist was skipped that way (`check_ip`, tested in `tests/test_web_server_advanced.py`).
+- **Every line of `requirements.txt` has a version.** Dependabot does not check a line without one, and pip then picks whatever the other pins allow (an old `typing_extensions` pin kept FastAPI and Starlette on versions with known advisories). The file is not a full lock: packages it does not list (`h2`, `cffi`, `aiormq`…) are still chosen at build time.
 - **`uvloop.install()`** at startup of trader and position_monitor.
 - **Schema** defined as plain dicts in `src/schema/__init__.py` (not pydantic), validated with `jsonschema`.
 - **Admin is opt-in** (compose profile `admin`). It reads PostgreSQL through a read-only pool, reaches the other services through what they expose (`/latest-signals`, `/internal/signal`, watchlist endpoints, RabbitMQ, the Saxo token files) and has no Docker socket. Its only DB write is the pause of new entries (`trade_risk_state`, separate connection). All its outside access goes through `AdminContext` (`src/admin/context.py`), which tests replace with fakes.

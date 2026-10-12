@@ -7,7 +7,7 @@ click==8.1.7
 dnspython==2.6.1
 duckdb==1.1.3
 email_validator==2.1.1
-fastapi
+fastapi==0.135.1
 fastapi-cli==0.0.3
 h11==0.16.0
 httpcore==1.0.9
@@ -40,12 +40,12 @@ selenium==4.20.0
 shellingham==1.5.4
 sniffio==1.3.1
 sortedcontainers==2.4.0
-starlette
+starlette==1.3.1
 tenacity==9.1.2
 trio==0.25.0
 trio-websocket==0.11.1
 typer==0.12.3
-typing_extensions==4.11.0
+typing_extensions==4.12.2
 ujson==5.13.0
 urllib3==2.8.0
 uvicorn==0.29.0
@@ -60,6 +60,6 @@ asyncpg==0.30.0
 aio-pika==9.5.4
 psycopg[binary]==3.2.6
 # ---------------------------------
-pytest
-pytest-cov
-pytest-asyncio==0.25.3
+pytest==9.0.3
+pytest-cov==7.1.0
+pytest-asyncio==1.4.0
