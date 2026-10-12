@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, NamedTuple, Sequence
 
 from src.price_recorder.bars import BAR_SECONDS
+from src.price_recorder.range_bars import RANGE_PAUSE_SECONDS, BuiltBar, RangeBarBuilder
 
 # One bar as the Prices page receives it: the start of its bucket (epoch seconds), then bid, ask and activity.
 BAR_COLUMNS = (
@@ -38,9 +39,6 @@ SIDES = ("bid", "ask")
 RANGE_MAX_DAYS = 31
 # Ten-second bars read to build them: a month recorded around the clock is 270,000.
 RANGE_MAX_ROWS = 300_000
-# Longer than this without a bar (a night, a recording gap) and the price in between
-# is not known: the bar in progress ends there and no bar is made up for the jump.
-RANGE_PAUSE_SECONDS = 60
 # An automatic range is about this fraction of what the price covered in the period.
 AUTO_RANGE_DIVISOR = 25
 # Prices are quoted with two decimals at least; beyond five it is noise.
@@ -183,15 +181,6 @@ class RangeBar(NamedTuple):
     after_pause: bool
 
 
-class _Growing:
-    __slots__ = ("start", "open", "high", "low", "close", "end", "after_pause")
-
-    def __init__(self, start: int, price: int, after_pause: bool):
-        self.start = self.end = start
-        self.open = self.high = self.low = self.close = price
-        self.after_pause = after_pause
-
-
 def range_bars(
     times: Sequence[int],
     opens: Sequence[float],
@@ -206,69 +195,42 @@ def range_bars(
     pause_seconds: int = RANGE_PAUSE_SECONDS,
 ) -> list[RangeBar]:
     """
-    Range bars from ten-second bars, oldest first.
+    Range bars from ten-second bars, oldest first; the last one is the bar
+    still in progress.
 
-    A bar grows with the price and is complete when the price leaves its
-    range: it then closes at its high or at its low, one range from the other
-    end, and the next bar opens where it closed. A move of several ranges
-    gives several bars.
-
-    What is inside ten seconds is not recorded. The order assumed is the usual
-    one: the low before the high when the ten seconds rose, the high first
-    when they fell.
-
-    Prices are counted in whole ticks, so a complete bar is its range exactly.
+    How a bar grows and ends is ``RangeBarBuilder``'s
+    (src/price_recorder/range_bars.py), which the strategies use as well. Here
+    the prices become whole ticks, each bar gets its place on the chart's
+    axis, and a period that makes more than ``limit`` bars is refused.
     """
-    if ticks < 1:
-        raise ValueError("A range is one tick at least")
+    builder = RangeBarBuilder(ticks, bar_seconds=bar_seconds, pause_seconds=pause_seconds)
     scale = 10 ** decimals
     bars: list[RangeBar] = []
-    growing: _Growing | None = None
-    paused = False
-    previous_time: int | None = None
 
-    def close_bar(bar: _Growing, complete: bool) -> None:
+    def keep(built: BuiltBar) -> None:
         if len(bars) >= limit:
             raise TooManyBars()
         bars.append(RangeBar(
-            t=bar.start if not bars else max(bar.start, bars[-1].t + 1),
-            open=bar.open, high=bar.high, low=bar.low, close=bar.close,
-            began=bar.start,
-            ended=bar.end + bar_seconds,
-            complete=complete,
-            after_pause=bar.after_pause,
+            t=built.began if not bars else max(built.began, bars[-1].t + 1),
+            open=built.open, high=built.high, low=built.low, close=built.close,
+            began=built.began,
+            ended=built.ended,
+            complete=built.complete,
+            after_pause=built.after_pause,
         ))
 
     for index, time in enumerate(times):
-        if previous_time is not None and time - previous_time > pause_seconds:
-            if growing is not None:
-                close_bar(growing, complete=False)
-                growing = None
-            paused = True
-        previous_time = time
+        ended = builder.add(
+            time,
+            round(opens[index] * scale), round(highs[index] * scale),
+            round(lows[index] * scale), round(closes[index] * scale),
+        )
+        for built in ended:
+            keep(built)
 
-        first, last = round(opens[index] * scale), round(closes[index] * scale)
-        high, low = round(highs[index] * scale), round(lows[index] * scale)
-        for price in ((first, low, high, last) if last >= first else (first, high, low, last)):
-            if growing is None:
-                growing = _Growing(time, price, paused)
-                paused = False
-                continue
-            growing.end = time
-            while price > growing.low + ticks:
-                growing.high = growing.close = growing.low + ticks
-                close_bar(growing, complete=True)
-                growing = _Growing(time, growing.close, False)
-            while price < growing.high - ticks:
-                growing.low = growing.close = growing.high - ticks
-                close_bar(growing, complete=True)
-                growing = _Growing(time, growing.close, False)
-            growing.high = max(growing.high, price)
-            growing.low = min(growing.low, price)
-            growing.close = price
-
-    if growing is not None:
-        close_bar(growing, complete=False)
+    in_progress = builder.in_progress()
+    if in_progress is not None:
+        keep(in_progress)
     return bars
 
 
