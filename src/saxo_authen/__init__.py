@@ -388,6 +388,33 @@ class SaxoAuth:
         logger.debug(f"Refresh token wanted expiration time: {refresh_token_expiration_time}, current time: {datetime.datetime.now()}")
         return datetime.datetime.now() > refresh_token_expiration_time
 
+    def get_token_status(self):
+        """
+        Describe the stored token without exposing it (used by the admin interface).
+        """
+        token_data = self._load_token_data()
+        date_saved = None
+        if token_data.get("date_saved"):
+            date_saved = datetime.datetime.fromisoformat(token_data["date_saved"])
+
+        def to_utc(naive_local):
+            # date_saved is naive local time, which is how astimezone() reads it.
+            return naive_local.astimezone(datetime.timezone.utc).isoformat()
+
+        def expiry(lifetime_key):
+            if date_saved is None or lifetime_key not in token_data:
+                return None
+            return to_utc(date_saved + datetime.timedelta(seconds=token_data[lifetime_key]))
+
+        return {
+            "has_token": bool(token_data.get("access_token")),
+            "saved_at": to_utc(date_saved) if date_saved else None,
+            "access_token_expires_at": expiry("expires_in"),
+            "refresh_token_expires_at": expiry("refresh_token_expires_in"),
+            "access_token_expired": self.is_token_expired(token_data),
+            "refresh_token_expired": self.is_refresh_token_expired(token_data),
+        }
+
     def get_token(self):
         """
         Get a valid access token, either by refreshing an existing token or obtaining a new one.

@@ -1387,6 +1387,9 @@ class AsyncPerformanceMonitor:
         # hasn't accepted yet wait in the pending map.
         self._max_perf_by_position: dict[str, float] = {}
         self._max_perf_pending_save: dict[str, float] = {}
+        # Latest (bid, performance percent, observed at) per open position, kept
+        # for the admin interface: see live_values(). Nothing here reads it back.
+        self._live_values: dict[str, tuple[float, float, datetime]] = {}
         self._db_unavailable_until = 0.0
         self.perf_config = self.config.get_config_value("trade.config.position_management", {})
         self.thresholds = self.perf_config.get("performance_thresholds", {"stoploss_percent": -15, "max_profit_percent": 60})
@@ -1430,6 +1433,16 @@ class AsyncPerformanceMonitor:
             return {"closed_positions_processed": [], "db_updates": [], "errors": 1}
 
         return await self._evaluate_positions(api_dict)
+
+    def live_values(self) -> dict[str, tuple[float, float, datetime]]:
+        """Latest observed (bid, performance percent, observed at) of each open position."""
+        return dict(self._live_values)
+
+    def forget_live_values_except(self, position_ids) -> None:
+        """Drop what was observed for positions that are no longer open."""
+        for pid in list(self._live_values):
+            if pid not in position_ids:
+                del self._live_values[pid]
 
     def _db_usable(self) -> bool:
         return time.monotonic() >= self._db_unavailable_until
@@ -1538,7 +1551,7 @@ class AsyncPerformanceMonitor:
         """
         db_positions, today_pct = await self._load_managed_state()
         managed_ids = {db_pos["position_id"] for db_pos in db_positions}
-        for known in (self._max_perf_by_position, self._max_perf_pending_save):
+        for known in (self._max_perf_by_position, self._max_perf_pending_save, self._live_values):
             for pid in list(known):
                 if pid not in managed_ids:
                     del known[pid]
@@ -1563,6 +1576,7 @@ class AsyncPerformanceMonitor:
 
             perf_pct = round(((current_bid * 100) / open_price) - 100, 2)
             logger.info("Pos %s: Open=%.4f, Bid=%.4f, Perf=%.2f%%", pid, open_price, current_bid, perf_pct)
+            self._live_values[pid] = (current_bid, perf_pct, datetime.now(pytz.utc))
 
             self._log_performance_detail(pid, api_pos, perf_pct)
 
@@ -1724,15 +1738,21 @@ class AsyncPerformanceMonitor:
         action_filter: str | None = None,
         exclude_position_id: str | None = None,
         defer_bookkeeping: bool = False,
+        only_position_id: str | None = None,
     ) -> dict:
         """
-        Close open positions, optionally filtered by action, with concurrency.
+        Close open positions, optionally filtered by action or limited to one
+        position, with concurrency.
 
         With ``defer_bookkeeping`` this returns as soon as the sell orders are
         accepted: looking up the closed positions, updating the DB and notifying
         run in the background, so the caller's next order isn't held up by them.
         """
-        logger.info("--- Closing positions (filter=%s, exclude=%s) ---", action_filter, exclude_position_id)
+        logger.info(
+            "--- Closing positions (filter=%s, exclude=%s, only=%s) ---",
+            action_filter, exclude_position_id, only_position_id,
+        )
+        close_scope = f"position {only_position_id}" if only_position_id else (action_filter or "All")
 
         db_positions = await self.db_position_manager.get_open_positions_ids_actions()
         if not db_positions:
@@ -1760,6 +1780,8 @@ class AsyncPerformanceMonitor:
                     return
                 if exclude_position_id and str(pid) == str(exclude_position_id):
                     return
+                if only_position_id and str(pid) != str(only_position_id):
+                    return
                 if pid not in api_dict:
                     return
                 if pid in self._closing_position_ids:
@@ -1775,7 +1797,7 @@ class AsyncPerformanceMonitor:
                     await self._send_close_order(api_pos)
                     closed_count += 1
                     closed_position_ids.append(pid)
-                    reason = f"Explicit Close ({action_filter or 'All'})"
+                    reason = f"Explicit Close ({close_scope})"
                     if defer_bookkeeping:
                         self._record_closed_position_in_background(pid, reason)
                     else:

@@ -226,6 +226,7 @@ def _handler_dependencies(reserve_cash_percent: float, protective_stop=None):
     trading_rule.get_allowed_indice_id.return_value = "1909050"
     trading_rule.check_profit_per_day = AsyncMock()
     trading_rule.check_cooldown_after_loss = AsyncMock()
+    trading_rule.check_entries_paused = AsyncMock()
     trading_rule.check_max_trades_per_day = AsyncMock()
 
     db_position_manager = MagicMock()

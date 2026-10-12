@@ -99,10 +99,12 @@ def _normalize_temporal_fields(
 class PostgresConnectionManager:
     """Manages an asyncpg connection pool (singleton-friendly)."""
 
-    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10):
+    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10, server_settings: dict | None = None):
         self._dsn = dsn
         self._min_size = min_size
         self._max_size = max_size
+        # Session parameters applied to every connection (e.g. a read-only pool).
+        self._server_settings = server_settings
         self._pool: asyncpg.Pool | None = None
 
     @classmethod
@@ -121,6 +123,7 @@ class PostgresConnectionManager:
                 min_size=self._min_size,
                 max_size=self._max_size,
                 command_timeout=30,
+                server_settings=self._server_settings,
             )
             logger.info("asyncpg connection pool created.")
         return self._pool
@@ -226,7 +229,39 @@ CREATE TABLE IF NOT EXISTS trade_risk_state (
     value_time  TIMESTAMPTZ
 );
 
+-- Latest price and performance of each open position, as seen by the position
+-- monitor. Written on a timer for the admin interface; nothing trades on it.
+CREATE TABLE IF NOT EXISTS position_live_value (
+    position_id         VARCHAR(64) PRIMARY KEY,
+    bid                 DOUBLE PRECISION,
+    performance_percent DOUBLE PRECISION,
+    observed_at         TIMESTAMPTZ
+);
+
+-- What the trader did with each signal it received (executed, refused, ...).
+CREATE TABLE IF NOT EXISTS signal_journal (
+    signal_uuid        VARCHAR(64) PRIMARY KEY,
+    action             VARCHAR(32),
+    indice             VARCHAR(64),
+    confidence         DOUBLE PRECISION,
+    signal_timestamp   TIMESTAMPTZ,
+    received_timestamp TIMESTAMPTZ,
+    decided_at         TIMESTAMPTZ,
+    outcome            VARCHAR(16),
+    reason             TEXT,
+    position_id        VARCHAR(64),
+    order_id           VARCHAR(64)
+);
+
+-- Total account value, recorded with each daily report.
+CREATE TABLE IF NOT EXISTS account_balance_history (
+    date_day     DATE PRIMARY KEY,
+    total_value  DOUBLE PRECISION,
+    recorded_at  TIMESTAMPTZ
+);
+
 -- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_signal_journal_decided_at ON signal_journal (decided_at);
 CREATE INDEX IF NOT EXISTS idx_position_status ON turbo_data_position (position_status);
 CREATE INDEX IF NOT EXISTS idx_position_close_time ON turbo_data_position (execution_time_close);
 CREATE INDEX IF NOT EXISTS idx_position_open_time ON turbo_data_position (execution_time_open);
@@ -654,6 +689,8 @@ class AsyncDbRiskStateManager:
     """
 
     LAST_LOSS_KEY = "last_loss_timestamp"
+    # Set (to the time of the pause) while the operator has paused new entries.
+    ENTRIES_PAUSED_KEY = "entries_paused_since"
 
     def __init__(self, conn_mgr: PostgresConnectionManager):
         self.db = conn_mgr
@@ -672,3 +709,118 @@ class AsyncDbRiskStateManager:
             "SELECT value_time FROM trade_risk_state WHERE key = $1",
             self.LAST_LOSS_KEY,
         )
+
+    async def pause_entries(self, ts: datetime):
+        """Pause new entries; an existing pause keeps the time it started at."""
+        await self.db.execute(
+            """
+            INSERT INTO trade_risk_state (key, value_time) VALUES ($1, $2)
+            ON CONFLICT (key) DO NOTHING
+            """,
+            self.ENTRIES_PAUSED_KEY, ts,
+        )
+
+    async def resume_entries(self):
+        await self.db.execute("DELETE FROM trade_risk_state WHERE key = $1", self.ENTRIES_PAUSED_KEY)
+
+    async def get_entries_paused_since(self) -> datetime | None:
+        return await self.db.fetchval(
+            "SELECT value_time FROM trade_risk_state WHERE key = $1",
+            self.ENTRIES_PAUSED_KEY,
+        )
+
+
+class AsyncDbLiveValueManager:
+    """Latest observed price and performance of the open positions (see position_live_value)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def replace_live_values(self, values: dict[str, tuple[float, float, datetime]]):
+        """
+        Make the table hold exactly ``values`` ({position_id: (bid, performance
+        percent, observed at)}): rows of positions that are no longer open go.
+        """
+        position_ids = list(values)
+        await self.db.execute(
+            "DELETE FROM position_live_value WHERE NOT (position_id = ANY($1::text[]))",
+            position_ids,
+        )
+        if not position_ids:
+            return
+        await self.db.execute(
+            """
+            INSERT INTO position_live_value (position_id, bid, performance_percent, observed_at)
+            SELECT * FROM unnest($1::text[], $2::float8[], $3::float8[], $4::timestamptz[])
+            ON CONFLICT (position_id) DO UPDATE SET
+                bid = EXCLUDED.bid,
+                performance_percent = EXCLUDED.performance_percent,
+                observed_at = EXCLUDED.observed_at
+            """,
+            position_ids,
+            [values[pid][0] for pid in position_ids],
+            [values[pid][1] for pid in position_ids],
+            [values[pid][2] for pid in position_ids],
+        )
+
+
+class AsyncDbSignalJournalManager:
+    """What the trader did with each signal (see signal_journal)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record_decision(self, entry: dict):
+        normalized = _normalize_temporal_fields(
+            entry,
+            datetime_fields=frozenset({"signal_timestamp", "received_timestamp", "decided_at"}),
+        )
+        await self.db.execute(
+            """
+            INSERT INTO signal_journal
+                (signal_uuid, action, indice, confidence, signal_timestamp, received_timestamp,
+                 decided_at, outcome, reason, position_id, order_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            ON CONFLICT (signal_uuid) DO NOTHING
+            """,
+            normalized["signal_uuid"],
+            normalized.get("action"),
+            normalized.get("indice"),
+            normalized.get("confidence"),
+            normalized.get("signal_timestamp"),
+            normalized.get("received_timestamp"),
+            normalized.get("decided_at"),
+            normalized["outcome"],
+            normalized.get("reason"),
+            normalized.get("position_id"),
+            normalized.get("order_id"),
+        )
+
+
+class AsyncDbBalanceHistoryManager:
+    """Total account value over time (see account_balance_history)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record_balance(self, day: date, total_value: float):
+        """Keep the latest value seen on ``day``."""
+        await self.db.execute(
+            """
+            INSERT INTO account_balance_history (date_day, total_value, recorded_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (date_day) DO UPDATE SET
+                total_value = EXCLUDED.total_value,
+                recorded_at = EXCLUDED.recorded_at
+            """,
+            day, total_value, datetime.now().astimezone(),
+        )
+
+    async def record_balance_safely(self, day: date, total_value: float | None) -> None:
+        """``record_balance`` for callers that must not fail because of it (the daily report)."""
+        if total_value is None:
+            return
+        try:
+            await self.record_balance(day, total_value)
+        except Exception as e:
+            logger.error("Failed to record the account balance: %s", e)

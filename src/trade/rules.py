@@ -180,6 +180,20 @@ class TradingRule:
             logging.info(message)
             raise TradingRuleViolation(message)
 
+    async def check_entries_paused(self):
+        """
+        Refuses the signal while the operator has paused new entries (from the
+        admin interface). Closing positions is not affected.
+        """
+        if self.db_risk_state_manager is None:
+            return
+
+        paused_since = await self.db_risk_state_manager.get_entries_paused_since()
+        if paused_since is not None:
+            message = f"Breaking trading rule: New entries are paused by the operator since {paused_since}."
+            logging.info(message)
+            raise TradingRuleViolation(message)
+
     async def record_loss(self):
         """Records the timestamp of a losing trade for cooldown tracking."""
         now = datetime.now(pytz.utc)

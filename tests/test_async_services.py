@@ -1433,3 +1433,104 @@ def test_instrument_details_are_fetched_once_per_instrument(mock_config_manager,
 
     assert first == second == TURBO_DETAILS
     mock_api_client.request.assert_awaited_once()
+
+
+# ── AsyncPerformanceMonitor: what the admin interface relies on ──
+
+def test_position_check_remembers_the_latest_price_and_performance(tmp_path):
+    async def scenario():
+        monitor = _checking_monitor(tmp_path)
+        # Both below every exit threshold: the position stays open between the two checks.
+        await monitor.check_positions_from_stream(_streamed(10.05))
+        first = monitor.live_values()
+        await monitor.check_positions_from_stream(_streamed(10.08))
+        return monitor, first
+
+    monitor, first = asyncio.run(scenario())
+
+    assert first["p1"][:2] == (10.05, 0.5)
+    bid, performance, observed_at = monitor.live_values()["p1"]
+    assert (bid, performance) == (10.08, 0.8)
+    assert observed_at.tzinfo is not None
+    assert observed_at >= first["p1"][2]
+
+
+def test_live_values_are_a_copy_that_callers_cannot_change(tmp_path):
+    async def scenario():
+        monitor = _checking_monitor(tmp_path)
+        await monitor.check_positions_from_stream(_streamed(10.05))
+        monitor.live_values().clear()
+        return monitor
+
+    assert "p1" in asyncio.run(scenario()).live_values()
+
+
+def test_live_value_of_a_position_that_is_no_longer_managed_is_dropped(tmp_path):
+    async def scenario():
+        monitor = _checking_monitor(tmp_path)
+        await monitor.check_positions_from_stream(_streamed(10.05))
+        # Closed and recorded as such: the DB no longer lists it as open.
+        monitor.db_position_manager.get_open_positions_ids_actions = AsyncMock(return_value=[])
+        await monitor.check_positions_from_stream(_streamed(10.06))
+        return monitor
+
+    assert asyncio.run(scenario()).live_values() == {}
+
+
+def test_live_values_are_forgotten_for_positions_that_left_the_stream(tmp_path):
+    async def scenario():
+        monitor = _checking_monitor(tmp_path)
+        monitor.db_position_manager.get_open_positions_ids_actions = AsyncMock(
+            return_value=[{"position_id": "p1", "action": "long"}, {"position_id": "p2", "action": "short"}]
+        )
+        await monitor.check_positions_from_stream({**_streamed(10.05, "p1"), **_streamed(10.03, "p2")})
+        monitor.forget_live_values_except({"p2"})
+        return monitor
+
+    assert set(asyncio.run(scenario()).live_values()) == {"p2"}
+
+
+def _two_open_positions_monitor():
+    second = {"PositionId": "p2", "PositionBase": {**OPEN_POSITION["PositionBase"], "Uic": 202}}
+    monitor = _performance_monitor(open_positions={"return_value": {"Data": [OPEN_POSITION, second]}})
+    monitor.db_position_manager.get_open_positions_ids_actions = AsyncMock(
+        return_value=[{"position_id": "p1", "action": "long"}, {"position_id": "p2", "action": "long"}]
+    )
+    return monitor
+
+
+def test_closing_one_position_leaves_the_others_open():
+    async def scenario():
+        monitor = _two_open_positions_monitor()
+        with patch("src.trade.async_services.CLOSED_POSITION_BACKGROUND_LOOKUP_DELAYS", (0,)):
+            result = await monitor.close_managed_positions_by_criteria(only_position_id="p2", defer_bookkeeping=True)
+            await asyncio.gather(*monitor._background_tasks)
+        return monitor, result
+
+    monitor, result = asyncio.run(scenario())
+
+    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p2"]}
+    monitor.order_service.place_market_order.assert_awaited_once()
+    assert monitor.order_service.place_market_order.await_args.kwargs["uic"] == 202
+
+
+def test_closing_a_position_that_is_not_open_does_nothing():
+    monitor = _two_open_positions_monitor()
+
+    result = asyncio.run(monitor.close_managed_positions_by_criteria(only_position_id="unknown"))
+
+    assert result == {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": []}
+    monitor.order_service.place_market_order.assert_not_awaited()
+
+
+def test_single_position_close_is_recorded_with_its_own_reason():
+    async def scenario():
+        monitor = _performance_monitor()
+        with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+            await monitor.close_managed_positions_by_criteria(only_position_id="p1")
+        return monitor
+
+    monitor = asyncio.run(scenario())
+
+    _, update = monitor.db_position_manager.update_turbo_position_data.await_args.args
+    assert update["position_close_reason"] == "Explicit Close (position p1)"
