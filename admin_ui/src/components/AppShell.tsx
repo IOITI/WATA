@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
   ChartCandlestick,
+  ChartLine,
   CirclePause,
   ClipboardList,
   Eye,
@@ -23,6 +24,7 @@ import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
 
 import { ServiceStatusBadge } from '@/components/status'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { Sidebar, SidebarTrigger, useSidebar } from '@/components/ui/sidebar'
 import type { SidebarSection } from '@/components/ui/sidebar'
 import { useAuth, useSession } from '@/features/auth/auth-context'
@@ -48,6 +50,7 @@ const NAVIGATION: (NavEntry & { section: string; icon: SidebarSection['items'][n
   { id: 'report', path: '/report', label: 'Report', section: 'Analysis', icon: <FileText /> },
   { id: 'exits', path: '/exits', label: 'Exits', section: 'Analysis', icon: <Undo2 /> },
   { id: 'timing', path: '/timing', label: 'Execution timing', section: 'Analysis', icon: <Timer /> },
+  { id: 'prices', path: '/prices', label: 'Prices', section: 'Analysis', icon: <ChartLine /> },
   { id: 'system', path: '/system', label: 'System', section: 'Operations', icon: <Activity /> },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations', icon: <ScrollText /> },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations', icon: <ClipboardList /> },
@@ -65,9 +68,10 @@ function activeEntry(pathname: string): NavEntry | undefined {
   )
 }
 
+// The 400 steps are made for a dark surface; on a light one the 800 steps carry the text.
 const CHIP_TONE = {
-  warning: 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20',
-  danger: 'bg-red-500/10 text-red-400 hover:bg-red-500/20',
+  warning: 'bg-amber-500/15 text-amber-800 hover:bg-amber-500/25 dark:bg-amber-500/10 dark:text-amber-400 dark:hover:bg-amber-500/20',
+  danger: 'bg-red-500/10 text-red-700 hover:bg-red-500/20 dark:text-red-400',
 }
 
 interface StateChipProps {
@@ -123,7 +127,7 @@ function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
       type="button"
       onClick={onSignOut}
       aria-label="Sign out"
-      className="flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-sm text-neutral-400 outline-none transition-colors hover:bg-neutral-900 hover:text-white focus-visible:ring-2 focus-visible:ring-neutral-600/60"
+      className="flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-sm text-neutral-600 outline-none transition-colors hover:bg-neutral-200/70 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-400/60 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-white dark:focus-visible:ring-neutral-600/60"
     >
       <span className="grid size-5 shrink-0 place-items-center">
         <LogOut className="size-[18px]" />
@@ -210,6 +214,7 @@ export function AppShell() {
             {live ? 'Live' : 'Polling'}
           </span>
           <NotificationToggle />
+          <ThemeToggle />
           {healthQuery.data && (
             <Link to="/system" className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
               <span className="hidden sm:inline">Services</span>

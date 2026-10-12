@@ -51,7 +51,7 @@ const variantStyles: Record<ButtonVariant, string> = {
   ghost:
     'bg-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)] border border-transparent cursor-pointer',
   destructive:
-    'bg-rose-500/10 border border-rose-500/30 text-rose-500 dark:text-rose-400 hover:bg-rose-500 hover:text-white cursor-pointer',
+    'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-400 hover:bg-rose-600 dark:hover:bg-rose-500 hover:text-white cursor-pointer',
   success:
     'bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500 hover:text-white cursor-pointer',
   link:

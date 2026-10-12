@@ -32,7 +32,7 @@ export function NotificationToggle() {
       aria-label={label}
       aria-pressed={enabled}
       title={label}
-      className="grid size-9 shrink-0 place-items-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white focus-ring"
+      className="grid size-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-900 focus-ring dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white"
     >
       {enabled ? <Bell className="size-[18px]" /> : <BellOff className="size-[18px]" />}
     </button>

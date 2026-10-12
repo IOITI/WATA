@@ -48,6 +48,8 @@ from src.admin.queries import json_safe, summarise_trades
 from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
 
+import fake_prices
+
 DEV_PASSWORD = "wata-admin-dev"
 HOST = "127.0.0.1"
 PORT = 8082
@@ -197,6 +199,13 @@ class FakeQueries:
             {"action": "long", "indice": "us100", "confidence": 0.9}, "executed",
             decided_at=now - timedelta(minutes=18), position_id="5999999", order_id="7999999",
         )
+        # The signals behind the made-up trades of the Prices page, for the last week.
+        for days_ago in range(7):
+            day = (now.astimezone(fake_prices.TRADING_TIMEZONE) - timedelta(days=days_ago)).date()
+            if day.weekday() < 5:
+                for signal, outcome, reason, decided_at in fake_prices.daily_signals(day, now):
+                    self.add_decision(signal, outcome, reason, decided_at=decided_at)
+        self.journal.sort(key=lambda entry: entry["decided_at"], reverse=True)
 
     def add_decision(self, signal, outcome, reason=None, decided_at=None, **ids):
         decided_at = decided_at or datetime.now(timezone.utc)
@@ -233,6 +242,36 @@ class FakeQueries:
 
     async def entries_paused_since(self):
         return self.paused_since
+
+    async def price_recorder_status(self):
+        # As if the recorder had just written the bucket that ended.
+        now = datetime.now(timezone.utc)
+        return {"ts": now - timedelta(seconds=12), "feed_ok": True, "instruments": 43, "bars": 43}
+
+    # ── recorded prices: made up, see fake_prices.py ──
+
+    async def price_instruments(self, start, end):
+        # Like the real query: only what has bars in the period (none on a weekend).
+        if not fake_prices.bars(fake_prices.INDEX["id"], start, end, 3600, 1, datetime.now(timezone.utc)):
+            return []
+        return [dict(instrument) for instrument in fake_prices.INSTRUMENTS]
+
+    async def price_instrument(self, instrument_id):
+        return fake_prices.BY_ID.get(instrument_id)
+
+    async def price_bars(self, instrument_id, start, end, interval, limit):
+        return fake_prices.bars(instrument_id, start, end, interval, limit, datetime.now(timezone.utc))
+
+    async def price_series(self, instrument_id, start, end, side, limit):
+        first = 1 if side == "bid" else 5
+        rows = fake_prices.bars(instrument_id, start, end, 10, limit, datetime.now(timezone.utc))
+        return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3]) for row in rows]
+
+    async def price_coverage(self, start, end):
+        return fake_prices.coverage(start, end, datetime.now(timezone.utc))
+
+    async def price_trades(self, instrument, start, end, limit=500):
+        return fake_prices.trades(instrument, start, end, datetime.now(timezone.utc))
 
     async def open_positions(self):
         """Open positions with a made-up price that moves a little at every call."""
@@ -560,6 +599,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
         token_dir = os.path.join(work_dir, "lib", name)
         config[name]["persistant"]["token_path"] = os.path.join(token_dir, "persist_token.json")
     config["trade"]["persistant"]["last_action_file"] = os.path.join(work_dir, "lib", "last_action.json")
+    # Shown in the service list, as on a server where the price recorder runs.
+    config["trade"]["config"]["price_recorder"]["enabled"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))

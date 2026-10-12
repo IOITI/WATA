@@ -114,6 +114,12 @@ describe('trading state in the top bar', () => {
     expect(screen.queryByText('Configuration changed since the services started')).not.toBeInTheDocument()
   })
 
+  it('carries the button that chooses the theme, on every page', async () => {
+    renderShell()
+
+    expect(await screen.findByRole('button', { name: /^Theme:/ })).toBeInTheDocument()
+  })
+
   it('no longer repeats the page name in a breadcrumb', async () => {
     renderShell()
 

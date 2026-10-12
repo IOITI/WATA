@@ -114,6 +114,14 @@
   --ring: oklch(0.552 0.016 285.938);
 }
 
+/* WATA, light theme only. The page is one step off white, so that white cards
+   and fields read as such; and the secondary text of EasyUI's palette (4.3:1 on
+   a hovered row) is lowered to what small text needs. Dark is EasyUI's, above. */
+:root:not(.dark) {
+  --background: #fafafa;
+  --muted-foreground: #676772;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -121,8 +129,13 @@
 
   html {
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-    color-scheme: dark;
+    /* Native controls, scrollbars and the date field follow the theme. */
+    color-scheme: light;
     @apply font-sans;
+  }
+
+  html.dark {
+    color-scheme: dark;
   }
 
   body {

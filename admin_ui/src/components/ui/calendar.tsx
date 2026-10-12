@@ -210,7 +210,7 @@ export function Calendar(props: CalendarProps) {
       {/* weekdays */}
       <div className="flex" aria-hidden>
         {weekdays.map((w, i) => (
-          <div key={i} className="grid h-8 w-9 place-items-center text-xs text-neutral-400 dark:text-neutral-500">
+          <div key={i} className="grid h-8 w-9 place-items-center text-xs text-neutral-500">
             {w}
           </div>
         ))}

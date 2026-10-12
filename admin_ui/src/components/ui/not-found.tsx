@@ -233,7 +233,7 @@ export function NotFound({
           transition={motionTransitions.springGentle}
           className="relative z-10 inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-surface-raised text-[11px] font-mono uppercase tracking-widest text-text-muted mb-6"
         >
-          <span className="size-1.5 rounded-full bg-amber-400/80 animate-pulse" aria-hidden="true" />
+          <span className="size-1.5 rounded-full bg-amber-500 dark:bg-amber-400/80 animate-pulse" aria-hidden="true" />
           <span>{badgeLabel}</span>
         </motion.div>
       )}

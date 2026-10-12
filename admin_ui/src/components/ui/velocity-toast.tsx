@@ -43,13 +43,13 @@ const variantIcon = (variant: VelocityToastVariant, custom?: React.ReactNode) =>
   if (custom) return custom;
   switch (variant) {
     case 'success':
-      return <Check className="w-4 h-4 text-emerald-400" />;
+      return <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />;
     case 'warning':
-      return <AlertTriangle className="w-4 h-4 text-amber-400" />;
+      return <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />;
     case 'error':
-      return <AlertCircle className="w-4 h-4 text-rose-400" />;
+      return <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />;
     case 'info':
-      return <Info className="w-4 h-4 text-sky-400" />;
+      return <Info className="w-4 h-4 text-sky-600 dark:text-sky-400" />;
     default:
       return <Info className="w-4 h-4 text-[var(--text-secondary)]" />;
   }
