@@ -38,11 +38,22 @@ from src.database.postgres import (
     AsyncDbPositionManager,
     AsyncDbTradePerformanceManager,
     AsyncDbRiskStateManager,
+    AsyncDbSignalJournalManager,
+    AsyncDbBalanceHistoryManager,
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
 from src.saxo_authen import SaxoAuth
 from src.trade.rules import TradingRule
+from src.trade.signal_journal import (
+    SignalJournal,
+    journal_signal,
+    EXECUTED,
+    CLOSED,
+    REFUSED,
+    FAILED,
+    IGNORED,
+)
 from src.schema import SchemaLoader
 from src.message_helper import (
     TelegramMessageComposer,
@@ -133,6 +144,7 @@ async def handle_trading_signal(
     db_position_manager: AsyncDbPositionManager,
     trade_turbo_exchange_id: str,
     telegram: AsyncTelegramSender,
+    journal: SignalJournal | None = None,
 ):
     """Process a long/short signal end-to-end."""
     action = data["action"]
@@ -147,6 +159,9 @@ async def handle_trading_signal(
         trading_rule.check_signal_timestamp(action, data.get("alert_timestamp"))
         trading_rule.check_market_hours(data.get("signal_timestamp"))
         indice_id = trading_rule.get_allowed_indice_id(indice)
+
+        # Paused by the operator: refused before anything is closed or opened
+        await trading_rule.check_entries_paused()
 
         # Async-aware position duplicate check
         open_positions = await db_position_manager.get_open_positions_ids_actions()
@@ -246,28 +261,39 @@ async def handle_trading_signal(
                 scale_info += f" (confidence: {confidence})"
             composer.add_text_section("Position Sizing", scale_info)
 
+        # Journaled before the notification: the trade is done whatever happens to the message.
+        journal_signal(
+            journal, data, EXECUTED,
+            position_id=result["position_details"]["position_id"],
+            order_id=result["order_details"]["order_id"],
+        )
         await telegram.send(composer.get_message())
         logger.info("Trade %s executed — Order %s, Position %s",
                      action, result["order_details"]["order_id"], result["position_details"]["position_id"])
 
     except TradingRuleViolation as trv:
         logger.warning("Rule violation: %s", trv)
+        journal_signal(journal, data, REFUSED, str(trv))
         # Don't spam telegram for rule violations
     except (NoMarketAvailableException, NoTurbosAvailableException, InsufficientFundsException) as e:
         logger.warning("Trade setup issue (%s): %s", type(e).__name__, e)
+        journal_signal(journal, data, FAILED, f"{type(e).__name__}: {e}")
         composer.add_generic_error(type(e).__name__, e)
         await telegram.send(composer.get_message())
     except OrderPlacementError as e:
         logger.error("Order rejected: %s", e)
+        journal_signal(journal, data, FAILED, f"Order rejected: {e}")
         composer.add_position_result(error=e)
         await telegram.send(composer.get_message())
     except PositionNotFoundException as e:
         logger.critical("Position not found after order: %s", e)
+        journal_signal(journal, data, FAILED, f"PositionNotFoundException: {e}")
         composer.add_generic_error("PositionNotFoundException", e, is_critical=True)
         await telegram.send(composer.get_message())
         raise  # Bubble up for service-level handling
     except DatabaseOperationException as e:
         logger.critical("DB error during trade: %s", e)
+        journal_signal(journal, data, FAILED, f"DatabaseOperationException: {e}")
         composer.add_generic_error("DatabaseOperationException", e, is_critical=True)
         await telegram.send(composer.get_message())
         raise
@@ -281,6 +307,7 @@ async def handle_close_signal(
     data: dict,
     performance_monitor: AsyncPerformanceMonitor,
     telegram: AsyncTelegramSender,
+    journal: SignalJournal | None = None,
 ):
     action = data["action"]
     action_filter = None
@@ -294,7 +321,12 @@ async def handle_close_signal(
     errors = result["errors_count"]
     logger.info("Close action '%s': closed=%d, errors=%d", action, closed, errors)
     if closed > 0:
+        journal_signal(journal, data, CLOSED, f"Closed {closed} position(s). Errors: {errors}")
         await telegram.send(f"{action.upper()}: Closed {closed} position(s). Errors: {errors}")
+    elif errors > 0:
+        journal_signal(journal, data, FAILED, f"No position closed. Errors: {errors}")
+    else:
+        journal_signal(journal, data, IGNORED, "No open position to close")
 
 
 # ─────────────────────────────────────────────────────
@@ -308,6 +340,7 @@ async def handle_daily_stats(
     telegram: AsyncTelegramSender,
     position_service: AsyncPositionService,
     milestones_eur: list[float],
+    db_balance_manager: AsyncDbBalanceHistoryManager | None = None,
 ):
     days = 7
     report_date = date.today()
@@ -326,6 +359,8 @@ async def handle_daily_stats(
     except Exception as e:
         logger.error("Failed to fetch account balance for daily report: %s", e)
         current_balance = None
+    if db_balance_manager is not None:
+        await db_balance_manager.record_balance_safely(report_date, current_balance)
 
     message = build_daily_trading_report_message(
         report_date=report_date,
@@ -363,12 +398,15 @@ async def dispatch_message(
     telegram: AsyncTelegramSender,
     position_service: AsyncPositionService,
     milestones_eur: list[float],
+    journal: SignalJournal | None = None,
+    db_balance_manager: AsyncDbBalanceHistoryManager | None = None,
 ):
     # Validate schema
     try:
         jsonschema.validate(instance=body, schema=SchemaLoader.get_trading_action_schema())
     except jsonschema.exceptions.ValidationError as e:
         logger.error("Schema validation failed: %s", e.message)
+        journal_signal(journal, body, FAILED, f"Schema validation failed: {e.message}")
         await telegram.send(f"SCHEMA ERROR: {e.message}")
         return
 
@@ -382,9 +420,10 @@ async def dispatch_message(
                 body, trading_orchestrator, performance_monitor,
                 trading_rule, db_position_manager,
                 trade_turbo_exchange_id, telegram,
+                journal=journal,
             )
         elif action in CLOSE_ACTIONS:
-            await handle_close_signal(body, performance_monitor, telegram)
+            await handle_close_signal(body, performance_monitor, telegram, journal=journal)
             trading_orchestrator.invalidate_spending_power()
         elif action == "daily_stats":
             uuid = body.get("signal_uuid")
@@ -398,6 +437,7 @@ async def dispatch_message(
             await handle_daily_stats(
                 body, db_position_manager, db_perf_manager, telegram,
                 position_service, milestones_eur,
+                db_balance_manager=db_balance_manager,
             )
         elif action == "check_positions_on_saxo_api":
             # Position checks are handled by position_monitor service
@@ -409,15 +449,18 @@ async def dispatch_message(
 
     except (PositionNotFoundException, DatabaseOperationException) as critical:
         logger.critical("CRITICAL error processing %s: %s", action, critical, exc_info=True)
+        journal_signal(journal, body, FAILED, f"{type(critical).__name__}: {critical}")
         await telegram.send(f"CRITICAL ERROR ({type(critical).__name__}): {critical}")
         # For critical errors, we may want to restart
         raise
     except (TokenAuthenticationException, ConfigurationError) as fatal:
         logger.critical("FATAL: %s", fatal, exc_info=True)
+        journal_signal(journal, body, FAILED, f"{type(fatal).__name__}: {fatal}")
         await telegram.send(f"FATAL ({type(fatal).__name__}): {fatal}")
         raise
     except Exception as e:
         logger.error("Error processing action %s: %s", action, e, exc_info=True)
+        journal_signal(journal, body, FAILED, f"{type(e).__name__}: {e}")
         await telegram.send(f"ERROR processing {action}: {type(e).__name__}: {e}")
 
 
@@ -452,6 +495,7 @@ def select_signals_to_dispatch(
     *,
     first_poll: bool,
     startup_replay_max_age_seconds: float,
+    journal: SignalJournal | None = None,
 ) -> list[dict]:
     """
     Return the polled signals that have not been dispatched yet, marking them as seen.
@@ -473,12 +517,17 @@ def select_signals_to_dispatch(
                 "Not replaying signal stored before startup: action=%s indice=%s signal_uuid=%s",
                 signal.get("action"), signal.get("indice"), signal.get("signal_uuid"),
             )
+            journal_signal(journal, signal, IGNORED, "Stored before the trader started: not replayed")
             continue
         to_dispatch.append(signal)
     return to_dispatch
 
 
-async def poll_and_dispatch_signals(signal_client: SignalPollingClient, dispatch) -> None:
+async def poll_and_dispatch_signals(
+    signal_client: SignalPollingClient,
+    dispatch,
+    journal: SignalJournal | None = None,
+) -> None:
     """
     Poll the web_server forever, handing each new signal to ``dispatch`` once.
 
@@ -507,6 +556,7 @@ async def poll_and_dispatch_signals(signal_client: SignalPollingClient, dispatch
             signals,
             first_poll=first_poll,
             startup_replay_max_age_seconds=signal_client.startup_replay_max_age_seconds,
+            journal=journal,
         ):
             try:
                 await dispatch(signal)
@@ -582,6 +632,7 @@ async def main():
     watchlist_client = None
     keep_warm_task = None
     performance_monitor = None
+    journal = None
 
     try:
         # 3. PostgreSQL
@@ -594,6 +645,9 @@ async def main():
         db_position_manager = AsyncDbPositionManager(pg)
         db_perf_manager = AsyncDbTradePerformanceManager(pg)
         db_risk_state_manager = AsyncDbRiskStateManager(pg)
+        db_balance_manager = AsyncDbBalanceHistoryManager(pg)
+        # What was done with each signal, for the admin interface (written in the background)
+        journal = SignalJournal(AsyncDbSignalJournalManager(pg))
 
         # 4. Trading rules (async DB-backed checks; risk state shared with position_monitor)
         trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
@@ -627,6 +681,7 @@ async def main():
                 {"action": "daily_stats", "indice": "n/a"},
                 db_position_manager, db_perf_manager, telegram,
                 position_service, milestones_eur,
+                db_balance_manager=db_balance_manager,
             )
 
         performance_monitor = AsyncPerformanceMonitor(
@@ -671,11 +726,13 @@ async def main():
                 telegram=telegram,
                 position_service=position_service,
                 milestones_eur=milestones_eur,
+                journal=journal,
+                db_balance_manager=db_balance_manager,
             )
 
         # Keep polling forever
         try:
-            await poll_and_dispatch_signals(signal_client, _dispatch)
+            await poll_and_dispatch_signals(signal_client, _dispatch, journal=journal)
         except asyncio.CancelledError:
             pass
 
@@ -695,6 +752,8 @@ async def main():
             await signal_client.close()
         if performance_monitor is not None:
             await performance_monitor.wait_for_background_tasks()
+        if journal is not None:
+            await journal.wait_for_pending()
         if watchlist_client is not None:
             await watchlist_client.close()
         if api_client is not None:
