@@ -16,6 +16,8 @@ from starlette.concurrency import run_in_threadpool
 from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
 from src.admin.logs import last_lifecycle_event
 from src.admin.services import OPS_QUEUE, TELEGRAM_QUEUE
+from src.price_recorder.bars import BAR_SECONDS
+from src.price_recorder.settings import RecorderSettings
 
 OK = "ok"
 WARNING = "warning"
@@ -46,6 +48,8 @@ LOG_OBSERVED_SERVICES = {
 
 
 SAXO_SERVICE_ID = "saxo"
+# The recorder writes one line every ten seconds: past this, it is not running.
+PRICE_RECORDER_SILENT_AFTER_SECONDS = 60
 
 
 def _entry(service_id: str, name: str, status: str, detail: str) -> dict:
@@ -111,6 +115,37 @@ async def _watchlist(ctx) -> tuple[list[dict], dict | None]:
     return [entry], snapshot
 
 
+async def _price_recorder(ctx) -> list[dict]:
+    """
+    The price recorder, when it is switched on. What it misses cannot be
+    fetched afterwards, so it is watched like the services that trade.
+    """
+    name = "Price recorder"
+    try:
+        settings = RecorderSettings.from_config(ctx.config_manager)
+    except ValueError as e:
+        return [_entry("price_recorder", name, DOWN, f"Invalid configuration: {e}")]
+    if not settings.enabled:
+        return []
+    try:
+        status = await ctx.queries.price_recorder_status()
+    except DatabaseUnavailable:
+        return [_entry("price_recorder", name, UNKNOWN, "The database is unavailable")]
+    if status is None:
+        return [_entry("price_recorder", name, DOWN, "Nothing recorded yet")]
+
+    now = datetime.now(timezone.utc)
+    # The line of a bucket is written when it ends, ten seconds after its start.
+    silent_for = (now - status["ts"]).total_seconds() - BAR_SECONDS
+    if silent_for > PRICE_RECORDER_SILENT_AFTER_SECONDS:
+        return [_entry("price_recorder", name, DOWN, f"No sign of it for {int(silent_for // 60)} min")]
+    if status["bars"] > 0:
+        return [_entry("price_recorder", name, OK, f"Recording {_count(status['bars'], 'instrument')}")]
+    if settings.is_trading_time(now):
+        return [_entry("price_recorder", name, DOWN, "Running, but no price is being recorded")]
+    return [_entry("price_recorder", name, OK, "Running; the markets are closed")]
+
+
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:
     if queue["consumers"] > 0:
         return _entry(service_id, name, OK, f"Consuming {queue['name']}")
@@ -159,15 +194,20 @@ def _overall(services: list[dict]) -> str:
 
 
 async def collect_health(ctx) -> dict:
-    postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo = await asyncio.gather(
+    (
+        postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
+    ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
         _watchlist(ctx),
         _rabbitmq(ctx),
         run_in_threadpool(_log_observed, ctx.settings.log_path),
         _saxo(ctx),
+        _price_recorder(ctx),
     )
-    services = [*saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *postgres, rabbitmq[0]]
+    services = [
+        *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *postgres, rabbitmq[0],
+    ]
     return {
         "version": ctx.version,
         "checked_at": datetime.now(timezone.utc).isoformat(),

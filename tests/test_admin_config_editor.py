@@ -441,3 +441,30 @@ def test_restore_is_refused_when_the_file_changed_since_it_was_loaded(editor, co
 
     assert open(config_path).read() == before
     assert _directory_listing(config_path) == listing
+
+
+def test_a_mistake_in_the_price_recorder_section_is_refused_like_any_other(editor, config_path):
+    before = open(config_path).read()
+    listing = _directory_listing(config_path)
+    loaded = editor.load()
+    loaded["config"]["trade"]["config"]["price_recorder"] = {"enabled": True, "max_instruments": "many"}
+
+    with pytest.raises(ConfigInvalid, match=r"trade\.config\.price_recorder\.max_instruments"):
+        editor.validate(loaded["config"])
+    with pytest.raises(ConfigInvalid, match=r"trade\.config\.price_recorder\.max_instruments"):
+        editor.save(loaded["config"], loaded["revision"])
+
+    assert open(config_path).read() == before
+    assert _directory_listing(config_path) == listing
+
+
+def test_a_valid_price_recorder_section_is_saved(editor, config_path):
+    loaded = editor.load()
+    loaded["config"]["trade"]["config"]["price_recorder"] = {
+        "enabled": True,
+        "instruments": [{"label": "us100", "uic": 4913, "asset_type": "CfdOnIndex"}],
+    }
+
+    editor.save(loaded["config"], loaded["revision"])
+
+    assert _on_disk(config_path)["trade"]["config"]["price_recorder"]["instruments"][0]["uic"] == 4913

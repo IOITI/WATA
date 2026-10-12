@@ -70,6 +70,10 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/actions/close-position"),
     ("POST", "/api/actions/daily-stats"),
     ("POST", "/api/system/saxo/auth-code"),
+    ("GET", "/api/prices/instruments"),
+    ("GET", "/api/prices/bars"),
+    ("GET", "/api/prices/range-bars"),
+    ("GET", "/api/prices/context"),
     ("GET", "/api/config"),
     ("POST", "/api/config/validate"),
     ("PUT", "/api/config"),
@@ -90,6 +94,18 @@ JOURNAL_ENTRY = {
 }
 
 
+PRICE_INDEX = {
+    "id": 1, "uic": 1909050, "asset_type": "StockIndex", "symbol": "NDX.I", "description": "NASDAQ 100",
+    "currency": "USD", "role": "underlying", "indice": "us100", "underlying_uic": 1909050, "direction": None,
+    "barrier": None, "issuer": None,
+}
+PRICE_TURBO = {
+    "id": 2, "uic": 40001234, "asset_type": "WarrantOpenEndKnockOut", "symbol": "SG-NDX-L1",
+    "description": "NASDAQ 100 Turbo Long 24150 SG", "currency": "EUR", "role": "turbo", "indice": "us100",
+    "underlying_uic": 1909050, "direction": "long", "barrier": 24150.0, "issuer": "SG",
+}
+
+
 class FakeQueries:
     def __init__(self):
         self.calls = []
@@ -97,10 +113,20 @@ class FakeQueries:
         self.paused_since = None
         self.journal = [JOURNAL_ENTRY]
         self.failing = False
+        self.recorder_status = None
+        self.price_instruments_recorded = [PRICE_INDEX, PRICE_TURBO]
+        self.price_bar_rows = [[1791792000, 8.40, 8.52, 8.36, 8.45, 8.45, 8.57, 8.41, 8.50, 3]]
+        self.price_coverage_rows = []
+        # Ten-second bars per instrument, as (epoch seconds, open, high, low, close).
+        self.price_series_rows = {}
 
     def _check(self):
         if self.failing:
             raise DatabaseUnavailable("connection refused")
+
+    async def price_recorder_status(self):
+        self._check()
+        return self.recorder_status
 
     async def ping(self):
         self._check()
@@ -136,6 +162,33 @@ class FakeQueries:
     async def signal_journal(self, start=None, end=None, limit=200):
         self.calls.append(("signal_journal", start, end, limit))
         return self.journal
+
+    # ── recorded prices ──
+
+    async def price_instruments(self, start, end):
+        self._check()
+        self.calls.append(("price_instruments", start, end))
+        return list(self.price_instruments_recorded)
+
+    async def price_instrument(self, instrument_id):
+        return next((item for item in self.price_instruments_recorded if item["id"] == instrument_id), None)
+
+    async def price_bars(self, instrument_id, start, end, interval, limit):
+        self.calls.append(("price_bars", instrument_id, start, end, interval, limit))
+        return self.price_bar_rows[:limit]
+
+    async def price_series(self, instrument_id, start, end, side, limit):
+        self.calls.append(("price_series", instrument_id, start, end, side, limit))
+        rows = self.price_series_rows.get(instrument_id, [])
+        return [row for row in rows if start.timestamp() <= row[0] < end.timestamp()][:limit]
+
+    async def price_coverage(self, start, end):
+        self.calls.append(("price_coverage", start, end))
+        return self.price_coverage_rows
+
+    async def price_trades(self, instrument, start, end):
+        self.calls.append(("price_trades", instrument["id"], start, end))
+        return [CLOSED_POSITION]
 
     async def exits(self, start=None, end=None):
         self.calls.append(("exits", start, end))
@@ -625,6 +678,98 @@ def test_health_survives_an_unreadable_saxo_token(client, ctx):
     assert response.json()["status"] == "ok"
 
 
+# ── price recorder ──
+
+
+def _with_recorder(config_path, tmp_path, **section):
+    config = json.load(open(config_path))
+    config["trade"]["config"]["price_recorder"] = {"enabled": True, **section}
+    with open(config_path, "w") as config_file:
+        json.dump(config, config_file)
+    return make_ctx(config_path, tmp_path)
+
+
+def _recorder_entry(ctx, tmp_path):
+    with make_client(ctx, tmp_path / "no-interface") as client:
+        client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN)
+        health = client.get("/api/system/health").json()
+    entries = [service for service in health["services"] if service["id"] == "price_recorder"]
+    return (entries[0] if entries else None), health["status"]
+
+
+def _bucket(seconds_ago, bars=43):
+    return {"ts": datetime.now(timezone.utc) - timedelta(seconds=seconds_ago), "feed_ok": bars > 0, "instruments": bars, "bars": bars}
+
+
+def test_the_price_recorder_is_not_listed_while_it_is_switched_off(client):
+    health = client.get("/api/system/health").json()
+
+    assert "price_recorder" not in _statuses(health)
+
+
+def test_a_recorder_that_writes_is_up_with_what_it_records(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path)
+    ctx.queries.recorder_status = _bucket(seconds_ago=14)
+
+    entry, overall = _recorder_entry(ctx, tmp_path)
+
+    assert (entry["name"], entry["status"], entry["detail"]) == ("Price recorder", "ok", "Recording 43 instruments")
+    assert overall == "ok"
+
+
+def test_a_recorder_that_stopped_writing_is_down_and_so_is_the_summary(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path)
+    ctx.queries.recorder_status = _bucket(seconds_ago=10 + 5 * 60)
+
+    entry, overall = _recorder_entry(ctx, tmp_path)
+
+    assert (entry["status"], entry["detail"]) == ("down", "No sign of it for 5 min")
+    # What it misses cannot be fetched later: it counts like a service that trades.
+    assert overall == "down"
+
+
+def test_a_recorder_that_never_wrote_is_down(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path)
+
+    entry, _ = _recorder_entry(ctx, tmp_path)
+
+    assert (entry["status"], entry["detail"]) == ("down", "Nothing recorded yet")
+
+
+def test_a_recorder_with_nothing_to_record_is_a_problem_only_in_trading_hours(config_path, tmp_path):
+    from unittest.mock import patch
+
+    ctx = _with_recorder(config_path, tmp_path)
+    ctx.queries.recorder_status = _bucket(seconds_ago=14, bars=0)
+
+    with patch("src.admin.health.RecorderSettings.is_trading_time", return_value=True):
+        open_market, _ = _recorder_entry(ctx, tmp_path)
+    with patch("src.admin.health.RecorderSettings.is_trading_time", return_value=False):
+        closed_market, overall = _recorder_entry(ctx, tmp_path)
+
+    assert (open_market["status"], open_market["detail"]) == ("down", "Running, but no price is being recorded")
+    assert (closed_market["status"], closed_market["detail"]) == ("ok", "Running; the markets are closed")
+    assert overall == "ok"
+
+
+def test_a_recorder_with_a_broken_configuration_says_which_field(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path, max_instruments="many")
+
+    entry, _ = _recorder_entry(ctx, tmp_path)
+
+    assert entry["status"] == "down"
+    assert "trade.config.price_recorder.max_instruments" in entry["detail"]
+
+
+def test_the_recorder_state_is_unknown_while_the_database_is_down(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path)
+    ctx.queries.failing = True
+
+    entry, _ = _recorder_entry(ctx, tmp_path)
+
+    assert (entry["status"], entry["detail"]) == ("unknown", "The database is unavailable")
+
+
 def test_health_details_count_in_plain_words(client, ctx):
     details = {service["id"]: service["detail"] for service in client.get("/api/system/health").json()["services"]}
 
@@ -938,6 +1083,7 @@ def built_interface(tmp_path):
     (static_dir / "assets").mkdir(parents=True)
     (static_dir / "index.html").write_text("<html>WATA Admin</html>")
     (static_dir / "favicon.svg").write_text("<svg/>")
+    (static_dir / "theme.js").write_text("document.documentElement.classList.toggle('dark', true)")
     (static_dir / "assets" / "app.js").write_text("console.log('app')")
     (tmp_path / "secret.txt").write_text("outside the build")
     return static_dir
@@ -951,6 +1097,20 @@ def test_interface_is_served_with_a_fallback_to_the_application(ctx, built_inter
         assert client.get("/assets/app.js").text == "console.log('app')"
         assert client.get("/api/unknown").status_code == 404
         assert client.get("/api").status_code == 404
+
+
+def test_the_script_that_sets_the_theme_is_served_as_a_script_the_browser_will_run(ctx, built_interface):
+    # It is a file of the build's root, not an asset, loaded before the application.
+    # With "nosniff", a browser only runs it if it is declared as JavaScript; and the
+    # policy that forbids inline scripts is why it is a file at all.
+    with make_client(ctx, built_interface) as client:
+        response = client.get("/theme.js")
+
+    assert response.status_code == 200
+    assert response.text.startswith("document.documentElement")
+    assert response.headers["content-type"].split(";")[0] in ("text/javascript", "application/javascript")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "script-src 'self'" in response.headers["content-security-policy"]
 
 
 @pytest.mark.parametrize("path", ["/..%2Fsecret.txt", "/%2E%2E/secret.txt", "/assets/..%2F..%2Fsecret.txt"])
@@ -1351,6 +1511,316 @@ def test_event_stream_sends_what_is_published_until_the_session_ends(client, ctx
     assert frames[3] == ": keep-alive"
     # The browser that left is no longer written to.
     assert not ctx.events.has_subscribers
+
+
+# ── recorded prices ──
+
+
+def test_instruments_recorded_in_a_period_are_listed_with_what_describes_them(client, ctx):
+    response = client.get("/api/prices/instruments?from=2026-10-12&to=2026-10-13")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["from"], body["to"], body["timezone"]) == ("2026-10-12", "2026-10-13", "Europe/Paris")
+    assert [item["role"] for item in body["items"]] == ["underlying", "turbo"]
+    assert body["items"][1]["barrier"] == 24150.0
+    # The two days of the trading timezone, both included: midnight in Paris is 22:00 UTC.
+    _, start, end = ctx.queries.calls[-1]
+    assert start.astimezone(timezone.utc) == datetime(2026, 10, 11, 22, 0, tzinfo=timezone.utc)
+    assert end.astimezone(timezone.utc) == datetime(2026, 10, 13, 22, 0, tzinfo=timezone.utc)
+
+
+def test_without_a_period_the_prices_are_those_of_today(client, ctx):
+    today = datetime.now(pytz.timezone("Europe/Paris")).date().isoformat()
+
+    body = client.get("/api/prices/instruments").json()
+
+    assert (body["from"], body["to"]) == (today, today)
+
+
+def test_bars_come_as_compact_rows_with_their_column_names(client, ctx):
+    response = client.get("/api/prices/bars?instrument_id=2&from=2026-10-12&interval=60")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instrument"]["symbol"] == "SG-NDX-L1"
+    assert body["interval"] == 60 and body["timezone"] == "Europe/Paris"
+    assert body["columns"] == [
+        "t", "bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close", "updates",
+    ]
+    assert body["bars"] == [[1791792000, 8.40, 8.52, 8.36, 8.45, 8.45, 8.57, 8.41, 8.50, 3]]
+    call = ctx.queries.calls[-1]
+    assert (call[0], call[1], call[4]) == ("price_bars", 2, 60)
+
+
+def test_bars_are_ten_seconds_long_unless_asked_otherwise(client, ctx):
+    client.get("/api/prices/bars?instrument_id=2&from=2026-10-12")
+
+    assert ctx.queries.calls[-1][4] == 10
+
+
+@pytest.mark.parametrize("query, reason", [
+    ("instrument_id=2&interval=45", "The interval must be one of 10, 30, 60, 300, 900, 3600 seconds"),
+    ("instrument_id=2&from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
+    ("instrument_id=2&from=2025-01-01&to=2026-10-11", "The period is longer than 366 days"),
+])
+def test_a_request_for_bars_that_makes_no_sense_is_refused_saying_why(client, query, reason):
+    response = client.get(f"/api/prices/bars?{query}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == reason
+
+
+@pytest.mark.parametrize("query", ["", "instrument_id=0", "instrument_id=abc", "instrument_id=2&from=yesterday"])
+def test_malformed_price_parameters_are_refused(client, query):
+    assert client.get(f"/api/prices/bars?{query}").status_code == 422
+
+
+def test_bars_of_an_instrument_that_was_never_recorded_are_not_found(client):
+    response = client.get("/api/prices/bars?instrument_id=99&from=2026-10-12")
+
+    assert response.status_code == 404
+    assert client.get("/api/prices/context?instrument_id=99&from=2026-10-12").status_code == 404
+
+
+def test_a_period_with_too_many_bars_asks_for_a_longer_interval(client, ctx):
+    from src.admin.prices import MAX_BUCKETS
+
+    ctx.queries.price_bar_rows = [[1791792000 + 10 * n, 1, 1, 1, 1, 1, 1, 1, 1, 0] for n in range(MAX_BUCKETS + 1)]
+
+    response = client.get("/api/prices/bars?instrument_id=2&from=2026-10-01&to=2026-10-12")
+
+    assert response.status_code == 422
+    assert "choose a longer interval or a shorter period" in response.json()["detail"]
+    # One more than the limit was asked of the database, not the whole period.
+    assert ctx.queries.calls[-1][5] == MAX_BUCKETS + 1
+
+    ctx.queries.price_bar_rows = ctx.queries.price_bar_rows[:MAX_BUCKETS]
+    assert client.get("/api/prices/bars?instrument_id=2&from=2026-10-01&to=2026-10-12").status_code == 200
+
+
+# Monday 12 Oct 2026, 08:00 in Paris.
+RANGE_T0 = 1791784800
+
+
+def flat_bars(*prices, start=RANGE_T0, step=10):
+    """Ten-second bars that each hold one price."""
+    return [(start + index * step, price, price, price, price) for index, price in enumerate(prices)]
+
+
+def test_range_bars_end_when_the_price_has_left_the_range_asked_for(client, ctx):
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44, 8.52, 8.49)}
+
+    response = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instrument"]["id"] == 2
+    assert (body["tick"], body["decimals"], body["ticks"], body["size"], body["auto"]) == (0.01, 2, 10, 0.1, False)
+    assert (body["from"], body["to"], body["timezone"], body["side"]) == ("2026-10-12", "2026-10-12", "Europe/Paris", "bid")
+    assert body["columns"] == ["t", "open", "high", "low", "close", "began", "ended", "complete", "after_pause", "index"]
+    assert body["bars"] == [
+        [RANGE_T0, 8.4, 8.5, 8.4, 8.5, RANGE_T0, RANGE_T0 + 30, True, False, None],
+        [RANGE_T0 + 20, 8.5, 8.52, 8.49, 8.49, RANGE_T0 + 20, RANGE_T0 + 40, False, False, None],
+    ]
+    assert body["under"] is None
+
+
+def test_without_a_size_a_range_that_suits_the_period_is_chosen_and_said(client, ctx):
+    # Between 8.00 and 10.50: a twenty-fifth is ten cents.
+    ctx.queries.price_series_rows = {2: flat_bars(8.00, 9.20, 10.50, 9.90)}
+
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12").json()
+
+    assert (body["auto"], body["ticks"], body["size"]) == (True, 10, 0.1)
+    assert len(body["bars"]) > 20
+
+
+def test_the_range_is_counted_in_the_steps_the_prices_are_quoted_in(client, ctx):
+    ctx.queries.price_series_rows = {2: flat_bars(0.855, 0.861, 0.872)}
+
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.01").json()
+
+    assert (body["tick"], body["decimals"], body["ticks"], body["size"]) == (0.001, 3, 10, 0.01)
+    assert body["bars"][0][1:5] == [0.855, 0.865, 0.855, 0.865]
+
+
+def test_range_bars_of_the_ask_are_built_from_the_ask(client, ctx):
+    ctx.queries.price_series_rows = {2: flat_bars(8.45, 8.60)}
+
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10&side=ask").json()
+
+    assert body["side"] == "ask"
+    assert [call[4] for call in ctx.queries.calls if call[0] == "price_series"] == ["ask"]
+
+
+def test_the_index_under_a_turbo_comes_with_each_bar_as_it_was_when_the_bar_ended(client, ctx):
+    ctx.queries.price_series_rows = {
+        2: flat_bars(8.40, 8.44, 8.52, 8.49),
+        1: flat_bars(25000.0, 25004.5, 25012.25, 25009.0),
+    }
+
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10&under=1").json()
+
+    assert body["under"]["id"] == 1
+    # The first bar ended in the third ten seconds, the second is still going in the fourth.
+    assert [bar[9] for bar in body["bars"]] == [25012.25, 25009.0]
+    # The index is read on its bid, whatever side the turbo is shown on.
+    assert [(call[1], call[4]) for call in ctx.queries.calls if call[0] == "price_series"] == [(2, "bid"), (1, "bid")]
+
+
+def test_a_night_in_the_period_cuts_the_bar_and_flags_the_one_after(client, ctx):
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44) + flat_bars(9.10, start=RANGE_T0 + 3600)}
+
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10").json()
+
+    assert [(bar[1], bar[4], bar[7], bar[8]) for bar in body["bars"]] == [(8.4, 8.44, False, False), (9.1, 9.1, False, True)]
+    # The first one ended with its last ten seconds, not when the next began an hour later.
+    assert [(bar[5], bar[6]) for bar in body["bars"]] == [(RANGE_T0, RANGE_T0 + 20), (RANGE_T0 + 3600, RANGE_T0 + 3610)]
+
+
+def test_a_period_with_nothing_recorded_has_no_range_bar(client):
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12").json()
+
+    assert body["bars"] == []
+    assert (body["tick"], body["ticks"], body["auto"]) == (0.01, 1, True)
+
+
+def test_the_ten_second_bars_are_read_a_page_at_a_time(client, ctx, monkeypatch):
+    from src.admin.routers import prices as prices_router
+
+    monkeypatch.setattr(prices_router, "SERIES_PAGE", 2)
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.41, 8.42, 8.43, 8.44)}
+
+    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=1").json()
+
+    assert body["bars"] == [[RANGE_T0, 8.4, 8.44, 8.4, 8.44, RANGE_T0, RANGE_T0 + 50, False, False, None]]
+    starts = [call[2].timestamp() for call in ctx.queries.calls if call[0] == "price_series"]
+    # Each page starts just after the last bar of the one before; a short page ends the reading.
+    assert starts[1:] == [RANGE_T0 + 11, RANGE_T0 + 31]
+
+
+@pytest.mark.parametrize("query, reason", [
+    ("instrument_id=2&from=2026-10-12&size=0.001", "The range is smaller than one step of these prices (0.01)"),
+    ("instrument_id=2&from=2026-10-12&side=mid", "The side must be one of bid, ask"),
+    ("instrument_id=2&from=2026-09-01&to=2026-10-12", "Range bars are built for periods of 31 days at most"),
+    ("instrument_id=2&from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
+])
+def test_a_request_for_range_bars_that_makes_no_sense_is_refused_saying_why(client, ctx, query, reason):
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44)}
+
+    response = client.get(f"/api/prices/range-bars?{query}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == reason
+
+
+@pytest.mark.parametrize("query", ["", "instrument_id=2&size=0", "instrument_id=2&size=-1", "instrument_id=2&size=abc", "instrument_id=2&under=0"])
+def test_malformed_range_parameters_are_refused(client, query):
+    assert client.get(f"/api/prices/range-bars?{query}").status_code == 422
+
+
+def test_range_bars_of_an_instrument_or_an_index_that_was_never_recorded_are_not_found(client):
+    assert client.get("/api/prices/range-bars?instrument_id=99&from=2026-10-12").status_code == 404
+    assert client.get("/api/prices/range-bars?instrument_id=2&under=99&from=2026-10-12").status_code == 404
+
+
+def test_a_range_that_gives_too_many_bars_asks_for_a_larger_one(client, ctx):
+    # One cent bars over a climb of 150 euros: more than a chart is given.
+    ctx.queries.price_series_rows = {2: flat_bars(8.00, 158.00)}
+
+    response = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.01")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "More than 12000 range bars in this period: choose a larger range or a shorter period"
+
+
+def test_a_period_with_more_recorded_bars_than_can_be_read_is_refused(client, ctx, monkeypatch):
+    from src.admin.routers import prices as prices_router
+
+    monkeypatch.setattr(prices_router, "RANGE_MAX_ROWS", 3)
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.41, 8.42, 8.43)}
+
+    response = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10")
+
+    assert response.status_code == 422
+    assert "choose a shorter one" in response.json()["detail"]
+
+
+def test_context_of_a_turbo_gives_its_trades_and_the_signals_of_its_indice(client, ctx):
+    ctx.queries.journal = [
+        {**JOURNAL_ENTRY, "signal_uuid": "b", "indice": "us100", "decided_at": "2026-10-12T09:00:00+00:00"},
+        {**JOURNAL_ENTRY, "signal_uuid": "c", "indice": "germany40", "decided_at": "2026-10-12T08:30:00+00:00"},
+        {**JOURNAL_ENTRY, "signal_uuid": "a", "indice": "n/a", "action": "close-position",
+         "decided_at": "2026-10-12T08:00:00+00:00"},
+    ]
+
+    response = client.get("/api/prices/context?instrument_id=2&from=2026-10-12")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instrument"]["id"] == 2
+    assert [trade["position_id"] for trade in body["trades"]] == [CLOSED_POSITION["position_id"]]
+    # Its own indice and the signals that name none, oldest first; another indice's are left out.
+    assert [signal["signal_uuid"] for signal in body["signals"]] == ["a", "b"]
+
+
+def test_context_lists_what_was_not_recorded_during_trading_hours(client, ctx):
+    # Monday 12 Oct 2026, long past: the recorder ran from 08:00 to 22:00 in Paris, except five minutes.
+    def rows(start, end):
+        moment, found = start, []
+        while moment < end:
+            found.append({"ts": moment, "feed_ok": True})
+            moment += timedelta(seconds=10)
+        return found
+
+    day = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    ctx.queries.price_coverage_rows = (
+        rows(day.replace(hour=6), day.replace(hour=9)) + rows(day.replace(hour=9, minute=5), day.replace(hour=20))
+    )
+
+    with patch_now(datetime(2026, 10, 20, tzinfo=timezone.utc)):
+        body = client.get("/api/prices/context?instrument_id=2&from=2026-10-12").json()
+
+    assert body["gaps"] == [
+        {"start": "2026-10-12T09:00:00+00:00", "end": "2026-10-12T09:05:00+00:00", "seconds": 300, "reason": "down"},
+    ]
+
+
+def test_gaps_are_not_worked_out_for_a_period_too_long_to_read_line_by_line(client, ctx):
+    body = client.get("/api/prices/context?instrument_id=2&from=2026-08-01&to=2026-10-12").json()
+
+    assert body["gaps"] is None
+    assert not any(call[0] == "price_coverage" for call in ctx.queries.calls)
+
+
+def test_prices_read_as_empty_before_anything_was_recorded(client, ctx):
+    ctx.queries.price_instruments_recorded = []
+
+    assert client.get("/api/prices/instruments?from=2026-10-12").json()["items"] == []
+
+
+class patch_now:
+    """Freeze "now" for the gap computation of the prices routes."""
+
+    def __init__(self, moment):
+        self.moment = moment
+
+    def __enter__(self):
+        from unittest.mock import patch
+
+        import src.admin.routers.prices as prices_router
+
+        class Frozen(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return self.moment.astimezone(tz) if tz else self.moment.replace(tzinfo=None)
+
+        self._patch = patch.object(prices_router, "datetime", Frozen)
+        self._patch.start()
+
+    def __exit__(self, *exc_info):
+        self._patch.stop()
 
 
 class RunningAdmin:

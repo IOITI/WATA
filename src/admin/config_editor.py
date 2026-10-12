@@ -23,6 +23,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 
 from src.configuration import ConfigurationManager
+from src.price_recorder.settings import RecorderSettings
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,9 @@ class ConfigEditor:
         current, revision = self._read()
         candidate_path = self._write_candidate(merge_editable(current, submitted, keep_protected=keep_protected))
         try:
-            ConfigurationManager(candidate_path)
+            # The price recorder checks its own section, which the shared
+            # validator leaves alone: said here, rather than found idle later.
+            RecorderSettings.from_config(ConfigurationManager(candidate_path))
         except Exception as e:
             os.remove(candidate_path)
             # The validator raises ValueError for the cases it checks, and
