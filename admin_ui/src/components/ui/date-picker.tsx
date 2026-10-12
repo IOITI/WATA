@@ -160,11 +160,11 @@ function PickerShell({
           open && "border-neutral-400 hover:border-neutral-400 dark:border-neutral-600 dark:hover:border-neutral-600"
         )}
       >
-        <CalendarDays className="size-4 shrink-0 text-neutral-400" />
+        <CalendarDays className="size-4 shrink-0 text-neutral-500 dark:text-neutral-400" />
         <span
           className={cn(
             "truncate",
-            text ? "text-neutral-900 dark:text-neutral-100" : "text-neutral-400 dark:text-neutral-500"
+            text ? "text-neutral-900 dark:text-neutral-100" : "text-neutral-500"
           )}
         >
           {text ?? placeholder}

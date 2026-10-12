@@ -212,7 +212,7 @@ export const SpringSelect: React.FC<SpringSelectProps> = ({
           initial={{ opacity: 0, y: -2 }}
           animate={{ opacity: 1, y: 0 }}
           transition={motionTransitions.springSnappy}
-          className="text-[11px] text-rose-400 font-medium mt-1.5"
+          className="text-[11px] text-rose-700 dark:text-rose-400 font-medium mt-1.5"
           role="alert"
         >
           {error}

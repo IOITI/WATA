@@ -17,6 +17,10 @@ import type {
   Performance,
   PositionDetail,
   Position,
+  PriceBars,
+  PriceContext,
+  PriceInstruments,
+  PriceRangeBars,
   Report,
   SaxoStatus,
   Session,
@@ -115,6 +119,11 @@ export interface DateRangeParams {
   to?: string | null
 }
 
+export interface PricePeriod {
+  from: string
+  to: string
+}
+
 export const api = {
   session: () => request<Session>('GET', '/api/session', { expectUnauthorized: true }),
   /** Public: whether the login needs a one-time code as well as the password. */
@@ -141,6 +150,22 @@ export const api = {
     request<{ items: JournalEntry[] }>('GET', `/api/journal${query({ ...params, limit: 500 })}`),
   watchlist: () => request<Watchlist>('GET', '/api/watchlist'),
   executionTimings: (days: number) => request<ExecutionTimings>('GET', `/api/execution-timing${query({ days })}`),
+  priceInstruments: (period: PricePeriod) =>
+    request<PriceInstruments>('GET', `/api/prices/instruments${query({ ...period })}`),
+  priceBars: (instrumentId: number, period: PricePeriod, interval: number) =>
+    request<PriceBars>('GET', `/api/prices/bars${query({ instrument_id: instrumentId, ...period, interval })}`),
+  /** Range bars of one side. Without a size the server chooses one; `under` is the index shown under a turbo. */
+  priceRangeBars: (
+    instrumentId: number,
+    period: PricePeriod,
+    options: { side: 'bid' | 'ask'; size: number | null; under: number | null },
+  ) =>
+    request<PriceRangeBars>(
+      'GET',
+      `/api/prices/range-bars${query({ instrument_id: instrumentId, ...period, side: options.side, size: options.size, under: options.under })}`,
+    ),
+  priceContext: (instrumentId: number, period: PricePeriod) =>
+    request<PriceContext>('GET', `/api/prices/context${query({ instrument_id: instrumentId, ...period })}`),
   audit: () => request<{ items: AuditEntry[] }>('GET', '/api/audit?limit=500'),
 
   signals: () => request<{ items: Signal[] }>('GET', '/api/signals'),

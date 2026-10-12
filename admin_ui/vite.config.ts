@@ -22,7 +22,10 @@ export default defineConfig({
   server: {
     proxy: {
       // The admin API, or the fake one started with `npm run dev:api`.
-      '/api': 'http://127.0.0.1:8082',
+      // The Host header is passed on as the browser sent it: the admin refuses a
+      // change whose Origin is not its own Host, which is what signing in from
+      // this dev server would otherwise look like.
+      '/api': { target: 'http://127.0.0.1:8082', changeOrigin: false },
     },
   },
   test: {

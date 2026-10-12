@@ -99,6 +99,16 @@ describe('sign-in', () => {
     expect(JSON.parse(login?.[1]?.body as string)).toEqual({ password: 'correct horse battery' })
   })
 
+  it('lets the theme be chosen before signing in', async () => {
+    stubApi({
+      'GET /api/session': () => json(401, { detail: 'Not authenticated' }),
+      'GET /api/healthz': () => json(200, { service: 'admin', totp: false }),
+    })
+    renderApp('/login')
+
+    expect(await screen.findByRole('button', { name: /^Theme:/ })).toBeInTheDocument()
+  })
+
   it('shows why a sign-in was refused and clears the field', async () => {
     stubApi({
       'GET /api/session': () => json(401, { detail: 'Not authenticated' }),

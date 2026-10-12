@@ -416,3 +416,113 @@ export interface LiveEvent {
   type: string
   [key: string]: unknown
 }
+
+// ── recorded prices (src/admin/routers/prices.py) ──
+
+export interface PriceInstrument {
+  id: number
+  uic: number
+  asset_type: string
+  symbol: string | null
+  description: string | null
+  currency: string | null
+  role: 'turbo' | 'underlying'
+  indice: string | null
+  underlying_uic: number | null
+  direction: string | null
+  /** Knock-out level of a turbo. */
+  barrier: number | null
+  issuer: string | null
+}
+
+export interface PriceInstruments {
+  from: string
+  to: string
+  timezone: string
+  items: PriceInstrument[]
+}
+
+/**
+ * One bar, as the server sends it: start of the bucket (epoch seconds, UTC),
+ * open/high/low/close of the bid, the same of the ask (null when the
+ * instrument has none), and the number of quote changes received.
+ */
+export type PriceBarRow = [
+  t: number,
+  bidOpen: number,
+  bidHigh: number,
+  bidLow: number,
+  bidClose: number,
+  askOpen: number | null,
+  askHigh: number | null,
+  askLow: number | null,
+  askClose: number | null,
+  updates: number,
+]
+
+export interface PriceBars {
+  instrument: PriceInstrument
+  from: string
+  to: string
+  timezone: string
+  /** Length of a bar, in seconds. */
+  interval: number
+  columns: string[]
+  bars: PriceBarRow[]
+}
+
+/**
+ * One range bar, as the server sends it: the time the chart is given for it (epoch
+ * seconds, UTC, never twice the same: a place on the axis, not a time to show),
+ * open, high, low, close, when it really began and ended (to the ten seconds),
+ * whether it reached its range, whether it is the first after a pause in the data,
+ * and the index at its end (under a turbo).
+ */
+export type PriceRangeRow = [
+  t: number,
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+  began: number,
+  ended: number,
+  complete: boolean,
+  afterPause: boolean,
+  index: number | null,
+]
+
+export interface PriceRangeBars {
+  instrument: PriceInstrument
+  /** The index whose level comes with each bar. */
+  under: PriceInstrument | null
+  from: string
+  to: string
+  timezone: string
+  side: 'bid' | 'ask'
+  /** One step of these prices: what "1R" is. */
+  tick: number
+  decimals: number
+  /** The range of a bar in ticks (TradingView's R) and as a price move. */
+  ticks: number
+  size: number
+  /** The range was chosen by the server for the period. */
+  auto: boolean
+  columns: string[]
+  bars: PriceRangeRow[]
+}
+
+export interface PriceGap {
+  start: string
+  end: string
+  seconds: number
+  /** "down": the recorder was not running. "silent": it was, and no quote was arriving. */
+  reason: 'down' | 'silent'
+}
+
+export interface PriceContext {
+  instrument: PriceInstrument
+  trades: Position[]
+  signals: JournalEntry[]
+  /** null when the period is too long for the gaps to be worked out. */
+  gaps: PriceGap[] | null
+}

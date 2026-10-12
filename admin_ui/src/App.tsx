@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { createBrowserRouter, createRoutesFromElements, Outlet, Route, RouterProvider } from 'react-router'
 
 import { AppShell } from '@/components/AppShell'
+import { ThemeProvider } from '@/components/ThemeProvider'
 import { ToastProvider } from '@/components/ToastProvider'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AuditPage } from '@/features/audit/AuditPage'
@@ -31,6 +32,10 @@ const ReportPage = lazy(() =>
   import('@/features/report/ReportPage').then((module) => ({ default: module.ReportPage })),
 )
 const ExitsPage = lazy(() => import('@/features/exits/ExitsPage').then((module) => ({ default: module.ExitsPage })))
+// Its own charting library, for candles: loaded with the page as well.
+const PricesPage = lazy(() =>
+  import('@/features/prices/PricesPage').then((module) => ({ default: module.PricesPage })),
+)
 
 function ChartPage({ children }: { children: ReactNode }) {
   return <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>{children}</Suspense>
@@ -100,6 +105,14 @@ const router = createBrowserRouter(
             </ChartPage>
           }
         />
+        <Route
+          path="prices"
+          element={
+            <ChartPage>
+              <PricesPage />
+            </ChartPage>
+          }
+        />
         <Route path="timing" element={<TimingPage />} />
         <Route path="signals" element={<SignalsPage />} />
         <Route path="watchlist" element={<WatchlistPage />} />
@@ -118,10 +131,13 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Animations follow the system's "reduce motion" setting. */}
-      <MotionConfig reducedMotion="user">
-        <RouterProvider router={router} />
-      </MotionConfig>
+      {/* Light or dark, for every page, the login included. */}
+      <ThemeProvider>
+        {/* Animations follow the system's "reduce motion" setting. */}
+        <MotionConfig reducedMotion="user">
+          <RouterProvider router={router} />
+        </MotionConfig>
+      </ThemeProvider>
     </QueryClientProvider>
   )
 }

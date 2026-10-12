@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router'
 
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Form, FormControl, FormItem, FormLabel, Input } from '@/components/ui/form'
@@ -55,7 +56,9 @@ export function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-dvh place-items-center p-6">
+    <main className="relative grid min-h-dvh place-items-center p-6">
+      {/* The theme can be chosen before signing in: this page is the first one seen. */}
+      <ThemeToggle className="absolute right-4 top-4" />
       <div className="w-full max-w-sm rounded-2xl border border-border/70 bg-surface/50 p-8 shadow-elevated dark:bg-surface/25">
         <div className="mb-6 flex flex-col gap-1.5">
           <div className="mb-3 grid size-10 place-items-center rounded-xl border border-border bg-surface-raised">

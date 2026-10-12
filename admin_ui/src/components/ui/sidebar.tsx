@@ -278,7 +278,7 @@ function Panel({
           {!collapsed && hasChildren && (
             <ChevronRight
               className={cn(
-                "relative size-3.5 shrink-0 text-neutral-400 transition-transform duration-200",
+                "relative size-3.5 shrink-0 text-neutral-500 transition-transform duration-200 dark:text-neutral-400",
                 isOpen && "rotate-90"
               )}
             />
@@ -326,7 +326,7 @@ function Panel({
                       )}
                       <span className="flex-1 truncate text-left">{c.label}</span>
                       {c.badge !== undefined && (
-                        <span className="text-[11px] tabular-nums text-neutral-400">{c.badge}</span>
+                        <span className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">{c.badge}</span>
                       )}
                     </button>
                   );
@@ -377,7 +377,7 @@ function Panel({
                 (collapsed ? (
                   <div className="mx-2.5 my-2 h-px bg-neutral-200 dark:bg-neutral-800" />
                 ) : (
-                  <p className="truncate px-2.5 pb-1 pt-4 text-xs text-neutral-400 dark:text-neutral-500">
+                  <p className="truncate px-2.5 pb-1 pt-4 text-xs text-neutral-500">
                     {section.title}
                   </p>
                 ))}
@@ -414,7 +414,7 @@ function Panel({
                   Collapse
                 </motion.span>
                 {!collapsed && (
-                  <kbd className="rounded border border-neutral-200 px-1 font-sans text-[10px] text-neutral-400 dark:border-neutral-800">
+                  <kbd className="rounded border border-neutral-200 px-1 font-sans text-[10px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
                     ⌘B
                   </kbd>
                 )}

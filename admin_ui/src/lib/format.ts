@@ -141,6 +141,18 @@ export function formatDuration(milliseconds: number): string {
   return `${Math.floor(hours / 24)} d`
 }
 
+/**
+ * A length of time with its seconds: "50 s", "1 min 50 s", "12 min", "2 h 05 min".
+ * For what is measured to the ten seconds, where `formatDuration` would round the point away.
+ */
+export function formatSpan(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  if (total < 60) return `${total} s`
+  const minutes = Math.floor(total / 60)
+  if (minutes < 60) return total % 60 ? `${minutes} min ${total % 60} s` : `${minutes} min`
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
+}
+
 export function formatRelative(value: string | null | undefined, now: number = Date.now()): string {
   const date = parseDate(value)
   if (!date) return EMPTY

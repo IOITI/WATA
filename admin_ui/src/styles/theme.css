@@ -1,22 +1,32 @@
 /* -----------------------------------------------------------------------------
    WATA additions to the EasyUI tokens.
 
+   `:root` is the light theme and `.dark` the dark one, as in tokens.css. The
+   interface follows the system setting unless a theme was chosen (lib/theme.ts).
+
    EasyUI has no status colours of its own; its components use Tailwind's
-   emerald / red / amber on dark surfaces, so the trading colours (profit,
-   loss, warning) come from the same families.
+   emerald / red / amber, so the trading colours (profit, loss, warning) come
+   from the same families.
 
    Text and chart marks use different steps on purpose. Text needs contrast
    against the surface; filled marks need to sit in a narrower lightness band
-   and stay apart for colour-blind readers. The chart pair was checked with the
-   dataviz palette validator against the dark card surface (#18181b).
+   and stay apart for colour-blind readers. Both chart pairs were checked with
+   the dataviz palette validator, each against its own card surface.
    --------------------------------------------------------------------------- */
 
 :root {
+  /* EasyUI's own values for these two (#71717A, #A1A1AA) are 4.3:1 and 2.3:1 on
+     the light surfaces a row or a field can have: under what small text needs
+     (4.5:1). Lowered here, tokens.css staying the unchanged copy. */
+  --text-muted: #63636b;
+  --text-subtle: #6b6b74;
   --focus-ring: #2563eb;
-  --positive: #059669;
-  --negative: #dc2626;
-  --warning: #d97706;
-  --info: #0284c7;
+  /* Status colours as text: each is 4.5:1 at least on white, on the page and on
+     a hovered or raised surface (#f1f1f2), where the brighter steps are not. */
+  --positive: #047857;
+  --negative: #b91c1c;
+  --warning: #a14a08;
+  --info: #0369a1;
 
   --chart-series: #2563eb;
   --chart-positive: #059669;

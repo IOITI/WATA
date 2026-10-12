@@ -5,6 +5,7 @@ import {
   formatDateTime,
   formatDay,
   formatDuration,
+  formatSpan,
   formatMoney,
   formatMoneyCompact,
   formatPercent,
@@ -93,6 +94,17 @@ describe('dates', () => {
     const now = Date.parse('2026-10-11T12:00:00Z')
     expect(formatRelative('2026-10-11T12:05:00Z', now)).toBe('in 5 min')
     expect(formatRelative('2026-10-11T11:42:00Z', now)).toBe('18 min ago')
+  })
+
+  it('keeps the seconds of a length of time measured to the ten seconds', () => {
+    expect(formatSpan(10)).toBe('10 s')
+    expect(formatSpan(59)).toBe('59 s')
+    expect(formatSpan(60)).toBe('1 min')
+    expect(formatSpan(110)).toBe('1 min 50 s')
+    expect(formatSpan(3590)).toBe('59 min 50 s')
+    expect(formatSpan(3600)).toBe('1 h 00 min')
+    expect(formatSpan(7510)).toBe('2 h 05 min')
+    expect(formatSpan(-5)).toBe('0 s')
   })
 
   it('turns a local date into the day the API expects', () => {
