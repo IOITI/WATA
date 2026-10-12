@@ -76,6 +76,48 @@ def test_admin_writes_nowhere_else(compose_services):
     ]
 
 
+def test_price_recorder_is_only_started_on_request_and_reachable_by_nothing(compose_services):
+    recorder = compose_services["price_recorder1"]
+
+    assert recorder["profiles"] == ["recorder"]
+    assert recorder["environment"] == ["WATA_APP_ROLE=price_recorder"]
+    # It serves nothing: no port, no route.
+    assert "ports" not in recorder and "expose" not in recorder and "labels" not in recorder
+
+
+def test_price_recorder_mounts_only_what_it_uses(compose_services):
+    modes = _mount_modes(compose_services["price_recorder1"])
+
+    assert modes == {
+        "/app/var/log/wata-price-recorder": "rw",
+        # The Saxo token it shares with, and renews like, the other services.
+        "/app/var/lib/saxo_auth": "rw",
+        "/app/var/lib/price_export": "rw",
+        "/app/etc/config.json": "ro",
+    }
+    assert not any("docker.sock" in volume for volume in compose_services["price_recorder1"]["volumes"])
+
+
+def test_no_trading_service_waits_for_the_price_recorder(compose_services):
+    for name, service in compose_services.items():
+        depends_on = service.get("depends_on") or {}
+        assert "price_recorder1" not in depends_on, name
+
+
+def test_the_start_script_knows_every_role_of_the_compose_file(compose_services):
+    script = open("src/start_python_script.sh").read()
+    roles = {
+        variable.split("=", 1)[1]
+        for service in compose_services.values()
+        for variable in service.get("environment") or []
+        if isinstance(variable, str) and variable.startswith("WATA_APP_ROLE=")
+    }
+
+    assert "price_recorder" in roles
+    for role in roles:
+        assert f'"{role}")' in script, role
+
+
 def test_admin_is_routed_on_its_own_domain_behind_its_own_allowlist(compose_services):
     labels = compose_services["admin1"]["labels"]
 

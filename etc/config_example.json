@@ -217,6 +217,15 @@
         "enabled": true,
         "ttl_seconds": 30
       },
+      "price_recorder": {
+        "enabled": false,
+        "refresh_interval_seconds": 300,
+        "max_instruments": 150,
+        "refresh_rate_ms": 1000,
+        "instruments": [],
+        "retention_months": 0,
+        "alert_after_seconds": 300
+      },
       "watchlist_manager": {
         "enabled": true,
         "api_host": "0.0.0.0",

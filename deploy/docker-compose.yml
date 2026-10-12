@@ -326,5 +326,41 @@ services:
       traefik:
         condition: service_healthy
 
+  # Price recorder: ten-second bars of the turbos and their index, kept for
+  # backtesting. Not started unless the "recorder" profile is enabled
+  # (COMPOSE_PROFILES=recorder in .env, or admin,recorder for both) and
+  # trade.config.price_recorder.enabled is true. No trading service uses it.
+  price_recorder1:
+    image: wata-base:latest
+    hostname: price_recorder1
+    container_name: 'price_recorder1'
+    profiles: ["recorder"]
+    environment:
+      - WATA_APP_ROLE=price_recorder
+    volumes:
+      # Only what it needs: its own log, the Saxo token it shares with the other
+      # services, and the directory its exports are written to.
+      - ../../var/log/wata-price-recorder:/app/var/log/wata-price-recorder
+      - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
+      - ../../var/lib/price_export:/app/var/lib/price_export
+      - ../../etc/config.json:/app/etc/config.json:ro
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      postgres1:
+        condition: service_healthy
+
 networks:
   trade-net:

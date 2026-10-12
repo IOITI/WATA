@@ -38,6 +38,7 @@ mkdir -p "$APP_BASE_DIR/var/lib/web_server"
 mkdir -p "$APP_BASE_DIR/var/lib/rabbitmq"
 mkdir -p "$APP_BASE_DIR/var/lib/trade"
 mkdir -p "$APP_BASE_DIR/var/lib/admin"
+mkdir -p "$APP_BASE_DIR/var/lib/price_export"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik/letsencrypt"
 mkdir -p "$APP_BASE_DIR/var/log/"
@@ -47,6 +48,7 @@ mkdir -p "$APP_BASE_DIR/var/log/wata-trader"
 mkdir -p "$APP_BASE_DIR/var/log/wata-telegram"
 mkdir -p "$APP_BASE_DIR/var/log/wata-scheduler"
 mkdir -p "$APP_BASE_DIR/var/log/wata-admin"
+mkdir -p "$APP_BASE_DIR/var/log/wata-price-recorder"
 
 # Ensure docker service is enabled
 echo "Ensuring Docker service is enabled..."
@@ -126,6 +128,21 @@ fi
 docker exec -it admin1 python -m src.admin.cli $OPTIONS
 EOF
 chmod +x /usr/local/bin/wataadmintotp
+
+# Create the wataprices command wrapper (price recorder: export a period, or check an instrument)
+cat << 'EOF' > /usr/local/bin/wataprices
+#!/bin/bash
+set -euo pipefail
+# wataprices --from 2026-10-12 --to 2026-10-16     export to /app/wata/var/lib/price_export/
+# wataprices probe --keywords "US Tech 100"        does Saxo price this instrument for the account?
+if [ "$#" -gt 0 ] && [ "$1" == "probe" ]; then
+    shift
+    docker exec price_recorder1 python -m src.price_recorder.probe "$@"
+else
+    docker exec price_recorder1 python -m src.price_recorder.export "$@"
+fi
+EOF
+chmod +x /usr/local/bin/wataprices
 
 # --- Helper function definition for other scripts ---
 # Note: This is a string that will be embedded into other scripts.
