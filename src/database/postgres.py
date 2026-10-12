@@ -7,7 +7,8 @@ Uses asyncpg connection pool for high-performance async I/O.
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -824,3 +825,235 @@ class AsyncDbBalanceHistoryManager:
             await self.record_balance(day, total_value)
         except Exception as e:
             logger.error("Failed to record the account balance: %s", e)
+
+
+# ──────────────────────────────────────────────
+#  Price history (price recorder)
+# ──────────────────────────────────────────────
+
+# Created by the price recorder alone, not by init_schema(): the trading
+# services have no use for these tables and must not depend on them.
+PRICE_HISTORY_SCHEMA_SQL = """
+-- Instruments whose prices are recorded. Saxo reuses a UIC across asset types,
+-- so the two together identify one.
+CREATE TABLE IF NOT EXISTS price_instrument (
+    id              SERIAL PRIMARY KEY,
+    uic             INTEGER NOT NULL,
+    asset_type      VARCHAR(40) NOT NULL,
+    symbol          VARCHAR(64),
+    description     TEXT,
+    currency        VARCHAR(8),
+    role            VARCHAR(16) NOT NULL,
+    indice          VARCHAR(32),
+    underlying_uic  INTEGER,
+    direction       VARCHAR(8),
+    barrier         DOUBLE PRECISION,
+    issuer          VARCHAR(32),
+    first_seen_at   TIMESTAMPTZ NOT NULL,
+    last_seen_at    TIMESTAMPTZ NOT NULL,
+    UNIQUE (uic, asset_type)
+);
+
+-- Ten-second bars of the bid and the ask. ts is the start of the bucket.
+-- updates = 0: the quote did not move in the bucket. No row: not quotable, or
+-- not recorded (see price_recorder_coverage).
+CREATE TABLE IF NOT EXISTS price_bar_10s (
+    ts               TIMESTAMPTZ NOT NULL,
+    instrument_id    INTEGER NOT NULL,
+    bid_open         DOUBLE PRECISION NOT NULL,
+    bid_high         DOUBLE PRECISION NOT NULL,
+    bid_low          DOUBLE PRECISION NOT NULL,
+    bid_close        DOUBLE PRECISION NOT NULL,
+    ask_open         DOUBLE PRECISION,
+    ask_high         DOUBLE PRECISION,
+    ask_low          DOUBLE PRECISION,
+    ask_close        DOUBLE PRECISION,
+    updates          SMALLINT NOT NULL,
+    delayed_minutes  SMALLINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (instrument_id, ts)
+) PARTITION BY RANGE (ts);
+
+-- One row per bucket the recorder lived through: whether quotes were arriving,
+-- and how much it wrote. A bucket with no row here was not recorded at all.
+CREATE TABLE IF NOT EXISTS price_recorder_coverage (
+    ts           TIMESTAMPTZ PRIMARY KEY,
+    feed_ok      BOOLEAN NOT NULL,
+    instruments  SMALLINT NOT NULL,
+    bars         SMALLINT NOT NULL
+);
+"""
+
+PRICE_BAR_TABLE = "price_bar_10s"
+_PRICE_PARTITION_NAME = re.compile(rf"^{PRICE_BAR_TABLE}_y(\d{{4}})m(\d{{2}})$")
+
+
+async def init_price_history_schema(conn_mgr: PostgresConnectionManager):
+    await conn_mgr.execute(PRICE_HISTORY_SCHEMA_SQL)
+
+
+def _month_start(day: date, months_later: int = 0) -> date:
+    months = day.year * 12 + (day.month - 1) + months_later
+    return date(months // 12, months % 12 + 1, 1)
+
+
+def price_bar_partition(day: date) -> tuple[str, date, date]:
+    """Name of the monthly partition holding ``day``, and its bounds (first day in, first day out)."""
+    start = _month_start(day)
+    return f"{PRICE_BAR_TABLE}_y{start.year:04d}m{start.month:02d}", start, _month_start(day, 1)
+
+
+class AsyncDbPriceHistoryManager:
+    """Instruments, bars and coverage written by the price recorder (see PRICE_HISTORY_SCHEMA_SQL)."""
+
+    BAR_COLUMNS = (
+        "ts", "instrument_id", "bid_open", "bid_high", "bid_low", "bid_close",
+        "ask_open", "ask_high", "ask_low", "ask_close", "updates", "delayed_minutes",
+    )
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def ensure_partitions(self, today: date, months_ahead: int = 1) -> list[str]:
+        """Create the partitions of this month and the next ones, so that a bar never arrives without one."""
+        names = []
+        for offset in range(months_ahead + 1):
+            name, start, end = price_bar_partition(_month_start(today, offset))
+            # Bounds in UTC whatever the session's timezone: a bucket belongs to the month it starts in, in UTC.
+            await self.db.execute(
+                f"CREATE TABLE IF NOT EXISTS {name} PARTITION OF {PRICE_BAR_TABLE} "
+                f"FOR VALUES FROM ('{start.isoformat()} 00:00:00+00') TO ('{end.isoformat()} 00:00:00+00')"
+            )
+            names.append(name)
+        return names
+
+    async def drop_partitions_older_than(self, today: date, months: int) -> list[str]:
+        """
+        Remove the bars of the months that ended more than ``months`` months ago
+        (and their coverage). Only called when a retention is configured.
+        """
+        if months <= 0:
+            return []
+        cutoff = _month_start(today, -months)
+        rows = await self.db.fetch(
+            "SELECT child.relname AS name FROM pg_inherits "
+            "JOIN pg_class parent ON pg_inherits.inhparent = parent.oid "
+            "JOIN pg_class child ON pg_inherits.inhrelid = child.oid "
+            "WHERE parent.relname = $1",
+            PRICE_BAR_TABLE,
+        )
+        dropped = []
+        for row in rows:
+            match = _PRICE_PARTITION_NAME.match(row["name"])
+            if not match:
+                continue
+            if date(int(match.group(1)), int(match.group(2)), 1) < cutoff:
+                await self.db.execute(f"DROP TABLE IF EXISTS {row['name']}")
+                dropped.append(row["name"])
+        if dropped:
+            await self.db.execute(
+                "DELETE FROM price_recorder_coverage WHERE ts < $1",
+                datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc),
+            )
+        return dropped
+
+    async def upsert_instrument(self, instrument: dict, seen_at: datetime) -> int:
+        """Record (or refresh) an instrument's description; returns its id."""
+        return await self.db.fetchval(
+            """
+            INSERT INTO price_instrument (
+                uic, asset_type, symbol, description, currency, role, indice,
+                underlying_uic, direction, barrier, issuer, first_seen_at, last_seen_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+            ON CONFLICT (uic, asset_type) DO UPDATE SET
+                symbol = COALESCE(EXCLUDED.symbol, price_instrument.symbol),
+                description = COALESCE(EXCLUDED.description, price_instrument.description),
+                currency = COALESCE(EXCLUDED.currency, price_instrument.currency),
+                role = EXCLUDED.role,
+                indice = COALESCE(EXCLUDED.indice, price_instrument.indice),
+                underlying_uic = COALESCE(EXCLUDED.underlying_uic, price_instrument.underlying_uic),
+                direction = COALESCE(EXCLUDED.direction, price_instrument.direction),
+                barrier = COALESCE(EXCLUDED.barrier, price_instrument.barrier),
+                issuer = COALESCE(EXCLUDED.issuer, price_instrument.issuer),
+                last_seen_at = EXCLUDED.last_seen_at
+            RETURNING id
+            """,
+            instrument["uic"], instrument["asset_type"], instrument.get("symbol"), instrument.get("description"),
+            instrument.get("currency"), instrument["role"], instrument.get("indice"),
+            instrument.get("underlying_uic"), instrument.get("direction"), instrument.get("barrier"),
+            instrument.get("issuer"), seen_at,
+        )
+
+    async def insert_bars(self, bars: list[tuple]) -> None:
+        """Write bars (tuples in BAR_COLUMNS order) in one statement. A bar already there is left as it is."""
+        if not bars:
+            return
+        columns = list(zip(*bars))
+        await self.db.execute(
+            f"""
+            INSERT INTO {PRICE_BAR_TABLE} ({", ".join(self.BAR_COLUMNS)})
+            SELECT * FROM unnest(
+                $1::timestamptz[], $2::int4[],
+                $3::float8[], $4::float8[], $5::float8[], $6::float8[],
+                $7::float8[], $8::float8[], $9::float8[], $10::float8[],
+                $11::int2[], $12::int2[]
+            )
+            ON CONFLICT (instrument_id, ts) DO NOTHING
+            """,
+            *[list(column) for column in columns],
+        )
+
+    async def record_coverage(self, ts: datetime, feed_ok: bool, instruments: int, bars: int) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO price_recorder_coverage (ts, feed_ok, instruments, bars)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (ts) DO NOTHING
+            """,
+            ts, feed_ok, instruments, bars,
+        )
+
+    async def instruments_recorded_since(self, since: datetime) -> list[dict]:
+        """The instruments that have a bar since ``since``: what to keep recording after a restart."""
+        rows = await self.db.fetch(
+            f"""
+            SELECT i.id, i.uic, i.asset_type, i.symbol, i.description, i.currency, i.role, i.indice,
+                   i.underlying_uic, i.direction, i.barrier, i.issuer
+            FROM price_instrument i
+            WHERE EXISTS (SELECT 1 FROM {PRICE_BAR_TABLE} b WHERE b.instrument_id = i.id AND b.ts >= $1)
+            """,
+            since,
+        )
+        return [dict(row) for row in rows]
+
+    async def bars_page(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        indice: str | None = None,
+        after: tuple[datetime, int] | None = None,
+        limit: int = 20000,
+    ) -> list[dict]:
+        """
+        Bars of [start, end) with their instrument, oldest first, one page at a
+        time: pass the (ts, instrument_id) of the last row as ``after`` for the next.
+        """
+        after_ts, after_id = after if after is not None else (start, -1)
+        rows = await self.db.fetch(
+            f"""
+            SELECT b.ts, b.instrument_id, i.uic, i.asset_type, i.symbol, i.description, i.role, i.indice,
+                   i.direction, i.barrier, i.issuer,
+                   b.bid_open, b.bid_high, b.bid_low, b.bid_close,
+                   b.ask_open, b.ask_high, b.ask_low, b.ask_close, b.updates, b.delayed_minutes
+            FROM {PRICE_BAR_TABLE} b
+            JOIN price_instrument i ON i.id = b.instrument_id
+            WHERE b.ts >= $1 AND b.ts < $2
+              AND ($3::text IS NULL OR i.indice = $3)
+              AND (b.ts, b.instrument_id) > ($4::timestamptz, $5::int4)
+            ORDER BY b.ts, b.instrument_id
+            LIMIT $6
+            """,
+            start, end, indice, after_ts, after_id, limit,
+        )
+        return [dict(row) for row in rows]
+
