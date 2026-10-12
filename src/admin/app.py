@@ -16,7 +16,7 @@ from starlette.datastructures import MutableHeaders
 from src.admin.context import AdminContext
 from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
 from src.admin.events import StateWatcher
-from src.admin.routers import actions, config, session, system, trading
+from src.admin.routers import actions, config, prices, session, system, trading
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, trading, system, actions, config):
+    for module in (session, trading, system, actions, config, prices):
         app.include_router(module.router)
 
     _mount_interface(app, static_dir)

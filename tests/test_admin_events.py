@@ -36,6 +36,13 @@ class Queries:
         return True
 
 
+class Config:
+    """A configuration with nothing optional switched on."""
+
+    def get_config_value(self, key, default=None):
+        return default
+
+
 class Services:
     watchlist_enabled = False
 
@@ -68,6 +75,7 @@ class Ctx:
         self.queries = Queries()
         self.services = Services()
         self.saxo = Saxo()
+        self.config_manager = Config()
 
 
 def _position(position_id, **extra):

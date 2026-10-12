@@ -10,11 +10,13 @@ configured trading timezone.
 import asyncio
 import logging
 import math
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from src.admin.analysis import summarise_exits
 from src.admin.errors import DatabaseUnavailable
+from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
+from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.database.postgres import AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
 
@@ -237,6 +239,155 @@ class AdminQueries:
             if _is_missing_table(e):
                 return []
             raise
+
+    async def price_recorder_status(self) -> dict | None:
+        """
+        The last ten-second bucket the price recorder lived through (ts is its
+        start), None when it never ran: its tables only exist once it has.
+        """
+        rows = await self._fetch_optional(
+            "SELECT ts, feed_ok, instruments, bars FROM price_recorder_coverage ORDER BY ts DESC LIMIT 1"
+        )
+        return dict(rows[0]) if rows else None
+
+    # ── recorded prices (written by the price recorder) ──
+
+    _PRICE_INSTRUMENT_COLUMNS = (
+        "i.id, i.uic, i.asset_type, i.symbol, i.description, i.currency, i.role, i.indice, "
+        "i.underlying_uic, i.direction, i.barrier, i.issuer"
+    )
+
+    async def price_instruments(self, start: datetime, end: datetime) -> list[dict]:
+        """
+        The instruments that have a bar in [start, end): the index first, then
+        the turbos by direction and knock-out level. The bars are reached
+        through their primary key, one probe per instrument, never scanned.
+        """
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {self._PRICE_INSTRUMENT_COLUMNS}
+            FROM price_instrument i
+            WHERE i.last_seen_at >= $1 AND i.first_seen_at < $2
+              AND EXISTS (
+                  SELECT 1 FROM price_bar_10s b WHERE b.instrument_id = i.id AND b.ts >= $1 AND b.ts < $2
+              )
+            ORDER BY (i.role <> 'underlying'), i.indice, i.direction, i.barrier, i.id
+            """,
+            start, end,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def price_instrument(self, instrument_id: int) -> dict | None:
+        rows = await self._fetch_optional(
+            f"SELECT {self._PRICE_INSTRUMENT_COLUMNS} FROM price_instrument i WHERE i.id = $1", instrument_id,
+        )
+        return _clean_row(rows[0]) if rows else None
+
+    async def price_bars(self, instrument_id: int, start: datetime, end: datetime, interval: int, limit: int) -> list[list]:
+        """
+        Bars of one instrument in [start, end), oldest first, as rows of
+        PRICE_BAR_COLUMNS. ``interval`` is ten seconds, as recorded, or a
+        multiple: the bars of each bucket are then merged into one (first open,
+        highest high, lowest low, last close).
+        """
+        if interval not in PRICE_INTERVALS:
+            raise ValueError(f"Unsupported interval: {interval}")
+        if interval == PRICE_INTERVALS[0]:
+            query = """
+                SELECT extract(epoch FROM ts)::bigint AS t,
+                       bid_open, bid_high, bid_low, bid_close, ask_open, ask_high, ask_low, ask_close, updates
+                FROM price_bar_10s
+                WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+                ORDER BY ts
+                LIMIT $4
+            """
+        else:
+            # The interval is one of a fixed list of whole numbers: written into
+            # the statement, where a parameter would leave its type to be guessed.
+            query = f"""
+                SELECT (floor(extract(epoch FROM ts) / {interval}) * {interval})::bigint AS t,
+                       (array_agg(bid_open ORDER BY ts ASC))[1] AS bid_open,
+                       max(bid_high) AS bid_high,
+                       min(bid_low) AS bid_low,
+                       (array_agg(bid_close ORDER BY ts DESC))[1] AS bid_close,
+                       (array_agg(ask_open ORDER BY ts ASC) FILTER (WHERE ask_open IS NOT NULL))[1] AS ask_open,
+                       max(ask_high) AS ask_high,
+                       min(ask_low) AS ask_low,
+                       (array_agg(ask_close ORDER BY ts DESC) FILTER (WHERE ask_close IS NOT NULL))[1] AS ask_close,
+                       sum(updates)::int AS updates
+                FROM price_bar_10s
+                WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+                GROUP BY 1
+                ORDER BY 1
+                LIMIT $4
+            """
+        rows = await self._fetch_optional(query, instrument_id, start, end, limit)
+        return [json_safe([row[column] for column in PRICE_BAR_COLUMNS]) for row in rows]
+
+    # The four prices of each side. Which side is asked for chooses between these
+    # names; nothing of the request itself is ever written into a statement.
+    _PRICE_SIDE_COLUMNS = {
+        "bid": ("bid_open", "bid_high", "bid_low", "bid_close"),
+        "ask": ("ask_open", "ask_high", "ask_low", "ask_close"),
+    }
+
+    async def price_series(self, instrument_id: int, start: datetime, end: datetime, side: str, limit: int) -> list[tuple]:
+        """
+        The ten-second bars of one side of an instrument in [start, end), oldest
+        first, as (epoch seconds, open, high, low, close). Bars without that
+        side (an instrument with no ask) are left out. Read a page at a time:
+        pass the moment after the last row as ``start`` for the next.
+        """
+        if side not in self._PRICE_SIDE_COLUMNS:
+            raise ValueError(f"Unsupported side: {side}")
+        opened, high, low, closed = self._PRICE_SIDE_COLUMNS[side]
+        # The bid is never missing (NOT NULL); the ask can be.
+        present = "" if side == "bid" else f" AND {opened} IS NOT NULL AND {high} IS NOT NULL AND {low} IS NOT NULL AND {closed} IS NOT NULL"
+        rows = await self._fetch_optional(
+            f"""
+            SELECT extract(epoch FROM ts)::bigint AS t,
+                   {opened} AS open, {high} AS high, {low} AS low, {closed} AS close
+            FROM price_bar_10s
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3{present}
+            ORDER BY ts
+            LIMIT $4
+            """,
+            instrument_id, start, end, limit,
+        )
+        return [(row["t"], row["open"], row["high"], row["low"], row["close"]) for row in rows]
+
+    async def price_coverage(self, start: datetime, end: datetime) -> list[dict]:
+        """One row per ten seconds the recorder lived through in [start, end), in time order."""
+        rows = await self._fetch_optional(
+            "SELECT ts, feed_ok FROM price_recorder_coverage WHERE ts >= $1 AND ts < $2 ORDER BY ts", start, end,
+        )
+        return [dict(row) for row in rows]
+
+    async def price_trades(self, instrument: dict, start: datetime, end: datetime, limit: int = 500) -> list[dict]:
+        """
+        The positions that were open at some point of [start, end) on a
+        recorded turbo, or on any recorded turbo of the indice when the
+        instrument is its index.
+        """
+        if instrument["role"] == "underlying":
+            which = "instrument_uic IN (SELECT uic FROM price_instrument WHERE indice = $1 AND role = 'turbo')"
+            target = instrument["indice"]
+        else:
+            which = "instrument_uic = $1"
+            target = instrument["uic"]
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {_POSITION_COLUMNS}
+            FROM turbo_data_position
+            WHERE {which}
+              AND execution_time_open < $3
+              AND COALESCE(execution_time_close, now()) >= $2
+            ORDER BY execution_time_open ASC, position_id ASC
+            LIMIT {min(max(limit, 1), MAX_ROWS)}
+            """,
+            target, start, end,
+        )
+        return [_clean_row(row) for row in rows]
 
     # ── live values, journal, balance (written by the trading services) ──
 
