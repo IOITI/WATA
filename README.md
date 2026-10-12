@@ -76,6 +76,7 @@ WATA runs as a set of Docker Compose services:
 | **RabbitMQ** | Carries `trading-ops` messages and Telegram notifications; the Trader no longer consumes trade signals from a RabbitMQ queue |
 | **Telegram** (`telegram`) | Delivers trade and service notifications |
 | **Admin** (`admin`, optional) | Web interface for monitoring, performance reporting, operator actions and editing the trading configuration. Off unless enabled, see [Admin Interface](#️-admin-interface) |
+| **Price Recorder** (`price_recorder`, optional) | Keeps ten-second bid and ask bars of the turbos the Trader could buy and of their index, for backtesting. Off unless enabled, see [Price Recorder](#️-price-recorder) |
 
 ```mermaid
 flowchart TD
@@ -393,9 +394,11 @@ An optional web interface for the operator, served on its own domain:
 - **Positions, orders and performance**: history with CSV export, cumulative and daily profit and loss, win rate, long/short and per-instrument figures, read live from PostgreSQL.
 - **Report and exits**: the figures of the daily Telegram report with the account balance over time, and an analysis of how trades ended (by exit, hour of entry, holding time, and how much of the best level was given back).
 - **Signals, watchlist and execution timing**: what the Trader did with each signal and why, the turbo that would be bought now, and how long each step of a trade took.
+- **Prices**: the bars kept by the [Price Recorder](#️-price-recorder), as a candlestick chart per instrument, from ten-second bars to one-hour ones or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under each turbo. The times that were not recorded are listed, and the bars can be exported to CSV.
 - **Operator actions**: pause and resume new entries, close one position, hand over the Saxo authorization code from the browser (instead of `watasaxoauth` over SSH), send a manual `long` / `short` / close signal, request the daily report. Each one asks for an explicit confirmation, is kept in an audit trail and announced on Telegram.
 - **Configuration**: view `config.json` with secrets masked and edit the trading parameters (`trade.rules`, `trade.config`, `reporting`, `logging.level`). A change is checked with the same validator the services use, the previous file is kept as `config.json.bak-<date>` and its trading parameters can be restored, and it takes effect the next time each service starts (run `watastop` then `watastart`).
 - **Logs**: the end of each service's log file, filtered by level and text.
+- **Light and dark**: the interface follows the system setting of the computer or phone, and a button in the top bar (also on the login page) sets it to always light or always dark; the choice is remembered in that browser.
 
 ### Enabling it
 
@@ -429,6 +432,78 @@ An optional web interface for the operator, served on its own domain:
 - The live value of an open position is what the Position Monitor last saw, published every few seconds (`streaming.live_value_interval_seconds`); the interface shows how old it is.
 - The state of the Trader and the Scheduler is read from the start and stop lines of their logs, since they expose nothing to query.
 - The signal journal and the account balance curve start with the version that introduced them.
+
+## 🗃️ Price Recorder
+
+Saxo's history goes no finer than one minute. To make a backtest on real prices possible later, WATA can record them itself, every ten seconds, from the day this is switched on. **What is not recorded cannot be fetched afterwards.**
+
+What it records:
+
+- **The turbos the Trader could buy**: the same candidates as its own selection (20 per indice and direction). A turbo stays recorded until the end of the day once it has been a candidate, so the one that was bought has no gap after the index moved on.
+- **The index** of each allowed indice.
+- **One row per instrument and ten seconds**: open, high, low and close of the bid and of the ask, built from Saxo's one-second stream. A stop-loss touched inside the ten seconds is visible in the low.
+
+It is a separate service with its own Saxo stream and database connections: no trading service uses it, and it cannot slow one down.
+
+### Enabling it
+
+1. In `config.json`, set `trade.config.price_recorder.enabled` to `true`.
+2. In `/app/wata/.env`, add `recorder` to the profiles: `COMPOSE_PROFILES=recorder`, or `COMPOSE_PROFILES=admin,recorder` with the admin interface.
+3. `watastop`, then `watastart`.
+4. Check the index: `wataprices probe --uic 1909050` (the underlying of your indice) says whether Saxo prices it for your account. If it does not, look for one that is, for example `wataprices probe --keywords "US Tech 100"`, and put the entry it prints in `trade.config.price_recorder.instruments`.
+
+When nothing has been recorded for five minutes during trading hours, a Telegram message says so, and another when it resumes. With the admin interface, "Price recorder" is listed with the services.
+
+| Setting (`trade.config.price_recorder`) | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Switches the recording on |
+| `instruments` | `[]` | Instruments recorded besides the turbos, as `{"label": "us100", "uic": 4913, "asset_type": "CfdOnIndex"}`. An entry labelled like an indice replaces its index |
+| `max_instruments` | `150` | Upper bound of what is recorded at once; beyond it, the turbos seen longest ago are dropped |
+| `refresh_interval_seconds` | `300` | How often the candidates are looked for |
+| `refresh_rate_ms` | `1000` | Refresh rate asked of Saxo's stream |
+| `retention_months` | `0` | `0` keeps everything; otherwise whole months older than this are deleted |
+| `alert_after_seconds` | `300` | Silence, during trading hours, after which Telegram is told |
+
+### Reading the data
+
+With the [Admin Interface](#️-admin-interface), the **Prices** page shows what was recorded: choose a period and an instrument, and it draws the bid or the ask as candles of ten seconds to one hour, with the index under a turbo, WATA's entries and exits at their prices, the signals received, and the list of the times in trading hours for which nothing was recorded. A day fits at ten seconds; a longer period needs longer bars (a chart holds at most 12,000 of them).
+
+**Range bars.** "Range" beside the bar lengths shows the same prices as range bars: a bar ends when the price has left a range of the size you set, however long that took.
+
+- The size is typed in ticks, as in TradingView (60R is sixty ticks), or as the price move that makes; the two fields follow each other. Enter, the "Apply" button or leaving the field rebuilds the bars, and "−" / "+" step along 1, 2, 5, 10, 20, 50… ticks. A tick is the smallest step of the recorded prices (0.01 for prices with two decimals). In TradingView it is the tick of the symbol you look at, which may be another size (0.25 on NQ futures, where 60R is 15 points): compare the price move, not the number of ticks.
+- "Auto" chooses a size that suits the period. The choice is made once for an instrument, a period and a side, and kept while the page reads the data again; pressing Auto again makes it anew. The page remembers, in the browser, the last size used for the index and the last used for turbos.
+- Each bar is shown with when it began and when it ended, to the ten seconds, and how long that was. Where several bars began in the same ten seconds, the chart spaces them a second apart on its axis; the readout, the table and the CSV file give the real times.
+- They are built from the ten-second bars of the side shown. Inside ten seconds the order of the high and the low is not recorded: the low is taken first when the ten seconds rose, the high first when they fell. A bar opens where the previous one closed.
+- **No bar is made up for a time that was not recorded.** After more than a minute without a bar (a night, a recording gap), the bar in progress ends as it is, the chart leaves one empty slot and a new bar starts at the first price recorded. This is TradingView with "Phantom bars" off.
+- Up to 31 days and 12,000 bars at a time; beyond, the page asks for a larger range or a shorter period.
+
+For anything else, three tables in PostgreSQL, created by the recorder:
+
+- `price_instrument`: one row per instrument, with `uic`, `asset_type`, `role` (`turbo` or `underlying`), `indice`, `direction`, `barrier` (the knock-out level) and `issuer`.
+- `price_bar_10s`: `ts` (start of the ten seconds, UTC), `instrument_id`, `bid_open/high/low/close`, `ask_open/high/low/close`, `updates` and `delayed_minutes`. One partition per month.
+- `price_recorder_coverage`: one row per ten seconds the recorder was running, with `feed_ok`.
+
+How to read a bar:
+
+- `updates = 0` means the quote did not move in those ten seconds: the four values are the quote that was standing.
+- **No row** for an instrument means it was not quotable (market closed, turbo knocked out) or that nothing was being recorded. `price_recorder_coverage` tells the two apart: no row there, or `feed_ok = false`, means the prices of that moment are not known.
+- A bar opens on the quote that was standing when its ten seconds began, not on the first change inside it.
+- `delayed_minutes` is Saxo's own flag: above 0, your account receives that instrument late.
+
+To take a period out, with each instrument's description beside its prices:
+
+```bash
+wataprices --from 2026-10-12 --to 2026-10-16 --indice us100
+# -> /app/wata/var/lib/price_export/prices_2026-10-12_2026-10-16.csv.gz
+```
+
+Days are those of the trading timezone, both included.
+
+### What to keep in mind
+
+- **Size**: about 5,000 rows per instrument and trading day. With 50 to 70 instruments seen in a day, that is roughly 8 to 14 GB a year. Check the free disk space of the server, and set `retention_months` if it is short.
+- **Resolution**: inside a bar, the extremes are those of the stream (one second), not of every tick.
+- **Not yet run against Saxo**: see the verification status in the changelog. Try it in Saxo's simulation environment first.
 
 ## 📈 Reporting
 
