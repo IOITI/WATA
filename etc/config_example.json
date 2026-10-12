@@ -254,7 +254,8 @@
           "reconnect_delay_seconds": 1.0,
           "max_reconnect_delay_seconds": 30.0,
           "reauth_interval_seconds": 900,
-          "reconcile_interval_seconds": 30
+          "reconcile_interval_seconds": 30,
+          "live_value_interval_seconds": 5
         },
         "keep_warm_interval_seconds": 30,
         "timezone": "Europe/Paris"
@@ -280,6 +281,18 @@
       5000000,
       10000000
     ]
+  },
+  "admin": {
+    "api_host": "0.0.0.0",
+    "api_port": 8082,
+    "session_idle_minutes": 60,
+    "session_max_age_minutes": 720,
+    "actions_enabled": true,
+    "config_edit_enabled": true,
+    "trusted_proxy_hosts": ["traefik"],
+    "persistant": {
+      "credentials_path": "/app/var/lib/admin/credentials.json"
+    }
   },
   "telegram": {
     "bot_token": "xxxx",
