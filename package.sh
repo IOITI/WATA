@@ -22,6 +22,25 @@ if [ -f "$PACKAGE_NAME" ]; then
         echo "Old package $PACKAGE_NAME has been removed."
     fi
 fi
+# Build the admin interface: admin_ui/ compiles into src/admin/static, which ships with ./src
+build_admin_interface() {
+    (
+        cd admin_ui || exit 1
+        # Use the Node version of admin_ui/.nvmrc when nvm is installed
+        if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
+            . "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+            nvm use > /dev/null || exit 1
+        fi
+        npm ci && npm run build
+    )
+}
+
+echo "Building the admin interface..."
+if ! build_admin_interface; then
+    echo "Error: the admin interface could not be built (Node.js and npm are required, see admin_ui/README.md)." >&2
+    exit 1
+fi
+
 # Build the new package with the versioned name
 mkdir -p _tmp_package/wata/$VERSION
 cp -r ./src _tmp_package/wata/$VERSION/
