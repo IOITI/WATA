@@ -1,5 +1,7 @@
 ./wata_app*.zip
 ./var/
+# The line above matches nothing ("./" is not a pattern): this one does.
+/var/
 /.idea/**
 .idea/**
 .idea/

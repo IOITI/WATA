@@ -505,6 +505,66 @@ Days are those of the trading timezone, both included.
 - **Resolution**: inside a bar, the extremes are those of the stream (one second), not of every tick.
 - **Not yet run against Saxo**: see the verification status in the changelog. Try it in Saxo's simulation environment first.
 
+## 🧪 Strategy Backtester
+
+WATA can replay a strategy on prices of the past and say what it would have done with it: which entries the Trader would have taken or refused, and where the Position Monitor would have sold.
+
+This is the first part of computing the signals inside WATA instead of TradingView. **Nothing live uses it yet**: TradingView still sends the signals, and no service runs the strategy.
+
+### Running one
+
+From a checkout of the repository:
+
+```bash
+# 1. Fetch the index (US Tech 100, from Dukascopy) for the days wanted
+PYTHONPATH=./:src/ python3 -m src.strategy.history.dukascopy --from 2026-09-14 --to 2026-10-12
+
+# 2. Replay the strategy on them
+PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12
+
+# The same with a parameter changed, and the trades written to files
+PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 \
+    --set entry_mode=cross_catchup --out var/lib/backtests/catchup
+```
+
+- **Fetching is slow and has to be repeated.** Dukascopy's server refuses many requests, and stops answering altogether for a while when it is asked too much (two downloads at the same time are enough). Each run keeps what it got under `var/lib/price_history/`, says which days are incomplete, and stops by itself when nothing is answered any more; the next run only asks for what is missing. A day with a missing hour is never written. Count hours, not minutes, for a month of prices.
+- **The rules are those of a configuration**: `--config`, else `WATA_CONFIG_PATH`, else `etc/config_example.json`. Give it your own `config.json` to test with your own stop, targets and hours.
+- **`--source`** takes a file or a directory made by `wataprices` instead, to replay prices the [Price Recorder](#️-price-recorder) recorded.
+- **`--trace file.csv`** writes one line per range bar (close, kernel, VWAP, band, whether entries were allowed), to compare with a chart.
+
+### What is replayed
+
+- **The strategy** (`kernel_vwap`) is the one of the TradingView script, on one feed: on range bars of the index, a kernel regression of the closes crossing the VWAP of the session is an entry; the reverse cross or the end of the session ends it. Entries wait until the session's prices have spread enough around the VWAP, and are not taken while the market is racing or gapping.
+- **WATA's rules**, read from the configuration: market hours and closed dates, the trade limit, the cooldown after a loss, the day's profit cap and loss limit, then the stop, the take-profit, the trailing stop, the daily target and the end-of-day close.
+- **A turbo**, because those rules are about a turbo's price, not the index. It is a model: its value is the distance from the index to its knock-out level, bought at the ask and valued at the bid.
+
+| Parameter (`--set name=value`) | Default | Meaning |
+|---|---|---|
+| `range_points` | `6.0` | Size of the range bars, in index points (60R on a chart with ticks of 0.1) |
+| `kernel_bandwidth` | `15` | Range bars the kernel regression looks back on |
+| `session_start`, `session_end` | `08:00`, `21:55` | The session, in the trading timezone; the VWAP restarts at its start |
+| `min_band_width` | `20.0` | Entries wait until the VWAP's band has been this wide once in the session, in points. `0`: no wait |
+| `entry_mode` | `cross` | `cross_catchup` also enters when entries become allowed with the kernel already on one side of the VWAP, once its slope agrees |
+| `catchup_max_distance` | `0.0` | A catch-up entry waits while the kernel is further than this from the VWAP. `0`: no limit |
+| `vwap_weight` | `updates` | What stands for volume: the number of quote changes in each ten seconds, or `time` (every ten seconds the same) |
+| `cooldown_bars` | `0` | Range bars to let pass after an exit before a new entry |
+| `fast_bars`, `fast_seconds` | `10`, `10` | A racing market: that many range bars within that many seconds |
+
+### Reading the result
+
+One column per leverage assumed for the turbo (`--points-per-unit`: the index points that move its price by 1.00), then, for each, the trades by reason of entry and of exit and the entries refused by rule. With `--out`, `trades_<leverage>.csv` holds every trade and `days_<leverage>.csv` every day.
+
+Percentages are counted as WATA counts a day: each trade as the whole stake, one result applied on the one before. Position sizing by time of day and by confidence is not applied.
+
+### What to keep in mind
+
+- **The turbo's leverage and spread are assumptions** until they are calibrated on real trades. That is why the backtest runs with three leverages by default: a conclusion that holds for one only is not a conclusion.
+- **Index points say little.** With the example configuration a position is sold at −15 %, or as soon as the day reaches +1.7 %: a move of 300 points and a move of 20 can end as the same trade.
+- **It is a close relative of the TradingView script, not a copy.** One feed instead of the average of three, range bars built from ten-second bars, and a session that ends on the clock.
+- **Dukascopy's prices are another broker's**, fetched from an address it does not document. They are for research. A strategy that only works on one broker's prices is fragile.
+- **Ten seconds is the resolution.** A decision is acted on at the open of the next ten seconds. A stop crossed inside ten seconds is sold at their worst price, a target at the target and no better.
+- **Past results are not future results**, and a parameter chosen because it did best on the period tested will do worse on the next one.
+
 ## 📈 Reporting
 
 The [Admin Interface](#️-admin-interface) has a performance page that reads the live PostgreSQL database. WATA also generates trading reports and includes a local visualization dashboard built on Observable Framework:
