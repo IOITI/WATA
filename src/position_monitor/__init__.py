@@ -31,6 +31,8 @@ from src.trade.async_services import (
 )
 from src.database.postgres import (
     PostgresConnectionManager,
+    AsyncDbOrderManager,
+    AsyncDbOrderExecutionManager,
     AsyncDbPositionManager,
     AsyncDbTradePerformanceManager,
     AsyncDbRiskStateManager,
@@ -42,6 +44,7 @@ from src.mq_telegram.async_tools import AsyncTelegramSender
 from src.saxo_authen import SaxoAuth
 from src.saxo_streaming.client import SaxoStreamClient
 from src.trade.rules import TradingRule
+from src.trade.order_tracker import OrderTracker
 from src.message_helper import build_daily_trading_report_message, DEFAULT_MILESTONES_EUR
 
 logger = logging.getLogger(__name__)
@@ -347,6 +350,7 @@ async def main():
     pg = None
     api_client = None
     performance_monitor = None
+    order_tracker = None
     stream_handler = None
     reconcile_task = None
     live_value_task = None
@@ -361,6 +365,10 @@ async def main():
         db_risk_state_manager = AsyncDbRiskStateManager(pg)
         db_live_value_manager = AsyncDbLiveValueManager(pg)
         db_balance_manager = AsyncDbBalanceHistoryManager(pg)
+        # The sell orders and what became of them, for the admin interface (written in the background)
+        order_tracker = OrderTracker(
+            AsyncDbOrderExecutionManager(pg), AsyncDbOrderManager(pg), recorded_by="position_monitor",
+        )
 
         # Saxo API client
         saxo_auth = SaxoAuth(config_manager)
@@ -390,6 +398,7 @@ async def main():
             position_service, order_service, config_manager,
             db_position_manager, trading_rule, telegram.send,
             trigger_daily_stats_fn=_trigger_daily_stats,
+            order_tracker=order_tracker,
         )
 
         # ── Streaming configuration ──
@@ -474,6 +483,8 @@ async def main():
             await stream_client.stop()
         if performance_monitor is not None:
             await performance_monitor.wait_for_background_tasks()
+        if order_tracker is not None:
+            await order_tracker.wait_for_pending()
         if api_client is not None:
             await api_client.close()
         if pg is not None:

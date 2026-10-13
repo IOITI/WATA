@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.14.0 - Each order followed to its position
+
+**Release date:** not yet released
+
+An order and the position it gave were linked in the database and hardly on the pages, and nothing said how long Saxo took to turn one into the other: an order's time was written once its position had been confirmed, an order that gave no position was cancelled and written nowhere, and the sell order that closes a position was never recorded at all. This release makes the trader and the position monitor keep the moments of every order, and the admin interface show them, so that a slow entry or an order given up can be explained from the Orders page.
+
+**Verification status:** covered by unit tests, six deliberate faults in the new trading code were each caught by them, and the pages were driven in a browser on a development machine, in both themes and at a phone's width, on made-up orders. The new SQL (the table, the two writes of an order in either order, the admin's joined reads through a read-only connection and their fallback) was run against a real PostgreSQL 16.2 on that machine. **Not yet run on a server, and never against Saxo**: the first real order will be the first one followed. No new request is made to Saxo; what is read is the answer to requests WATA already made.
+
+---
+
+### What's New
+
+#### Orders page: what became of each order
+- **Sell orders and orders that gave no position are listed**, like the others. Until now the page only held the buy orders that had given a position.
+- **Result**: opened a position, closed a position, no position (cancelled, or cancel refused), not seen closed, stopped by an error. The position's id is a link to it.
+- **Took**: from the order leaving to WATA seeing its position open (or closed), or to the giving up. Sort on it to find the slow ones.
+- **Three figures for the period**: the typical time from order to position, the slowest entry, and the number of orders Saxo accepted that gave no position.
+- **A row opens onto each moment**: signal received, order sent, accepted by Saxo, filled at Saxo, seen by WATA, each with the time since the step before. For an order given up: how long and how many times the trader looked, then what Saxo answered to the cancellation, in Saxo's own words when it refused.
+- Two clocks are involved and the page says which is which: the server's for what WATA did and saw, Saxo's for the fill. "Order sent" to "filled at Saxo" is the time that speaks about Saxo; "seen by WATA" also holds WATA's own waits between two looks.
+
+#### Positions page: the order that opened it, the order that closed it
+- A position's row opens onto **"Opened by order"** and **"Closed by order"**, each with its moments and a link to the order.
+- A position Saxo closed by itself (a knock-out, a stop resting at Saxo, a sale made there by hand) says so, instead of showing no sell order without a word.
+- A link from an order lands on its position among all of them, found and opened; a link from a position does the same on the Orders page, whenever the order was placed.
+
+#### What the trading services now keep
+- A table of their own, `order_execution`: for each order Saxo accepted, when it left, when Saxo answered, when its position was seen open or closed and at which look, or when the service gave up, with Saxo's answer to the cancellation.
+- Kept in memory while the order is placed and **written in the background**, once Saxo has the order: nothing on the way to a buy or a sell waits for it, and a failure to write it is logged and changes nothing of the trade.
+- The journal of signals keeps the order's id for a signal whose order gave no position, so that the signal behind such an order is found.
+
+### What Changed
+
+- **An order's recorded time is when it left**, no longer the moment after its position was confirmed (up to some ten seconds later). Orders already recorded keep the time they have: for them the page shows Saxo's fill time and the second WATA wrote the order down, and says the rest was not kept.
+- The Orders page hides the side, the type and the cost until they are picked in the column list: the result says whether it was a buy or a sale.
+- The message of an order that gave no position (Telegram, logs, journal) carries Saxo's answer when it refused the cancellation.
+
+### Upgrade Notes
+
+- Nothing to configure. The table is created by the trader and the position monitor when they start with this version; until then the admin reads the orders alone, as before.
+- **Past orders are not filled in**: an order placed before this version has no moments, and its sell order was never recorded.
+
+### Known Limits
+
+- A cancellation Saxo refuses can mean that the order was filled after the trader stopped looking: such a position is at Saxo and not in WATA's database. The page says so and asks for a look at the account; WATA does nothing about it by itself.
+- The stop order resting at Saxo (opt-in) is still not listed among the orders.
+
 ## v0.13.0 - Backtests that say how far to trust them, and what to change
 
 **Release date:** 2026-10-13

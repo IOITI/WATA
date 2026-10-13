@@ -225,6 +225,124 @@ def test_position_detail_includes_its_related_orders():
     assert result["position"]["position_id"] == "5001"
 
 
+LINKED_ORDER_ROW = {
+    "order_id": "7001", "buy_sell": "Buy", "position_id": "5001", "instrument_price": float("nan"),
+    "purpose": "open", "sent_at": "sent", "accepted_at": "accepted", "confirmed_at": "confirmed",
+    "gave_up_at": None, "lookups": 2, "outcome": "confirmed", "cancel_accepted": None, "detail": None,
+    "recorded_by": "trader",
+    "position__position_id": "5001", "position__position_status": "Closed",
+    "position__execution_time_open": "filled", "position__position_profit_loss": float("inf"),
+    "signal__signal_uuid": "uuid-1", "signal__received_timestamp": "received",
+}
+
+
+class DbWithoutOrderLinks(FakeDb):
+    """A database the trading services have not started on with this version: one table is not there yet."""
+
+    def __init__(self, rows=None, missing="order_execution", error=None):
+        super().__init__(rows)
+        self.missing = missing
+        self.error = error or f'relation "{missing}" does not exist'
+
+    async def fetch(self, query, *args):
+        if self.missing in query:
+            self.calls.append((query, args))
+            raise DatabaseUnavailable(self.error)
+        return await super().fetch(query, *args)
+
+
+def test_an_order_comes_with_what_became_of_it_its_position_and_its_signal():
+    queries = AdminQueries(FakeDb(rows=[LINKED_ORDER_ROW], value=1), "Europe/Paris")
+
+    result = asyncio.run(queries.list_orders())
+
+    order = result["items"][0]
+    assert (order["order_id"], order["outcome"], order["lookups"]) == ("7001", "confirmed", 2)
+    assert (order["sent_at"], order["accepted_at"], order["confirmed_at"]) == ("sent", "accepted", "confirmed")
+    assert order["position"] == {
+        "position_id": "5001", "position_status": "Closed", "execution_time_open": "filled",
+        # Infinity cannot be serialised to JSON, in a linked row either.
+        "position_profit_loss": None,
+    }
+    assert order["signal"] == {"signal_uuid": "uuid-1", "received_timestamp": "received"}
+    assert order["instrument_price"] is None
+    assert not [key for key in order if "__" in key]
+
+
+def test_an_order_with_no_position_and_no_signal_says_so():
+    without_links = {**LINKED_ORDER_ROW, "position_id": None, "outcome": "gave_up"}
+    without_links.update({key: None for key in LINKED_ORDER_ROW if "__" in key})
+    queries = AdminQueries(FakeDb(rows=[without_links], value=1), "Europe/Paris")
+
+    order = asyncio.run(queries.list_orders())["items"][0]
+
+    assert (order["position"], order["signal"]) == (None, None)
+    assert order["outcome"] == "gave_up"
+
+
+def test_orders_are_read_with_their_links_filtered_by_local_day_and_bounded():
+    db = FakeDb(value=3)
+    queries = AdminQueries(db, "Europe/Paris")
+
+    result = asyncio.run(queries.list_orders(start=DAY_1, end=DAY_2, limit=10 ** 9))
+
+    count_query, count_args = db.calls[0]
+    list_query, list_args = db.calls[1]
+    assert count_args == list_args == ("Europe/Paris", DAY_1, DAY_2)
+    assert "COUNT(*) FROM turbo_data_order o" in count_query
+    assert "(o.order_time AT TIME ZONE $1)::date >= $2::date" in list_query
+    for table in ("order_execution e", "turbo_data_position p", "signal_journal"):
+        assert table in list_query
+    # One signal at most per order, or an order would be listed twice.
+    assert "DISTINCT ON (order_id)" in list_query
+    assert f"LIMIT {MAX_ROWS}" in list_query
+    assert result == {"items": [], "total": 3}
+
+
+@pytest.mark.parametrize("missing", ["order_execution", "signal_journal"])
+def test_orders_are_read_alone_until_the_trading_services_have_created_what_links_them(missing):
+    db = DbWithoutOrderLinks(rows=[{"order_id": "7001", "position_id": "5001"}], missing=missing)
+    queries = AdminQueries(db, "Europe/Paris")
+
+    result = asyncio.run(queries.list_orders(start=DAY_1))
+
+    plain_query, plain_args = db.calls[-1]
+    assert "order_execution" not in plain_query and "signal_journal" not in plain_query
+    assert "FROM turbo_data_order o" in plain_query
+    assert plain_args == ("Europe/Paris", DAY_1)
+    order = result["items"][0]
+    assert (order["order_id"], order["position_id"]) == ("7001", "5001")
+    # The shape of a linked order, with nothing known.
+    assert (order["sent_at"], order["outcome"], order["position"], order["signal"]) == (None, None, None, None)
+
+
+def test_a_database_that_fails_for_another_reason_is_not_read_as_orders_without_links():
+    db = DbWithoutOrderLinks(error="connection refused")
+    queries = AdminQueries(db, "Europe/Paris")
+
+    with pytest.raises(DatabaseUnavailable, match="connection refused"):
+        asyncio.run(queries.list_orders())
+
+
+def test_position_detail_gives_its_orders_with_what_became_of_them():
+    position = {"position_id": "5001", "order_id": "7001", "related_order_id": None}
+
+    class Db(FakeDb):
+        async def fetch(self, query, *args):
+            self.calls.append((query, args))
+            return [LINKED_ORDER_ROW, {**LINKED_ORDER_ROW, "order_id": "7002", "buy_sell": "Sell", "purpose": "close"}]
+
+    db = Db(rows=[position])
+    result = asyncio.run(AdminQueries(db, "Europe/Paris").get_position("5001"))
+
+    orders_query, orders_args = db.calls[1]
+    assert orders_args == ("5001", "7001", [])
+    assert "o.position_id = $1 OR o.order_id = $2 OR o.order_id = ANY($3::text[])" in orders_query
+    assert "ORDER BY o.order_time ASC" in orders_query
+    assert [(order["order_id"], order["purpose"]) for order in result["orders"]] == [("7001", "open"), ("7002", "close")]
+    assert result["orders"][0]["position"]["position_status"] == "Closed"
+
+
 def test_unknown_position_detail_is_none():
     queries = AdminQueries(FakeDb(), "Europe/Paris")
 

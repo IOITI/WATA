@@ -254,6 +254,23 @@ CREATE TABLE IF NOT EXISTS signal_journal (
     order_id           VARCHAR(64)
 );
 
+-- What became of each order sent to Saxo, and when, as the service that sent it
+-- saw it. Written in the background for the admin interface; nothing trades on it.
+CREATE TABLE IF NOT EXISTS order_execution (
+    order_id        VARCHAR(64) PRIMARY KEY,
+    purpose         VARCHAR(8),
+    position_id     VARCHAR(64),
+    sent_at         TIMESTAMPTZ,
+    accepted_at     TIMESTAMPTZ,
+    confirmed_at    TIMESTAMPTZ,
+    gave_up_at      TIMESTAMPTZ,
+    lookups         INTEGER,
+    outcome         VARCHAR(16),
+    cancel_accepted BOOLEAN,
+    detail          TEXT,
+    recorded_by     VARCHAR(32)
+);
+
 -- Total account value, recorded with each daily report.
 CREATE TABLE IF NOT EXISTS account_balance_history (
     date_day     DATE PRIMARY KEY,
@@ -795,6 +812,49 @@ class AsyncDbSignalJournalManager:
             normalized.get("reason"),
             normalized.get("position_id"),
             normalized.get("order_id"),
+        )
+
+
+class AsyncDbOrderExecutionManager:
+    """What became of each order sent to Saxo (see order_execution)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record(self, entry: dict):
+        """
+        Keep what is known of an order. It is written twice, once Saxo has it
+        and once its outcome is known, both in the background: they may arrive
+        in either order, so a row that has its outcome is never changed.
+        """
+        await self.db.execute(
+            """
+            INSERT INTO order_execution
+                (order_id, purpose, position_id, sent_at, accepted_at, confirmed_at,
+                 gave_up_at, lookups, outcome, cancel_accepted, detail, recorded_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ON CONFLICT (order_id) DO UPDATE SET
+                position_id = EXCLUDED.position_id,
+                confirmed_at = EXCLUDED.confirmed_at,
+                gave_up_at = EXCLUDED.gave_up_at,
+                lookups = EXCLUDED.lookups,
+                outcome = EXCLUDED.outcome,
+                cancel_accepted = EXCLUDED.cancel_accepted,
+                detail = EXCLUDED.detail
+            WHERE order_execution.outcome IS NULL
+            """,
+            entry["order_id"],
+            entry.get("purpose"),
+            entry.get("position_id"),
+            entry.get("sent_at"),
+            entry.get("accepted_at"),
+            entry.get("confirmed_at"),
+            entry.get("gave_up_at"),
+            entry.get("lookups"),
+            entry.get("outcome"),
+            entry.get("cancel_accepted"),
+            entry.get("detail"),
+            entry.get("recorded_by"),
         )
 
 

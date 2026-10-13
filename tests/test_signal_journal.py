@@ -16,6 +16,7 @@ import src.trader as trader
 from src.trade.exceptions import (
     DatabaseOperationException,
     NoTurbosAvailableException,
+    PositionNotFoundException,
     TradingRuleViolation,
 )
 from src.trade.signal_journal import SignalJournal
@@ -228,6 +229,24 @@ def test_trade_that_could_not_be_set_up_is_journaled_as_failed():
 
     assert db.entries[0]["outcome"] == "failed"
     assert "NoTurbosAvailableException" in db.entries[0]["reason"]
+
+
+def test_order_that_gave_no_position_is_journaled_with_its_id():
+    deps = _dependencies()
+    deps[0].execute_trade_signal = AsyncMock(side_effect=PositionNotFoundException(
+        "Position not found after 14 retries for order order-9", order_id="order-9",
+        cancellation_attempted=True, cancellation_succeeded=True,
+    ))
+
+    async def scenario(db, journal):
+        with pytest.raises(PositionNotFoundException):
+            await _handle(_signal(), deps, journal)
+
+    db = _run(scenario)
+
+    # The order's id is what links the signal to the order shown in the admin interface.
+    assert [(e["outcome"], e["order_id"], e["position_id"]) for e in db.entries] == [("failed", "order-9", None)]
+    assert "Order cancellation attempt: succeeded" in db.entries[0]["reason"]
 
 
 def test_critical_error_is_journaled_once_and_still_raised():
