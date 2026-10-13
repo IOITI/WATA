@@ -5,6 +5,7 @@ import {
   createSeriesMarkers,
   CrosshairMode,
   LineSeries,
+  LineStyle,
 } from 'lightweight-charts'
 import type {
   IChartApi,
@@ -20,7 +21,7 @@ import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 
 import { withAlpha } from './chartData'
-import type { Candle, ChartMarker, EmptyPoint, LinePoint, MarkerTone } from './chartData'
+import type { Candle, ChartMarker, ChartOverlay, EmptyPoint, LinePoint, MarkerTone } from './chartData'
 
 /**
  * The price chart. The only file that knows the charting library: what it is
@@ -78,6 +79,24 @@ function priceFormat(decimals: number) {
   return { type: 'price' as const, precision: decimals, minMove: 1 / 10 ** decimals }
 }
 
+/** How a line over the prices is drawn: its place among them is told by more than its colour. */
+function overlayOptions(tone: ChartOverlay['tone'], colors: Palette) {
+  const common = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+  if (tone === 'trend') return { ...common, color: colors.text, lineWidth: 2 as const }
+  if (tone === 'reference') return { ...common, color: colors.line, lineWidth: 2 as const }
+  return { ...common, color: withAlpha(colors.line, 0.6), lineWidth: 1 as const, lineStyle: LineStyle.Dashed }
+}
+
+/** A trend takes the colour of its direction at each point; the other lines keep their own. */
+function overlayData(overlay: ChartOverlay, colors: Palette) {
+  if (overlay.tone !== 'trend') return overlay.points
+  return overlay.points.map((point) =>
+    'rising' in point && point.rising !== undefined
+      ? { time: point.time, value: point.value, color: point.rising ? colors.up : colors.down }
+      : point,
+  )
+}
+
 // How much taller the prices are than the index under them.
 const MAIN_PANE_SHARE = 3
 const INDEX_PANE = 1
@@ -91,10 +110,14 @@ export interface PriceChartProps {
   indexLine?: readonly (LinePoint | EmptyPoint)[]
   indexMarkers?: readonly ChartMarker[]
   indexDecimals?: number
+  /** Lines over the prices, on their scale: what was measured on them. */
+  overlays?: readonly ChartOverlay[]
   /** Bars shorter than a minute: the time axis then shows the seconds. */
   showSeconds: boolean
   /** Changes when another view is shown: the whole period comes back into view. A refresh keeps the zoom. */
   viewKey: string
+  /** Chart times to bring into view in place of the whole period: one trade of a day, say. */
+  focus?: { from: number; to: number } | null
   /** The chart time under the pointer; null when it leaves the chart. */
   onHover: (time: number | null) => void
   label: string
@@ -108,8 +131,10 @@ export function PriceChart({
   indexLine,
   indexMarkers,
   indexDecimals = 2,
+  overlays,
   showSeconds,
   viewKey,
+  focus,
   onHover,
   label,
   className,
@@ -121,6 +146,7 @@ export function PriceChart({
   const candleMarkers = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const lineSeries = useRef<ISeriesApi<'Line'> | null>(null)
   const lineMarkers = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const overlaySeries = useRef(new Map<string, ISeriesApi<'Line'>>())
   const hover = useRef(onHover)
 
   useEffect(() => {
@@ -177,6 +203,7 @@ export function PriceChart({
     palette.current = colors
     candleSeries.current = series
     candleMarkers.current = createSeriesMarkers(series, [])
+    const lines = overlaySeries.current
 
     return () => {
       created.unsubscribeCrosshairMove(onCrosshairMove)
@@ -186,6 +213,7 @@ export function PriceChart({
       candleMarkers.current = null
       lineSeries.current = null
       lineMarkers.current = null
+      lines.clear()
     }
   }, [])
 
@@ -227,9 +255,28 @@ export function PriceChart({
       index?.setStretchFactor(1)
     }
 
+    // The lines over the prices: those no longer asked for go, the new ones join.
+    const lines = overlaySeries.current
+    const wanted = new Map((overlays ?? []).map((overlay) => [overlay.id, overlay]))
+    for (const [id, line] of lines) {
+      if (wanted.has(id)) continue
+      created.removeSeries(line)
+      lines.delete(id)
+    }
+    for (const [id, overlay] of wanted) {
+      if (lines.has(id)) continue
+      // A second series joining the prices: emptied first, for the same reason as above.
+      if (lines.size === 0 && !lineSeries.current) prices.setData([])
+      lines.set(id, created.addSeries(LineSeries, overlayOptions(overlay.tone, colors)))
+    }
+
     prices.setData(timed(candles))
     if (indexLine) lineSeries.current?.setData(timed(indexLine))
-  }, [candles, indexLine])
+    for (const [id, line] of lines) {
+      const overlay = wanted.get(id)
+      if (overlay) line.setData(timed(overlayData(overlay, colors)))
+    }
+  }, [candles, indexLine, overlays])
 
   // A change of format makes the library lay the whole chart out again: only when it does change.
   useEffect(() => {
@@ -250,9 +297,22 @@ export function PriceChart({
   }, [markers, indexMarkers, hasIndex])
 
   // After the data of the new view went in (effects run in order).
+  const focusFrom = focus?.from
+  const focusTo = focus?.to
   useEffect(() => {
-    chart.current?.timeScale().fitContent()
-  }, [viewKey])
+    const scale = chart.current?.timeScale()
+    if (!scale) return
+    if (focusFrom === undefined || focusTo === undefined) {
+      scale.fitContent()
+      return
+    }
+    try {
+      scale.setVisibleRange({ from: focusFrom as Time, to: focusTo as Time })
+    } catch {
+      // Times the chart has no bar for: the whole period then.
+      scale.fitContent()
+    }
+  }, [viewKey, focusFrom, focusTo])
 
   // Not an image: the chart's link to TradingView stays reachable inside it.
   return <div ref={container} role="group" aria-label={label} className={cn('w-full', className)} />

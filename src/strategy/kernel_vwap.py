@@ -27,15 +27,16 @@ What differs from the Pine script, and why:
 Pure logic: no clock of its own, no I/O.
 """
 
+import re
 from collections import deque
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import date
 from typing import Callable
 
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.range_bars import BuiltBar, RangeBarBuilder
 from src.strategy.bars import IndexBar
-from src.strategy.engine import FLAT, LONG, SHORT, Decision, LocalClock
+from src.strategy.engine import FLAT, LONG, SHORT, Decision, LocalClock, seconds_of
 from src.strategy.indicators import KernelRegression, SessionVwap
 
 CROSS = "cross"
@@ -46,50 +47,94 @@ SESSION_END = "session end"
 ENTRY_MODES = ("cross", "cross_catchup")
 VWAP_WEIGHTS = ("updates", "time")
 
-# The columns of a trace row: one per range bar, to compare with a chart.
-TRACE_COLUMNS = ("ended", "close", "kernel", "vwap", "band", "entries_allowed", "target")
+# The columns of a trace row: one per range bar the strategy saw, with what it
+# measured on it. Enough to draw the bars again and compare with a chart.
+TRACE_COLUMNS = (
+    "ended", "began", "open", "high", "low", "close", "complete", "after_pause",
+    "kernel", "vwap", "band", "entries_allowed", "target",
+)
 
 _BEFORE, _OPEN, _OVER = "before", "open", "over"
+_CLOCK_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 # "Bars since the last exit" when there has been none.
 _LONG_AGO = 999
 _SLOPE_MEMORY = 50
 
 
+def _parameter(default, help: str, *, least=None, most=None, choices: tuple = (), advanced: bool = False):
+    """A parameter with what a form needs to offer it: what it means, and the values it may take."""
+    return field(default=default, metadata={
+        "help": help, "least": least, "most": most, "choices": choices, "advanced": advanced,
+    })
+
+
 @dataclass(frozen=True)
 class KernelVwapParams:
-    # 60R on the TradingView chart: sixty ticks of 0.1.
-    range_points: float = 6.0
-    tick: float = 0.1
-    kernel_style: str = "wave"
-    kernel_bandwidth: int = 15
-    # In the trading timezone.
-    session_start: str = "08:00"
-    session_end: str = "21:55"
-    band_multiplier: float = 1.0
-    # Entries wait until the band has been this wide once in the session, in points. 0: no wait.
-    min_band_width: float = 20.0
-    # Range bars to let pass after an exit before a new entry.
-    cooldown_bars: int = 0
-    # A racing market: this many range bars within this many seconds.
-    fast_bars: int = 10
-    fast_seconds: int = 10
-    # A gap: a bar opening further from the last close than this many average bar sizes.
-    gap_average_bars: int = 100
-    gap_multiplier: float = 2.0
-    entry_mode: str = "cross"
-    # A catch-up entry waits while the kernel is further than this from the average, in points. 0: no limit.
-    catchup_max_distance: float = 0.0
-    vwap_weight: str = "updates"
+    range_points: float = _parameter(
+        6.0, "Size of the range bars, in index points. 60R on a chart with ticks of 0.1 is 6.", least=0.5, most=1000.0,
+    )
+    tick: float = _parameter(
+        0.1, "Smallest step the prices are counted in.", least=0.01, most=10.0, advanced=True,
+    )
+    kernel_style: str = _parameter("wave", "Shape of the kernel.", choices=("wave",), advanced=True)
+    kernel_bandwidth: int = _parameter(
+        15, "Range bars the kernel regression looks back on.", least=2, most=500,
+    )
+    session_start: str = _parameter("08:00", "Start of the session, in the trading timezone: the VWAP restarts here.")
+    session_end: str = _parameter("21:55", "End of the session: an open trade ends here.")
+    band_multiplier: float = _parameter(
+        1.0, "Width of the VWAP band, in standard deviations.", least=0.1, most=10.0, advanced=True,
+    )
+    min_band_width: float = _parameter(
+        20.0, "Entries wait until the VWAP band has been this wide once in the session, in points. 0: no wait.",
+        least=0.0, most=10000.0,
+    )
+    cooldown_bars: int = _parameter(
+        0, "Range bars to let pass after an exit before a new entry.", least=0, most=10000, advanced=True,
+    )
+    fast_bars: int = _parameter(
+        10, "A racing market, in which nothing is entered: this many range bars...", least=2, most=1000, advanced=True,
+    )
+    fast_seconds: int = _parameter(10, "...within this many seconds.", least=1, most=3600, advanced=True)
+    gap_average_bars: int = _parameter(
+        100, "A gap is measured against the average size of this many range bars.", least=1, most=10000, advanced=True,
+    )
+    gap_multiplier: float = _parameter(
+        2.0, "No entry on a bar that opened further from the last close than this many average bar sizes.",
+        least=0.1, most=1000.0, advanced=True,
+    )
+    entry_mode: str = _parameter(
+        "cross",
+        "cross: enter when the kernel crosses the VWAP. cross_catchup: also enter when entries become allowed "
+        "with the kernel already on one side, once its slope agrees.",
+        choices=ENTRY_MODES,
+    )
+    catchup_max_distance: float = _parameter(
+        0.0, "A catch-up entry waits while the kernel is further than this from the VWAP, in points. 0: no limit.",
+        least=0.0, most=100000.0,
+    )
+    vwap_weight: str = _parameter(
+        "updates",
+        "What stands for volume in the VWAP: the number of quote changes in each ten seconds, or time "
+        "(every ten seconds the same).",
+        choices=VWAP_WEIGHTS, advanced=True,
+    )
 
     def __post_init__(self):
-        if self.entry_mode not in ENTRY_MODES:
-            raise ValueError(f"entry_mode must be one of {', '.join(ENTRY_MODES)}")
-        if self.vwap_weight not in VWAP_WEIGHTS:
-            raise ValueError(f"vwap_weight must be one of {', '.join(VWAP_WEIGHTS)}")
         if self.tick <= 0 or self.range_points < self.tick:
             raise ValueError("range_points must be one tick at least")
-        if self.fast_bars < 2:
-            raise ValueError("fast_bars must be 2 at least")
+        for spec in fields(self):
+            value = getattr(self, spec.name)
+            choices, least, most = spec.metadata["choices"], spec.metadata["least"], spec.metadata["most"]
+            if choices and value not in choices:
+                raise ValueError(f"{spec.name} must be one of {', '.join(choices)}")
+            if least is not None and not least <= value <= most:
+                raise ValueError(f"{spec.name} must be between {least} and {most}")
+        for name in ("session_start", "session_end"):
+            if not _CLOCK_TIME.fullmatch(getattr(self, name)):
+                raise ValueError(f"{name} must be a time of day such as 08:00")
+        if self.session_end <= self.session_start:
+            raise ValueError("session_end must be after session_start")
 
     def with_overrides(self, overrides: dict[str, str]) -> "KernelVwapParams":
         """The same parameters with some replaced by values given as text ("entry_mode" -> "cross_catchup")."""
@@ -144,6 +189,9 @@ class KernelVwap:
     @property
     def position(self) -> str:
         return self._position
+
+    def entry_window(self) -> tuple[int, int]:
+        return seconds_of(self._params.session_start), seconds_of(self._params.session_end)
 
     def on_bar(self, bar: IndexBar) -> list[Decision]:
         params = self._params
@@ -202,7 +250,8 @@ class KernelVwap:
     def _on_range_bar(self, built: BuiltBar, known_at: int) -> Decision | None:
         params = self._params
         tick = params.tick
-        close = built.close * tick
+        # Whole ticks back as prices, without the last digits a product leaves: 30877.0, not 30877.000000000004.
+        close = round(built.close * tick, 6)
         risky = self._is_risky(built, built.open * tick, (built.high - built.low) * tick)
 
         kernel = self._kernel.push(close)
@@ -272,7 +321,11 @@ class KernelVwap:
 
         if self._trace is not None:
             self._trace({
-                "ended": built.ended, "close": close, "kernel": kernel, "vwap": reference, "band": band,
+                "ended": built.ended, "began": built.began,
+                "open": round(built.open * tick, 6), "high": round(built.high * tick, 6),
+                "low": round(built.low * tick, 6), "close": close,
+                "complete": built.complete, "after_pause": built.after_pause,
+                "kernel": kernel, "vwap": reference, "band": band,
                 "entries_allowed": entries_allowed, "target": self._position,
             })
         return decision

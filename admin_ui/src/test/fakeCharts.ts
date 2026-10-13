@@ -23,6 +23,8 @@ export interface FakeChart {
   /** Every call that changes what is drawn, in the order it was made. */
   calls: string[]
   fits: number
+  /** The last range the chart was told to bring into view. */
+  range: { from: number; to: number } | null
   removed: boolean
   /** Moves the crosshair as the library would: to a time, or off the chart. */
   hover: (time?: number) => void
@@ -54,6 +56,7 @@ function createChart(container: HTMLElement, options: Record<string, any>) {
     series: [],
     calls: [],
     fits: 0,
+    range: null,
     removed: false,
     hover: (time) => crosshairHandler?.({ time }),
   }
@@ -92,6 +95,10 @@ function createChart(container: HTMLElement, options: Record<string, any>) {
           chart.fits += 1
           chart.calls.push('fit')
         },
+        setVisibleRange(range: { from: number; to: number }) {
+          chart.range = range
+          chart.calls.push('range')
+        },
       }
     },
     subscribeCrosshairMove(handler: (event: { time?: number }) => void) {
@@ -122,6 +129,7 @@ export const fakeLightweightCharts = {
   LineSeries: 'Line',
   ColorType: { Solid: 'solid' },
   CrosshairMode: { Normal: 0 },
+  LineStyle: { Solid: 0, Dashed: 2 },
   createChart,
   createSeriesMarkers,
 }

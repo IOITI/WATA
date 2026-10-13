@@ -34,6 +34,14 @@
   --chart-muted: #a1a1aa;
   --chart-grid: #e4e4e7;
   --chart-axis: #d4d4d8;
+  /* Up to four things compared on one chart (backtest runs), in this order and
+     never recycled. Every pair was checked with the dataviz palette validator
+     against the card surface, for colour-blind readers too (lines cross, so all
+     pairs count, not only neighbours). A fifth has no colour that passes. */
+  --chart-compare-1: #2563eb;
+  --chart-compare-2: #e8590c;
+  --chart-compare-3: #0d9488;
+  --chart-compare-4: #e65ccf;
 }
 
 .dark {
@@ -54,4 +62,8 @@
   --chart-muted: #52525b;
   --chart-grid: #27272a;
   --chart-axis: #3f3f46;
+  --chart-compare-1: #3b82f6;
+  --chart-compare-2: #d95926;
+  --chart-compare-3: #199e70;
+  --chart-compare-4: #d936d9;
 }

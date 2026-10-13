@@ -80,6 +80,31 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/config/backups"),
     ("GET", "/api/config/backups/config.json.bak-20260101-000000"),
     ("POST", "/api/config/backups/config.json.bak-20260101-000000/restore"),
+    ("GET", "/api/backtests/options"),
+    ("GET", "/api/backtests/prices"),
+    ("POST", "/api/backtests/prices/fetch"),
+    ("POST", "/api/backtests/prices/fetch/stop"),
+    ("PUT", "/api/backtests/prices/keep"),
+    ("GET", "/api/backtests/calibration"),
+    ("POST", "/api/backtests/calibration"),
+    ("POST", "/api/backtests/signals"),
+    ("POST", "/api/backtests/sweeps"),
+    ("POST", "/api/backtests/remove"),
+    ("GET", "/api/backtests/storage"),
+    ("GET", "/api/backtests"),
+    ("POST", "/api/backtests"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3"),
+    ("PATCH", "/api/backtests/20261012-213045-a1b2c3"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/cells/2/run"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/breakdowns"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/trades/path"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/trades"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/days"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/refusals"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/days/2026-10-12/chart"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/comparison"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/cancel"),
+    ("DELETE", "/api/backtests/20261012-213045-a1b2c3"),
 ]
 
 
@@ -162,6 +187,16 @@ class FakeQueries:
     async def signal_journal(self, start=None, end=None, limit=200):
         self.calls.append(("signal_journal", start, end, limit))
         return self.journal
+
+    async def journal_between(self, start=None, end=None):
+        self._check()
+        self.calls.append(("journal_between", start, end))
+        return self.journal
+
+    async def closed_positions(self, start=None, end=None):
+        self._check()
+        self.calls.append(("closed_positions", start, end))
+        return [CLOSED_POSITION]
 
     # ── recorded prices ──
 
@@ -384,7 +419,10 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             method,
             route.path.replace("{position_id}", "5001")
             .replace("{service}", "wata-api")
-            .replace("{name}", "config.json.bak-20260101-000000"),
+            .replace("{name}", "config.json.bak-20260101-000000")
+            .replace("{run_id}", "20261012-213045-a1b2c3")
+            .replace("{cell}", "2")
+            .replace("{day}", "2026-10-12"),
         )
         for route in app.routes
         if route.path.startswith("/api")
@@ -519,6 +557,20 @@ def test_login_from_another_origin_is_refused(anonymous):
     response = anonymous.post("/api/session", json={"password": PASSWORD}, headers={"Origin": "https://evil.example"})
 
     assert response.status_code == 403
+
+
+def test_served_on_a_port_of_its_own_the_same_name_on_another_port_is_another_origin(config_path, tmp_path):
+    # Without a domain of its own, the interface is on a second HTTPS port of the webhook's domain.
+    address = "https://admin.test:8443"
+    ctx = make_ctx(config_path, tmp_path)
+    with TestClient(create_app(ctx, static_dir=str(tmp_path / "no-interface")), base_url=address) as client:
+        webhook_origin = {"Origin": "https://admin.test"}
+        assert client.post("/api/session", json={"password": PASSWORD}, headers=webhook_origin).status_code == 403
+
+        assert client.post("/api/session", json={"password": PASSWORD}, headers={"Origin": address}).status_code == 204
+        assert client.get("/api/session").status_code == 200
+        assert client.delete("/api/session", headers=webhook_origin).status_code == 403
+        assert client.delete("/api/session", headers={"Origin": address}).status_code == 204
 
 
 def test_responses_carry_security_headers(anonymous):
@@ -1931,3 +1983,466 @@ def test_streamed_and_plain_responses_all_carry_the_security_headers(plain_http_
         refused = client.get("/api/positions/unknown")
         assert refused.headers["x-frame-options"] == "DENY"
         assert refused.headers["cache-control"] == "no-store"
+
+
+# ── backtests ──
+
+RUN = "20261012-213045-a1b2c3"
+
+
+class FakeBacktests:
+    """Stands for the backtest service: remembers what it was asked, and fails when told to."""
+
+    def __init__(self):
+        self.asked = []
+        self.failure = None
+
+    def _answer(self, what, *arguments, answer=None):
+        self.asked.append((what, *arguments))
+        if self.failure is not None:
+            raise self.failure
+        return answer
+
+    def options(self):
+        return self._answer("options", answer={"strategies": []})
+
+    def coverage(self, first_day, last_day):
+        return self._answer("coverage", first_day, last_day, answer={"days": []})
+
+    def start_fetch(self, first_day, last_day):
+        return self._answer("start_fetch", first_day, last_day, answer={"state": "running"})
+
+    def stop_fetch(self):
+        return self._answer("stop_fetch", answer={"state": "running"})
+
+    def set_keep(self, enabled, days):
+        return self._answer("set_keep", enabled, days, answer={"enabled": enabled, "days": days})
+
+    def calibration(self):
+        return self._answer("calibration", answer={"status": {"state": "idle"}})
+
+    def start_calibration(self, positions, journal):
+        return self._answer("start_calibration", positions, journal, answer={"status": {"state": "running"}})
+
+    def create_from_signals(self, **asked):
+        return self._answer("create_from_signals", asked, answer={"id": RUN, "kind": "signals"})
+
+    def create_sweep(self, **asked):
+        return self._answer("create_sweep", asked, answer={"id": RUN, "kind": "sweep"})
+
+    def run_cell(self, run_id, cell):
+        return self._answer("run_cell", run_id, cell, answer={"id": RUN, "kind": "strategy"})
+
+    def update(self, run_id, note=None, tags=None):
+        return self._answer("update", run_id, note, tags, answer={"id": run_id, "note": note, "tags": tags})
+
+    def delete_many(self, run_ids):
+        return self._answer("delete_many", run_ids, answer={"removed": run_ids, "kept": []})
+
+    def storage(self):
+        return self._answer("storage", answer={"runs": {"count": 2, "bytes": 4096}})
+
+    def breakdowns(self, run_id, leverage):
+        return self._answer("breakdowns", run_id, leverage, answer={"groups": {}})
+
+    def trade_path(self, run_id, leverage, entry_time):
+        return self._answer("trade_path", run_id, leverage, entry_time, answer={"points": []})
+
+    def comparison(self, run_id, leverage):
+        return self._answer("comparison", run_id, leverage, answer={"pairs": []})
+
+    def list_runs(self):
+        return self._answer("list_runs", answer=[{"id": RUN}])
+
+    def create(self, **asked):
+        return self._answer("create", asked, answer={"id": RUN, "status": {"state": "queued"}})
+
+    def get(self, run_id):
+        return self._answer("get", run_id, answer={"id": run_id})
+
+    def rows(self, run_id, kind, leverage):
+        return self._answer("rows", run_id, kind, leverage, answer=[{"day": "2026-10-12"}])
+
+    def day_chart(self, run_id, day, leverage):
+        return self._answer("day_chart", run_id, day, leverage, answer={"bars": []})
+
+    def cancel(self, run_id):
+        return self._answer("cancel", run_id, answer={"id": run_id})
+
+    def delete(self, run_id):
+        return self._answer("delete", run_id)
+
+    async def run(self):
+        await asyncio.Event().wait()
+
+    async def keep_prices(self):
+        await asyncio.Event().wait()
+
+    async def close(self):
+        pass
+
+
+@contextmanager
+def signed_in(ctx, tmp_path):
+    with make_client(ctx, tmp_path / "no-interface") as client:
+        assert client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN).status_code == 204
+        yield client
+
+
+@pytest.fixture
+def backtests(ctx):
+    ctx.backtests = FakeBacktests()
+    return ctx.backtests
+
+
+def test_the_session_says_whether_backtests_can_be_asked_for(client, ctx):
+    assert client.get("/api/session").json()["backtests_enabled"] is False
+
+    ctx.backtests = FakeBacktests()
+    assert client.get("/api/session").json()["backtests_enabled"] is True
+    ctx.settings.backtests_enabled = False
+    assert client.get("/api/session").json()["backtests_enabled"] is False
+
+
+def test_backtests_switched_off_or_not_wired_answer_as_such(client, ctx):
+    assert client.get("/api/backtests").status_code == 503
+
+    ctx.backtests = FakeBacktests()
+    ctx.settings.backtests_enabled = False
+    response = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+
+    assert (response.status_code, response.json()["detail"]) == (403, "Backtests are disabled in the configuration")
+    assert ctx.backtests.asked == []
+
+
+def test_a_backtest_is_asked_for_with_its_period_and_what_differs(client, backtests):
+    response = client.post(
+        "/api/backtests",
+        json={
+            "from": "2026-09-14", "to": "2026-10-09",
+            "parameters": {"entry_mode": "cross_catchup", "kernel_bandwidth": 8},
+            "rules": {"day_profit_target": 3.0, "trailing_enabled": False},
+            "leverages": [80, 110], "note": "  higher target  ",
+        },
+        headers=SAME_ORIGIN,
+    )
+
+    assert (response.status_code, response.json()["id"]) == (202, RUN)
+    assert backtests.asked == [("create", {
+        "first_day": datetime(2026, 9, 14).date(), "last_day": datetime(2026, 10, 9).date(), "strategy": "kernel_vwap",
+        "parameters": {"entry_mode": "cross_catchup", "kernel_bandwidth": 8},
+        "rules": {"day_profit_target": 3.0, "trailing_enabled": False},
+        "entry_price": None, "spread": None, "leverages": [80.0, 110.0], "note": "higher target",
+        "capital": None, "fill_delay": None, "slippage": None,
+    })]
+
+
+def test_a_backtest_is_asked_with_less_kind_fills_and_another_account(client, backtests):
+    response = client.post(
+        "/api/backtests",
+        json={"from": "2026-09-14", "to": "2026-10-09", "capital": 2500, "fill_delay": 30, "slippage": 1.5},
+        headers=SAME_ORIGIN,
+    )
+
+    assert response.status_code == 202
+    assert {name: backtests.asked[0][1][name] for name in ("capital", "fill_delay", "slippage")} == {
+        "capital": 2500.0, "fill_delay": 30, "slippage": 1.5,
+    }
+    for body in ({"slippage": -1}, {"fill_delay": -10}, {"capital": -5}):
+        refused = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", **body}, headers=SAME_ORIGIN)
+        assert refused.status_code == 422
+
+
+@pytest.mark.parametrize("body", [
+    {"to": "2026-10-09"},
+    {"from": "next week", "to": "2026-10-09"},
+    {"from": "2026-09-14", "to": "2026-10-09", "entry_price": 0},
+    {"from": "2026-09-14", "to": "2026-10-09", "rules": {"stoploss_percent": "low"}},
+])
+def test_a_request_for_a_backtest_that_cannot_be_read_goes_no_further(client, backtests, body):
+    assert client.post("/api/backtests", json=body, headers=SAME_ORIGIN).status_code == 422
+    assert backtests.asked == []
+
+
+def test_what_the_service_refuses_is_answered_with_its_reason(client, backtests):
+    from src.admin.backtests import InvalidRequest, NotPossible, UnknownRun
+
+    backtests.failure = UnknownRun(RUN)
+    for method, path in (("GET", f"/api/backtests/{RUN}"), ("DELETE", f"/api/backtests/{RUN}"), ("POST", f"/api/backtests/{RUN}/cancel")):
+        response = client.request(method, path, headers=SAME_ORIGIN)
+        assert (response.status_code, response.json()["detail"]) == (404, "No such backtest")
+
+    backtests.failure = InvalidRequest("The period is longer than 366 days")
+    response = client.post("/api/backtests", json={"from": "2020-01-01", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    assert (response.status_code, response.json()["detail"]) == (422, "The period is longer than 366 days")
+
+    backtests.failure = NotPossible("Stop this backtest before removing it")
+    response = client.delete(f"/api/backtests/{RUN}", headers=SAME_ORIGIN)
+    assert (response.status_code, response.json()["detail"]) == (409, "Stop this backtest before removing it")
+
+
+def test_runs_are_listed_read_stopped_and_removed(client, backtests):
+    assert client.get("/api/backtests").json() == {"items": [{"id": RUN}]}
+    assert client.get("/api/backtests/options").json() == {"strategies": []}
+    assert client.get(f"/api/backtests/{RUN}").json() == {"id": RUN}
+    assert client.post(f"/api/backtests/{RUN}/cancel", headers=SAME_ORIGIN).json() == {"id": RUN}
+    assert client.delete(f"/api/backtests/{RUN}", headers=SAME_ORIGIN).status_code == 204
+
+    assert backtests.asked == [("list_runs",), ("options",), ("get", RUN), ("cancel", RUN), ("delete", RUN)]
+
+
+def test_the_rows_of_a_run_are_asked_for_one_leverage(client, backtests):
+    for kind in ("trades", "days", "refusals"):
+        assert client.get(f"/api/backtests/{RUN}/{kind}?leverage=110").json() == {"items": [{"day": "2026-10-12"}]}
+    assert client.get(f"/api/backtests/{RUN}/trades").status_code == 422
+
+    assert backtests.asked == [("rows", RUN, kind, 110.0) for kind in ("trades", "days", "refusals")]
+
+
+def test_the_chart_of_a_day_is_asked_for_a_real_day(client, backtests):
+    assert client.get(f"/api/backtests/{RUN}/days/2026-10-12/chart?leverage=110").json() == {"bars": []}
+    assert client.get(f"/api/backtests/{RUN}/days/monday/chart?leverage=110").status_code == 422
+
+    assert backtests.asked == [("day_chart", RUN, datetime(2026, 10, 12).date(), 110.0)]
+
+
+def test_the_prices_panel_reads_the_last_months_unless_told_a_period(client, backtests):
+    today = datetime.now(timezone.utc).date()
+
+    assert client.get("/api/backtests/prices").json() == {"days": []}
+    client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30")
+
+    assert backtests.asked == [
+        ("coverage", today - timedelta(days=119), today),
+        ("coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date()),
+    ]
+
+
+def test_a_download_of_prices_is_started_and_stopped(client, backtests):
+    started = client.post("/api/backtests/prices/fetch", json={"from": "2026-10-05", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    stopped = client.post("/api/backtests/prices/fetch/stop", headers=SAME_ORIGIN)
+
+    assert (started.status_code, stopped.status_code) == (202, 200)
+    assert backtests.asked == [
+        ("start_fetch", datetime(2026, 10, 5).date(), datetime(2026, 10, 9).date()), ("stop_fetch",),
+    ]
+
+
+def test_the_service_is_told_to_keep_the_prices_up_to_date_or_to_stop(client, backtests):
+    kept = client.put("/api/backtests/prices/keep", json={"enabled": True, "days": 250}, headers=SAME_ORIGIN)
+    by_default = client.put("/api/backtests/prices/keep", json={"enabled": False}, headers=SAME_ORIGIN)
+
+    assert (kept.status_code, kept.json()) == (200, {"enabled": True, "days": 250})
+    assert by_default.json() == {"enabled": False, "days": 120}
+    assert client.put("/api/backtests/prices/keep", json={"days": 30}, headers=SAME_ORIGIN).status_code == 422
+    assert client.put("/api/backtests/prices/keep", json={"enabled": True, "days": 0}, headers=SAME_ORIGIN).status_code == 422
+    assert backtests.asked == [("set_keep", True, 250), ("set_keep", False, 120)]
+
+
+def test_the_turbo_is_measured_on_every_closed_trade_read_from_the_database(client, ctx, backtests):
+    assert client.get("/api/backtests/calibration").json() == {"status": {"state": "idle"}}
+
+    started = client.post("/api/backtests/calibration", headers=SAME_ORIGIN)
+
+    assert (started.status_code, started.json()) == (202, {"status": {"state": "running"}})
+    # The whole history of both: the service sorts out which trades are of the indice.
+    assert ctx.queries.calls[-2:] == [("closed_positions", None, None), ("journal_between", None, None)]
+    assert backtests.asked == [("calibration",), ("start_calibration", [CLOSED_POSITION], [JOURNAL_ENTRY])]
+
+
+def test_the_signals_wata_received_are_replayed_with_its_journal_and_its_positions_of_the_period(client, ctx, backtests):
+    response = client.post(
+        "/api/backtests/signals",
+        json={"from": "2026-09-14", "to": "2026-10-09", "rules": {"day_profit_target": 3}, "leverages": [104], "note": "  real  "},
+        headers=SAME_ORIGIN,
+    )
+
+    first_day, last_day = datetime(2026, 9, 14).date(), datetime(2026, 10, 9).date()
+    assert (response.status_code, response.json()) == (202, {"id": RUN, "kind": "signals"})
+    assert ctx.queries.calls[-2:] == [("journal_between", first_day, last_day), ("closed_positions", first_day, last_day)]
+    assert backtests.asked == [("create_from_signals", {
+        "first_day": first_day, "last_day": last_day, "journal": [JOURNAL_ENTRY], "positions": [CLOSED_POSITION],
+        "rules": {"day_profit_target": 3}, "entry_price": None, "spread": None, "leverages": [104.0], "note": "real",
+        "capital": None, "fill_delay": None, "slippage": None,
+    })]
+    # A replay has no strategy to give a parameter to.
+    assert client.post("/api/backtests/signals", json={"from": "2026-09-14"}, headers=SAME_ORIGIN).status_code == 422
+
+
+def test_a_database_that_cannot_be_reached_starts_neither_a_replay_nor_a_measure(client, ctx, backtests):
+    ctx.queries.failing = True
+
+    replay = client.post("/api/backtests/signals", json={"from": "2026-09-14", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    measure = client.post("/api/backtests/calibration", headers=SAME_ORIGIN)
+
+    assert (replay.status_code, measure.status_code) == (503, 503)
+    assert backtests.asked == []
+
+
+def test_a_replay_is_compared_with_what_wata_did_for_one_leverage(client, backtests):
+    assert client.get(f"/api/backtests/{RUN}/comparison?leverage=110").json() == {"pairs": []}
+    assert client.get(f"/api/backtests/{RUN}/comparison").status_code == 422
+
+    assert backtests.asked == [("comparison", RUN, 110.0)]
+
+
+def test_a_sweep_is_asked_for_with_the_values_to_try(client, ctx, backtests):
+    response = client.post(
+        "/api/backtests/sweeps",
+        json={
+            "from": "2026-09-14", "to": "2026-10-09", "held_out": 0.4, "leverage": 104, "note": " targets ",
+            "parameters": {"entry_mode": "cross_catchup"}, "rules": {"stoploss_percent": -10}, "slippage": 1,
+            "axes": [
+                {"kind": "rule", "name": "day_profit_target", "values": [1, 1.7, 3]},
+                {"kind": "parameter", "name": "kernel_bandwidth", "values": [8, "15"]},
+            ],
+        },
+        headers=SAME_ORIGIN,
+    )
+
+    assert (response.status_code, response.json()) == (202, {"id": RUN, "kind": "sweep"})
+    assert backtests.asked == [("create_sweep", {
+        "first_day": datetime(2026, 9, 14).date(), "last_day": datetime(2026, 10, 9).date(),
+        "axes": [
+            {"kind": "rule", "name": "day_profit_target", "values": [1, 1.7, 3]},
+            {"kind": "parameter", "name": "kernel_bandwidth", "values": [8, "15"]},
+        ],
+        "held_out": 0.4, "strategy": "kernel_vwap", "parameters": {"entry_mode": "cross_catchup"},
+        "rules": {"stoploss_percent": -10}, "entry_price": None, "spread": None, "leverage": 104.0, "note": "targets",
+        "fill_delay": None, "slippage": 1.0,
+        # A strategy's sweep reads nothing from the database.
+        "journal": None, "positions": None,
+    })]
+    assert not [call for call in ctx.queries.calls if call[0] in ("journal_between", "closed_positions")]
+
+
+def test_a_sweep_of_the_signals_wata_received_is_given_its_journal_and_its_positions(client, ctx, backtests):
+    response = client.post(
+        "/api/backtests/sweeps",
+        json={
+            "from": "2026-09-14", "to": "2026-10-09", "replay": "signals",
+            "axes": [{"kind": "rule", "name": "day_profit_target", "values": [1, 3]}],
+        },
+        headers=SAME_ORIGIN,
+    )
+
+    first_day, last_day = datetime(2026, 9, 14).date(), datetime(2026, 10, 9).date()
+    assert response.status_code == 202
+    assert ctx.queries.calls[-2:] == [("journal_between", first_day, last_day), ("closed_positions", first_day, last_day)]
+    asked = backtests.asked[0][1]
+    assert (asked["journal"], asked["positions"], asked["held_out"]) == ([JOURNAL_ENTRY], [CLOSED_POSITION], 0.3)
+
+
+@pytest.mark.parametrize("body", [
+    {"axes": []},
+    {"axes": [{"kind": "turbo", "name": "spread", "values": [0.01, 0.05]}]},
+    {"axes": [{"kind": "rule", "name": "day_profit_target"}]},
+    {"axes": [{"kind": "rule", "name": "day_profit_target", "values": [1, 3]}], "held_out": 1},
+    {"axes": [{"kind": "rule", "name": "day_profit_target", "values": [1, 3]}], "replay": "prices"},
+])
+def test_a_sweep_that_cannot_be_read_goes_no_further(client, backtests, body):
+    response = client.post("/api/backtests/sweeps", json={"from": "2026-09-14", "to": "2026-10-09", **body}, headers=SAME_ORIGIN)
+
+    # An empty list of axes can be read: it is the service that says a sweep needs one.
+    assert response.status_code == (202 if body == {"axes": []} else 422)
+    assert backtests.asked == ([] if response.status_code == 422 else backtests.asked)
+
+
+def test_a_combination_of_a_sweep_is_made_a_backtest_of_its_own(client, backtests):
+    response = client.post(f"/api/backtests/{RUN}/cells/2/run", headers=SAME_ORIGIN)
+
+    assert (response.status_code, response.json()) == (202, {"id": RUN, "kind": "strategy"})
+    assert client.post(f"/api/backtests/{RUN}/cells/second/run", headers=SAME_ORIGIN).status_code == 422
+    assert backtests.asked == [("run_cell", RUN, 2)]
+
+
+def test_a_run_is_named_again_tagged_and_several_are_removed_at_once(client, backtests):
+    renamed = client.patch(f"/api/backtests/{RUN}", json={"note": "  September  ", "tags": ["keep"]}, headers=SAME_ORIGIN)
+    tagged = client.patch(f"/api/backtests/{RUN}", json={"tags": []}, headers=SAME_ORIGIN)
+    removed = client.post("/api/backtests/remove", json={"ids": [RUN, "20261012-213045-ffffff"]}, headers=SAME_ORIGIN)
+
+    assert renamed.json() == {"id": RUN, "note": "September", "tags": ["keep"]}
+    assert (tagged.status_code, removed.json()) == (200, {"removed": [RUN, "20261012-213045-ffffff"], "kept": []})
+    assert client.post("/api/backtests/remove", json={"ids": ["x"] * 201}, headers=SAME_ORIGIN).status_code == 422
+    assert backtests.asked == [
+        ("update", RUN, "September", ["keep"]), ("update", RUN, None, []),
+        ("delete_many", [RUN, "20261012-213045-ffffff"]),
+    ]
+
+
+def test_the_disk_used_the_breakdowns_of_a_run_and_the_path_of_a_trade_are_read(client, backtests):
+    assert client.get("/api/backtests/storage").json() == {"runs": {"count": 2, "bytes": 4096}}
+    assert client.get(f"/api/backtests/{RUN}/breakdowns?leverage=110").json() == {"groups": {}}
+    assert client.get(f"/api/backtests/{RUN}/trades/path?leverage=110&entry=2026-10-12T06:25:50Z").json() == {"points": []}
+    assert client.get(f"/api/backtests/{RUN}/trades/path?leverage=110").status_code == 422
+    assert client.get(f"/api/backtests/{RUN}/breakdowns").status_code == 422
+
+    assert backtests.asked == [
+        ("storage",), ("breakdowns", RUN, 110.0), ("trade_path", RUN, 110.0, "2026-10-12T06:25:50Z"),
+    ]
+
+
+def _real_backtests(tmp_path, launcher, publish=None):
+    from src.admin.backtests import BacktestService
+    from src.strategy.execution import WataRules
+
+    with open("etc/config_example.json") as config_file:
+        rules = WataRules.from_config(json.load(config_file))
+    (tmp_path / "runs").mkdir()
+    return BacktestService(
+        runs_root=str(tmp_path / "runs"), prices_root=str(tmp_path / "prices"), rules=lambda: rules, launcher=launcher,
+        publish=publish,
+    )
+
+
+def test_a_path_that_tries_to_leave_the_runs_folder_finds_no_run(ctx, tmp_path):
+    async def never(arguments, log_path):
+        raise AssertionError("nothing is to be run")
+
+    ctx.backtests = _real_backtests(tmp_path, never)
+    (tmp_path / "status.json").write_text("{}")
+
+    with signed_in(ctx, tmp_path) as client:
+        for run_id in ("..", "%2E%2E", "..%2F..%2Fetc", "_fetch", "_calibration", RUN):
+            assert client.get(f"/api/backtests/{run_id}/trades?leverage=110").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/comparison?leverage=110").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/breakdowns?leverage=110").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/trades/path?leverage=110&entry=x").status_code == 404
+            assert client.patch(f"/api/backtests/{run_id}", json={"note": "x"}, headers=SAME_ORIGIN).status_code in (404, 405)
+            assert client.post(f"/api/backtests/{run_id}/cells/0/run", headers=SAME_ORIGIN).status_code in (404, 405)
+            assert client.delete(f"/api/backtests/{run_id}", headers=SAME_ORIGIN).status_code in (404, 405)
+        # Asked to remove what is not a run of its own: nothing is, and each is said not to be one.
+        outcome = client.post("/api/backtests/remove", json={"ids": ["..", "_fetch", "../prices"]}, headers=SAME_ORIGIN).json()
+        assert (outcome["removed"], [entry["reason"] for entry in outcome["kept"]]) == ([], ["No such backtest"] * 3)
+    assert (tmp_path / "status.json").exists()
+
+
+def test_the_admin_runs_the_backtests_it_is_asked_for(ctx, tmp_path):
+    class Ended:
+        returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def launcher(arguments, log_path):
+        out = arguments[arguments.index("--out") + 1]
+        with open(os.path.join(out, "summary.json"), "w") as out_file:
+            json.dump({"runs": [{"turbo": {"points_per_unit": 110.0}, "summary": {"trades": 3}}]}, out_file)
+        return Ended()
+
+    ctx.backtests = _real_backtests(tmp_path, launcher, publish=ctx.events.publish)
+    events = ctx.events.subscribe()
+
+    with signed_in(ctx, tmp_path) as client:
+        asked = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", "leverages": [110]}, headers=SAME_ORIGIN)
+        run_id = asked.json()["id"]
+        for _ in range(200):
+            run = client.get(f"/api/backtests/{run_id}").json()
+            if run["status"]["state"] == "done":
+                break
+
+    assert asked.status_code == 202
+    assert (run["status"]["state"], run["headline"]["trades"]) == ("done", 3)
+    # Open pages are told: no need to keep asking.
+    announced = events.get_nowait()
+    assert (announced["type"], announced["run_id"], announced["state"]) == ("backtest_finished", run_id, "done")

@@ -50,6 +50,10 @@ class AdminSettings:
     api_host: str = "0.0.0.0"
     api_port: int = 8082
     credentials_path: str = "/app/var/lib/admin/credentials.json"
+    # Backtests asked for from the interface: their results, and the prices they run on.
+    backtests_enabled: bool = True
+    backtests_path: str = "/app/var/lib/backtests"
+    price_history_path: str = "/app/var/lib/price_history"
     session_idle_minutes: int = 60
     session_max_age_minutes: int = 720
     cookie_secure: bool = True
@@ -69,6 +73,9 @@ class AdminSettings:
             api_host=admin_config.get("api_host", cls.api_host),
             api_port=admin_config.get("api_port", cls.api_port),
             credentials_path=admin_config.get("persistant", {}).get("credentials_path", cls.credentials_path),
+            backtests_enabled=admin_config.get("backtests_enabled", cls.backtests_enabled),
+            backtests_path=admin_config.get("persistant", {}).get("backtests_path", cls.backtests_path),
+            price_history_path=admin_config.get("persistant", {}).get("price_history_path", cls.price_history_path),
             session_idle_minutes=admin_config.get("session_idle_minutes", cls.session_idle_minutes),
             session_max_age_minutes=admin_config.get("session_max_age_minutes", cls.session_max_age_minutes),
             cookie_secure=admin_config.get("cookie_secure", cls.cookie_secure),
@@ -93,6 +100,8 @@ class AdminContext:
     # Through a connection of its own, the rest being read through a read-only pool.
     risk_state: Any = None
     audit_log: Any = None
+    # Backtests run as child processes, and their results kept as files (src/admin/backtests.py).
+    backtests: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -134,15 +143,32 @@ def build_context(config_manager) -> AdminContext:
     """The context used in production, wired to the real services."""
     import httpx
 
+    import json
+
     from src.admin.audit import AuditLog
+    from src.admin.backtests import BacktestService
     from src.admin.config_editor import ConfigEditor
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.services import SaxoAccess, WataServices
     from src.database.postgres import AsyncDbRiskStateManager, PostgresConnectionManager
     from src.mq_telegram.async_tools import AsyncTelegramSender
+    from src.strategy.execution import WataRules
     from src.web_server_token import WebServerToken
 
     settings = AdminSettings.from_config(config_manager)
+    events = EventHub()
+
+    def live_rules() -> WataRules:
+        # Read again each time: the configuration may have been edited since the admin started.
+        with open(settings.config_path, encoding="utf-8") as config_file:
+            return WataRules.from_config(json.load(config_file))
+
+    backtests = BacktestService(
+        runs_root=settings.backtests_path,
+        prices_root=settings.price_history_path,
+        rules=live_rules,
+        publish=events.publish,
+    )
 
     postgres_config = config_manager.get_config_value("postgresql", {})
     dsn = postgres_config.get("dsn", "postgresql://wata:wata@localhost:5432/wata")
@@ -180,8 +206,10 @@ def build_context(config_manager) -> AdminContext:
         config_editor=ConfigEditor(settings.config_path),
         risk_state=AsyncDbRiskStateManager(pause_database),
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
+        backtests=backtests,
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
+        events=events,
         notifier=telegram_sender.send,
         version=read_version(),
-        closers=[database.close, pause_database.close, http_client.aclose, telegram_sender.close],
+        closers=[backtests.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close],
     )

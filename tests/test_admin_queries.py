@@ -12,7 +12,7 @@ asyncpg_stub.create_pool = None
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 
 from src.admin.errors import DatabaseUnavailable
-from src.admin.queries import MAX_ROWS, AdminQueries, LazyDatabase, summarise_trades
+from src.admin.queries import MAX_REPLAYED_ROWS, MAX_ROWS, AdminQueries, LazyDatabase, summarise_trades
 
 
 def _trade(day, action, percent, profit, instrument="TURBO A"):
@@ -168,6 +168,49 @@ def test_filter_values_are_bound_parameters_never_part_of_the_sql():
     for query, args in db.calls:
         assert "DROP TABLE" not in query
         assert hostile in args
+
+
+def test_the_journal_of_a_period_is_read_oldest_first_for_a_replay():
+    db = FakeDb(rows=[{"signal_uuid": "s1", "confidence": float("nan")}])
+    queries = AdminQueries(db, "Europe/Paris")
+
+    rows = asyncio.run(queries.journal_between(DAY_1, DAY_2))
+
+    query, args = db.calls[0]
+    assert args == ("Europe/Paris", DAY_1, DAY_2)
+    assert "FROM signal_journal" in query and "(decided_at AT TIME ZONE $1)::date >= $2::date" in query
+    assert "ORDER BY decided_at ASC" in query and f"LIMIT {MAX_REPLAYED_ROWS}" in query
+    assert rows == [{"signal_uuid": "s1", "confidence": None}]
+
+    asyncio.run(queries.journal_between())
+    assert "WHERE" not in db.calls[1][0] and db.calls[1][1] == ()
+
+
+def test_a_journal_that_does_not_exist_yet_reads_as_empty():
+    class NoJournal(FakeDb):
+        async def fetch(self, query, *args):
+            raise DatabaseUnavailable('relation "signal_journal" does not exist')
+
+    assert asyncio.run(AdminQueries(NoJournal(), "Europe/Paris").journal_between()) == []
+
+
+def test_closed_positions_are_read_with_what_each_was_bought_and_sold_at():
+    db = FakeDb(rows=[{"position_id": "1", "position_open_price": 4.4}])
+    queries = AdminQueries(db, "Europe/Paris")
+
+    rows = asyncio.run(queries.closed_positions(DAY_1, DAY_2))
+
+    query, args = db.calls[0]
+    assert args == ("Europe/Paris", DAY_1, DAY_2)
+    assert "position_status = 'Closed'" in query and "execution_time_close IS NOT NULL" in query
+    # A position belongs to the day it was opened on: the day of the signal it came from.
+    assert "(execution_time_open AT TIME ZONE $1)::date >= $2::date" in query
+    assert "position_open_price, position_close_price" in query
+    assert "ORDER BY execution_time_open ASC" in query and f"LIMIT {MAX_REPLAYED_ROWS}" in query
+    assert rows == [{"position_id": "1", "position_open_price": 4.4}]
+
+    asyncio.run(queries.closed_positions())
+    assert db.calls[1][1] == ()
 
 
 def test_position_detail_includes_its_related_orders():

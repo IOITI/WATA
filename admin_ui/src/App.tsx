@@ -10,6 +10,8 @@ import { ToastProvider } from '@/components/ToastProvider'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AuditPage } from '@/features/audit/AuditPage'
 import { AuthProvider } from '@/features/auth/AuthProvider'
+import { BacktestFormPage } from '@/features/backtests/BacktestFormPage'
+import { BacktestsPage } from '@/features/backtests/BacktestsPage'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { RequireAuth } from '@/features/auth/RequireAuth'
 import { ConfigPage } from '@/features/config/ConfigPage'
@@ -32,6 +34,15 @@ const ReportPage = lazy(() =>
   import('@/features/report/ReportPage').then((module) => ({ default: module.ReportPage })),
 )
 const ExitsPage = lazy(() => import('@/features/exits/ExitsPage').then((module) => ({ default: module.ExitsPage })))
+const BacktestRunPage = lazy(() =>
+  import('@/features/backtests/BacktestRunPage').then((module) => ({ default: module.BacktestRunPage })),
+)
+const ComparePage = lazy(() =>
+  import('@/features/backtests/ComparePage').then((module) => ({ default: module.ComparePage })),
+)
+const BacktestDayPage = lazy(() =>
+  import('@/features/backtests/BacktestDayPage').then((module) => ({ default: module.BacktestDayPage })),
+)
 // Its own charting library, for candles: loaded with the page as well.
 const PricesPage = lazy(() =>
   import('@/features/prices/PricesPage').then((module) => ({ default: module.PricesPage })),
@@ -110,6 +121,32 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <PricesPage />
+            </ChartPage>
+          }
+        />
+        <Route path="backtests" element={<BacktestsPage />} />
+        <Route path="backtests/new" element={<BacktestFormPage />} />
+        <Route
+          path="backtests/compare"
+          element={
+            <ChartPage>
+              <ComparePage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="backtests/:runId"
+          element={
+            <ChartPage>
+              <BacktestRunPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="backtests/:runId/days/:day"
+          element={
+            <ChartPage>
+              <BacktestDayPage />
             </ChartPage>
           }
         />

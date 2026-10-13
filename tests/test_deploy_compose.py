@@ -70,6 +70,9 @@ def test_admin_writes_nowhere_else(compose_services):
     assert writable == [
         "/app/etc",
         "/app/var/lib/admin",
+        # Backtests: their results, and the prices fetched for them.
+        "/app/var/lib/backtests",
+        "/app/var/lib/price_history",
         "/app/var/lib/saxo_auth",
         "/app/var/lib/web_server",
         "/app/var/log/wata-admin",
@@ -127,3 +130,63 @@ def test_admin_is_routed_on_its_own_domain_behind_its_own_allowlist(compose_serv
     assert "admin-ip-allowlist" in middlewares
     # Not the allowlist of the webhook route, which contains TradingView's servers.
     assert "api-ip-whitelist" not in middlewares
+
+
+def _routers(compose_services):
+    """Router name -> {setting: value}, from the Traefik labels of every service."""
+    routers = {}
+    prefix = "traefik.http.routers."
+    for service in compose_services.values():
+        for label in service.get("labels") or []:
+            if label.startswith(prefix):
+                key, value = label[len(prefix):].split("=", 1)
+                name, setting = key.split(".", 1)
+                routers.setdefault(name, {})[setting] = value
+    return routers
+
+
+def test_second_https_port_stays_on_the_machine_unless_asked(compose_services):
+    traefik = compose_services["traefik"]
+
+    assert "--entrypoints.adminsecure.address=:8443" in traefik["command"]
+    # Published on the loopback address by default: an upgrade opens nothing.
+    assert "${ADMIN_PORT:-127.0.0.1:8443}:8443" in traefik["ports"]
+    assert not any(port.endswith(":8443") and not port.startswith("${ADMIN_PORT") for port in traefik["ports"])
+
+
+def test_admin_is_on_the_usual_https_port_unless_asked(compose_services):
+    assert _routers(compose_services)["admin"]["entrypoints"] == "${ADMIN_ENTRYPOINT:-websecure}"
+
+
+def test_webhook_keeps_its_route_when_the_admin_is_given_its_domain(compose_services):
+    routers = _routers(compose_services)
+
+    # Two routes for one domain on one port: the higher priority wins, and a
+    # route without one has the length of its rule, which is more than 1.
+    assert routers["admin"]["priority"] == "1"
+    assert "priority" not in routers["fastapi"]
+    assert routers["fastapi"]["entrypoints"] == "websecure"
+
+
+def test_every_route_names_its_entrypoint(compose_services):
+    # A route that names none is attached to all of them, the admin's port included.
+    for name, router in _routers(compose_services).items():
+        assert router.get("entrypoints"), name
+
+
+def test_admin_keeps_backtests_and_their_prices_outside_the_container(compose_services):
+    modes = _mount_modes(compose_services["admin1"])
+
+    # Written by the admin: the prices it fetches and the results of its runs must survive a restart.
+    assert modes["/app/var/lib/price_history"] == "rw"
+    assert modes["/app/var/lib/backtests"] == "rw"
+
+
+def test_backtests_cannot_take_more_than_one_processor_from_the_services_that_trade(compose_services):
+    limits = compose_services["admin1"]["deploy"]["resources"]["limits"]
+
+    assert float(limits["cpus"]) <= 1.0
+    # No other service is capped: the trader and the position monitor keep what the machine has.
+    for name, service in compose_services.items():
+        if name != "admin1":
+            assert "cpus" not in ((service.get("deploy") or {}).get("resources") or {}).get("limits", {}), name

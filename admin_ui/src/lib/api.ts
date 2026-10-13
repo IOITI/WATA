@@ -1,5 +1,20 @@
 import type {
   AuditEntry,
+  BacktestBreakdowns,
+  BacktestCalibration,
+  BacktestComparison,
+  BacktestDay,
+  BacktestDayChart,
+  BacktestOptions,
+  BacktestRefusal,
+  BacktestRequest,
+  BacktestRun,
+  BacktestRunListed,
+  BacktestSignalsRequest,
+  BacktestStorage,
+  BacktestSweepRequest,
+  BacktestTrade,
+  BacktestTradePath,
   ConfigBackup,
   ConfigDocument,
   ConfigRestored,
@@ -19,6 +34,9 @@ import type {
   Position,
   PriceBars,
   PriceContext,
+  PriceCoverage,
+  PriceFetchStatus,
+  PriceKeepStatus,
   PriceInstruments,
   PriceRangeBars,
   Report,
@@ -186,6 +204,54 @@ export const api = {
     }),
   submitSaxoAuthCode: (code: string) =>
     request<void>('POST', '/api/system/saxo/auth-code', { body: { code } }),
+
+  backtestOptions: () => request<BacktestOptions>('GET', '/api/backtests/options'),
+  backtests: () => request<{ items: BacktestRunListed[] }>('GET', '/api/backtests'),
+  backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
+  createBacktest: (body: BacktestRequest) => request<BacktestRun>('POST', '/api/backtests', { body }),
+  cancelBacktest: (runId: string) =>
+    request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cancel`),
+  deleteBacktest: (runId: string) => request<void>('DELETE', `/api/backtests/${encodeURIComponent(runId)}`),
+  backtestTrades: (runId: string, leverage: number) =>
+    request<{ items: BacktestTrade[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/trades${query({ leverage })}`),
+  backtestDays: (runId: string, leverage: number) =>
+    request<{ items: BacktestDay[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/days${query({ leverage })}`),
+  backtestRefusals: (runId: string, leverage: number) =>
+    request<{ items: BacktestRefusal[] }>(
+      'GET',
+      `/api/backtests/${encodeURIComponent(runId)}/refusals${query({ leverage })}`,
+    ),
+  backtestDayChart: (runId: string, day: string, leverage: number) =>
+    request<BacktestDayChart>(
+      'GET',
+      `/api/backtests/${encodeURIComponent(runId)}/days/${encodeURIComponent(day)}/chart${query({ leverage })}`,
+    ),
+  priceCoverage: (period: Partial<PricePeriod> = {}) =>
+    request<PriceCoverage>('GET', `/api/backtests/prices${query({ ...period })}`),
+  fetchPrices: (period: PricePeriod) => request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch', { body: period }),
+  stopFetchingPrices: () => request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch/stop'),
+  keepPrices: (body: { enabled: boolean; days: number }) =>
+    request<PriceKeepStatus>('PUT', '/api/backtests/prices/keep', { body }),
+  backtestCalibration: () => request<BacktestCalibration>('GET', '/api/backtests/calibration'),
+  measureTurbo: () => request<BacktestCalibration>('POST', '/api/backtests/calibration'),
+  replaySignals: (body: BacktestSignalsRequest) => request<BacktestRun>('POST', '/api/backtests/signals', { body }),
+  createSweep: (body: BacktestSweepRequest) => request<BacktestRun>('POST', '/api/backtests/sweeps', { body }),
+  runSweepCell: (runId: string, cell: number) =>
+    request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cells/${cell}/run`),
+  renameBacktest: (runId: string, body: { note?: string; tags?: string[] }) =>
+    request<BacktestRun>('PATCH', `/api/backtests/${encodeURIComponent(runId)}`, { body }),
+  removeBacktests: (ids: string[]) =>
+    request<{ removed: string[]; kept: { id: string; reason: string }[] }>('POST', '/api/backtests/remove', { body: { ids } }),
+  backtestStorage: () => request<BacktestStorage>('GET', '/api/backtests/storage'),
+  backtestBreakdowns: (runId: string, leverage: number) =>
+    request<BacktestBreakdowns>('GET', `/api/backtests/${encodeURIComponent(runId)}/breakdowns${query({ leverage })}`),
+  backtestTradePath: (runId: string, leverage: number, entry: string) =>
+    request<BacktestTradePath>(
+      'GET',
+      `/api/backtests/${encodeURIComponent(runId)}/trades/path${query({ leverage, entry })}`,
+    ),
+  backtestComparison: (runId: string, leverage: number) =>
+    request<BacktestComparison>('GET', `/api/backtests/${encodeURIComponent(runId)}/comparison${query({ leverage })}`),
 
   config: () => request<ConfigDocument>('GET', '/api/config'),
   validateConfig: (config: JsonObject) =>

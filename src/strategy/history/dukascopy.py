@@ -23,6 +23,8 @@ decisions.
 import argparse
 import csv
 import gzip
+import io
+import json
 import lzma
 import os
 import struct
@@ -35,6 +37,7 @@ from typing import Callable, NamedTuple
 
 from src.price_recorder.bars import Bar, BarBuilder, Quote
 from src.price_recorder.export import COLUMNS
+from src.strategy.process import lower_priority
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 SYMBOL = "USATECHIDXUSD"
@@ -215,7 +218,9 @@ def write_day_file(path: str, bars: list[Bar], *, symbol: str, label: str) -> No
     }
 
     def write(partial: str) -> None:
-        with gzip.open(partial, "wt", newline="", encoding="utf-8") as out_file:
+        # Without the time of writing in its header: the same bars give the same file, to the byte,
+        # and a backtest can tell from the file whether its prices changed (src/strategy/fingerprint.py).
+        with gzip.GzipFile(partial, "wb", mtime=0) as packed, io.TextIOWrapper(packed, newline="", encoding="utf-8") as out_file:
             writer = csv.writer(out_file)
             writer.writerow(COLUMNS)
             for bar in bars:
@@ -239,6 +244,10 @@ class DayReport:
     status: str
     bars: int = 0
     failed_hours: list[datetime] = field(default_factory=list)
+    # Hours the server answered for, to say it has no such file: asking again will not bring them.
+    unpublished_hours: int = 0
+    # Hours it did not answer for at all.
+    unanswered_hours: int = 0
 
 
 def sync(
@@ -283,7 +292,10 @@ def sync(
         present = [hour for hour, outcome in zip(open_hours, outcomes) if outcome in (CACHED, FETCHED)]
         hole = bool(failed) or (bool(present) and any(hour < present[-1] for hour in unpublished))
         if hole:
-            reports.append(DayReport(day, "incomplete", failed_hours=failed or unpublished))
+            reports.append(DayReport(
+                day, "incomplete", failed_hours=failed or unpublished,
+                unpublished_hours=len(unpublished), unanswered_hours=len(failed),
+            ))
             progress(f"{day}: {len(failed or unpublished)} hour(s) could not be fetched")
             answered = outcomes.count(FETCHED) + outcomes.count(UNPUBLISHED)
             if not answered and len(failed) >= UNANSWERED_HOURS_TO_STOP:
@@ -291,7 +303,7 @@ def sync(
                 progress("The server answers nothing any more: stopping here. Try again later.")
             continue
         if not present:
-            reports.append(DayReport(day, "empty"))
+            reports.append(DayReport(day, "empty", unpublished_hours=len(unpublished)))
             continue
 
         ticks, _ = ticks_of_day(root, symbol, day)
@@ -299,7 +311,7 @@ def sync(
         bars = bars_from_ticks(ticks, until)
         write_day_file(path, bars, symbol=symbol, label=label)
         status = "partial" if unpublished else "written"
-        reports.append(DayReport(day, status, bars=len(bars)))
+        reports.append(DayReport(day, status, bars=len(bars), unpublished_hours=len(unpublished)))
         progress(f"{day}: {len(bars)} bars" + (" (the day is not over)" if unpublished else ""))
     return reports
 
@@ -316,6 +328,8 @@ def parse_arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--label", default=DEFAULT_LABEL, help=f"the indice it stands for (default: {DEFAULT_LABEL})")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="hours fetched at the same time")
     parser.add_argument("--attempts", type=int, default=DEFAULT_ATTEMPTS, help="tries per hour before giving up for this run")
+    parser.add_argument("--low-priority", action="store_true", help="give way to everything else on the machine")
+    parser.add_argument("--report", help="file to write what became of each day to, as JSON")
     arguments = parser.parse_args(argv)
     arguments.last_day = arguments.last_day or arguments.first_day
     if arguments.last_day < arguments.first_day:
@@ -323,14 +337,37 @@ def parse_arguments(argv=None) -> argparse.Namespace:
     return arguments
 
 
+def write_report(path: str, reports: list[DayReport]) -> None:
+    """What became of each day, for whoever ran the command without reading what it printed."""
+    content = {
+        "days": [
+            {
+                "day": report.day.isoformat(), "status": report.status, "bars": report.bars,
+                "unpublished_hours": report.unpublished_hours, "unanswered_hours": report.unanswered_hours,
+            }
+            for report in reports
+        ],
+    }
+
+    def write(partial: str) -> None:
+        with open(partial, "w", encoding="utf-8") as out_file:
+            json.dump(content, out_file, indent=2)
+
+    _write_atomically(os.path.abspath(path), write)
+
+
 def main(argv=None) -> int:
     arguments = parse_arguments(argv)
+    if arguments.low_priority:
+        lower_priority()
     reports = sync(
         arguments.first_day, arguments.last_day,
         fetch=http_fetch(), root=arguments.root, symbol=arguments.symbol, label=arguments.label,
         workers=arguments.workers, attempts=arguments.attempts,
         progress=lambda message: print(message, flush=True),
     )
+    if arguments.report:
+        write_report(arguments.report, reports)
     incomplete = [report for report in reports if report.status in ("incomplete", "not tried")]
     ready = [report for report in reports if report.status in ("written", "kept", "partial")]
     print(f"{len(ready)} day(s) ready in {bars_directory(arguments.root, arguments.label)}, {len(incomplete)} incomplete.")

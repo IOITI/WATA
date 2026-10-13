@@ -23,6 +23,8 @@ from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_repor
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 2000
+# What a backtest of real signals, or the measure of the turbo, may read at once: years of trading.
+MAX_REPLAYED_ROWS = 20000
 
 _POSITION_COLUMNS = """
     action, position_id, position_amount, position_open_price, position_close_price,
@@ -420,6 +422,43 @@ class AdminQueries:
             {where}
             ORDER BY decided_at DESC NULLS LAST, signal_uuid DESC
             LIMIT {min(max(limit, 1), MAX_ROWS)}
+            """,
+            *args,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def journal_between(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """Every signal the trader dealt with between two days (both included), oldest first: what a backtest replays."""
+        args: list[Any] = []
+        conditions = self._date_range_conditions("decided_at", start, end, args)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = await self._fetch_optional(
+            f"""
+            SELECT signal_uuid, action, indice, confidence, signal_timestamp, received_timestamp,
+                   decided_at, outcome, reason, position_id
+            FROM signal_journal
+            {where}
+            ORDER BY decided_at ASC NULLS LAST, signal_uuid ASC
+            LIMIT {MAX_REPLAYED_ROWS}
+            """,
+            *args,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def closed_positions(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """The closed positions opened between two days (both included), oldest first, with what each was bought and sold at."""
+        args: list[Any] = []
+        conditions = ["position_status = 'Closed'", "execution_time_open IS NOT NULL", "execution_time_close IS NOT NULL"]
+        conditions += self._date_range_conditions("execution_time_open", start, end, args)
+        rows = await self.db.fetch(
+            f"""
+            SELECT position_id, action, execution_time_open, execution_time_close,
+                   position_open_price, position_close_price, position_total_performance_percent,
+                   position_max_performance_percent, position_close_reason, instrument_name
+            FROM turbo_data_position
+            WHERE {' AND '.join(conditions)}
+            ORDER BY execution_time_open ASC, position_id ASC
+            LIMIT {MAX_REPLAYED_ROWS}
             """,
             *args,
         )

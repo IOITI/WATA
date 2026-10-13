@@ -15,6 +15,7 @@ const SESSION: Session = {
   timezone: 'Europe/Paris',
   actions_enabled: true,
   config_edit_enabled: true,
+  backtests_enabled: true,
   totp_enabled: false,
   restart_required: false,
 }

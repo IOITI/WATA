@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
 
-import type { Candle, ChartMarker, LinePoint } from './chartData'
+import type { Candle, ChartMarker, ChartOverlay, LinePoint } from './chartData'
 import { PriceChart } from './PriceChart'
 import type { PriceChartProps } from './PriceChart'
 
@@ -201,6 +201,78 @@ describe('markers', () => {
 
     expect(chart.calls).toEqual([])
     expect(seriesOf(chart, 'Candlestick')?.markers).toHaveLength(1)
+  })
+})
+
+describe('lines over the prices', () => {
+  const VWAP: ChartOverlay = { id: 'vwap', tone: 'reference', points: [point(100, 8.4), point(110, 8.41), point(120, 8.42)] }
+  const BAND: ChartOverlay = { id: 'upper', tone: 'band', points: [point(100, 8.5), point(110, 8.5), point(120, 8.5)] }
+  const KERNEL: ChartOverlay = {
+    id: 'kernel',
+    tone: 'trend',
+    points: [{ time: 100 }, { time: 110, value: 8.43, rising: true }, { time: 120, value: 8.41, rising: false }],
+  }
+  const lines = () => theChart().series.filter((series) => series.type === 'Line' && !series.removed)
+
+  it('are drawn in the panel of the prices, each with its points', () => {
+    render(<PriceChart {...props({ overlays: [BAND, VWAP] })} />)
+
+    expect(lines().map((line) => [line.pane, line.data])).toEqual([
+      [0, BAND.points],
+      [0, VWAP.points],
+    ])
+    // The prices keep their own panel to themselves: no second one is made.
+    expect(seriesOf(theChart(), 'Candlestick')?.data).toEqual(CANDLES)
+  })
+
+  it('are told apart by more than their colour: a reference is thick, a band thin and dashed', () => {
+    render(<PriceChart {...props({ overlays: [BAND, VWAP] })} />)
+    const [band, vwap] = lines()
+
+    expect(vwap.options).toMatchObject({ color: '#3b82f6', lineWidth: 2 })
+    expect(band.options).toMatchObject({ lineWidth: 1, lineStyle: 2 })
+    // Four more labels on the price scale would bury the last price.
+    expect(vwap.options).toMatchObject({ lastValueVisible: false, priceLineVisible: false })
+  })
+
+  it('take the colour of their direction at each point when they are a trend', () => {
+    render(<PriceChart {...props({ overlays: [KERNEL] })} />)
+
+    expect(lines()[0].data).toEqual([
+      { time: 100 },
+      { time: 110, value: 8.43, color: '#059669' },
+      { time: 120, value: 8.41, color: '#ef4444' },
+    ])
+  })
+
+  it('join prices that were emptied first, then filled again', () => {
+    const { rerender } = render(<PriceChart {...props()} />)
+    theChart().calls.length = 0
+
+    rerender(<PriceChart {...props({ overlays: [VWAP, BAND] })} />)
+
+    // Emptied once, for the first line that joins; the second finds a chart of two series already.
+    expect(theChart().calls).toEqual(['Candlestick data 0', 'add Line', 'add Line', 'Candlestick data 3', 'Line data 3', 'Line data 3'])
+  })
+
+  it('are given their new points at a refresh without being made again', () => {
+    const { rerender } = render(<PriceChart {...props({ overlays: [VWAP] })} />)
+    theChart().calls.length = 0
+    const moved = { ...VWAP, points: [point(100, 8.4), point(110, 8.44)] }
+
+    rerender(<PriceChart {...props({ overlays: [moved] })} />)
+
+    expect(theChart().calls).toEqual(['Candlestick data 3', 'Line data 2'])
+    expect(lines()).toHaveLength(1)
+  })
+
+  it('go away when they are no longer asked for', () => {
+    const { rerender } = render(<PriceChart {...props({ overlays: [VWAP, BAND] })} />)
+
+    rerender(<PriceChart {...props({ overlays: [VWAP] })} />)
+
+    expect(lines().map((line) => line.data)).toEqual([VWAP.points])
+    expect(theChart().series.filter((series) => series.removed)).toHaveLength(1)
   })
 })
 

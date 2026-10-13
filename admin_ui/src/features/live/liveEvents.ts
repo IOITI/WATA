@@ -12,6 +12,9 @@ export const LIVE_EVENT_TYPES = [
   'service_status',
   'saxo_authorisation_required',
   'saxo_authorised',
+  'backtest_finished',
+  'prices_fetch_finished',
+  'calibration_finished',
 ] as const
 
 export interface EventNotice {
@@ -88,6 +91,35 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       }
     case 'saxo_authorised':
       return { title: 'Saxo is authorised again', variant: 'success' }
+    case 'backtest_finished': {
+      const state = text(event.state) ?? ''
+      // Stopped by the operator: they know.
+      if (state === 'cancelled') return null
+      return {
+        title: state === 'done' ? 'Backtest finished' : 'Backtest failed',
+        body: text(event.note),
+        variant: state === 'done' ? 'success' : 'error',
+      }
+    }
+    case 'prices_fetch_finished': {
+      const state = text(event.state) ?? ''
+      // Stopped by the operator, or one of the downloads the service makes by itself: no news.
+      if (state === 'stopped' || event.automatic === true) return null
+      return {
+        title: state === 'done' ? 'Prices downloaded' : 'The download of prices ended',
+        body:
+          state === 'incomplete'
+            ? 'Some days are still missing: run the same period again.'
+            : state === 'failed'
+              ? 'It failed.'
+              : undefined,
+        variant: state === 'done' ? 'success' : 'warning',
+      }
+    }
+    case 'calibration_finished':
+      return text(event.state) === 'done'
+        ? { title: 'Turbo measured on the real trades', variant: 'success' }
+        : { title: 'The measure of the turbo failed', variant: 'error' }
     default:
       // Pauses are shown by the dashboard itself, to whoever caused them and to everyone else.
       return null
@@ -112,6 +144,13 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'saxo_authorised':
       // The health summary carries the Saxo connection too (top bar, dashboard).
       return ['saxo', 'health']
+    case 'backtest_finished':
+      return ['backtests', 'backtest']
+    case 'prices_fetch_finished':
+      return ['backtest-prices']
+    case 'calibration_finished':
+      // The turbo a new backtest is offered comes from it.
+      return ['backtest-calibration', 'backtest-options']
     default:
       return []
   }

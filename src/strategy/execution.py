@@ -22,16 +22,27 @@ The turbo is a model, not a recorded price: its value is the distance from the
 index to its knock-out level. Two numbers of it are assumptions until they
 are calibrated on real trades (``TurboModel``).
 
+Two kinds of decisions are replayed. A strategy says the position it wants:
+going from long to short ends the long whatever becomes of the short. A signal
+WATA received is an order to the trader (``entries_are_orders``): an entry it
+refuses closes nothing, as in ``handle_trading_signal``.
+
 Timing: a decision is known when its ten seconds end, and acted on at the open
 of the next bar. Inside a bar the monitor is taken through its open, its low
 and its high in the usual order, then its close. Neither way flatters the
 result: a stop is sold at the worst price of the ten seconds that crossed it,
-a target at the target and no better.
+a target at the target and no better. ``Execution`` makes it less kind still:
+a wait between a decision and its fill, and index points lost on each fill.
+
+Every trade counts as the whole stake in the day's result, as WATA counts a
+day. What WATA would really have put on each (its sizing by time of day and
+by confidence) is kept with the trade as a share, and turned into money for a
+starting capital by the report.
 
 Pure logic: no clock of its own, no I/O.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from datetime import date
 
 from src.strategy.bars import IndexBar
@@ -57,6 +68,7 @@ REFUSED_DAY_LOSS = "Day loss limit reached"
 REFUSED_COOLDOWN = "Cooldown after a loss"
 REFUSED_TRADE_LIMIT = "Trade limit of the day reached"
 REFUSED_DUPLICATE = "Same position already open"
+REFUSED_CONFIDENCE = "Confidence below the minimum"
 
 
 def _rule(config: dict, rule_type: str) -> dict | None:
@@ -96,6 +108,18 @@ class WataRules:
     trailing_enabled: bool
     trailing_activation_percent: float
     trailing_drawdown_percent: float
+    # An entry whose confidence is known and under this is refused. 0: no such check.
+    min_confidence: float = 0.0
+    # What an order is sized on: the share of the account it may use, in percent, and the
+    # turbos left unbought as a margin (``_calculate_bid_amount``, src/trade/async_services.py).
+    funds_percent: float = 100.0
+    safety_units: float = 1.0
+    # Sizing by time of day: (first minute, minute it ends before, percent) of each period. Empty: always 100.
+    time_scaling: tuple = ()
+    # Sizing by confidence: (from, under, percent). Empty: always 100.
+    confidence_scaling: tuple = ()
+    # The confidence taken for an entry that comes without one.
+    default_confidence: float = 1.0
 
     @classmethod
     def from_config(cls, config: dict) -> "WataRules":
@@ -107,6 +131,10 @@ class WataRules:
         trade_config = (config.get("trade") or {}).get("config") or {}
         thresholds = (trade_config.get("position_management") or {}).get("performance_thresholds") or {}
         trailing = thresholds.get("trailing_stop") or {}
+        sizing = trade_config.get("position_sizing") or {}
+        confidence = sizing.get("confidence_scaling") or {}
+        time_of_day = sizing.get("time_of_day_scaling") or {}
+        buying_power = trade_config.get("buying_power") or {}
         return cls(
             timezone=(trade_config.get("general") or {}).get("timezone", "Europe/Paris"),
             trading_start_hour=market_hours["trading_start_hour"],
@@ -125,7 +153,74 @@ class WataRules:
             trailing_enabled=trailing.get("enabled", False),
             trailing_activation_percent=trailing.get("activation_percent", 5),
             trailing_drawdown_percent=trailing.get("drawdown_percent", 8),
+            min_confidence=confidence.get("min_confidence_threshold", 0.0) if confidence.get("enabled", False) else 0.0,
+            funds_percent=max(
+                0, buying_power.get("max_account_funds_to_use_percentage", 100) - buying_power.get("reserve_cash_percent", 0),
+            ),
+            safety_units=(buying_power.get("safety_margins") or {}).get("bid_calculation", 1),
+            time_scaling=tuple(
+                (
+                    period["start_hour"] * 60 + period.get("start_minute", 0),
+                    period["end_hour"] * 60 + period.get("end_minute", 0),
+                    period.get("scale_percent", 100),
+                )
+                for period in time_of_day.get("periods") or []
+            ) if time_of_day.get("enabled", False) else (),
+            confidence_scaling=tuple(
+                (rule["min_confidence"], rule["max_confidence"], rule.get("scale_percent", 100))
+                for rule in confidence.get("scaling_rules") or []
+            ) if confidence.get("enabled", False) else (),
+            default_confidence=confidence.get("default_confidence", 1.0),
         )
+
+    def position_scale(self, seconds: int, confidence: float | None) -> float:
+        """
+        The share of what an order may use that WATA puts on an entry at that
+        time of day (seconds since midnight) with that confidence: 1 is all of
+        it (``_calculate_position_scale``).
+        """
+        minute = seconds // _MINUTE
+        by_time = next((percent for first, end, percent in self.time_scaling if first <= minute < end), 100)
+        if confidence is None:
+            confidence = self.default_confidence
+        by_confidence = next(
+            (percent for least, under, percent in self.confidence_scaling if least <= confidence < under), 100,
+        )
+        return by_time / 100.0 * by_confidence / 100.0
+
+    def to_dict(self) -> dict:
+        """The rules as plain values, to be written as JSON and read back with ``from_dict``."""
+        return {
+            **asdict(self), "closed_dates": sorted(self.closed_dates),
+            "time_scaling": [list(period) for period in self.time_scaling],
+            "confidence_scaling": [list(rule) for rule in self.confidence_scaling],
+        }
+
+    @classmethod
+    def from_dict(cls, values: dict) -> "WataRules":
+        """
+        Rules written by ``to_dict``, some of them changed perhaps: every one
+        must be there, and no other. A rule added since they were written is
+        the exception: it takes the value that changes nothing.
+        """
+        names = [spec.name for spec in fields(cls)]
+        unknown = sorted(set(values) - set(names))
+        missing = [spec.name for spec in fields(cls) if spec.default is MISSING and spec.name not in values]
+        if unknown or missing:
+            raise ValueError(
+                "Not a set of rules: "
+                + "; ".join(part for part in (
+                    f"unknown {', '.join(unknown)}" if unknown else "",
+                    f"missing {', '.join(missing)}" if missing else "",
+                ) if part)
+            )
+        return cls(**{
+            **values, "closed_dates": frozenset(values["closed_dates"]),
+            **{
+                name: tuple(tuple(entry) for entry in values[name])
+                for name in ("time_scaling", "confidence_scaling") if name in values
+            },
+        })
 
 
 @dataclass(frozen=True)
@@ -159,13 +254,28 @@ class TurboModel:
         if distance <= 0:
             return -100.0
         bid = distance / self.points_per_unit - self.spread / 2
-        return round(bid * 100 / self.entry_price - 100, 2)
+        # Adding zero turns a rounded "-0.0" into the 0.0 it is.
+        return round(bid * 100 / self.entry_price - 100, 2) + 0.0
 
     def index_at(self, direction: str, barrier: float, performance: float) -> float:
         """Where the index is when the turbo shows that performance."""
         bid = (1 + performance / 100) * self.entry_price
         distance = (bid + self.spread / 2) * self.points_per_unit
         return barrier + distance if direction == LONG else barrier - distance
+
+
+@dataclass(frozen=True)
+class Execution:
+    """How much less kind than the bars the fills are taken to be."""
+
+    # Seconds between the moment a decision is known and its fill, on top of the wait for the next bar.
+    fill_delay: int = 0
+    # Index points lost against the trade on each fill, the entry and the exit alike.
+    slippage: float = 0.0
+
+    def __post_init__(self):
+        if self.fill_delay < 0 or self.slippage < 0:
+            raise ValueError("A fill is neither early nor better than the price: delay and slippage are 0 or more")
 
 
 @dataclass
@@ -176,7 +286,9 @@ class _Position:
     entry_at: int
     entry_index: float
     barrier: float
+    scale: float = 1.0
     max_performance: float = 0.0
+    min_performance: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -193,6 +305,10 @@ class Trade:
     performance: float
     max_performance: float
     exit_reason: str
+    # The worst the monitor saw of it, at or below 0: what a stop has to leave room for.
+    min_performance: float = 0.0
+    # The share of what an order may use that WATA's sizing puts on it: 1 is all of it.
+    scale: float = 1.0
 
     @property
     def points(self) -> float:
@@ -232,20 +348,37 @@ def compounded(performances: list[float]) -> float:
 
 class Simulator:
     """
-    Give it every bar in order with ``on_bar``, and each decision of the
-    strategy with ``decide`` once the bar that brought it is over.
+    Give it every bar in order with ``on_bar``, and each decision with
+    ``decide`` once the bar that brought it is over.
+
+    ``entries_are_orders``: the decisions are signals as the trader receives
+    them, not the position a strategy wants. An entry the rules refuse then
+    leaves an open position of the other side where it is.
     """
 
-    def __init__(self, rules: WataRules, turbo: TurboModel, clock: LocalClock):
+    def __init__(
+        self,
+        rules: WataRules,
+        turbo: TurboModel,
+        clock: LocalClock,
+        *,
+        entries_are_orders: bool = False,
+        execution: Execution = Execution(),
+    ):
         self._rules = rules
         self._turbo = turbo
         self._clock = clock
+        self._entries_are_orders = entries_are_orders
+        self._delay = execution.fill_delay
+        self._slippage = execution.slippage
         self._close_time = seconds_of(rules.close_position_time)
         self._cooldown = rules.cooldown_after_loss_minutes * _MINUTE
 
         self._position: _Position | None = None
-        self._pending: Decision | None = None
+        self._pending: list[Decision] = []
         self._day: DayResult | None = None
+        # 1 + the day's result so far: asked at every bar of a position, and only changed by a close.
+        self._day_factor = 1.0
         self._last_loss_at: int | None = None
         self._last_bar: IndexBar | None = None
 
@@ -254,7 +387,12 @@ class Simulator:
         self.days: list[DayResult] = []
 
     def decide(self, decision: Decision) -> None:
-        self._pending = decision
+        self._pending.append(decision)
+
+    @property
+    def busy(self) -> bool:
+        """A position is open, or a decision waits for the next bar: the bars matter to it."""
+        return self._position is not None or bool(self._pending)
 
     def on_bar(self, bar: IndexBar) -> None:
         day, seconds = self._clock.at(bar.start)
@@ -263,6 +401,7 @@ class Simulator:
             if self._position is not None:
                 self._close(bar.start, bar.mid_open, END_OF_DAY)
             self._day = DayResult(day)
+            self._day_factor = 1.0
             self.days.append(self._day)
         self._last_bar = bar
         if self._rules.trading_start_hour <= seconds // _HOUR < self._rules.trading_end_hour:
@@ -271,11 +410,17 @@ class Simulator:
         # At the open: the scheduler's end of day, then what the strategy decided before.
         if self._position is not None and seconds >= self._close_time:
             self._close(bar.start, bar.mid_open, END_OF_DAY)
-        pending, self._pending = self._pending, None
-        if pending is not None:
-            self._act(pending, bar, day, seconds)
+        if self._pending:
+            if self._delay:
+                # Filled at the first bar that opens once the wait is over.
+                due = [decision for decision in self._pending if decision.at + self._delay <= bar.start]
+                self._pending = [decision for decision in self._pending if decision.at + self._delay > bar.start]
+            else:
+                due, self._pending = self._pending, []
+            for decision in due:
+                self._act(decision, bar, day, seconds)
 
-        if self._position is not None:
+        if self._position is not None and not self._nothing_sells(bar):
             rose = bar.mid_close >= bar.mid_open
             path = (
                 (bar.mid_open, bar.mid_low, bar.mid_high, bar.mid_close) if rose
@@ -292,7 +437,7 @@ class Simulator:
 
     # ── the trader ──
 
-    def _refusal(self, at: int, day: date, seconds: int, direction: str) -> str | None:
+    def _refusal(self, at: int, day: date, seconds: int, direction: str, confidence: float | None) -> str | None:
         """Why the trader would refuse this entry, in the order it checks."""
         rules = self._rules
         hour, minute = seconds // _HOUR, seconds % _HOUR // _MINUTE
@@ -313,39 +458,78 @@ class Simulator:
             return REFUSED_COOLDOWN
         if rules.max_trades_per_day > 0 and self._day.entries >= rules.max_trades_per_day:
             return REFUSED_TRADE_LIMIT
+        if confidence is not None and confidence < rules.min_confidence:
+            return REFUSED_CONFIDENCE
         return None
 
     def _act(self, decision: Decision, bar: IndexBar, day: date, seconds: int) -> None:
         index = bar.mid_open
         if decision.target == FLAT:
-            if self._position is not None:
+            if self._position is not None and decision.closes in (None, self._position.direction):
                 self._close(bar.start, index, f"{SIGNAL}: {decision.reason}")
             return
 
-        # A reversal: the strategy's exit closes the other side whatever becomes of the entry.
-        if self._position is not None and self._position.direction != decision.target:
+        reversal = self._position is not None and self._position.direction != decision.target
+        # The strategy's exit closes the other side whatever becomes of the entry.
+        if reversal and not self._entries_are_orders:
             self._close(bar.start, index, f"{SIGNAL}: reversal")
 
-        reason = self._refusal(bar.start, day, seconds, decision.target)
+        reason = self._refusal(bar.start, day, seconds, decision.target, decision.confidence)
         if reason is not None:
             self.refusals.append(Refusal(bar.start, decision.target, reason))
             return
+        # The trader closes what is open once the entry is accepted, not before.
+        if reversal and self._entries_are_orders:
+            self._close(bar.start, index, f"{SIGNAL}: reversal")
 
         self._day.entries += 1
+        # Bought with the index further on by the slippage: the turbo starts that much behind.
+        paid = index + self._slippage if decision.target == LONG else index - self._slippage
         self._position = _Position(
             direction=decision.target,
             reason=decision.reason,
             confidence=decision.confidence,
             entry_at=bar.start,
-            entry_index=index,
-            barrier=self._turbo.barrier(decision.target, index),
+            entry_index=paid,
+            barrier=self._turbo.barrier(decision.target, paid),
+            scale=self._rules.position_scale(seconds, decision.confidence),
         )
 
     # ── the position monitor ──
 
     def _with_the_day(self, performance: float) -> float:
         """The day's result if the open position were closed at ``performance``."""
-        return round(((1 + self._day.percent / 100.0) * (1 + performance / 100.0) - 1) * 100, 2)
+        return round((self._day_factor * (1 + performance / 100.0) - 1) * 100, 2)
+
+    def _nothing_sells(self, bar: IndexBar) -> bool:
+        """
+        Whether no exit can be reached inside the bar, told from its two
+        extremes: every exit is reached by the turbo's result going far enough
+        one way, and it goes no further than them. Such a bar, which most bars
+        of a position are, only leaves its best and its worst behind; the
+        others are gone through step by step (``_monitor``), which decides.
+        """
+        rules, position = self._rules, self._position
+        if position.direction == LONG:
+            against, with_it = bar.mid_low, bar.mid_high
+        else:
+            against, with_it = bar.mid_high, bar.mid_low
+        worst = self._turbo.performance(position.direction, position.barrier, against)
+        best = self._turbo.performance(position.direction, position.barrier, with_it)
+        if worst <= rules.stoploss_percent or best >= rules.max_profit_percent:
+            return False
+        peak = best if best > position.max_performance else position.max_performance
+        if (
+            rules.trailing_enabled and peak >= rules.trailing_activation_percent
+            and peak - worst >= rules.trailing_drawdown_percent
+        ):
+            return False
+        if self._with_the_day(best) >= rules.day_profit_target:
+            return False
+        position.max_performance = peak
+        if worst < position.min_performance:
+            position.min_performance = worst
+        return True
 
     def _monitor(self, at: int, index: float, at_open: bool) -> bool:
         """The monitor's checks with the index at ``index``; True when it sold."""
@@ -355,6 +539,8 @@ class Simulator:
         best_before = position.max_performance
         if performance > position.max_performance:
             position.max_performance = performance
+        if performance < position.min_performance:
+            position.min_performance = performance
 
         reason = None
         if performance <= rules.stoploss_percent:
@@ -378,12 +564,14 @@ class Simulator:
             if target < performance:
                 index = self._turbo.index_at(position.direction, position.barrier, target)
                 # What the bar did beyond the target was never seen by a position already sold.
-                position.max_performance = max(best_before, target)
+                position.max_performance = max(best_before, round(target, 2))
         self._close(at, index, reason)
         return True
 
     def _close(self, at: int, index: float, reason: str) -> None:
         position = self._position
+        # Sold with the index back by the slippage.
+        index = index - self._slippage if position.direction == LONG else index + self._slippage
         performance = self._turbo.performance(position.direction, position.barrier, index)
         self._position = None
         self.trades.append(Trade(
@@ -397,8 +585,11 @@ class Simulator:
             performance=performance,
             max_performance=max(position.max_performance, performance),
             exit_reason=reason,
+            min_performance=min(position.min_performance, performance),
+            scale=position.scale,
         ))
         self._day.performances.append(performance)
+        self._day_factor = 1 + self._day.percent / 100.0
         # A losing close starts the cooldown, whatever closed it.
         if performance < 0:
             self._last_loss_at = at

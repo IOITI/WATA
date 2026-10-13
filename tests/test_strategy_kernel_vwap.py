@@ -204,6 +204,11 @@ def test_parameters_given_as_text_take_the_type_of_the_one_they_replace():
     ({"entry_mode": "always"}, "entry_mode must be one of"),
     ({"vwap_weight": "volume"}, "vwap_weight must be one of"),
     ({"range_points": "0.01"}, "one tick at least"),
+    ({"range_points": "0.2"}, "range_points must be between 0.5 and 1000.0"),
+    ({"kernel_bandwidth": "100000"}, "kernel_bandwidth must be between 2 and 500"),
+    ({"kernel_style": "gaussian"}, "kernel_style must be one of wave"),
+    ({"session_start": "8h"}, "session_start must be a time of day such as 08:00"),
+    ({"session_start": "22:00"}, "session_end must be after session_start"),
 ])
 def test_a_parameter_that_makes_no_sense_is_refused_saying_why(overrides, message):
     with pytest.raises(ValueError, match=message):
