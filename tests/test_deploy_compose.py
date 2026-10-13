@@ -251,7 +251,7 @@ def test_ci_checks_that_nothing_is_installed_that_requirements_does_not_name(ci_
     for job in ("build-and-test", "image"):
         commands = "\n".join(step.get("run", "") for step in ci_jobs[job]["steps"])
         assert "pip freeze > installed.txt" in commands, job
-        assert "tests/test_requirements.py requirements.txt installed.txt" in commands, job
+        assert "tests/requirements_lock.py requirements.txt installed.txt" in commands, job
 
 
 def test_the_live_tests_get_the_database_and_the_queue_of_the_compose_file(compose_services, ci_jobs):

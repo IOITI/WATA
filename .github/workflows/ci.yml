@@ -32,7 +32,7 @@ jobs:
       run: |
         pip check
         pip freeze > installed.txt
-        python tests/test_requirements.py requirements.txt installed.txt
+        python tests/requirements_lock.py requirements.txt installed.txt
 
     - name: Run tests with coverage
       run: |
@@ -63,7 +63,7 @@ jobs:
         docker run --rm wata-base:ci python --version | grep -F "Python ${{ matrix.python-version }}."
         docker run --rm wata-base:ci python -m pip check
         docker run --rm wata-base:ci python -m pip freeze > installed.txt
-        python3 tests/test_requirements.py requirements.txt installed.txt
+        python3 tests/requirements_lock.py requirements.txt installed.txt
 
     - name: Every service can be loaded in it
       run: |

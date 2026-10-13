@@ -1,7 +1,7 @@
 # The whole environment of the image, one line per package and nothing else:
 # no version is left for pip to choose when the image is built on the server.
 # CI installs it on each Python it tests and fails if `pip freeze` gives another
-# list (tests/test_requirements.py).
+# list (tests/requirements_lock.py).
 
 # --- What WATA imports ---
 aio-pika==9.6.2
