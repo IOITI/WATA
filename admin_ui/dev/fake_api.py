@@ -488,9 +488,21 @@ class FakeQueries:
 
     async def price_instruments(self, start, end):
         # Like the real query: only what has bars in the period (none on a weekend).
-        if not fake_prices.bars(fake_prices.INDEX["id"], start, end, 3600, 1, datetime.now(timezone.utc)):
+        now = datetime.now(timezone.utc)
+        if not fake_prices.bars(fake_prices.INDEX["id"], start, end, 3600, 1, now):
             return []
-        return [dict(instrument) for instrument in fake_prices.INSTRUMENTS]
+        return [
+            {**instrument, **fake_prices.last_quote(instrument["id"], start, end, now)}
+            for instrument in fake_prices.INSTRUMENTS
+        ]
+
+    async def price_runs(self, start, end, limit):
+        from src.admin.prices import Run
+
+        return [Run(*row) for row in fake_prices.runs(start, end, datetime.now(timezone.utc))][:limit]
+
+    async def price_volumes(self, start, end):
+        return fake_prices.volumes(start, end, datetime.now(timezone.utc))
 
     async def price_instrument(self, instrument_id):
         return fake_prices.BY_ID.get(instrument_id)

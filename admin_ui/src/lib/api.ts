@@ -32,6 +32,7 @@ import type {
   Performance,
   PositionDetail,
   Position,
+  PriceAvailability,
   PriceBars,
   PriceContext,
   PriceCoverage,
@@ -182,6 +183,9 @@ export const api = {
       'GET',
       `/api/prices/range-bars${query({ instrument_id: instrumentId, ...period, side: options.side, size: options.size, under: options.under })}`,
     ),
+  /** What was recorded of each instrument of the period, and when Saxo left it without a quote. */
+  priceAvailability: (period: PricePeriod) =>
+    request<PriceAvailability>('GET', `/api/prices/availability${query({ ...period })}`),
   priceContext: (instrumentId: number, period: PricePeriod) =>
     request<PriceContext>('GET', `/api/prices/context${query({ instrument_id: instrumentId, ...period })}`),
   audit: () => request<{ items: AuditEntry[] }>('GET', '/api/audit?limit=500'),

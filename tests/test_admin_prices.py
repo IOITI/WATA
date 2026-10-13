@@ -4,6 +4,7 @@ import types
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytz
 
 asyncpg_stub = types.ModuleType("asyncpg")
 asyncpg_stub.Pool = object
@@ -18,8 +19,13 @@ from src.admin.prices import (
     MAX_BUCKETS,
     RANGE_COLUMNS,
     SILENT,
+    STOPPED,
+    STRETCHES_KEPT,
+    UNQUOTED,
+    Run,
     TooManyBars,
     auto_range_ticks,
+    availability,
     price_decimals,
     range_bars,
     range_rows,
@@ -230,9 +236,74 @@ def test_instruments_of_a_period_are_found_without_scanning_the_bars():
     assert rows == [{"id": 1, "uic": 1909050, "role": "underlying"}]
     statement, args = db.calls[0]
     assert "i.last_seen_at >= $1 AND i.first_seen_at < $2" in statement
-    assert "EXISTS ( SELECT 1 FROM price_bar_10s b WHERE b.instrument_id = i.id AND b.ts >= $1 AND b.ts < $2 )" in statement
+    # One probe of the bars' primary key per instrument, from the latest: it finds the last quote on the way.
+    assert (
+        "CROSS JOIN LATERAL ( SELECT b.ts, b.bid_close, b.ask_close FROM price_bar_10s b "
+        "WHERE b.instrument_id = i.id AND b.ts >= $1 AND b.ts < $2 ORDER BY b.ts DESC LIMIT 1 ) latest"
+    ) in statement
+    assert "extract(epoch FROM latest.ts)::bigint AS last_t, latest.bid_close AS last_bid, latest.ask_close AS last_ask" in statement
     assert "ORDER BY (i.role <> 'underlying'), i.indice, i.direction, i.barrier, i.id" in statement
     assert args == (START, END)
+
+
+def test_the_last_quote_of_an_instrument_that_is_not_a_number_is_none():
+    db = FakeDb(rows=[{"id": 2, "last_t": 1791792000, "last_bid": 8.45, "last_ask": float("nan")}])
+
+    (row,) = asyncio.run(AdminQueries(db, "Europe/Paris").price_instruments(START, END))
+
+    assert (row["last_bid"], row["last_ask"]) == (8.45, None)
+
+
+RUN_ROW = {
+    "instrument_id": 2, "first": 1791792000, "last": 1791792590, "bars": 60, "updates": 412,
+    "without_ask": 0, "delayed_minutes": 0, "high": 8.61, "last_bid": 8.45,
+}
+
+
+def test_the_bars_of_a_period_are_read_as_stretches_without_a_break():
+    db = FakeDb(rows=[RUN_ROW])
+
+    runs = asyncio.run(AdminQueries(db, "Europe/Paris").price_runs(START, END, 500))
+
+    assert runs == [Run(2, 1791792000, 1791792590, 60, 412, 0, 0, 8.61, 8.45)]
+    statement, args = db.calls[0]
+    # Bars ten seconds apart share their time less ten seconds per bar before them: one pass over the bars.
+    assert (
+        "extract(epoch FROM ts)::bigint - 10 * row_number() OVER (PARTITION BY instrument_id ORDER BY ts) AS run"
+    ) in statement
+    assert "FROM price_bar_10s WHERE ts >= $1 AND ts < $2 ) bars GROUP BY instrument_id, run" in statement
+    # The bid a stretch ended on is one row, found by its key.
+    assert "JOIN price_bar_10s ending ON ending.instrument_id = runs.instrument_id AND ending.ts = runs.last_ts" in statement
+    assert statement.endswith("ORDER BY runs.instrument_id, runs.first_ts LIMIT $3")
+    assert args == (START, END, 500)
+
+
+def test_a_stretch_with_a_price_that_is_not_a_number_is_still_read():
+    db = FakeDb(rows=[{**RUN_ROW, "high": float("nan")}])
+
+    (run,) = asyncio.run(AdminQueries(db, "Europe/Paris").price_runs(START, END, 500))
+
+    assert run.high is None and run.last_bid == 8.45
+
+
+def test_the_volume_of_a_period_is_the_last_total_of_each_day_added_up():
+    db = FakeDb(rows=[{"instrument_id": 2, "volume": 15300.0}, {"instrument_id": 3, "volume": float("nan")}])
+
+    volumes = asyncio.run(AdminQueries(db, "Europe/Paris").price_volumes(START, END))
+
+    assert volumes == {2: 15300.0}
+    statement, args = db.calls[0]
+    # Saxo's total starts again each day: the last one received that day is the day's.
+    assert "(array_agg(day_volume ORDER BY ts DESC))[1] AS volume" in statement
+    assert "FROM price_volume WHERE ts >= $1 AND ts < $2 GROUP BY instrument_id, (ts AT TIME ZONE $3)::date" in statement
+    assert statement.endswith("GROUP BY instrument_id")
+    assert args == (START, END, "Europe/Paris")
+
+
+def test_before_the_recorder_keeps_any_volume_there_is_none_to_read():
+    db = FakeDb(error=DatabaseUnavailable('relation "price_volume" does not exist'))
+
+    assert asyncio.run(AdminQueries(db, "Europe/Paris").price_volumes(START, END)) == {}
 
 
 def test_trades_of_a_turbo_are_those_on_its_own_number():
@@ -303,6 +374,7 @@ def test_coverage_is_read_in_time_order():
     lambda queries: queries.price_coverage(START, END),
     lambda queries: queries.price_series(2, START, END, "bid", 100),
     lambda queries: queries.price_trades({"role": "underlying", "indice": "us100"}, START, END),
+    lambda queries: queries.price_runs(START, END, 100),
 ])
 def test_before_the_recorder_ever_ran_its_tables_read_as_empty(read):
     db = FakeDb(error=DatabaseUnavailable('relation "price_instrument" does not exist'))
@@ -314,6 +386,215 @@ def test_no_instrument_is_none_not_an_error():
     queries = AdminQueries(FakeDb(), "Europe/Paris")
 
     assert asyncio.run(queries.price_instrument(7)) is None
+
+
+# ── what Saxo did not quote ──
+
+PARIS = pytz.timezone("Europe/Paris")
+TURBOS = {2: "us100", 3: "us100", 4: "us100"}
+
+
+def run(instrument_id, start, end, *, high=8.0, last_bid=7.5, **figures):
+    """Bars of an instrument without a break over [start, end)."""
+    first, last = int(start.timestamp()), int(end.timestamp()) - 10
+    return Run(
+        instrument_id, first, last, bars=(last - first) // 10 + 1, updates=figures.get("updates", 0),
+        without_ask=figures.get("without_ask", 0), delayed_minutes=figures.get("delayed_minutes", 0),
+        high=high, last_bid=last_bid,
+    )
+
+
+def available(runs, gaps=(), turbos=TURBOS):
+    return availability(runs, turbos, list(gaps), SETTINGS.is_trading_time, PARIS)
+
+
+def stretches_of(found):
+    return [(stretch["start"], stretch["end"], stretch["reason"]) for stretch in found["stretches"]]
+
+
+def gap(start, end, reason=DOWN):
+    return {"start": start, "end": end, "seconds": int((end - start).total_seconds()), "reason": reason}
+
+
+def test_an_instrument_quoted_all_day_has_nothing_missing():
+    found = available([run(2, at(6), at(20), updates=4120)])[2]
+
+    assert (found["bars"], found["quoted_seconds"], found["updates"]) == (5040, 50400, 4120)
+    assert (found["first_bar"], found["last_bar"]) == (at(6), at(19, 59, 50))
+    assert (found["missing_seconds"], found["holes"], found["stretches"], found["issues"]) == (0, 0, [], [])
+    assert (found["stops"], found["knocked_out_at"], found["stretch_count"]) == ([], None, 0)
+
+
+def test_minutes_without_a_bar_between_two_bars_of_a_day_are_a_hole():
+    found = available([run(2, at(6), at(9)), run(2, at(9, 12), at(20))])[2]
+
+    assert stretches_of(found) == [(at(9), at(9, 12), UNQUOTED)]
+    assert (found["missing_seconds"], found["holes"], found["hole_seconds"], found["issues"]) == (720, 1, 720, ["holes"])
+    assert found["bars"] == 5040 - 72
+
+
+def test_a_hole_while_the_recorder_itself_was_not_recording_is_not_the_instruments():
+    runs = [run(2, at(6), at(9)), run(2, at(9, 12), at(20))]
+
+    assert available(runs, [gap(at(9), at(9, 12))])[2]["issues"] == []
+    assert available(runs, [gap(at(8, 50), at(9, 30), SILENT)])[2]["issues"] == []
+
+
+def test_only_the_part_of_a_hole_outside_the_recorders_gap_is_counted():
+    runs = [run(2, at(6), at(9)), run(2, at(9, 12), at(20))]
+
+    found = available(runs, [gap(at(9, 2), at(9, 7))])[2]
+
+    assert stretches_of(found) == [(at(9), at(9, 2), UNQUOTED), (at(9, 7), at(9, 12), UNQUOTED)]
+    assert (found["missing_seconds"], found["holes"]) == (420, 2)
+
+
+def test_a_bar_or_two_missed_is_not_a_hole():
+    # Twenty seconds: where the recorder comes back, an instrument may get its first quote a bar late.
+    runs = [run(2, at(6), at(9)), run(2, at(9, 0, 20), at(20))]
+
+    assert available(runs)[2]["issues"] == []
+    assert available([run(2, at(6), at(9)), run(2, at(9, 0, 30), at(20))])[2]["issues"] == ["holes"]
+
+
+def test_the_night_between_two_days_is_not_a_hole():
+    runs = [run(2, at(6), at(20)), run(2, at(9, day=13), at(20, day=13))]
+
+    found = available(runs)[2]
+
+    # Nor is the morning of the second day: a turbo is only followed from the moment it is found again.
+    assert (found["stretches"], found["issues"]) == ([], [])
+
+
+def test_a_hole_is_only_counted_in_trading_hours():
+    # Quoted before the open at 08:00 in Paris, then again from 08:10.
+    runs = [run(2, at(5, 30), at(5, 40)), run(2, at(6, 10), at(20))]
+
+    assert stretches_of(available(runs)[2]) == [(at(6), at(6, 10), UNQUOTED)]
+
+
+def test_a_turbo_with_no_more_quote_while_the_others_went_on_has_stopped():
+    runs = [run(2, at(6), at(11), high=8.0, last_bid=7.4), run(3, at(6), at(20)), run(4, at(6), at(19))]
+
+    found = available(runs)
+
+    assert stretches_of(found[2]) == [(at(11), at(20), STOPPED)]
+    assert (found[2]["issues"], found[2]["missing_seconds"], found[2]["stops"]) == (["stopped"], 9 * 3600, [at(11)])
+    # A stop is not a hole: nothing is missing between its bars.
+    assert (found[2]["holes"], found[2]["hole_seconds"]) == (0, 0)
+    # The one that went on longest is compared with the one before it: an hour, here.
+    assert found[3]["issues"] == []
+    assert stretches_of(found[4]) == [(at(19), at(20), STOPPED)]
+
+
+def test_a_turbo_whose_price_had_fallen_to_almost_nothing_was_knocked_out_not_left_unquoted():
+    runs = [run(2, at(6), at(11), high=8.0, last_bid=0.3), run(3, at(6), at(20))]
+
+    found = available(runs)[2]
+
+    assert (found["issues"], found["stretches"], found["stops"]) == ([], [], [])
+    assert found["knocked_out_at"] == at(11)
+
+
+def test_the_days_highest_bid_is_what_a_knock_out_is_measured_against():
+    # 8.00 in the morning, then 0.30 at the end of the afternoon's run: knocked out, though that run never saw 8.00.
+    runs = [
+        run(2, at(6), at(9), high=8.0, last_bid=6.0), run(2, at(9, 5), at(11), high=6.0, last_bid=0.3),
+        run(3, at(6), at(20)),
+    ]
+
+    found = available(runs)[2]
+
+    assert found["knocked_out_at"] == at(11)
+    assert stretches_of(found) == [(at(9), at(9, 5), UNQUOTED)]
+
+
+def test_issuers_that_end_the_day_a_few_minutes_apart_have_not_stopped():
+    runs = [run(2, at(6), at(19, 50)), run(3, at(6), at(20))]
+
+    assert available(runs)[2]["issues"] == []
+
+
+def test_a_stop_is_measured_outside_the_recorders_gaps_and_inside_trading_hours():
+    # Ten minutes before the others, then twenty during which nothing at all was recorded.
+    runs = [run(2, at(6), at(11)), run(3, at(6), at(11, 10)), run(3, at(11, 30), at(11, 31))]
+    assert available(runs, [gap(at(11, 10), at(11, 30))])[2]["issues"] == []
+    # The others quoted until 23:00 in Paris: what is after the close does not count.
+    late = [run(2, at(6), at(19, 50)), run(3, at(6), at(21))]
+    assert available(late)[2]["issues"] == []
+
+
+def test_a_stop_cut_in_two_by_the_recorders_own_gap_is_still_one_stop():
+    runs = [run(2, at(6), at(11)), run(3, at(6), at(20))]
+
+    found = available(runs, [gap(at(12), at(12, 2), SILENT)])[2]
+
+    assert stretches_of(found) == [(at(11), at(12), STOPPED), (at(12, 2), at(20), STOPPED)]
+    assert (found["stops"], found["stretch_count"], found["holes"]) == ([at(11)], 2, 0)
+    assert found["missing_seconds"] == 9 * 3600 - 120
+
+
+def test_an_index_is_never_said_to_have_stopped():
+    # Its cash hours end before the turbos': not a fault of the data.
+    runs = [run(1, at(13, 30), at(16)), run(2, at(6), at(20)), run(3, at(6), at(20))]
+
+    assert available(runs)[1]["issues"] == []
+
+
+def test_a_turbo_is_compared_with_those_of_its_own_indice():
+    runs = [run(2, at(6), at(11)), run(3, at(6), at(20))]
+
+    assert available(runs, turbos={2: "germany40", 3: "us100"})[2]["issues"] == []
+
+
+def test_a_turbo_alone_that_day_has_nothing_to_be_compared_with():
+    assert available([run(2, at(6), at(11))])[2]["issues"] == []
+
+
+def test_each_day_of_a_period_is_judged_on_its_own():
+    runs = [
+        run(2, at(6), at(11)), run(2, at(6, day=13), at(20, day=13)),
+        run(3, at(6), at(20)), run(3, at(6, day=13), at(20, day=13)),
+    ]
+
+    found = available(runs)[2]
+
+    assert stretches_of(found) == [(at(11), at(20), STOPPED)]
+    assert found["stops"] == [at(11)]
+
+
+def test_a_turbo_that_stops_on_two_days_has_two_stops():
+    runs = [
+        run(2, at(6), at(11)), run(2, at(6, day=13), at(9, day=13)),
+        run(3, at(6), at(20)), run(3, at(6, day=13), at(20, day=13)),
+    ]
+
+    assert available(runs)[2]["stops"] == [at(11), at(9, day=13)]
+
+
+def test_bars_without_an_ask_and_delayed_quotes_are_counted_not_flagged():
+    runs = [run(2, at(6), at(9), without_ask=12, delayed_minutes=15), run(2, at(9), at(20), without_ask=3)]
+
+    found = available(runs)[2]
+
+    assert (found["without_ask"], found["delayed_minutes"], found["issues"]) == (15, 15, [])
+
+
+def test_only_the_longest_stretches_are_given_in_the_order_they_happened():
+    # A quote that comes and goes every other minute, all day: a minute quoted, a minute not.
+    runs = [run(2, at(6) + timedelta(minutes=2 * n), at(6) + timedelta(minutes=2 * n + 1)) for n in range(60)]
+    # One hole of five minutes among them.
+    runs.append(run(2, at(8, 5), at(20)))
+
+    found = available(sorted(runs, key=lambda item: item.first))[2]
+
+    assert (found["holes"], found["stretch_count"]) == (60, 60)
+    assert len(found["stretches"]) == STRETCHES_KEPT
+    starts = [stretch["start"] for stretch in found["stretches"]]
+    assert starts == sorted(starts)
+    assert (at(7, 59), at(8, 5), UNQUOTED) in stretches_of(found)
+    # What is counted is all of them, not only those given.
+    assert found["missing_seconds"] == found["hole_seconds"] == 59 * 60 + 6 * 60
 
 
 # ── range bars ──

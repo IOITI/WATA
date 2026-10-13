@@ -1,33 +1,53 @@
 import { CircleCheck } from 'lucide-react'
+import { useMemo } from 'react'
 
 import { Panel } from '@/components/Panel'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatDateTime, formatDuration, formatTime } from '@/lib/format'
-import type { PriceGap } from '@/lib/types'
+import type { InstrumentAvailability, PriceGap, PriceStretch } from '@/lib/types'
 
-const REASONS: Record<PriceGap['reason'], string> = {
+const REASONS: Record<PriceGap['reason'] | PriceStretch['reason'], string> = {
   down: 'Recorder not running',
   silent: 'No quote arriving',
+  unquoted: 'No quote for this instrument',
+  stopped: 'No more quote for this instrument',
 }
 
 interface GapsPanelProps {
   /** undefined while loading; null when the period is too long for the gaps to be worked out. */
   gaps: PriceGap[] | null | undefined
+  /**
+   * What is missing from the instrument shown alone: the times Saxo sent no
+   * quote for it while the recorder was receiving others.
+   */
+  own?: InstrumentAvailability
   /** Why the gaps, the trades and the signals could not be read. */
   error?: Error | null
   timeZone: string
 }
 
-/** What is missing from the recording, during trading hours: a backtest must know where its data has holes. */
-export function GapsPanel({ gaps, error, timeZone }: GapsPanelProps) {
+/**
+ * What is missing from the recording, during trading hours: a backtest must
+ * know where its data has holes. The recorder's own gaps, which every
+ * instrument has, and those of the instrument shown.
+ */
+export function GapsPanel({ gaps: recorded, own, error, timeZone }: GapsPanelProps) {
+  const gaps = useMemo<(PriceGap | PriceStretch)[] | null | undefined>(
+    () => recorded && [...recorded, ...(own?.stretches ?? [])].sort((a, b) => a.start.localeCompare(b.start)),
+    [recorded, own],
+  )
   const total = (gaps ?? []).reduce((seconds, gap) => seconds + gap.seconds, 0)
+  // Only the longest stretches of an instrument are given: say so when there are more.
+  const left = own ? own.stretch_count - own.stretches.length : 0
 
   return (
     <Panel
       title="Recording gaps"
       description={
         gaps && gaps.length > 0
-          ? `${gaps.length} in trading hours, ${formatDuration(total * 1000)} in all. No bar exists for these times.`
+          ? `${gaps.length} in trading hours, ${formatDuration(total * 1000)} in all. No bar exists for these times.${
+              left > 0 ? ` ${left} shorter ones of this instrument are not listed.` : ''
+            }`
           : 'Times in trading hours for which no bar exists.'
       }
       bodyClassName="pt-3"
@@ -58,7 +78,7 @@ export function GapsPanel({ gaps, error, timeZone }: GapsPanelProps) {
             </thead>
             <tbody className="divide-y divide-border/40">
               {gaps.map((gap) => (
-                <tr key={gap.start}>
+                <tr key={`${gap.start}|${gap.reason}`}>
                   <td className="py-2.5 pr-4 tabular-nums">{formatDateTime(gap.start, timeZone)}</td>
                   <td className="py-2.5 pr-4 tabular-nums">{formatTime(gap.end, timeZone)}</td>
                   <td className="py-2.5 pr-4 text-right tabular-nums">{formatDuration(gap.seconds * 1000)}</td>

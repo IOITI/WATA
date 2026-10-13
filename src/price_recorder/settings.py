@@ -69,6 +69,8 @@ class RecorderSettings:
     # 0 keeps everything.
     retention_months: int = 0
     alert_after_seconds: int = 300
+    # Also ask Saxo for what it counts as traded on each instrument.
+    record_volume: bool = False
     # When the turbos are expected to quote: outside it, silence is not an incident.
     trading_start_hour: int | None = None
     trading_end_hour: int | None = None
@@ -82,6 +84,9 @@ class RecorderSettings:
         enabled = section.get("enabled", False)
         if not isinstance(enabled, bool):
             raise ValueError(f"Config field '{SECTION}.enabled' must be true or false")
+        record_volume = section.get("record_volume", False)
+        if not isinstance(record_volume, bool):
+            raise ValueError(f"Config field '{SECTION}.record_volume' must be true or false")
 
         market_hours = _rule_config(config_manager, "market_hours")
         closed_dates = _rule_config(config_manager, "market_closed_dates").get("market_closed_dates") or []
@@ -94,6 +99,7 @@ class RecorderSettings:
             instruments=_extra_instruments(section),
             retention_months=_positive_int(section, "retention_months", cls.retention_months, minimum=0),
             alert_after_seconds=_positive_int(section, "alert_after_seconds", cls.alert_after_seconds, minimum=30),
+            record_volume=record_volume,
             trading_start_hour=market_hours.get("trading_start_hour"),
             trading_end_hour=market_hours.get("trading_end_hour"),
             market_closed_dates=frozenset(closed_dates),

@@ -11,12 +11,14 @@ import { Button } from '@/components/ui/button'
 import type { DateRange } from '@/components/ui/calendar'
 import { DateRangePicker } from '@/components/ui/date-picker'
 import { Skeleton } from '@/components/ui/skeleton'
+import { StretchSwitch } from '@/components/ui/stretch-switch'
 import { useSession } from '@/features/auth/auth-context'
 import { api, ApiError } from '@/lib/api'
 import { formatDay, toIsoDay } from '@/lib/format'
 import type { PriceInstrument } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
+import { availabilityOf } from './availability'
 import { RangeBarsTable, TimeBarsTable } from './BarsTable'
 import { ChartAttribution } from './ChartAttribution'
 import {
@@ -41,6 +43,7 @@ import { PriceReadout, RangeReadout } from './PriceReadout'
 import { RangeControl } from './RangeControl'
 import type { BuiltRange } from './RangeControl'
 import { rememberedRange, rememberRange } from './rangeMemory'
+import { rememberedSignals, rememberSignals } from './signalMemory'
 import { parseView, periodPresets, viewParams, withPeriod } from './view'
 import type { PriceView } from './view'
 
@@ -48,6 +51,8 @@ const NO_INSTRUMENTS: PriceInstrument[] = []
 const NO_MARKERS: ChartMarker[] = []
 /** How often a period that includes today is read again. A bar closes every ten seconds; nobody watches that closely. */
 const REFRESH_MS = 30_000
+/** What is missing from each instrument is read from every bar of the period: less often. */
+const AVAILABILITY_REFRESH_MS = 120_000
 /** How long the bars of a past period are kept without asking again: they no longer change. */
 const PAST_FRESH_MS = 10 * 60_000
 const SIDES: { id: Side; label: string }[] = [
@@ -136,7 +141,7 @@ function NothingRecorded({ view }: { view: PriceView }) {
   )
 }
 
-function Legend({ indexName, hasMarkers }: { indexName?: string; hasMarkers: boolean }) {
+function Legend({ indexName, hasTrades, hasSignals }: { indexName?: string; hasTrades: boolean; hasSignals: boolean }) {
   return (
     <ul aria-label="Legend" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
       <li className="flex items-center gap-1.5">
@@ -153,7 +158,7 @@ function Legend({ indexName, hasMarkers }: { indexName?: string; hasMarkers: boo
           {indexName}, lower panel
         </li>
       )}
-      {hasMarkers && (
+      {hasTrades && (
         <>
           <li>
             <span aria-hidden>▲</span> Bought
@@ -161,10 +166,12 @@ function Legend({ indexName, hasMarkers }: { indexName?: string; hasMarkers: boo
           <li>
             <span aria-hidden>▼</span> Sold
           </li>
-          <li>
-            <span aria-hidden>●</span> Signal
-          </li>
         </>
+      )}
+      {hasSignals && (
+        <li>
+          <span aria-hidden>●</span> Signal
+        </li>
       )}
     </ul>
   )
@@ -239,6 +246,16 @@ export function PricesPage() {
     placeholderData: keepPreviousData,
   })
   const instruments = instrumentsQuery.data?.items ?? NO_INSTRUMENTS
+  // Apart from the list, which it must not slow down: the marks arrive a moment after the names.
+  // Nothing is kept from the period before: its holes are not this one's. The server reads every
+  // bar of the period for it, so only today alone is read again while the page stays open.
+  const availabilityQuery = useQuery({
+    queryKey: ['prices', 'availability', view.from, view.to],
+    queryFn: () => api.priceAvailability(period),
+    refetchInterval: live && view.from === view.to ? AVAILABILITY_REFRESH_MS : false,
+    staleTime: live ? AVAILABILITY_REFRESH_MS / 2 : PAST_FRESH_MS,
+  })
+  const availability = availabilityQuery.data
   const selected =
     instruments.find((instrument) => instrument.id === view.instrument) ??
     groupInstruments(instruments).index[0] ??
@@ -318,15 +335,18 @@ export function PricesPage() {
   const stale = fresh === undefined && chart !== undefined
 
   const context = chart && contextQuery.data?.instrument.id === chart.instrument.id ? contextQuery.data : undefined
-  const { markers, indexMarkers } = useMemo(() => {
-    if (!chart || !context) return { markers: NO_MARKERS, indexMarkers: NO_MARKERS }
+  // The signals can be left out of the chart: on a busy day they hide the prices they are about.
+  const [signalsShown, setSignalsShown] = useState(rememberedSignals)
+  const { markers, indexMarkers, hasTrades, hasSignals } = useMemo(() => {
+    if (!chart || !context) return { markers: NO_MARKERS, indexMarkers: NO_MARKERS, hasTrades: false, hasSignals: false }
     // On the turbo's own chart a trade sits at the price paid or received.
     const trades = tradeMarkers(context.trades, chart.instrument.role === 'turbo', chart.locate)
     // Signals are about the index: on its line when it is there.
-    if (chart.indexLocate) return { markers: trades, indexMarkers: signalMarkers(context.signals, chart.indexLocate) }
-    const all = [...trades, ...signalMarkers(context.signals, chart.locate)].sort((a, b) => a.time - b.time)
-    return { markers: all, indexMarkers: NO_MARKERS }
-  }, [chart, context])
+    const signals = signalsShown ? signalMarkers(context.signals, chart.indexLocate ?? chart.locate) : NO_MARKERS
+    const drawn = { hasTrades: trades.length > 0, hasSignals: signals.length > 0 }
+    if (chart.indexLocate) return { markers: trades, indexMarkers: signals, ...drawn }
+    return { markers: [...trades, ...signals].sort((a, b) => a.time - b.time), indexMarkers: NO_MARKERS, ...drawn }
+  }, [chart, context, signalsShown])
 
   const [hoveredTime, setHoveredTime] = useState<number | null>(null)
   const [refits, setRefits] = useState(0)
@@ -385,6 +405,8 @@ export function PricesPage() {
               <InstrumentPicker
                 instruments={instruments}
                 selectedId={selected.id}
+                availability={availability}
+                timeZone={timezone}
                 onSelect={(instrument) =>
                   show({
                     ...view,
@@ -504,8 +526,19 @@ export function PricesPage() {
                             />
                           )}
                           {/* Under the chart on a phone: the chart is what was come for. */}
-                          <div className="max-sm:order-last">
-                            <Legend indexName={chart.indexName} hasMarkers={markers.length + indexMarkers.length > 0} />
+                          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-sm:order-last">
+                            <Legend indexName={chart.indexName} hasTrades={hasTrades} hasSignals={hasSignals} />
+                            {/* With the legend, which says what is drawn, and not in the row of buttons above: one more
+                                there wraps it. Not "Signals" alone: that is the name of a page in the menu. */}
+                            <StretchSwitch
+                              label="Signal marks"
+                              checked={signalsShown}
+                              onChange={(shown) => {
+                                rememberSignals(shown)
+                                setSignalsShown(shown)
+                              }}
+                              className="gap-2"
+                            />
                           </div>
                           <PriceChart
                             // The chart draws on a canvas with the colours it read when it was made:
@@ -550,7 +583,12 @@ export function PricesPage() {
                   </div>
                 </Panel>
 
-                <GapsPanel gaps={context?.gaps} error={contextQuery.error} timeZone={chart?.timeZone ?? timezone} />
+                <GapsPanel
+                  gaps={context?.gaps}
+                  own={chart && availabilityOf(availability, chart.instrument)}
+                  error={contextQuery.error}
+                  timeZone={chart?.timeZone ?? timezone}
+                />
               </div>
             </div>
 

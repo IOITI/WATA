@@ -276,6 +276,20 @@ def test_subscriptions_are_per_asset_type_quotes_only_and_stable():
     assert recording.subscription_definitions() == definitions
 
 
+def test_subscriptions_ask_for_more_than_the_quotes_only_when_told_to():
+    recording = _set()
+    recording.set_underlyings([_underlying()])
+    recording.add_turbos([_turbo(101)], NOW)
+
+    definitions = recording.subscription_definitions(("Quote", "PriceInfoDetails"))
+
+    assert [definition["field_groups"] for definition in definitions] == [["Quote", "PriceInfoDetails"]] * 2
+    # The same subscriptions otherwise: asking for more replaces them, it does not add to them.
+    assert [definition["reference_id"] for definition in definitions] == [
+        definition["reference_id"] for definition in recording.subscription_definitions()
+    ]
+
+
 def test_a_large_set_is_split_into_several_subscriptions():
     recording = _set(max_instruments=1000)
     recording.add_turbos([_turbo(uic) for uic in range(1, SUBSCRIPTION_CHUNK * 2 + 6)], NOW)

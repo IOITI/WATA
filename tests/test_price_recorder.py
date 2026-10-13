@@ -15,8 +15,9 @@ sys.modules.setdefault("asyncpg", asyncpg_stub)
 
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.instruments import TURBO, UNDERLYING, Instrument, RecordingSet
-from src.price_recorder.recorder import PENDING_BUCKETS_LIMIT, PriceRecorder
+from src.price_recorder.recorder import PENDING_BUCKETS_LIMIT, VOLUME_SUBSCRIPTIONS_GRACE_SECONDS, PriceRecorder
 from src.price_recorder.settings import RecorderSettings
+from src.price_recorder.volume import VolumeChanges, read_volume
 
 # Monday 12 Oct 2026, 08:00:00 UTC: 10:00 in Paris, inside trading hours.
 T0 = 1791792000
@@ -42,6 +43,15 @@ def _rows(**bids):
     ]
 
 
+def _traded(volumes, **bids):
+    """The same rows with what Saxo counts as traded that day on some of them: {uic: total}."""
+    rows = _rows(**bids)
+    for row in rows:
+        if row["Uic"] in volumes:
+            row["PriceInfoDetails"] = {"Volume": volumes[row["Uic"]], "LastTraded": 8.4}
+    return rows
+
+
 class Clock:
     def __init__(self, at=T0):
         self.at = float(at)
@@ -58,6 +68,8 @@ class History:
         self.upserts = []
         self.inserts = []
         self.coverage = []
+        self.volumes = []
+        self.volumes_failing: Exception | None = None
         self.recorded_today = []
         self._next_id = 0
         self._ids = {}
@@ -93,6 +105,12 @@ class History:
         self._check()
         self.coverage.append((ts, feed_ok, instruments, bars))
 
+    async def record_volumes(self, volumes):
+        self._check()
+        if self.volumes_failing:
+            raise self.volumes_failing
+        self.volumes.append(list(volumes))
+
     async def instruments_recorded_since(self, since):
         self._check()
         self.since = since
@@ -105,9 +123,22 @@ class History:
 class Stream:
     def __init__(self):
         self.subscriptions = []
+        # A field group Saxo does not take: a subscription that asks for it is never made.
+        self.refused = None
+        self.unreachable = False
 
     async def set_subscriptions(self, definitions):
         self.subscriptions.append(definitions)
+
+    @property
+    def desired_subscription_count(self):
+        return len(self.subscriptions[-1]) if self.subscriptions else 0
+
+    @property
+    def active_subscription_count(self):
+        if self.unreachable or not self.subscriptions:
+            return 0
+        return sum(1 for definition in self.subscriptions[-1] if self.refused not in definition["field_groups"])
 
 
 class Setup:
@@ -137,6 +168,10 @@ class Setup:
     async def quotes(self, at, asset_type=WARRANT, **bids):
         self.clock.at = T0 + at
         await self.recorder.on_quotes({"asset_type": asset_type}, _rows(**bids), "ctx")
+
+    async def traded(self, at, volumes, **bids):
+        self.clock.at = T0 + at
+        await self.recorder.on_quotes({"asset_type": WARRANT}, _traded(volumes, **bids), "ctx")
 
     async def tick(self, at):
         self.clock.at = T0 + at
@@ -563,6 +598,306 @@ def test_the_real_stream_client_feeds_the_recorder_snapshot_then_changes():
     assert by_id[s.history.id_of(102)][2:6] == (9.10, 9.10, 9.10, 9.10) and by_id[s.history.id_of(102)][10] == 0
     assert by_id[s.history.id_of(101)][10] == 0
     assert [entry[1:] for entry in s.history.coverage] == [(True, 2, 2), (True, 1, 2)]
+
+
+# ── volume ──
+
+WITH_VOLUME = replace(SETTINGS, record_volume=True)
+BOTH = ["Quote", "PriceInfoDetails"]
+
+
+@pytest.mark.parametrize("row, volume", [
+    ({"PriceInfoDetails": {"Volume": 1500}}, 1500.0),
+    ({"PriceInfoDetails": {"Volume": 0}}, 0.0),
+    ({"PriceInfoDetails": {"LastTraded": 8.4}}, None),
+    ({"PriceInfoDetails": {"Volume": None}}, None),
+    ({"PriceInfoDetails": {"Volume": "1500"}}, None),
+    ({"PriceInfoDetails": {"Volume": True}}, None),
+    ({"PriceInfoDetails": {"Volume": -1}}, None),
+    ({"PriceInfoDetails": {"Volume": float("nan")}}, None),
+    ({"PriceInfoDetails": None}, None),
+    ({"Quote": {"Bid": 8.4}}, None),
+])
+def test_the_volume_of_a_row_is_read_only_when_saxo_gives_a_number(row, volume):
+    assert read_volume(row) == volume
+
+
+def test_only_the_totals_that_changed_are_handed_over_and_only_once():
+    changes = VolumeChanges()
+    changes.note("a", 100.0, 1.0)
+    changes.note("b", 5.0, 2.0)
+    changes.note("a", 100.0, 3.0)      # the same total again: Saxo repeats it with every quote
+    changes.note("a", 140.0, 4.0)
+
+    assert changes.take() == {"a": (140.0, 4.0), "b": (5.0, 2.0)}
+    assert changes.take() == {}
+    changes.note("b", 5.0, 9.0)
+    assert changes.take() == {}
+
+
+def test_a_total_that_could_not_be_written_waits_unless_a_newer_one_came():
+    changes = VolumeChanges()
+    changes.note("a", 100.0, 1.0)
+    changes.note("b", 5.0, 2.0)
+    taken = changes.take()
+    changes.note("a", 140.0, 4.0)
+
+    changes.give_back(taken)
+
+    assert changes.take() == {"a": (140.0, 4.0), "b": (5.0, 2.0)}
+
+
+def test_an_instrument_found_again_has_a_new_total_even_if_it_is_the_same():
+    changes = VolumeChanges()
+    changes.note("a", 100.0, 1.0)
+    changes.take()
+
+    changes.retain([])
+    changes.note("a", 100.0, 50.0)
+
+    assert changes.take() == {"a": (100.0, 50.0)}
+
+
+def test_the_quotes_alone_are_asked_for_unless_the_volume_is_wanted():
+    async def scenario(s):
+        await s.recorder.refresh()
+
+    plain, wanted = _run(scenario), Setup(settings=WITH_VOLUME)
+    _run((wanted, scenario))
+
+    assert [definition["field_groups"] for definition in plain.stream.subscriptions[-1]] == [["Quote"], ["Quote"]]
+    assert [definition["field_groups"] for definition in wanted.stream.subscriptions[-1]] == [BOTH, BOTH]
+
+
+def test_the_volume_is_written_after_the_bars_when_it_changes_not_with_every_quote():
+    async def scenario(s):
+        await s.recorder.refresh()
+        await s.traded(1, {101: 1500}, u101=8.40, u102=9.10)
+        await s.traded(4, {101: 1500}, u101=8.45, u102=9.10)
+        assert s.history.volumes == []          # the stream callback writes nothing itself
+        await s.tick(10.05)
+        await s.traded(12, {101: 1500}, u101=8.50, u102=9.10)
+        await s.tick(20.05)
+        await s.traded(23, {101: 1740}, u101=8.50, u102=9.10)
+        await s.tick(30.05)
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    # One row when it was first seen, one when it changed; 102 has no volume and gets none.
+    assert s.history.volumes == [[(s.history.id_of(101), _ts(0), 1500.0)], [(s.history.id_of(101), _ts(20), 1740.0)]]
+    assert len(s.history.inserts) == 3
+
+
+def test_no_volume_is_kept_when_it_is_not_asked_for_even_if_saxo_sends_it():
+    async def scenario(s):
+        await s.recorder.refresh()
+        await s.traded(1, {101: 1500}, u101=8.40)
+        await s.tick(10.05)
+
+    assert _run(scenario).history.volumes == []
+
+
+def test_the_total_of_an_instrument_that_is_not_quoting_is_not_taken():
+    async def scenario(s):
+        await s.recorder.refresh()
+        s.clock.at = T0 + 1
+        # A closed market still carries the total of the day before.
+        await s.recorder.on_quotes(
+            {"asset_type": WARRANT},
+            [{"Uic": 101, "Quote": {"Bid": 8.4, "Ask": 8.45, "MarketState": "Closed"}, "PriceInfoDetails": {"Volume": 9000}}],
+            "ctx",
+        )
+        await s.tick(10.05)
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    assert s.history.volumes == []
+
+
+def test_a_volume_that_cannot_be_written_costs_no_bar_and_is_written_later():
+    async def scenario(s):
+        await s.recorder.refresh()
+        s.history.volumes_failing = RuntimeError("relation price_volume does not exist")
+        await s.traded(1, {101: 1500}, u101=8.40)
+        await s.tick(10.05)
+        await s.traded(12, {101: 1500}, u101=8.45)
+        await s.tick(20.05)
+        assert len(s.history.inserts) == 2 and s.history.volumes == []
+        s.history.volumes_failing = None
+        await s.tick(30.05)
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    assert len(s.history.inserts) == 3 and len(s.history.coverage) == 3
+    # Dated when it was received, not when it could be written.
+    assert s.history.volumes == [[(s.history.id_of(101), _ts(0), 1500.0)]]
+    assert s.messages == []
+
+
+def test_the_volume_is_not_tried_while_the_database_does_not_take_the_bars():
+    async def scenario(s):
+        await s.recorder.refresh()
+        s.history.failing = RuntimeError("connection refused")
+        await s.traded(1, {101: 1500}, u101=8.40)
+        await s.tick(10.05)
+        assert s.history.volumes == []
+        s.history.failing = None
+        await s.tick(20.05)
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    assert s.history.volumes == [[(s.history.id_of(101), _ts(0), 1500.0)]]
+
+
+def test_subscriptions_saxo_does_not_take_with_the_volume_are_asked_again_for_the_quotes_alone():
+    async def scenario(s):
+        s.stream.refused = "PriceInfoDetails"
+        await s.recorder.refresh()
+        await s.tick(10.05)
+        await s.tick(VOLUME_SUBSCRIPTIONS_GRACE_SECONDS)
+        assert len(s.stream.subscriptions) == 1 and s.messages == []       # not yet: a reconnection is short too
+        await s.tick(VOLUME_SUBSCRIPTIONS_GRACE_SECONDS + 10.05)
+        await s.quotes(VOLUME_SUBSCRIPTIONS_GRACE_SECONDS + 11, u101=8.40)
+        await s.tick(VOLUME_SUBSCRIPTIONS_GRACE_SECONDS + 20.05)
+        await s.recorder.refresh()
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    assert [definition["field_groups"] for definition in s.stream.subscriptions[0]] == [BOTH, BOTH]
+    assert [definition["field_groups"] for definition in s.stream.subscriptions[1]] == [["Quote"], ["Quote"]]
+    # And it stays so: the next refresh does not ask for the volume again.
+    assert s.stream.subscriptions[2] == s.stream.subscriptions[1]
+    assert len(s.messages) == 1 and "quotes are asked for alone" in s.messages[0]
+    # In trading hours it may have cost quotes: not tried again by itself.
+    assert "until the recorder restarts" in s.messages[0]
+    # The quotes that then arrive are recorded.
+    assert [row[1] for row in s.history.inserts[-1]] == [s.history.id_of(101)]
+
+
+def test_a_stream_that_comes_back_in_time_keeps_the_volume():
+    async def scenario(s):
+        await s.recorder.refresh()
+        s.stream.unreachable = True
+        await s.tick(10.05)
+        await s.tick(60)
+        s.stream.unreachable = False
+        await s.tick(70)
+        # Short again later: the two minutes are counted afresh.
+        s.stream.unreachable = True
+        await s.tick(100)
+        await s.tick(100 + VOLUME_SUBSCRIPTIONS_GRACE_SECONDS - 10)
+        s.stream.unreachable = False
+        await s.tick(100 + VOLUME_SUBSCRIPTIONS_GRACE_SECONDS)
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    assert len(s.stream.subscriptions) == 1
+    assert not any("volume" in message for message in s.messages)
+
+
+def test_given_up_while_the_market_is_closed_the_volume_is_asked_for_again_the_next_day():
+    night = 14 * 3600       # 00:00 in Paris, Tuesday
+
+    async def scenario(s):
+        await s.recorder.refresh()
+        s.stream.unreachable = True
+        await s.tick(night)
+        await s.tick(night + VOLUME_SUBSCRIPTIONS_GRACE_SECONDS + 10)
+        s.stream.unreachable = False
+        await s.recorder.refresh()
+        assert [definition["field_groups"] for definition in s.stream.subscriptions[-1]] == [["Quote"], ["Quote"]]
+        s.day = date(2026, 10, 14)
+        await s.recorder.refresh()
+
+    s = Setup(settings=WITH_VOLUME)
+    _run((s, scenario))
+
+    assert "asked for again tomorrow" in s.messages[-1]
+    assert [definition["field_groups"] for definition in s.stream.subscriptions[-1]] == [BOTH, BOTH]
+
+
+def test_the_subscriptions_are_not_watched_when_the_volume_is_not_asked_for():
+    async def scenario(s):
+        s.stream.unreachable = True
+        await s.recorder.refresh()
+        await s.tick(10.05)
+        await s.tick(VOLUME_SUBSCRIPTIONS_GRACE_SECONDS + 60)
+
+    s = _run(scenario)
+
+    assert len(s.stream.subscriptions) == 1
+    assert not any("volume" in message for message in s.messages)
+
+
+def test_through_the_real_stream_client_a_volume_alone_is_kept_and_changes_no_bar():
+    """
+    Asking for the volume makes Saxo send messages that carry it and nothing
+    else. The client merges them into the row it holds, so the quote is still
+    there to be read; the bar must not count them as changes of the quote,
+    which is what ``updates`` stands for in every backtest.
+    """
+    from unittest.mock import MagicMock
+
+    from src.saxo_streaming.client import SaxoStreamClient
+
+    s = Setup(settings=WITH_VOLUME, underlyings=(), turbos=(101,))
+    quote = {"PriceTypeBid": "Tradable", "PriceTypeAsk": "Tradable", "MarketState": "Open", "DelayedByMinutes": 0}
+
+    async def on_quotes(definition, rows, context_id):
+        await s.recorder.on_quotes(definition, rows, context_id)
+
+    stream = SaxoStreamClient(
+        api_client=MagicMock(), account_key="account", client_key="", on_positions_update=None,
+        on_info_price_subscription_update=on_quotes,
+    )
+    stream._context_id = "ctx-1"
+    stream._sync_api_token = MagicMock()
+    requests = []
+
+    async def request(endpoint):
+        requests.append(endpoint)
+        return {"Snapshot": {"Data": [
+            {"Uic": 101, "AssetType": WARRANT, "Quote": {**quote, "Bid": 8.40, "Ask": 8.45},
+             "PriceInfoDetails": {"Volume": 1500, "LastTraded": 8.42}},
+        ]}}
+
+    stream._request = request
+    s.recorder._stream = stream
+
+    async def scenario():
+        await s.recorder.refresh()
+        s.clock.at = T0 + 1
+        (definition,) = stream._desired_info_price_subscriptions.values()
+        await stream._create_info_price_subscription(definition)
+        reference_id = definition["reference_id"]
+        assert stream.active_subscription_count == stream.desired_subscription_count == 1
+
+        # A trade: the volume alone, twice; then the quote alone.
+        s.clock.at = T0 + 3
+        await stream._handle_info_price_subscription_update(reference_id, [{"Uic": 101, "PriceInfoDetails": {"Volume": 1740}}])
+        s.clock.at = T0 + 5
+        await stream._handle_info_price_subscription_update(reference_id, [{"Uic": 101, "PriceInfoDetails": {"Volume": 1800}}])
+        s.clock.at = T0 + 7
+        await stream._handle_info_price_subscription_update(reference_id, [{"Uic": 101, "Quote": {"Bid": 8.52}}])
+        await s.tick(10.05)
+        await s.tick(20.05)
+
+    asyncio.run(scenario())
+
+    assert requests[0].data["Arguments"]["FieldGroups"] == ["Quote", "PriceInfoDetails"]
+    (bar,), (still,) = s.history.inserts
+    # The first quote and the one change of the bid: two. The two volumes are not changes of the quote.
+    assert bar[2:6] == (8.40, 8.52, 8.40, 8.52) and bar[10] == 2
+    assert still[10] == 0
+    # The last total of the ten seconds, once; nothing more while it does not change.
+    assert s.history.volumes == [[(s.history.id_of(101), _ts(0), 1800.0)]]
+    assert s.messages == []
 
 
 def test_a_refresh_that_fails_is_tried_again_soon_not_five_minutes_later():

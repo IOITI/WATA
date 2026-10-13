@@ -20,7 +20,8 @@ npm run dev         # Vite dev server; /api is proxied to the server above
 `npm run dev:api` needs the Python dependencies of the repository. It prints the password to sign in with,
 keeps everything in memory and in a temporary directory, and never talks to Saxo, PostgreSQL or RabbitMQ.
 Its recorded prices (`dev/fake_prices.py`) are made up from the time asked for: an index, six turbos that
-follow it, two recording gaps a day, and a couple of trades and signals on them.
+follow it, two recording gaps a day, and a couple of trades and signals on them. Three of the turbos are not
+quoted all day, each in its own way (holes, a stop, a knock-out), and three have a volume.
 
 The proxy of `vite.config.ts` passes the `Host` header on as the browser sent it. The admin refuses a change
 whose `Origin` is not its own `Host`; with the header rewritten to the API's address, signing in from the dev

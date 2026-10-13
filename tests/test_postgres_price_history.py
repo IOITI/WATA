@@ -44,7 +44,7 @@ NOW = datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
 
 
 def test_the_price_tables_are_not_part_of_what_every_service_creates():
-    for table in ("price_instrument", "price_bar_10s", "price_recorder_coverage"):
+    for table in ("price_instrument", "price_bar_10s", "price_recorder_coverage", "price_volume"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in PRICE_HISTORY_SCHEMA_SQL
         assert table not in SCHEMA_SQL
     assert "PARTITION BY RANGE (ts)" in PRICE_HISTORY_SCHEMA_SQL
@@ -108,7 +108,8 @@ def test_a_retention_removes_only_whole_months_that_are_old_enough():
     assert db.executed[1] == (
         "DELETE FROM price_recorder_coverage WHERE ts < $1", (datetime(2026, 4, 1, tzinfo=timezone.utc),),
     )
-    assert len(db.executed) == 2
+    assert db.executed[2] == ("DELETE FROM price_volume WHERE ts < $1", (datetime(2026, 4, 1, tzinfo=timezone.utc),))
+    assert len(db.executed) == 3
 
 
 def test_an_instrument_is_recorded_once_and_its_description_kept_when_a_later_sighting_has_less():
@@ -153,6 +154,34 @@ def test_no_statement_for_no_bar():
     db = FakeDb()
 
     asyncio.run(AsyncDbPriceHistoryManager(db).insert_bars([]))
+
+    assert db.executed == []
+
+
+def test_the_volume_is_kept_beside_the_bars_not_in_them():
+    bars = PRICE_HISTORY_SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS price_bar_10s")[1].split(";")[0]
+
+    # A column there would change the bars every backtest is made from.
+    assert "volume" not in bars
+    assert len(AsyncDbPriceHistoryManager.BAR_COLUMNS) == 12
+
+
+def test_the_totals_that_changed_are_written_in_one_statement_the_latest_of_ten_seconds_winning():
+    db = FakeDb()
+
+    asyncio.run(AsyncDbPriceHistoryManager(db).record_volumes([(1, NOW, 1500.0), (2, NOW, 40.0)]))
+
+    assert len(db.executed) == 1
+    statement, args = db.executed[0]
+    assert statement.startswith("INSERT INTO price_volume (instrument_id, ts, day_volume) SELECT * FROM unnest(")
+    assert statement.endswith("ON CONFLICT (instrument_id, ts) DO UPDATE SET day_volume = EXCLUDED.day_volume")
+    assert args == ([1, 2], [NOW, NOW], [1500.0, 40.0])
+
+
+def test_no_statement_for_no_volume():
+    db = FakeDb()
+
+    asyncio.run(AsyncDbPriceHistoryManager(db).record_volumes([]))
 
     assert db.executed == []
 

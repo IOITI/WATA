@@ -1,17 +1,21 @@
-import { ChevronDown, Search } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 import { Panel } from '@/components/Panel'
 import { Input } from '@/components/ui/form'
-import type { PriceInstrument } from '@/lib/types'
+import type { PriceAvailability, PriceInstrument } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
+import { availabilityOf, flagText, instrumentFacts, isFlagged } from './availability'
 import { groupInstruments, instrumentLabel } from './chartData'
 
 interface InstrumentPickerProps {
   instruments: readonly PriceInstrument[]
   selectedId: number | null
   onSelect: (instrument: PriceInstrument) => void
+  /** What is missing from each instrument; undefined while it is being read. */
+  availability?: PriceAvailability
+  timeZone: string
 }
 
 function matches(instrument: PriceInstrument, words: string[]): boolean {
@@ -32,10 +36,14 @@ function matches(instrument: PriceInstrument, words: string[]): boolean {
  * direction and knock-out level. A list beside the chart on a wide screen,
  * so that going from one turbo to the next is one click; folded under the
  * name of the instrument shown on a narrow one.
+ *
+ * A row is two buttons: its name shows the instrument, the arrow beside it
+ * opens what is known of it without leaving the chart being looked at.
  */
-export function InstrumentPicker({ instruments, selectedId, onSelect }: InstrumentPickerProps) {
+export function InstrumentPicker({ instruments, selectedId, onSelect, availability, timeZone }: InstrumentPickerProps) {
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
+  const [detailed, setDetailed] = useState<ReadonlySet<number>>(new Set())
 
   const groups = useMemo(() => {
     const words = search.toLowerCase().split(/\s+/).filter(Boolean)
@@ -50,11 +58,24 @@ export function InstrumentPicker({ instruments, selectedId, onSelect }: Instrume
   // Several indices recorded: a knock-out level alone no longer says which one.
   const severalIndices = new Set(instruments.map((instrument) => instrument.indice)).size > 1
   const selected = instruments.find((instrument) => instrument.id === selectedId)
+  const severalDays = availability !== undefined && availability.from !== availability.to
+  const flagged = instruments.filter((instrument) => isFlagged(availabilityOf(availability, instrument))).length
+
+  const toggleDetails = (id: number) =>
+    setDetailed((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
 
   return (
     <Panel
       title="Instruments"
-      description={`${instruments.length} recorded in this period`}
+      description={
+        flagged > 0
+          ? `${instruments.length} recorded in this period, ${flagged} with missing data`
+          : `${instruments.length} recorded in this period`
+      }
       bodyClassName="pt-3"
       className="xl:self-start"
     >
@@ -91,32 +112,73 @@ export function InstrumentPicker({ instruments, selectedId, onSelect }: Instrume
               <ul>
                 {group.items.map((instrument) => {
                   const isSelected = instrument.id === selectedId
+                  const isDetailed = detailed.has(instrument.id)
+                  const label = instrumentLabel(instrument)
+                  const item = availabilityOf(availability, instrument)
+                  const flag = item && isFlagged(item) ? flagText(item, timeZone, severalDays) : ''
+                  const detailsId = `price-instrument-${instrument.id}`
                   return (
                     <li key={instrument.id}>
-                      <button
-                        type="button"
-                        aria-pressed={isSelected}
-                        onClick={() => {
-                          onSelect(instrument)
-                          setOpen(false)
-                        }}
+                      <div
                         className={cn(
-                          'flex w-full items-baseline justify-between gap-3 rounded-lg px-2 py-1.5 text-left text-sm',
+                          'flex items-stretch rounded-lg text-sm',
                           isSelected ? 'bg-foreground/10 font-medium' : 'hover:bg-foreground/5',
                         )}
                       >
-                        <span className="min-w-0 truncate">{instrumentLabel(instrument)}</span>
-                        {/* On the grey of the selected row the secondary text needs one step more, in light. */}
-                        <span
-                          className={cn(
-                            'shrink-0 text-xs text-muted-foreground',
-                            isSelected && 'text-foreground/75 dark:text-muted-foreground',
-                          )}
+                        <button
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => {
+                            onSelect(instrument)
+                            setOpen(false)
+                          }}
+                          className="flex min-w-0 flex-1 items-baseline justify-between gap-3 rounded-l-lg py-1.5 pl-2 text-left"
                         >
-                          {severalIndices && instrument.indice ? `${instrument.indice} · ` : ''}
-                          {instrument.symbol ?? instrument.uic}
-                        </span>
-                      </button>
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="min-w-0 truncate">{label}</span>
+                            {flag && (
+                              // Told by its shape and by its text, not by its colour alone.
+                              <span className="shrink-0 text-warning" title={flag}>
+                                <AlertTriangle aria-hidden className="size-3.5" />
+                                <span className="sr-only">{flag}</span>
+                              </span>
+                            )}
+                          </span>
+                          {/* On the grey of the selected row the secondary text needs one step more, in light. */}
+                          <span
+                            className={cn(
+                              'shrink-0 text-xs font-normal text-muted-foreground',
+                              isSelected && 'text-foreground/75 dark:text-muted-foreground',
+                            )}
+                          >
+                            {severalIndices && instrument.indice ? `${instrument.indice} · ` : ''}
+                            {instrument.symbol ?? instrument.uic}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          aria-expanded={isDetailed}
+                          aria-controls={detailsId}
+                          aria-label={`Details of ${label}`}
+                          onClick={() => toggleDetails(instrument.id)}
+                          className="flex shrink-0 items-center rounded-r-lg px-2 text-muted-foreground hover:text-foreground"
+                        >
+                          <ChevronDown aria-hidden className={cn('size-3.5 transition-transform', isDetailed && 'rotate-180')} />
+                        </button>
+                      </div>
+                      {isDetailed && (
+                        <dl id={detailsId} className="mb-1.5 space-y-1 px-2 pb-1.5 pt-1 text-xs">
+                          {instrumentFacts(instrument, availability, timeZone).map((fact) => (
+                            <div key={fact.label} className="flex gap-2">
+                              <dt className="w-[5.25rem] shrink-0 text-muted-foreground">{fact.label}</dt>
+                              <dd className={cn('min-w-0 tabular-nums', fact.warning && 'text-warning')}>{fact.value}</dd>
+                            </div>
+                          ))}
+                          {availability === undefined && (
+                            <div className="text-muted-foreground">Reading what was recorded of it…</div>
+                          )}
+                        </dl>
+                      )}
                     </li>
                   )
                 })}
