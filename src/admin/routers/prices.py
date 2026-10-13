@@ -2,7 +2,7 @@
 The prices the recorder kept, for the Prices page: which instruments have
 bars in a period, the bars of one of them (by time, or as range bars), and
 what gives them context (the trades taken on it, the signals received, the
-stretches that were not recorded).
+stretches that were not recorded, the instruments Saxo left without a quote).
 """
 
 from array import array
@@ -13,17 +13,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.admin.auth import require_session
 from src.admin.prices import (
+    AVAILABILITY_MAX_DAYS,
     BAR_COLUMNS,
     GAPS_MAX_DAYS,
     INTERVALS,
     MAX_BUCKETS,
     MAX_PERIOD_DAYS,
+    MAX_RUNS,
     RANGE_COLUMNS,
     RANGE_MAX_DAYS,
     RANGE_MAX_ROWS,
     SIDES,
     TooManyBars,
     auto_range_ticks,
+    availability,
     price_decimals,
     range_bars,
     range_rows,
@@ -70,12 +73,71 @@ async def instruments(
 ):
     ctx = request.app.state.ctx
     first_day, last_day, start, end = _period(ctx, first_day, last_day)
+    items = await ctx.queries.price_instruments(start, end)
+    # Read apart from the instruments: while the recorder keeps no volume, the list is the same without it.
+    volumes = await ctx.queries.price_volumes(start, end) if items else {}
     return {
         "from": first_day,
         "to": last_day,
         "timezone": ctx.settings.timezone,
-        "items": await ctx.queries.price_instruments(start, end),
+        # volume None: Saxo's was not recorded for the instrument in the period.
+        "items": [{**item, "volume": volumes.get(item["id"])} for item in items],
     }
+
+
+def _recording_gaps(settings: RecorderSettings, coverage: list[dict], start: datetime, end: datetime) -> list[dict]:
+    return recording_gaps(
+        coverage,
+        start.astimezone(timezone.utc),
+        end.astimezone(timezone.utc),
+        settings.is_trading_time,
+        datetime.now(timezone.utc),
+    )
+
+
+@router.get("/availability")
+async def availability_of(
+    request: Request,
+    first_day: date | None = Query(None, alias="from"),
+    last_day: date | None = Query(None, alias="to"),
+):
+    """
+    What was recorded of each instrument of the period, and when Saxo left it
+    without a quote while the recorder was receiving others.
+    """
+    ctx = request.app.state.ctx
+    first_day, last_day, start, end = _period(ctx, first_day, last_day)
+    answer = {
+        "from": first_day,
+        "to": last_day,
+        "timezone": ctx.settings.timezone,
+        "max_days": AVAILABILITY_MAX_DAYS,
+        # None: the period is too long for every one of its bars to be read.
+        "items": None,
+    }
+    if (last_day - first_day).days >= AVAILABILITY_MAX_DAYS:
+        return answer
+
+    runs = await ctx.queries.price_runs(start, end, MAX_RUNS + 1)
+    if len(runs) > MAX_RUNS:
+        raise HTTPException(
+            status_code=422,
+            detail="Too many interruptions in the bars of this period to work them out: choose a shorter one",
+        )
+    turbos = {
+        instrument["id"]: instrument.get("indice")
+        for instrument in await ctx.queries.price_instruments(start, end)
+        if instrument.get("role") == "turbo"
+    }
+    settings = RecorderSettings.from_config(ctx.config_manager)
+    answer["items"] = availability(
+        runs,
+        turbos,
+        _recording_gaps(settings, await ctx.queries.price_coverage(start, end), start, end),
+        settings.is_trading_time,
+        pytz.timezone(ctx.settings.timezone),
+    )
+    return answer
 
 
 @router.get("/bars")
@@ -243,13 +305,7 @@ async def context(
     gaps = None
     if (last_day - first_day).days < GAPS_MAX_DAYS:
         settings = RecorderSettings.from_config(ctx.config_manager)
-        gaps = recording_gaps(
-            await ctx.queries.price_coverage(start, end),
-            start.astimezone(timezone.utc),
-            end.astimezone(timezone.utc),
-            settings.is_trading_time,
-            datetime.now(timezone.utc),
-        )
+        gaps = _recording_gaps(settings, await ctx.queries.price_coverage(start, end), start, end)
     return {
         "instrument": instrument,
         "trades": trades,

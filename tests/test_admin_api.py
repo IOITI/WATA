@@ -71,6 +71,7 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/actions/daily-stats"),
     ("POST", "/api/system/saxo/auth-code"),
     ("GET", "/api/prices/instruments"),
+    ("GET", "/api/prices/availability"),
     ("GET", "/api/prices/bars"),
     ("GET", "/api/prices/range-bars"),
     ("GET", "/api/prices/context"),
@@ -144,6 +145,9 @@ class FakeQueries:
         self.price_coverage_rows = []
         # Ten-second bars per instrument, as (epoch seconds, open, high, low, close).
         self.price_series_rows = {}
+        # Stretches of consecutive bars (src.admin.prices.Run), and Saxo's volume per instrument.
+        self.price_run_rows = []
+        self.price_volume_by_instrument = {}
 
     def _check(self):
         if self.failing:
@@ -220,6 +224,14 @@ class FakeQueries:
     async def price_coverage(self, start, end):
         self.calls.append(("price_coverage", start, end))
         return self.price_coverage_rows
+
+    async def price_runs(self, start, end, limit):
+        self.calls.append(("price_runs", start, end, limit))
+        return self.price_run_rows[:limit]
+
+    async def price_volumes(self, start, end):
+        self.calls.append(("price_volumes", start, end))
+        return dict(self.price_volume_by_instrument)
 
     async def price_trades(self, instrument, start, end):
         self.calls.append(("price_trades", instrument["id"], start, end))
@@ -1582,6 +1594,19 @@ def test_instruments_recorded_in_a_period_are_listed_with_what_describes_them(cl
     assert end.astimezone(timezone.utc) == datetime(2026, 10, 13, 22, 0, tzinfo=timezone.utc)
 
 
+def test_each_instrument_comes_with_its_last_quote_and_the_volume_saxo_counted(client, ctx):
+    ctx.queries.price_instruments_recorded = [
+        PRICE_INDEX, {**PRICE_TURBO, "last_t": 1791792000, "last_bid": 8.45, "last_ask": 8.5},
+    ]
+    ctx.queries.price_volume_by_instrument = {2: 15300.0}
+
+    index, turbo = client.get("/api/prices/instruments?from=2026-10-12").json()["items"]
+
+    assert (turbo["last_t"], turbo["last_bid"], turbo["last_ask"], turbo["volume"]) == (1791792000, 8.45, 8.5, 15300.0)
+    # No volume was recorded for the index: none, not zero.
+    assert index["volume"] is None
+
+
 def test_without_a_period_the_prices_are_those_of_today(client, ctx):
     today = datetime.now(pytz.timezone("Europe/Paris")).date().isoformat()
 
@@ -1844,6 +1869,72 @@ def test_gaps_are_not_worked_out_for_a_period_too_long_to_read_line_by_line(clie
 
     assert body["gaps"] is None
     assert not any(call[0] == "price_coverage" for call in ctx.queries.calls)
+
+
+def _run(instrument_id, first, last, **figures):
+    from src.admin.prices import Run
+
+    start, end = (int(datetime(2026, 10, 12, *clock, tzinfo=timezone.utc).timestamp()) for clock in (first, last))
+    return Run(
+        instrument_id, start, end - 10, bars=(end - start) // 10, updates=figures.get("updates", 0), without_ask=0,
+        delayed_minutes=0, high=figures.get("high", 8.0), last_bid=figures.get("last_bid", 7.5),
+    )
+
+
+def test_availability_says_which_instruments_saxo_left_without_a_quote(client, ctx):
+    # Monday 12 Oct 2026, 08:00 to 22:00 in Paris. A second turbo, quoted all day, and the first with twelve
+    # minutes missing in the morning; the recorder itself was down for five of them.
+    ctx.queries.price_instruments_recorded = [PRICE_INDEX, PRICE_TURBO, {**PRICE_TURBO, "id": 3}]
+    ctx.queries.price_run_rows = [
+        _run(1, (13, 30), (20, 0)),
+        _run(2, (6, 0), (9, 0), updates=900), _run(2, (9, 12), (20, 0), updates=3100),
+        _run(3, (6, 0), (20, 0)),
+    ]
+    day = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    ctx.queries.price_coverage_rows = [
+        {"ts": day.replace(hour=6) + timedelta(seconds=10 * n), "feed_ok": True}
+        for n in range(14 * 360)
+        if not 9 * 360 <= n + 6 * 360 < 9 * 360 + 30
+    ]
+
+    with patch_now(datetime(2026, 10, 20, tzinfo=timezone.utc)):
+        response = client.get("/api/prices/availability?from=2026-10-12")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["from"], body["to"], body["timezone"], body["max_days"]) == ("2026-10-12", "2026-10-12", "Europe/Paris", 7)
+    turbo = body["items"]["2"]
+    assert (turbo["bars"], turbo["updates"], turbo["issues"]) == (5040 - 72, 4000, ["holes"])
+    assert (turbo["holes"], turbo["hole_seconds"], turbo["missing_seconds"], turbo["stops"]) == (1, 420, 420, [])
+    assert turbo["stretches"] == [
+        {"start": "2026-10-12T09:05:00+00:00", "end": "2026-10-12T09:12:00+00:00", "seconds": 420, "reason": "unquoted"},
+    ]
+    assert (turbo["first_bar"], turbo["last_bar"]) == ("2026-10-12T06:00:00+00:00", "2026-10-12T19:59:50+00:00")
+    assert body["items"]["3"]["issues"] == []
+    # The index, quoted in its own hours only, is not said to have stopped.
+    assert body["items"]["1"]["issues"] == []
+
+
+def test_availability_is_not_worked_out_for_a_period_too_long_to_read_bar_by_bar(client, ctx):
+    body = client.get("/api/prices/availability?from=2026-10-01&to=2026-10-12").json()
+
+    assert body["items"] is None and body["max_days"] == 7
+    assert not any(call[0] == "price_runs" for call in ctx.queries.calls)
+    # Seven days are.
+    assert client.get("/api/prices/availability?from=2026-10-06&to=2026-10-12").json()["items"] == {}
+
+
+def test_a_period_with_too_many_interruptions_is_refused_rather_than_half_read(client, ctx):
+    from src.admin.prices import MAX_RUNS
+
+    ctx.queries.price_run_rows = [_run(2, (6, 0), (6, 1))] * (MAX_RUNS + 1)
+
+    response = client.get("/api/prices/availability?from=2026-10-12")
+
+    assert response.status_code == 422
+    assert "shorter" in response.json()["detail"]
+    # One more than the limit was asked for: enough to know, without reading the rest.
+    assert next(call[3] for call in ctx.queries.calls if call[0] == "price_runs") == MAX_RUNS + 1
 
 
 def test_prices_read_as_empty_before_anything_was_recorded(client, ctx):

@@ -10,6 +10,11 @@ does not answer, the buckets wait (up to an hour) and are written afterwards.
 What is not recorded cannot be fetched later at this resolution, so a
 recorder that stops must be heard: after a while without a bar during
 trading hours it says so on Telegram, and again when it resumes.
+
+The volume Saxo counts on each instrument is recorded too when asked for
+(``record_volume``), and second to the quotes in everything: it is written
+after the bars and apart from them, and a subscription that asks for it and
+does not get through is asked again for the quotes alone.
 """
 
 import asyncio
@@ -23,8 +28,11 @@ from typing import Awaitable, Callable
 import pytz
 
 from src.price_recorder.bars import BAR_SECONDS, Bar, BarBuilder, ClosedBucket, bucket_start, read_quote
-from src.price_recorder.instruments import Instrument, InstrumentKey, RecordingSet, UNDERLYING
+from src.price_recorder.instruments import (
+    QUOTE_FIELD_GROUPS, UNDERLYING, Instrument, InstrumentKey, RecordingSet,
+)
 from src.price_recorder.settings import RecorderSettings
+from src.price_recorder.volume import VOLUME_FIELD_GROUP, VolumeChanges, read_volume
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,10 @@ RESUMED_WITHIN_SECONDS = 3 * BAR_SECONDS
 REFRESH_RETRY_SECONDS = 30.0
 # Time given to Saxo to send a first quote before an underlying is reported as unquoted.
 FIRST_QUOTE_GRACE_SECONDS = 60.0
+# How long the subscriptions that ask for the volume may stay short of what was
+# asked before the quotes are asked for alone. Saxo closing the stream at each
+# renewal of the token is a second of it.
+VOLUME_SUBSCRIPTIONS_GRACE_SECONDS = 120.0
 
 
 class PriceRecorder:
@@ -79,6 +91,13 @@ class PriceRecorder:
         self._unquoted_reported: set[InstrumentKey] = set()
         self._subscribed_since: dict[InstrumentKey, float] = {}
 
+        self._volumes = VolumeChanges()
+        self._asking_volume = settings.record_volume
+        # Given up while the market was closed: tried again at the change of day.
+        self._volume_retry_next_day = False
+        self._subscriptions_short_since: float | None = None
+        self._volume_write_failing = False
+
     # ── stream ──
 
     async def on_quotes(self, definition: dict, snapshot_rows: list[dict], context_id: str | None = None) -> None:
@@ -90,8 +109,15 @@ class PriceRecorder:
             if uic is None:
                 continue
             key = (int(uic), asset_type)
-            if key in self._set:
-                self._builder.update(key, read_quote(row), at)
+            if key not in self._set:
+                continue
+            quote = read_quote(row)
+            self._builder.update(key, quote, at)
+            # Only of an instrument that is quoting: a total sent with a closed market is the day before's.
+            if self._asking_volume and quote is not None:
+                volume = read_volume(row)
+                if volume is not None:
+                    self._volumes.note(key, volume, at)
 
     # ── instruments ──
 
@@ -120,6 +146,9 @@ class PriceRecorder:
         if self._set.start_new_day_if_needed():
             logger.info("New day: the turbos seen yesterday are no longer recorded.")
             self._unquoted_reported.clear()
+            if self._volume_retry_next_day:
+                logger.info("New day: asking Saxo for the volume again.")
+                self._asking_volume, self._volume_retry_next_day = True, False
 
         try:
             found = await self._discover()
@@ -133,11 +162,12 @@ class PriceRecorder:
 
         keys = self._set.keys()
         self._builder.retain(keys)
+        self._volumes.retain(keys)
         # The ids are kept: bars of an instrument that just left the set may still be waiting to be written.
         at = self._clock()
         self._subscribed_since = {key: self._subscribed_since.get(key, at) for key in keys}
 
-        await self._stream.set_subscriptions(self._set.subscription_definitions())
+        await self._stream.set_subscriptions(self._set.subscription_definitions(self._field_groups()))
         await self._maintain_database(now)
         self._report_unquoted_underlyings(now)
 
@@ -164,6 +194,9 @@ class PriceRecorder:
             if instrument is None:
                 continue
             self._ids[key] = await self._history.upsert_instrument(asdict(instrument), seen_at)
+
+    def _field_groups(self) -> tuple[str, ...]:
+        return (*QUOTE_FIELD_GROUPS, VOLUME_FIELD_GROUP) if self._asking_volume else QUOTE_FIELD_GROUPS
 
     def _report_unquoted_underlyings(self, now: datetime) -> None:
         if not self._settings.is_trading_time(now):
@@ -241,7 +274,79 @@ class PriceRecorder:
                 self._db_failing = False
                 self._last_db_error = None
 
+        await self._write_volumes()
+        await self._watch_volume_subscriptions()
         await self._check_alert()
+
+    # ── volume ──
+
+    async def _write_volumes(self) -> None:
+        """
+        Write the totals that changed. After the bars and apart from them:
+        whatever happens here costs no bar, and nothing is tried while the
+        database does not take the bars either.
+        """
+        if self._db_failing:
+            return
+        changed = self._volumes.take()
+        # An instrument has its id by the time its first bar is written: until then its total waits.
+        ready = {key: change for key, change in changed.items() if key in self._ids}
+        self._volumes.give_back({key: change for key, change in changed.items() if key not in ready})
+        if not ready:
+            return
+        rows = [
+            (self._ids[key], datetime.fromtimestamp(bucket_start(received_at), timezone.utc), total)
+            for key, (total, received_at) in ready.items()
+        ]
+        try:
+            await asyncio.wait_for(self._history.record_volumes(rows), DB_TIMEOUT_SECONDS)
+        except Exception as e:
+            self._volumes.give_back(ready)
+            if not self._volume_write_failing:
+                logger.warning("The volume could not be written, it is kept for later: %s", e)
+            self._volume_write_failing = True
+        else:
+            self._volume_write_failing = False
+
+    async def _watch_volume_subscriptions(self) -> None:
+        """
+        Asking for the volume must not cost the quotes. While it is asked for,
+        the subscriptions Saxo has taken are counted against those asked: short
+        for too long, whatever the reason, the quotes are asked for alone.
+        """
+        if not self._asking_volume:
+            return
+        at = self._clock()
+        try:
+            short = self._stream.active_subscription_count < self._stream.desired_subscription_count
+        except Exception as e:
+            logger.warning("The stream's subscriptions could not be counted: %s", e)
+            return
+        if not short:
+            self._subscriptions_short_since = None
+            return
+        if self._subscriptions_short_since is None:
+            self._subscriptions_short_since = at
+            return
+        if at - self._subscriptions_short_since < VOLUME_SUBSCRIPTIONS_GRACE_SECONDS:
+            return
+
+        self._asking_volume = False
+        self._subscriptions_short_since = None
+        # With the market closed nothing was lost by trying, so it is tried again the
+        # next day. During trading hours it may have cost quotes: not again by itself.
+        self._volume_retry_next_day = not self._settings.is_trading_time(datetime.fromtimestamp(at, timezone.utc))
+        try:
+            await self._stream.set_subscriptions(self._set.subscription_definitions(self._field_groups()))
+        except Exception as e:
+            # The next refresh sets them again, for the quotes alone.
+            logger.error("Could not ask Saxo for the quotes alone: %s", e, exc_info=True)
+        await self._say(
+            "WATA price recorder: Saxo did not take the subscriptions that ask for the volume for "
+            f"{int(VOLUME_SUBSCRIPTIONS_GRACE_SECONDS // 60)} min. The quotes are asked for alone, as before; the volume is "
+            + ("asked for again tomorrow." if self._volume_retry_next_day
+               else "no longer asked for until the recorder restarts (trade.config.price_recorder.record_volume).")
+        )
 
     # ── being heard when it stops ──
 

@@ -941,6 +941,18 @@ CREATE TABLE IF NOT EXISTS price_recorder_coverage (
     instruments  SMALLINT NOT NULL,
     bars         SMALLINT NOT NULL
 );
+
+-- What Saxo counts as traded on an instrument: its total of the day, one row
+-- each time it changes (ts is the start of the ten seconds it changed in).
+-- Only filled when the recorder is asked to (record_volume), and beside the
+-- bars, not in them: a turbo trades a few times a day.
+CREATE TABLE IF NOT EXISTS price_volume (
+    instrument_id  INTEGER NOT NULL,
+    ts             TIMESTAMPTZ NOT NULL,
+    day_volume     DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (instrument_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_price_volume_ts ON price_volume (ts);
 """
 
 PRICE_BAR_TABLE = "price_bar_10s"
@@ -1010,10 +1022,9 @@ class AsyncDbPriceHistoryManager:
                 await self.db.execute(f"DROP TABLE IF EXISTS {row['name']}")
                 dropped.append(row["name"])
         if dropped:
-            await self.db.execute(
-                "DELETE FROM price_recorder_coverage WHERE ts < $1",
-                datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc),
-            )
+            oldest_kept = datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc)
+            await self.db.execute("DELETE FROM price_recorder_coverage WHERE ts < $1", oldest_kept)
+            await self.db.execute("DELETE FROM price_volume WHERE ts < $1", oldest_kept)
         return dropped
 
     async def upsert_instrument(self, instrument: dict, seen_at: datetime) -> int:
@@ -1070,6 +1081,24 @@ class AsyncDbPriceHistoryManager:
             ON CONFLICT (ts) DO NOTHING
             """,
             ts, feed_ok, instruments, bars,
+        )
+
+    async def record_volumes(self, volumes: list[tuple]) -> None:
+        """
+        Write the day's totals that changed, as (instrument_id, ts, day_volume),
+        in one statement. A total that changed again in the same ten seconds
+        replaces the one written for them.
+        """
+        if not volumes:
+            return
+        columns = list(zip(*volumes))
+        await self.db.execute(
+            """
+            INSERT INTO price_volume (instrument_id, ts, day_volume)
+            SELECT * FROM unnest($1::int4[], $2::timestamptz[], $3::float8[])
+            ON CONFLICT (instrument_id, ts) DO UPDATE SET day_volume = EXCLUDED.day_volume
+            """,
+            *[list(column) for column in columns],
         )
 
     async def instruments_recorded_since(self, since: datetime) -> list[dict]:

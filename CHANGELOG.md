@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.17.0 - Prices page: missing quotes, details of an instrument, signal marks, Saxo's volume
+
+**Release date:** 2026-10-13
+
+Some turbos have stretches without a bar although the recorder was running and other turbos were quoted: Saxo sent no quote for them. Nothing on the Prices page said so, and "Recording gaps" answered "Recorded without interruption" under a chart with holes.
+
+- **Turbos with missing quotes are marked in the list of instruments.** Two things are looked for, in trading hours and outside the recorder's own gaps: a hole of 30 seconds or more between two bars of a day, and a turbo with no more bar 15 minutes or more before the other turbos of its indice stopped. A turbo whose bid had fallen under a quarter of its highest of the day is taken for knocked out and is not marked. The count is above the list, and "Recording gaps" lists the times of the instrument shown beside the recorder's own. Worked out for periods of up to 7 days.
+- **An instrument opens in the list** (the arrow beside its name) to its last bid and ask, the volume Saxo counted, its quote changes, its first and last bar, the share of the time it had a quote, its holes, its stop or probable knock-out.
+- **The signals can be left off the chart**: "Signal marks", beside the legend, kept in the browser. The trades stay.
+- **Saxo's volume can be recorded** (`trade.config.price_recorder.record_volume`, off by default): the total of the day of each instrument, in a table of its own (`price_volume`), one row each time it changes. `wataprices probe --uic <a turbo>` says whether Saxo has one for an instrument: to be asked before switching it on. The bars, their table and the code that builds them are unchanged, so no backtest is marked stale.
+
+**Verification status:** the rule, the queries' text, the routes, the recorder and the pages are covered by tests (Python suite and interface suite pass, in an environment built from `requirements.txt`). The new SQL was run on a real PostgreSQL 16 with bars placed by hand (a hole, a stop, a knock-out, a volume over two days, a retention) and on a made-up week of two million bars: 0.25 s for a day, 1.2 s for the week, on a development machine. The page was driven in a browser against the admin application over made-up prices, in both themes and at phone width. **Not run against Saxo or the server's data**: whether Saxo sends a volume for the turbos, and whether it takes a subscription that asks for one, is unknown until `wataprices probe` and then `record_volume` are tried there; the thresholds of the rule (30 seconds, 15 minutes, a quarter) have only seen made-up prices.
+
+---
+
 ## v0.16.0 - Python 3.14
 
 **Release date:** 2026-10-13

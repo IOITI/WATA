@@ -401,7 +401,7 @@ An optional web interface for the operator, served on its own domain or on a por
   An order whose position never shows is cancelled once the trader's patience runs out (`trade.config.general.retry_config.max_retries`, about ten seconds at most); the page then gives Saxo's answer to that cancellation. Orders placed before v0.14.0 have none of these moments.
 - **Report and exits**: the figures of the daily Telegram report with the account balance over time, and an analysis of how trades ended (by exit, hour of entry, holding time, and how much of the best level was given back).
 - **Signals, watchlist and execution timing**: what the Trader did with each signal and why, the turbo that would be bought now, and how long each step of a trade took.
-- **Prices**: the bars kept by the [Price Recorder](#️-price-recorder), as a candlestick chart per instrument, from ten-second bars to one-hour ones or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under each turbo. The times that were not recorded are listed, and the bars can be exported to CSV.
+- **Prices**: the bars kept by the [Price Recorder](#️-price-recorder), as a candlestick chart per instrument, from ten-second bars to one-hour ones or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under each turbo. The times that were not recorded are listed, and the bars can be exported to CSV. The turbos Saxo left without a quote for part of a day are marked in the list, and each instrument opens to its last price, its volume and what was recorded of it.
 - **Backtests**: a strategy replayed on prices of the past with WATA's own rules, asked for and read from the browser: see the [Strategy Backtester](#-strategy-backtester).
 - **Operator actions**: pause and resume new entries, close one position, hand over the Saxo authorization code from the browser (instead of `watasaxoauth` over SSH), send a manual `long` / `short` / close signal, request the daily report. Each one asks for an explicit confirmation, is kept in an audit trail and announced on Telegram.
 - **Configuration**: view `config.json` with secrets masked and edit the trading parameters (`trade.rules`, `trade.config`, `reporting`, `logging.level`). A change is checked with the same validator the services use, the previous file is kept as `config.json.bak-<date>` and its trading parameters can be restored, and it takes effect the next time each service starts (run `watastop` then `watastart`).
@@ -539,10 +539,22 @@ When nothing has been recorded for five minutes during trading hours, a Telegram
 | `refresh_rate_ms` | `1000` | Refresh rate asked of Saxo's stream |
 | `retention_months` | `0` | `0` keeps everything; otherwise whole months older than this are deleted |
 | `alert_after_seconds` | `300` | Silence, during trading hours, after which Telegram is told |
+| `record_volume` | `false` | Also asks Saxo for the volume it counts on each instrument, and keeps it. Check first that Saxo has one: see [Volume](#volume) |
 
 ### Reading the data
 
 With the [Admin Interface](#️-admin-interface), the **Prices** page shows what was recorded: choose a period and an instrument, and it draws the bid or the ask as candles of ten seconds to one hour, with the index under a turbo, WATA's entries and exits at their prices, the signals received, and the list of the times in trading hours for which nothing was recorded. A day fits at ten seconds; a longer period needs longer bars (a chart holds at most 12,000 of them).
+
+**Missing quotes.** A recorder that runs does not mean every turbo was quoted: Saxo sometimes sends no quote for one of them for some minutes, or for the rest of the day, while the others go on. The list of instruments marks those turbos (⚠, with what is missing as its text), counts them above the list, and "Recording gaps" under the chart lists the times of the instrument shown beside the recorder's own.
+
+- A **hole** is time between two bars of the same instrument on the same day, in trading hours and outside the recorder's own gaps, of 30 seconds or more. The night says nothing, nor does the morning before a turbo's first bar: the turbos followed are found again each day.
+- A turbo has **stopped** when its last bar of a day is 15 minutes or more before the last bar of the other turbos of its indice. One whose bid had by then fallen under a quarter of its highest of the day is taken to have been **knocked out**, which is said in its details and not marked: nothing in a quote says "knocked out", the price is the only trace of it.
+- Worked out for periods of up to 7 days (every bar of the period is read), and read again every two minutes for today alone.
+- What it cannot tell: a turbo the recorder dropped because of `max_instruments` looks like one that stopped, and a turbo that got no quote at all has no bar and is not listed.
+
+**More about an instrument.** The arrow beside a name opens what is known of it without leaving the chart shown: its last bid and ask with their time, the volume Saxo counted (see [Volume](#volume)), the number of quote changes, its first and last bar, the share of the time it had a quote, its holes, and whether it stopped or was probably knocked out. Bars without an ask and quotes received late are said when there are some.
+
+**Signal marks.** The switch beside the chart's legend takes the signals (Long, Short, Close, refused…) off the chart; the trades stay. The choice is kept in the browser.
 
 **Range bars.** "Range" beside the bar lengths shows the same prices as range bars: a bar ends when the price has left a range of the size you set, however long that took.
 
@@ -558,6 +570,7 @@ For anything else, three tables in PostgreSQL, created by the recorder:
 - `price_instrument`: one row per instrument, with `uic`, `asset_type`, `role` (`turbo` or `underlying`), `indice`, `direction`, `barrier` (the knock-out level) and `issuer`.
 - `price_bar_10s`: `ts` (start of the ten seconds, UTC), `instrument_id`, `bid_open/high/low/close`, `ask_open/high/low/close`, `updates` and `delayed_minutes`. One partition per month.
 - `price_recorder_coverage`: one row per ten seconds the recorder was running, with `feed_ok`.
+- `price_volume`: `instrument_id`, `ts`, `day_volume`: Saxo's total of the day for an instrument, one row each time it changes. Empty unless `record_volume` is on.
 
 How to read a bar:
 
@@ -565,6 +578,25 @@ How to read a bar:
 - **No row** for an instrument means it was not quotable (market closed, turbo knocked out) or that nothing was being recorded. `price_recorder_coverage` tells the two apart: no row there, or `feed_ok = false`, means the prices of that moment are not known.
 - A bar opens on the quote that was standing when its ten seconds began, not on the first change inside it.
 - `delayed_minutes` is Saxo's own flag: above 0, your account receives that instrument late.
+
+### Volume
+
+The bars hold quotes, not trades: `updates` counts how often a quote moved, which is not a volume. Saxo can also send, with the quotes, the volume it counts on an instrument since the start of the day. **Whether it has one for your turbos is not known in advance** (an index never has one, and turbos quoted by their issuer alone may not). Ask before switching anything on, in trading hours, with the UIC of a turbo (it is in the details of each instrument on the Prices page):
+
+```bash
+wataprices probe --uic 40001234
+#     volume: 15300 today: record_volume would record it
+#     volume: Saxo gives none for it: record_volume would record nothing
+```
+
+If it has one, set `trade.config.price_recorder.record_volume` to `true` and restart the recorder. From then on:
+
+- The total of the day is kept in `price_volume` each time it changes, and the Prices page shows, for a period, the last total of each of its days added up. Nothing exists for the days before: like the prices, it cannot be fetched afterwards.
+- It is kept beside the bars, never in them, and written after them: a volume that cannot be written never holds a bar back.
+- **It must not cost the quotes.** If Saxo does not take the subscriptions that ask for the volume for two minutes, the recorder asks for the quotes alone again and says so on Telegram. With the market closed it tries the volume again the next day; during trading hours it does not until it is restarted.
+- Untested against Saxo, like the rest of the recorder's subscriptions: watch the first minutes after switching it on.
+
+### Taking the data out
 
 To take a period out, with each instrument's description beside its prices:
 

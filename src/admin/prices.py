@@ -1,19 +1,22 @@
 """
 What the Prices page needs beside the bars the recorder wrote: the stretches
-of trading time for which nothing was recorded, and the same prices as range
-bars.
+of trading time for which nothing was recorded, the instruments Saxo left
+without a quote meanwhile, and the same prices as range bars.
 
 A missing bar means two different things: the instrument was not quotable
 (market closed, turbo knocked out), or the recorder was not recording. Only
 the second is a gap, and only the recorder's own coverage can tell them apart.
+There is a third case, between the two: the recorder was receiving quotes and
+Saxo sent none for one instrument, which had one before. That one is read
+from the instrument's own bars (``availability``).
 
 Pure logic: no clock, no I/O.
 """
 
 import math
 from bisect import bisect_right
-from datetime import datetime, timedelta, timezone
-from typing import Callable, Iterable, NamedTuple, Sequence
+from datetime import datetime, timedelta, timezone, tzinfo
+from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
 
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.range_bars import RANGE_PAUSE_SECONDS, BuiltBar, RangeBarBuilder
@@ -47,6 +50,23 @@ MAX_DECIMALS = 5
 
 DOWN = "down"       # no coverage row: the recorder was not running
 SILENT = "silent"   # the recorder was running, no quote was arriving
+
+# One instrument without a quote while the recorder was receiving others.
+UNQUOTED = "unquoted"   # between two of its bars of the same day
+STOPPED = "stopped"     # after its last bar of a day, while other turbos of its indice went on
+# Every bar of the period is read to find them: not worked out for longer periods.
+AVAILABILITY_MAX_DAYS = 7
+# Stretches of consecutive bars read at most: an instrument quoted without a break is one a day.
+MAX_RUNS = 50_000
+# A bar or two missed where the recorder comes back is not an incident.
+MIN_UNQUOTED_SECONDS = 30
+# Issuers do not all stop quoting at the same minute of the evening.
+STOPPED_AFTER_SECONDS = 15 * 60
+# A turbo is worth its distance to the knock-out level: one whose last bid was
+# under this share of its highest of the day was knocked out, or about to be.
+KNOCK_OUT_RESIDUAL = 0.25
+# Stretches given for one instrument, the longest ones.
+STRETCHES_KEPT = 20
 
 _BAR = timedelta(seconds=BAR_SECONDS)
 # Whether a moment is trading time changes on the hour, in the trading timezone.
@@ -129,6 +149,178 @@ def recording_gaps(
         {"start": gap_start, "end": gap_end, "seconds": int((gap_end - gap_start).total_seconds()), "reason": reason}
         for gap_start, gap_end, reason in _merged(gaps)
     ]
+
+
+# ── what Saxo did not quote ──
+
+
+class Run(NamedTuple):
+    """Bars of one instrument that follow one another without a break, ten seconds apart."""
+
+    instrument_id: int
+    # Start of its first and of its last bar, epoch seconds.
+    first: int
+    last: int
+    bars: int
+    # Quote changes received over the run.
+    updates: int
+    without_ask: int
+    delayed_minutes: int
+    # Highest bid of the run, and the bid it ended on.
+    high: float | None
+    last_bid: float | None
+
+
+RUN_COLUMNS = Run._fields
+
+
+def _moment(seconds: int) -> datetime:
+    return datetime.fromtimestamp(seconds, timezone.utc)
+
+
+def _outside(
+    start: datetime, end: datetime, gaps: Sequence[tuple[datetime, datetime]], gap_ends: Sequence[datetime],
+) -> list[tuple[datetime, datetime]]:
+    """The parts of [start, end) that are in none of ``gaps`` (in time order, not overlapping)."""
+    kept = []
+    cursor = start
+    for gap_start, gap_end in gaps[bisect_right(gap_ends, start):]:
+        if gap_start >= end:
+            break
+        if gap_start > cursor:
+            kept.append((cursor, gap_start))
+        cursor = max(cursor, gap_end)
+    if cursor < end:
+        kept.append((cursor, end))
+    return kept
+
+
+def _stretches(parts: Iterable[tuple[datetime, datetime]], reason: str) -> list[dict]:
+    return [
+        {"start": start, "end": end, "seconds": int((end - start).total_seconds()), "reason": reason}
+        for start, end in parts
+    ]
+
+
+def availability(
+    runs: Iterable[Run],
+    turbos: Mapping[int, str | None],
+    gaps: Sequence[dict],
+    is_trading_time: Callable[[datetime], bool],
+    trading_timezone: tzinfo,
+) -> dict[int, dict]:
+    """
+    What was recorded of each instrument, and the times Saxo left it without a
+    quote while the recorder was receiving others. ``runs`` are the stretches
+    of consecutive bars of the period, by instrument and in time order;
+    ``turbos`` gives the indice of each instrument that is a turbo; ``gaps``
+    are the recorder's own (``recording_gaps``).
+
+    Two things are looked for, both only in trading time and outside the
+    recorder's gaps:
+
+    - a hole between two bars of the same day of the trading timezone. The
+      night says nothing, and nor does the morning before a turbo's first
+      bar: the turbos followed are found again each day;
+    - a turbo that got no quote for the rest of a day while another of its
+      indice still did. One whose bid had fallen to a fraction of its highest
+      of the day is taken to have been knocked out, which is not a fault of
+      the data. Nothing in a quote says "knocked out": the price is the only
+      trace of it.
+    """
+    gap_spans = [(gap["start"], gap["end"]) for gap in gaps]
+    gap_ends = [end for _, end in gap_spans]
+
+    def day_of(seconds: int):
+        return datetime.fromtimestamp(seconds, trading_timezone).date()
+
+    def unquoted(start: int, end: int) -> list[tuple[datetime, datetime]]:
+        """The parts of [start, end) in which the instrument could have been quoted."""
+        if end <= start:
+            return []
+        parts = []
+        for part_start, part_end, _ in _within_trading_time(_moment(start), _moment(end), UNQUOTED, is_trading_time):
+            parts += _outside(part_start, part_end, gap_spans, gap_ends)
+        return parts
+
+    by_instrument: dict[int, list[Run]] = {}
+    for run in runs:
+        by_instrument.setdefault(run.instrument_id, []).append(run)
+
+    # The last bar of each turbo on each day, and the two latest of them per indice:
+    # a turbo is compared with the others, so the latest one with the one before it.
+    last_of_day: dict[int, dict] = {}
+    latest: dict[tuple, list[tuple[int, int]]] = {}
+    for instrument_id, own in by_instrument.items():
+        if instrument_id not in turbos:
+            continue
+        days = last_of_day[instrument_id] = {}
+        for run in own:
+            days[day_of(run.last)] = run
+        for day, run in days.items():
+            best = latest.setdefault((turbos[instrument_id], day), [])
+            best.append((run.last, instrument_id))
+            best.sort(reverse=True)
+            del best[2:]
+
+    found: dict[int, dict] = {}
+    for instrument_id, own in by_instrument.items():
+        stretches: list[dict] = []
+        for before, after in zip(own, own[1:]):
+            if day_of(before.last) != day_of(after.first):
+                continue
+            stretches += _stretches(
+                [
+                    (start, end) for start, end in unquoted(before.last + BAR_SECONDS, after.first)
+                    if (end - start).total_seconds() >= MIN_UNQUOTED_SECONDS
+                ],
+                UNQUOTED,
+            )
+
+        holes = len(stretches)
+        hole_seconds = sum(stretch["seconds"] for stretch in stretches)
+
+        stops: list[datetime] = []
+        knocked_out_at = None
+        for day, run in last_of_day.get(instrument_id, {}).items():
+            others = [last for last, other in latest[(turbos[instrument_id], day)] if other != instrument_id]
+            if not others:
+                continue
+            parts = unquoted(run.last + BAR_SECONDS, others[0] + BAR_SECONDS)
+            if sum((end - start).total_seconds() for start, end in parts) < STOPPED_AFTER_SECONDS:
+                continue
+            highs = [other.high for other in own if day_of(other.last) == day and other.high is not None]
+            if run.last_bid is not None and highs and run.last_bid < KNOCK_OUT_RESIDUAL * max(highs):
+                knocked_out_at = _moment(run.last + BAR_SECONDS)
+            else:
+                # One stop, in as many stretches as the recorder's own gaps cut it into.
+                stops.append(_moment(run.last + BAR_SECONDS))
+                stretches += _stretches(parts, STOPPED)
+
+        bars = sum(run.bars for run in own)
+        longest = sorted(stretches, key=lambda stretch: stretch["seconds"], reverse=True)[:STRETCHES_KEPT]
+        found[instrument_id] = {
+            "bars": bars,
+            "updates": sum(run.updates for run in own),
+            "first_bar": _moment(own[0].first),
+            "last_bar": _moment(own[-1].last),
+            "quoted_seconds": bars * BAR_SECONDS,
+            # All the time it had no quote and could have had one: its holes, and what followed a stop.
+            "missing_seconds": sum(stretch["seconds"] for stretch in stretches),
+            "holes": holes,
+            "hole_seconds": hole_seconds,
+            # When it stopped, for each day it did.
+            "stops": sorted(stops),
+            # The longest stretches of both kinds, in the order they happened, of ``stretch_count`` in all.
+            "stretches": sorted(longest, key=lambda stretch: stretch["start"]),
+            "stretch_count": len(stretches),
+            "knocked_out_at": knocked_out_at,
+            "without_ask": sum(run.without_ask for run in own),
+            "delayed_minutes": max(run.delayed_minutes for run in own),
+            # What flags the instrument on the page.
+            "issues": [issue for issue, present in (("holes", holes), ("stopped", stops)) if present],
+        }
+    return found
 
 
 # ── range bars ──

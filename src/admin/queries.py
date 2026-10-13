@@ -17,6 +17,7 @@ from src.admin.analysis import summarise_exits
 from src.admin.errors import DatabaseUnavailable
 from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
 from src.admin.prices import INTERVALS as PRICE_INTERVALS
+from src.admin.prices import Run as PriceRun
 from src.database.postgres import AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
 
@@ -161,6 +162,11 @@ def json_safe(value):
     if isinstance(value, (list, tuple)):
         return [json_safe(item) for item in value]
     return value
+
+
+def _finite(value):
+    """``value``, or None where it is a float that is not a number."""
+    return None if isinstance(value, float) and not math.isfinite(value) else value
 
 
 def _is_missing_table(error: DatabaseUnavailable) -> bool:
@@ -324,23 +330,92 @@ class AdminQueries:
 
     async def price_instruments(self, start: datetime, end: datetime) -> list[dict]:
         """
-        The instruments that have a bar in [start, end): the index first, then
-        the turbos by direction and knock-out level. The bars are reached
-        through their primary key, one probe per instrument, never scanned.
+        The instruments that have a bar in [start, end), each with the quote of
+        its last bar there (``last_t`` is the start of that bar): the index
+        first, then the turbos by direction and knock-out level. The bars are
+        reached through their primary key, one probe per instrument, never
+        scanned.
         """
         rows = await self._fetch_optional(
             f"""
-            SELECT {self._PRICE_INSTRUMENT_COLUMNS}
+            SELECT {self._PRICE_INSTRUMENT_COLUMNS},
+                   extract(epoch FROM latest.ts)::bigint AS last_t,
+                   latest.bid_close AS last_bid, latest.ask_close AS last_ask
             FROM price_instrument i
+            CROSS JOIN LATERAL (
+                SELECT b.ts, b.bid_close, b.ask_close FROM price_bar_10s b
+                WHERE b.instrument_id = i.id AND b.ts >= $1 AND b.ts < $2
+                ORDER BY b.ts DESC
+                LIMIT 1
+            ) latest
             WHERE i.last_seen_at >= $1 AND i.first_seen_at < $2
-              AND EXISTS (
-                  SELECT 1 FROM price_bar_10s b WHERE b.instrument_id = i.id AND b.ts >= $1 AND b.ts < $2
-              )
             ORDER BY (i.role <> 'underlying'), i.indice, i.direction, i.barrier, i.id
             """,
             start, end,
         )
         return [_clean_row(row) for row in rows]
+
+    async def price_runs(self, start: datetime, end: datetime, limit: int) -> list[PriceRun]:
+        """
+        The bars of [start, end) as stretches that follow one another without
+        a break, by instrument and in time order: where one ends and the next
+        begins, the instrument had no bar. Every bar of the period is read,
+        once: bars ten seconds apart all have the same "time less ten seconds
+        per bar before it", which is what they are grouped by. The bid a
+        stretch ended on is then read by its key.
+        """
+        rows = await self._fetch_optional(
+            f"""
+            WITH runs AS (
+                SELECT instrument_id, min(ts) AS first_ts, max(ts) AS last_ts,
+                       count(*)::int AS bars,
+                       sum(updates)::bigint AS updates,
+                       (count(*) FILTER (WHERE ask_close IS NULL))::int AS without_ask,
+                       max(delayed_minutes)::int AS delayed_minutes,
+                       max(bid_high) AS high
+                FROM (
+                    SELECT instrument_id, ts, updates, ask_close, delayed_minutes, bid_high,
+                           extract(epoch FROM ts)::bigint
+                               - {PRICE_INTERVALS[0]} * row_number() OVER (PARTITION BY instrument_id ORDER BY ts) AS run
+                    FROM price_bar_10s
+                    WHERE ts >= $1 AND ts < $2
+                ) bars
+                GROUP BY instrument_id, run
+            )
+            SELECT runs.instrument_id,
+                   extract(epoch FROM runs.first_ts)::bigint AS first,
+                   extract(epoch FROM runs.last_ts)::bigint AS last,
+                   runs.bars, runs.updates, runs.without_ask, runs.delayed_minutes, runs.high,
+                   ending.bid_close AS last_bid
+            FROM runs
+            JOIN price_bar_10s ending ON ending.instrument_id = runs.instrument_id AND ending.ts = runs.last_ts
+            ORDER BY runs.instrument_id, runs.first_ts
+            LIMIT $3
+            """,
+            start, end, limit,
+        )
+        return [PriceRun(*(_finite(row[column]) for column in PriceRun._fields)) for row in rows]
+
+    async def price_volumes(self, start: datetime, end: datetime) -> dict[int, float]:
+        """
+        What Saxo counted as traded on each instrument in [start, end): its
+        total of each day as last received, the days added up. Empty until the
+        recorder is asked to keep it (``record_volume``).
+        """
+        rows = await self._fetch_optional(
+            """
+            SELECT instrument_id, sum(volume) AS volume
+            FROM (
+                SELECT instrument_id, (array_agg(day_volume ORDER BY ts DESC))[1] AS volume
+                FROM price_volume
+                WHERE ts >= $1 AND ts < $2
+                GROUP BY instrument_id, (ts AT TIME ZONE $3)::date
+            ) days
+            GROUP BY instrument_id
+            """,
+            start, end, self.timezone,
+        )
+        return {row["instrument_id"]: row["volume"] for row in rows if _finite(row["volume"]) is not None}
 
     async def price_instrument(self, instrument_id: int) -> dict | None:
         rows = await self._fetch_optional(

@@ -25,6 +25,8 @@ DIRECTIONS = ("long", "short")
 # Instruments per streaming subscription. Saxo's limit is not known from here
 # (to be confirmed in simulation); the watchlist manager runs with 20.
 SUBSCRIPTION_CHUNK = 100
+# What a subscription asks Saxo for: the quotes, which are what is recorded.
+QUOTE_FIELD_GROUPS = ("Quote",)
 # Preferred when an underlying UIC exists under several asset types.
 UNDERLYING_ASSET_TYPES = ("StockIndex", "CfdOnIndex")
 
@@ -260,11 +262,12 @@ class RecordingSet:
     def get(self, key: InstrumentKey) -> Instrument | None:
         return self._fixed.get(key) or self._turbos.get(key)
 
-    def subscription_definitions(self) -> list[dict]:
+    def subscription_definitions(self, field_groups: tuple[str, ...] = QUOTE_FIELD_GROUPS) -> list[dict]:
         """
         The streaming subscriptions that cover the set: per asset type, in chunks,
-        quotes only. UICs are sorted so that an unchanged set gives the same
-        definitions, and the stream client leaves its subscriptions alone.
+        quotes only unless more is asked for. UICs are sorted so that an unchanged
+        set gives the same definitions, and the stream client leaves its
+        subscriptions alone.
         """
         by_asset_type: dict[str, list[int]] = {}
         for uic, asset_type in self.keys():
@@ -277,6 +280,6 @@ class RecordingSet:
                     "reference_id": f"pr-{asset_type}-{chunk}",
                     "asset_type": asset_type,
                     "uics": uics[start:start + SUBSCRIPTION_CHUNK],
-                    "field_groups": ["Quote"],
+                    "field_groups": list(field_groups),
                 })
         return definitions

@@ -483,6 +483,15 @@ export interface PriceInstrument {
   /** Knock-out level of a turbo. */
   barrier: number | null
   issuer: string | null
+  /**
+   * In the list of a period only: the quote of its last bar there (`last_t` is
+   * the start of that bar, epoch seconds), and what Saxo counted as traded in
+   * the period (null: no volume was recorded for it).
+   */
+  last_t?: number | null
+  last_bid?: number | null
+  last_ask?: number | null
+  volume?: number | null
 }
 
 export interface PriceInstruments {
@@ -567,6 +576,54 @@ export interface PriceGap {
   seconds: number
   /** "down": the recorder was not running. "silent": it was, and no quote was arriving. */
   reason: 'down' | 'silent'
+}
+
+/** A time one instrument had no quote while the recorder was receiving others. */
+export interface PriceStretch {
+  start: string
+  end: string
+  seconds: number
+  /**
+   * "unquoted": between two of its bars of the same day. "stopped": after its
+   * last bar of a day, while other turbos of its indice were still quoted.
+   */
+  reason: 'unquoted' | 'stopped'
+}
+
+/** What was recorded of one instrument in a period, and what is missing from it. */
+export interface InstrumentAvailability {
+  bars: number
+  /** Quote changes received over the period. */
+  updates: number
+  first_bar: string
+  last_bar: string
+  quoted_seconds: number
+  /** All the time it had no quote and could have had one: its holes, and what followed a stop. */
+  missing_seconds: number
+  /** Holes between two of its bars of a day: how many, and how long in all. */
+  holes: number
+  hole_seconds: number
+  /** When it stopped being quoted for the rest of a day, for each day it did. */
+  stops: string[]
+  /** The longest twenty stretches of both kinds, in time order, of `stretch_count` in all. */
+  stretches: PriceStretch[]
+  stretch_count: number
+  /** When a turbo stopped being quoted with a bid fallen to almost nothing: taken for a knock-out, not a fault. */
+  knocked_out_at: string | null
+  without_ask: number
+  delayed_minutes: number
+  /** What flags the instrument: holes in its day, or no more quote for the rest of one. */
+  issues: ('holes' | 'stopped')[]
+}
+
+export interface PriceAvailability {
+  from: string
+  to: string
+  timezone: string
+  /** The longest period it is worked out for, in days. */
+  max_days: number
+  /** By instrument id; null when the period is longer than `max_days`. */
+  items: Record<string, InstrumentAvailability> | null
 }
 
 export interface PriceContext {

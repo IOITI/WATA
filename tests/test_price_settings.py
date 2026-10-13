@@ -30,6 +30,7 @@ def test_the_recorder_is_off_and_keeps_everything_unless_told_otherwise():
     assert settings.instruments == ()
     assert settings.retention_months == 0
     assert settings.alert_after_seconds == 300
+    assert settings.record_volume is False
     assert settings.timezone == "Europe/Paris"
 
 
@@ -42,16 +43,19 @@ def test_settings_follow_the_section():
         "instruments": [{"label": "us100", "uic": 4913, "asset_type": "CfdOnIndex"}],
         "retention_months": 18,
         "alert_after_seconds": 600,
+        "record_volume": True,
     }))
 
     assert settings.enabled is True
     assert (settings.refresh_interval_seconds, settings.max_instruments, settings.refresh_rate_ms) == (120, 80, 500)
     assert settings.instruments == (ExtraInstrument("us100", 4913, "CfdOnIndex"),)
     assert (settings.retention_months, settings.alert_after_seconds) == (18, 600)
+    assert settings.record_volume is True
 
 
 @pytest.mark.parametrize("section, field", [
     ({"enabled": "yes"}, "enabled"),
+    ({"record_volume": 1}, "record_volume"),
     ({"refresh_interval_seconds": 5}, "refresh_interval_seconds"),
     ({"refresh_interval_seconds": "300"}, "refresh_interval_seconds"),
     ({"max_instruments": 0}, "max_instruments"),

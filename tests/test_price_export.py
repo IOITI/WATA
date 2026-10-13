@@ -124,6 +124,9 @@ class Api:
         self.search = search or []
         self.quotes = quotes or {}
         self.requests = []
+        # What Saxo sends beside the quote when asked (None: nothing), or the error it answers the asking with.
+        self.details_sent = None
+        self.volume_refused = None
 
     async def request(self, endpoint):
         self.requests.append(endpoint)
@@ -135,7 +138,14 @@ class Api:
         quote = self.quotes.get((int(endpoint.params["Uics"]), endpoint.params["AssetType"]))
         if isinstance(quote, Exception):
             raise quote
-        return {"Data": [] if quote is None else [{"Uic": int(endpoint.params["Uics"]), "Quote": quote}]}
+        if "PriceInfoDetails" in endpoint.params["FieldGroups"] and self.volume_refused:
+            raise self.volume_refused
+        if quote is None:
+            return {"Data": []}
+        row = {"Uic": int(endpoint.params["Uics"]), "Quote": quote}
+        if "PriceInfoDetails" in endpoint.params["FieldGroups"] and self.details_sent is not None:
+            row["PriceInfoDetails"] = self.details_sent
+        return {"Data": [row]}
 
 
 INDEX = {"Uic": 1909050, "AssetType": "StockIndex", "Symbol": "NDX.I", "Description": "NASDAQ 100"}
@@ -155,7 +165,7 @@ def test_a_uic_is_tried_under_each_of_its_asset_types():
     assert "no access" in index["why"]
     assert (cfd["asset_type"], cfd["recordable"], cfd["why"]) == ("CfdOnIndex", True, "recordable, in real time")
     assert api.requests[0].params == {"Uics": "1909050", "AccountKey": "account"}
-    assert api.requests[1].params["FieldGroups"] == "Quote"
+    assert api.requests[1].params["FieldGroups"] == "Quote,PriceInfoDetails"
 
 
 def test_a_search_lists_what_saxo_finds_with_whether_each_is_priced():
@@ -184,6 +194,45 @@ def test_what_cannot_be_recorded_says_why(quote, reason):
     (result,) = asyncio.run(probe.probe(api, "account", uic=1909050))
 
     assert result["recordable"] is False and reason in result["why"]
+
+
+TURBO = {"Uic": 40001234, "AssetType": "WarrantOpenEndKnockOut", "Symbol": "SG-NDX-L1", "Description": "TURBO LONG"}
+TURBO_QUOTE = {"Bid": 8.4, "Ask": 8.45, "PriceTypeBid": "Tradable", "PriceTypeAsk": "Tradable", "MarketState": "Open"}
+
+
+def test_a_turbo_is_asked_for_its_volume_too():
+    api = Api(details=[TURBO], quotes={(40001234, "WarrantOpenEndKnockOut"): TURBO_QUOTE})
+    api.details_sent = {"Volume": 15300.0, "LastTraded": 8.42}
+
+    (result,) = asyncio.run(probe.probe(api, "account", uic=40001234))
+
+    assert (result["recordable"], result["volume"]) == (True, 15300.0)
+    assert result["about_volume"] == "15300 today: record_volume would record it"
+    text = probe.report([result])
+    assert "    volume: 15300 today" in text
+    # A turbo is never what stands for an index: no entry to copy into the configuration.
+    assert "trade.config.price_recorder.instruments" not in text
+
+
+def test_an_instrument_saxo_counts_no_volume_for_says_so():
+    api = Api(details=[TURBO], quotes={(40001234, "WarrantOpenEndKnockOut"): TURBO_QUOTE})
+    api.details_sent = {"LastTraded": 8.42}
+
+    (result,) = asyncio.run(probe.probe(api, "account", uic=40001234))
+
+    assert result["volume"] is None and result["recordable"] is True
+    assert "Saxo gives none for it" in result["about_volume"]
+
+
+def test_a_request_refused_because_of_the_volume_still_says_whether_the_price_is_recordable():
+    api = Api(details=[TURBO], quotes={(40001234, "WarrantOpenEndKnockOut"): TURBO_QUOTE})
+    api.volume_refused = RuntimeError("400 Illegal FieldGroups")
+
+    (result,) = asyncio.run(probe.probe(api, "account", uic=40001234))
+
+    assert (result["recordable"], result["why"]) == (True, "recordable, in real time")
+    assert "Saxo refuses a request that asks for it (400 Illegal FieldGroups): leave record_volume off" == result["about_volume"]
+    assert [request.params["FieldGroups"] for request in api.requests[1:]] == ["Quote,PriceInfoDetails", "Quote"]
 
 
 def test_the_report_ends_with_the_entry_to_put_in_the_configuration():

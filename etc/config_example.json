@@ -224,7 +224,8 @@
         "refresh_rate_ms": 1000,
         "instruments": [],
         "retention_months": 0,
-        "alert_after_seconds": 300
+        "alert_after_seconds": 300,
+        "record_volume": false
       },
       "watchlist_manager": {
         "enabled": true,

@@ -7,6 +7,10 @@ naming it in ``trade.config.price_recorder.instruments``.
 
 The underlying of the turbos is an index, and an index is not always quoted
 to an account: this shows which instrument is, and how delayed its price is.
+
+It also says whether Saxo counts a volume for the instrument, which is what
+``trade.config.price_recorder.record_volume`` would record. Ask it of a turbo
+(its UIC is on the admin's Prices page) before switching that on.
 """
 
 import argparse
@@ -19,9 +23,12 @@ import src.saxo_openapi.endpoints.referencedata as rd
 import src.saxo_openapi.endpoints.trading as tr
 
 from src.price_recorder.bars import read_quote
+from src.price_recorder.volume import VOLUME_FIELD_GROUP, read_volume
 
 DEFAULT_ASSET_TYPES = "StockIndex,CfdOnIndex"
 SEARCH_LIMIT = 20
+# The turbos themselves (the trader's own search): never what stands for an index.
+TURBO_ASSET_TYPES = frozenset({"WarrantKnockOut", "WarrantOpenEndKnockOut", "MiniFuture", "WarrantDoubleKnockOut"})
 
 
 async def find_candidates(api_client, account_key: str, *, uic: int | None, keywords: str | None, asset_types: str) -> list[dict]:
@@ -49,25 +56,42 @@ async def find_candidates(api_client, account_key: str, *, uic: int | None, keyw
 
 async def quote_of(api_client, account_key: str, candidate: dict) -> dict:
     """What Saxo answers for one instrument, and whether the recorder could record it."""
-    try:
-        response = await api_client.request(
+
+    async def ask(field_groups: str):
+        return await api_client.request(
             tr.infoprices.InfoPrices(
                 params={
                     "AccountKey": account_key,
                     "Uics": str(candidate["uic"]),
                     "AssetType": candidate["asset_type"],
-                    "FieldGroups": "Quote",
+                    "FieldGroups": field_groups,
                 }
             )
         )
-    except Exception as e:
-        return {**candidate, "recordable": False, "why": f"request refused: {e}"}
+
+    volume_refused = None
+    try:
+        response = await ask(f"Quote,{VOLUME_FIELD_GROUP}")
+    except Exception as with_volume:
+        # It may be the volume that Saxo refuses: the quote is what the recorder cannot do without.
+        try:
+            response = await ask("Quote")
+        except Exception as e:
+            return {**candidate, "recordable": False, "why": f"request refused: {e}"}
+        volume_refused = str(with_volume)
 
     rows = (response or {}).get("Data") or []
     if not rows:
         return {**candidate, "recordable": False, "why": "Saxo returned no price row"}
     quote = rows[0].get("Quote") or {}
     read = read_quote(rows[0])
+    volume = read_volume(rows[0])
+    if volume_refused is not None:
+        about_volume = f"Saxo refuses a request that asks for it ({volume_refused}): leave record_volume off"
+    elif volume is None:
+        about_volume = "Saxo gives none for it: record_volume would record nothing"
+    else:
+        about_volume = f"{volume:g} today: record_volume would record it"
     result = {
         **candidate,
         "bid": quote.get("Bid"),
@@ -77,6 +101,8 @@ async def quote_of(api_client, account_key: str, candidate: dict) -> dict:
         "price_type_ask": quote.get("PriceTypeAsk"),
         "market_state": quote.get("MarketState"),
         "delayed_minutes": quote.get("DelayedByMinutes"),
+        "volume": volume,
+        "about_volume": about_volume,
         "recordable": read is not None,
     }
     if read is None:
@@ -111,9 +137,13 @@ def report(results: list[dict], label: str = "us100") -> str:
                 f"    bid {result['bid']}  ask {result['ask']}  mid {result['mid']}  "
                 f"({result['price_type_bid']}/{result['price_type_ask']}, market {result['market_state']})"
             )
+        if "about_volume" in result:
+            lines.append(f"    volume: {result['about_volume']}")
         lines.append(f"    -> {result['why']}")
-    best = next((result for result in results if result["recordable"] and not result.get("delayed_minutes")), None) \
-        or next((result for result in results if result["recordable"]), None)
+    # A turbo is recorded because the trader could buy it, never as the index of an indice.
+    indexes = [result for result in results if result["asset_type"] not in TURBO_ASSET_TYPES]
+    best = next((result for result in indexes if result["recordable"] and not result.get("delayed_minutes")), None) \
+        or next((result for result in indexes if result["recordable"]), None)
     if best is not None:
         entry = {"label": label, "uic": best["uic"], "asset_type": best["asset_type"]}
         lines += ["", "To record it, in trade.config.price_recorder.instruments:", f"    {json.dumps(entry)}"]

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
@@ -7,7 +7,16 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { AuthContext } from '@/features/auth/auth-context'
-import type { JournalEntry, Position, PriceBarRow, PriceContext, PriceInstrument, PriceRangeRow, Session } from '@/lib/types'
+import type {
+  InstrumentAvailability,
+  JournalEntry,
+  Position,
+  PriceBarRow,
+  PriceContext,
+  PriceInstrument,
+  PriceRangeRow,
+  Session,
+} from '@/lib/types'
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
 import { stubSystemTheme } from '@/test/systemTheme'
 
@@ -61,6 +70,20 @@ const SIGNALS = [
 ] as JournalEntry[]
 const GAP = { start: '2026-10-12T08:40:00Z', end: '2026-10-12T08:47:00Z', seconds: 420, reason: 'down' } as const
 
+/** What was recorded of an instrument quoted from 08:00 to 22:00 in Paris, with nothing missing unless said. */
+function recorded(missing: Partial<InstrumentAvailability> = {}): InstrumentAvailability {
+  return {
+    bars: 5040, updates: 12840, first_bar: '2026-10-12T06:00:00Z', last_bar: '2026-10-12T19:59:50Z',
+    quoted_seconds: 50400, missing_seconds: 0, holes: 0, hole_seconds: 0, stops: [], stretches: [], stretch_count: 0,
+    knocked_out_at: null, without_ask: 0, delayed_minutes: 0, issues: [], ...missing,
+  }
+}
+/** Twelve minutes without a quote from 11:00 in Paris. */
+const HOLED = recorded({
+  bars: 4968, quoted_seconds: 49680, missing_seconds: 720, holes: 1, hole_seconds: 720, stretch_count: 1, issues: ['holes'],
+  stretches: [{ start: '2026-10-12T09:00:00Z', end: '2026-10-12T09:12:00Z', seconds: 720, reason: 'unquoted' }],
+})
+
 const T0 = utc('2026-10-12T08:00:00Z')
 
 /**
@@ -85,11 +108,20 @@ interface Server {
   rangeRefused?: { size: number; detail: string }
   /** The instruments have no ask: range bars of the ask are none. */
   noAsk?: boolean
+  /** What is missing from each instrument, by id; null: not worked out for the period. */
+  availability?: Record<number, InstrumentAvailability> | null
 }
 
 let requests: string[] = []
 
-function serve({ instruments = [INDEX, LONG, SHORT], context = {}, barsError, rangeRefused, noAsk }: Server = {}) {
+function serve({
+  instruments = [INDEX, LONG, SHORT],
+  context = {},
+  barsError,
+  rangeRefused,
+  noAsk,
+  availability = {},
+}: Server = {}) {
   requests = []
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -103,6 +135,9 @@ function serve({ instruments = [INDEX, LONG, SHORT], context = {}, barsError, ra
       const instrument = instruments.find((item) => item.id === Number(url.searchParams.get('instrument_id')))
       if (url.pathname === '/api/prices/instruments') {
         return json({ from, to, timezone: 'Europe/Paris', items: instruments })
+      }
+      if (url.pathname === '/api/prices/availability') {
+        return json({ from, to, timezone: 'Europe/Paris', max_days: 7, items: availability })
       }
       if (url.pathname === '/api/prices/bars') {
         if (barsError) return json({ detail: barsError.detail }, barsError.status)
@@ -246,7 +281,7 @@ describe('choosing what to look at', () => {
     renderPage()
     await chartIsDrawn()
 
-    await user.click(screen.getByRole('button', { name: /Long 24,150 · SG/ }))
+    await user.click(screen.getByRole('button', { name: /^Long 24,150 · SG/ }))
 
     await waitFor(() => expect(seriesOf(theChart(), 'Line')?.data).toHaveLength(3))
     expect(barRequests()).toContain(`/api/prices/bars?instrument_id=2&from=${TODAY}&to=${TODAY}&interval=10`)
@@ -269,7 +304,7 @@ describe('choosing what to look at', () => {
     renderPage('/prices?instrument=2')
     await waitFor(() => expect(seriesOf(theChart(), 'Line')?.data).toHaveLength(3))
 
-    await user.click(screen.getByRole('button', { name: /Short 25,900 · SG/ }))
+    await user.click(screen.getByRole('button', { name: /^Short 25,900 · SG/ }))
 
     await screen.findByRole('heading', { name: 'Short 25,900 · SG' })
     await waitFor(() => expect(barRequests().filter((path) => path.includes('instrument_id=5'))).toHaveLength(1))
@@ -345,8 +380,8 @@ describe('choosing what to look at', () => {
 
     await user.type(screen.getByRole('searchbox', { name: 'Search the instruments' }), '259')
 
-    expect(screen.getByRole('button', { name: /Short 25,900 · SG/ })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Long 24,150 · SG/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Short 25,900 · SG/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Long 24,150 · SG/ })).not.toBeInTheDocument()
 
     await user.clear(screen.getByRole('searchbox', { name: 'Search the instruments' }))
     await user.type(screen.getByRole('searchbox', { name: 'Search the instruments' }), 'zzz')
@@ -364,6 +399,202 @@ describe('choosing what to look at', () => {
     await user.click(screen.getByRole('button', { name: 'Whole period' }))
 
     expect(theChart().fits).toBe(fits + 1)
+  })
+})
+
+describe('what is missing from an instrument', () => {
+  const longRow = () => screen.getByRole('button', { name: /^Long 24,150 · SG/ })
+  const details = (name: string) => screen.getByRole('button', { name: `Details of ${name}` })
+
+  it('marks in the list the turbos Saxo left without a quote, and counts them', async () => {
+    serve({ availability: { 1: recorded(), 2: HOLED, 5: recorded() } })
+    renderPage()
+    await chartIsDrawn()
+
+    await waitFor(() => expect(longRow()).toHaveAccessibleName(/Missing data: no quote for 12 min from 11:00:00/))
+    expect(screen.getByRole('button', { name: /^Short 25,900 · SG/ })).not.toHaveAccessibleName(/Missing data/)
+    expect(screen.getByText('3 recorded in this period, 1 with missing data')).toBeInTheDocument()
+  })
+
+  it('says of a turbo that got no more quote when it stopped', async () => {
+    const stopped = recorded({
+      bars: 1800, quoted_seconds: 18000, missing_seconds: 32400, stretch_count: 1, issues: ['stopped'],
+      stops: ['2026-10-12T11:00:00Z'], last_bar: '2026-10-12T10:59:50Z',
+      stretches: [{ start: '2026-10-12T11:00:00Z', end: '2026-10-12T20:00:00Z', seconds: 32400, reason: 'stopped' }],
+    })
+    serve({ availability: { 1: recorded(), 2: stopped, 5: recorded() } })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+
+    await waitFor(() => expect(longRow()).toHaveAccessibleName(/Missing data: no more quote after 13:00:00/))
+    await user.click(details('Long 24,150 · SG'))
+
+    const facts = document.getElementById('price-instrument-2') as HTMLElement
+    expect(within(facts).getByText('Stopped').nextSibling).toHaveTextContent(
+      'No more quote after 13:00:00, while other turbos were still quoted',
+    )
+    expect(within(facts).getByText('Availability').nextSibling).toHaveTextContent('35.7%')
+  })
+
+  it('does not mark a turbo that was knocked out, and says so in its details', async () => {
+    const knockedOut = recorded({ bars: 1800, quoted_seconds: 18000, last_bar: '2026-10-12T10:59:50Z', knocked_out_at: '2026-10-12T11:00:00Z' })
+    serve({ availability: { 1: recorded(), 2: knockedOut, 5: recorded() } })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+
+    await user.click(details('Long 24,150 · SG'))
+
+    const facts = document.getElementById('price-instrument-2') as HTMLElement
+    expect(await within(facts).findByText('Knocked out')).toBeInTheDocument()
+    expect(within(facts).getByText('Knocked out').nextSibling).toHaveTextContent('Probably, around 13:00:00')
+    expect(longRow()).not.toHaveAccessibleName(/Missing data/)
+    expect(screen.getByText('3 recorded in this period')).toBeInTheDocument()
+  })
+
+  it('opens what is known of an instrument without leaving the one shown', async () => {
+    serve({
+      instruments: [INDEX, { ...LONG, last_t: utc('2026-10-12T10:29:50Z'), last_bid: 8.45, last_ask: 8.5, volume: 15300 }, SHORT],
+      availability: { 1: recorded(), 2: HOLED, 5: recorded() },
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+
+    expect(details('Long 24,150 · SG')).toHaveAttribute('aria-expanded', 'false')
+    await user.click(details('Long 24,150 · SG'))
+
+    expect(details('Long 24,150 · SG')).toHaveAttribute('aria-expanded', 'true')
+    const facts = document.getElementById('price-instrument-2') as HTMLElement
+    const fact = (label: string) => within(facts).getByText(label).nextSibling
+    expect(fact('Last price')).toHaveTextContent('Bid 8.45 · Ask 8.50 · spread 0.05 at 12:29:50')
+    expect(fact('Volume')).toHaveTextContent('15,300')
+    expect(fact('Quote changes')).toHaveTextContent('12,840')
+    expect(fact('Recorded')).toHaveTextContent('08:00:00 to 21:59:50 · 4,968 bars')
+    expect(fact('Availability')).toHaveTextContent('98.5% · 12 min without a quote while other instruments had one')
+    expect(fact('Holes')).toHaveTextContent('No quote for 12 min from 11:00:00')
+    expect(fact('Instrument')).toHaveTextContent('SG-NDX-L2 · UIC 40000002 · EUR')
+    // The chart is still the index's: opening a row is not choosing it.
+    expect(screen.getByRole('heading', { name: 'NASDAQ 100' })).toBeInTheDocument()
+    expect(address()).toBe('/prices')
+
+    await user.click(details('Long 24,150 · SG'))
+    expect(document.getElementById('price-instrument-2')).toBeNull()
+  })
+
+  it('says that no volume was recorded where Saxo counted none', async () => {
+    serve({ instruments: [INDEX, { ...LONG, last_t: T0, last_bid: 8.45, last_ask: 8.5, volume: null }, SHORT] })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+
+    await user.click(details('Long 24,150 · SG'))
+
+    const facts = document.getElementById('price-instrument-2') as HTMLElement
+    expect(within(facts).getByText('Volume').nextSibling).toHaveTextContent('Not recorded')
+  })
+
+  it('says of a long period that what is missing was not worked out, and marks nothing', async () => {
+    serve({ availability: null })
+    const user = userEvent.setup()
+    renderPage('/prices?from=2026-09-01&to=2026-10-12')
+    await chartIsDrawn()
+
+    await user.click(details('Long 24,150 · SG'))
+
+    const facts = document.getElementById('price-instrument-2') as HTMLElement
+    expect(await within(facts).findByText('Not worked out for a period of more than 7 days')).toBeInTheDocument()
+    expect(screen.getByText('3 recorded in this period')).toBeInTheDocument()
+  })
+
+  it('lists the holes of the instrument shown with the recorder’s own gaps', async () => {
+    serve({ context: { gaps: [GAP] }, availability: { 1: recorded(), 2: HOLED, 5: recorded() } })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+
+    const panel = (await screen.findByRole('heading', { name: 'Recording gaps' })).closest('section') as HTMLElement
+    await within(panel).findByText('Recorder not running')
+    // The index has no hole of its own: the recorder's gap only.
+    expect(within(panel).getAllByRole('row')).toHaveLength(2)
+
+    await user.click(longRow())
+
+    await within(panel).findByText('No quote for this instrument')
+    const [, first, second] = within(panel).getAllByRole('row')
+    expect(first).toHaveTextContent('Recorder not running')
+    expect(second).toHaveTextContent('12 Oct, 11:00:00')
+    expect(second).toHaveTextContent('11:12:00')
+    expect(second).toHaveTextContent('12 min')
+    expect(panel).toHaveTextContent('2 in trading hours, 19 min in all')
+  })
+
+  it('no longer says the recording was uninterrupted under an instrument that has holes', async () => {
+    serve({ context: { gaps: [] }, availability: { 1: recorded(), 2: HOLED, 5: recorded() } })
+    renderPage('/prices?instrument=2')
+    await chartIsDrawn()
+
+    const panel = (await screen.findByRole('heading', { name: 'Recording gaps' })).closest('section') as HTMLElement
+    await within(panel).findByText('No quote for this instrument')
+    expect(screen.queryByText('Recorded without interruption during trading hours.')).not.toBeInTheDocument()
+  })
+})
+
+describe('the signals on the chart', () => {
+  const toggle = () => screen.getByRole('switch', { name: 'Signal marks' })
+  const legend = () => within(screen.getByRole('list', { name: 'Legend' }))
+
+  it('can be left out, the trades staying where they are', async () => {
+    serve({ context: { trades: [TRADE], signals: SIGNALS } })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.markers).toHaveLength(4))
+    expect(toggle()).toBeChecked()
+    expect(legend().getByText('Signal')).toBeInTheDocument()
+
+    await user.click(toggle())
+
+    expect(toggle()).not.toBeChecked()
+    await waitFor(() =>
+      expect(seriesOf(theChart(), 'Candlestick')?.markers.map((marker) => marker.text)).toEqual(['Long', 'Long +1.78%']),
+    )
+    expect(legend().queryByText('Signal')).not.toBeInTheDocument()
+    expect(legend().getByText('Bought')).toBeInTheDocument()
+
+    await user.click(toggle())
+
+    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.markers).toHaveLength(4))
+  })
+
+  it('are left off the index line under a turbo too', async () => {
+    serve({ context: { trades: [TRADE], signals: SIGNALS } })
+    const user = userEvent.setup()
+    renderPage('/prices?instrument=2')
+    await waitFor(() => expect(seriesOf(theChart(), 'Line')?.markers).toHaveLength(2))
+
+    await user.click(toggle())
+
+    await waitFor(() => expect(seriesOf(theChart(), 'Line')?.markers).toEqual([]))
+    expect(seriesOf(theChart(), 'Candlestick')?.markers.map((marker) => marker.text)).toEqual(['Buy €8.45', '+1.78%'])
+  })
+
+  it('stay hidden for the next visit, and out of the address', async () => {
+    serve({ context: { trades: [TRADE], signals: SIGNALS } })
+    const user = userEvent.setup()
+    renderPage()
+    await chartIsDrawn()
+    await user.click(toggle())
+    expect(address()).toBe('/prices')
+
+    cleanup()
+    resetCharts()
+    renderPage()
+    await chartIsDrawn()
+
+    expect(toggle()).not.toBeChecked()
+    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.markers).toHaveLength(2))
   })
 })
 
@@ -435,7 +666,7 @@ describe('range bars', () => {
     await rangeIsDrawn()
     expect(screen.getByLabelText('Range as a price move, in pts')).toHaveValue('20.00')
 
-    await user.click(screen.getByRole('button', { name: /Long 24,150 · SG/ }))
+    await user.click(screen.getByRole('button', { name: /^Long 24,150 · SG/ }))
 
     expect(await screen.findByLabelText('Range as a price move, in EUR')).toBeInTheDocument()
     expect(await screen.findByText('1R = 0.01 EUR')).toBeInTheDocument()
@@ -542,7 +773,7 @@ describe('range bars', () => {
     await waitFor(() => expect(address()).toBe('/prices?range=15'))
 
     // They mean nothing on a turbo, which starts on a range of its own.
-    await user.click(screen.getByRole('button', { name: /Long 24,150 · SG/ }))
+    await user.click(screen.getByRole('button', { name: /^Long 24,150 · SG/ }))
     await waitFor(() => expect(address()).toBe('/prices?instrument=2&range=auto'))
     await waitFor(() => expect(ticksField().value).toBe('20'))
     await user.clear(sizeField())
@@ -550,11 +781,11 @@ describe('range bars', () => {
     await waitFor(() => expect(address()).toBe('/prices?instrument=2&range=0.1'))
 
     // Another turbo keeps it; the index gets its own back; so does the turbo after it.
-    await user.click(screen.getByRole('button', { name: /Short 25,900 · SG/ }))
+    await user.click(screen.getByRole('button', { name: /^Short 25,900 · SG/ }))
     await waitFor(() => expect(address()).toBe('/prices?instrument=5&range=0.1'))
     await user.click(screen.getByRole('button', { name: /NASDAQ 100\s*NDX\.I/ }))
     await waitFor(() => expect(address()).toBe('/prices?instrument=1&range=15'))
-    await user.click(screen.getByRole('button', { name: /Long 24,150 · SG/ }))
+    await user.click(screen.getByRole('button', { name: /^Long 24,150 · SG/ }))
     await waitFor(() => expect(address()).toBe('/prices?instrument=2&range=0.1'))
   })
 
