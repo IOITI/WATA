@@ -263,3 +263,21 @@ def test_the_live_tests_get_the_database_and_the_queue_of_the_compose_file(compo
     # Without it the tests would be skipped, and the job green for nothing.
     assert step["env"]["WATA_TEST_REQUIRE_LIVE"] == "1"
     assert step["env"]["WATA_TEST_POSTGRES_DSN"].endswith("@localhost:5432/wata")
+
+
+def test_ci_builds_the_image_once_exactly_as_the_server_does(dockerfile, ci_jobs):
+    """The server asks for no Python: what it gets is the one the Dockerfile names."""
+    steps = ci_jobs["image-as-deployed"]["steps"]
+    build = next(step["run"] for step in steps if step.get("name") == "Build the image with the server's own command")
+    on_the_server = [line.strip() for line in open("docker_build.sh") if line.startswith("docker build")]
+
+    assert on_the_server == [build]
+    assert "--build-arg" not in build
+    check = next(step["run"] for step in steps if "python --version" in step.get("run", ""))
+    assert "ARG PYTHON_VERSION=" in check and 'grep -F "Python $expected."' in check
+
+
+def test_the_documents_name_the_python_of_the_image(dockerfile):
+    project = open("AGENTS.md", encoding="utf-8").read().split("## Service map")[0]
+
+    assert f"Python {_image_python(dockerfile)}," in project

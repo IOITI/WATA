@@ -2,7 +2,7 @@
 
 ## Project
 
-Automated trading assistant for Saxo Bank Knock-out warrants (Turbos). Python 3.12, FastAPI, async microservices in Docker.
+Automated trading assistant for Saxo Bank Knock-out warrants (Turbos). Python 3.14, FastAPI, async microservices in Docker.
 
 ## Service map
 
@@ -75,7 +75,7 @@ npm run dev           # Vite dev server, proxies /api to it
 - **Two auth schemes**: webhook uses `?token=...` query param; internal endpoints use HTTP Bearer token.
 - **An access check reads the path from `request.scope["path"]`, not from `request.url`**: the URL is rebuilt from the `Host` header, which the caller writes. The web server's IP allowlist was skipped that way (`check_ip`, tested in `tests/test_web_server_advanced.py`).
 - **`requirements.txt` is the whole environment**: every package installed is a line of it at one exact version, and every line is installed. The image is built on the server at each deploy, so a version left open would be chosen there, by pip, on the day (it was so for `h2`, `cffi`, `aiormq`…), and Dependabot does not check a line without one. A library added means its line and a line for each thing it needs that is not there yet: install the file in an empty environment and read `pip freeze`. CI fails when the two lists differ (`tests/requirements_lock.py`, a command that needs nothing but Python, tested by `tests/test_requirements.py`), on each Python and for each image; a library nothing imports any more must go, for the same reason.
-- **The image's Python is the `ARG PYTHON_VERSION` at the top of the `Dockerfile`**, which the server builds as it is. CI tests that version and the one to move to next, and builds the image with each (`--build-arg`). Changing Python is therefore two releases: the libraries brought to versions that run on both, then that one line. Libraries are installed before the code is copied and only from ready-made builds (`--only-binary=:all:`): the install script stops the application before it builds the image, so whatever the build downloads or compiles is time without trading.
+- **The image's Python is the `ARG PYTHON_VERSION` at the top of the `Dockerfile`**, which the server builds as it is. CI tests that version and one other, and builds the image with each (`--build-arg`): the next one before a move, the one before for a while after it (3.12 today, the services having moved to 3.14 in v0.16.0). Changing Python is therefore two releases: the libraries brought to versions that run on both, then that one line. A job builds the image with the server's own command and checks the Python it gets. Libraries are installed before the code is copied and only from ready-made builds (`--only-binary=:all:`): the install script stops the application before it builds the image, so whatever the build downloads or compiles is time without trading.
 - **A service runs its main coroutine with `event_loop.run(main())`** (`src/event_loop.py`): on uvloop, as the loop of that run alone. `uvloop.install()` goes through asyncio's policies, which Python 3.14 deprecates and 3.16 removes. The servers started by `uvicorn.run` get uvloop from uvicorn itself.
 - **`websockets.connect` is the library's asyncio client** (the default one since websockets 14): a connection has a `state`, no `closed`, and `ConnectionClosed` says what was received in `rcvd`. `SaxoStreamClient` passes `proxy=None`: that client would otherwise look for a proxy in the environment, which the one before never did.
 - **Schema** defined as plain dicts in `src/schema/__init__.py` (not pydantic), validated with `jsonschema`.
@@ -125,6 +125,6 @@ npm run dev           # Vite dev server, proxies /api to it
 
 ## CI / Deploy
 
-- **CI**: GitHub Actions (`.github/workflows/ci.yml`), on push/PR to main. Four jobs: `tests.sh` on each Python of the matrix; the image built for each and every service loaded inside it; the live tests against PostgreSQL and RabbitMQ; the admin interface. `tests/test_deploy_compose.py` keeps the workflow, the `Dockerfile` and the compose file saying the same thing (the Python of the image is in the matrix, the live tests get the compose file's images)
+- **CI**: GitHub Actions (`.github/workflows/ci.yml`), on push/PR to main. Five jobs: `tests.sh` on each Python of the matrix; the image built for each and every service loaded inside it; the image built as the server builds it; the live tests against PostgreSQL and RabbitMQ; the admin interface. `tests/test_deploy_compose.py` keeps the workflow, the `Dockerfile` and the compose file saying the same thing (the Python of the image is in the matrix, the live tests get the compose file's images)
 - **Build package**: `./package.sh` → creates `wata_app_v<VERSION>.zip`
 - **Deploy**: `./deploy/tools/deploy_app_to_your_server.sh` (uses Ansible playbook `deploy_app.yml`)

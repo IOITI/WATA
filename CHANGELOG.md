@@ -1,12 +1,46 @@
 # Changelog
 
+## v0.16.0 - Python 3.14
+
+**Release date:** 2026-10-13
+
+The second of the two releases that move WATA from Python 3.12 to 3.14, and the one that does it: the image is now built with Python 3.14. Everything this needed was done in v0.15.0, on Python 3.12, so that this release is one line of the `Dockerfile` and nothing else. It was written to be deployed after v0.15.0 had traded for some days, so that a fault would say which of the two it came from. **The operator chose to deploy v0.14.0, v0.15.0 and this one together**, on 2026-10-13: the server went from 0.13.0 to 0.16.0 in one step, and a fault seen from now on may come from any of the three.
+
+**Verification status:** CI built this image, with Python 3.14 for the server's platform, on the commits of v0.15.0: it holds exactly the libraries of `requirements.txt`, every service loads inside it, the tests pass on 3.14 and so do the tests against a real PostgreSQL and a real RabbitMQ. On a development machine, with Python 3.14.8: the same backtest, with its random entries, gives the same files to the byte as on 3.12; the admin application was started and every page visited in a browser, with a backtest launched from the page. **Not run yet**: the new CI job that builds the image with the server's own command (it runs on GitHub at the next push).
+
+**At its deployment** (2026-10-13, 20:39 to 20:41 Paris: no position open, and no entry possible that evening, the day's result being above its limit; about two minutes without the trading services): the image was first built on the server while the application ran, and checked there: Python 3.14.8, the libraries of `requirements.txt` and no other, the server's own configuration accepted, every service loaded. After the start, all eight services ran on Python 3.14.8 with no error in their logs; the position monitor, the watchlist manager and the price recorder connected to Saxo's stream through the new WebSocket client and got their subscriptions; the trader took up its polling; the start messages of the trader and the monitor went through RabbitMQ and reached Telegram; `order_execution` was created. **Not seen yet when this was written**: an order (none could be placed that evening: the first trade of the next session is the first on all of this), the stream coming back after Saxo closes it at the token's renewal, and the end-of-day jobs.
+
+---
+
+### What Changed
+
+- **The image is built with Python 3.14** (`ARG PYTHON_VERSION=3.14`): the 3.14 current on the day the server builds it, 3.14.8 as this is written. Python 3.12 only receives security fixes and stops in 2028; 3.14 gets bug fixes until October 2027 and security fixes until October 2030.
+- **The system under it does not change.** Looked up on the server at the deploy: the image in use already stood on Debian 13, the server asking the registry for the base image at each build, and the new one does too, with the same OpenSSL (3.5.7), which every connection to Saxo and to Telegram goes through, and the same compression library (zlib 1.3.1).
+- **CI keeps testing Python 3.12** beside 3.14, and building the image with it, until 3.14 has run in production: going back stays something that is tested. A new job builds the image with the server's own command and checks that the Python it gets is the one the `Dockerfile` names.
+
+Nothing changes in WATA's code, in its libraries or in the database.
+
+### Upgrade Notes
+
+- **This deploy stops the trading services longer than usual, unless it is prepared.** The install script stops the application and then builds the image, and this build has a new base image to download and every library to install again for Python 3.14. To keep the stop as short as any other, build the image once on the server while the application still runs, from a copy of this version's files and under a tag of its own (`docker build --platform=linux/amd64 -t wata-base:next .`): the build that follows the stop then finds the base image and the libraries already there. Done so on 2026-10-13: 46 seconds for that first build, and a stop of about two minutes.
+- **Deploy it with no position open**, at a time when none can be opened.
+- **To go back**: stop, put the previous version back in `/app/wata/VERSION`, give the previous image the tag `wata-base:latest` again, start. The previous image holds its own Python 3.12, so both come back together. Tag it before the deploy (`docker tag wata-base:latest wata-base:rollback-<version>`): the build replaces `latest`.
+- **Watch after the start**: each service's start line, Saxo's authorisation without a manual login, the position monitor's first snapshot of the stream, the token renewal and the stream's reconnection about twenty minutes later, then the first signal from the webhook to its position and the first Telegram message.
+- Nothing to configure.
+
+### Known Limits
+
+- **The price recorder writes one warning at its start**: `'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16`. It comes from uvloop, when the recorder asks to be told of a stop signal, and changes nothing today. It is the one thing Python 3.14 said in the services' output.
+- A day of prices fetched again is expected to give the same file as before: a backtest keeps a digest of the price files it read, the library that compresses them is the same in both images, and on a development machine the two Pythons gave the same bytes. Not compared on the server itself.
+- A development environment on Python 3.12 still runs the tests, for as long as CI does.
+
 ## v0.15.0 - The libraries brought forward, ahead of Python 3.14
 
-**Release date:** not yet released
+**Release date:** 2026-10-13, deployed together with v0.16.0: it never ran on a server on Python 3.12
 
 WATA runs on Python 3.12, which only receives security fixes and stops in 2028. Moving to Python 3.14 is not held back by WATA's code but by its libraries: ten of the versions it was pinned to cannot be installed on 3.14 at all, and several others that every signal and every position go through were released long before 3.14 existed. This release brings those libraries to versions that run on both, **still on Python 3.12**, so that the change of interpreter that follows is that and nothing else. Nothing changes in what WATA does.
 
-**Verification status:** every test passes on Python 3.12 and on Python 3.14.8 with the new libraries (1,279 tests), on a development machine. The stream client's new tests were written and passed on the library of before, then showed what its upgrade breaks, then passed again once the client was adapted. The database tests ran against a real PostgreSQL 16.2 with asyncpg 0.30 and 0.31, on both interpreters. The same backtest, with its two hundred runs of random entries, gives the same files to the byte on both. The admin application was started on Python 3.14 and every page visited in a browser, a backtest asked for from the page included. All fifty-four libraries have a ready-made build for the server's platform on both interpreters. **Not run yet**: the three new CI jobs (they run on GitHub, at the next push), so the image has not been built and the RabbitMQ tests have never run. **Never against Saxo**: its stream now goes through the WebSocket library's new client, which only a real connection will prove.
+**Verification status:** every test passes on Python 3.12 and on Python 3.14.8 with the new libraries (1,279 tests), on a development machine. The stream client's new tests were written and passed on the library of before, then showed what its upgrade breaks, then passed again once the client was adapted. The database tests ran against a real PostgreSQL 16.2 with asyncpg 0.30 and 0.31, on both interpreters. The same backtest, with its two hundred runs of random entries, gives the same files to the byte on both. The admin application was started on Python 3.14 and every page visited in a browser, a backtest asked for from the page included. All fifty-four libraries have a ready-made build for the server's platform on both interpreters. CI then ran its new jobs: the image builds with Python 3.12 and 3.14 and every service loads in it, and the tests against a real PostgreSQL and a real RabbitMQ pass on both. One job, the tests on 3.12, failed once and passed on the commits before and after it; which test it was is not known, and a failed test is now named beside its job. **Against Saxo**, the stream's new client was first used at the deployment of v0.16.0: see there.
 
 ---
 
@@ -45,11 +79,11 @@ WATA runs on Python 3.12, which only receives security fixes and stops in 2028. 
 
 ## v0.14.0 - Each order followed to its position
 
-**Release date:** not yet released
+**Release date:** 2026-10-13, deployed together with v0.16.0
 
 An order and the position it gave were linked in the database and hardly on the pages, and nothing said how long Saxo took to turn one into the other: an order's time was written once its position had been confirmed, an order that gave no position was cancelled and written nowhere, and the sell order that closes a position was never recorded at all. This release makes the trader and the position monitor keep the moments of every order, and the admin interface show them, so that a slow entry or an order given up can be explained from the Orders page.
 
-**Verification status:** covered by unit tests, six deliberate faults in the new trading code were each caught by them, and the pages were driven in a browser on a development machine, in both themes and at a phone's width, on made-up orders. The new SQL (the table, the two writes of an order in either order, the admin's joined reads through a read-only connection and their fallback) was run against a real PostgreSQL 16.2 on that machine. **Not yet run on a server, and never against Saxo**: the first real order will be the first one followed. No new request is made to Saxo; what is read is the answer to requests WATA already made.
+**Verification status:** covered by unit tests, six deliberate faults in the new trading code were each caught by them, and the pages were driven in a browser on a development machine, in both themes and at a phone's width, on made-up orders. The new SQL (the table, the two writes of an order in either order, the admin's joined reads through a read-only connection and their fallback) was run against a real PostgreSQL 16.2 on that machine. **On the server** since 2026-10-13: the table was created at the start, and no order could be placed that evening, the day's result being above its limit. **No real order has been followed yet**: the first trade of the next session will be the first. No new request is made to Saxo; what is read is the answer to requests WATA already made.
 
 ---
 

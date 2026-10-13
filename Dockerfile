@@ -1,7 +1,8 @@
-# The Python the services run on. CI also builds the image with the next one
-# (--build-arg PYTHON_VERSION=...), so that it is known to work before it
-# becomes this one.
-ARG PYTHON_VERSION=3.12
+# The Python the services run on: what the server builds, which asks for
+# nothing else. CI also builds the image with another one (--build-arg
+# PYTHON_VERSION=...): the next, so that it is known to work before it becomes
+# this one, or the one before, for as long as going back to it must stay possible.
+ARG PYTHON_VERSION=3.14
 FROM python:${PYTHON_VERSION}
 
 # Set the working directory in the container to /app
