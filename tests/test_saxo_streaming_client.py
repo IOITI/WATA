@@ -264,6 +264,18 @@ def _connected_client(stream: LocalSaxoStream, callback=None, **settings) -> Sax
         return saxo_address(token).replace("wss://live-streaming.saxobank.com", f"ws://127.0.0.1:{stream.port}")
 
     client._build_ws_url = local_address
+
+    # How many times the client has finished connecting and subscribing. The
+    # server sees a connection a moment before the client is handed it: a test
+    # that acts on the client waits for the client.
+    client.connections_made = 0
+    connect_and_subscribe = client._connect_and_subscribe
+
+    async def counted():
+        await connect_and_subscribe()
+        client.connections_made += 1
+
+    client._connect_and_subscribe = counted
     return client
 
 
@@ -278,6 +290,17 @@ async def _until(condition, timeout=3.0):
         while not condition():
             await asyncio.sleep(0.005)
     await asyncio.wait_for(poll(), timeout)
+
+
+async def _ends(running: asyncio.Task, timeout=3.0):
+    """
+    Wait for the stream to end by itself. Not ``asyncio.wait_for``: it would
+    cancel a stream that hangs, which ``start()`` takes as a request to end,
+    and the test would pass three seconds late instead of failing.
+    """
+    done, _ = await asyncio.wait({running}, timeout=timeout)
+    assert done, "the stream did not end"
+    running.result()
 
 
 def _run(scenario):
@@ -341,7 +364,7 @@ def test_stream_connects_subscribes_and_delivers_what_saxo_sends():
             asked = dict(stream.asked[0])
             requests = _requests(client)
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
         return client, asked, requests, delivered
 
     client, asked, requests, delivered = _run(scenario)
@@ -362,9 +385,9 @@ def test_the_connection_is_opened_with_its_keepalive_and_size_limits():
             client = _connected_client(stream)
             with patch("src.saxo_streaming.client.websockets.connect", wraps=websockets.connect) as connect:
                 running = asyncio.create_task(client.start())
-                await _until(lambda: len(stream.asked) == 1)
+                await _until(lambda: client.connections_made == 1)
                 await client.stop()
-                await asyncio.wait_for(running, timeout=3)
+                await _ends(running)
             return connect.call_args.kwargs
 
     settings = _run(scenario)
@@ -400,7 +423,7 @@ def test_stream_comes_back_after_saxo_drops_the_connection_and_resumes_from_the_
             asked = list(stream.asked)
             requests = _requests(client)
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
         return asked, requests
 
     with caplog.at_level(logging.INFO, logger="src.saxo_streaming.client"):
@@ -428,9 +451,9 @@ def test_stream_comes_back_after_saxo_closes_the_connection_with_a_reason(caplog
         async with LocalSaxoStream(saxo) as stream:
             client = _connected_client(stream)
             running = asyncio.create_task(client.start())
-            await _until(lambda: len(stream.asked) == 2)
+            await _until(lambda: client.connections_made == 2)
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
 
     with caplog.at_level(logging.INFO, logger="src.saxo_streaming.client"):
         _run(scenario)
@@ -449,9 +472,9 @@ def test_stream_comes_back_after_an_ordinary_close():
         async with LocalSaxoStream(saxo) as stream:
             client = _connected_client(stream)
             running = asyncio.create_task(client.start())
-            await _until(lambda: len(stream.asked) == 2)
+            await _until(lambda: client.connections_made == 2)
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
             return len(stream.asked)
 
     assert _run(scenario) == 2
@@ -465,10 +488,10 @@ def test_stop_closes_the_connection_removes_the_subscriptions_and_does_not_come_
         async with LocalSaxoStream(saxo) as stream:
             client = _connected_client(stream)
             running = asyncio.create_task(client.start())
-            await _until(lambda: client._subscription_ready)
+            await _until(lambda: client.connections_made == 1)
 
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
             await asyncio.wait_for(stream.left[0].wait(), timeout=3)
             await asyncio.sleep(0.1)  # a reconnection would show up here
             return len(stream.asked), _requests(client), client._subscription_ready
@@ -491,10 +514,10 @@ def test_stopping_twice_or_before_any_connection_is_harmless():
 
             client = _connected_client(stream)
             running = asyncio.create_task(client.start())
-            await _until(lambda: client._subscription_ready)
+            await _until(lambda: client.connections_made == 1)
             await client.stop()
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
 
     _run(scenario)
 
@@ -514,7 +537,7 @@ def test_price_subscriptions_are_made_at_once_while_connected_and_kept_for_later
             before = _requests(client)
 
             running = asyncio.create_task(client.start())
-            await _until(lambda: client.active_subscription_count == 1)
+            await _until(lambda: client.connections_made == 1)
             at_connection = _requests(client)
 
             # Connected: a change is made at once.
@@ -522,7 +545,7 @@ def test_price_subscriptions_are_made_at_once_while_connected_and_kept_for_later
             while_connected = _requests(client)
 
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
 
             # The connection is closed: kept again, nothing asked of Saxo.
             asked_before = len(_requests(client))
@@ -547,7 +570,7 @@ def test_a_disconnect_message_from_saxo_ends_the_stream_without_a_reconnection(c
 
         async with LocalSaxoStream(saxo) as stream:
             client = _connected_client(stream)
-            await asyncio.wait_for(client.start(), timeout=3)
+            await _ends(asyncio.create_task(client.start()))
             await asyncio.sleep(0.1)  # a reconnection would show up here
             connections = len(stream.asked)
             await client.stop()
@@ -579,7 +602,7 @@ def test_a_frame_that_cannot_be_read_does_not_end_the_stream():
             await _until(lambda: delivered and delivered[-1] == 9.6)
             connections = len(stream.asked)
             await client.stop()
-            await asyncio.wait_for(running, timeout=3)
+            await _ends(running)
             return connections
 
     assert _run(scenario) == 1
