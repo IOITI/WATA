@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.15.0 - The libraries brought forward, ahead of Python 3.14
+
+**Release date:** not yet released
+
+WATA runs on Python 3.12, which only receives security fixes and stops in 2028. Moving to Python 3.14 is not held back by WATA's code but by its libraries: ten of the versions it was pinned to cannot be installed on 3.14 at all, and several others that every signal and every position go through were released long before 3.14 existed. This release brings those libraries to versions that run on both, **still on Python 3.12**, so that the change of interpreter that follows is that and nothing else. Nothing changes in what WATA does.
+
+**Verification status:** every test passes on Python 3.12 and on Python 3.14.8 with the new libraries (1,279 tests), on a development machine. The stream client's new tests were written and passed on the library of before, then showed what its upgrade breaks, then passed again once the client was adapted. The database tests ran against a real PostgreSQL 16.2 with asyncpg 0.30 and 0.31, on both interpreters. The same backtest, with its two hundred runs of random entries, gives the same files to the byte on both. The admin application was started on Python 3.14 and every page visited in a browser, a backtest asked for from the page included. All fifty-four libraries have a ready-made build for the server's platform on both interpreters. **Not run yet**: the three new CI jobs (they run on GitHub, at the next push), so the image has not been built and the RabbitMQ tests have never run. **Never against Saxo**: its stream now goes through the WebSocket library's new client, which only a real connection will prove.
+
+---
+
+### What Changed
+
+#### Libraries
+- **Upgraded to the first release that supports Python 3.14** (each also runs on 3.12): pydantic 2.7 to 2.12, asyncpg 0.30 to 0.31, uvloop 0.19 to 0.22, uvicorn 0.29 to 0.38, httptools 0.6 to 0.7, websockets 12 to 16, pika 1.3 to 1.4, aio-pika 9.5 to 9.6, jsonschema 4.22 to 4.26 with referencing and rpds-py, duckdb 1.1 to 1.4, PyYAML 6.0.1 to 6.0.3, typing_extensions 4.12 to 4.14. The defaults of every call WATA makes into them were compared before and after: none changed, but for the WebSocket client below.
+- **Removed, because nothing uses them**: twenty-five pins (selenium, trio, psycopg, typer, rich, orjson, ujson, Jinja2, python-multipart, watchfiles and others). Read from the installed packages' own requirements, not guessed: nothing WATA imports needs them.
+- **`requirements.txt` is now the whole environment.** Sixteen libraries were installed without being named (aiormq, yarl, h2, cffi…), so their version was chosen by pip on the server at each deploy. They are pinned, and CI fails when anything is installed that the file does not name, or the other way round.
+
+#### The link to Saxo's stream
+- The WebSocket library's default client was replaced upstream by a new one. `SaxoStreamClient` is adapted to it: same keepalive (a ping every 20 seconds), same limits, same reconnection, and still a direct connection (the new client would have looked for a proxy in the environment).
+- **Its connection had no test.** It now has thirteen, ten of them against a WebSocket server on the machine: opening with the token and the context, reading Saxo's frames, Saxo dropping the connection without a word (the case seen every twenty minutes in production), coming back from the last message read without subscribing again, a `_disconnect` message, leaving. Without the adaptation, the upgrade would have broken the stop of the position monitor and every change of price subscription, and no test of before would have said so.
+
+#### How the services start
+- The trader, the position monitor and the price recorder run on uvloop as before, without making it the default of the whole process: the mechanism that did so is deprecated in Python 3.14 and removed in 3.16.
+
+#### The image
+- **Its Python is one line at the top of the `Dockerfile`** (`ARG PYTHON_VERSION=3.12`). CI builds the image with 3.12 and with 3.14.
+- **Libraries are installed before the code is copied**, and only from ready-made builds. Until now every deploy downloaded all of them again while the trading services were stopped, because the code was copied first. A deploy that only changes the code now reuses them. The first build after this release still downloads everything.
+
+#### CI
+- The tests run on Python 3.12 and 3.14.
+- **The image is built** for each, as the server builds it, and every service is loaded inside it.
+- **PostgreSQL and RabbitMQ for real**, through the services' own code, on each Python: what the other tests replace with fakes.
+
+### Upgrade Notes
+
+- Nothing to configure, no change to the database.
+- The first deploy of this release takes longer than usual: a few minutes for the libraries, once.
+- A development environment needs `pip install -r requirements.txt` again: with the libraries of before, the stream client's new tests fail.
+
+### Known Limits
+
+- The web servers still load the WebSocket library's old server code, through uvicorn, though none of them serves a WebSocket. It is deprecated upstream, not removed.
+
 ## v0.14.0 - Each order followed to its position
 
 **Release date:** not yet released

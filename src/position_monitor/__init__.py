@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import aio_pika
 
+from src import event_loop
 from src.configuration import ConfigurationManager
 from src.logging_helper import setup_logging
 from src.trade.async_services import (
@@ -493,9 +494,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    try:
-        import uvloop
-        uvloop.install()
-    except ImportError:
-        pass
-    asyncio.run(main())
+    event_loop.run(main())

@@ -18,6 +18,7 @@ import jsonschema
 import pytz
 
 # --- Configuration & Logging ---
+from src import event_loop
 from src.configuration import ConfigurationManager
 from src.logging_helper import setup_logging
 
@@ -774,9 +775,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    try:
-        import uvloop
-        uvloop.install()
-    except ImportError:
-        pass
-    asyncio.run(main())
+    event_loop.run(main())
