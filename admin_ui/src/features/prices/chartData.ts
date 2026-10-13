@@ -120,6 +120,22 @@ export interface EmptyPoint {
   time: number
 }
 
+/**
+ * A line drawn over the prices, on their scale: something measured on them.
+ * "trend" is told by its colour as well (rising or falling at each point),
+ * "reference" is a level the prices are compared with, "band" a limit around it.
+ */
+export type OverlayTone = 'trend' | 'reference' | 'band'
+export interface OverlayPoint extends LinePoint {
+  /** For a trend: whether the line was rising at this point. */
+  rising?: boolean
+}
+export interface ChartOverlay {
+  id: string
+  tone: OverlayTone
+  points: readonly (OverlayPoint | EmptyPoint)[]
+}
+
 function build<T extends { time: number }>(
   bars: readonly PriceBarRow[],
   interval: number,

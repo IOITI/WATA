@@ -27,6 +27,10 @@ _HOLDING_BUCKETS = (
 )
 
 
+# The holding times a trade is put in, shortest first.
+HOLDING_LABELS = tuple(label for _, label in _HOLDING_BUCKETS)
+
+
 def exit_group(close_reason: str | None) -> str:
     if not close_reason:
         return "Not recorded"
@@ -73,33 +77,45 @@ def _grouped(trades: list[dict], key) -> dict:
     return groups
 
 
+def stats_by(trades: list[dict], key, order: list | None = None, name: str = "group") -> list[dict]:
+    """
+    The figures of the trades of each group ``key`` puts them in (None: in
+    none), under ``name``. In ``order`` when the groups have one, empty ones
+    included; else the groups there are, sorted.
+    """
+    groups = _grouped(trades, key)
+    return [{name: group, **_stats(groups.get(group, []))} for group in (order if order is not None else sorted(groups))]
+
+
+def given_back(trades: list[dict]) -> dict:
+    """How much of the best level seen during a trade was lost by its close, over the trades that have one."""
+    with_best = [trade for trade in trades if trade.get("max_performance_percent") is not None]
+    turned_negative = sum(
+        1 for trade in with_best
+        if trade["max_performance_percent"] > 0 and (trade.get("performance_percent") or 0) < 0
+    )
+    return {
+        # Percentage points between the best level reached and the close.
+        "average_given_back": _rounded_mean([
+            trade["max_performance_percent"] - (trade.get("performance_percent") or 0) for trade in with_best
+        ]),
+        # In profit at some point, closed at a loss.
+        "turned_negative_count": turned_negative,
+        "turned_negative_percent": round(100.0 * turned_negative / len(with_best), 2) if with_best else None,
+    }
+
+
 def summarise_exits(trades: list[dict]) -> dict:
     """
     ``trades``: closed trades with ``close_reason``, ``performance_percent``,
     ``max_performance_percent``, ``profit_loss``, ``open_hour`` and ``holding_seconds``.
     """
-    with_best = [trade for trade in trades if trade.get("max_performance_percent") is not None]
-    given_back = [
-        trade["max_performance_percent"] - (trade.get("performance_percent") or 0) for trade in with_best
-    ]
-    turned_negative = sum(
-        1 for trade in with_best
-        if trade["max_performance_percent"] > 0 and (trade.get("performance_percent") or 0) < 0
-    )
-
     by_reason = _grouped(trades, lambda trade: exit_group(trade.get("close_reason")))
     by_hour = _grouped(trades, lambda trade: trade.get("open_hour"))
     by_holding = _grouped(trades, lambda trade: holding_bucket(trade.get("holding_seconds")))
 
     return {
-        "summary": {
-            **_stats(trades),
-            # Percentage points between the best level reached and the close.
-            "average_given_back": _rounded_mean(given_back),
-            # In profit at some point, closed at a loss.
-            "turned_negative_count": turned_negative,
-            "turned_negative_percent": round(100.0 * turned_negative / len(with_best), 2) if with_best else None,
-        },
+        "summary": {**_stats(trades), **given_back(trades)},
         "by_reason": sorted(
             ({"reason": reason, **_stats(group)} for reason, group in by_reason.items()),
             key=lambda entry: entry["trade_count"],

@@ -11,8 +11,11 @@ import calendar
 import csv
 import gzip
 import os
+from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterator
+
+from src.price_recorder.bars import BAR_SECONDS
 
 from src.strategy.bars import IndexBar
 
@@ -39,6 +42,20 @@ def _day_of_file(name: str) -> date | None:
         return None
 
 
+def files_of_period(location: str, names: list[str], start: datetime, end: datetime) -> list[str]:
+    """Of the files ``names`` of a directory, those that can hold a bar beginning in [start, end)."""
+    first, last = start.astimezone(timezone.utc).date(), (end - timedelta(seconds=1)).astimezone(timezone.utc).date()
+    files = []
+    for name in sorted(names):
+        if not name.endswith(_SUFFIX):
+            continue
+        day = _day_of_file(name)
+        # A file named after a day holds that UTC day only: the others need not be opened.
+        if day is None or first <= day <= last:
+            files.append(os.path.join(location, name))
+    return files
+
+
 class FileBars:
     """The index bars of ``indice`` found in one file, or in every file of a directory."""
 
@@ -47,26 +64,18 @@ class FileBars:
         self._indice = indice
         self._asset_type = asset_type
 
-    def _files(self, start: datetime, end: datetime) -> list[str]:
+    def files(self, start: datetime, end: datetime) -> list[str]:
+        """The files read for the bars that begin in [start, end)."""
         if not os.path.isdir(self._location):
             return [self._location]
-        first, last = start.astimezone(timezone.utc).date(), (end - timedelta(seconds=1)).astimezone(timezone.utc).date()
-        files = []
-        for name in sorted(os.listdir(self._location)):
-            if not name.endswith(_SUFFIX):
-                continue
-            day = _day_of_file(name)
-            # A file named after a day holds that UTC day only: the others need not be opened.
-            if day is None or first <= day <= last:
-                files.append(os.path.join(self._location, name))
-        return files
+        return files_of_period(self._location, os.listdir(self._location), start, end)
 
     def bars(self, start: datetime, end: datetime) -> Iterator[IndexBar]:
         """The bars that begin in [start, end), oldest first."""
         first, last = int(start.timestamp()), int(end.timestamp())
         instrument = None
         previous = None
-        for path in self._files(start, end):
+        for path in self.files(start, end):
             with gzip.open(path, "rt", newline="", encoding="utf-8") as in_file:
                 for row in csv.DictReader(in_file):
                     if row["role"] != UNDERLYING or row["indice"] != self._indice:
@@ -100,3 +109,47 @@ class FileBars:
                         ask_close=float(row["ask_close"]) if row["ask_close"] else bid_close,
                         updates=int(row["updates"] or 0),
                     )
+
+
+class IndexLookup:
+    """
+    The index at a given moment, from a directory of files named after UTC
+    days (what is fetched from Dukascopy). For moments asked in time order or
+    nearly: a few days are kept in memory, not the whole history.
+    """
+
+    def __init__(self, location: str, indice: str, *, max_wait: int = 60, days_kept: int = 3):
+        self._location = location
+        self._indice = indice
+        self._max_wait = max_wait
+        self._days_kept = days_kept
+        self._days: OrderedDict[date, dict[int, float]] = OrderedDict()
+
+    def _day(self, day: date) -> dict[int, float]:
+        if day in self._days:
+            self._days.move_to_end(day)
+            return self._days[day]
+        prices: dict[int, float] = {}
+        path = os.path.join(self._location, f"{day.isoformat()}{_SUFFIX}")
+        if os.path.exists(path):
+            start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+            for bar in FileBars(path, self._indice).bars(start, start + timedelta(days=1)):
+                # Where in its ten seconds a moment falls is not known: their middle is the fairest guess.
+                prices[bar.start] = (bar.mid_open + bar.mid_close) / 2
+        self._days[day] = prices
+        while len(self._days) > self._days_kept:
+            self._days.popitem(last=False)
+        return prices
+
+    def at(self, moment: int) -> float | None:
+        """
+        The index in the ten seconds ``moment`` (epoch seconds) falls in, or in
+        the last ones before it when the prices paused, a minute back at most.
+        None when there is no price for it.
+        """
+        bucket = moment - moment % BAR_SECONDS
+        for start in range(bucket, bucket - self._max_wait - 1, -BAR_SECONDS):
+            price = self._day(datetime.fromtimestamp(start, timezone.utc).date()).get(start)
+            if price is not None:
+                return price
+        return None

@@ -1,5 +1,79 @@
 # Changelog
 
+## v0.13.0 - Backtests that say how far to trust them, and what to change
+
+**Release date:** 2026-10-13
+
+A backtest gave a total, and nothing to tell a good one from luck. With WATA's rules a position is sold at its stop or as soon as the day has reached its target, so much of a result comes from the exits whatever the entry was. This release makes every backtest say what its total is worth, lets the model be checked against what WATA really did, and fetches the prices without anyone watching. It then gives the means to look for what to change: several values tried at once with days held out, the trades broken down, one trade followed on the turbo, and the result in money. Nothing changes for the trading services.
+
+**Verification status:** covered by unit tests, and the pages were driven in a browser against the admin application on a development machine: a backtest with its random entries, the measure of the turbo, a replay of signals and its comparison, a sweep and the backtest made of one of its combinations, the breakdowns, a trade followed, renaming and removal, in both themes and at a phone's width. All of it on three days of prices, with "real trades" made up from them. At its deployment (2026-10-13, market open, no position open, about two minutes without the trading services) the admin's new code was run read-only on the server: it read the live rules, the folders of prices and runs, and both database reads ran against the real PostgreSQL (442 closed positions, 2 journal rows). **Not yet run on a server**: a backtest, a sweep, the measure of the turbo and the comparison with real trades, and the unattended download against Dukascopy.
+
+---
+
+### What's New
+
+#### Every backtest is set against entries taken at random
+- The same days are traded again **with a coin and a clock**: on each day as many entries as the strategy asked for, each at a moment drawn in the hours it may enter in, long or short by a coin, and only WATA's rules to end them. Two hundred times over, with the same draws from one run to the next.
+- A run now says **the share of those random runs it did better than**. Near 50 %, the entries have shown nothing the exit rules do not explain; the page says so in words, and shows where the run stands among them.
+- In the list of runs, in the comparison of runs and for each leverage of a run: "Beats random".
+
+#### Figures that say what they rest on
+- **Per trade**: what a trade brings on average, what was won for 1 lost, the most trades lost in a row.
+- **The range of the total** when the same number of days is drawn again from the days tested (not given for fewer than five days).
+- **Room for a stop and a target**: each trade is kept with the worst level it went through, beside its best. A run says how far winning trades fell before they won, and how high losing trades had been.
+- **"Too few to conclude"**, in words, for a run of fewer than 30 trades or 20 days.
+
+#### The turbo measured on WATA's closed trades
+- A backtest prices a turbo from the index with three numbers that were guesses: what is paid for it, how many index points move it by 1.00, and its spread. **"Measure on real trades"** (Backtests page) reads WATA's closed positions and the index at the open and the close of each, and finds the turbo they describe, with the range the leverage could be in and how far the result is from the real trades.
+- Backtests are then made with it: once for the leverage found, once for each end of its range.
+- From a checkout: `python -m src.strategy.calibration --trades trades.json`.
+
+#### The signals WATA really received, replayed
+- "New backtest" can replay **the signals of WATA's own journal** instead of a strategy, through the same rules and the same turbo.
+- The run is then set **against what WATA really did**: each real trade beside the model's, how far apart their results are, whether they ended the same way, the trades only one of the two made, and the days of both. The gaps found are the margin every backtest is to be read with.
+- A signal is replayed as the trader receives it: an entry the rules refuse closes nothing. The minimum confidence asked of a signal, when that check is on, is now one of the rules a backtest applies.
+
+#### Prices without babysitting
+- **"Keep the prices up to date"** (Backtests page, off until switched on): the service fetches what is missing of the last 30 to 500 days by itself, the newest days first, a few at a time.
+- **Only while the market is closed** by the live rules, and it waits longer each time the source stops answering: half an hour, then twice as long each time, up to twelve hours.
+- A day the source has no more of is not asked for again.
+
+#### Several values at once, with days held out
+- "New backtest" has a section **"Try several values"**: one setting or two (a parameter of the strategy, a rule of WATA), each with the values to try. Every combination is replayed **in one pass over the prices**, of a strategy or of the signals WATA received.
+- **The last days of the period are held out** (30 %, or 10 to 50): the page shows every combination on the days a value may be chosen on and, beside it, on the days that had no say in the choice. It says in words what became of the best one there: "it held up", or "it was fitted to the first ones".
+- A combination is made **a backtest of its own** with one button, to be read with all a backtest says. From a checkout: `python -m src.strategy.sweep --axis rule:day_profit_target=1,1.7,3`.
+
+#### Where a result comes from, and one trade followed
+- **Breakdowns** on a run: its trades by hour of entry, weekday, direction, what they were entered and left on, confidence and holding time, with the same figures as the Exits page has for real trades, and how much of the best level was given back.
+- **A trade leads to its day**, brought into view around it, with **the turbo's result every ten seconds** from the entry to the exit against the stop, the day's target and the trailing stop.
+
+#### Less kind fills, and the result in money
+- A backtest filled every decision at the first price of the next ten seconds. It can now **wait longer** before a fill and **lose index points** on each: what a result owes to perfect fills shows at once.
+- With a starting capital (10,000 unless said otherwise), a run gives its result **in money at the size WATA would have given each trade**: the sizing by time of day and by confidence of the configuration, in whole turbos. Per trade, per day, and the account after each day.
+
+#### Runs that can be found again, and trusted to be what they were
+- A run keeps **what it was made with**: the version of the code and a fingerprint of the prices it read. One whose code or prices have changed since is marked **stale**, in the list and on its page.
+- A run can be **named again and tagged** after it was made; the list is searched by tags.
+- **Several runs are removed at once**: those ticked, the failed or stopped ones, or those older than 30 days. The list says what the runs and the prices take on disk.
+
+---
+
+### Things to Know
+
+- **A total proves nothing by itself.** Read it with the random runs it beat and with the number of trades and days it rests on.
+- **A sweep finds the value that did best, which is not the value that will.** The held-out days are the guard, and on a short period they are few. A sweep runs on one turbo and without the random entries.
+- **Nothing is removed by itself.** There is no automatic retention: runs are removed when someone asks, a tick or a button at a time.
+- **The money leaves out fees**: the broker's commission on each order is not counted.
+- **Files of prices fetched from now on are the same to the byte whenever they are written.** The ones fetched before keep the time they were written in their header: a run made on them is marked stale if they are fetched again, even with the same prices.
+- **Runs made before this release** show their figures as before, and a note where the new ones would be: run them again to have them.
+- **Once the turbo is measured, new runs use it**, and can no longer be compared side by side with runs made on the assumed leverages (80, 110, 140): they have no leverage in common.
+- **The measure of the turbo is rough.** The index of the history is another broker's and in dollars; the turbo is quoted in euros. A line through fewer than thirty trades is a first idea, and the page says so.
+- **Both need the prices of the days WATA traded.** A trade whose day has no prices is left out of the measure; a signal that came at a moment without prices is not replayed.
+- **Disk space:** about 5 MB for each day of prices, some 400 MB for the 120 days the unattended download goes back by default.
+- **A backtest takes longer**: the random entries are the larger part of it, the more so as the rules hold a position longer. Three days took one second on a laptop with the example rules, eight with rules that sell nothing before the end of the day: count minutes for a year, more on a small server, where it runs at the lowest priority. A run is stopped after three hours. `--baseline 0` leaves the random entries out from the command line.
+
+---
+
 ## v0.12.0 - Price Recorder
 
 **Release date:** not yet released
@@ -34,11 +108,25 @@ This release adds an optional service that records the prices of the turbos WATA
 - Charts are drawn with TradingView's Lightweight Charts (Apache License 2.0), whose notice is on the page. It is only loaded with this page.
 - Four read-only routes for it: `/api/prices/instruments`, `/api/prices/bars`, `/api/prices/range-bars`, `/api/prices/context`.
 
+#### Strategy backtests, from the command line and in the admin interface
+- WATA can **replay a strategy on prices of the past** and say what it would have done with it: which entries the Trader would have taken or refused, and where the Position Monitor would have sold. This is the first part of computing the signals inside WATA. **Nothing live uses it**: TradingView still sends the signals and no service runs the strategy.
+- **The strategy** (`kernel_vwap`) is the one of the TradingView script, on one feed: on range bars of the index, a kernel regression crossing the VWAP of the session is an entry. `entry_mode=cross_catchup` adds an entry the script does not have, for a move that began before entries were allowed.
+- **WATA's own rules are applied**, read from the configuration: market hours, trade limit, cooldown, day profit cap and loss limit, then stop, take-profit, trailing stop, daily target and end-of-day close, on a turbo modelled from the index. Index points alone say little: with the example configuration a position is sold at −15 %, or as soon as the day reaches +1.7 %.
+- **Prices** come from Dukascopy's public tick files (US Tech 100, since 2013), fetched and kept as the ten-second bars the Price Recorder writes: `python -m src.strategy.history.dukascopy`. Files exported by `wataprices` are read the same way.
+- **In the admin interface**, a new **Backtests** page (under Analysis): ask for a run with its period, the strategy's parameters and, for that run only, other values of WATA's rules; follow it; read its figures per leverage assumed, its curve, its days, its trades and the entries refused, with CSV export; open **one day as a chart** (range bars, kernel, VWAP and band, entries, exits and refusals); set **up to four runs side by side**; see which days have prices and **fetch more from the page**.
+- From a checkout: `python -m src.strategy.backtest --from … --to …`.
+
 #### Light theme for the admin interface
 - The interface was dark only. It is now light or dark: it **follows the system setting**, and a button in the top bar and on the login page sets it to always light, to always dark, or back to following the system. The choice is kept in the browser.
 - The theme is set before the page is painted, so a load does not flash in the other theme.
 - Every page, dialog, menu, toast and chart has both themes. In light, the profit, loss, warning and information colours and the secondary text were given darker steps than their dark counterparts, so that each is readable (4.5:1 at least) on every light surface.
 - Dark is unchanged: its pages were compared pixel for pixel before and after.
+
+#### Admin interface without a domain of its own, and from a phone
+- The interface can be served on a **second HTTPS port of the API domain** (`https://<API_DOMAIN>:8443/`), with the same certificate and behind the same allowlist: `ADMIN_DOMAIN` set to the API domain, `ADMIN_ENTRYPOINT=adminsecure` and `ADMIN_PORT=0.0.0.0:8443` in `.env`.
+- Given the API domain without the other two lines, the interface is not served and the webhook keeps its route: the admin route now has the lowest priority.
+- The README describes how to reach it **from an address that changes**, such as a phone on cellular data: a WireGuard tunnel to the server, and the tunnel's range as allowlist.
+- Both were run on one server: the second port answers 403 outside the allowlist and serves the interface inside it, and an iPhone signed in through the tunnel, recorded under its VPN address. The device configuration first written in the README never connected; the one given now did. No other device was tried.
 
 ---
 
@@ -60,6 +148,10 @@ This release adds an optional service that records the prices of the turbos WATA
 
 ### Things to Know
 
+- **Backtests run in the admin container**, as a child process at the lowest priority, one at a time, and the container is now limited to **one processor** (`cpus: '1.0'`). They are files under two new folders, `var/lib/backtests` and `var/lib/price_history`, which the installer creates and the admin mounts. `admin.backtests_enabled: false` switches the page off. None of this had been run in Docker or on a server when this entry was written: the interface was driven in a browser against the admin application on a development machine, running real backtests on three days of prices.
+- **A backtest's turbo is a model.** Its leverage and its spread are assumptions until they are calibrated on real trades, so a run is made for three leverages and a conclusion should hold for all of them.
+- **Dukascopy's prices are another broker's**, from an address it does not document, and its server refuses many requests and stops answering for a while when asked too much: a month takes hours and several downloads. One download at a time.
+- **Traefik listens on one more port, 8443, whether the admin interface is used or not.** Only on the server itself (`127.0.0.1`) unless `ADMIN_PORT` says otherwise, so nothing new is reachable from outside. If something on the server already uses that port, Traefik does not start and the webhook is down with it: check with `ss -lnt | grep 8443` before upgrading, and give `ADMIN_PORT` another one if so (`ADMIN_PORT=127.0.0.1:9443`).
 - **The recording starts when it is switched on.** Earlier prices cannot be fetched at this resolution.
 - **Disk space:** roughly 8 to 14 GB a year for one indice, more on days when the index moves a lot. `max_instruments` bounds it.
 - **The index may need naming.** If Saxo does not price the underlying of an indice for the account, the log says so and the instrument to record goes in `price_recorder.instruments`.

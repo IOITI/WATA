@@ -45,7 +45,7 @@ npm run build       # writes ../src/admin/static (ignored by git; ./package.sh r
 | `src/lib/` | API client and types (`api.ts`, `types.ts` mirror `src/admin/routers/`), formatting |
 | `src/test/` | Test setup, and the stand-ins for the charting library and for the system's theme |
 | `src/styles/` | `tokens.css` (EasyUI, unchanged), `theme.css` (WATA additions), `index.css` (Tailwind mapping) |
-| `dev/fake_api.py`, `dev/fake_prices.py` | The fake-data server and its made-up recorded prices |
+| `dev/fake_api.py`, `dev/fake_prices.py` | The fake-data server and its made-up recorded prices. Its backtests are real ones, on the prices kept under `var/lib/price_history` of the checkout; the "real trades" they are set against are made up from those same prices |
 
 ## Themes
 
@@ -102,6 +102,8 @@ Changes made to the copied files:
 - `drag-to-confirm.tsx`: the hidden fallback button is out of the Tab order (it was a stop nobody could see,
   on which Enter confirmed); ArrowRight no longer confirms, only Enter and Space.
 - `velocity-toast.tsx`: `wrapperClassName`, to lift the toast above the bar at the bottom of the configuration page.
+- `stretch-switch.tsx`: the switch is named by its label and described by its description
+  (`aria-labelledby`, `aria-describedby`); it had no name, so a screen reader only said "switch, on".
 - `form.tsx`, `animated-tabs.tsx`, `smooth-accordion.tsx`: the literal grey `#6B6B6B` (3.6:1 on the dark
   surface) replaced by `text-muted-foreground`; hints at 12 px instead of 11.
 - `not-found.tsx`: import of `./button` in lower case, as the file is named (the original casing only
@@ -133,11 +135,16 @@ Prices page only.
 
 - **Its licence asks for a notice and a link on the page that shows the charts.** The notice is
   "TradingView Lightweight Charts™ Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/".
-  `PricesPage.tsx` writes it under the chart, and the chart keeps the library's own logo
-  (`layout.attributionLogo`). Keep both if the page is reworked.
+  `ChartAttribution.tsx` writes it under the chart, on both pages that show one, and the chart keeps the
+  library's own logo (`layout.attributionLogo`). Keep both if a page is reworked, and on any new one.
 - **`features/prices/PriceChart.tsx` is the only file that imports it.** It is given data that is ready to
   draw and draws it. Everything that can be wrong without a canvas (times, holes, markers, intervals) is in
   `chartData.ts`, which is plain functions with tests.
+- **Two pages show it**: the Prices page, and a day of a backtest (`features/backtests/BacktestDayPage.tsx`),
+  which gives it `overlays`: lines over the prices, on their scale (the kernel, the VWAP of the session, its
+  band). A line is told by more than its colour: the kernel takes the colour of its direction at each
+  point, the VWAP is thick, its band thin and dashed. `features/prices/ChartAttribution.tsx` is the licence
+  notice: it goes on every page where `PriceChart` goes.
 - **The library only knows UTC.** To show the trading timezone, `chartData.ts` shifts every time by that
   zone's offset before the chart sees it; what comes back from the chart (the time under the pointer) is in
   the same shifted time.

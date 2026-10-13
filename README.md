@@ -388,13 +388,14 @@ Payload:
 
 ## 🖥️ Admin Interface
 
-An optional web interface for the operator, served on its own domain:
+An optional web interface for the operator, served on its own domain or on a port of its own:
 
 - **Dashboard**: the day's profit and loss, trades against the daily limit, whether the next signal would be traded and what holds it back, open positions with their live value, latest signals and the state of each service. The page is updated as things happen and can raise browser notifications. On every page, the top bar says when new entries are paused, when Saxo needs a new authorisation and when a restart is needed.
 - **Positions, orders and performance**: history with CSV export, cumulative and daily profit and loss, win rate, long/short and per-instrument figures, read live from PostgreSQL.
 - **Report and exits**: the figures of the daily Telegram report with the account balance over time, and an analysis of how trades ended (by exit, hour of entry, holding time, and how much of the best level was given back).
 - **Signals, watchlist and execution timing**: what the Trader did with each signal and why, the turbo that would be bought now, and how long each step of a trade took.
 - **Prices**: the bars kept by the [Price Recorder](#️-price-recorder), as a candlestick chart per instrument, from ten-second bars to one-hour ones or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under each turbo. The times that were not recorded are listed, and the bars can be exported to CSV.
+- **Backtests**: a strategy replayed on prices of the past with WATA's own rules, asked for and read from the browser: see the [Strategy Backtester](#-strategy-backtester).
 - **Operator actions**: pause and resume new entries, close one position, hand over the Saxo authorization code from the browser (instead of `watasaxoauth` over SSH), send a manual `long` / `short` / close signal, request the daily report. Each one asks for an explicit confirmation, is kept in an audit trail and announced on Telegram.
 - **Configuration**: view `config.json` with secrets masked and edit the trading parameters (`trade.rules`, `trade.config`, `reporting`, `logging.level`). A change is checked with the same validator the services use, the previous file is kept as `config.json.bak-<date>` and its trading parameters can be restored, and it takes effect the next time each service starts (run `watastop` then `watastart`).
 - **Logs**: the end of each service's log file, filtered by level and text.
@@ -413,9 +414,77 @@ An optional web interface for the operator, served on its own domain:
 3. `watastart`, then set the password (at least 12 characters): `wataadminpasswd`. Until a password is set, every login is refused.
 4. Recommended: `wataadmintotp` prints a key to add to an authenticator app; a one-time code is then required at each login. `wataadmintotp --disable` removes it.
 
+### Without a domain for it
+
+The interface can use the API domain on a second HTTPS port, with the same certificate. Skip step 1 and add these three lines to `/app/wata/.env`, where `ADMIN_DOMAIN` is the value of `API_DOMAIN`:
+
+```
+ADMIN_DOMAIN=api.yourdomain.com
+ADMIN_ENTRYPOINT=adminsecure
+ADMIN_PORT=0.0.0.0:8443
+```
+
+The interface is then at `https://api.yourdomain.com:8443/`, behind the same allowlist. All three lines are needed: with the domain alone, the webhook keeps its route and the interface is not served. `0.0.0.0` publishes the port over IPv4 only, where Traefik sees the address of the caller. Before starting, check that nothing on the server already listens on that port (`ss -lnt | grep 8443`): Traefik would not start.
+
+### From a phone, or any address that changes
+
+An allowlist cannot follow a phone on cellular data. Put your devices on a VPN that ends on the server and allow the VPN's addresses instead: the login page stays closed to everyone else. With [WireGuard](https://www.wireguard.com/), as root on the server:
+
+```bash
+apt-get install -y wireguard-tools qrencode
+umask 077 && cd /etc/wireguard
+wg genkey | tee server.key | wg pubkey > server.pub
+cat > wg0.conf <<EOF
+[Interface]
+Address = 10.77.0.1/24
+ListenPort = 51820
+PrivateKey = $(cat server.key)
+EOF
+ufw allow 51820/udp
+systemctl enable --now wg-quick@wg0
+```
+
+Then for each device, with an address of its own (`10.77.0.2`, `10.77.0.3`...), the public IPv4 address of the server in place of `203.0.113.5` and its IPv6 address in place of `2001:db8::5`:
+
+```bash
+umask 077 && cd /etc/wireguard
+wg genkey | tee phone.key | wg pubkey > phone.pub
+cat >> wg0.conf <<EOF
+
+[Peer]
+# phone
+PublicKey = $(cat phone.pub)
+AllowedIPs = 10.77.0.2/32
+EOF
+cat > phone.conf <<EOF
+[Interface]
+PrivateKey = $(cat phone.key)
+Address = 10.77.0.2/32
+
+[Peer]
+PublicKey = $(cat server.pub)
+Endpoint = [2001:db8::5]:51820
+AllowedIPs = 203.0.113.5/32
+PersistentKeepalive = 25
+EOF
+wg syncconf wg0 <(wg-quick strip wg0)
+qrencode -t ansiutf8 < phone.conf
+rm phone.key phone.conf
+```
+
+The WireGuard app (iPhone, Mac, Android, Windows) reads the code that `qrencode` draws, or the content of `phone.conf` copied to a file before it is removed. In `.env`, the allowlist is the VPN's range: `ADMIN_ALLOWED_IPS=10.77.0.0/24`.
+
+- The tunnel only carries what the device sends to the server's address, the rest of its traffic is untouched. It can therefore stay on: the app's "On-Demand Activation" switches it on by itself.
+- That includes SSH: if WireGuard is stopped on the server, switch the tunnel off on the computer to reach it.
+- The device reaches the server by its IPv6 address and the tunnel carries its IPv4 address: this is the form that was seen working, from an iPhone, and it needs IPv6 on the network the device is on. With the IPv4 address in both places and no keepalive, the phone never sent a packet; which of the two differences matters was not established.
+- The app shows a tunnel as active whether or not the server answers. `wg show` on the server is what tells: a device that has connected has a "latest handshake".
+- To check: with the tunnel off, the interface answers 403, or nothing at all when a firewall of the hosting provider closes the port; with it on, the login page. The audit trail then shows the device's VPN address.
+- A lost device: remove its `[Peer]` block from `wg0.conf` and run the `wg syncconf` line again.
+- If the hosting provider has a firewall of its own in front of the server, open UDP port 51820 there too. Port 8443 can stay closed there: it is reached inside the tunnel.
+
 ### Security model
 
-- Its own Traefik route with HTTPS and its own IP allowlist, then a password login and, when enabled, a one-time code. Repeated failed logins lock the address out for 15 minutes. Changing the password or the second factor closes open sessions.
+- Its own Traefik route with HTTPS and its own IP allowlist, on its own domain or on a second port of the API domain, then a password login and, when enabled, a one-time code. Repeated failed logins lock the address out for 15 minutes. Changing the password or the second factor closes open sessions.
 - The address used for that lockout and in the audit trail is the one Traefik reports. `admin.trusted_proxy_hosts` (`["traefik"]` by default) names the proxies believed for it; anything else that reaches the admin port is known by its own address.
 - The container reads PostgreSQL through connections set to read-only, so that a mistake in a query cannot write anything. This is a safeguard, not a separate database account: it connects as the same user as the trading services. The pause of new entries is the one thing it writes, through a separate connection.
 - It mounts only the token directories it needs, the other services' logs read-only, and has no access to Docker: it cannot start, stop or restart anything.
@@ -511,7 +580,34 @@ WATA can replay a strategy on prices of the past and say what it would have done
 
 This is the first part of computing the signals inside WATA instead of TradingView. **Nothing live uses it yet**: TradingView still sends the signals, and no service runs the strategy.
 
-### Running one
+### In the admin interface
+
+With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page (under Analysis) does it all from the browser:
+
+- **Prices**: which days have prices, by month, and "Fetch these days" for more. The download runs in the background, one at a time, and can be stopped. It is slow: see below. **"Keep the prices up to date"** has the service fetch what is missing by itself, as far back as chosen: the newest days first, a few at a time, **only while the market is closed**, waiting longer each time the source stops answering (half an hour, then twice as long, up to twelve hours). Off until switched on.
+- **Turbo**: "Measure on real trades" reads WATA's closed positions and the index at the open and the close of each, and finds the turbo they describe: what was paid, how many index points move it by 1.00, its spread, with the range the leverage could be in and how far the result is from the real trades. Backtests are then made with it instead of the assumed one. It needs the prices of the days WATA traded.
+- **New backtest**: the period, the strategy's parameters, the turbo and, **for that run only, other values of WATA's rules** (stop, take-profit, trailing stop, daily target, entry cap, cooldown, trade limit, minimum confidence). The live configuration is not touched. Instead of a strategy, **"The signals WATA received"** replays the signals of WATA's own journal for the period.
+- **A run**: what was asked, the days that could not be tested, then for each leverage its figures, the curve of all days, the result of each day, why trades were entered and left and which rules refused entries, and the trades, days and refusals as tables with CSV export. "Run again with changes" starts a new one from it.
+- **How far to trust a run**, on its page: where its total stands among **the same days traded with entries at random** (see below), what a trade brings on average, what was won for 1 lost, the longest losing streak, the range the total falls in when the days are drawn again, and how far winning trades fell before they won. A run of fewer than 30 trades or 20 days says so in words.
+- **A replay of real signals** is also set **against what WATA really did**: each real trade beside the model's, how far apart their results are, whether they ended the same way, the trades only one of the two made, and the days of both. It is the model that is tested there, not a strategy.
+- **Try several values (a sweep)**, from "New backtest": give one setting or two (a parameter of the strategy, a rule) several values, and every combination is replayed in one run. **The last days of the period are held out** (30 % unless said otherwise): the page shows every combination on the days a value may be chosen on, the same combinations on the days held out, and says in words what became of the best one there. A combination is then made a backtest of its own with one button.
+- **Where the result comes from**, on a run: its trades by hour of entry, weekday, direction, what they were entered and left on, confidence and holding time, with what each group weighs, and how much of the best level was given back.
+- **A trade followed**: a trade in the list leads to the chart of its day, brought into view around it, with **the turbo's result every ten seconds from the entry to the exit** against the stop, the day's target and the trailing stop: why the monitor sold where it did.
+- **Fills, and the account**: a wait between a decision and its fill, index points lost on each fill, and a starting capital. With a capital, a run also gives its result **in money, at the size WATA would have given each trade** (its sizing by time of day and by confidence, in whole turbos).
+- **Housekeeping**: a run can be named again and tagged, several can be removed at once (the failed ones, or those older than 30 days, in one go), and the list says what the runs and the prices take on disk. A run made with code or prices that have changed since is marked **stale**.
+- **A day**: the range bars the strategy saw, with the kernel (green while it rises, red while it falls), the VWAP of the session and its band, and a mark where a trade was entered, left, or refused. The day's trades and refusals are listed under the chart.
+- **Compare**: tick up to four finished runs in the list to set their figures side by side, with what each one changed and their curves on one chart.
+
+What it does on the server:
+
+- A backtest is a separate process started by the admin, **at the lowest priority and one at a time**; others wait their turn (ten at most). The admin container is limited to one processor, so the services that trade keep the rest.
+- Runs are files under `/app/wata/var/lib/backtests/`, one folder each; prices are under `/app/wata/var/lib/price_history/`. Nothing is written to the database. "Remove" on a run deletes its folder.
+- It is on with the admin interface. `"backtests_enabled": false` in the `admin` section of `config.json` switches it off.
+- A backtest is not an operator action: it changes nothing that trades, and is neither in the audit trail nor announced on Telegram.
+- The measure of the turbo and the replay of real signals **read** the closed positions and the signal journal, through the admin's read-only connection. They write files, like any run.
+- Prices take about 5 MB of disk a day (the hourly files as they were fetched, and the ten-second bars): some 400 MB for the 120 days "Keep the prices up to date" goes back by default.
+
+### From the command line
 
 From a checkout of the repository:
 
@@ -525,12 +621,24 @@ PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-
 # The same with a parameter changed, and the trades written to files
 PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 \
     --set entry_mode=cross_catchup --out var/lib/backtests/catchup
+
+# Signals WATA received (a JSON list: at, action, confidence) instead of a strategy
+PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 --signals signals.json
+
+# The turbo measured on closed trades (a JSON list: direction, opened_at, closed_at, open_price, close_price)
+PYTHONPATH=./:src/ python3 -m src.strategy.calibration --trades trades.json
+
+# Several values of a rule and of a parameter in one pass, the last 30 % of the days held out
+PYTHONPATH=./:src/ python3 -m src.strategy.sweep --from 2026-06-01 --to 2026-10-09 \
+    --axis rule:day_profit_target=1,1.7,2.5,4 --axis parameter:kernel_bandwidth=8,15,25
 ```
 
 - **Fetching is slow and has to be repeated.** Dukascopy's server refuses many requests, and stops answering altogether for a while when it is asked too much (two downloads at the same time are enough). Each run keeps what it got under `var/lib/price_history/`, says which days are incomplete, and stops by itself when nothing is answered any more; the next run only asks for what is missing. A day with a missing hour is never written. Count hours, not minutes, for a month of prices.
 - **The rules are those of a configuration**: `--config`, else `WATA_CONFIG_PATH`, else `etc/config_example.json`. Give it your own `config.json` to test with your own stop, targets and hours.
 - **`--source`** takes a file or a directory made by `wataprices` instead, to replay prices the [Price Recorder](#️-price-recorder) recorded.
 - **`--trace file.csv`** writes one line per range bar (close, kernel, VWAP, band, whether entries were allowed), to compare with a chart.
+- **`--baseline 200`** (the default) is how many times the same days are traded with entries at random, to compare; `--baseline 0` leaves that out, `--baseline-seed` draws others.
+- **`--fill-delay 30`** fills each decision thirty seconds after the next ten seconds, **`--slippage 1.5`** loses that many index points against the trade on each fill, and **`--capital 10000`** (the default) is the account the result is also given in money for; `--capital 0` gives none.
 
 ### What is replayed
 
@@ -556,14 +664,29 @@ One column per leverage assumed for the turbo (`--points-per-unit`: the index po
 
 Percentages are counted as WATA counts a day: each trade as the whole stake, one result applied on the one before. Position sizing by time of day and by confidence is not applied.
 
+**"Random entries beaten"** is what the total is worth. WATA's exits decide most of a trade: the monitor sells at its stop, or as soon as the day has reached its target, whatever the trade was entered on. So the same days are traded again with a coin and a clock: on each day as many entries as the strategy asked for, each at a moment drawn in the hours it may enter in, long or short by a coin, and only WATA's rules to end them. Two hundred times over, with the same draws from one run to the next. The figure is the share of those that did worse than the strategy. **Near 50 %, the entries have shown nothing the exit rules do not explain**; it takes 95 % or more to say they count for something.
+
+**"90 % of redrawn days"** is where the total falls when the same number of days is drawn again from the days tested: how much it owes to which days there were. It is not given for fewer than five days, and knows nothing of days unlike any of them.
+
+With `--out`, each trade is written with the worst level it went through (`min_performance_percent`) beside its best: what a stop has to leave room for.
+
+**"In money, as WATA sizes"** is the same trades at the size WATA would have given each, on an account that starts with the capital: the share of the account the configuration lets an order use, scaled by the time of day and by the confidence of the entry, in whole turbos with one left unbought. The percentages above it count every trade as the whole stake. Neither fees nor taxes are counted.
+
+**A sweep** prints one line per combination, with its total and its trades on the days a value may be chosen on, then on the days held out. Read the second column before believing the first: the value that did best on a period was chosen because it did best there.
+
 ### What to keep in mind
 
-- **The turbo's leverage and spread are assumptions** until they are calibrated on real trades. That is why the backtest runs with three leverages by default: a conclusion that holds for one only is not a conclusion.
+- **The turbo's leverage and spread are assumptions** until they are measured on real trades (the Turbo panel, or `python -m src.strategy.calibration`). That is why the backtest runs with three leverages by default: a conclusion that holds for one only is not a conclusion. Once measured, a run is made for the leverage found and for each end of the range it could be in. The measure itself is rough: the index of the history is another broker's and in dollars, the turbo is quoted in euros, and a line through fewer than thirty trades is a first idea.
+- **A total proves nothing by itself.** Read it with the random entries it beat, and with the number of trades and days it rests on.
+- **A sweep finds the value that did best, which is not the value that will.** That is what the held-out days are for; on a short period they are a handful of days and say little. A sweep runs on one turbo and without the random entries: make the combination chosen a backtest of its own before acting on it.
+- **The money leaves out fees.** Saxo's commission on each order is not counted, nor is a turbo priced other than the one assumed.
+- **The model can be wrong, and a replay of real signals says by how much.** Until one has been made on the server, with the journal and the positions of real days, the gap between a backtest and what WATA would really have done is not known.
 - **Index points say little.** With the example configuration a position is sold at −15 %, or as soon as the day reaches +1.7 %: a move of 300 points and a move of 20 can end as the same trade.
 - **It is a close relative of the TradingView script, not a copy.** One feed instead of the average of three, range bars built from ten-second bars, and a session that ends on the clock.
 - **Dukascopy's prices are another broker's**, fetched from an address it does not document. They are for research. A strategy that only works on one broker's prices is fragile.
 - **Ten seconds is the resolution.** A decision is acted on at the open of the next ten seconds. A stop crossed inside ten seconds is sold at their worst price, a target at the target and no better.
 - **Past results are not future results**, and a parameter chosen because it did best on the period tested will do worse on the next one.
+- **Not yet run on a server**: the pages were driven in a browser against the admin application on a development machine, with real backtests on three days of prices. The container's new folders and its processor limit are only checked by tests of the compose file. Open the page for the first time with the market closed. The measure of the turbo, the comparison with real trades and a sweep have only seen made-up trades and three days of prices; their two database reads were run once against the real PostgreSQL, when v0.13.0 was deployed. The unattended download has not run against Dukascopy.
 
 ## 📈 Reporting
 

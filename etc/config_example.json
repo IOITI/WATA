@@ -298,6 +298,7 @@
     "session_max_age_minutes": 720,
     "actions_enabled": true,
     "config_edit_enabled": true,
+    "backtests_enabled": true,
     "trusted_proxy_hosts": ["traefik"],
     "persistant": {
       "credentials_path": "/app/var/lib/admin/credentials.json"

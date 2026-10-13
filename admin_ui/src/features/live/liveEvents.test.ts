@@ -42,6 +42,43 @@ describe('describeEvent', () => {
     expect(up).toEqual({ title: 'Position monitor is back up', body: undefined, variant: 'success' })
   })
 
+  it('says when a backtest ended, and nothing when the operator stopped it', () => {
+    expect(describeEvent({ type: 'backtest_finished', state: 'done', note: 'higher target' })).toEqual({
+      title: 'Backtest finished', body: 'higher target', variant: 'success',
+    })
+    expect(describeEvent({ type: 'backtest_finished', state: 'failed', note: '' })).toEqual({
+      title: 'Backtest failed', body: undefined, variant: 'error',
+    })
+    expect(describeEvent({ type: 'backtest_finished', state: 'cancelled' })).toBeNull()
+  })
+
+  it('says how a download of prices ended, and that days are usually still missing', () => {
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'done' })).toEqual({
+      title: 'Prices downloaded', body: undefined, variant: 'success',
+    })
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'incomplete' })).toEqual({
+      title: 'The download of prices ended',
+      body: 'Some days are still missing: run the same period again.',
+      variant: 'warning',
+    })
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'stopped' })).toBeNull()
+  })
+
+  it('says nothing of the downloads the service makes by itself, night after night', () => {
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', automatic: true })).toBeNull()
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'incomplete', automatic: true })).toBeNull()
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', automatic: false })).not.toBeNull()
+  })
+
+  it('says when the turbo was measured, or that it could not be', () => {
+    expect(describeEvent({ type: 'calibration_finished', state: 'done' })).toEqual({
+      title: 'Turbo measured on the real trades', variant: 'success',
+    })
+    expect(describeEvent({ type: 'calibration_finished', state: 'failed' })).toEqual({
+      title: 'The measure of the turbo failed', variant: 'error',
+    })
+  })
+
   it('stays silent for what the dashboard already shows, and for events it does not know', () => {
     expect(describeEvent({ type: 'entries_paused' })).toBeNull()
     expect(describeEvent({ type: 'entries_resumed' })).toBeNull()
@@ -56,6 +93,10 @@ describe('staleQueries', () => {
     )
     expect(staleQueries({ type: 'entries_paused' })).toEqual(['overview'])
     expect(staleQueries({ type: 'service_status' })).toEqual(['health'])
+    expect(staleQueries({ type: 'backtest_finished' })).toEqual(['backtests', 'backtest'])
+    expect(staleQueries({ type: 'prices_fetch_finished' })).toEqual(['backtest-prices'])
+    // A new backtest is offered the turbo that was measured.
+    expect(staleQueries({ type: 'calibration_finished' })).toEqual(['backtest-calibration', 'backtest-options'])
     expect(staleQueries({ type: 'something_new' })).toEqual([])
   })
 

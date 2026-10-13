@@ -18,6 +18,7 @@ import type { PriceInstrument } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { RangeBarsTable, TimeBarsTable } from './BarsTable'
+import { ChartAttribution } from './ChartAttribution'
 import {
   allowedIntervals,
   daysBetween,
@@ -197,18 +198,6 @@ function AboutRangeBars({ tick, side, unit }: { tick: string; side: Side; unit: 
         </p>
       </div>
     </details>
-  )
-}
-
-/** The notice the charting library's licence asks for, on the page that shows its charts. */
-function Attribution() {
-  return (
-    <p className="text-[11px] text-muted-foreground">
-      TradingView Lightweight Charts™ Copyright (c) 2025 TradingView, Inc.{' '}
-      <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">
-        https://www.tradingview.com/
-      </a>
-    </p>
   )
 }
 
@@ -549,7 +538,7 @@ export function PricesPage() {
                       <p className="text-xs text-muted-foreground">
                         Scroll or pinch to zoom, drag to move.{live ? ' Read again every 30 seconds.' : ''}
                       </p>
-                      <Attribution />
+                      <ChartAttribution />
                     </div>
                     {ranged && (
                       <AboutRangeBars

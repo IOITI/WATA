@@ -1,4 +1,5 @@
 import gzip
+import json
 import lzma
 import os
 import struct
@@ -25,7 +26,7 @@ from src.strategy.history.dukascopy import (
     raw_path,
     sync,
 )
-from src.strategy.sources import FileBars, SeveralInstruments
+from src.strategy.sources import FileBars, IndexLookup, SeveralInstruments
 
 SYMBOL = "USATECHIDXUSD"
 # Monday 12 October 2026.
@@ -292,6 +293,31 @@ def test_the_command_says_what_is_ready_and_what_to_run_again(tmp_path, monkeypa
     assert "2026-10-13" in out.splitlines()[-1]
 
 
+def test_the_command_can_report_what_became_of_each_day(tmp_path, monkeypatch):
+    # Monday: an hour never answered. Tuesday: every hour answered, none of them published after noon.
+    def answer(url: str):
+        if "/2026/09/12/07h_" in url:
+            return RuntimeError("503")
+        if "/2026/09/13/" in url and int(url.rsplit("/", 1)[1][:2]) >= 12:
+            return None
+        return _one_tick_per_hour(url)
+
+    monkeypatch.setattr(dukascopy, "http_fetch", lambda: Server(answer))
+    monkeypatch.setattr(dukascopy.time, "sleep", lambda seconds: None)
+    report = tmp_path / "out" / "report.json"
+
+    dukascopy.main([
+        "--from", "2026-10-10", "--to", "2026-10-13", "--root", str(tmp_path), "--attempts", "1", "--report", str(report),
+    ])
+
+    assert json.loads(report.read_text())["days"] == [
+        {"day": "2026-10-10", "status": "empty", "bars": 0, "unpublished_hours": 0, "unanswered_hours": 0},
+        {"day": "2026-10-11", "status": "written", "bars": 12, "unpublished_hours": 0, "unanswered_hours": 0},
+        {"day": "2026-10-12", "status": "incomplete", "bars": 0, "unpublished_hours": 0, "unanswered_hours": 1},
+        {"day": "2026-10-13", "status": "partial", "bars": 36, "unpublished_hours": 12, "unanswered_hours": 0},
+    ]
+
+
 # ── reading files of bars ──
 
 
@@ -360,3 +386,36 @@ def test_in_a_directory_of_days_only_the_days_of_the_period_are_opened(tmp_path)
     bars = list(FileBars(str(tmp_path), "us100").bars(_hour(MONDAY, 0), _hour(date(2026, 10, 13), 0)))
 
     assert [bar.start for bar in bars] == [1791792000]
+
+
+# ── the index at a given moment ──
+
+
+def test_the_index_at_a_moment_is_the_middle_of_its_ten_seconds(tmp_path):
+    start = int(_hour(MONDAY, 8).timestamp())
+    _export(tmp_path / "2026-10-12.csv.gz", [
+        _row("2026-10-12T08:00:00Z", bid_open=100, bid_close=104, ask_open=102, ask_close=106),
+        _row("2026-10-12T08:00:10Z", bid_open=200, bid_close=200),
+        _row("2026-10-12T08:02:00Z", bid_open=300, bid_close=300),
+    ])
+    lookup = IndexLookup(str(tmp_path), "us100")
+
+    # Between the middle of bid and ask at the open (101) and at the close (105).
+    assert lookup.at(start) == lookup.at(start + 9) == 103.0
+    assert lookup.at(start + 10) == 200.0
+    # The prices paused: the last ones stand for a minute, no longer.
+    assert lookup.at(start + 70) == 200.0
+    assert lookup.at(start + 80) is None
+    assert lookup.at(start + 120) == 300.0
+    assert lookup.at(start - 10) is None
+
+
+def test_a_day_that_was_not_fetched_has_no_index_and_few_days_are_kept_in_memory(tmp_path):
+    for day in ("2026-10-12", "2026-10-13", "2026-10-14"):
+        _export(tmp_path / f"{day}.csv.gz", [_row(f"{day}T08:00:00Z")])
+    lookup = IndexLookup(str(tmp_path), "us100", days_kept=2)
+
+    assert [lookup.at(int(_hour(date(2026, 10, day), 8).timestamp())) for day in (12, 13, 14, 15)] == [100.25, 100.25, 100.25, None]
+    assert len(lookup._days) == 2
+    # Asked again after it was let go: read again.
+    assert lookup.at(int(_hour(MONDAY, 8).timestamp())) == 100.25

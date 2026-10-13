@@ -13,10 +13,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 
+from src.admin.backtests import InvalidRequest, NotPossible, UnknownRun
 from src.admin.context import AdminContext
 from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
 from src.admin.events import StateWatcher
-from src.admin.routers import actions, config, prices, session, system, trading
+from src.admin.routers import actions, backtests, config, prices, session, system, trading
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,11 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
             # Keeps the address of the reverse proxy up to date.
             asyncio.create_task(ctx.trusted_proxies.keep_refreshed()),
         ]
+        if ctx.backtests is not None and ctx.settings.backtests_enabled:
+            # Runs the backtests asked for, one at a time.
+            background.append(asyncio.create_task(ctx.backtests.run()))
+            # Fetches the prices that are missing, when it was told to and the market is closed.
+            background.append(asyncio.create_task(ctx.backtests.keep_prices()))
         try:
             yield
         finally:
@@ -133,13 +139,25 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         logger.warning(f"Upstream service unavailable: {exc}")
         return JSONResponse(content={"detail": f"Service unavailable ({exc})"}, status_code=502)
 
+    @app.exception_handler(UnknownRun)
+    async def unknown_run(_: Request, __: UnknownRun):
+        return JSONResponse(content={"detail": "No such backtest"}, status_code=404)
+
+    @app.exception_handler(InvalidRequest)
+    async def invalid_request(_: Request, exc: InvalidRequest):
+        return JSONResponse(content={"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(NotPossible)
+    async def not_possible(_: Request, exc: NotPossible):
+        return JSONResponse(content={"detail": str(exc)}, status_code=409)
+
     @app.get("/api/healthz", include_in_schema=False)
     async def healthz():
         # "totp" lets the login page ask for a one-time code without a failed attempt first.
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, trading, system, actions, config, prices):
+    for module in (session, trading, system, actions, config, prices, backtests):
         app.include_router(module.router)
 
     _mount_interface(app, static_dir)

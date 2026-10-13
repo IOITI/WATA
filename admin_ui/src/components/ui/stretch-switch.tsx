@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { cn } from '../../lib/utils';
 import { motionTransitions } from '../../lib/motion-tokens';
@@ -27,6 +27,9 @@ const TRAVEL = TRACK_WIDTH - THUMB_SIZE - TRACK_PADDING * 2;
  * Implementation: while pressing, the thumb is allowed to grow horizontally
  * (scaleX > 1) and slightly vertically (scaleY < 1) so it looks "stretched".
  * On release, the spring (springSnappy) handles the snap to the new x.
+ *
+ * WATA: the switch is named by its label and described by its description, so
+ * that a screen reader says which setting it is and not only "switch, on".
  */
 export const StretchSwitch: React.FC<StretchSwitchProps> = ({
   checked,
@@ -38,6 +41,7 @@ export const StretchSwitch: React.FC<StretchSwitchProps> = ({
   className,
 }) => {
   const [isOn, setIsOn] = useState(defaultChecked);
+  const id = useId();
   const isControlled = checked !== undefined;
   const current = isControlled ? checked : isOn;
 
@@ -74,10 +78,10 @@ export const StretchSwitch: React.FC<StretchSwitchProps> = ({
           onClick={handleToggle}
         >
           {label && (
-            <div className="text-xs font-medium text-[var(--text-primary)] leading-tight">{label}</div>
+            <div id={`${id}-label`} className="text-xs font-medium text-[var(--text-primary)] leading-tight">{label}</div>
           )}
           {description && (
-            <div className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-relaxed">
+            <div id={`${id}-description`} className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-relaxed">
               {description}
             </div>
           )}
@@ -88,6 +92,8 @@ export const StretchSwitch: React.FC<StretchSwitchProps> = ({
         type="button"
         role="switch"
         aria-checked={current}
+        aria-labelledby={label ? `${id}-label` : undefined}
+        aria-describedby={description ? `${id}-description` : undefined}
         disabled={disabled}
         onPointerDown={() => !disabled && setIsPressed(true)}
         onPointerUp={() => setIsPressed(false)}

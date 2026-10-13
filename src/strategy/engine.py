@@ -36,6 +36,8 @@ class Decision:
     target: str
     reason: str
     confidence: float | None = None
+    # A flat decision that only ends one side (the trader's close-long and close-short): "long" or "short".
+    closes: str | None = None
 
 
 class Strategy(Protocol):
@@ -44,6 +46,13 @@ class Strategy(Protocol):
 
     def on_bar(self, bar: IndexBar) -> list[Decision]:
         """The next bar of the day; the decisions it brought, in the order they were taken."""
+
+    def entry_window(self) -> tuple[int, int]:
+        """
+        The part of a day in which it may enter, in seconds since midnight of
+        the trading timezone (the end is not in it). What random entries are
+        drawn in, to be compared with its own (src/strategy/baseline.py).
+        """
 
 
 class LocalClock:
@@ -86,6 +95,44 @@ def seconds_of(clock_time: str) -> int:
     return hour * _HOUR + minute * 60
 
 
+class Feed:
+    """
+    One strategy given the bars a bar at a time: what ``run`` does, for whoever
+    has several strategies to give the same bars to (src/strategy/sweep.py).
+    ``begin`` before the bar is acted on by whoever executes, ``end`` after.
+    """
+
+    def __init__(self, strategy: Strategy, clock: LocalClock, on_decision: Callable[[Decision], None] | None = None):
+        self._strategy = strategy
+        self._clock = clock
+        self._on_decision = on_decision
+        self._day: date | None = None
+        self._target = FLAT
+        # Each change of target the strategy made.
+        self.changes: list[Decision] = []
+
+    def _changed(self, decision: Decision) -> None:
+        self._target = decision.target
+        self.changes.append(decision)
+        if self._on_decision is not None:
+            self._on_decision(decision)
+
+    def begin(self, bar: IndexBar) -> None:
+        bar_day, _ = self._clock.at(bar.start)
+        if bar_day != self._day:
+            # The strategy starts the day afresh: a position it never closed
+            # (the data stopped before the session did) is given back first.
+            if self._day is not None and self._target != FLAT:
+                self._changed(Decision(bar.start, FLAT, DAY_ENDED))
+            self._day = bar_day
+            self._strategy.start_day(bar_day)
+
+    def end(self, bar: IndexBar) -> None:
+        decisions = self._strategy.on_bar(bar)
+        if decisions and decisions[-1].target != self._target:
+            self._changed(decisions[-1])
+
+
 def run(
     strategy: Strategy,
     bars: Iterable[IndexBar],
@@ -101,29 +148,10 @@ def run(
     executes acts at its open on what was decided before. ``on_decision`` is
     called with the change of target a bar brought, once the bar is over.
     """
-    changes: list[Decision] = []
-    day: date | None = None
-    target = FLAT
-
-    def changed(decision: Decision) -> None:
-        nonlocal target
-        target = decision.target
-        changes.append(decision)
-        if on_decision is not None:
-            on_decision(decision)
-
+    feed = Feed(strategy, clock, on_decision)
     for bar in bars:
-        bar_day, _ = clock.at(bar.start)
-        if bar_day != day:
-            # The strategy starts the day afresh: a position it never closed
-            # (the data stopped before the session did) is given back first.
-            if day is not None and target != FLAT:
-                changed(Decision(bar.start, FLAT, DAY_ENDED))
-            day = bar_day
-            strategy.start_day(day)
+        feed.begin(bar)
         if on_bar is not None:
             on_bar(bar)
-        decisions = strategy.on_bar(bar)
-        if decisions and decisions[-1].target != target:
-            changed(decisions[-1])
-    return changes
+        feed.end(bar)
+    return feed.changes
