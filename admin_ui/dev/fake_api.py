@@ -55,7 +55,7 @@ from src.admin.backtests import BacktestService
 from src.admin.config_editor import ConfigEditor
 from src.admin.context import AdminContext, AdminSettings
 from src.admin.events import EventHub
-from src.admin.queries import json_safe, summarise_trades
+from src.admin.queries import _ORDER_POSITION_COLUMNS, _ORDER_SIGNAL_COLUMNS, json_safe, summarise_trades
 from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
 from src.strategy.engine import LocalClock
@@ -88,9 +88,57 @@ CLOSE_REASONS = [
 ]
 
 
+# The made-up history changes over this many days ago, as a server does when it
+# is given the version that keeps what became of each order: before, the buy
+# order alone, written once its position was confirmed; since, every order
+# with its moments.
+TRACKED_SINCE_DAYS = 30
+ORDER_MARKS = (
+    "purpose", "sent_at", "accepted_at", "confirmed_at", "gave_up_at", "lookups", "outcome",
+    "cancel_accepted", "detail", "recorded_by",
+)
+NO_MARKS = dict.fromkeys(ORDER_MARKS)
+# How long after Saxo accepted an order its position was seen, and at which look.
+ENTRY_WAITS = ((60, 140, 1), (190, 330, 2), (420, 700, 3))
+SLOW_ENTRY_WAITS = ((2600, 4200, 6), (5200, 7800, 9))
+EXIT_WAITS = ((260, 340, 1), (580, 700, 2))
+
+
+def order_marks(rng: random.Random, purpose: str, at_saxo: datetime, waits=None) -> dict:
+    """What a service would have kept of an order Saxo filled at ``at_saxo`` (its own clock)."""
+    sent_at = at_saxo - timedelta(milliseconds=rng.randint(40, 160))
+    accepted_at = sent_at + timedelta(milliseconds=rng.randint(130, 320))
+    low, high, lookups = rng.choice(waits or (ENTRY_WAITS if purpose == "open" else EXIT_WAITS))
+    return {
+        **NO_MARKS,
+        "purpose": purpose,
+        "sent_at": sent_at,
+        "accepted_at": accepted_at,
+        "confirmed_at": accepted_at + timedelta(milliseconds=rng.randint(low, high)),
+        "lookups": lookups,
+        "outcome": "confirmed",
+        "recorded_by": "trader" if purpose == "open" else "position_monitor",
+    }
+
+
+def given_up(marks: dict, after_ms: int, lookups: int, detail: str | None, cancel_accepted: bool | None) -> dict:
+    """The same order, had Saxo never shown what it was meant to do."""
+    return {
+        **marks,
+        "confirmed_at": None,
+        "gave_up_at": marks["accepted_at"] + timedelta(milliseconds=after_ms),
+        "lookups": lookups,
+        "outcome": "gave_up",
+        "cancel_accepted": cancel_accepted,
+        "detail": detail,
+    }
+
+
 def build_history(today: date) -> tuple[list[dict], list[dict]]:
     """A few months of made-up trades, the same on every start."""
     rng = random.Random(7)
+    # Its own draws, so that the trades themselves stay what they were.
+    marks_rng = random.Random(11)
     positions, orders = [], []
     for days_ago in range(120, -1, -1):
         day = today - timedelta(days=days_ago)
@@ -107,15 +155,17 @@ def build_history(today: date) -> tuple[list[dict], list[dict]]:
             best = round(max(percent, 0) + abs(rng.gauss(0, 2.5)), 2)
             close_price = round(open_price * (1 + percent / 100), 2)
             position_id = str(5_000_000 + len(positions))
-            order_id = str(7_000_000 + len(orders))
-            close_order_id = str(7_000_001 + len(orders))
+            order_id = str(7_000_000 + 2 * len(positions))
+            close_order_id = str(7_000_001 + 2 * len(positions))
+            close_reason = rng.choice(CLOSE_REASONS)
+            tracked = days_ago <= TRACKED_SINCE_DAYS
             positions.append({
                 "action": action,
                 "position_id": position_id,
                 "position_amount": amount,
                 "position_open_price": open_price,
                 "position_close_price": close_price,
-                "position_close_reason": rng.choice(CLOSE_REASONS),
+                "position_close_reason": close_reason,
                 "position_profit_loss": round((close_price - open_price) * amount, 2),
                 "position_total_open_price": round(open_price * amount, 2),
                 "position_total_close_price": round(close_price * amount, 2),
@@ -126,34 +176,52 @@ def build_history(today: date) -> tuple[list[dict], list[dict]]:
                 "execution_time_open": opened_at,
                 "execution_time_close": closed_at,
                 "order_id": order_id,
-                "related_order_id": [close_order_id],
+                "related_order_id": [],
                 "instrument_name": name,
                 "instrument_symbol": symbol,
                 "instrument_uic": 40_000_000 + rng.randint(0, 9999),
                 "instrument_currency": "EUR",
             })
-            for an_order_id, side, price, when in (
-                (order_id, "Buy", open_price, opened_at),
-                (close_order_id, "Sell", close_price, closed_at),
-            ):
-                orders.append({
-                    "action": action,
-                    "buy_sell": side,
-                    "order_id": an_order_id,
-                    "order_amount": amount,
-                    "order_type": "Market",
-                    "order_kind": "main",
-                    "order_time": when,
-                    "related_order_id": [],
-                    "position_id": position_id,
-                    "instrument_name": name,
-                    "instrument_symbol": symbol,
-                    "instrument_uic": positions[-1]["instrument_uic"],
-                    "instrument_price": price,
-                    "instrument_currency": "EUR",
-                    "order_cost": round(price * amount, 2),
-                })
+            buy = {
+                "action": action,
+                "buy_sell": "Buy",
+                "order_id": order_id,
+                "order_amount": amount,
+                "order_type": "Market",
+                "order_kind": "main",
+                "related_order_id": [],
+                "position_id": position_id,
+                "instrument_name": name,
+                "instrument_symbol": symbol,
+                "instrument_uic": positions[-1]["instrument_uic"],
+                "instrument_price": open_price,
+                "instrument_currency": "EUR",
+                "order_cost": round(open_price * amount * 0.001, 2),
+            }
+            if not tracked:
+                # Written once the position was confirmed, to the second: all there was.
+                recorded_at = (opened_at + timedelta(seconds=1)).replace(microsecond=0)
+                orders.append({**buy, "order_time": recorded_at, **NO_MARKS})
+            else:
+                marks = order_marks(marks_rng, "open", opened_at)
+                orders.append({**buy, "order_time": marks["sent_at"].replace(microsecond=0), **marks})
+                # A position Saxo closed by itself has no sell order from WATA.
+                if close_reason != "SaxoAPI":
+                    marks = order_marks(marks_rng, "close", closed_at)
+                    orders.append({
+                        **buy,
+                        "buy_sell": "Sell",
+                        "order_id": close_order_id,
+                        "order_kind": "close",
+                        "order_time": marks["sent_at"],
+                        # The bid the sale was decided on, a little off what it was sold at.
+                        "instrument_price": round(close_price + marks_rng.choice((-0.01, 0.0, 0.0, 0.01, 0.02)), 2),
+                        "order_cost": None,
+                        **marks,
+                    })
             opened_at = closed_at
+
+    add_orders_worth_a_look(positions, orders, marks_rng)
 
     # One position still open, taken a moment ago.
     name, symbol, action = INSTRUMENTS[0]
@@ -179,10 +247,60 @@ def build_history(today: date) -> tuple[list[dict], list[dict]]:
         "instrument_name": name,
         "instrument_symbol": symbol,
     })
+    marks = order_marks(marks_rng, "open", opened_at)
     orders.append({**orders[-1], "order_id": "7999999", "position_id": "5999999", "buy_sell": "Buy",
-                   "order_time": opened_at, "order_amount": 260, "instrument_price": 8.42, "order_cost": 2189.2,
-                   "instrument_name": name, "instrument_symbol": symbol, "action": action})
+                   "order_kind": "main", "order_time": marks["sent_at"].replace(microsecond=0),
+                   "order_amount": 260, "instrument_price": 8.42, "order_cost": 2.19,
+                   "instrument_name": name, "instrument_symbol": symbol, "action": action, **marks})
     return positions, orders
+
+
+def add_orders_worth_a_look(positions: list[dict], orders: list[dict], rng: random.Random) -> None:
+    """
+    What the Orders page is for, among the tracked trades: an entry Saxo took
+    seconds to show, two orders that gave no position, a sale never seen closed.
+    """
+    tracked = [order for order in orders if order["sent_at"] is not None]
+    buys = [order for order in tracked if order["buy_sell"] == "Buy"]
+    sells = [order for order in tracked if order["buy_sell"] == "Sell"]
+    if len(buys) < 6 or len(sells) < 3:
+        return
+
+    def position_of(order: dict) -> dict:
+        return next(position for position in positions if position["position_id"] == order["position_id"])
+
+    # Two entries whose position took seconds to be shown.
+    for slow in (buys[-2], buys[len(buys) // 2]):
+        slow.update(order_marks(rng, "open", position_of(slow)["execution_time_open"], SLOW_ENTRY_WAITS))
+
+    # Two orders Saxo accepted that gave no position: one cancelled, one whose
+    # cancellation Saxo refused.
+    refusal = (
+        'SaxoApiError: Request failed (Status: 400) '
+        '{"ErrorInfo": {"ErrorCode": "OrderNotFound", "Message": "Order not found"}}'
+    )
+    for number, (like, detail, cancel_accepted) in enumerate(
+        ((buys[-4], None, True), (buys[len(buys) // 3], refusal, False)),
+    ):
+        left_at = like["sent_at"] + timedelta(minutes=7)
+        marks = order_marks(rng, "open", left_at)
+        orders.append({
+            **like,
+            "order_id": str(7_900_000 + number),
+            "position_id": None,
+            "order_time": marks["sent_at"].replace(microsecond=0),
+            **given_up(marks, after_ms=10_800 + rng.randint(600, 1400), lookups=14, detail=detail,
+                       cancel_accepted=cancel_accepted),
+        })
+
+    # A sale Saxo did not list among its closed positions in time: the closure
+    # was found later, when the database was set against Saxo.
+    unseen = sells[-3]
+    unseen.update(given_up(
+        {key: unseen[key] for key in ORDER_MARKS}, after_ms=7_500 + rng.randint(500, 900), lookups=7,
+        detail="Not among Saxo's closed positions", cancel_accepted=None,
+    ))
+    position_of(unseen)["position_close_reason"] = "SaxoAPI"
 
 
 # The turbo the made-up real trades were "bought": what measuring it should find.
@@ -297,17 +415,34 @@ class FakeQueries:
             if day.weekday() < 5:
                 for signal, outcome, reason, decided_at in fake_prices.daily_signals(day, now):
                     self.add_decision(signal, outcome, reason, decided_at=decided_at)
+        # The signals behind the last tracked entries, the ones that gave no position among them.
+        tracked_buys = [o for o in self.orders if o["sent_at"] is not None and o["buy_sell"] == "Buy"]
+        recent = sorted(tracked_buys, key=lambda o: o["sent_at"], reverse=True)[:12]
+        for order in [o for o in tracked_buys if o["position_id"] is None or o in recent]:
+            if order["order_id"] == "7999999":
+                continue
+            received_at = order["sent_at"] - timedelta(milliseconds=170)
+            failed = order["position_id"] is None
+            self.add_decision(
+                {"action": order["action"], "indice": "us100"},
+                "failed" if failed else "executed",
+                f"PositionNotFoundException: Position not found after 14 retries for order {order['order_id']}"
+                if failed else None,
+                decided_at=order["gave_up_at"] or order["confirmed_at"], received_at=received_at,
+                position_id=order["position_id"], order_id=order["order_id"],
+            )
         self.journal.sort(key=lambda entry: entry["decided_at"], reverse=True)
 
-    def add_decision(self, signal, outcome, reason=None, decided_at=None, **ids):
+    def add_decision(self, signal, outcome, reason=None, decided_at=None, received_at=None, **ids):
         decided_at = decided_at or datetime.now(timezone.utc)
+        received_at = received_at or decided_at
         self.journal.insert(0, {
             "signal_uuid": signal.get("signal_uuid") or str(uuid.uuid4()),
             "action": signal.get("action"),
             "indice": signal.get("indice"),
             "confidence": signal.get("confidence"),
-            "signal_timestamp": decided_at,
-            "received_timestamp": decided_at,
+            "signal_timestamp": received_at - timedelta(milliseconds=450) if received_at != decided_at else decided_at,
+            "received_timestamp": received_at,
             "decided_at": decided_at,
             "outcome": outcome,
             "reason": reason,
@@ -327,6 +462,15 @@ class FakeQueries:
                     "position_profit_loss": round((close_price - position["position_open_price"]) * position["position_amount"], 2),
                     "position_total_close_price": round(close_price * position["position_amount"], 2),
                     "execution_time_close": datetime.now(timezone.utc),
+                })
+                marks = order_marks(random.Random(), "close", position["execution_time_close"])
+                self.orders.append({
+                    "action": position["action"], "buy_sell": "Sell", "order_id": str(8_000_000 + len(self.orders)),
+                    "order_amount": position["position_amount"], "order_type": "Market", "order_kind": "close",
+                    "order_time": marks["sent_at"], "related_order_id": [], "position_id": position_id,
+                    "instrument_name": position["instrument_name"], "instrument_symbol": position["instrument_symbol"],
+                    "instrument_uic": position["instrument_uic"], "instrument_price": close_price,
+                    "instrument_currency": position["instrument_currency"], "order_cost": None, **marks,
                 })
 
     async def ping(self):
@@ -486,12 +630,23 @@ class FakeQueries:
         position = next((p for p in self.positions if p["position_id"] == position_id), None)
         if position is None:
             return None
-        return {"position": position, "orders": [o for o in self.orders if o["position_id"] == position_id]}
+        orders = sorted((o for o in self.orders if o["position_id"] == position_id), key=lambda o: o["order_time"])
+        return {"position": position, "orders": [self._linked(order) for order in orders]}
+
+    def _linked(self, order: dict) -> dict:
+        """An order as the admin's query gives it: with the position it gave or closed and its signal."""
+        position = next((p for p in self.positions if p["position_id"] == order["position_id"]), None)
+        signal = next((entry for entry in self.journal if entry["order_id"] == order["order_id"]), None)
+        return {
+            **order,
+            "position": position and {column: position[column] for column in _ORDER_POSITION_COLUMNS},
+            "signal": signal and {column: signal[column] for column in _ORDER_SIGNAL_COLUMNS},
+        }
 
     async def list_orders(self, start=None, end=None, limit=500):
         rows = [o for o in self.orders if in_range(o["order_time"], start, end)]
         rows.sort(key=lambda o: o["order_time"], reverse=True)
-        return {"items": rows[:limit], "total": len(rows)}
+        return {"items": [self._linked(order) for order in rows[:limit]], "total": len(rows)}
 
     async def performance(self, start=None, end=None):
         before = sum(t["profit_loss"] for t in self._closed_trades(None, start - timedelta(days=1))) if start else 0.0

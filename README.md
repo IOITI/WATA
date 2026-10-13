@@ -166,6 +166,7 @@ flowchart TD
 PostgreSQL 16 is the primary runtime database. The application uses an `asyncpg` connection pool and creates its schema on startup.
 
 - **Order tracking**: Orders and execution details
+- **Order follow-up**: for each order Saxo accepted, when it left, when Saxo answered and when its position was seen open or closed, or when the service gave up (`order_execution`, written in the background for the admin interface)
 - **Position management**: Open and closed positions, including profit/loss data
 - **Performance analytics**: Trade performance and daily statistics
 - **DuckDB migration**: `src/database/migration.py` imports existing DuckDB data into PostgreSQL. DuckDB is no longer used by the live trading services.
@@ -392,6 +393,12 @@ An optional web interface for the operator, served on its own domain or on a por
 
 - **Dashboard**: the day's profit and loss, trades against the daily limit, whether the next signal would be traded and what holds it back, open positions with their live value, latest signals and the state of each service. The page is updated as things happen and can raise browser notifications. On every page, the top bar says when new entries are paused, when Saxo needs a new authorisation and when a restart is needed.
 - **Positions, orders and performance**: history with CSV export, cumulative and daily profit and loss, win rate, long/short and per-instrument figures, read live from PostgreSQL.
+- **Each order followed to its position**: the Orders page says what became of every order sent to Saxo (opened a position, closed one, gave none and was cancelled) and how long it took, and a row opens onto each moment: order sent, accepted by Saxo, filled at Saxo, seen by WATA. A position shows the order that opened it and the one that closed it, with a link each way. Three times are worth telling apart:
+  - *sent* to *accepted by Saxo* is Saxo's answer to the request, network included;
+  - *sent* to *filled at Saxo* is how long Saxo took to fill the order, read on Saxo's clock against the server's, so the two clocks' difference is in it;
+  - *accepted* to *seen by WATA* also holds WATA's own waits between two looks (a look at once, then after 0.1 s, 0.2 s, 0.4 s...), so it is an upper bound.
+
+  An order whose position never shows is cancelled once the trader's patience runs out (`trade.config.general.retry_config.max_retries`, about ten seconds at most); the page then gives Saxo's answer to that cancellation. Orders placed before v0.14.0 have none of these moments.
 - **Report and exits**: the figures of the daily Telegram report with the account balance over time, and an analysis of how trades ended (by exit, hour of entry, holding time, and how much of the best level was given back).
 - **Signals, watchlist and execution timing**: what the Trader did with each signal and why, the turbo that would be bought now, and how long each step of a trade took.
 - **Prices**: the bars kept by the [Price Recorder](#️-price-recorder), as a candlestick chart per instrument, from ten-second bars to one-hour ones or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under each turbo. The times that were not recorded are listed, and the bars can be exported to CSV.

@@ -25,11 +25,13 @@ class TradingRuleViolation(Exception):
 class PositionNotFoundException(Exception):
      """Raised when a position cannot be found after an order, potentially after retries."""
      # Added cancellation_attempted and cancellation_succeeded
-     def __init__(self, message, order_id=None, cancellation_attempted=None, cancellation_succeeded=None):
+     def __init__(self, message, order_id=None, cancellation_attempted=None, cancellation_succeeded=None,
+                  cancellation_error=None):
         super().__init__(message)
         self.order_id = order_id
         self.cancellation_attempted = cancellation_attempted # Boolean flag
         self.cancellation_succeeded = cancellation_succeeded # Boolean flag or None if not attempted
+        self.cancellation_error = cancellation_error # What Saxo answered when it refused the cancellation
 
      def __str__(self):
         base = super().__str__()
@@ -37,6 +39,8 @@ class PositionNotFoundException(Exception):
         cancel_info = ""
         if self.cancellation_attempted is not None:
             status = "succeeded" if self.cancellation_succeeded else "failed"
+            if not self.cancellation_succeeded and self.cancellation_error:
+                status = f"{status}: {self.cancellation_error}"
             cancel_info = f" (Order cancellation attempt: {status})"
         return f"{base}{order_info}{cancel_info}"
 

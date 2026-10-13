@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,6 +28,7 @@ from src.trade.async_services import (
     stop_order_tick_size,
 )
 from src.trade.exceptions import OrderPlacementError, PositionNotFoundException, TokenAuthenticationException
+from src.trade.order_tracker import CLOSE, OPEN, OrderTrace
 from src.saxo_openapi.exceptions import OpenAPIError
 
 
@@ -446,7 +448,7 @@ def _slept(mock_sleep) -> list[float]:
 
 def _position_service_with_open_positions(mock_config_manager, open_positions):
     order_service = MagicMock()
-    order_service.cancel_order = AsyncMock(return_value=True)
+    order_service.cancel_order_with_reason = AsyncMock(return_value=(True, None))
     position_service = AsyncPositionService(MagicMock(), order_service, mock_config_manager, "account-1", "client-1")
     position_service.get_open_positions = AsyncMock(**open_positions)
     return position_service, order_service
@@ -476,7 +478,7 @@ def test_position_confirmation_finds_a_position_listed_a_moment_later(mock_confi
 
     assert found == position
     assert _slept(mock_sleep) == pytest.approx([0.1, 0.2])
-    order_service.cancel_order.assert_not_awaited()
+    order_service.cancel_order_with_reason.assert_not_awaited()
 
 
 def test_position_confirmation_keeps_its_patience_then_cancels_the_order(mock_config_manager):
@@ -490,7 +492,7 @@ def test_position_confirmation_keeps_its_patience_then_cancels_the_order(mock_co
             asyncio.run(position_service.find_position_by_order_id_with_retry("order-1"))
 
     assert sum(_slept(mock_sleep)) == pytest.approx(1.8)
-    order_service.cancel_order.assert_awaited_once_with("order-1")
+    order_service.cancel_order_with_reason.assert_awaited_once_with("order-1")
 
 
 # ── AsyncSaxoApiClient: token handling ──
@@ -1534,3 +1536,324 @@ def test_single_position_close_is_recorded_with_its_own_reason():
 
     _, update = monitor.db_position_manager.update_turbo_position_data.await_args.args
     assert update["position_close_reason"] == "Explicit Close (position p1)"
+
+
+# ── What became of each order (kept for the admin interface) ──
+
+class RecordingTracker:
+    """Stands for the OrderTracker: keeps each trace as it was when it was recorded."""
+
+    def __init__(self, error=None):
+        self.records = []
+        self.error = error
+
+    def record(self, trace, order_row=None):
+        if self.error:
+            raise self.error
+        if not trace.order_id:
+            # As the tracker does: Saxo never had it, there is no order to speak of.
+            return
+        self.records.append((trace.as_entry("test"), order_row))
+
+    @property
+    def entries(self):
+        return [entry for entry, _ in self.records]
+
+    @property
+    def order_rows(self):
+        return [order_row for _, order_row in self.records]
+
+
+LEFT_AT = datetime(2026, 10, 13, 7, 31, 2, 120000, tzinfo=timezone.utc)
+
+
+def _moments(*milliseconds):
+    """Moments for the marks of an order, in the order they are made."""
+    return patch.object(
+        OrderTrace, "_now", side_effect=[LEFT_AT + timedelta(milliseconds=offset) for offset in milliseconds],
+    )
+
+
+def _tracked_orchestrator(tmp_path, tracker=None):
+    orchestrator, position_service = _orchestrator(tmp_path)
+    orchestrator.order_tracker = tracker or RecordingTracker()
+    orchestrator.order_service.cancel_order = AsyncMock(return_value=True)
+    return orchestrator, position_service, orchestrator.order_tracker
+
+
+def test_cancelling_an_order_gives_what_saxo_answered():
+    api_client = MagicMock()
+    api_client.request = AsyncMock(side_effect=[{}, RuntimeError("Order not found")])
+    order_service = AsyncOrderService(api_client, "account-1", "client-1")
+
+    async def scenario():
+        return (
+            await order_service.cancel_order_with_reason("order-1"),
+            await order_service.cancel_order_with_reason("order-2"),
+        )
+
+    accepted, refused = asyncio.run(scenario())
+
+    assert accepted == (True, None)
+    assert refused == (False, "RuntimeError: Order not found")
+
+
+def test_cancelling_an_order_still_answers_yes_or_no_to_its_other_callers():
+    api_client = MagicMock()
+    api_client.request = AsyncMock(side_effect=[{}, RuntimeError("Order not found")])
+    order_service = AsyncOrderService(api_client, "account-1", "client-1")
+
+    async def scenario():
+        return await order_service.cancel_order("order-1"), await order_service.cancel_order("order-2")
+
+    assert asyncio.run(scenario()) == (True, False)
+
+
+def test_position_confirmation_marks_each_look_and_the_one_that_found_it(mock_config_manager):
+    position = {"PositionId": "position-1", "PositionBase": {"SourceOrderId": "order-1"}}
+    position_service, _ = _position_service_with_open_positions(
+        mock_config_manager, {"side_effect": [{"Data": []}, {"Data": []}, {"Data": [position]}]},
+    )
+    trace = OrderTrace(OPEN)
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        asyncio.run(position_service.find_position_by_order_id_with_retry("order-1", trace=trace))
+
+    assert (trace.lookups, trace.outcome, trace.position_id) == (3, "confirmed", "position-1")
+    assert trace.confirmed_at is not None
+
+
+def test_position_confirmation_given_up_keeps_what_saxo_answered_to_the_cancellation(mock_config_manager):
+    position_service, order_service = _position_service_with_open_positions(
+        mock_config_manager, {"return_value": {"Data": []}},
+    )
+    order_service.cancel_order_with_reason = AsyncMock(return_value=(False, "SaxoApiError: Order not found"))
+    trace = OrderTrace(OPEN)
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(PositionNotFoundException) as raised:
+            asyncio.run(position_service.find_position_by_order_id_with_retry("order-1", trace=trace))
+
+    # max_retries=3 in the fixture: a look at once, then five more over 1.8 seconds
+    assert (trace.lookups, trace.outcome) == (6, "gave_up")
+    assert (trace.cancel_accepted, trace.detail) == (False, "SaxoApiError: Order not found")
+    assert raised.value.cancellation_error == "SaxoApiError: Order not found"
+    assert "Order cancellation attempt: failed: SaxoApiError: Order not found" in str(raised.value)
+
+
+def test_entry_is_tracked_once_saxo_has_the_order_and_once_its_position_is_seen(tmp_path):
+    orchestrator, _, tracker = _tracked_orchestrator(tmp_path)
+
+    asyncio.run(_execute(orchestrator))
+
+    assert [(entry["order_id"], entry["outcome"], entry["position_id"]) for entry in tracker.entries] == [
+        ("order-1", None, None),
+        ("order-1", "confirmed", "position-1"),
+    ]
+    first, last = tracker.entries
+    assert first["purpose"] == OPEN
+    assert first["sent_at"] <= first["accepted_at"] <= last["confirmed_at"]
+    # The trade itself records the order, as it always did.
+    assert tracker.order_rows == [None, None]
+    orchestrator.db_order_manager.insert_turbo_order_data.assert_awaited_once()
+
+
+def test_the_time_recorded_for_an_order_is_when_it_left_not_when_its_position_was_confirmed(tmp_path):
+    orchestrator, _, _ = _tracked_orchestrator(tmp_path)
+
+    # Sent, accepted 190 ms later, position seen 9 seconds later.
+    with _moments(0, 190, 9190):
+        result = asyncio.run(_execute(orchestrator))
+
+    assert result["order_details"]["order_submit_time"] == "2026-10-13T07:31:02Z"
+    recorded = orchestrator.db_order_manager.insert_turbo_order_data.await_args.args[0]
+    assert recorded["order_submit_time"] == "2026-10-13T07:31:02Z"
+    assert recorded["position_id"] == "position-1"
+
+
+def test_entry_given_up_is_tracked_and_recorded_as_an_order_without_a_position(tmp_path):
+    orchestrator, position_service, tracker = _tracked_orchestrator(tmp_path)
+    position_service.find_position_by_order_id_with_retry = AsyncMock(side_effect=PositionNotFoundException(
+        "Position not found", order_id="order-1", cancellation_attempted=True,
+        cancellation_succeeded=False, cancellation_error="SaxoApiError: Order not found",
+    ))
+
+    with pytest.raises(PositionNotFoundException):
+        asyncio.run(_execute(orchestrator))
+
+    last, order_row = tracker.records[-1]
+    assert (last["order_id"], last["outcome"], last["position_id"]) == ("order-1", "gave_up", None)
+    assert (last["cancel_accepted"], last["detail"]) == (False, "SaxoApiError: Order not found")
+    assert (order_row["order_id"], order_row["buy_sell"], order_row["position_id"]) == ("order-1", "Buy", None)
+    assert (order_row["action"], order_row["instrument_uic"]) == ("long", WATCHLIST_TURBO["selected_instrument"]["uic"])
+    # Nothing else writes it: the trade's own record is only made once a position exists.
+    orchestrator.db_order_manager.insert_turbo_order_data.assert_not_awaited()
+    # Already cancelled where the looking stopped: not a second time.
+    orchestrator.order_service.cancel_order.assert_not_awaited()
+
+
+def test_error_after_saxo_accepted_the_order_is_tracked_with_its_cancellation(tmp_path):
+    orchestrator, position_service, tracker = _tracked_orchestrator(tmp_path)
+    position_service.find_position_by_order_id_with_retry = AsyncMock(side_effect=RuntimeError("Saxo is unreachable"))
+
+    with pytest.raises(RuntimeError, match="Saxo is unreachable"):
+        asyncio.run(_execute(orchestrator))
+
+    orchestrator.order_service.cancel_order.assert_awaited_once_with("order-1")
+    last, order_row = tracker.records[-1]
+    assert (last["outcome"], last["cancel_accepted"]) == ("error", True)
+    assert last["detail"] == "RuntimeError: Saxo is unreachable"
+    assert order_row["position_id"] is None
+
+
+def test_order_refused_by_saxo_is_not_an_order_to_track(tmp_path):
+    orchestrator, _, tracker = _tracked_orchestrator(tmp_path)
+    orchestrator.order_service.place_market_order = AsyncMock(side_effect=OrderPlacementError("rejected"))
+
+    with pytest.raises(OrderPlacementError):
+        asyncio.run(_execute(orchestrator))
+
+    assert tracker.records == []
+    orchestrator.order_service.cancel_order.assert_not_awaited()
+
+
+def test_a_failing_tracker_changes_nothing_of_the_trade(tmp_path):
+    orchestrator, _, _ = _tracked_orchestrator(tmp_path, RecordingTracker(error=RuntimeError("tracker is broken")))
+
+    result = asyncio.run(_execute(orchestrator))
+
+    assert result["order_details"]["order_id"] == "order-1"
+    assert result["position_details"]["position_id"] == "position-1"
+    orchestrator.db_order_manager.insert_turbo_order_data.assert_awaited_once()
+    orchestrator.db_position_manager.insert_turbo_open_position_data.assert_awaited_once()
+
+
+def test_a_failing_tracker_does_not_hide_why_an_entry_failed(tmp_path):
+    orchestrator, position_service, _ = _tracked_orchestrator(
+        tmp_path, RecordingTracker(error=RuntimeError("tracker is broken")),
+    )
+    position_service.find_position_by_order_id_with_retry = AsyncMock(
+        side_effect=PositionNotFoundException("Position not found", order_id="order-1"),
+    )
+
+    with pytest.raises(PositionNotFoundException):
+        asyncio.run(_execute(orchestrator))
+
+
+SELLABLE_POSITION = {
+    "PositionId": "p1",
+    "PositionBase": {**OPEN_POSITION["PositionBase"], "OpenPrice": 10.0},
+    "PositionView": {"Bid": 11.0},
+    "DisplayAndFormat": {"Description": "Turbo Long", "Symbol": "TL1", "Currency": "EUR"},
+}
+
+
+def _tracked_monitor(tracker=None, **kwargs):
+    kwargs.setdefault("open_positions", {"return_value": {"Data": [SELLABLE_POSITION]}})
+    monitor = _performance_monitor(**kwargs)
+    monitor.order_tracker = tracker or RecordingTracker()
+    return monitor, monitor.order_tracker
+
+
+def test_sell_order_is_recorded_as_an_order_then_tracked_until_the_position_is_seen_closed():
+    monitor, tracker = _tracked_monitor()
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    assert [(entry["order_id"], entry["purpose"], entry["position_id"], entry["outcome"]) for entry in tracker.entries] == [
+        ("sell-1", CLOSE, "p1", None),
+        ("sell-1", CLOSE, "p1", "confirmed"),
+    ]
+    assert tracker.entries[-1]["lookups"] == 1
+
+    order_row, nothing_more = tracker.order_rows
+    assert nothing_more is None
+    assert (order_row["order_id"], order_row["buy_sell"], order_row["order_kind"]) == ("sell-1", "Sell", "close")
+    assert (order_row["position_id"], order_row["action"], order_row["order_amount"]) == ("p1", "long", 10)
+    assert (order_row["instrument_name"], order_row["instrument_symbol"]) == ("Turbo Long", "TL1")
+    assert (order_row["instrument_uic"], order_row["instrument_price"]) == (101, 11.0)
+    assert order_row["order_submit_time"] == tracker.entries[0]["sent_at"]
+
+
+def test_sell_whose_closure_saxo_never_lists_is_tracked_as_given_up():
+    monitor, tracker = _tracked_monitor(closed_positions={"return_value": {"Data": []}})
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    last = tracker.entries[-1]
+    assert (last["outcome"], last["lookups"], last["detail"]) == ("gave_up", 4, "Not among Saxo's closed positions")
+    assert last["confirmed_at"] is None
+
+
+def test_sell_whose_closure_could_not_be_looked_up_is_tracked_as_an_error():
+    monitor, tracker = _tracked_monitor(closed_positions={"side_effect": RuntimeError("Saxo is unreachable")})
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    last = tracker.entries[-1]
+    assert (last["outcome"], last["detail"]) == ("error", "RuntimeError: Saxo is unreachable")
+
+
+def test_stop_loss_sell_is_tracked_like_any_other(tmp_path):
+    async def scenario():
+        monitor = _checking_monitor(tmp_path)
+        monitor.order_tracker = RecordingTracker()
+        with patch("src.trade.async_services.CLOSED_POSITION_BACKGROUND_LOOKUP_DELAYS", (0,)):
+            await monitor.check_positions_from_stream(_streamed(8.4))  # -16%
+            await monitor.wait_for_background_tasks()
+        return monitor.order_tracker
+
+    tracker = asyncio.run(scenario())
+
+    assert [(entry["order_id"], entry["position_id"], entry["outcome"]) for entry in tracker.entries] == [
+        ("sell-1", "p1", None),
+        ("sell-1", "p1", "confirmed"),
+    ]
+    assert (tracker.order_rows[0]["action"], tracker.order_rows[0]["instrument_price"]) == ("long", 8.4)
+
+
+def test_a_failing_tracker_never_makes_a_sell_look_failed():
+    monitor, _ = _tracked_monitor(RecordingTracker(error=RuntimeError("tracker is broken")))
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        result = asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"]}
+    monitor.order_service.place_market_order.assert_awaited_once()
+    monitor.db_position_manager.update_turbo_position_data.assert_awaited_once()
+    assert monitor._closing_position_ids == set()
+
+
+@pytest.mark.parametrize("answer", [None, {}, {"OrderId": None}, "accepted", {"OrderId": "sell-1"}])
+def test_whatever_saxo_answers_to_a_sell_the_position_is_sold_once_and_its_closure_recorded(answer):
+    # OPEN_POSITION is a position described only in part: no name, no price to give the order.
+    monitor, tracker = _tracked_monitor(
+        open_positions={"return_value": {"Data": [OPEN_POSITION]}},
+        place_market_order={"return_value": answer},
+    )
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        result = asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    assert (result["closed_initiated_count"], result["errors_count"]) == (1, 0)
+    monitor.order_service.place_market_order.assert_awaited_once()
+    monitor.db_position_manager.update_turbo_position_data.assert_awaited_once()
+    assert monitor._closing_position_ids == set()
+    assert len(tracker.records) == (2 if answer == {"OrderId": "sell-1"} else 0)
+
+
+def test_a_sell_order_that_cannot_be_described_is_still_a_sell_that_went_through():
+    unexpected = {**SELLABLE_POSITION, "DisplayAndFormat": ["not what Saxo documents"]}
+    monitor, tracker = _tracked_monitor(open_positions={"return_value": {"Data": [unexpected]}})
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        result = asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"]}
+    monitor.order_service.place_market_order.assert_awaited_once()
+    assert monitor._closing_position_ids == set()
+    # The order could not be written, what became of it still is.
+    assert [entry["outcome"] for entry in tracker.entries] == ["confirmed"]

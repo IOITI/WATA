@@ -51,6 +51,7 @@ from .exceptions import (
     SaxoApiError,
     OrderPlacementError,
 )
+from .order_tracker import CLOSE, OPEN, OrderTrace, track_order
 
 logger = logging.getLogger(__name__)
 
@@ -878,15 +879,20 @@ class AsyncOrderService:
         return order_id
 
     async def cancel_order(self, order_id: str) -> bool:
+        cancelled, _ = await self.cancel_order_with_reason(order_id)
+        return cancelled
+
+    async def cancel_order_with_reason(self, order_id: str) -> tuple[bool, str | None]:
+        """Cancel an order: whether Saxo accepted that, and what it answered when it did not."""
         logger.info("Cancelling order: %s", order_id)
         req = tr.orders.CancelOrders(OrderIds=order_id, params={"AccountKey": self.account_key})
         try:
             await self.api_client.request(req)
             logger.info("Order %s cancelled.", order_id)
-            return True
+            return True, None
         except Exception as e:
             logger.error("Failed to cancel order %s: %s", order_id, e)
-            return False
+            return False, f"{type(e).__name__}: {e}"
 
 
 # ──────────────────────────────────────────────
@@ -945,12 +951,17 @@ class AsyncPositionService:
         )
         return await self.api_client.request(req)
 
-    async def find_position_by_order_id_with_retry(self, order_id: str) -> dict:
+    async def find_position_by_order_id_with_retry(self, order_id: str, trace: OrderTrace | None = None) -> dict:
         """
         Finds position, checking straight away and then with exponential backoff
         (non-blocking).
         Attempts order cancellation if not found after all retries.
+
+        ``trace`` is marked with each look and with how it ended, for whoever
+        keeps what became of the order.
         """
+        if not isinstance(trace, OrderTrace):
+            trace = OrderTrace(OPEN)
         # Time allowed per configured retry (~10.8s total max). It is spent as an
         # immediate check followed by short, growing waits: Saxo usually lists the
         # position within milliseconds of accepting a market order.
@@ -962,20 +973,24 @@ class AsyncPositionService:
             if waits[attempt]:
                 await asyncio.sleep(waits[attempt])
             positions = await self.get_open_positions()
+            trace.looked()
             for p in positions.get("Data", []):
                 if p.get("PositionBase", {}).get("SourceOrderId") == order_id:
+                    trace.confirmed(p.get("PositionId"))
                     logger.info("Position found for order %s after %d attempt(s).", order_id, attempt + 1)
                     return p
             logger.debug("Position not found for order %s (attempt %d/%d)", order_id, attempt + 1, max_attempts)
 
         # All retries exhausted — attempt cancellation
         logger.critical("Position not found for order %s after %d retries. Cancelling.", order_id, max_attempts)
-        cancelled = await self.order_service.cancel_order(order_id)
+        cancelled, cancel_error = await self.order_service.cancel_order_with_reason(order_id)
+        trace.gave_up(detail=cancel_error, cancel_accepted=cancelled)
         raise PositionNotFoundException(
             f"Position not found after {max_attempts} retries for order {order_id}",
             order_id=order_id,
             cancellation_attempted=True,
             cancellation_succeeded=cancelled,
+            cancellation_error=cancel_error,
         )
 
     async def get_spending_power(self) -> float:
@@ -1017,6 +1032,7 @@ class AsyncTradingOrchestrator:
         db_order_manager: AsyncDbOrderManager,
         db_position_manager: AsyncDbPositionManager,
         watchlist_client=None,
+        order_tracker=None,
     ):
         self.instrument_service = instrument_service
         self.order_service = order_service
@@ -1025,6 +1041,8 @@ class AsyncTradingOrchestrator:
         self.db_order_manager = db_order_manager
         self.db_position_manager = db_position_manager
         self.watchlist_client = watchlist_client
+        # Keeps what became of each order for the admin interface, in the background.
+        self.order_tracker = order_tracker
         self.buying_power_config = self.config.get_config_value("trade.config.buying_power", {})
         self.safety_margins = self.buying_power_config.get("safety_margins", {"bid_calculation": 1})
         self.reserve_cash_percent = self.buying_power_config.get("reserve_cash_percent", 0)
@@ -1194,6 +1212,8 @@ class AsyncTradingOrchestrator:
         validated_order = None
         confirmed_position = None
         turbo_info = None
+        amount = None
+        trace = OrderTrace(OPEN)
 
         try:
             # 0. Position scale (instant)
@@ -1220,6 +1240,7 @@ class AsyncTradingOrchestrator:
             timestamps["amount_calculated"] = time.time()
 
             # 4. Place order
+            trace.sent()
             validated_order = await self.order_service.place_market_order(
                 uic=turbo_info["selected_instrument"]["uic"],
                 asset_type=turbo_info["selected_instrument"]["asset_type"],
@@ -1229,25 +1250,19 @@ class AsyncTradingOrchestrator:
             self.invalidate_spending_power()
             order_id = validated_order["OrderId"]
             timestamps["order_placed"] = time.time()
+            trace.accepted(order_id)
+            track_order(self.order_tracker, trace)
 
             # 5. Confirm position (exponential backoff)
-            confirmed_position = await self.position_service.find_position_by_order_id_with_retry(order_id)
+            confirmed_position = await self.position_service.find_position_by_order_id_with_retry(order_id, trace=trace)
             timestamps["position_confirmed"] = time.time()
+            trace.confirmed(confirmed_position.get("PositionId"))
+            track_order(self.order_tracker, trace)
 
             # 6. Persist to PostgreSQL
-            now_utc = datetime.now(pytz.utc)
-            order_data = {
-                "action": keywords, "buy_sell": "Buy", "order_id": order_id,
-                "order_amount": amount, "order_type": "Market", "order_kind": "main",
-                "order_submit_time": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "related_order_id": [], "position_id": confirmed_position.get("PositionId"),
-                "instrument_name": turbo_info["selected_instrument"]["description"],
-                "instrument_symbol": turbo_info["selected_instrument"]["symbol"],
-                "instrument_uic": turbo_info["selected_instrument"]["uic"],
-                "instrument_price": turbo_info["selected_instrument"].get("latest_ask"),
-                "instrument_currency": turbo_info["selected_instrument"]["currency"],
-                "order_cost": turbo_info["selected_instrument"].get("commissions", {}).get("CostBuy"),
-            }
+            order_data = self._entry_order_data(
+                keywords, order_id, amount, turbo_info, trace.sent_at, confirmed_position.get("PositionId"),
+            )
             pos_base = confirmed_position.get("PositionBase", {})
             pos_disp = confirmed_position.get("DisplayAndFormat", {})
             position_data = {
@@ -1292,15 +1307,53 @@ class AsyncTradingOrchestrator:
                 "message": f"Successfully executed trade for {keywords}.",
             }
 
-        except PositionNotFoundException:
+        except PositionNotFoundException as e:
+            # Normally marked where the looking stopped; this is for a caller that did not.
+            trace.gave_up(detail=getattr(e, "cancellation_error", None), cancel_accepted=e.cancellation_succeeded)
+            self._track_entry_without_position(trace, keywords, amount, turbo_info)
             raise
         except Exception as e:
             if validated_order and not confirmed_position:
                 oid = validated_order.get("OrderId")
                 if oid:
                     logger.warning("Cancelling orphan order %s due to failure: %s", oid, e)
-                    await self.order_service.cancel_order(oid)
+                    cancelled = await self.order_service.cancel_order(oid)
+                    trace.failed(detail=f"{type(e).__name__}: {e}", cancel_accepted=cancelled)
+                    self._track_entry_without_position(trace, keywords, amount, turbo_info)
             raise
+
+    @staticmethod
+    def _entry_order_data(keywords, order_id, amount, turbo_info: dict, sent_at: datetime | None, position_id) -> dict:
+        """The buy order as it is recorded: ``position_id`` is the position it gave, None when it gave none."""
+        instrument = turbo_info["selected_instrument"]
+        return {
+            "action": keywords, "buy_sell": "Buy", "order_id": order_id,
+            "order_amount": amount, "order_type": "Market", "order_kind": "main",
+            # When the order left, not when its position was confirmed.
+            "order_submit_time": (sent_at or datetime.now(pytz.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "related_order_id": [], "position_id": position_id,
+            "instrument_name": instrument["description"],
+            "instrument_symbol": instrument["symbol"],
+            "instrument_uic": instrument["uic"],
+            "instrument_price": instrument.get("latest_ask"),
+            "instrument_currency": instrument["currency"],
+            "order_cost": instrument.get("commissions", {}).get("CostBuy"),
+        }
+
+    def _track_entry_without_position(self, trace: OrderTrace, keywords, amount, turbo_info) -> None:
+        """
+        Keep an order Saxo accepted that gave no position, with the order
+        itself: nothing else records it. Never raises: it runs while an error
+        is on its way up.
+        """
+        if self.order_tracker is None or not trace.order_id:
+            return
+        try:
+            order_row = self._entry_order_data(keywords, trace.order_id, amount, turbo_info, trace.sent_at, None)
+        except Exception as e:
+            logger.warning("Could not describe order %s for the record: %r", trace.order_id, e)
+            order_row = None
+        track_order(self.order_tracker, trace, order_row)
 
     @staticmethod
     def _build_timing_summary(timestamps: dict) -> dict:
@@ -1365,6 +1418,7 @@ class AsyncPerformanceMonitor:
         trading_rule,  # TradingRule instance (sync is fine — it's pure computation)
         send_telegram_fn,  # async callable(message: str) -> None
         trigger_daily_stats_fn=None,  # optional async callable() -> None
+        order_tracker=None,
     ):
         self.position_service = position_service
         self.order_service = order_service
@@ -1373,6 +1427,8 @@ class AsyncPerformanceMonitor:
         self.trading_rule = trading_rule
         self.send_telegram = send_telegram_fn
         self.trigger_daily_stats = trigger_daily_stats_fn
+        # Keeps what became of each sell order for the admin interface, in the background.
+        self.order_tracker = order_tracker
         self._last_daily_stats_trigger_date = None
         # Positions with a sell order sent whose closure isn't recorded in the DB
         # yet; they still read as open there and must not be sold a second time.
@@ -1614,7 +1670,10 @@ class AsyncPerformanceMonitor:
                     close_reason = f"Daily profit target ({self.percent_profit_wanted}%) potentially met ({potential}%)"
 
             if close_reason:
-                positions_to_close.append({"position_id": pid, "api_details": api_pos, "reason": close_reason})
+                positions_to_close.append({
+                    "position_id": pid, "api_details": api_pos, "reason": close_reason,
+                    "action": db_pos.get("action"),
+                })
 
         # Execute closures concurrently (bounded)
         processed = []
@@ -1637,7 +1696,7 @@ class AsyncPerformanceMonitor:
 
                 self._closing_position_ids.add(pid)
                 try:
-                    await self._send_close_order(api_pos)
+                    trace = await self._send_close_order(api_pos, position_id=pid, action=pos_info.get("action"))
                 except Exception as e:
                     self._closing_position_ids.discard(pid)
                     logger.error("Failed to close %s: %s", pid, e, exc_info=True)
@@ -1648,7 +1707,7 @@ class AsyncPerformanceMonitor:
 
                 # Not awaited: the next price update must not wait for Saxo to
                 # list this closure before the other positions are checked again.
-                self._record_closed_position_in_background(pid, f"Performance ({reason})")
+                self._record_closed_position_in_background(pid, f"Performance ({reason})", trace=trace)
                 processed.append({"id": pid, "status": "Close order sent"})
 
         await asyncio.gather(*[_close_one(p) for p in positions_to_close])
@@ -1794,14 +1853,14 @@ class AsyncPerformanceMonitor:
 
                 self._closing_position_ids.add(pid)
                 try:
-                    await self._send_close_order(api_pos)
+                    trace = await self._send_close_order(api_pos, position_id=pid, action=action)
                     closed_count += 1
                     closed_position_ids.append(pid)
                     reason = f"Explicit Close ({close_scope})"
                     if defer_bookkeeping:
-                        self._record_closed_position_in_background(pid, reason)
+                        self._record_closed_position_in_background(pid, reason, trace=trace)
                     else:
-                        await self._record_closed_position(pid, reason)
+                        await self._record_closed_position(pid, reason, trace=trace)
                 except Exception as e:
                     self._closing_position_ids.discard(pid)
                     logger.error("Failed closing %s: %s", pid, e)
@@ -1816,8 +1875,13 @@ class AsyncPerformanceMonitor:
             "closed_position_ids": closed_position_ids,
         }
 
-    async def _send_close_order(self, api_pos: dict) -> None:
-        """Sell a position at market, after cancelling any order resting on it (e.g. its protective stop)."""
+    async def _send_close_order(self, api_pos: dict, position_id=None, action: str | None = None) -> OrderTrace:
+        """
+        Sell a position at market, after cancelling any order resting on it (e.g. its protective stop).
+
+        Returns the marks of the sell order, to be completed once the position
+        is seen closed. Nothing is awaited here but Saxo.
+        """
         pos_base = api_pos["PositionBase"]
         related_order_ids = [
             related["OrderId"]
@@ -1829,12 +1893,54 @@ class AsyncPerformanceMonitor:
             await self.order_service.cancel_order(",".join(related_order_ids))
 
         direction = direction_from_amount(pos_base["Amount"])
-        await self.order_service.place_market_order(
+        trace = OrderTrace(CLOSE, position_id=position_id)
+        trace.sent()
+        result = await self.order_service.place_market_order(
             uic=pos_base["Uic"],
             asset_type=pos_base["AssetType"],
             amount=pos_base["Amount"],
             buy_sell=direction_invert(direction),
         )
+        self._track_close_order(trace, result, api_pos, action)
+        return trace
+
+    def _track_close_order(self, trace: OrderTrace, result, api_pos: dict, action: str | None) -> None:
+        """
+        Keep the sell order Saxo just accepted, with the order itself: nothing
+        else records it. Never raises: an error here would read as a sell that
+        failed, and the position would be sold again.
+        """
+        try:
+            order_id = result.get("OrderId") if isinstance(result, dict) else None
+            if not order_id:
+                return
+            trace.accepted(order_id)
+            if self.order_tracker is None:
+                return
+            pos_base = api_pos.get("PositionBase") or {}
+            display = api_pos.get("DisplayAndFormat") or {}
+            amount = pos_base.get("Amount")
+            order_row = {
+                "action": action,
+                "buy_sell": direction_invert(direction_from_amount(amount)),
+                "order_id": trace.order_id,
+                "order_amount": abs(int(amount)),
+                "order_type": "Market",
+                "order_kind": "close",
+                "order_submit_time": trace.sent_at,
+                "related_order_id": [],
+                "position_id": trace.position_id,
+                "instrument_name": display.get("Description"),
+                "instrument_symbol": display.get("Symbol"),
+                "instrument_uic": pos_base.get("Uic"),
+                # The bid the sale was decided on: what it was sold at is on the position.
+                "instrument_price": (api_pos.get("PositionView") or {}).get("Bid"),
+                "instrument_currency": display.get("Currency"),
+                "order_cost": None,
+            }
+            track_order(self.order_tracker, trace, order_row)
+        except Exception as e:
+            logger.warning("Could not keep the sell order of position %s: %r", trace.position_id, e)
 
     async def wait_for_background_tasks(self, timeout: float = 10.0) -> None:
         """Give closures still being recorded in the background a chance to finish (used at shutdown)."""
@@ -1877,16 +1983,19 @@ class AsyncPerformanceMonitor:
         position_id: str,
         reason: str,
         lookup_delays: tuple[float, ...] = CLOSED_POSITION_LOOKUP_DELAYS,
+        trace: OrderTrace | None = None,
     ) -> bool:
         """Record a closure whose sell order was just sent, then stop treating it as in flight."""
         try:
-            return await self._fetch_and_update_closed_position(position_id, reason, lookup_delays)
+            return await self._fetch_and_update_closed_position(position_id, reason, lookup_delays, trace=trace)
         finally:
             self._closing_position_ids.discard(position_id)
 
-    def _record_closed_position_in_background(self, position_id: str, reason: str) -> None:
+    def _record_closed_position_in_background(
+        self, position_id: str, reason: str, trace: OrderTrace | None = None,
+    ) -> None:
         self._run_in_background(
-            self._record_closed_position(position_id, reason, CLOSED_POSITION_BACKGROUND_LOOKUP_DELAYS)
+            self._record_closed_position(position_id, reason, CLOSED_POSITION_BACKGROUND_LOOKUP_DELAYS, trace=trace)
         )
 
     async def _find_closed_position(self, position_id: str) -> dict | None:
@@ -1901,19 +2010,32 @@ class AsyncPerformanceMonitor:
         position_id: str,
         reason: str,
         lookup_delays: tuple[float, ...] = CLOSED_POSITION_LOOKUP_DELAYS,
+        trace: OrderTrace | None = None,
     ) -> bool:
-        """Fetch closed position from API (retrying while it isn't listed yet) and update DB."""
+        """
+        Fetch closed position from API (retrying while it isn't listed yet) and update DB.
+
+        ``trace`` is the sell order's: it is marked with each look and with
+        whether the position was seen closed.
+        """
+        if not isinstance(trace, OrderTrace):
+            trace = OrderTrace(CLOSE, position_id=position_id)
         try:
             item = None
             for delay in lookup_delays:
                 await asyncio.sleep(delay)  # Non-blocking wait for API to reflect closure
                 item = await self._find_closed_position(position_id)
+                trace.looked()
                 if item is not None:
                     break
 
             if item is None:
                 logger.warning("Closed position %s not found in API.", position_id)
+                trace.gave_up(detail="Not among Saxo's closed positions")
+                track_order(self.order_tracker, trace)
                 return False
+            trace.confirmed()
+            track_order(self.order_tracker, trace)
 
             cp = item.get("ClosedPosition", {})
             dp = item.get("DisplayAndFormat", {})
@@ -1956,6 +2078,9 @@ Today realized: {today_pct}%"""
 
         except Exception as e:
             logger.error("Error updating closed position %s: %s", position_id, e, exc_info=True)
+            # Only counts when the looking itself failed: a closure already seen keeps its mark.
+            trace.failed(detail=f"{type(e).__name__}: {e}")
+            track_order(self.order_tracker, trace)
             return False
 
     async def _maybe_trigger_daily_stats(self, today_pct: float) -> None:

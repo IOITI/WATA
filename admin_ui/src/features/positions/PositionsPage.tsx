@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router'
 
 import { DateRangeFilter } from '@/components/DateRangeFilter'
 import { ExportButton } from '@/components/ExportButton'
@@ -48,7 +49,10 @@ function useNow(intervalMs: number): number {
 export function PositionsPage() {
   const { timezone, actions_enabled: actionsEnabled } = useSession()
   const now = useNow(5_000)
-  const [status, setStatus] = useState<StatusFilter>('open')
+  const [searchParams, setSearchParams] = useSearchParams()
+  // A link from an order: its position, open or closed, with its orders shown.
+  const find = searchParams.get('find') ?? ''
+  const [status, setStatus] = useState<StatusFilter>(() => (find ? 'all' : 'open'))
   const [range, setRange] = useState<DateRange>(ALL_TIME)
   const params = rangeParams(range)
 
@@ -77,7 +81,11 @@ export function PositionsPage() {
         <AnimatedTabs
           tabs={TABS}
           activeTab={status}
-          onChange={(tab) => setStatus(tab as StatusFilter)}
+          onChange={(tab) => {
+            setStatus(tab as StatusFilter)
+            // The position that was looked for has been seen: the other tabs start unsearched.
+            if (find) setSearchParams({}, { replace: true })
+          }}
           renderContent={false}
         />
         <div className="flex flex-wrap items-center gap-2">
@@ -92,7 +100,7 @@ export function PositionsPage() {
           <div className={cn('space-y-2 transition-opacity', positionsQuery.isPlaceholderData && 'opacity-60')}>
             <AdvancedDataTable<Position>
               // Sorting and paging start over when the filter changes the columns.
-              key={status}
+              key={`${status}:${find}`}
               title={TABLE_TEXT[status].title}
               emptyTitle={TABLE_TEXT[status].emptyTitle}
               emptyDescription={TABLE_TEXT[status].emptyDescription}
@@ -102,6 +110,8 @@ export function PositionsPage() {
               getRowId={(row) => row.position_id}
               defaultPageSize={20}
               selectable={false}
+              initialSearch={find}
+              initialExpandedRowIds={find ? [find] : undefined}
               renderSubComponent={(row) => <PositionOrders positionId={row.position_id} />}
             />
             {page.total > page.items.length && (

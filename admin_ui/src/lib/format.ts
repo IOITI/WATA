@@ -117,6 +117,28 @@ export function formatTime(value: string | null | undefined, timeZone: string): 
   }).format(date)
 }
 
+/** A time of day to the millisecond ("09:31:02.120"), for moments less than a second apart. */
+export function formatClock(value: string | null | undefined, timeZone: string): string {
+  const date = parseDate(value)
+  if (!date) return EMPTY
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+    hour12: false,
+  }).format(date)
+}
+
+/** A short wait: "190 ms" under a second, "3.4 s" under a minute, then as `formatSpan`. */
+export function formatWait(milliseconds: number): string {
+  const wait = Math.max(0, milliseconds)
+  if (wait < 1000) return `${Math.round(wait)} ms`
+  if (wait < 60_000) return `${(wait / 1000).toFixed(1)} s`
+  return formatSpan(wait / 1000)
+}
+
 /** A calendar day ("2026-10-11") as "11 Oct 2026". Days from the API are already local to the trading timezone. */
 export function formatDay(value: string | null | undefined, withYear = true): string {
   if (!value) return EMPTY

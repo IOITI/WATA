@@ -44,6 +44,48 @@ _ORDER_COLUMNS = """
 # When a position last changed: its close, or its open while it is still open.
 _POSITION_ACTIVITY_TIME = "COALESCE(execution_time_close, execution_time_open)"
 
+# What became of an order (order_execution), absent for the orders placed before it was kept.
+_ORDER_EXECUTION_COLUMNS = (
+    "purpose", "sent_at", "accepted_at", "confirmed_at", "gave_up_at", "lookups", "outcome",
+    "cancel_accepted", "detail", "recorded_by",
+)
+# The position an order gave, or closed.
+_ORDER_POSITION_COLUMNS = (
+    "position_id", "position_status", "position_amount", "position_open_price", "position_close_price",
+    "position_profit_loss", "position_total_performance_percent", "execution_time_open",
+    "execution_time_close", "position_close_reason",
+)
+# The signal an order came from.
+_ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp", "decided_at")
+
+# An order with what became of it, its position and its signal. What a sell
+# order could not say of its instrument is taken from the position it closed.
+_LINKED_ORDER_COLUMNS = ", ".join([
+    "COALESCE(o.action, p.action) AS action",
+    "o.buy_sell, o.order_id, o.order_amount, o.order_type, o.order_kind, o.order_time",
+    "o.related_order_id, o.position_id",
+    "COALESCE(o.instrument_name, p.instrument_name) AS instrument_name",
+    "COALESCE(o.instrument_symbol, p.instrument_symbol) AS instrument_symbol",
+    "COALESCE(o.instrument_uic, p.instrument_uic) AS instrument_uic",
+    "o.instrument_price",
+    "COALESCE(o.instrument_currency, p.instrument_currency) AS instrument_currency",
+    "o.order_cost",
+    *(f"e.{column}" for column in _ORDER_EXECUTION_COLUMNS),
+    *(f"p.{column} AS position__{column}" for column in _ORDER_POSITION_COLUMNS),
+    *(f"j.{column} AS signal__{column}" for column in _ORDER_SIGNAL_COLUMNS),
+])
+_LINKED_ORDER_TABLES = f"""
+    turbo_data_order o
+    LEFT JOIN order_execution e ON e.order_id = o.order_id
+    LEFT JOIN turbo_data_position p ON p.position_id = o.position_id
+    LEFT JOIN (
+        SELECT DISTINCT ON (order_id) order_id, {", ".join(_ORDER_SIGNAL_COLUMNS)}
+        FROM signal_journal
+        WHERE order_id IS NOT NULL
+        ORDER BY order_id, decided_at
+    ) j ON j.order_id = o.order_id
+"""
+
 
 class LazyDatabase:
     """
@@ -87,6 +129,27 @@ def _clean_row(record) -> dict:
         if isinstance(value, float) and not math.isfinite(value):
             row[key] = None
     return row
+
+
+def _linked_order(record) -> dict:
+    """A row of the linked orders: its position and its signal as dicts, None when it has none."""
+    row = _clean_row(record)
+    order = {key: value for key, value in row.items() if "__" not in key}
+    for link in ("position", "signal"):
+        prefix = f"{link}__"
+        linked = {key[len(prefix):]: value for key, value in row.items() if key.startswith(prefix)}
+        order[link] = linked if any(value is not None for value in linked.values()) else None
+    return order
+
+
+def _unlinked_order(record) -> dict:
+    """An order read alone, in the shape of a linked one that has nothing known of it."""
+    return {
+        **_clean_row(record),
+        **{column: None for column in _ORDER_EXECUTION_COLUMNS},
+        "position": None,
+        "signal": None,
+    }
 
 
 def json_safe(value):
@@ -519,36 +582,51 @@ class AdminQueries:
         )
         if position is None:
             return None
-        orders = await self.db.fetch(
-            f"""
-            SELECT {_ORDER_COLUMNS}
-            FROM turbo_data_order
-            WHERE position_id = $1 OR order_id = $2 OR order_id = ANY($3::text[])
-            ORDER BY order_time ASC NULLS LAST, order_id ASC
+        orders = await self._linked_orders(
+            """
+            WHERE o.position_id = $1 OR o.order_id = $2 OR o.order_id = ANY($3::text[])
+            ORDER BY o.order_time ASC NULLS LAST, o.order_id ASC
             """,
             position_id,
             position["order_id"],
             position["related_order_id"] or [],
         )
-        return {"position": _clean_row(position), "orders": [_clean_row(row) for row in orders]}
+        return {"position": _clean_row(position), "orders": orders}
+
+    async def _linked_orders(self, selection: str, *args) -> list[dict]:
+        """
+        Orders, each with what became of it, the position it gave or closed and
+        the signal it came from. ``selection`` is what follows the tables
+        (WHERE, ORDER BY, LIMIT), the orders being named ``o``.
+
+        The tables that say so are created by the trading services at their
+        first start with the version that writes them: until then the orders
+        are read alone, as they always were.
+        """
+        try:
+            rows = await self.db.fetch(f"SELECT {_LINKED_ORDER_COLUMNS} FROM {_LINKED_ORDER_TABLES} {selection}", *args)
+        except DatabaseUnavailable as e:
+            if not _is_missing_table(e):
+                raise
+            rows = await self.db.fetch(f"SELECT {_ORDER_COLUMNS} FROM turbo_data_order o {selection}", *args)
+            return [_unlinked_order(row) for row in rows]
+        return [_linked_order(row) for row in rows]
 
     async def list_orders(self, start: date | None = None, end: date | None = None, limit: int = 500) -> dict:
         args: list[Any] = []
-        conditions = self._date_range_conditions("order_time", start, end, args)
+        conditions = self._date_range_conditions("o.order_time", start, end, args)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-        total = await self.db.fetchval(f"SELECT COUNT(*) FROM turbo_data_order {where}", *args)
-        rows = await self.db.fetch(
+        total = await self.db.fetchval(f"SELECT COUNT(*) FROM turbo_data_order o {where}", *args)
+        orders = await self._linked_orders(
             f"""
-            SELECT {_ORDER_COLUMNS}
-            FROM turbo_data_order
             {where}
-            ORDER BY order_time DESC NULLS LAST, order_id DESC
+            ORDER BY o.order_time DESC NULLS LAST, o.order_id DESC
             LIMIT {min(max(limit, 1), MAX_ROWS)}
             """,
             *args,
         )
-        return {"items": [_clean_row(row) for row in rows], "total": total or 0}
+        return {"items": orders, "total": total or 0}
 
     # ── reporting ──
 

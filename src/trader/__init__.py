@@ -39,6 +39,7 @@ from src.database.postgres import (
     AsyncDbTradePerformanceManager,
     AsyncDbRiskStateManager,
     AsyncDbSignalJournalManager,
+    AsyncDbOrderExecutionManager,
     AsyncDbBalanceHistoryManager,
     init_schema,
 )
@@ -54,6 +55,7 @@ from src.trade.signal_journal import (
     FAILED,
     IGNORED,
 )
+from src.trade.order_tracker import OrderTracker
 from src.schema import SchemaLoader
 from src.message_helper import (
     TelegramMessageComposer,
@@ -287,7 +289,8 @@ async def handle_trading_signal(
         await telegram.send(composer.get_message())
     except PositionNotFoundException as e:
         logger.critical("Position not found after order: %s", e)
-        journal_signal(journal, data, FAILED, f"PositionNotFoundException: {e}")
+        # With the order's id: the admin finds the signal behind an order that gave no position.
+        journal_signal(journal, data, FAILED, f"PositionNotFoundException: {e}", order_id=e.order_id)
         composer.add_generic_error("PositionNotFoundException", e, is_critical=True)
         await telegram.send(composer.get_message())
         raise  # Bubble up for service-level handling
@@ -633,6 +636,7 @@ async def main():
     keep_warm_task = None
     performance_monitor = None
     journal = None
+    order_tracker = None
 
     try:
         # 3. PostgreSQL
@@ -648,6 +652,8 @@ async def main():
         db_balance_manager = AsyncDbBalanceHistoryManager(pg)
         # What was done with each signal, for the admin interface (written in the background)
         journal = SignalJournal(AsyncDbSignalJournalManager(pg))
+        # What became of each order, for the admin interface (written in the background too)
+        order_tracker = OrderTracker(AsyncDbOrderExecutionManager(pg), db_order_manager, recorded_by="trader")
 
         # 4. Trading rules (async DB-backed checks; risk state shared with position_monitor)
         trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
@@ -675,6 +681,7 @@ async def main():
             instrument_service, order_service, position_service,
             config_manager, db_order_manager, db_position_manager,
             watchlist_client=watchlist_client,
+            order_tracker=order_tracker,
         )
         async def _trigger_daily_stats():
             await handle_daily_stats(
@@ -688,6 +695,7 @@ async def main():
             position_service, order_service, config_manager,
             db_position_manager, trading_rule, telegram.send,
             trigger_daily_stats_fn=_trigger_daily_stats,
+            order_tracker=order_tracker,
         )
 
         # 8. Keep the Saxo session warm between signals
@@ -754,6 +762,8 @@ async def main():
             await performance_monitor.wait_for_background_tasks()
         if journal is not None:
             await journal.wait_for_pending()
+        if order_tracker is not None:
+            await order_tracker.wait_for_pending()
         if watchlist_client is not None:
             await watchlist_client.close()
         if api_client is not None:

@@ -16,6 +16,7 @@ from src.database.postgres import (
     SCHEMA_SQL,
     AsyncDbBalanceHistoryManager,
     AsyncDbLiveValueManager,
+    AsyncDbOrderExecutionManager,
     AsyncDbRiskStateManager,
     AsyncDbSignalJournalManager,
 )
@@ -44,7 +45,7 @@ NOW = datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
 
 
 def test_schema_creates_the_tables_the_admin_reads_without_touching_existing_ones():
-    for table in ("position_live_value", "signal_journal", "account_balance_history"):
+    for table in ("position_live_value", "signal_journal", "account_balance_history", "order_execution"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in SCHEMA_SQL
     assert "DROP " not in SCHEMA_SQL
     assert "ALTER " not in SCHEMA_SQL
@@ -179,6 +180,56 @@ def test_journal_entry_with_only_the_required_fields_is_accepted():
 
     assert db.calls[0][1][0] == "uuid-2"
     assert db.calls[0][1][7] == "ignored"
+
+
+# ── what became of each order ──
+
+
+def _order_entry(**overrides):
+    return {
+        "order_id": "order-1", "purpose": "open", "position_id": None,
+        "sent_at": NOW, "accepted_at": NOW, "confirmed_at": None, "gave_up_at": None,
+        "lookups": 0, "outcome": None, "cancel_accepted": None, "detail": None, "recorded_by": "trader",
+        **overrides,
+    }
+
+
+def test_what_became_of_an_order_is_stored_with_each_of_its_moments():
+    db = FakeConnMgr()
+    entry = _order_entry(position_id="position-1", confirmed_at=NOW, lookups=2, outcome="confirmed")
+
+    asyncio.run(AsyncDbOrderExecutionManager(db).record(entry))
+
+    query, args = db.calls[0]
+    assert "INSERT INTO order_execution" in query
+    assert args == (
+        "order-1", "open", "position-1", NOW, NOW, NOW, None, 2, "confirmed", None, None, "trader",
+    )
+    # One value per column named, in the same order.
+    columns = query[query.index("(") + 1:query.index(")")].replace("\n", " ").split(",")
+    assert [column.strip() for column in columns] == list(entry)
+
+
+def test_an_order_that_has_its_outcome_is_never_written_over():
+    db = FakeConnMgr()
+
+    asyncio.run(AsyncDbOrderExecutionManager(db).record(_order_entry()))
+
+    query, _ = db.calls[0]
+    # The two writes of an order are made in the background and may arrive in
+    # either order: the one that says how it ended must be the one that stays.
+    assert "ON CONFLICT (order_id) DO UPDATE SET" in query
+    assert query.rstrip().endswith("WHERE order_execution.outcome IS NULL")
+    updated = query[query.index("DO UPDATE SET"):query.index("WHERE order_execution")]
+    assert "sent_at" not in updated and "accepted_at" not in updated
+
+
+def test_an_order_known_only_by_its_id_is_accepted():
+    db = FakeConnMgr()
+
+    asyncio.run(AsyncDbOrderExecutionManager(db).record({"order_id": "order-2"}))
+
+    assert db.calls[0][1] == ("order-2",) + (None,) * 11
 
 
 # ── account balance history ──

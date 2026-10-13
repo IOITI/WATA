@@ -56,6 +56,54 @@ export interface Order {
   instrument_price: number | null
   instrument_currency: string | null
   order_cost: number | null
+  /**
+   * What became of the order, by the clock of the service that sent it. All
+   * empty for an order placed before WATA kept it: only `order_time` is known
+   * then, written once the position was confirmed.
+   */
+  purpose?: 'open' | 'close' | null
+  /** Just before the order left. */
+  sent_at?: string | null
+  /** Saxo answered with the order's id. */
+  accepted_at?: string | null
+  /** The look at Saxo that showed the position open (a buy) or closed (a sell). */
+  confirmed_at?: string | null
+  /** When the service stopped looking, the position never having been shown. */
+  gave_up_at?: string | null
+  /** How many times Saxo was asked. */
+  lookups?: number | null
+  /** Empty while it is not known, or when the service stopped before knowing. */
+  outcome?: 'confirmed' | 'gave_up' | 'error' | null
+  /** A buy given up is cancelled: whether Saxo accepted that. */
+  cancel_accepted?: boolean | null
+  /** What Saxo answered when it refused the cancellation, or the error that stopped the order. */
+  detail?: string | null
+  recorded_by?: string | null
+  /** The position a buy gave, or a sell closed. */
+  position?: OrderPosition | null
+  /** The signal a buy came from, when the journal knows it. */
+  signal?: OrderSignal | null
+}
+
+export type OrderPosition = Pick<
+  Position,
+  | 'position_id'
+  | 'position_status'
+  | 'position_amount'
+  | 'position_open_price'
+  | 'position_close_price'
+  | 'position_profit_loss'
+  | 'position_total_performance_percent'
+  | 'execution_time_open'
+  | 'execution_time_close'
+  | 'position_close_reason'
+>
+
+export interface OrderSignal {
+  signal_uuid: string | null
+  signal_timestamp: string | null
+  received_timestamp: string | null
+  decided_at: string | null
 }
 
 export interface Page<T> {

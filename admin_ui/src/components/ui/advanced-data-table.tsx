@@ -818,6 +818,10 @@ export interface DataTableProps<T = any> {
   /** Row checkboxes for bulk actions (default true). */
   selectable?: boolean;
   renderSubComponent?: (row: T) => React.ReactNode;
+  /** WATA: what the search holds when the table appears (a link to one row). */
+  initialSearch?: string;
+  /** WATA: the rows shown opened when the table appears. */
+  initialExpandedRowIds?: string[];
   isLoading?: boolean;
   error?: string | null;
   className?: string;
@@ -833,6 +837,8 @@ export function DataTable<T = any>({
   accentColor,
   selectable = true,
   renderSubComponent,
+  initialSearch = '',
+  initialExpandedRowIds,
   isLoading,
   error,
   className,
@@ -863,10 +869,10 @@ export function DataTable<T = any>({
   }, [defaultViewMode]);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
-  const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(new Set());
+  const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(() => new Set(initialExpandedRowIds));
   const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(
     () => new Set(columns.filter((column) => column.defaultHidden).map((column) => column.id))
   );

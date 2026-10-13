@@ -1,12 +1,15 @@
+import { Link } from 'react-router'
+
 import { ActionBadge, PnlValue } from '@/components/status'
 import { Badge } from '@/components/ui/badge'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import type { CsvColumn } from '@/lib/csv'
-import { formatDateTime, formatMoney, formatNumber } from '@/lib/format'
+import { formatDateTime, formatMoney, formatNumber, formatWait } from '@/lib/format'
 import type { Order, Position } from '@/lib/types'
 
 import { ClosePositionButton } from './ClosePositionButton'
 import { LiveValue } from './LiveValue'
+import { orderResult, positionLink, purposeOf, RESULT_FILTER, RESULTS, tookMs } from './orderLife'
 
 export const POSITION_CSV: CsvColumn<Position>[] = [
   { header: 'position_id', value: (row) => row.position_id },
@@ -38,6 +41,21 @@ export const ORDER_CSV: CsvColumn<Order>[] = [
   { header: 'price', value: (row) => row.instrument_price },
   { header: 'cost', value: (row) => row.order_cost },
   { header: 'currency', value: (row) => row.instrument_currency },
+  { header: 'result', value: (row) => orderResult(row) },
+  { header: 'sent_at', value: (row) => row.sent_at },
+  { header: 'accepted_at', value: (row) => row.accepted_at },
+  // Saxo's clock: the fill for a buy, the closure for a sell.
+  {
+    header: 'saxo_time',
+    value: (row) =>
+      purposeOf(row) === 'open' ? row.position?.execution_time_open : row.position?.execution_time_close,
+  },
+  { header: 'seen_at', value: (row) => row.confirmed_at },
+  { header: 'gave_up_at', value: (row) => row.gave_up_at },
+  { header: 'looks', value: (row) => row.lookups },
+  { header: 'took_ms', value: (row) => tookMs(row) },
+  { header: 'cancel_accepted', value: (row) => (row.cancel_accepted == null ? null : row.cancel_accepted ? 'yes' : 'no') },
+  { header: 'detail', value: (row) => row.detail },
 ]
 
 const DIRECTION_FILTER = [
@@ -234,14 +252,41 @@ export function positionColumns(
   ]
 }
 
+/** What came of an order, and the position it gave or closed, as a link to it. */
+function resultCell(order: Order) {
+  const result = orderResult(order)
+  const cancel =
+    result === 'no_position' && order.cancel_accepted != null
+      ? order.cancel_accepted
+        ? 'cancelled'
+        : 'cancel refused'
+      : null
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      <Badge tone={RESULTS[result].tone}>{RESULTS[result].label}</Badge>
+      {order.position_id && (
+        <Link
+          to={positionLink(order.position_id)}
+          className="font-mono text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+          aria-label={`Position ${order.position_id}`}
+        >
+          {order.position_id}
+        </Link>
+      )}
+      {cancel && <span className="text-xs text-muted-foreground">{cancel}</span>}
+    </div>
+  )
+}
+
 export function orderColumns(timeZone: string): ColumnDef<Order>[] {
   return [
     {
       id: 'time',
       header: 'Time',
-      accessorKey: 'order_time',
+      // When it left; for the orders placed before that was kept, when it was written down.
+      accessorFn: (row) => row.sent_at ?? row.order_time,
       sortable: true,
-      cell: ({ row }) => formatDateTime(row.order_time, timeZone),
+      cell: ({ row }) => formatDateTime(row.sent_at ?? row.order_time, timeZone),
     },
     {
       id: 'instrument',
@@ -264,14 +309,30 @@ export function orderColumns(timeZone: string): ColumnDef<Order>[] {
       header: 'Side',
       accessorKey: 'buy_sell',
       sortable: true,
+      // The result says it: a position opened is a buy, one closed a sell.
+      defaultHidden: true,
       cell: ({ row }) => row.buy_sell ?? '—',
     },
     {
-      id: 'type',
-      header: 'Type',
-      accessorKey: 'order_type',
+      id: 'result',
+      header: 'Result',
+      accessorFn: orderResult,
       sortable: true,
-      cell: ({ row }) => [row.order_type, row.order_kind].filter(Boolean).join(' · ') || '—',
+      filterable: true,
+      filterOptions: RESULT_FILTER,
+      cell: ({ row }) => resultCell(row),
+    },
+    {
+      id: 'took',
+      // From the order leaving to its position being seen open (or closed), or to the giving up.
+      header: 'Took',
+      accessorFn: tookMs,
+      sortable: true,
+      align: 'right',
+      cell: ({ row }) => {
+        const took = tookMs(row)
+        return <span className="tabular-nums">{took == null ? '—' : formatWait(took)}</span>
+      },
     },
     {
       id: 'amount',
@@ -289,12 +350,22 @@ export function orderColumns(timeZone: string): ColumnDef<Order>[] {
       align: 'right',
       cell: ({ row }) => formatMoney(row.instrument_price, row.instrument_currency),
     },
+    // One click away, in the column list, like the side: every order is a market order, and a sale has no cost.
+    {
+      id: 'type',
+      header: 'Type',
+      accessorKey: 'order_type',
+      sortable: true,
+      defaultHidden: true,
+      cell: ({ row }) => [row.order_type, row.order_kind].filter(Boolean).join(' · ') || '—',
+    },
     {
       id: 'cost',
       header: 'Cost',
       accessorKey: 'order_cost',
       sortable: true,
       align: 'right',
+      defaultHidden: true,
       cell: ({ row }) => formatMoney(row.order_cost, row.instrument_currency),
     },
     {

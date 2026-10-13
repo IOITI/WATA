@@ -96,7 +96,9 @@ Changes made to the copied files:
 - `advanced-data-table.tsx`: new `selectable` prop (default `true`) to hide the row checkboxes of tables
   that have no bulk action; `defaultHidden` on a column (shown once picked in the column list); `emptyTitle` /
   `emptyDescription` on `AdvancedDataTable`, and "Clear filters" only when a search or a filter is active;
-  cells padded 20 px instead of 24, so that the seven columns of the closed positions fit a 1440 px screen.
+  cells padded 20 px instead of 24, so that the seven columns of the closed positions fit a 1440 px screen;
+  `initialSearch` and `initialExpandedRowIds`, for a link that lands on one row found and opened (an order
+  from its position, a position from its order: `?find=<id>`).
 - `settle-modal.tsx`: rendered in `document.body` (a dialog opened from a table cell took the cell's
   alignment and wrapping); focus moves into the dialog, stays in it and returns to what opened it.
 - `drag-to-confirm.tsx`: the hidden fallback button is out of the Tab order (it was a stop nobody could see,
