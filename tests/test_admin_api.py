@@ -1929,6 +1929,10 @@ def _open_event_stream(client):
     lines = stream.__enter__().iter_lines()
     while next(lines) != "event: connected":
         pass
+    # Kept for as long as the stream is: an iterator that is let go closes the
+    # connection under it, and the server then sees the browser leave before
+    # the test says it does.
+    stream.lines = lines
     return stream
 
 
