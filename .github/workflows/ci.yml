@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The Python the image is built with (Dockerfile), and the one it moves to next.
+        # The Python the image is built with (Dockerfile), and the one it was built
+        # with before: kept until 3.14 has run in production, so that going back
+        # to 3.12 stays something that is tested.
         python-version: ['3.12', '3.14']
 
     steps:
@@ -71,6 +73,22 @@ jobs:
           python -W error::SyntaxWarning -m compileall -q /app/src
         docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
           python -c "import importlib; [importlib.import_module(name) for name in ('src.web_server', 'src.trader', 'src.position_monitor', 'src.watchlist_manager', 'src.price_recorder', 'src.admin', 'src.mq_telegram', 'src.saxo_authen', 'src.strategy.backtest', 'schedule', 'duckdb', 'uvloop', 'httptools')]"
+
+  # The image exactly as the server builds it: no Python asked for.
+  image-as-deployed:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build the image with the server's own command
+      run: docker build -t wata-base . --platform=linux/amd64
+
+    - name: It has the Python the Dockerfile names
+      run: |
+        expected=$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)
+        test -n "$expected"
+        docker run --rm wata-base python --version | grep -F "Python $expected."
 
   # The database and the queue for real, with the libraries that talk to them.
   infrastructure:
