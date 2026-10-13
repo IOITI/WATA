@@ -2,7 +2,7 @@ import logging
 import math
 import textwrap
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json  # Import json for formatting details
 
 import pytz
@@ -952,7 +952,7 @@ def build_daily_trading_report_payload(
     current_balance: float | None = None,
     milestones_eur: list[float] | None = None,
 ) -> dict:
-    normalized_report_date = _coerce_date(report_date) or datetime.utcnow().date()
+    normalized_report_date = _coerce_date(report_date) or datetime.now(timezone.utc).date()
     ordered_closed_trades = _sort_trades_chronologically(closed_trades)
     daily_trades = [
         trade for trade in ordered_closed_trades

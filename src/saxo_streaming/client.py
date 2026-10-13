@@ -35,6 +35,7 @@ from typing import Any, Callable, Coroutine
 
 import websockets
 import websockets.exceptions
+from websockets.protocol import State
 
 from src.saxo_openapi.async_client import AsyncAPI, TRADING_ENVIRONMENTS
 from src.saxo_openapi.contrib.ws.stream import decode_ws_msg
@@ -132,7 +133,7 @@ class SaxoStreamClient:
         # Connection state
         self._context_id: str = ""
         self._pos_ref_id: str = ""
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: websockets.ClientConnection | None = None
         self._last_message_id: int | None = None
         self._running = False
         self._receive_task: asyncio.Task | None = None
@@ -167,7 +168,7 @@ class SaxoStreamClient:
                 except asyncio.CancelledError:
                     break
                 except websockets.exceptions.ConnectionClosed as e:
-                    logger.warning("WebSocket closed: code=%s reason=%s", e.code, e.reason)
+                    logger.warning("WebSocket closed: code=%s reason=%s", *_close_code_and_reason(e))
                 except Exception as e:
                     logger.error("Stream error: %s", e, exc_info=True)
 
@@ -189,7 +190,7 @@ class SaxoStreamClient:
         if self._receive_task and not self._receive_task.done():
             self._receive_task.cancel()
         await self._cleanup_subscriptions()
-        if self._ws and not self._ws.closed:
+        if self._has_connection():
             await self._ws.close()
             logger.info("WebSocket closed gracefully.")
 
@@ -227,10 +228,14 @@ class SaxoStreamClient:
         async with self._info_price_subscriptions_lock:
             self._desired_info_price_subscriptions = normalized
 
-        if self._ws is not None and not self._ws.closed:
+        if self._has_connection():
             await self._sync_desired_info_price_subscriptions()
 
     # ── Connection ────────────────────────────────────────────────
+
+    def _has_connection(self) -> bool:
+        """Whether there is a WebSocket that is not closed yet (one being closed still counts)."""
+        return self._ws is not None and self._ws.state is not State.CLOSED
 
     async def _connect_and_subscribe(self):
         """Open WS, create position subscription, start reauth timer."""
@@ -252,6 +257,9 @@ class SaxoStreamClient:
             ping_timeout=20,
             close_timeout=5,
             max_size=2 ** 22,  # 4 MiB
+            # Straight to Saxo, as it always was: the library would otherwise
+            # look for a proxy in the environment.
+            proxy=None,
         )
         logger.info("WebSocket connected.")
 
@@ -751,6 +759,13 @@ class SaxoStreamClient:
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
+def _close_code_and_reason(closed: websockets.exceptions.ConnectionClosed) -> tuple[int, str]:
+    """What Saxo closed the connection with; 1006 when it was lost without a closing frame."""
+    if closed.rcvd is None:
+        return 1006, ""
+    return closed.rcvd.code, closed.rcvd.reason
+
 
 def _short_id(prefix: str) -> str:
     """Generate a short alphanumeric ID suitable for Saxo context/ref IDs."""

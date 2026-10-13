@@ -12,6 +12,8 @@ import os
 import signal
 import sys
 
+from src import event_loop
+
 logger = logging.getLogger(__name__)
 
 
@@ -168,10 +170,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    try:
-        import uvloop
-
-        uvloop.install()
-    except ImportError:
-        pass
-    asyncio.run(main())
+    event_loop.run(main())
