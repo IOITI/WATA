@@ -1,10 +1,7 @@
-import { Link } from 'react-router'
-
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { BacktestStatus } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { STATE_LABEL, STATE_TONE } from './model'
 import type { Change } from './model'
@@ -84,10 +81,3 @@ export function BacktestsDisabled() {
   )
 }
 
-export function BackToRuns({ className }: { className?: string }) {
-  return (
-    <Link to="/backtests" className={cn('text-xs text-muted-foreground hover:text-foreground', className)}>
-      ← All backtests
-    </Link>
-  )
-}

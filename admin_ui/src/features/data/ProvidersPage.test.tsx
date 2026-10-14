@@ -14,6 +14,7 @@ import type {
   SaxoProviderDetails,
   Session,
 } from '@/lib/types'
+import { WithTrail } from '@/test/WithTrail'
 
 import { ProviderPage } from './ProviderPage'
 import { ProvidersPage } from './ProvidersPage'
@@ -132,6 +133,8 @@ function Address() {
 
 const toast = vi.fn()
 
+const trail = () => within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
+
 function renderPage(address = '/data/providers', session: Session = SESSION) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
@@ -139,11 +142,13 @@ function renderPage(address = '/data/providers', session: Session = SESSION) {
       <ToastContext.Provider value={toast}>
         <AuthContext.Provider value={{ session, error: null, login: async () => {}, logout: async () => {} }}>
           <MemoryRouter initialEntries={[address]}>
-            <Routes>
-              <Route path="data/providers" element={<ProvidersPage />} />
-              <Route path="data/providers/:providerId" element={<ProviderPage />} />
-              <Route path="*" element={<Address />} />
-            </Routes>
+            <WithTrail>
+              <Routes>
+                <Route path="data/providers" element={<ProvidersPage />} />
+                <Route path="data/providers/:providerId" element={<ProviderPage />} />
+                <Route path="*" element={<Address />} />
+              </Routes>
+            </WithTrail>
           </MemoryRouter>
         </AuthContext.Provider>
       </ToastContext.Provider>
@@ -178,7 +183,7 @@ describe('the providers', () => {
     expect(within(table).getByRole('link', { name: 'View assets' })).toHaveAttribute('href', '/data/assets?provider=saxo')
     expect(within(table).getByRole('link', { name: 'View details' })).toHaveAttribute('href', '/data/providers/saxo')
     expect(document.title).toBe('Providers · WATA Admin')
-    expect(within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('Providers')).toBeInTheDocument()
+    expect(trail().getByText('Providers').closest('[aria-current="page"]')).not.toBeNull()
   })
 
   it('are said to be none when nothing is switched on, with how to add one', async () => {
@@ -325,8 +330,8 @@ describe('the Saxo provider’s page', () => {
     expect(screen.getByText('Kept').nextSibling).toHaveTextContent('6 months')
     expect(screen.getByText('UIC 4913 · CfdOnIndex')).toBeInTheDocument()
     expect(screen.getByText(/wataprices probe --uic/)).toBeInTheDocument()
-    const trail = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
-    expect(trail.getByRole('link', { name: 'Providers' })).toHaveAttribute('href', '/data/providers')
+    expect(trail().getByRole('link', { name: 'Providers' })).toHaveAttribute('href', '/data/providers')
+    expect(trail().getByText('Saxo Bank').closest('[aria-current="page"]')).not.toBeNull()
   })
 
   it('says that a recorder switched on and silent must be started on the server', async () => {

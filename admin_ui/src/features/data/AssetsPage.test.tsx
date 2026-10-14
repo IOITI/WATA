@@ -7,6 +7,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { AuthContext } from '@/features/auth/auth-context'
 import type { DataAsset, DataAssets, InstrumentAvailability, Session } from '@/lib/types'
 import { resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
+import { WithTrail } from '@/test/WithTrail'
 
 import { AssetsPage } from './AssetsPage'
 
@@ -119,6 +120,8 @@ function Address() {
   return <output aria-label="address">{location.pathname + location.search}</output>
 }
 
+const trail = () => within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
+
 function renderPage(address = '/data/assets') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
@@ -127,18 +130,20 @@ function renderPage(address = '/data/assets') {
         <MemoryRouter initialEntries={[address]}>
           {/* A provider's link, from elsewhere in the interface. */}
           <Link to="/data/assets?provider=dukascopy">Dukascopy's assets</Link>
-          <Routes>
-            <Route
-              path="data/assets"
-              element={
-                <>
-                  <AssetsPage />
-                  <Address />
-                </>
-              }
-            />
-            <Route path="*" element={<Address />} />
-          </Routes>
+          <WithTrail>
+            <Routes>
+              <Route
+                path="data/assets"
+                element={
+                  <>
+                    <AssetsPage />
+                    <Address />
+                  </>
+                }
+              />
+              <Route path="*" element={<Address />} />
+            </Routes>
+          </WithTrail>
         </MemoryRouter>
       </AuthContext.Provider>
     </QueryClientProvider>,
@@ -183,9 +188,8 @@ describe('the assets stored', () => {
     renderPage()
     await listed()
 
-    const trail = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
-    expect(trail.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
-    expect(trail.getByText('Assets View').closest('[aria-current="page"]')).not.toBeNull()
+    expect(trail().getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
+    expect(trail().getByText('Assets View').closest('[aria-current="page"]')).not.toBeNull()
   })
 
   it('mark the turbos Saxo left without a quote today, and count them', async () => {

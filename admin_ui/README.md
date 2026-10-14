@@ -110,7 +110,8 @@ Changes made to the copied files:
 - `breadcrumb.tsx`: its text in `text-muted-foreground` and `text-foreground`, not `neutral-500` (4.54:1 on
   the light background, a hair from the limit) and `neutral-900`. Copied by hand at the pinned commit: the
   CLI would also offer to overwrite `src/lib/utils.ts`, which is the same. React Router's `Link` reads `to`
-  where this component gives `href`: it is given `components/RouterLink.tsx`.
+  where this component gives `href`: it is given `components/RouterLink.tsx`. `wrap={false}` keeps the trail
+  on one line, for the top bar: each crumb cut short with an ellipsis, the last one first.
 - `settle-modal.tsx`: rendered in `document.body` (a dialog opened from a table cell took the cell's
   alignment and wrapping); focus moves into the dialog, stays in it and returns to what opened it. An `xl`
   size (`max-w-2xl`), and a panel no taller than the screen, what does not fit scrolling inside it.

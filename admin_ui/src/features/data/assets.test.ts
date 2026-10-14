@@ -14,7 +14,6 @@ import {
   parseSeen,
   tableFilters,
 } from './assets'
-import { assetCrumbs, assetsCrumbs, providerCrumbs, providersCrumbs } from './crumbs'
 
 const TURBO: DataAsset = {
   provider: 'saxo', key: '2', ref: 'saxo/2', id: 2, uic: 40001234, asset_type: 'WarrantOpenEndKnockOut',
@@ -100,19 +99,6 @@ describe('an address of the former Prices page', () => {
 
   it('drops a period that makes no sense', () => {
     expect(legacyPricesTarget('?instrument=5&from=yesterday&to=today')).toBe('/data/assets/saxo/5')
-  })
-})
-
-describe('where a page of the Data section is', () => {
-  it('names the section, then the page, the last one not a link', () => {
-    expect(assetsCrumbs()).toEqual([{ label: 'Data' }, { label: 'Assets View' }])
-    expect(assetCrumbs('Long 24,150 · SG')).toEqual([
-      { label: 'Data' }, { label: 'Assets View', href: '/data/assets' }, { label: 'Long 24,150 · SG' },
-    ])
-    expect(providersCrumbs()).toEqual([{ label: 'Data' }, { label: 'Providers' }])
-    expect(providerCrumbs('Dukascopy')).toEqual([
-      { label: 'Data' }, { label: 'Providers', href: '/data/providers' }, { label: 'Dukascopy' },
-    ])
   })
 })
 

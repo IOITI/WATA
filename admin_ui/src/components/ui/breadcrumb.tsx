@@ -20,6 +20,11 @@ export interface BreadcrumbProps extends Omit<React.ComponentProps<"nav">, "chil
   maxItems?: number;
   /** Your router's link, e.g. next/link. Defaults to <a>. */
   as?: React.ElementType;
+  /**
+   * WATA: false keeps the trail on one line (the top bar), each crumb cut
+   * short with an ellipsis, the last one first, instead of going to a second line.
+   */
+  wrap?: boolean;
 }
 
 export function Breadcrumb({
@@ -27,6 +32,7 @@ export function Breadcrumb({
   separator = "chevron",
   maxItems = 4,
   as,
+  wrap = true,
   className,
   ...props
 }: BreadcrumbProps) {
@@ -68,7 +74,10 @@ export function Breadcrumb({
       <ol
         ref={listRef}
         onMouseLeave={() => setHover(null)}
-        className="flex flex-wrap items-center gap-x-0.5 gap-y-1 text-muted-foreground"
+        className={cn(
+          "flex items-center gap-x-0.5 gap-y-1 text-muted-foreground",
+          wrap ? "flex-wrap" : "min-w-0 flex-nowrap",
+        )}
       >
         {entries.map((entry, n) => {
           const first = n === 0;
@@ -93,9 +102,9 @@ export function Breadcrumb({
           const isLast = entry === items.length - 1;
           const revealed = expanded && canCollapse && entry >= hiddenFrom && entry < hiddenTo;
           const body = (
-            <span className="relative flex items-center gap-1.5 [&>svg]:size-4">
+            <span className={cn("relative flex items-center gap-1.5 [&>svg]:size-4 [&>svg]:shrink-0", !wrap && "min-w-0")}>
               {item.icon}
-              <span>{item.label}</span>
+              <span className={cn(!wrap && "truncate")}>{item.label}</span>
             </span>
           );
 
@@ -106,13 +115,16 @@ export function Breadcrumb({
               initial={revealed ? { opacity: 0, x: -6 } : false}
               animate={{ opacity: 1, x: 0 }}
               transition={spring}
-              className="flex items-center gap-0.5"
+              className={cn(
+                "flex items-center gap-0.5",
+                !wrap && (isLast ? "min-w-0" : "max-w-64 min-w-0 shrink-0"),
+              )}
             >
               {!first && sep}
               {isLast || !item.href ? (
                 <span
                   aria-current={isLast ? "page" : undefined}
-                  className={cn(linkBase, isLast && "font-medium text-foreground")}
+                  className={cn(linkBase, isLast && "font-medium text-foreground", !wrap && "min-w-0")}
                 >
                   {body}
                 </span>
@@ -123,7 +135,7 @@ export function Breadcrumb({
                   onMouseEnter={() => setHover(entry)}
                   onFocus={() => setHover(entry)}
                   onBlur={() => setHover(null)}
-                  className={cn(linkBase, "transition-colors hover:text-foreground")}
+                  className={cn(linkBase, "transition-colors hover:text-foreground", !wrap && "min-w-0")}
                 >
                   {hover === entry && (
                     <motion.span

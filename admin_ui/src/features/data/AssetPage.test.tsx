@@ -20,6 +20,7 @@ import type {
 } from '@/lib/types'
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
 import { stubSystemTheme } from '@/test/systemTheme'
+import { WithTrail } from '@/test/WithTrail'
 
 import { AssetPage } from './AssetPage'
 
@@ -231,24 +232,28 @@ function Address() {
 
 let queryClient: QueryClient
 
+const trail = () => within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
+
 function renderPage(address = '/data/assets/saxo/1') {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
         <MemoryRouter initialEntries={[address]}>
-          <Routes>
-            <Route
-              path="data/assets/:provider/:key"
-              element={
-                <>
-                  <AssetPage />
-                  <Address />
-                </>
-              }
-            />
-            <Route path="*" element={<Address />} />
-          </Routes>
+          <WithTrail>
+            <Routes>
+              <Route
+                path="data/assets/:provider/:key"
+                element={
+                  <>
+                    <AssetPage />
+                    <Address />
+                  </>
+                }
+              />
+              <Route path="*" element={<Address />} />
+            </Routes>
+          </WithTrail>
         </MemoryRouter>
       </AuthContext.Provider>
     </QueryClientProvider>,
@@ -310,12 +315,11 @@ describe('opening an asset', () => {
     renderPage('/data/assets/saxo/2')
     await chartIsDrawn()
 
-    const trail = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
-    expect(trail.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
-    expect(trail.getByRole('link', { name: 'Assets View' })).toHaveAttribute('href', '/data/assets')
+    expect(trail().getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
+    expect(trail().getByRole('link', { name: 'Assets View' })).toHaveAttribute('href', '/data/assets')
     // The section has no page of its own; the asset is where the reader is.
-    expect(trail.queryByRole('link', { name: 'Data' })).not.toBeInTheDocument()
-    expect(trail.getByText('Long 24,150 · SG').closest('[aria-current="page"]')).not.toBeNull()
+    expect(trail().queryByRole('link', { name: 'Data' })).not.toBeInTheDocument()
+    expect(trail().getByText('Long 24,150 · SG').closest('[aria-current="page"]')).not.toBeNull()
   })
 
   it('carries the notice and the link the charting library asks for', async () => {

@@ -1,12 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { Link, MemoryRouter, Route, Routes } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
+import { NotFoundPage } from '@/features/NotFoundPage'
 import type { Session } from '@/lib/types'
 
 import { AppShell } from './AppShell'
+import { PageHeader } from './Panel'
 import { ToastProvider } from './ToastProvider'
 
 const SESSION: Session = {
@@ -24,9 +27,11 @@ interface ServerState {
   saxo?: 'ok' | 'down' | 'unknown'
   pausedSince?: string | null
   restartRequired?: boolean
+  /** The page shown. */
+  path?: string
 }
 
-function renderShell({ saxo = 'ok', pausedSince = null, restartRequired = false }: ServerState = {}) {
+function renderShell({ saxo = 'ok', pausedSince = null, restartRequired = false, path = '/positions' }: ServerState = {}) {
   const bodies: Record<string, unknown> = {
     '/api/system/health': {
       status: saxo === 'down' ? 'down' : 'ok',
@@ -56,10 +61,25 @@ function renderShell({ saxo = 'ok', pausedSince = null, restartRequired = false 
         }}
       >
         <ToastProvider>
-          <MemoryRouter initialEntries={['/positions']}>
+          <MemoryRouter initialEntries={[path]}>
             <Routes>
               <Route element={<AppShell />}>
+                <Route index element={<PageHeader title="Dashboard" />} />
                 <Route path="positions" element={<h1>Positions</h1>} />
+                <Route
+                  path="data/assets/:provider/:key"
+                  element={
+                    <>
+                      <PageHeader title="Long 24,150 · SG" />
+                      <Link to="/positions">To the positions</Link>
+                    </>
+                  }
+                />
+                <Route
+                  path="backtests/:runId/days/:day"
+                  element={<PageHeader title="9 Oct 2026" parents={[{ label: 'Morning breakout', href: '/backtests/r1' }]} />}
+                />
+                <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -121,11 +141,64 @@ describe('trading state in the top bar', () => {
     expect(await screen.findByRole('button', { name: /^Theme:/ })).toBeInTheDocument()
   })
 
-  it('no longer repeats the page name in a breadcrumb', async () => {
+})
+
+/** Both forms of the trail are rendered here (no CSS): the whole one, then its last two steps. */
+const trails = () => screen.getAllByRole('navigation', { name: 'Breadcrumb' })
+const wholeTrail = () => within(trails()[0])
+const shortTrail = () => within(trails()[1])
+const isCurrent = (element: HTMLElement) => element.closest('[aria-current="page"]') !== null
+
+describe('where the page is, in the top bar', () => {
+  it('is said on every page: the section, which is no link, then the page, from Home', async () => {
     renderShell()
 
-    await screen.findByText('Up')
-    expect(screen.queryByRole('navigation', { name: /breadcrumb/i })).not.toBeInTheDocument()
-    expect(screen.getAllByText('Positions').length).toBeGreaterThan(0)
+    expect(await wholeTrail().findByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
+    expect(wholeTrail().getByText('Trading')).toBeInTheDocument()
+    expect(wholeTrail().queryByRole('link', { name: 'Trading' })).not.toBeInTheDocument()
+    expect(isCurrent(wholeTrail().getByText('Positions'))).toBe(true)
+    // A narrow screen has room for the last two steps.
+    expect(shortTrail().getByText('Trading')).toBeInTheDocument()
+    expect(isCurrent(shortTrail().getByText('Positions'))).toBe(true)
+    expect(shortTrail().queryByText('Home')).not.toBeInTheDocument()
+  })
+
+  it('is Home alone on the dashboard', async () => {
+    renderShell({ path: '/' })
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument()
+    expect(wholeTrail().getAllByRole('listitem')).toHaveLength(1)
+    expect(isCurrent(wholeTrail().getByText('Home'))).toBe(true)
+  })
+
+  it('leads from a deeper page back through the pages it names, to its page of the menu', async () => {
+    renderShell({ path: '/backtests/r1/days/2026-10-09' })
+
+    expect(isCurrent(await wholeTrail().findByText('9 Oct 2026'))).toBe(true)
+    expect(wholeTrail().getByText('Analysis')).toBeInTheDocument()
+    expect(wholeTrail().getByRole('link', { name: 'Backtests' })).toHaveAttribute('href', '/backtests')
+    expect(wholeTrail().getByRole('link', { name: 'Morning breakout' })).toHaveAttribute('href', '/backtests/r1')
+    // On a narrow screen, the way back to the run stays.
+    expect(shortTrail().getByRole('link', { name: 'Morning breakout' })).toHaveAttribute('href', '/backtests/r1')
+    expect(isCurrent(shortTrail().getByText('9 Oct 2026'))).toBe(true)
+  })
+
+  it('forgets the name of a page left behind', async () => {
+    const user = userEvent.setup()
+    renderShell({ path: '/data/assets/saxo/2' })
+    expect(isCurrent(await wholeTrail().findByText('Long 24,150 · SG'))).toBe(true)
+    expect(wholeTrail().getByRole('link', { name: 'Assets View' })).toHaveAttribute('href', '/data/assets')
+
+    await user.click(screen.getByRole('link', { name: 'To the positions' }))
+
+    expect(isCurrent(await wholeTrail().findByText('Positions'))).toBe(true)
+    expect(screen.queryByText('Long 24,150 · SG')).not.toBeInTheDocument()
+  })
+
+  it('says of an address that is no page that there is none', async () => {
+    renderShell({ path: '/positions/nothing' })
+
+    expect(isCurrent(await wholeTrail().findByText('Page not found'))).toBe(true)
+    expect(wholeTrail().getByRole('link', { name: 'Positions' })).toHaveAttribute('href', '/positions')
   })
 })

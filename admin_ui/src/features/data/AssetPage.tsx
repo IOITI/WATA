@@ -20,7 +20,6 @@ import type { AssetDetails } from '@/lib/types'
 
 import { AssetChart } from './AssetChart'
 import { ASSETS_PATH, PROVIDER_LABELS } from './assets'
-import { assetCrumbs } from './crumbs'
 import { DetailsTab } from './DetailsTab'
 import { QualityTab } from './QualityTab'
 import { StatisticsTab } from './StatisticsTab'
@@ -98,7 +97,7 @@ function PeriodFilter({ view, anchor, today, onChange }: PeriodFilterProps) {
 function NotFound({ refused }: { refused: string }) {
   return (
     <>
-      <PageHeader title="No such asset" breadcrumb={assetCrumbs('No such asset')} />
+      <PageHeader title="No such asset" />
       <Panel title="This asset is not stored">
         <p className="text-sm text-muted-foreground">
           {refused} Its prices may have been dropped by the recorder&rsquo;s retention, or the address is not one of an
@@ -188,7 +187,6 @@ function AssetView({ details }: { details: AssetDetails }) {
     <>
       <PageHeader
         title={name}
-        breadcrumb={assetCrumbs(name)}
         description={[PROVIDER_LABELS[asset.provider], asset.description, asset.symbol, asset.currency]
           .filter(Boolean)
           .join(' · ')}

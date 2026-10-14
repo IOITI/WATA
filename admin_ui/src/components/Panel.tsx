@@ -1,10 +1,8 @@
-import { House } from 'lucide-react'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 
-import { RouterLink } from '@/components/RouterLink'
-import { Breadcrumb } from '@/components/ui/breadcrumb'
-import type { BreadcrumbItem } from '@/components/ui/breadcrumb'
+import type { Crumb } from '@/components/navigation'
+import { usePageName } from '@/components/page-trail-context'
 import { cn } from '@/lib/utils'
 
 interface PanelProps {
@@ -44,16 +42,20 @@ interface PageHeaderProps {
   description?: ReactNode
   actions?: ReactNode
   /**
-   * Where the page is, for the pages deeper than the menu (an asset of the
-   * Data section): from the dashboard, which is always first, to the page
-   * itself, which is last and not a link.
+   * For the trail of the top bar, on a page deeper than the menu: the pages
+   * between its entry of the menu and itself (the run a day of a backtest
+   * belongs to). The title is the page's own step.
    */
-  breadcrumb?: BreadcrumbItem[]
+  parents?: Crumb[]
 }
 
-const HOME: BreadcrumbItem = { label: 'Home', href: '/', icon: <House aria-hidden /> }
+/**
+ * The title of a page and what it does. On a page deeper than the menu, its
+ * title also ends the trail of the top bar, which every page has.
+ */
+export function PageHeader({ title, description, actions, parents }: PageHeaderProps) {
+  usePageName(title, parents)
 
-export function PageHeader({ title, description, actions, breadcrumb }: PageHeaderProps) {
   // The tab says which page it is: several are often open side by side.
   useEffect(() => {
     document.title = `${title} · WATA Admin`
@@ -62,21 +64,13 @@ export function PageHeader({ title, description, actions, breadcrumb }: PageHead
     }
   }, [title])
 
-  const header = (
+  return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="min-w-0">
         <h1 className="text-2xl tracking-tight">{title}</h1>
         {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-    </div>
-  )
-  if (!breadcrumb) return header
-  return (
-    <div className="flex flex-col gap-1.5">
-      {/* Its links are padded: drawn back to the edge the title starts at. */}
-      <Breadcrumb as={RouterLink} items={[HOME, ...breadcrumb]} className="-ml-2" />
-      {header}
     </div>
   )
 }
