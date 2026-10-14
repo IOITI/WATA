@@ -1,7 +1,7 @@
 import { keepPreviousData, skipToken, useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { PageHeader, Panel } from '@/components/Panel'
 import { ActionBadge, PnlValue, QueryState } from '@/components/status'
@@ -206,13 +206,9 @@ export function BacktestDayPage() {
 
   return (
     <>
-      {runId && (
-        <Link to={`/backtests/${runId}`} className="text-xs text-muted-foreground hover:text-foreground">
-          ← {run ? runName(run) : 'The backtest'}
-        </Link>
-      )}
       <PageHeader
         title={day ? formatDay(day) : 'Day'}
+        parents={runId ? [{ label: run ? runName(run) : 'Backtest', href: `/backtests/${runId}` }] : undefined}
         description="The range bars the strategy saw that day, what it measured on them, and what became of its decisions."
         actions={
           <>

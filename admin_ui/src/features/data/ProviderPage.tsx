@@ -19,7 +19,6 @@ import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { DataProvider, DukascopyProviderDetails, SaxoProviderDetails } from '@/lib/types'
 
 import { assetHref, assetsLink, PROVIDERS_PATH } from './assets'
-import { providerCrumbs } from './crumbs'
 import { HistorySettingsDialog } from './HistorySettingsDialog'
 import { KIND_LABELS, PROVIDER_NAMES } from './providers'
 import { RecorderSettingsDialog } from './RecorderSettingsDialog'
@@ -76,7 +75,6 @@ function SaxoProvider({ provider }: { provider: SaxoProviderDetails }) {
     <>
       <PageHeader
         title={provider.name}
-        breadcrumb={providerCrumbs(provider.name)}
         description={`${KIND_LABELS[provider.kind]}. ${provider.description}`}
         actions={
           <>
@@ -179,7 +177,6 @@ function DukascopyProvider({ provider }: { provider: DukascopyProviderDetails })
     <>
       <PageHeader
         title={provider.name}
-        breadcrumb={providerCrumbs(provider.name)}
         description={`${KIND_LABELS[provider.kind]}. ${provider.description}`}
         actions={
           <Button size="sm" leftIcon={<Settings2 className="size-3.5" />} onClick={() => setEditing(true)}>
@@ -289,7 +286,7 @@ export function ProviderPage() {
   const name = PROVIDER_NAMES[providerId]
   return (
     <>
-      <PageHeader title={name ?? 'No such provider'} breadcrumb={providerCrumbs(name ?? 'No such provider')} />
+      <PageHeader title={name ?? 'No such provider'} />
       <Panel title={name ? `${name} is not integrated yet` : 'No such provider'}>
         <p className="text-sm text-muted-foreground">
           The providers WATA has code for are on the{' '}

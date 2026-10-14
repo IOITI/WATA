@@ -25,6 +25,8 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
 
+import { MENU, MENU_SECTIONS, menuEntry } from '@/components/navigation'
+import { PageTrailProvider, TopBarTrail } from '@/components/PageTrail'
 import { ServiceStatusBadge } from '@/components/status'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { Sidebar, SidebarTrigger, useSidebar } from '@/components/ui/sidebar'
@@ -36,41 +38,30 @@ import { api } from '@/lib/api'
 import { SAXO_SERVICE_ID } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-interface NavEntry {
-  id: string
-  path: string
-  label: string
+// The menu itself is in navigation.ts, which the trail of the top bar reads too.
+const ICONS: Record<string, SidebarSection['items'][number]['icon']> = {
+  dashboard: <LayoutDashboard />,
+  positions: <ChartCandlestick />,
+  orders: <Receipt />,
+  signals: <Radio />,
+  watchlist: <Eye />,
+  performance: <TrendingUp />,
+  report: <FileText />,
+  exits: <Undo2 />,
+  timing: <Timer />,
+  backtests: <FlaskConical />,
+  providers: <Database />,
+  assets: <ChartLine />,
+  system: <Activity />,
+  logs: <ScrollText />,
+  audit: <ClipboardList />,
+  config: <SlidersHorizontal />,
 }
 
-const NAVIGATION: (NavEntry & { section: string; icon: SidebarSection['items'][number]['icon'] })[] = [
-  { id: 'dashboard', path: '/', label: 'Dashboard', section: 'Trading', icon: <LayoutDashboard /> },
-  { id: 'positions', path: '/positions', label: 'Positions', section: 'Trading', icon: <ChartCandlestick /> },
-  { id: 'orders', path: '/orders', label: 'Orders', section: 'Trading', icon: <Receipt /> },
-  { id: 'signals', path: '/signals', label: 'Signals', section: 'Trading', icon: <Radio /> },
-  { id: 'watchlist', path: '/watchlist', label: 'Watchlist', section: 'Trading', icon: <Eye /> },
-  { id: 'performance', path: '/performance', label: 'Performance', section: 'Analysis', icon: <TrendingUp /> },
-  { id: 'report', path: '/report', label: 'Report', section: 'Analysis', icon: <FileText /> },
-  { id: 'exits', path: '/exits', label: 'Exits', section: 'Analysis', icon: <Undo2 /> },
-  { id: 'timing', path: '/timing', label: 'Execution timing', section: 'Analysis', icon: <Timer /> },
-  { id: 'backtests', path: '/backtests', label: 'Backtests', section: 'Analysis', icon: <FlaskConical /> },
-  { id: 'providers', path: '/data/providers', label: 'Providers', section: 'Data', icon: <Database /> },
-  { id: 'assets', path: '/data/assets', label: 'Assets View', section: 'Data', icon: <ChartLine /> },
-  { id: 'system', path: '/system', label: 'System', section: 'Operations', icon: <Activity /> },
-  { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations', icon: <ScrollText /> },
-  { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations', icon: <ClipboardList /> },
-  { id: 'config', path: '/config', label: 'Configuration', section: 'Operations', icon: <SlidersHorizontal /> },
-]
-
-const SECTIONS: SidebarSection[] = ['Trading', 'Analysis', 'Data', 'Operations'].map((title) => ({
+const SECTIONS: SidebarSection[] = MENU_SECTIONS.map((title) => ({
   title,
-  items: NAVIGATION.filter((entry) => entry.section === title).map(({ id, label, icon }) => ({ id, label, icon })),
+  items: MENU.filter((entry) => entry.section === title).map(({ id, label }) => ({ id, label, icon: ICONS[id] })),
 }))
-
-function activeEntry(pathname: string): NavEntry | undefined {
-  return NAVIGATION.find((entry) =>
-    entry.path === '/' ? pathname === '/' : pathname === entry.path || pathname.startsWith(`${entry.path}/`),
-  )
-}
 
 // The 400 steps are made for a dark surface; on a light one the 800 steps carry the text.
 const CHIP_TONE = {
@@ -142,13 +133,21 @@ function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
 }
 
 export function AppShell() {
+  return (
+    <PageTrailProvider>
+      <Shell />
+    </PageTrailProvider>
+  )
+}
+
+function Shell() {
   const session = useSession()
   const { logout } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
 
-  const current = activeEntry(location.pathname)
+  const current = menuEntry(location.pathname)
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15_000 })
   // Shared with the dashboard, which refreshes it more often; a pause or a
   // resume is also announced by a live event, which refreshes it at once.
@@ -165,7 +164,7 @@ export function AppShell() {
         sections={SECTIONS}
         activeId={current?.id ?? ''}
         onActiveChange={(id) => {
-          const entry = NAVIGATION.find((candidate) => candidate.id === id)
+          const entry = MENU.find((candidate) => candidate.id === id)
           if (entry) navigate(entry.path)
         }}
         header={<SidebarHeader />}
@@ -177,7 +176,11 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">
           <SidebarTrigger onClick={() => setMobileOpen(true)} />
-          <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* Where the page is, on every page: it takes the room left, and gives it up first. */}
+          <div className="flex min-w-0 flex-1 items-center">
+            <TopBarTrail />
+          </div>
+          <div className="flex shrink-0 items-center gap-2 empty:hidden">
             {saxoNeedsAuthorisation && (
               <StateChip
                 to="/system"

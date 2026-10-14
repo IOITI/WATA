@@ -18,7 +18,6 @@ import { assetColumns } from './assetColumns'
 import { assetRows, dayOf, parseSeen, PROVIDERS_PATH, SEEN, SEEN_LABELS, tableFilters } from './assets'
 import type { AssetRow } from './assets'
 import { AssetSummary } from './AssetSummary'
-import { assetsCrumbs } from './crumbs'
 
 /** The list is read again now and then: recorded turbos come and go through the day. */
 const REFRESH_MS = 60_000
@@ -116,7 +115,6 @@ export function AssetsPage() {
     <>
       <PageHeader
         title="Assets View"
-        breadcrumb={assetsCrumbs()}
         description={`Every asset whose prices WATA keeps: the turbos and their index recorded from Saxo, the history downloaded from Dukascopy. Click a row to see its last day; its name opens its page. Times are in ${timezone}.`}
         actions={
           <SeenFilter

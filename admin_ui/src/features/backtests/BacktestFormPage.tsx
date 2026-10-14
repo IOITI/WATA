@@ -40,7 +40,7 @@ import {
   wording,
 } from './model'
 import type { FormValues } from './model'
-import { BacktestsDisabled, BackToRuns } from './parts'
+import { BacktestsDisabled } from './parts'
 
 const DEFAULT_PERIOD_DAYS = 30
 
@@ -676,7 +676,6 @@ export function BacktestFormPage() {
 
   return (
     <>
-      <BackToRuns />
       <PageHeader
         title="New backtest"
         description="A strategy, or the signals WATA received, replayed on prices of the past with the rules WATA would have applied."

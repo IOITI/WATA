@@ -15,7 +15,7 @@ import { formatDay, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestFigures, BacktestRun } from '@/lib/types'
 
 import { commonLeverages, compounded, differing, figuresAt, middleLeverage, runName, showValue, wording } from './model'
-import { BacktestsDisabled, BackToRuns, LeveragePicker } from './parts'
+import { BacktestsDisabled, LeveragePicker } from './parts'
 
 interface Measure {
   label: string
@@ -193,7 +193,6 @@ export function ComparePage() {
 
   return (
     <>
-      <BackToRuns />
       <PageHeader title="Compare backtests" description="The same measures for each run, and what each one changed." />
 
       {!enabled ? (

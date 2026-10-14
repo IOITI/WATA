@@ -17,7 +17,6 @@ import type { DataProvider, DataProviders } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { assetsLink, PROVIDERS_PATH } from './assets'
-import { providersCrumbs } from './crumbs'
 import { HistorySettingsDialog } from './HistorySettingsDialog'
 import { catalogItems, KIND_LABELS, listedProviders } from './providers'
 import type { CatalogItem } from './providers'
@@ -211,7 +210,6 @@ export function ProvidersPage() {
     <>
       <PageHeader
         title="Providers"
-        breadcrumb={providersCrumbs()}
         description={`Where the prices WATA keeps come from: streams recorded live, and history downloaded for backtests. Times are in ${timezone}.`}
         actions={
           <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={() => setCatalogOpen(true)}>

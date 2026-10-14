@@ -47,7 +47,7 @@ import {
   tally,
   wording,
 } from './model'
-import { BacktestsDisabled, BackToRuns, ChangeList, LeveragePicker, StateBadge } from './parts'
+import { BacktestsDisabled, ChangeList, LeveragePicker, StateBadge } from './parts'
 import { RealComparison } from './RealComparison'
 import { SweepResults } from './SweepResults'
 import { TrustPanel } from './TrustPanel'
@@ -674,7 +674,6 @@ export function BacktestRunPage() {
 
   return (
     <>
-      <BackToRuns />
       <PageHeader
         title={run ? runName(run) : 'Backtest'}
         description={
