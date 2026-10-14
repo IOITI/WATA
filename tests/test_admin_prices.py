@@ -254,6 +254,96 @@ def test_the_last_quote_of_an_instrument_that_is_not_a_number_is_none():
     assert (row["last_bid"], row["last_ask"]) == (8.45, None)
 
 
+def test_every_instrument_ever_recorded_is_listed_with_its_first_and_last_bar():
+    db = FakeDb(rows=[{"id": 2, "first_t": 1791792000, "last_t": 1791842390, "last_bid": 8.45, "last_ask": float("nan")}])
+
+    (row,) = asyncio.run(AdminQueries(db, "Europe/Paris").price_assets(5001))
+
+    assert (row["last_bid"], row["last_ask"]) == (8.45, None)
+    statement, args = db.calls[0]
+    assert "i.first_seen_at, i.last_seen_at" in statement
+    # Each probe stays within the days the instrument was in the recording set, give or take one:
+    # one or two monthly partitions, through the primary key, for each instrument.
+    assert (
+        "CROSS JOIN LATERAL ( SELECT b.ts, b.bid_close, b.ask_close FROM price_bar_10s b WHERE b.instrument_id = i.id "
+        "AND b.ts >= i.first_seen_at - interval '1 day' AND b.ts < i.last_seen_at + interval '1 day' "
+        "ORDER BY b.ts DESC LIMIT 1 ) last_bar"
+    ) in statement
+    assert (
+        "CROSS JOIN LATERAL ( SELECT b.ts FROM price_bar_10s b WHERE b.instrument_id = i.id "
+        "AND b.ts >= i.first_seen_at - interval '1 day' AND b.ts <= last_bar.ts ORDER BY b.ts LIMIT 1 ) first_bar"
+    ) in statement
+    # The index first, then the instruments quoted last: what a limit leaves out is the oldest.
+    assert statement.endswith(
+        "ORDER BY (i.role <> 'underlying'), last_bar.ts DESC, i.indice, i.direction, i.barrier, i.id LIMIT $1"
+    )
+    assert "WHERE i.last_seen_at" not in statement
+    assert args == (5001,)
+
+
+def test_the_instruments_listed_can_be_those_recorded_since_a_moment():
+    db = FakeDb()
+
+    asyncio.run(AdminQueries(db, "Europe/Paris").price_assets(5001, since=START))
+
+    statement, args = db.calls[0]
+    assert ") first_bar WHERE i.last_seen_at >= $2 ORDER BY" in statement
+    assert args == (5001, START)
+
+
+def test_one_instrument_is_found_with_its_first_and_last_bar_the_same_way():
+    db = FakeDb()
+
+    asyncio.run(AdminQueries(db, "Europe/Paris").price_assets(1, instrument_id=7))
+
+    statement, args = db.calls[0]
+    assert ") first_bar WHERE i.id = $2 ORDER BY" in statement
+    assert args == (1, 7)
+
+
+def test_the_index_under_a_turbo_is_the_one_of_its_indice_quoted_in_the_period():
+    db = FakeDb(rows=[{"id": 1, "role": "underlying", "indice": "us100"}])
+
+    index = asyncio.run(AdminQueries(db, "Europe/Paris").price_index_of("us100", START, END))
+
+    assert index == {"id": 1, "role": "underlying", "indice": "us100"}
+    statement, args = db.calls[0]
+    assert "WHERE b.instrument_id = i.id AND b.ts >= $2 AND b.ts < $3 ORDER BY b.ts DESC LIMIT 1 ) latest" in statement
+    assert "WHERE i.role = 'underlying' AND i.indice = $1 AND i.last_seen_at >= $2 AND i.first_seen_at < $3" in statement
+    assert statement.endswith("ORDER BY latest.ts DESC, i.id LIMIT 1")
+    assert args == ("us100", START, END)
+
+
+def test_an_indice_with_no_index_recorded_in_the_period_has_none():
+    assert asyncio.run(AdminQueries(FakeDb(), "Europe/Paris").price_index_of("us100", START, END)) is None
+
+
+def test_the_volume_of_one_instrument_is_its_last_total_of_each_day():
+    db = FakeDb(rows=[
+        {"day": START.date(), "volume": 15300.0},
+        {"day": END.date(), "volume": float("nan")},
+    ])
+
+    volumes = asyncio.run(AdminQueries(db, "Europe/Paris").price_volume_days(2, START, END))
+
+    assert volumes == {START.date().isoformat(): 15300.0}
+    statement, args = db.calls[0]
+    assert "SELECT (ts AT TIME ZONE $4)::date AS day, (array_agg(day_volume ORDER BY ts DESC))[1] AS volume" in statement
+    assert "FROM price_volume WHERE instrument_id = $1 AND ts >= $2 AND ts < $3 GROUP BY 1 ORDER BY 1" in statement
+    assert args == (2, START, END, "Europe/Paris")
+
+
+def test_one_instrument_comes_with_when_it_was_first_and_last_recorded():
+    db = FakeDb(rows=[{"id": 7, "first_seen_at": START, "last_seen_at": END}])
+
+    instrument = asyncio.run(AdminQueries(db, "Europe/Paris").price_instrument(7))
+
+    assert instrument == {"id": 7, "first_seen_at": START, "last_seen_at": END}
+    statement, args = db.calls[0]
+    assert statement.endswith("i.first_seen_at, i.last_seen_at FROM price_instrument i WHERE i.id = $1")
+    assert args == (7,)
+
+
 RUN_ROW = {
     "instrument_id": 2, "first": 1791792000, "last": 1791792590, "bars": 60, "updates": 412,
     "without_ask": 0, "delayed_minutes": 0, "high": 8.61, "last_bid": 8.45,
@@ -375,6 +465,7 @@ def test_coverage_is_read_in_time_order():
     lambda queries: queries.price_series(2, START, END, "bid", 100),
     lambda queries: queries.price_trades({"role": "underlying", "indice": "us100"}, START, END),
     lambda queries: queries.price_runs(START, END, 100),
+    lambda queries: queries.price_assets(100),
 ])
 def test_before_the_recorder_ever_ran_its_tables_read_as_empty(read):
     db = FakeDb(error=DatabaseUnavailable('relation "price_instrument" does not exist'))

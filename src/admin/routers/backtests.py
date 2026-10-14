@@ -101,6 +101,11 @@ class KeepRequest(BaseModel):
     days: int = Field(KEEP_DEFAULT_DAYS, ge=1)
 
 
+class FetchRequest(Period):
+    # The Dukascopy instrument (src/admin/data.py); the history backtests read when absent.
+    label: str | None = None
+
+
 @router.get("/options")
 async def options(service=Depends(backtests)):
     """What the form offers: the strategies and their parameters, the turbo assumed, the rules in force."""
@@ -111,18 +116,24 @@ async def options(service=Depends(backtests)):
 async def prices(
     first_day: date | None = Query(None, alias="from"),
     last_day: date | None = Query(None, alias="to"),
+    label: str | None = Query(None),
     service=Depends(backtests),
 ):
-    """Which days have prices to backtest on, and the download in progress if there is one."""
+    """
+    Which days have prices to backtest on, and the download in progress if
+    there is one. Of another Dukascopy instrument than the one backtests read
+    when ``label`` says so. Off the event loop: each day's hours are looked
+    for on the disk.
+    """
     last_day = last_day or datetime.now(timezone.utc).date()
     first_day = first_day or last_day - timedelta(days=DEFAULT_COVERAGE_DAYS - 1)
-    return service.coverage(first_day, last_day)
+    return await run_in_threadpool(service.coverage, first_day, last_day, label)
 
 
 @router.post("/prices/fetch", status_code=202)
-async def fetch_prices(body: Period, service=Depends(backtests)):
+async def fetch_prices(body: FetchRequest, service=Depends(backtests)):
     """Download the prices of a period in the background. One download at a time."""
-    return service.start_fetch(body.first_day, body.last_day)
+    return service.start_fetch(body.first_day, body.last_day, label=body.label)
 
 
 @router.post("/prices/fetch/stop")

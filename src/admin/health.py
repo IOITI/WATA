@@ -115,6 +115,33 @@ async def _watchlist(ctx) -> tuple[list[dict], dict | None]:
     return [entry], snapshot
 
 
+def _silent_for(status: dict, now: datetime) -> float:
+    # The line of a bucket is written when it ends, ten seconds after its start.
+    return (now - status["ts"]).total_seconds() - BAR_SECONDS
+
+
+def recorder_running(status: dict | None, now: datetime) -> bool:
+    """Whether the recorder wrote its line of coverage lately: it does every ten seconds while it runs."""
+    return status is not None and _silent_for(status, now) <= PRICE_RECORDER_SILENT_AFTER_SECONDS
+
+
+def recorder_state(settings: RecorderSettings, status: dict | None, now: datetime) -> tuple[str, str]:
+    """
+    What the recorder's last line of coverage says of it, as (status, detail).
+    ``status`` is the last ten seconds it lived through (``price_recorder_status``),
+    None when it never wrote one. Health and the Providers page both say this.
+    """
+    if status is None:
+        return DOWN, "Nothing recorded yet"
+    if not recorder_running(status, now):
+        return DOWN, f"No sign of it for {int(_silent_for(status, now) // 60)} min"
+    if status["bars"] > 0:
+        return OK, f"Recording {_count(status['bars'], 'instrument')}"
+    if settings.is_trading_time(now):
+        return DOWN, "Running, but no price is being recorded"
+    return OK, "Running; the markets are closed"
+
+
 async def _price_recorder(ctx) -> list[dict]:
     """
     The price recorder, when it is switched on. What it misses cannot be
@@ -131,19 +158,7 @@ async def _price_recorder(ctx) -> list[dict]:
         status = await ctx.queries.price_recorder_status()
     except DatabaseUnavailable:
         return [_entry("price_recorder", name, UNKNOWN, "The database is unavailable")]
-    if status is None:
-        return [_entry("price_recorder", name, DOWN, "Nothing recorded yet")]
-
-    now = datetime.now(timezone.utc)
-    # The line of a bucket is written when it ends, ten seconds after its start.
-    silent_for = (now - status["ts"]).total_seconds() - BAR_SECONDS
-    if silent_for > PRICE_RECORDER_SILENT_AFTER_SECONDS:
-        return [_entry("price_recorder", name, DOWN, f"No sign of it for {int(silent_for // 60)} min")]
-    if status["bars"] > 0:
-        return [_entry("price_recorder", name, OK, f"Recording {_count(status['bars'], 'instrument')}")]
-    if settings.is_trading_time(now):
-        return [_entry("price_recorder", name, DOWN, "Running, but no price is being recorded")]
-    return [_entry("price_recorder", name, OK, "Running; the markets are closed")]
+    return [_entry("price_recorder", name, *recorder_state(settings, status, datetime.now(timezone.utc)))]
 
 
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:

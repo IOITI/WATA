@@ -14,6 +14,8 @@ export function availabilityOf(
   availability: PriceAvailability | undefined,
   instrument: PriceInstrument,
 ): InstrumentAvailability | undefined {
+  // Worked out for the instruments of the recorder alone, by their id.
+  if (instrument.id === null) return undefined
   return availability?.items?.[String(instrument.id)]
 }
 
@@ -171,7 +173,9 @@ export function instrumentFacts(
 
   facts.push({
     label: 'Instrument',
-    value: [instrument.symbol, `UIC ${instrument.uic}`, instrument.currency].filter(Boolean).join(' · '),
+    value: [instrument.symbol, instrument.uic === null ? null : `UIC ${instrument.uic}`, instrument.currency]
+      .filter(Boolean)
+      .join(' · '),
   })
   return facts
 }

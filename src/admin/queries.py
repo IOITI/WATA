@@ -417,9 +417,97 @@ class AdminQueries:
         )
         return {row["instrument_id"]: row["volume"] for row in rows if _finite(row["volume"]) is not None}
 
+    async def price_assets(self, limit: int, since: datetime | None = None, instrument_id: int | None = None) -> list[dict]:
+        """
+        Every recorded instrument that still has bars, all time: when it was
+        first and last in the recording set, and the start of its first bar and
+        the start and quote of its last one. The index comes first, then the
+        instruments quoted last. Each instrument's bars are reached through
+        their primary key, from a day before it was first seen to a day after it
+        was last seen (the recorder notes it when it refreshes its set, which
+        can be after its first bar and before its last): one or two monthly
+        partitions for a turbo, never a scan. An instrument whose months were
+        dropped by the retention has no bar left and is not listed. ``since``
+        keeps those in the recording set since then; ``instrument_id``, one.
+        """
+        if instrument_id is not None:
+            seen, args = "WHERE i.id = $2", (limit, instrument_id)
+        elif since is not None:
+            seen, args = "WHERE i.last_seen_at >= $2", (limit, since)
+        else:
+            seen, args = "", (limit,)
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {self._PRICE_INSTRUMENT_COLUMNS}, i.first_seen_at, i.last_seen_at,
+                   extract(epoch FROM first_bar.ts)::bigint AS first_t,
+                   extract(epoch FROM last_bar.ts)::bigint AS last_t,
+                   last_bar.bid_close AS last_bid, last_bar.ask_close AS last_ask
+            FROM price_instrument i
+            CROSS JOIN LATERAL (
+                SELECT b.ts, b.bid_close, b.ask_close FROM price_bar_10s b
+                WHERE b.instrument_id = i.id
+                  AND b.ts >= i.first_seen_at - interval '1 day'
+                  AND b.ts < i.last_seen_at + interval '1 day'
+                ORDER BY b.ts DESC
+                LIMIT 1
+            ) last_bar
+            CROSS JOIN LATERAL (
+                SELECT b.ts FROM price_bar_10s b
+                WHERE b.instrument_id = i.id
+                  AND b.ts >= i.first_seen_at - interval '1 day'
+                  AND b.ts <= last_bar.ts
+                ORDER BY b.ts
+                LIMIT 1
+            ) first_bar
+            {seen}
+            ORDER BY (i.role <> 'underlying'), last_bar.ts DESC, i.indice, i.direction, i.barrier, i.id
+            LIMIT $1
+            """,
+            *args,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def price_index_of(self, indice: str, start: datetime, end: datetime) -> dict | None:
+        """The index recorded for ``indice`` that has a bar in [start, end): the one quoted last, if several."""
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {self._PRICE_INSTRUMENT_COLUMNS}
+            FROM price_instrument i
+            CROSS JOIN LATERAL (
+                SELECT b.ts FROM price_bar_10s b
+                WHERE b.instrument_id = i.id AND b.ts >= $2 AND b.ts < $3
+                ORDER BY b.ts DESC
+                LIMIT 1
+            ) latest
+            WHERE i.role = 'underlying' AND i.indice = $1 AND i.last_seen_at >= $2 AND i.first_seen_at < $3
+            ORDER BY latest.ts DESC, i.id
+            LIMIT 1
+            """,
+            indice, start, end,
+        )
+        return _clean_row(rows[0]) if rows else None
+
+    async def price_volume_days(self, instrument_id: int, start: datetime, end: datetime) -> dict[str, float]:
+        """
+        What Saxo counted as traded on one instrument each day of [start, end),
+        by day of the trading timezone: its total of the day as last received.
+        """
+        rows = await self._fetch_optional(
+            """
+            SELECT (ts AT TIME ZONE $4)::date AS day, (array_agg(day_volume ORDER BY ts DESC))[1] AS volume
+            FROM price_volume
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            instrument_id, start, end, self.timezone,
+        )
+        return {row["day"].isoformat(): row["volume"] for row in rows if _finite(row["volume"]) is not None}
+
     async def price_instrument(self, instrument_id: int) -> dict | None:
         rows = await self._fetch_optional(
-            f"SELECT {self._PRICE_INSTRUMENT_COLUMNS} FROM price_instrument i WHERE i.id = $1", instrument_id,
+            f"SELECT {self._PRICE_INSTRUMENT_COLUMNS}, i.first_seen_at, i.last_seen_at FROM price_instrument i WHERE i.id = $1",
+            instrument_id,
         )
         return _clean_row(rows[0]) if rows else None
 

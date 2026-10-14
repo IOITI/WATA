@@ -54,6 +54,7 @@ from src.admin.auth import CredentialStore, LoginThrottle, SessionStore
 from src.admin.backtests import BacktestService
 from src.admin.config_editor import ConfigEditor
 from src.admin.context import AdminContext, AdminSettings
+from src.admin.data import PriceHistory
 from src.admin.events import EventHub
 from src.admin.queries import _ORDER_POSITION_COLUMNS, _ORDER_SIGNAL_COLUMNS, json_safe, summarise_trades
 from src.configuration import ConfigurationManager
@@ -505,7 +506,25 @@ class FakeQueries:
         return fake_prices.volumes(start, end, datetime.now(timezone.utc))
 
     async def price_instrument(self, instrument_id):
-        return fake_prices.BY_ID.get(instrument_id)
+        instrument = fake_prices.BY_ID.get(instrument_id)
+        found = fake_prices.assets(datetime.now(timezone.utc), instrument_id)
+        if instrument is None or not found:
+            return instrument
+        return {**instrument, "first_seen_at": found[0]["first_seen_at"], "last_seen_at": found[0]["last_seen_at"]}
+
+    async def price_assets(self, limit, since=None, instrument_id=None):
+        rows = fake_prices.assets(datetime.now(timezone.utc), instrument_id)
+        return [row for row in rows if since is None or row["last_seen_at"] >= since][:limit]
+
+    async def price_index_of(self, indice, start, end):
+        now = datetime.now(timezone.utc)
+        index = fake_prices.INDEX
+        if index["indice"] != indice or not fake_prices.bars(index["id"], start, end, 3600, 1, now):
+            return None
+        return dict(index)
+
+    async def price_volume_days(self, instrument_id, start, end):
+        return fake_prices.volume_days(instrument_id, start, end, datetime.now(timezone.utc))
 
     async def price_bars(self, instrument_id, start, end, interval, limit):
         return fake_prices.bars(instrument_id, start, end, interval, limit, datetime.now(timezone.utc))
@@ -916,6 +935,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         risk_state=FakeRiskState(queries),
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
         backtests=backtests,
+        history=PriceHistory(prices_root),
         events=events,
         notifier=notifier,
         version="dev",

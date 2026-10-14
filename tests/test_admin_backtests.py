@@ -31,6 +31,7 @@ from src.admin.backtests import (
     real_trades_of,
     signals_to_replay,
 )
+from src.admin.data import PriceHistory
 from src.price_recorder.bars import Bar
 from src.strategy.engine import LocalClock
 from src.strategy.execution import WataRules
@@ -707,12 +708,13 @@ def test_a_download_is_the_downloader_command_and_ends_with_days_missing_more_of
 
     assert launcher.commands == [[
         "src.strategy.history.dukascopy", "--from", "2026-10-05", "--to", "2026-10-09",
-        "--root", str(tmp_path / "prices"), "--label", "us100", "--low-priority",
+        "--root", str(tmp_path / "prices"), "--symbol", "USATECHIDXUSD", "--label", "us100", "--low-priority",
         "--report", str(tmp_path / "runs" / "_fetch" / "report.json"),
     ]]
     assert (started["state"], started["from"], started["to"], started["automatic"]) == (RUNNING, "2026-10-05", "2026-10-09", False)
+    assert (started["label"], started["symbol"]) == ("us100", "USATECHIDXUSD")
     assert (ended["state"], ended["exit_code"], ended["lines"]) == (INCOMPLETE, 1, ["started"])
-    assert published == [("prices_fetch_finished", {"state": INCOMPLETE, "automatic": False})]
+    assert published == [("prices_fetch_finished", {"state": INCOMPLETE, "automatic": False, "label": "us100"})]
 
 
 def test_a_download_can_be_stopped(tmp_path):
@@ -753,6 +755,101 @@ def test_a_download_an_earlier_admin_left_running_is_said_to_be_interrupted(tmp_
     (tmp_path / "runs" / "_fetch" / "status.json").write_text(json.dumps({"state": RUNNING, "from": "2026-10-05"}))
 
     assert service(tmp_path).fetch_status()["state"] == INTERRUPTED
+
+
+# ── other Dukascopy instruments ──
+
+
+def _keep_hours_of(prices_root, symbol: str, day: date, hours) -> None:
+    for hour in hours:
+        path = dukascopy.raw_path(str(prices_root), symbol, dukascopy.day_hours(day)[hour])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+
+
+def test_another_dukascopy_instrument_is_fetched_under_its_own_label(tmp_path):
+    PriceHistory(str(tmp_path / "prices")).add_instrument("DEUIDXEUR", "de40")
+    launcher, published = FakeLauncher(), []
+    backtests = service(tmp_path, launcher, published)
+
+    @worked
+    async def scenario(backtests):
+        started = backtests.start_fetch(date(2026, 10, 5), date(2026, 10, 9), label="de40")
+        await until(lambda: backtests.fetch_status()["state"] != RUNNING)
+        return started
+
+    started = scenario(backtests)
+
+    assert launcher.commands[0][5:11] == ["--root", str(tmp_path / "prices"), "--symbol", "DEUIDXEUR", "--label", "de40"]
+    assert (started["label"], started["symbol"]) == ("de40", "DEUIDXEUR")
+    assert published == [("prices_fetch_finished", {"state": DONE, "automatic": False, "label": "de40"})]
+
+
+@pytest.mark.parametrize("label", ["de40", "../us100", "--root", "US100"])
+def test_a_label_that_is_not_an_instrument_is_refused_before_anything_is_made_of_it(tmp_path, label):
+    launcher = FakeLauncher()
+    backtests = service(tmp_path, launcher)
+
+    async def scenario():
+        with pytest.raises(InvalidRequest, match="No Dukascopy instrument"):
+            backtests.start_fetch(date(2026, 10, 5), date(2026, 10, 9), label=label)
+        with pytest.raises(InvalidRequest, match="No Dukascopy instrument"):
+            backtests.coverage(date(2026, 10, 5), date(2026, 10, 9), label)
+
+    asyncio.run(scenario())
+
+    assert launcher.commands == []
+    assert not os.path.exists(tmp_path / "runs" / "_fetch" / "status.json")
+
+
+def test_the_coverage_of_another_instrument_is_read_from_its_own_files(tmp_path):
+    prices = tmp_path / "prices"
+    PriceHistory(str(prices)).add_instrument("DEUIDXEUR", "de40")
+    write_day_file(dukascopy.day_path(str(prices), "de40", DAY), [], symbol="DEUIDXEUR", label="de40")
+    _keep_hours_of(prices, "DEUIDXEUR", DAY, range(24))
+    backtests = service(tmp_path)
+
+    de40 = backtests.coverage(DAY, DAY, "de40")
+    us100 = backtests.coverage(DAY, DAY)
+
+    assert (de40["label"], de40["symbol"], de40["ready"]["count"]) == ("de40", "DEUIDXEUR", 1)
+    assert [(day["state"], day["hours"]) for day in de40["days"]] == [("ready", 24)]
+    assert (us100["label"], us100["symbol"], us100["ready"]["count"]) == ("us100", "USATECHIDXUSD", 0)
+    assert [(day["state"], day["hours"]) for day in us100["days"]] == [("missing", 0)]
+
+
+def test_a_download_of_another_instrument_settles_no_day_of_the_history_backtests_read(tmp_path):
+    PriceHistory(str(tmp_path / "prices")).add_instrument("DEUIDXEUR", "de40")
+    clock = Clock()
+    launcher = FakeLauncher(days=[
+        # What would settle the day for the Nasdaq history...
+        {"day": "2026-10-05", "status": "empty", "unpublished_hours": 24},
+        # ... and the server not answering for hours.
+        {"day": "2026-10-06", "status": "incomplete", "unanswered_hours": 5},
+    ])
+    backtests = service(tmp_path, launcher, clock=clock)
+
+    @worked
+    async def scenario(backtests):
+        backtests.start_fetch(date(2026, 10, 5), date(2026, 10, 6), label="de40")
+        await until(lambda: backtests.fetch_status()["state"] == DONE)
+
+    scenario(backtests)
+
+    keeper = backtests._keeper()
+    assert keeper["settled"] == {}
+    # The server's patience is the same whatever was asked of it: the next download waits all the same.
+    assert (keeper["failures"], keeper["next_at"]) == (1, clock.now + KEEP_BACKOFF_SECONDS)
+    assert backtests.coverage(date(2026, 10, 5), date(2026, 10, 5))["days"][0]["state"] == "missing"
+
+
+def test_the_disk_taken_by_prices_counts_the_days_of_every_instrument(tmp_path):
+    prices = tmp_path / "prices"
+    PriceHistory(str(prices)).add_instrument("DEUIDXEUR", "de40")
+    _day_file(prices, DAY)
+    write_day_file(dukascopy.day_path(str(prices), "de40", DAY), [], symbol="DEUIDXEUR", label="de40")
+
+    assert service(tmp_path).storage()["prices"]["days"] == 2
 
 
 # ── prices kept up to date without anyone asking ──

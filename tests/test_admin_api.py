@@ -70,11 +70,20 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/actions/close-position"),
     ("POST", "/api/actions/daily-stats"),
     ("POST", "/api/system/saxo/auth-code"),
-    ("GET", "/api/prices/instruments"),
-    ("GET", "/api/prices/availability"),
-    ("GET", "/api/prices/bars"),
-    ("GET", "/api/prices/range-bars"),
-    ("GET", "/api/prices/context"),
+    ("GET", "/api/data/providers"),
+    ("GET", "/api/data/providers/saxo"),
+    ("GET", "/api/data/providers/saxo/config"),
+    ("PUT", "/api/data/providers/saxo/config"),
+    ("GET", "/api/data/providers/saxo/availability"),
+    ("GET", "/api/data/providers/dukascopy/instruments"),
+    ("POST", "/api/data/providers/dukascopy/instruments"),
+    ("DELETE", "/api/data/providers/dukascopy/instruments/de40"),
+    ("GET", "/api/data/assets"),
+    ("GET", "/api/data/assets/saxo/2"),
+    ("GET", "/api/data/assets/saxo/2/bars"),
+    ("GET", "/api/data/assets/saxo/2/range-bars"),
+    ("GET", "/api/data/assets/saxo/2/context"),
+    ("GET", "/api/data/assets/saxo/2/statistics"),
     ("GET", "/api/config"),
     ("POST", "/api/config/validate"),
     ("PUT", "/api/config"),
@@ -148,6 +157,9 @@ class FakeQueries:
         # Stretches of consecutive bars (src.admin.prices.Run), and Saxo's volume per instrument.
         self.price_run_rows = []
         self.price_volume_by_instrument = {}
+        # What price_assets adds to an instrument's row, by id, and Saxo's volume by instrument and day.
+        self.price_asset_extras = {}
+        self.price_volume_by_day = {}
 
     def _check(self):
         if self.failing:
@@ -210,11 +222,12 @@ class FakeQueries:
         return list(self.price_instruments_recorded)
 
     async def price_instrument(self, instrument_id):
+        self._check()
         return next((item for item in self.price_instruments_recorded if item["id"] == instrument_id), None)
 
     async def price_bars(self, instrument_id, start, end, interval, limit):
         self.calls.append(("price_bars", instrument_id, start, end, interval, limit))
-        return self.price_bar_rows[:limit]
+        return [row for row in self.price_bar_rows if start.timestamp() <= row[0] < end.timestamp()][:limit]
 
     async def price_series(self, instrument_id, start, end, side, limit):
         self.calls.append(("price_series", instrument_id, start, end, side, limit))
@@ -234,8 +247,40 @@ class FakeQueries:
         return dict(self.price_volume_by_instrument)
 
     async def price_trades(self, instrument, start, end):
+        self._check()
         self.calls.append(("price_trades", instrument["id"], start, end))
         return [CLOSED_POSITION]
+
+    async def price_assets(self, limit, since=None, instrument_id=None):
+        self._check()
+        self.calls.append(("price_assets", limit, since, instrument_id))
+        now = datetime.now(timezone.utc)
+        rows = [
+            {
+                **item,
+                # In the recording set a minute ago; quoted on Monday 12 Oct 2026 from 08:00 to 23:59:50 in Paris.
+                "first_seen_at": now - timedelta(hours=2), "last_seen_at": now - timedelta(minutes=1),
+                "first_t": 1791784800, "last_t": 1791842390, "last_bid": 8.45, "last_ask": 8.5,
+                **self.price_asset_extras.get(item["id"], {}),
+            }
+            for item in self.price_instruments_recorded
+        ]
+        if instrument_id is not None:
+            rows = [row for row in rows if row["id"] == instrument_id]
+        if since is not None:
+            rows = [row for row in rows if row["last_seen_at"] >= since]
+        return rows[:limit]
+
+    async def price_index_of(self, indice, start, end):
+        self.calls.append(("price_index_of", indice, start, end))
+        return next(
+            (item for item in self.price_instruments_recorded if item["role"] == "underlying" and item["indice"] == indice),
+            None,
+        )
+
+    async def price_volume_days(self, instrument_id, start, end):
+        self.calls.append(("price_volume_days", instrument_id, start, end))
+        return dict(self.price_volume_by_day.get(instrument_id, {}))
 
     async def exits(self, start=None, end=None):
         self.calls.append(("exits", start, end))
@@ -434,7 +479,10 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{name}", "config.json.bak-20260101-000000")
             .replace("{run_id}", "20261012-213045-a1b2c3")
             .replace("{cell}", "2")
-            .replace("{day}", "2026-10-12"),
+            .replace("{day}", "2026-10-12")
+            .replace("{provider}", "saxo" if "/assets/" in route.path else "saxo")
+            .replace("{key}", "2")
+            .replace("{label}", "de40"),
         )
         for route in app.routes
         if route.path.startswith("/api")
@@ -1580,43 +1628,16 @@ def test_event_stream_sends_what_is_published_until_the_session_ends(client, ctx
 # ── recorded prices ──
 
 
-def test_instruments_recorded_in_a_period_are_listed_with_what_describes_them(client, ctx):
-    response = client.get("/api/prices/instruments?from=2026-10-12&to=2026-10-13")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert (body["from"], body["to"], body["timezone"]) == ("2026-10-12", "2026-10-13", "Europe/Paris")
-    assert [item["role"] for item in body["items"]] == ["underlying", "turbo"]
-    assert body["items"][1]["barrier"] == 24150.0
-    # The two days of the trading timezone, both included: midnight in Paris is 22:00 UTC.
-    _, start, end = ctx.queries.calls[-1]
-    assert start.astimezone(timezone.utc) == datetime(2026, 10, 11, 22, 0, tzinfo=timezone.utc)
-    assert end.astimezone(timezone.utc) == datetime(2026, 10, 13, 22, 0, tzinfo=timezone.utc)
-
-
-def test_each_instrument_comes_with_its_last_quote_and_the_volume_saxo_counted(client, ctx):
-    ctx.queries.price_instruments_recorded = [
-        PRICE_INDEX, {**PRICE_TURBO, "last_t": 1791792000, "last_bid": 8.45, "last_ask": 8.5},
-    ]
-    ctx.queries.price_volume_by_instrument = {2: 15300.0}
-
-    index, turbo = client.get("/api/prices/instruments?from=2026-10-12").json()["items"]
-
-    assert (turbo["last_t"], turbo["last_bid"], turbo["last_ask"], turbo["volume"]) == (1791792000, 8.45, 8.5, 15300.0)
-    # No volume was recorded for the index: none, not zero.
-    assert index["volume"] is None
-
-
 def test_without_a_period_the_prices_are_those_of_today(client, ctx):
     today = datetime.now(pytz.timezone("Europe/Paris")).date().isoformat()
 
-    body = client.get("/api/prices/instruments").json()
+    body = client.get("/api/data/assets/saxo/2/bars").json()
 
     assert (body["from"], body["to"]) == (today, today)
 
 
 def test_bars_come_as_compact_rows_with_their_column_names(client, ctx):
-    response = client.get("/api/prices/bars?instrument_id=2&from=2026-10-12&interval=60")
+    response = client.get("/api/data/assets/saxo/2/bars?from=2026-10-12&interval=60")
 
     assert response.status_code == 200
     body = response.json()
@@ -1631,41 +1652,43 @@ def test_bars_come_as_compact_rows_with_their_column_names(client, ctx):
 
 
 def test_bars_are_ten_seconds_long_unless_asked_otherwise(client, ctx):
-    client.get("/api/prices/bars?instrument_id=2&from=2026-10-12")
+    client.get("/api/data/assets/saxo/2/bars?from=2026-10-12")
 
     assert ctx.queries.calls[-1][4] == 10
 
 
 @pytest.mark.parametrize("query, reason", [
-    ("instrument_id=2&interval=45", "The interval must be one of 10, 30, 60, 300, 900, 3600 seconds"),
-    ("instrument_id=2&from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
-    ("instrument_id=2&from=2025-01-01&to=2026-10-11", "The period is longer than 366 days"),
+    ("interval=45", "The interval must be one of 10, 30, 60, 300, 900, 3600 seconds"),
+    ("from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
+    ("from=2025-01-01&to=2026-10-11", "The period is longer than 366 days"),
 ])
 def test_a_request_for_bars_that_makes_no_sense_is_refused_saying_why(client, query, reason):
-    response = client.get(f"/api/prices/bars?{query}")
+    response = client.get(f"/api/data/assets/saxo/2/bars?{query}")
 
     assert response.status_code == 422
     assert response.json()["detail"] == reason
 
 
-@pytest.mark.parametrize("query", ["", "instrument_id=0", "instrument_id=abc", "instrument_id=2&from=yesterday"])
+@pytest.mark.parametrize("query", ["from=yesterday", "interval=abc", "to=2026-13-01"])
 def test_malformed_price_parameters_are_refused(client, query):
-    assert client.get(f"/api/prices/bars?{query}").status_code == 422
+    assert client.get(f"/api/data/assets/saxo/2/bars?{query}").status_code == 422
 
 
 def test_bars_of_an_instrument_that_was_never_recorded_are_not_found(client):
-    response = client.get("/api/prices/bars?instrument_id=99&from=2026-10-12")
+    response = client.get("/api/data/assets/saxo/99/bars?from=2026-10-12")
 
     assert response.status_code == 404
-    assert client.get("/api/prices/context?instrument_id=99&from=2026-10-12").status_code == 404
+    assert client.get("/api/data/assets/saxo/99/context?from=2026-10-12").status_code == 404
 
 
 def test_a_period_with_too_many_bars_asks_for_a_longer_interval(client, ctx):
     from src.admin.prices import MAX_BUCKETS
 
-    ctx.queries.price_bar_rows = [[1791792000 + 10 * n, 1, 1, 1, 1, 1, 1, 1, 1, 0] for n in range(MAX_BUCKETS + 1)]
+    # Ten-second bars up to the morning of the 12th, all within the period asked.
+    first = 1791792000 - 10 * (MAX_BUCKETS + 1)
+    ctx.queries.price_bar_rows = [[first + 10 * n, 1, 1, 1, 1, 1, 1, 1, 1, 0] for n in range(MAX_BUCKETS + 1)]
 
-    response = client.get("/api/prices/bars?instrument_id=2&from=2026-10-01&to=2026-10-12")
+    response = client.get("/api/data/assets/saxo/2/bars?from=2026-10-01&to=2026-10-12")
 
     assert response.status_code == 422
     assert "choose a longer interval or a shorter period" in response.json()["detail"]
@@ -1673,7 +1696,7 @@ def test_a_period_with_too_many_bars_asks_for_a_longer_interval(client, ctx):
     assert ctx.queries.calls[-1][5] == MAX_BUCKETS + 1
 
     ctx.queries.price_bar_rows = ctx.queries.price_bar_rows[:MAX_BUCKETS]
-    assert client.get("/api/prices/bars?instrument_id=2&from=2026-10-01&to=2026-10-12").status_code == 200
+    assert client.get("/api/data/assets/saxo/2/bars?from=2026-10-01&to=2026-10-12").status_code == 200
 
 
 # Monday 12 Oct 2026, 08:00 in Paris.
@@ -1688,7 +1711,7 @@ def flat_bars(*prices, start=RANGE_T0, step=10):
 def test_range_bars_end_when_the_price_has_left_the_range_asked_for(client, ctx):
     ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44, 8.52, 8.49)}
 
-    response = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10")
+    response = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10")
 
     assert response.status_code == 200
     body = response.json()
@@ -1707,7 +1730,7 @@ def test_without_a_size_a_range_that_suits_the_period_is_chosen_and_said(client,
     # Between 8.00 and 10.50: a twenty-fifth is ten cents.
     ctx.queries.price_series_rows = {2: flat_bars(8.00, 9.20, 10.50, 9.90)}
 
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12").json()
 
     assert (body["auto"], body["ticks"], body["size"]) == (True, 10, 0.1)
     assert len(body["bars"]) > 20
@@ -1716,7 +1739,7 @@ def test_without_a_size_a_range_that_suits_the_period_is_chosen_and_said(client,
 def test_the_range_is_counted_in_the_steps_the_prices_are_quoted_in(client, ctx):
     ctx.queries.price_series_rows = {2: flat_bars(0.855, 0.861, 0.872)}
 
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.01").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.01").json()
 
     assert (body["tick"], body["decimals"], body["ticks"], body["size"]) == (0.001, 3, 10, 0.01)
     assert body["bars"][0][1:5] == [0.855, 0.865, 0.855, 0.865]
@@ -1725,7 +1748,7 @@ def test_the_range_is_counted_in_the_steps_the_prices_are_quoted_in(client, ctx)
 def test_range_bars_of_the_ask_are_built_from_the_ask(client, ctx):
     ctx.queries.price_series_rows = {2: flat_bars(8.45, 8.60)}
 
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10&side=ask").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10&side=ask").json()
 
     assert body["side"] == "ask"
     assert [call[4] for call in ctx.queries.calls if call[0] == "price_series"] == ["ask"]
@@ -1737,7 +1760,7 @@ def test_the_index_under_a_turbo_comes_with_each_bar_as_it_was_when_the_bar_ende
         1: flat_bars(25000.0, 25004.5, 25012.25, 25009.0),
     }
 
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10&under=1").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10&under=1").json()
 
     assert body["under"]["id"] == 1
     # The first bar ended in the third ten seconds, the second is still going in the fourth.
@@ -1749,7 +1772,7 @@ def test_the_index_under_a_turbo_comes_with_each_bar_as_it_was_when_the_bar_ende
 def test_a_night_in_the_period_cuts_the_bar_and_flags_the_one_after(client, ctx):
     ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44) + flat_bars(9.10, start=RANGE_T0 + 3600)}
 
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10").json()
 
     assert [(bar[1], bar[4], bar[7], bar[8]) for bar in body["bars"]] == [(8.4, 8.44, False, False), (9.1, 9.1, False, True)]
     # The first one ended with its last ten seconds, not when the next began an hour later.
@@ -1757,19 +1780,19 @@ def test_a_night_in_the_period_cuts_the_bar_and_flags_the_one_after(client, ctx)
 
 
 def test_a_period_with_nothing_recorded_has_no_range_bar(client):
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12").json()
 
     assert body["bars"] == []
     assert (body["tick"], body["ticks"], body["auto"]) == (0.01, 1, True)
 
 
 def test_the_ten_second_bars_are_read_a_page_at_a_time(client, ctx, monkeypatch):
-    from src.admin.routers import prices as prices_router
+    from src.admin.routers import data as data_router
 
-    monkeypatch.setattr(prices_router, "SERIES_PAGE", 2)
+    monkeypatch.setattr(data_router, "SERIES_PAGE", 2)
     ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.41, 8.42, 8.43, 8.44)}
 
-    body = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=1").json()
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=1").json()
 
     assert body["bars"] == [[RANGE_T0, 8.4, 8.44, 8.4, 8.44, RANGE_T0, RANGE_T0 + 50, False, False, None]]
     starts = [call[2].timestamp() for call in ctx.queries.calls if call[0] == "price_series"]
@@ -1778,47 +1801,47 @@ def test_the_ten_second_bars_are_read_a_page_at_a_time(client, ctx, monkeypatch)
 
 
 @pytest.mark.parametrize("query, reason", [
-    ("instrument_id=2&from=2026-10-12&size=0.001", "The range is smaller than one step of these prices (0.01)"),
-    ("instrument_id=2&from=2026-10-12&side=mid", "The side must be one of bid, ask"),
-    ("instrument_id=2&from=2026-09-01&to=2026-10-12", "Range bars are built for periods of 31 days at most"),
-    ("instrument_id=2&from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
+    ("from=2026-10-12&size=0.001", "The range is smaller than one step of these prices (0.01)"),
+    ("from=2026-10-12&side=mid", "The side must be one of bid, ask"),
+    ("from=2026-09-01&to=2026-10-12", "Range bars are built for periods of 31 days at most"),
+    ("from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
 ])
 def test_a_request_for_range_bars_that_makes_no_sense_is_refused_saying_why(client, ctx, query, reason):
     ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44)}
 
-    response = client.get(f"/api/prices/range-bars?{query}")
+    response = client.get(f"/api/data/assets/saxo/2/range-bars?{query}")
 
     assert response.status_code == 422
     assert response.json()["detail"] == reason
 
 
-@pytest.mark.parametrize("query", ["", "instrument_id=2&size=0", "instrument_id=2&size=-1", "instrument_id=2&size=abc", "instrument_id=2&under=0"])
+@pytest.mark.parametrize("query", ["size=0", "size=-1", "size=abc", "under=0"])
 def test_malformed_range_parameters_are_refused(client, query):
-    assert client.get(f"/api/prices/range-bars?{query}").status_code == 422
+    assert client.get(f"/api/data/assets/saxo/2/range-bars?{query}").status_code == 422
 
 
 def test_range_bars_of_an_instrument_or_an_index_that_was_never_recorded_are_not_found(client):
-    assert client.get("/api/prices/range-bars?instrument_id=99&from=2026-10-12").status_code == 404
-    assert client.get("/api/prices/range-bars?instrument_id=2&under=99&from=2026-10-12").status_code == 404
+    assert client.get("/api/data/assets/saxo/99/range-bars?from=2026-10-12").status_code == 404
+    assert client.get("/api/data/assets/saxo/2/range-bars?under=99&from=2026-10-12").status_code == 404
 
 
 def test_a_range_that_gives_too_many_bars_asks_for_a_larger_one(client, ctx):
     # One cent bars over a climb of 150 euros: more than a chart is given.
     ctx.queries.price_series_rows = {2: flat_bars(8.00, 158.00)}
 
-    response = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.01")
+    response = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.01")
 
     assert response.status_code == 422
     assert response.json()["detail"] == "More than 12000 range bars in this period: choose a larger range or a shorter period"
 
 
 def test_a_period_with_more_recorded_bars_than_can_be_read_is_refused(client, ctx, monkeypatch):
-    from src.admin.routers import prices as prices_router
+    from src.admin.routers import data as data_router
 
-    monkeypatch.setattr(prices_router, "RANGE_MAX_ROWS", 3)
+    monkeypatch.setattr(data_router, "RANGE_MAX_ROWS", 3)
     ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.41, 8.42, 8.43)}
 
-    response = client.get("/api/prices/range-bars?instrument_id=2&from=2026-10-12&size=0.10")
+    response = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10")
 
     assert response.status_code == 422
     assert "choose a shorter one" in response.json()["detail"]
@@ -1832,7 +1855,7 @@ def test_context_of_a_turbo_gives_its_trades_and_the_signals_of_its_indice(clien
          "decided_at": "2026-10-12T08:00:00+00:00"},
     ]
 
-    response = client.get("/api/prices/context?instrument_id=2&from=2026-10-12")
+    response = client.get("/api/data/assets/saxo/2/context?from=2026-10-12")
 
     assert response.status_code == 200
     body = response.json()
@@ -1857,7 +1880,7 @@ def test_context_lists_what_was_not_recorded_during_trading_hours(client, ctx):
     )
 
     with patch_now(datetime(2026, 10, 20, tzinfo=timezone.utc)):
-        body = client.get("/api/prices/context?instrument_id=2&from=2026-10-12").json()
+        body = client.get("/api/data/assets/saxo/2/context?from=2026-10-12").json()
 
     assert body["gaps"] == [
         {"start": "2026-10-12T09:00:00+00:00", "end": "2026-10-12T09:05:00+00:00", "seconds": 300, "reason": "down"},
@@ -1865,7 +1888,7 @@ def test_context_lists_what_was_not_recorded_during_trading_hours(client, ctx):
 
 
 def test_gaps_are_not_worked_out_for_a_period_too_long_to_read_line_by_line(client, ctx):
-    body = client.get("/api/prices/context?instrument_id=2&from=2026-08-01&to=2026-10-12").json()
+    body = client.get("/api/data/assets/saxo/2/context?from=2026-08-01&to=2026-10-12").json()
 
     assert body["gaps"] is None
     assert not any(call[0] == "price_coverage" for call in ctx.queries.calls)
@@ -1898,7 +1921,7 @@ def test_availability_says_which_instruments_saxo_left_without_a_quote(client, c
     ]
 
     with patch_now(datetime(2026, 10, 20, tzinfo=timezone.utc)):
-        response = client.get("/api/prices/availability?from=2026-10-12")
+        response = client.get("/api/data/providers/saxo/availability?from=2026-10-12")
 
     assert response.status_code == 200
     body = response.json()
@@ -1916,12 +1939,12 @@ def test_availability_says_which_instruments_saxo_left_without_a_quote(client, c
 
 
 def test_availability_is_not_worked_out_for_a_period_too_long_to_read_bar_by_bar(client, ctx):
-    body = client.get("/api/prices/availability?from=2026-10-01&to=2026-10-12").json()
+    body = client.get("/api/data/providers/saxo/availability?from=2026-10-01&to=2026-10-12").json()
 
     assert body["items"] is None and body["max_days"] == 7
     assert not any(call[0] == "price_runs" for call in ctx.queries.calls)
     # Seven days are.
-    assert client.get("/api/prices/availability?from=2026-10-06&to=2026-10-12").json()["items"] == {}
+    assert client.get("/api/data/providers/saxo/availability?from=2026-10-06&to=2026-10-12").json()["items"] == {}
 
 
 def test_a_period_with_too_many_interruptions_is_refused_rather_than_half_read(client, ctx):
@@ -1929,7 +1952,7 @@ def test_a_period_with_too_many_interruptions_is_refused_rather_than_half_read(c
 
     ctx.queries.price_run_rows = [_run(2, (6, 0), (6, 1))] * (MAX_RUNS + 1)
 
-    response = client.get("/api/prices/availability?from=2026-10-12")
+    response = client.get("/api/data/providers/saxo/availability?from=2026-10-12")
 
     assert response.status_code == 422
     assert "shorter" in response.json()["detail"]
@@ -1937,14 +1960,443 @@ def test_a_period_with_too_many_interruptions_is_refused_rather_than_half_read(c
     assert next(call[3] for call in ctx.queries.calls if call[0] == "price_runs") == MAX_RUNS + 1
 
 
-def test_prices_read_as_empty_before_anything_was_recorded(client, ctx):
-    ctx.queries.price_instruments_recorded = []
+# ── the Data pages: providers and assets ──
 
-    assert client.get("/api/prices/instruments?from=2026-10-12").json()["items"] == []
+
+def _history_day(prices_root, label, day, count=6, price=25000.0, symbol="USATECHIDXUSD", first_hour=6):
+    """A day of a Dukascopy history, written as the downloader writes it."""
+    from src.price_recorder.bars import Bar
+    from src.strategy.history import dukascopy
+
+    start = int(datetime(day.year, day.month, day.day, first_hour, tzinfo=timezone.utc).timestamp())
+    bars = [
+        Bar(key="index", start=start + 10 * n, bid_open=price + n, bid_high=price + n, bid_low=price + n,
+            bid_close=price + n, ask_open=price + n + 1.5, ask_high=price + n + 1.5, ask_low=price + n + 1.5,
+            ask_close=price + n + 1.5, updates=2, delayed_minutes=0)
+        for n in range(count)
+    ]
+    dukascopy.write_day_file(dukascopy.day_path(str(prices_root), label, day), bars, symbol=symbol, label=label)
+
+
+@pytest.fixture
+def history(ctx, tmp_path):
+    from datetime import date
+
+    from src.admin.data import PriceHistory
+
+    ctx.history = PriceHistory(str(tmp_path / "prices"))
+    _history_day(tmp_path / "prices", "us100", date(2026, 10, 12))
+    _history_day(tmp_path / "prices", "us100", date(2026, 10, 13), count=3, price=25100.0)
+    return ctx.history
+
+
+def _provider(body, provider_id):
+    return next(item for item in body["items"] if item["id"] == provider_id)
+
+
+def test_the_providers_are_saxo_and_dukascopy_and_capital_com_is_to_come(client, ctx):
+    body = client.get("/api/data/providers").json()
+
+    saxo, dukascopy = body["items"]
+    assert (saxo["id"], saxo["kind"], dukascopy["id"], dukascopy["kind"]) == ("saxo", "live", "dukascopy", "download")
+    # Switched off in the configuration, but two instruments were recorded: it is listed.
+    assert (saxo["status"], saxo["detail"], saxo["enabled"], saxo["active"]) == (
+        "disabled", "Switched off in the configuration", False, True,
+    )
+    assert (saxo["assets"], saxo["first_t"], saxo["last_t"]) == (2, 1791784800, 1791842390)
+    assert (saxo["first_day"], saxo["last_day"]) == ("2026-10-12", "2026-10-12")
+    # No backtest service and nothing fetched: offered to be added.
+    assert (dukascopy["status"], dukascopy["enabled"], dukascopy["active"], dukascopy["assets"]) == ("disabled", False, False, 0)
+    assert [(entry["id"], entry["available"]) for entry in body["catalog"]] == [
+        ("saxo", True), ("dukascopy", True), ("capital", False),
+    ]
+
+
+def test_a_recorder_switched_on_and_writing_is_a_provider_at_work(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path)
+    ctx.queries.recorder_status = _bucket(seconds_ago=14)
+
+    with make_client(ctx, tmp_path / "no-interface") as client:
+        client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN)
+        saxo = _provider(client.get("/api/data/providers").json(), "saxo")
+
+    assert (saxo["status"], saxo["detail"], saxo["enabled"]) == ("ok", "Recording 43 instruments", True)
+
+
+def test_a_recorder_switched_off_on_disk_records_until_it_is_restarted(config_path, tmp_path):
+    ctx = _with_recorder(config_path, tmp_path, enabled=False)
+    ctx.queries.recorder_status = _bucket(seconds_ago=14)
+
+    with make_client(ctx, tmp_path / "no-interface") as client:
+        client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN)
+        saxo = _provider(client.get("/api/data/providers").json(), "saxo")
+
+    assert (saxo["status"], saxo["detail"]) == ("warning", "Switched off in the configuration: it records until it is restarted")
+
+
+def test_the_providers_are_listed_while_the_database_is_down(client, ctx):
+    ctx.queries.failing = True
+
+    saxo = _provider(client.get("/api/data/providers").json(), "saxo")
+
+    assert (saxo["status"], saxo["detail"], saxo["assets"]) == ("unknown", "The database is unavailable", None)
+
+
+def test_the_dukascopy_provider_says_what_was_fetched_and_what_can_be_added(client, ctx, history, backtests):
+    body = client.get("/api/data/providers/dukascopy").json()
+
+    assert (body["status"], body["detail"], body["enabled"], body["active"], body["assets"]) == (
+        "ok", "Kept up to date", True, True, 1,
+    )
+    assert (body["first_day"], body["last_day"]) == ("2026-10-12", "2026-10-13")
+    (instrument,) = body["instruments"]
+    assert (instrument["label"], instrument["symbol"], instrument["built_in"], instrument["days"]) == (
+        "us100", "USATECHIDXUSD", True, 2,
+    )
+    assert (instrument["first_day"], instrument["last_day"]) == ("2026-10-12", "2026-10-13")
+    assert instrument["bytes"] > 0
+    assert [entry["symbol"] for entry in body["offered"]] == ["USA500IDXUSD", "DEUIDXEUR"]
+
+
+def test_the_saxo_provider_says_how_it_is_set_and_what_it_missed_today(client, ctx):
+    body = client.get("/api/data/providers/saxo").json()
+
+    assert body["settings"] == {
+        "enabled": False, "record_volume": False, "max_instruments": 150, "refresh_interval_seconds": 300,
+        "refresh_rate_ms": 1000, "retention_months": 0, "alert_after_seconds": 300, "instruments": [],
+    }
+    assert body["gaps_today"] is not None
+    assert body["restart_required"] is False
+    assert client.get("/api/data/providers/capital").status_code == 404
+    assert client.get("/api/data/providers/elsewhere").status_code == 404
+
+
+# ── the recorder's configuration, from its provider ──
+
+
+def test_the_recorder_section_is_read_with_what_the_form_needs(client, ctx):
+    body = client.get("/api/data/providers/saxo/config").json()
+
+    assert body["section"] == {}
+    assert body["defaults"]["max_instruments"] == 150 and body["defaults"]["instruments"] == []
+    assert body["asset_types"] == ["StockIndex", "CfdOnIndex"]
+    assert body["indices"] == sorted(body["indices"]) and body["editable"] is True
+    assert body["revision"] == ctx.config_editor.load()["revision"]
+
+
+def test_the_recorder_section_is_saved_alone_and_said_in_the_audit_trail(client, ctx, config_path):
+    revision = client.get("/api/data/providers/saxo/config").json()["revision"]
+    section = {"enabled": True, "record_volume": True, "instruments": [{"label": "dax", "uic": 4913, "asset_type": "CfdOnIndex"}]}
+
+    response = client.put("/api/data/providers/saxo/config", json={"section": section, "revision": revision}, headers=SAME_ORIGIN)
+
+    assert response.status_code == 200
+    assert response.json()["restart_required"] is True
+    assert json.load(open(config_path))["trade"]["config"]["price_recorder"] == section
+    assert client.get("/api/data/providers/saxo/config").json()["section"] == section
+    assert ctx.audit_log.read(1)[0]["action"] == "price recorder configuration saved"
+    assert client.get("/api/session").json()["restart_required"] is True
+
+
+@pytest.mark.parametrize("section, status, reason", [
+    ({"enabled": True, "max_instruments": 0}, 422, "trade.config.price_recorder.max_instruments"),
+    ({"enabled": True, "instruments": [{"label": "dax", "uic": 1, "asset_type": "CfdOnIndex"},
+                                       {"label": "dax", "uic": 2, "asset_type": "CfdOnIndex"}]}, 422, "Two instruments are labelled 'dax'"),
+    ({"enabled": True, "instruments": [{"label": "a", "uic": 1, "asset_type": "CfdOnIndex"},
+                                       {"label": "b", "uic": 1, "asset_type": "CfdOnIndex"}]}, 422, "UIC 1 as CfdOnIndex is listed twice"),
+])
+def test_a_recorder_section_that_would_not_work_is_refused_saying_why(client, ctx, config_path, section, status, reason):
+    before = open(config_path).read()
+    revision = client.get("/api/data/providers/saxo/config").json()["revision"]
+
+    response = client.put("/api/data/providers/saxo/config", json={"section": section, "revision": revision}, headers=SAME_ORIGIN)
+
+    assert response.status_code == status
+    assert reason in response.json()["detail"]
+    assert open(config_path).read() == before
+
+
+def test_a_recorder_section_is_not_saved_over_a_file_changed_since(client, ctx, config_path):
+    response = client.put(
+        "/api/data/providers/saxo/config", json={"section": {"enabled": True}, "revision": "stale"}, headers=SAME_ORIGIN,
+    )
+
+    assert response.status_code == 409
+
+
+def test_the_recorder_section_is_not_saved_when_editing_is_switched_off(config_path, tmp_path):
+    ctx = make_ctx(config_path, tmp_path, config_edit_enabled=False)
+
+    with make_client(ctx, tmp_path / "no-interface") as client:
+        client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN)
+        response = client.put(
+            "/api/data/providers/saxo/config", json={"section": {"enabled": True}, "revision": "x"}, headers=SAME_ORIGIN,
+        )
+        assert client.get("/api/data/providers/saxo/config").json()["editable"] is False
+
+    assert response.status_code == 403
+
+
+# ── the Dukascopy instruments ──
+
+
+def test_a_dukascopy_instrument_is_added_and_removed(client, ctx, history, backtests):
+    added = client.post(
+        "/api/data/providers/dukascopy/instruments", json={"symbol": "DEUIDXEUR", "label": "de40"}, headers=SAME_ORIGIN,
+    )
+
+    assert (added.status_code, added.json()["label"], added.json()["built_in"]) == (201, "de40", False)
+    listed = client.get("/api/data/providers/dukascopy/instruments").json()
+    assert [entry["label"] for entry in listed["items"]] == ["us100", "de40"]
+    assert "DEUIDXEUR" not in [entry["symbol"] for entry in listed["offered"]]
+
+    assert client.delete("/api/data/providers/dukascopy/instruments/de40", headers=SAME_ORIGIN).status_code == 204
+    assert [entry["label"] for entry in client.get("/api/data/providers/dukascopy/instruments").json()["items"]] == ["us100"]
+
+
+@pytest.mark.parametrize("method, path, body, status", [
+    ("POST", "/api/data/providers/dukascopy/instruments", {"symbol": "EURUSD", "label": "fx"}, 422),
+    ("POST", "/api/data/providers/dukascopy/instruments", {"symbol": "DEUIDXEUR", "label": "us100"}, 422),
+    ("POST", "/api/data/providers/dukascopy/instruments", {"symbol": "DEUIDXEUR", "label": "De 40"}, 422),
+    ("DELETE", "/api/data/providers/dukascopy/instruments/us100", None, 422),
+    ("DELETE", "/api/data/providers/dukascopy/instruments/de40", None, 404),
+    ("DELETE", "/api/data/providers/dukascopy/instruments/..%2Fus100", None, 404),
+])
+def test_a_dukascopy_instrument_that_cannot_be_fetched_rightly_is_refused(client, ctx, history, backtests, method, path, body, status):
+    response = client.request(method, path, json=body, headers=SAME_ORIGIN)
+
+    assert response.status_code == status
+
+
+def test_dukascopy_instruments_are_not_changed_while_downloads_are_switched_off(config_path, tmp_path):
+    from src.admin.data import PriceHistory
+
+    ctx = make_ctx(config_path, tmp_path, backtests_enabled=False)
+    ctx.history = PriceHistory(str(tmp_path / "prices"))
+
+    with make_client(ctx, tmp_path / "no-interface") as client:
+        client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN)
+        response = client.post(
+            "/api/data/providers/dukascopy/instruments", json={"symbol": "DEUIDXEUR", "label": "de40"}, headers=SAME_ORIGIN,
+        )
+
+    assert response.status_code == 403
+
+
+# ── assets ──
+
+
+def test_every_asset_of_every_provider_is_listed(client, ctx, history):
+    body = client.get("/api/data/assets").json()
+
+    assert (body["timezone"], body["seen"], body["truncated"], body["saxo_error"]) == ("Europe/Paris", "all", False, None)
+    assert [(item["ref"], item["status"]) for item in body["items"]] == [
+        ("saxo/1", "recording"), ("saxo/2", "recording"), ("dukascopy/us100", "downloaded"),
+    ]
+    turbo = body["items"][1]
+    assert (turbo["provider"], turbo["key"], turbo["barrier"], turbo["last_bid"]) == ("saxo", "2", 24150.0, 8.45)
+    assert body["items"][2]["days"] == 2
+    assert ctx.queries.calls[-1][:4] == ("price_assets", 5001, None, None)
+
+
+def test_an_instrument_no_longer_named_by_the_recorder_has_ended(client, ctx):
+    ctx.queries.price_asset_extras = {2: {"last_seen_at": datetime.now(timezone.utc) - timedelta(days=3)}}
+
+    statuses = [item["status"] for item in client.get("/api/data/assets").json()["items"]]
+
+    assert statuses == ["recording", "ended"]
+
+
+def test_the_assets_seen_lately_are_those_recorded_since_the_start_of_a_day(client, ctx, history):
+    with patch_now(datetime(2026, 10, 13, 12, tzinfo=timezone.utc)):
+        body = client.get("/api/data/assets?seen=today").json()
+
+    since = next(call[2] for call in ctx.queries.calls if call[0] == "price_assets")
+    # The start of 13 October in Paris.
+    assert since.astimezone(timezone.utc) == datetime(2026, 10, 12, 22, tzinfo=timezone.utc)
+    # The Dukascopy history's last bar is on the 13th, early: still seen today.
+    assert [item["ref"] for item in body["items"] if item["provider"] == "dukascopy"] == ["dukascopy/us100"]
+    assert client.get("/api/data/assets?seen=forever").status_code == 422
+
+
+def test_the_files_are_listed_while_the_database_is_down(client, ctx, history):
+    ctx.queries.failing = True
+
+    body = client.get("/api/data/assets").json()
+
+    assert [item["ref"] for item in body["items"]] == ["dukascopy/us100"]
+    assert "database is unavailable" in body["saxo_error"]
+
+
+def test_a_list_longer_than_shown_says_so(client, ctx, monkeypatch):
+    from src.admin.routers import data as data_router
+
+    monkeypatch.setattr(data_router, "MAX_ASSETS", 1)
+
+    body = client.get("/api/data/assets").json()
+
+    assert (len(body["items"]), body["truncated"]) == (1, True)
+
+
+def test_a_turbo_comes_with_its_days_how_it_was_recorded_and_its_index(client, ctx):
+    body = client.get("/api/data/assets/saxo/2").json()
+
+    assert body["asset"]["ref"] == "saxo/2" and body["asset"]["status"] == "recording"
+    assert (body["first_day"], body["last_day"], body["timezone"]) == ("2026-10-12", "2026-10-12", "Europe/Paris")
+    assert body["index"]["ref"] == "saxo/1"
+    # Its index on its last day, unless another period is asked for.
+    _, indice, start, end = next(call for call in ctx.queries.calls if call[0] == "price_index_of")
+    assert indice == "us100" and start.astimezone(timezone.utc) == datetime(2026, 10, 11, 22, tzinfo=timezone.utc)
+    assert body["recording"]["retention_months"] == 0
+    assert body["max_days"] == {"chart": 366, "range": 31, "statistics": 31, "availability": 7, "gaps": 31}
+
+
+def test_a_dukascopy_history_comes_with_its_files(client, ctx, history):
+    body = client.get("/api/data/assets/dukascopy/us100").json()
+
+    assert (body["asset"]["symbol"], body["asset"]["days"], body["index"]) == ("USATECHIDXUSD", 2, None)
+    recording = body["recording"]
+    assert (recording["label"], recording["fetchable"], recording["days"], recording["price_scale"]) == ("us100", True, 2, 1000)
+    assert (recording["first_file"], recording["last_file"]) == ("2026-10-12", "2026-10-13")
+    assert body["max_days"]["chart"] == 31
+
+
+def test_a_dukascopy_history_opens_on_the_day_of_its_last_file(client, ctx, tmp_path):
+    from datetime import date
+
+    from src.admin.data import PriceHistory
+
+    ctx.history = PriceHistory(str(tmp_path / "prices"))
+    # Its last hour of UTC is past midnight in Paris: two hours of the next day, outside trading.
+    _history_day(tmp_path / "prices", "us100", date(2026, 10, 13), count=360, first_hour=23)
+
+    body = client.get("/api/data/assets/dukascopy/us100").json()
+
+    assert body["asset"]["last_t"] == int(datetime(2026, 10, 13, 23, 59, 50, tzinfo=timezone.utc).timestamp())
+    assert (body["first_day"], body["last_day"]) == ("2026-10-13", "2026-10-13")
+    assert (body["asset"]["first_day"], body["asset"]["last_day"]) == ("2026-10-13", "2026-10-13")
+
+
+@pytest.mark.parametrize("path", [
+    "/api/data/assets/saxo/99", "/api/data/assets/saxo/abc", "/api/data/assets/saxo/0",
+    "/api/data/assets/dukascopy/de40", "/api/data/assets/dukascopy/US100", "/api/data/assets/capital/1",
+    "/api/data/assets/saxo/99/bars", "/api/data/assets/dukascopy/de40/bars", "/api/data/assets/elsewhere/1/statistics",
+])
+def test_an_asset_that_does_not_exist_is_not_found(client, ctx, history, path):
+    assert client.get(path).status_code == 404
+
+
+def test_the_bars_of_a_recorded_turbo_are_read_from_the_recorder_s_tables(client, ctx):
+    body = client.get("/api/data/assets/saxo/2/bars?from=2026-10-12&interval=60").json()
+
+    assert body["instrument"]["ref"] == "saxo/2"
+    assert body["bars"] == [[1791792000, 8.40, 8.52, 8.36, 8.45, 8.45, 8.57, 8.41, 8.50, 3]]
+    assert ctx.queries.calls[-1][:2] == ("price_bars", 2) and ctx.queries.calls[-1][4] == 60
+
+
+def test_the_bars_of_a_dukascopy_history_are_read_from_its_files(client, ctx, history):
+    body = client.get("/api/data/assets/dukascopy/us100/bars?from=2026-10-12&interval=60").json()
+
+    assert body["instrument"]["ref"] == "dukascopy/us100"
+    # 08:00 in Paris, six bars of ten seconds merged into one minute.
+    assert body["bars"] == [[1791784800, 25000.0, 25005.0, 25000.0, 25005.0, 25001.5, 25006.5, 25001.5, 25006.5, 12]]
+    assert len(client.get("/api/data/assets/dukascopy/us100/bars?from=2026-10-12&to=2026-10-13").json()["bars"]) == 9
+
+
+def test_a_dukascopy_history_is_read_a_month_at_a_time(client, ctx, history):
+    response = client.get("/api/data/assets/dukascopy/us100/bars?from=2026-09-01&to=2026-10-12&interval=3600")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "The Dukascopy history is read 31 days at a time at most"
+
+
+def test_range_bars_of_a_dukascopy_history_are_built_from_its_files(client, ctx, history):
+    body = client.get("/api/data/assets/dukascopy/us100/range-bars?from=2026-10-12&size=2&side=ask").json()
+
+    assert (body["side"], body["tick"], body["ticks"], body["under"]) == ("ask", 0.01, 200, None)
+    assert body["bars"][0][1:5] == [25001.5, 25003.5, 25001.5, 25003.5]
+
+
+def test_the_context_of_a_dukascopy_history_is_the_signals_of_its_indice(client, ctx, history):
+    ctx.queries.journal = [
+        {**JOURNAL_ENTRY, "signal_uuid": "b", "indice": "us100", "decided_at": "2026-10-12T09:00:00+00:00"},
+        {**JOURNAL_ENTRY, "signal_uuid": "c", "indice": "germany40", "decided_at": "2026-10-12T08:30:00+00:00"},
+    ]
+
+    body = client.get("/api/data/assets/dukascopy/us100/context?from=2026-10-12").json()
+
+    assert [signal["signal_uuid"] for signal in body["signals"]] == ["b"]
+    assert (body["gaps"], body["volume"]) == (None, None)
+    assert [trade["position_id"] for trade in body["trades"]] == [CLOSED_POSITION["position_id"]]
+
+
+def test_the_context_of_a_dukascopy_history_does_without_the_database(client, ctx, history):
+    ctx.queries.failing = True
+
+    body = client.get("/api/data/assets/dukascopy/us100/context?from=2026-10-12").json()
+
+    assert body["trades"] == []
+
+
+def test_the_context_of_a_turbo_comes_with_the_volume_saxo_counted(client, ctx):
+    ctx.queries.price_volume_by_day = {2: {"2026-10-12": 1200.0, "2026-10-13": 300.0}}
+
+    body = client.get("/api/data/assets/saxo/2/context?from=2026-10-12&to=2026-10-13").json()
+
+    assert body["volume"] == 1500.0
+    assert client.get("/api/data/assets/saxo/1/context?from=2026-10-12").json()["volume"] is None
+
+
+def test_the_statistics_of_a_turbo_are_read_a_page_at_a_time(client, ctx, monkeypatch):
+    from src.admin.routers import data as data_router
+
+    monkeypatch.setattr(data_router, "SERIES_PAGE", 2)
+    ctx.queries.price_bar_rows = [
+        [RANGE_T0 + 10 * n, 8.40 + n / 100, 8.40 + n / 100, 8.40 + n / 100, 8.40 + n / 100,
+         8.45 + n / 100, 8.45 + n / 100, 8.45 + n / 100, 8.45 + n / 100, 1]
+        for n in range(3)
+    ]
+    ctx.queries.price_volume_by_day = {2: {"2026-10-12": 1200.0}}
+
+    body = client.get("/api/data/assets/saxo/2/statistics?from=2026-10-12").json()
+
+    (day,) = body["days"]
+    assert (day["day"], day["bars"], day["open"], day["close"], day["volume"]) == ("2026-10-12", 3, 8.4, 8.42, 1200.0)
+    assert day["spread_average"] == pytest.approx(0.05)
+    assert body["spread"] is True and body["spread_by_time"][0]["slot"] == "08:00"
+    reads = [call for call in ctx.queries.calls if call[0] == "price_bars"]
+    # Ten-second rows, a page at a time, each starting just after the last one read.
+    assert [(call[4], call[5]) for call in reads] == [(10, 2), (10, 2)]
+    assert reads[1][2].timestamp() == RANGE_T0 + 11
+
+
+def test_the_recorder_s_index_has_no_spread_to_speak_of(client, ctx):
+    body = client.get("/api/data/assets/saxo/1/statistics?from=2026-10-12").json()
+
+    assert body["spread"] is False and body["spread_by_time"] == []
+    assert body["days"][0]["spread_average"] is None
+
+
+def test_the_statistics_of_a_dukascopy_history_are_read_from_its_files(client, ctx, history):
+    body = client.get("/api/data/assets/dukascopy/us100/statistics?from=2026-10-12&to=2026-10-13").json()
+
+    assert [(day["day"], day["bars"], day["open"], day["close"]) for day in body["days"]] == [
+        ("2026-10-12", 6, 25000.0, 25005.0), ("2026-10-13", 3, 25100.0, 25102.0),
+    ]
+    assert body["spread"] is True and body["days"][0]["spread_average"] == pytest.approx(1.5)
+    # Both days' bars, at 08:00 in Paris: the spread through the day is read from the same pages as the days.
+    assert [(slot["slot"], slot["bars"]) for slot in body["spread_by_time"]] == [("08:00", 9)]
+
+
+def test_statistics_are_worked_out_for_a_month_at_most(client, ctx):
+    response = client.get("/api/data/assets/saxo/2/statistics?from=2026-09-01&to=2026-10-12")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Statistics are worked out for periods of 31 days at most"
 
 
 class patch_now:
-    """Freeze "now" for the gap computation of the prices routes."""
+    """Freeze "now" for the data routes: the period of today, and the gaps that may still be filling."""
 
     def __init__(self, moment):
         self.moment = moment
@@ -1952,14 +2404,9 @@ class patch_now:
     def __enter__(self):
         from unittest.mock import patch
 
-        import src.admin.routers.prices as prices_router
+        import src.admin.routers.data as data_router
 
-        class Frozen(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return self.moment.astimezone(tz) if tz else self.moment.replace(tzinfo=None)
-
-        self._patch = patch.object(prices_router, "datetime", Frozen)
+        self._patch = patch.object(data_router, "_now", lambda: self.moment)
         self._patch.start()
 
     def __exit__(self, *exc_info):
@@ -2101,11 +2548,18 @@ class FakeBacktests:
     def options(self):
         return self._answer("options", answer={"strategies": []})
 
-    def coverage(self, first_day, last_day):
-        return self._answer("coverage", first_day, last_day, answer={"days": []})
+    def coverage(self, first_day, last_day, label=None):
+        return self._answer("coverage", first_day, last_day, label, answer={"days": []})
 
-    def start_fetch(self, first_day, last_day):
-        return self._answer("start_fetch", first_day, last_day, answer={"state": "running"})
+    def fetch_status(self):
+        return {"state": "idle", "lines": []}
+
+    def keep_status(self):
+        return {"enabled": True, "days": 120, "state": "up_to_date", "missing": 0, "settled": 0, "failures": 0,
+                "next_at": None, "limits": {"days": 730}}
+
+    def start_fetch(self, first_day, last_day, *, label=None):
+        return self._answer("start_fetch", first_day, last_day, label, answer={"state": "running"})
 
     def stop_fetch(self):
         return self._answer("stop_fetch", answer={"state": "running"})
@@ -2306,20 +2760,27 @@ def test_the_prices_panel_reads_the_last_months_unless_told_a_period(client, bac
 
     assert client.get("/api/backtests/prices").json() == {"days": []}
     client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30")
+    client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30&label=de40")
 
     assert backtests.asked == [
-        ("coverage", today - timedelta(days=119), today),
-        ("coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date()),
+        ("coverage", today - timedelta(days=119), today, None),
+        ("coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date(), None),
+        # Another Dukascopy instrument: the service checks the label before anything is made of it.
+        ("coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date(), "de40"),
     ]
 
 
 def test_a_download_of_prices_is_started_and_stopped(client, backtests):
     started = client.post("/api/backtests/prices/fetch", json={"from": "2026-10-05", "to": "2026-10-09"}, headers=SAME_ORIGIN)
     stopped = client.post("/api/backtests/prices/fetch/stop", headers=SAME_ORIGIN)
+    other = client.post(
+        "/api/backtests/prices/fetch", json={"from": "2026-10-05", "to": "2026-10-09", "label": "de40"}, headers=SAME_ORIGIN,
+    )
 
-    assert (started.status_code, stopped.status_code) == (202, 200)
+    assert (started.status_code, stopped.status_code, other.status_code) == (202, 200, 202)
     assert backtests.asked == [
-        ("start_fetch", datetime(2026, 10, 5).date(), datetime(2026, 10, 9).date()), ("stop_fetch",),
+        ("start_fetch", datetime(2026, 10, 5).date(), datetime(2026, 10, 9).date(), None), ("stop_fetch",),
+        ("start_fetch", datetime(2026, 10, 5).date(), datetime(2026, 10, 9).date(), "de40"),
     ]
 
 

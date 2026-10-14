@@ -42,6 +42,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Awaitable, Callable, Protocol
 
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
+from src.admin.data import PriceHistory
 from src.price_recorder.bars import BAR_SECONDS
 from src.strategy import backtest, signals, sweep
 from src.strategy.comparison import Leg, compare
@@ -391,6 +392,8 @@ class BacktestService:
         self._publish = publish
         self._clock = clock
         self._indice = indice
+        # The Dukascopy instruments that can be fetched, and the days of each (src/admin/data.py).
+        self._history = PriceHistory(prices_root)
 
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._waiting: list[str] = []
@@ -981,7 +984,8 @@ class BacktestService:
         return {
             "runs": {"count": len(runs), "bytes": sum(runs)},
             "prices": {
-                "days": len(self._ready_days()),
+                # Of every instrument fetched, as the bytes below.
+                "days": sum(len(self._history.days(label)) for label in self._history.labels()),
                 # The ten-second bars the backtests read, and the hours as they were fetched, kept to complete a day.
                 "bars_bytes": _folder_bytes(os.path.join(prices, "bars")),
                 "fetched_bytes": _folder_bytes(os.path.join(prices, "raw")),
@@ -1366,36 +1370,41 @@ class BacktestService:
 
     # ── prices ──
 
-    def _ready_days(self) -> set[date]:
-        """The days that have a file of bars."""
-        try:
-            names = os.listdir(dukascopy.bars_directory(self._prices_root, self._indice))
-        except OSError:
-            names = []
-        ready = set()
-        for name in names:
-            try:
-                ready.add(date.fromisoformat(name.removesuffix(".csv.gz")))
-            except ValueError:
-                continue
-        return ready
+    def _instrument(self, label: str | None) -> tuple[str, str]:
+        """
+        The label asked for (the history backtests read when none is) and the
+        Dukascopy symbol fetched for it. A label that is not one of the
+        instruments is refused before any path or command is made of it.
+        """
+        label = label or self._indice
+        symbol = self._history.symbol_of(label)
+        if symbol is None:
+            raise InvalidRequest(f"No Dukascopy instrument {label!r}")
+        return label, symbol
 
-    def _day_states(self, first_day: date, last_day: date) -> list[dict]:
+    def _ready_days(self, label: str | None = None) -> set[date]:
+        """The days that have a file of bars."""
+        return set(self._history.days(label or self._indice))
+
+    def _day_states(self, first_day: date, last_day: date, label: str | None = None) -> list[dict]:
         """
         What there is of each day: "ready", "partial" (it can be backtested on,
         but hours of it were not there yet when it was written), "incomplete"
         (some hours, not enough to write it), "missing", "closed" (the market
         was), or "unavailable" (the source has nothing for it). A day the
         source was found to have no more of is settled: not asked for again.
+        Days are only settled for the history backtests read, the one kept
+        up to date.
         """
-        ready = self._ready_days()
-        settled = self._keeper().get("settled") or {}
+        label, symbol = self._instrument(label)
+        ready = self._ready_days(label)
+        settled = (self._keeper().get("settled") or {}) if label == self._indice else {}
         days = []
         for offset in range((last_day - first_day).days + 1):
             day = first_day + timedelta(days=offset)
             open_hours = [hour for hour in dukascopy.day_hours(day) if not dukascopy.market_is_closed(hour)]
             kept = sum(
-                1 for hour in open_hours if os.path.exists(dukascopy.raw_path(self._prices_root, dukascopy.SYMBOL, hour))
+                1 for hour in open_hours if os.path.exists(dukascopy.raw_path(self._prices_root, symbol, hour))
             )
             if day in ready:
                 state = "ready" if kept == len(open_hours) or day.isoformat() in settled else "partial"
@@ -1408,15 +1417,18 @@ class BacktestService:
             days.append({"day": day.isoformat(), "state": state, "hours": kept, "hours_expected": len(open_hours)})
         return days
 
-    def coverage(self, first_day: date, last_day: date) -> dict:
-        """Which days of the period have prices to backtest on."""
+    def coverage(self, first_day: date, last_day: date, label: str | None = None) -> dict:
+        """Which days of the period have prices to backtest on, of ``label`` (the history backtests read by default)."""
         if last_day < first_day or (last_day - first_day).days >= MAX_PERIOD_DAYS:
             raise InvalidRequest(f"A period of {MAX_PERIOD_DAYS} days at most")
-        ready = self._ready_days()
+        label, symbol = self._instrument(label)
+        ready = self._ready_days(label)
         return {
             "from": first_day.isoformat(),
             "to": last_day.isoformat(),
-            "days": self._day_states(first_day, last_day),
+            "label": label,
+            "symbol": symbol,
+            "days": self._day_states(first_day, last_day, label),
             "ready": {
                 "count": len(ready),
                 "first": min(ready).isoformat() if ready else None,
@@ -1439,7 +1451,13 @@ class BacktestService:
             status = {**status, "state": INTERRUPTED}
         return {**status, "lines": _tail(self._fetch_file("output.log")) if status.get("state") != IDLE else []}
 
-    def start_fetch(self, first_day: date, last_day: date, *, automatic: bool = False) -> dict:
+    def start_fetch(self, first_day: date, last_day: date, *, automatic: bool = False, label: str | None = None) -> dict:
+        """
+        Download the days of a period, of ``label`` (the history backtests read
+        by default). One download at a time, whatever the instrument: the server
+        shuts out an address, not a symbol.
+        """
+        label, symbol = self._instrument(label)
         today = datetime.fromtimestamp(self._clock(), timezone.utc).date()
         if last_day < first_day:
             raise InvalidRequest("The period ends before it starts")
@@ -1458,19 +1476,20 @@ class BacktestService:
                 pass
         _write_json(self._fetch_file("status.json"), {
             "state": RUNNING, "from": first_day.isoformat(), "to": last_day.isoformat(),
+            "label": label, "symbol": symbol,
             "started_at": _utc(self._clock()),
             # Started by the service itself, to keep the prices up to date.
             "automatic": automatic,
         })
         self._fetch_stopped = False
-        self._fetch_task = asyncio.create_task(self._fetch(first_day, last_day))
+        self._fetch_task = asyncio.create_task(self._fetch(first_day, last_day, label, symbol))
         return self.fetch_status()
 
-    async def _fetch(self, first_day: date, last_day: date) -> None:
+    async def _fetch(self, first_day: date, last_day: date, label: str, symbol: str) -> None:
         arguments = [
             "src.strategy.history.dukascopy",
             "--from", first_day.isoformat(), "--to", last_day.isoformat(),
-            "--root", self._prices_root, "--label", self._indice, "--low-priority",
+            "--root", self._prices_root, "--symbol", symbol, "--label", label, "--low-priority",
             "--report", self._fetch_file("report.json"),
         ]
         state, code = FAILED, None
@@ -1494,11 +1513,11 @@ class BacktestService:
             **status, "state": state, "exit_code": code, "finished_at": _utc(self._clock()),
         })
         try:
-            self._after_fetch(state, _read_json(self._fetch_file("report.json")))
+            self._after_fetch(state, _read_json(self._fetch_file("report.json")), label)
         except Exception as e:
             logger.warning(f"Could not note how the download of prices went: {e}")
         # A download the service started by itself is not news to whoever is on the page.
-        self._announce("prices_fetch_finished", state=state, automatic=bool(status.get("automatic")))
+        self._announce("prices_fetch_finished", state=state, automatic=bool(status.get("automatic")), label=label)
 
     def stop_fetch(self) -> dict:
         if self._fetch_process is None:
@@ -1593,14 +1612,20 @@ class BacktestService:
         self.start_fetch(first, newest, automatic=True)
         return "fetching"
 
-    def _after_fetch(self, state: str, report: dict | None) -> None:
-        """What a download that ended says about the next one: when, and which days not to ask for again."""
+    def _after_fetch(self, state: str, report: dict | None, label: str | None = None) -> None:
+        """
+        What a download that ended says about the next one: when, and which
+        days not to ask for again. The wait follows every download, since the
+        server's patience is the same whatever was asked of it; the days settled
+        are those of the history kept up to date only, or another instrument's
+        missing day would mark the same day of that history unavailable for good.
+        """
         now = self._clock()
         keeper = self._keeper()
         today = datetime.fromtimestamp(now, timezone.utc).date()
         days = (report or {}).get("days") or []
         settled = dict(keeper.get("settled") or {})
-        for day in days:
+        for day in days if (label or self._indice) == self._indice else []:
             asked = date.fromisoformat(day["day"])
             # The server answered for every hour it was asked, and said it has no file for some of them:
             # days after the fact, they are not hours still to be published.

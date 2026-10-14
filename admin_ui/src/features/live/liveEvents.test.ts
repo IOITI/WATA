@@ -64,6 +64,16 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'stopped' })).toBeNull()
   })
 
+  it('names the Dukascopy instrument downloaded when it is not the history backtests read', () => {
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', label: 'de40' })?.title).toBe(
+      'Prices of de40 downloaded',
+    )
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'failed', label: 'de40' })?.title).toBe(
+      'The download of prices of de40 ended',
+    )
+    expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', label: 'us100' })?.title).toBe('Prices downloaded')
+  })
+
   it('says nothing of the downloads the service makes by itself, night after night', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', automatic: true })).toBeNull()
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'incomplete', automatic: true })).toBeNull()
@@ -92,9 +102,11 @@ describe('staleQueries', () => {
       expect.arrayContaining(['overview', 'positions', 'performance', 'exits', 'report']),
     )
     expect(staleQueries({ type: 'entries_paused' })).toEqual(['overview'])
-    expect(staleQueries({ type: 'service_status' })).toEqual(['health'])
+    expect(staleQueries({ type: 'service_status' })).toEqual(['health', 'data-providers', 'data-provider'])
     expect(staleQueries({ type: 'backtest_finished' })).toEqual(['backtests', 'backtest'])
-    expect(staleQueries({ type: 'prices_fetch_finished' })).toEqual(['backtest-prices'])
+    expect(staleQueries({ type: 'prices_fetch_finished' })).toEqual([
+      'backtest-prices', 'data-assets', 'data-asset', 'data-providers', 'data-provider',
+    ])
     // A new backtest is offered the turbo that was measured.
     expect(staleQueries({ type: 'calibration_finished' })).toEqual(['backtest-calibration', 'backtest-options'])
     expect(staleQueries({ type: 'something_new' })).toEqual([])

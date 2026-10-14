@@ -105,8 +105,11 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       const state = text(event.state) ?? ''
       // Stopped by the operator, or one of the downloads the service makes by itself: no news.
       if (state === 'stopped' || event.automatic === true) return null
+      // Another Dukascopy instrument than the history backtests read is named.
+      const label = text(event.label)
+      const what = label && label !== 'us100' ? `Prices of ${label}` : 'Prices'
       return {
-        title: state === 'done' ? 'Prices downloaded' : 'The download of prices ended',
+        title: state === 'done' ? `${what} downloaded` : `The download of ${what.toLowerCase()} ended`,
         body:
           state === 'incomplete'
             ? 'Some days are still missing: run the same period again.'
@@ -139,7 +142,8 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'entries_resumed':
       return ['overview']
     case 'service_status':
-      return ['health']
+      // The price recorder is one of the services, and the Saxo provider is what it does.
+      return ['health', 'data-providers', 'data-provider']
     case 'saxo_authorisation_required':
     case 'saxo_authorised':
       // The health summary carries the Saxo connection too (top bar, dashboard).
@@ -147,7 +151,8 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'backtest_finished':
       return ['backtests', 'backtest']
     case 'prices_fetch_finished':
-      return ['backtest-prices']
+      // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
+      return ['backtest-prices', 'data-assets', 'data-asset', 'data-providers', 'data-provider']
     case 'calibration_finished':
       // The turbo a new backtest is offered comes from it.
       return ['backtest-calibration', 'backtest-options']

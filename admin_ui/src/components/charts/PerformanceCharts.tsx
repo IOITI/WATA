@@ -664,3 +664,67 @@ export function CompareCurvesChart({ curves }: { curves: NamedCurve[] }) {
     </ResponsiveContainer>
   )
 }
+
+// ── the spread of an asset ──
+
+interface SpreadSlot {
+  slot: string
+  bars: number
+  spread_average: number | null
+  spread_widest: number | null
+  without_ask: number
+}
+
+/** A bar grown from zero, rounded at its top only, in the colour of the one series. */
+function SeriesBar({ x = 0, y = 0, width = 0, height = 0 }: BarShapeProps) {
+  if (height <= 0 || width <= 0) return null
+  const radius = Math.min(BAR_END_RADIUS, width / 2, height)
+  const right = x + width
+  const bottom = y + height
+  return (
+    <path
+      d={`M${x},${bottom} V${y + radius} Q${x},${y} ${x + radius},${y} H${right - radius} Q${right},${y} ${right},${y + radius} V${bottom} Z`}
+      fill="var(--chart-series)"
+    />
+  )
+}
+
+/**
+ * The average spread of each slot of the day (half hours of the trading
+ * timezone): when an asset is dear to trade. One series, named by the title;
+ * the widest spread and the bars of a slot are in its tooltip.
+ */
+export function SpreadByTimeChart({ slots, decimals }: { slots: SpreadSlot[]; decimals: number }) {
+  const show = (value: number | null) => (value === null ? '—' : value.toFixed(decimals))
+  return (
+    <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+      <BarChart data={slots} margin={CHART_MARGIN} barCategoryGap={2}>
+        <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+        <XAxis dataKey="slot" tick={AXIS_TICK} tickLine={false} axisLine={false} minTickGap={24} />
+        <YAxis
+          tickFormatter={(value: number) => value.toFixed(decimals)}
+          tick={AXIS_TICK}
+          tickLine={false}
+          axisLine={false}
+          width={52}
+        />
+        <ReferenceLine y={0} stroke="var(--chart-axis)" />
+        <Tooltip
+          cursor={{ fill: 'var(--foreground)', fillOpacity: 0.06 }}
+          content={
+            <GroupTooltip<SpreadSlot>
+              title={(slot) => `From ${slot.slot}`}
+              rows={(slot) => [
+                { label: 'Average spread', value: show(slot.spread_average), keyColor: 'var(--chart-series)' },
+                { label: 'Widest', value: show(slot.spread_widest) },
+                { label: 'Bars', value: String(slot.bars) },
+                ...(slot.without_ask > 0 ? [{ label: 'Without an ask', value: String(slot.without_ask) }] : []),
+              ]}
+            />
+          }
+        />
+        <Bar dataKey="spread_average" maxBarSize={24} shape={SeriesBar} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
