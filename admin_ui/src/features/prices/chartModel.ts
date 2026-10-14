@@ -90,7 +90,7 @@ export function timeChart({ prices, index }: TimeBars, side: Side): TimeChart {
 
   return {
     kind: 'time',
-    key: `${prices.instrument.id}|${prices.from}|${prices.to}|${interval}|${side}`,
+    key: `${prices.instrument.ref}|${prices.from}|${prices.to}|${interval}|${side}`,
     instrument: prices.instrument,
     timeZone,
     side,
@@ -125,7 +125,7 @@ export function rangeChart(data: PriceRangeBars): RangeChart {
 
   return {
     kind: 'range',
-    key: `${data.instrument.id}|${data.from}|${data.to}|range|${data.size}|${data.side}`,
+    key: `${data.instrument.ref}|${data.from}|${data.to}|range|${data.size}|${data.side}`,
     instrument: data.instrument,
     timeZone,
     side: data.side,

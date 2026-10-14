@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseView, periodPresets, viewParams, withPeriod } from './view'
+import { dayView, parseView, periodPresets, viewParams, withPeriod } from './view'
 
-const TODAY = '2026-10-12'
-const view = (query: string) => parseView(new URLSearchParams(query), TODAY)
+const DAY = '2026-10-12'
+const view = (query: string) => parseView(new URLSearchParams(query), DAY)
 
 describe('the view an address asks for', () => {
-  it('is today, at ten seconds, on the bid, when nothing is said', () => {
-    expect(view('')).toEqual({ instrument: null, from: TODAY, to: TODAY, interval: 10, range: null, side: 'bid' })
+  it('is the default day, at ten seconds, on the bid, when nothing is said', () => {
+    expect(view('')).toEqual({ from: DAY, to: DAY, interval: 10, range: null, side: 'bid' })
+    expect(view('')).toEqual(dayView(DAY))
   })
 
-  it('reads the instrument, the period, the interval and the side', () => {
-    expect(view('instrument=4&from=2026-10-06&to=2026-10-12&interval=300&side=ask')).toEqual({
-      instrument: 4, from: '2026-10-06', to: '2026-10-12', interval: 300, range: null, side: 'ask',
+  it('reads the period, the interval and the side', () => {
+    expect(view('from=2026-10-06&to=2026-10-12&interval=300&side=ask')).toEqual({
+      from: '2026-10-06', to: '2026-10-12', interval: 300, range: null, side: 'ask',
     })
   })
 
@@ -42,35 +43,28 @@ describe('the view an address asks for', () => {
     'from=yesterday&to=today',
     'from=2026-02-31&to=2026-03-02',
     'from=2026-13-01&to=2026-13-02',
-  ])('falls back to today for a period that makes no sense: %s', (query) => {
-    expect(view(query)).toMatchObject({ from: TODAY, to: TODAY })
+  ])('falls back to the default day for a period that makes no sense: %s', (query) => {
+    expect(view(query)).toMatchObject({ from: DAY, to: DAY })
   })
-
-  it.each(['instrument=abc', 'instrument=-3', 'instrument=1.5', 'instrument=0'])(
-    'has no instrument for %s',
-    (query) => {
-      expect(view(query).instrument).toBeNull()
-    },
-  )
 })
 
 describe('the address of a view', () => {
   it('says nothing of what is the default', () => {
-    expect(viewParams(view(''), TODAY).toString()).toBe('')
-    expect(viewParams(view('from=2026-10-06&to=2026-10-12'), TODAY).toString()).toBe('from=2026-10-06&to=2026-10-12')
+    expect(viewParams(view(''), DAY).toString()).toBe('')
+    expect(viewParams(view('from=2026-10-06&to=2026-10-12'), DAY).toString()).toBe('from=2026-10-06&to=2026-10-12')
   })
 
   it('reads back as the same view', () => {
-    const asked = view('instrument=4&from=2026-10-06&to=2026-10-12&interval=300&side=ask')
+    const asked = view('from=2026-10-06&to=2026-10-12&interval=300&side=ask')
 
-    expect(parseView(viewParams(asked, TODAY), TODAY)).toEqual(asked)
+    expect(parseView(viewParams(asked, DAY), DAY)).toEqual(asked)
   })
 
   it('keeps a range as a price, and reads it back', () => {
-    expect(viewParams(view('range=0.6'), TODAY).toString()).toBe('range=0.6')
-    expect(viewParams(view('range=auto&instrument=2'), TODAY).toString()).toBe('instrument=2&range=auto')
-    const asked = view('instrument=2&range=0.07&side=ask')
-    expect(parseView(viewParams(asked, TODAY), TODAY)).toEqual(asked)
+    expect(viewParams(view('range=0.6'), DAY).toString()).toBe('range=0.6')
+    expect(viewParams(view('range=auto'), DAY).toString()).toBe('range=auto')
+    const asked = view('range=0.07&side=ask')
+    expect(parseView(viewParams(asked, DAY), DAY)).toEqual(asked)
   })
 
   it('keeps the range when the period changes', () => {
@@ -87,11 +81,21 @@ describe('changing the period', () => {
     expect(withPeriod(view(''), '2026-10-06', '2026-10-12').interval).toBe(60)
   })
 
-  it('offers today, yesterday and the last seven days', () => {
-    expect(periodPresets(TODAY)).toEqual([
+  it('offers today, yesterday, the last seven days and the last thirty for an asset still recorded', () => {
+    expect(periodPresets(DAY, DAY)).toEqual([
       { label: 'Today', from: '2026-10-12', to: '2026-10-12' },
       { label: 'Yesterday', from: '2026-10-11', to: '2026-10-11' },
       { label: '7 days', from: '2026-10-06', to: '2026-10-12' },
+      { label: '30 days', from: '2026-09-13', to: '2026-10-12' },
+    ])
+  })
+
+  it('counts back from the last day with data for an asset that is no longer recorded', () => {
+    expect(periodPresets('2026-09-22', DAY)).toEqual([
+      { label: 'Last day', from: '2026-09-22', to: '2026-09-22' },
+      { label: 'Day before', from: '2026-09-21', to: '2026-09-21' },
+      { label: '7 days', from: '2026-09-16', to: '2026-09-22' },
+      { label: '30 days', from: '2026-08-24', to: '2026-09-22' },
     ])
   })
 })

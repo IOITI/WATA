@@ -17,7 +17,7 @@ import { formatDateTime, formatDay } from '@/lib/format'
 import type { PriceCoverageDay, PriceFetchStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-import { keepSentence } from './model'
+import { KEEP_DAYS, keepSentence } from './model'
 
 const DAY_STATE: Record<PriceCoverageDay['state'], { label: string; className: string }> = {
   ready: { label: 'ready', className: 'bg-positive' },
@@ -29,8 +29,6 @@ const DAY_STATE: Record<PriceCoverageDay['state'], { label: string; className: s
 }
 // In the order they are explained under the days.
 const LEGEND: PriceCoverageDay['state'][] = ['ready', 'partial', 'incomplete', 'missing', 'unavailable']
-// How far back the service can be told to keep the prices: a month and a half to two years of trading days.
-const KEEP_DAYS = [30, 60, 120, 250, 500]
 
 const FETCH_STATE: Record<PriceFetchStatus['state'], string> = {
   idle: '',
@@ -63,7 +61,8 @@ function byMonth(days: readonly PriceCoverageDay[]): Month[] {
   }))
 }
 
-function Coverage({ days }: { days: readonly PriceCoverageDay[] }) {
+/** The days of a period, month by month, each a square of the colour of what there is of it. */
+export function Coverage({ days }: { days: readonly PriceCoverageDay[] }) {
   const months = useMemo(() => byMonth(days), [days])
   return (
     <div className="flex flex-col gap-2">
@@ -102,39 +101,54 @@ function Coverage({ days }: { days: readonly PriceCoverageDay[] }) {
   )
 }
 
+interface PricesPanelProps {
+  /**
+   * Another Dukascopy instrument than the history backtests read, which is
+   * the one shown when this is left out: only that one is kept up to date.
+   */
+  label?: string
+  /** What the panel is called, and what its days are said to be of. */
+  title?: string
+  name?: string
+}
+
 /** Which days have prices to backtest on, and the download of more. */
-export function PricesPanel() {
+export function PricesPanel({ label, title = 'Prices', name = 'the index' }: PricesPanelProps) {
   const { timezone } = useSession()
   const queryClient = useQueryClient()
   const [range, setRange] = useState<DateRange>(() => lastDays(30))
   const period = rangeParams(range)
 
   const coverageQuery = useQuery({
-    queryKey: ['backtest-prices'],
-    queryFn: () => api.priceCoverage(),
+    // The history backtests read under the key the backtest form shares, any other under its label.
+    queryKey: label ? ['backtest-prices', label] : ['backtest-prices'],
+    queryFn: () => api.priceCoverage({}, label),
     // While a download runs its messages and the days it completes are worth following.
     refetchInterval: (query) => (query.state.data?.fetch.state === 'running' ? 3_000 : 60_000),
   })
   const coverage = coverageQuery.data
   const fetching = coverage?.fetch.state === 'running'
+  // One download at a time, whatever the instrument: the one running may be of another.
+  const fetchedLabel = coverage?.fetch.label ?? 'us100'
+  const elsewhere = coverage !== undefined && fetchedLabel !== coverage.label
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtest-prices'] })
   const fetchMutation = useMutation({
-    mutationFn: () => api.fetchPrices({ from: period.from ?? '', to: period.to ?? '' }),
+    mutationFn: () => api.fetchPrices({ from: period.from ?? '', to: period.to ?? '' }, label),
     onSuccess: refresh,
   })
   const stopMutation = useMutation({ mutationFn: api.stopFetchingPrices, onSuccess: refresh })
   const keepMutation = useMutation({ mutationFn: api.keepPrices, onSuccess: refresh })
   const failure = fetchMutation.error ?? stopMutation.error ?? keepMutation.error
-  const keep = coverage?.keep
+  const keep = label ? undefined : coverage?.keep
   const keepDays = keep ? [...new Set([...KEEP_DAYS, keep.days])].sort((a, b) => a - b) : KEEP_DAYS
 
   return (
     <Panel
-      title="Prices"
+      title={title}
       description={
         coverage?.ready.first
-          ? `${coverage.ready.count} day${coverage.ready.count === 1 ? '' : 's'} of the index ready to backtest on, from ${formatDay(coverage.ready.first)} to ${formatDay(coverage.ready.last)}.`
+          ? `${coverage.ready.count} day${coverage.ready.count === 1 ? '' : 's'} of ${name} ready to backtest on, from ${formatDay(coverage.ready.first)} to ${formatDay(coverage.ready.last)}.`
           : 'No day of prices yet: fetch some before asking for a backtest.'
       }
     >
@@ -221,7 +235,8 @@ export function PricesPanel() {
                     {coverage.fetch.from && (
                       <span className="text-muted-foreground">
                         {' '}
-                        ({formatDay(coverage.fetch.from)} to {formatDay(coverage.fetch.to)})
+                        ({elsewhere ? `${fetchedLabel}, ` : ''}
+                        {formatDay(coverage.fetch.from)} to {formatDay(coverage.fetch.to)})
                       </span>
                     )}
                   </p>

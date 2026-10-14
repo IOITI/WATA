@@ -63,6 +63,12 @@ PROTECTED_PATHS = (
     "trade.config.watchlist_manager.api_port",
 )
 
+# Sections a page other than the configuration page may read and save alone:
+# the price recorder's, edited from the Data pages (src/admin/routers/data.py).
+SECTION_PATHS = (
+    "trade.config.price_recorder",
+)
+
 _DAY_TRADING_FLOAT_FIELDS = (
     "percent_profit_wanted_per_days",
     "dont_enter_trade_if_day_profit_is_more_than",
@@ -396,3 +402,25 @@ class ConfigEditor:
         logger.info(f"Configuration saved, previous version kept as {backup_path}")
         _, new_revision = self._read()
         return {"revision": new_revision, "backup": os.path.basename(backup_path)}
+
+    def load_section(self, path: str) -> dict:
+        """One of SECTION_PATHS as it is on disk (None when it is not there), and the revision it was read at."""
+        if path not in SECTION_PATHS:
+            raise ConfigInvalid(f"'{path}' cannot be read alone")
+        config, revision = self._read()
+        value = _get_path(config, path)
+        return {"section": None if value is _MISSING else mask_secrets(value), "revision": revision}
+
+    def save_section(self, path: str, value, expected_revision: str) -> dict:
+        """
+        Replace one of SECTION_PATHS and save the whole as ``save`` does: merged
+        into the file on disk, checked with the services' own validator and the
+        recorder's, refused when the file changed since ``expected_revision``,
+        the version it replaces kept.
+        """
+        if path not in SECTION_PATHS:
+            raise ConfigInvalid(f"'{path}' cannot be saved alone")
+        current, _ = self._read()
+        submitted = copy.deepcopy(current)
+        _set_path(submitted, path, value)
+        return self.save(submitted, expected_revision)

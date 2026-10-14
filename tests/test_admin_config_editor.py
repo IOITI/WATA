@@ -468,3 +468,67 @@ def test_a_valid_price_recorder_section_is_saved(editor, config_path):
     editor.save(loaded["config"], loaded["revision"])
 
     assert _on_disk(config_path)["trade"]["config"]["price_recorder"]["instruments"][0]["uic"] == 4913
+
+
+# ── one section saved alone, from the Data pages ──
+
+RECORDER = "trade.config.price_recorder"
+
+
+def test_the_recorder_section_is_read_alone_with_the_revision_it_was_read_at(editor, config_path):
+    assert editor.load_section(RECORDER) == {"section": None, "revision": editor.load()["revision"]}
+
+    config = _on_disk(config_path)
+    config["trade"]["config"]["price_recorder"] = {"enabled": True, "max_instruments": 80}
+    _write(config_path, config)
+
+    assert editor.load_section(RECORDER)["section"] == {"enabled": True, "max_instruments": 80}
+
+
+def test_the_recorder_section_is_saved_alone_and_nothing_else_moves(editor, config_path):
+    before = _on_disk(config_path)
+    revision = editor.load_section(RECORDER)["revision"]
+
+    saved = editor.save_section(RECORDER, {"enabled": True, "record_volume": True, "retention_months": 6}, revision)
+
+    after = _on_disk(config_path)
+    assert after["trade"]["config"]["price_recorder"] == {"enabled": True, "record_volume": True, "retention_months": 6}
+    after["trade"]["config"].pop("price_recorder")
+    assert after == before
+    # Kept like any save: the version it replaced, and a new revision to save against.
+    assert saved["backup"] in _directory_listing(config_path)
+    assert saved["revision"] == editor.load()["revision"] != revision
+
+
+def test_a_section_saved_alone_is_checked_like_the_whole(editor, config_path):
+    before = open(config_path).read()
+    listing = _directory_listing(config_path)
+    revision = editor.load_section(RECORDER)["revision"]
+
+    with pytest.raises(ConfigInvalid, match=r"trade\.config\.price_recorder\.refresh_rate_ms"):
+        editor.save_section(RECORDER, {"enabled": True, "refresh_rate_ms": 5}, revision)
+
+    assert open(config_path).read() == before
+    assert _directory_listing(config_path) == listing
+
+
+def test_a_section_is_not_saved_over_a_file_that_changed_since_it_was_read(editor, config_path):
+    revision = editor.load_section(RECORDER)["revision"]
+    config = _on_disk(config_path)
+    config["logging"]["level"] = "DEBUG"
+    _write(config_path, config)
+
+    with pytest.raises(ConfigConflict):
+        editor.save_section(RECORDER, {"enabled": True}, revision)
+
+    assert "price_recorder" not in _on_disk(config_path)["trade"]["config"]
+
+
+@pytest.mark.parametrize("path", ["trade.config", "trade.rules", "postgresql", "trade.config.signal_polling"])
+def test_only_the_sections_listed_are_read_or_saved_alone(editor, path):
+    revision = editor.load()["revision"]
+
+    with pytest.raises(ConfigInvalid, match="alone"):
+        editor.load_section(path)
+    with pytest.raises(ConfigInvalid, match="alone"):
+        editor.save_section(path, {}, revision)

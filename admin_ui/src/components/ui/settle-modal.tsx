@@ -19,8 +19,8 @@ export interface SettleModalProps {
   hideCloseButton?: boolean;
   /** Click on backdrop closes the modal (default true) */
   closeOnBackdrop?: boolean;
-  /** Maximum width of the modal (Tailwind class) */
-  size?: 'sm' | 'md' | 'lg';
+  /** Maximum width of the modal (Tailwind class). WATA: `xl` for a form with rows of fields. */
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }
 
@@ -30,6 +30,7 @@ const sizeMap: Record<NonNullable<SettleModalProps['size']>, string> = {
   sm: 'max-w-sm',
   md: 'max-w-md',
   lg: 'max-w-lg',
+  xl: 'max-w-2xl',
 };
 
 /**
@@ -141,7 +142,8 @@ export const SettleModal: React.FC<SettleModalProps> = ({
               ease: [0.16, 1, 0.3, 1],
             }}
             className={cn(
-              'relative w-full rounded-2xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-primary)] shadow-[var(--shadow-elevated)] p-6 sm:p-8 focus:outline-none',
+              // WATA: no taller than the screen; what does not fit scrolls inside it (a phone, a long form).
+              'relative w-full max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-primary)] shadow-[var(--shadow-elevated)] p-6 sm:p-8 focus:outline-none',
               sizeMap[size],
               className
             )}

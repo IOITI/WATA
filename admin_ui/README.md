@@ -5,7 +5,7 @@ application (`../src/admin/app.py`) serves and which ships with `./src` in the d
 built on the server.
 
 React 19, Vite, TypeScript, Tailwind CSS 4, [EasyUI](https://easyui.site) components, TanStack Query,
-React Router, Recharts, and TradingView's Lightweight Charts for the Prices page.
+React Router, Recharts, and TradingView's Lightweight Charts for the charts of the stored prices (the Data section).
 
 ## Working on it
 
@@ -21,7 +21,9 @@ npm run dev         # Vite dev server; /api is proxied to the server above
 keeps everything in memory and in a temporary directory, and never talks to Saxo, PostgreSQL or RabbitMQ.
 Its recorded prices (`dev/fake_prices.py`) are made up from the time asked for: an index, six turbos that
 follow it, two recording gaps a day, and a couple of trades and signals on them. Three of the turbos are not
-quoted all day, each in its own way (holes, a stop, a knock-out), and three have a volume.
+quoted all day, each in its own way (holes, a stop, a knock-out), and three have a volume. Its Dukascopy
+provider is the real one, on the days kept under `var/lib/price_history` of the checkout: an instrument added
+from the Providers page goes to `var/lib/price_history/dukascopy/instruments.json` there.
 
 The proxy of `vite.config.ts` passes the `Host` header on as the browser sent it. The admin refuses a change
 whose `Origin` is not its own `Host`; with the header rewritten to the API's address, signing in from the dev
@@ -67,7 +69,7 @@ operator.
 - **Text colours are checked, not judged by eye.** The status colours as text (`--positive`, `--negative`,
   `--warning`, `--info`) and the secondary greys reach 4.5:1 on every surface of their theme, a hovered row
   included; the light values of `theme.css` say which of EasyUI's own were lowered for that.
-- **The price chart draws on a canvas** with the colours it read when it was made: `PricesPage.tsx` gives it
+- **The price chart draws on a canvas** with the colours it read when it was made: `AssetChart.tsx` gives it
   the theme as its `key`, so another theme makes another chart. The Recharts charts read CSS variables and
   follow by themselves.
 - Tests stand in for the system setting with `src/test/systemTheme.ts` (jsdom has no `matchMedia`). A
@@ -87,7 +89,7 @@ npx shadcn@latest add Surajmaurya1/easyui/<slug>
 
 - Source: https://github.com/Surajmaurya1/easyui at commit `4dbc8b18f4ce0f1173807e8ba22e586619d52b3e`
   (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya.
-- Components in use: `advanced-data-table`, `alert`, `animated-tabs`, `badge`, `button`,
+- Components in use: `advanced-data-table`, `alert`, `animated-tabs`, `badge`, `breadcrumb`, `button`,
   `calendar`, `date-picker`, `drag-to-confirm`, `form`, `loader`, `not-found`, `settle-modal`, `sidebar`,
   `skeleton`, `smooth-accordion`, `spring-select`, `stepper`, `stretch-switch`, `velocity-toast`.
 - `src/lib/motion-tokens.ts`, `src/lib/utils.ts` and `src/styles/tokens.css` come from it too.
@@ -99,9 +101,19 @@ Changes made to the copied files:
   `emptyDescription` on `AdvancedDataTable`, and "Clear filters" only when a search or a filter is active;
   cells padded 20 px instead of 24, so that the seven columns of the closed positions fit a 1440 px screen;
   `initialSearch` and `initialExpandedRowIds`, for a link that lands on one row found and opened (an order
-  from its position, a position from its order: `?find=<id>`).
+  from its position, a position from its order: `?find=<id>`); `initialFilters`, for a link that opens the
+  table filtered (the Assets View from a provider); `expandOnRowClick` (a click anywhere on a row opens it,
+  except on a link, a button, a field or the end of a selection of its text; the arrow stays for the
+  keyboard), `singleExpand` (one row open at a time) and `rowLabel` (each arrow named after its row, "Open
+  …", instead of all of them "Expand row details"); a search goes back to the first page, where what it
+  found starts.
+- `breadcrumb.tsx`: its text in `text-muted-foreground` and `text-foreground`, not `neutral-500` (4.54:1 on
+  the light background, a hair from the limit) and `neutral-900`. Copied by hand at the pinned commit: the
+  CLI would also offer to overwrite `src/lib/utils.ts`, which is the same. React Router's `Link` reads `to`
+  where this component gives `href`: it is given `components/RouterLink.tsx`.
 - `settle-modal.tsx`: rendered in `document.body` (a dialog opened from a table cell took the cell's
-  alignment and wrapping); focus moves into the dialog, stays in it and returns to what opened it.
+  alignment and wrapping); focus moves into the dialog, stays in it and returns to what opened it. An `xl`
+  size (`max-w-2xl`), and a panel no taller than the screen, what does not fit scrolling inside it.
 - `drag-to-confirm.tsx`: the hidden fallback button is out of the Tab order (it was a stop nobody could see,
   on which Enter confirmed); ArrowRight no longer confirms, only Enter and Space.
 - `velocity-toast.tsx`: `wrapperClassName`, to lift the toast above the bar at the bottom of the configuration page.
@@ -132,9 +144,9 @@ changing it.
 
 ## Lightweight Charts
 
-The candles of the Prices page are drawn by [Lightweight Charts](https://github.com/tradingview/lightweight-charts)
-5.2.1 (`lightweight-charts`, Apache License 2.0). Recharts stays for the other pages. It is loaded with the
-Prices page only.
+The candles of the stored prices are drawn by [Lightweight Charts](https://github.com/tradingview/lightweight-charts)
+5.2.1 (`lightweight-charts`, Apache License 2.0). Recharts stays for the other charts, the spread of an asset
+through the day included. It is loaded with the pages that draw candles only.
 
 - **Its licence asks for a notice and a link on the page that shows the charts.** The notice is
   "TradingView Lightweight Charts™ Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/".
@@ -143,7 +155,8 @@ Prices page only.
 - **`features/prices/PriceChart.tsx` is the only file that imports it.** It is given data that is ready to
   draw and draws it. Everything that can be wrong without a canvas (times, holes, markers, intervals) is in
   `chartData.ts`, which is plain functions with tests.
-- **Two pages show it**: the Prices page, and a day of a backtest (`features/backtests/BacktestDayPage.tsx`),
+- **Three places show it**: an asset's page and an opened row of the Assets View (`features/data/AssetChart.tsx`,
+  full and compact), and a day of a backtest (`features/backtests/BacktestDayPage.tsx`),
   which gives it `overlays`: lines over the prices, on their scale (the kernel, the VWAP of the session, its
   band). A line is told by more than its colour: the kernel takes the colour of its direction at each
   point, the VWAP is thick, its band thin and dashed. `features/prices/ChartAttribution.tsx` is the licence

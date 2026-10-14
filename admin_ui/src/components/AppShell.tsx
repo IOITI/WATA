@@ -5,6 +5,7 @@ import {
   ChartLine,
   CirclePause,
   ClipboardList,
+  Database,
   Eye,
   FileText,
   FlaskConical,
@@ -51,15 +52,16 @@ const NAVIGATION: (NavEntry & { section: string; icon: SidebarSection['items'][n
   { id: 'report', path: '/report', label: 'Report', section: 'Analysis', icon: <FileText /> },
   { id: 'exits', path: '/exits', label: 'Exits', section: 'Analysis', icon: <Undo2 /> },
   { id: 'timing', path: '/timing', label: 'Execution timing', section: 'Analysis', icon: <Timer /> },
-  { id: 'prices', path: '/prices', label: 'Prices', section: 'Analysis', icon: <ChartLine /> },
   { id: 'backtests', path: '/backtests', label: 'Backtests', section: 'Analysis', icon: <FlaskConical /> },
+  { id: 'providers', path: '/data/providers', label: 'Providers', section: 'Data', icon: <Database /> },
+  { id: 'assets', path: '/data/assets', label: 'Assets View', section: 'Data', icon: <ChartLine /> },
   { id: 'system', path: '/system', label: 'System', section: 'Operations', icon: <Activity /> },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations', icon: <ScrollText /> },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations', icon: <ClipboardList /> },
   { id: 'config', path: '/config', label: 'Configuration', section: 'Operations', icon: <SlidersHorizontal /> },
 ]
 
-const SECTIONS: SidebarSection[] = ['Trading', 'Analysis', 'Operations'].map((title) => ({
+const SECTIONS: SidebarSection[] = ['Trading', 'Analysis', 'Data', 'Operations'].map((title) => ({
   title,
   items: NAVIGATION.filter((entry) => entry.section === title).map(({ id, label, icon }) => ({ id, label, icon })),
 }))
@@ -225,7 +227,9 @@ export function AppShell() {
           )}
         </header>
 
-        <main className="flex-1 overflow-y-auto">
+        {/* Positioned, so that what it scrolls stays in it: text for screen readers placed
+            against the page would otherwise make the window itself scroll, onto nothing. */}
+        <main className="relative flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6">
             <Outlet />
           </div>

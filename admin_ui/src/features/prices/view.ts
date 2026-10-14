@@ -2,12 +2,13 @@ import { allowedIntervals, daysBetween, defaultInterval, shiftDay } from './char
 import type { Side } from './chartData'
 
 /**
- * What the Prices page shows, kept in the address so that a view can be
- * bookmarked, reloaded and sent to someone.
+ * What an asset's chart shows, kept in the address so that a view can be
+ * bookmarked, reloaded and sent to someone. The asset is in the path. What
+ * the address leaves out is the default, whose day is the asset's last one
+ * with data rather than today: a turbo is quoted for a day, and an ended one
+ * has nothing today.
  */
-export interface PriceView {
-  /** null: the first instrument of the period (its index). */
-  instrument: number | null
+export interface ChartView {
   /** First and last day, of the trading timezone, both included. */
   from: string
   to: string
@@ -21,32 +22,33 @@ export interface PriceView {
   side: Side
 }
 
-function parseRange(value: string | null): PriceView['range'] {
+/** The parameters of the address a view is kept in, and nothing else of it. */
+export const VIEW_PARAMS = ['from', 'to', 'interval', 'range', 'side'] as const
+
+function parseRange(value: string | null): ChartView['range'] {
   if (value === 'auto') return 'auto'
   const size = Number(value)
   return value !== null && value !== '' && Number.isFinite(size) && size > 0 ? size : null
 }
 
-function isDay(value: string | null): value is string {
+export function isDay(value: string | null): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00Z`)
   // 31 February parses in some browsers, as a day of March.
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
-/** The view an address asks for. Anything missing or senseless falls back to today's, never to an error. */
-export function parseView(params: URLSearchParams, today: string): PriceView {
+/** The view an address asks for. Anything missing or senseless falls back to the default day's, never to an error. */
+export function parseView(params: URLSearchParams, defaultDay: string): ChartView {
   let from = params.get('from')
   let to = params.get('to')
   if (!isDay(from) || !isDay(to) || from > to) {
-    from = today
-    to = today
+    from = defaultDay
+    to = defaultDay
   }
   const days = daysBetween(from, to)
   const interval = Number(params.get('interval'))
-  const instrument = Number(params.get('instrument'))
   return {
-    instrument: Number.isInteger(instrument) && instrument > 0 ? instrument : null,
     from,
     to,
     interval: allowedIntervals(days).includes(interval) ? interval : defaultInterval(days),
@@ -55,11 +57,10 @@ export function parseView(params: URLSearchParams, today: string): PriceView {
   }
 }
 
-/** The address of a view. What is the default is left out: "/prices" alone is today. */
-export function viewParams(view: PriceView, today: string): URLSearchParams {
+/** The address of a view. What is the default is left out: no parameter at all is the default day. */
+export function viewParams(view: ChartView, defaultDay: string): URLSearchParams {
   const params = new URLSearchParams()
-  if (view.instrument !== null) params.set('instrument', String(view.instrument))
-  if (view.from !== today || view.to !== today) {
+  if (view.from !== defaultDay || view.to !== defaultDay) {
     params.set('from', view.from)
     params.set('to', view.to)
   }
@@ -70,8 +71,13 @@ export function viewParams(view: PriceView, today: string): URLSearchParams {
   return params
 }
 
+/** The default view of a day: ten-second bars of the bid. */
+export function dayView(day: string): ChartView {
+  return { from: day, to: day, interval: defaultInterval(1), range: null, side: 'bid' }
+}
+
 /** Another period for a view: its bars stay as they were when the new period can be shown with them. */
-export function withPeriod(view: PriceView, from: string, to: string): PriceView {
+export function withPeriod(view: ChartView, from: string, to: string): ChartView {
   const days = daysBetween(from, to)
   return {
     ...view,
@@ -87,11 +93,17 @@ export interface PeriodPreset {
   to: string
 }
 
-export function periodPresets(today: string): PeriodPreset[] {
-  const yesterday = shiftDay(today, -1)
+/**
+ * The periods offered in one click, counted back from ``anchor``: today for
+ * an asset still recorded, else its last day with data.
+ */
+export function periodPresets(anchor: string, today: string): PeriodPreset[] {
+  const before = shiftDay(anchor, -1)
+  const live = anchor === today
   return [
-    { label: 'Today', from: today, to: today },
-    { label: 'Yesterday', from: yesterday, to: yesterday },
-    { label: '7 days', from: shiftDay(today, -6), to: today },
+    { label: live ? 'Today' : 'Last day', from: anchor, to: anchor },
+    { label: live ? 'Yesterday' : 'Day before', from: before, to: before },
+    { label: '7 days', from: shiftDay(anchor, -6), to: anchor },
+    { label: '30 days', from: shiftDay(anchor, -29), to: anchor },
   ]
 }

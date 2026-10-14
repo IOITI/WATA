@@ -102,6 +102,8 @@ class AdminContext:
     audit_log: Any = None
     # Backtests run as child processes, and their results kept as files (src/admin/backtests.py).
     backtests: Any = None
+    # The prices fetched from Dukascopy, read as files for the Data pages (src/admin/data.py).
+    history: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -148,6 +150,7 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.audit import AuditLog
     from src.admin.backtests import BacktestService
     from src.admin.config_editor import ConfigEditor
+    from src.admin.data import PriceHistory
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.services import SaxoAccess, WataServices
     from src.database.postgres import AsyncDbRiskStateManager, PostgresConnectionManager
@@ -207,6 +210,7 @@ def build_context(config_manager) -> AdminContext:
         risk_state=AsyncDbRiskStateManager(pause_database),
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
         backtests=backtests,
+        history=PriceHistory(settings.price_history_path),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,

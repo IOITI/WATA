@@ -83,6 +83,9 @@ export interface DataTableContextValue<T = any> {
   expandedRowIds: Set<string>;
   toggleRowExpansion: (id: string) => void;
   renderSubComponent?: (row: T) => React.ReactNode;
+  /** WATA: a click anywhere on a row opens it, and what names a row for its expand button. */
+  expandOnRowClick: boolean;
+  rowLabel?: (row: T) => string;
   // Column Visibility
   hiddenColumnIds: Set<string>;
   toggleColumnVisibility: (columnId: string) => void;
@@ -374,11 +377,30 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
     expandedRowIds,
     toggleRowExpansion,
     renderSubComponent,
+    expandOnRowClick,
+    rowLabel,
     viewMode,
     isLoading,
     error,
     clearFilters,
   } = useDataTable();
+
+  // WATA: a click on a row opens it, unless it was meant for something inside
+  // the row (a link, a button, a box) or it ended a selection of its text.
+  const expandOnClick = (rowId: string) =>
+    renderSubComponent && expandOnRowClick
+      ? (event: React.MouseEvent<HTMLElement>) => {
+          const target = event.target as HTMLElement;
+          if (target.closest('a, button, input, select, textarea, label, [role="button"], [data-no-row-click]')) return;
+          if (window.getSelection?.()?.toString()) return;
+          toggleRowExpansion(rowId);
+        }
+      : undefined;
+  const expandLabel = (row: any, isExpanded: boolean) => {
+    const name = rowLabel ? rowLabel(row) : null;
+    if (name) return isExpanded ? `Close ${name}` : `Open ${name}`;
+    return isExpanded ? 'Collapse row details' : 'Expand row details';
+  };
 
   const visibleColumns = useMemo(
     () => columns.filter((col) => !hiddenColumnIds.has(col.id)),
@@ -457,9 +479,11 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
           return (
             <div
               key={rowId}
+              onClick={expandOnClick(rowId)}
               className={cn(
                 'rounded-xl border border-border/60 bg-surface/30 p-3.5 sm:p-4 space-y-2.5 sm:space-y-3 transition-colors',
-                isSelected && 'bg-surface-raised/40 border-border'
+                isSelected && 'bg-surface-raised/40 border-border',
+                expandOnClick(rowId) && 'cursor-pointer'
               )}
             >
               <div className="flex items-center justify-between gap-2">
@@ -486,7 +510,7 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
                     onClick={() => toggleRowExpansion(rowId)}
                     className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors cursor-pointer shrink-0"
                     aria-expanded={isExpanded}
-                    aria-label={isExpanded ? 'Collapse row details' : 'Expand row details'}
+                    aria-label={expandLabel(row, isExpanded)}
                   >
                     <motion.div animate={{ rotate: isExpanded ? 90 : 0 }} transition={SPRING_PHYSICS}>
                       <ChevronRight className="w-3.5 h-3.5" />
@@ -608,9 +632,12 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
             return (
               <React.Fragment key={rowId}>
                 <tr
+                  onClick={expandOnClick(rowId)}
                   className={cn(
                     'transition-colors hover:bg-surface-hover/40 group',
-                    isSelected && 'bg-surface-raised/35'
+                    isSelected && 'bg-surface-raised/35',
+                    expandOnClick(rowId) && 'cursor-pointer',
+                    isExpanded && expandOnRowClick && 'bg-surface-raised/25'
                   )}
                 >
                   {/* Checkbox Cell */}
@@ -634,7 +661,7 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
                         onClick={() => toggleRowExpansion(rowId)}
                         className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                         aria-expanded={isExpanded}
-                        aria-label={isExpanded ? 'Collapse row details' : 'Expand row details'}
+                        aria-label={expandLabel(row, isExpanded)}
                       >
                         <motion.div
                           animate={{ rotate: isExpanded ? 90 : 0 }}
@@ -822,6 +849,14 @@ export interface DataTableProps<T = any> {
   initialSearch?: string;
   /** WATA: the rows shown opened when the table appears. */
   initialExpandedRowIds?: string[];
+  /** WATA: the filters chosen when the table appears (a link to some of the rows), by column id. */
+  initialFilters?: Record<string, string[]>;
+  /** WATA: a click anywhere on a row opens it, not only its arrow. */
+  expandOnRowClick?: boolean;
+  /** WATA: one row open at a time: opening another closes it. */
+  singleExpand?: boolean;
+  /** WATA: what names a row, for its expand button ("Open …"). */
+  rowLabel?: (row: T) => string;
   isLoading?: boolean;
   error?: string | null;
   className?: string;
@@ -839,6 +874,10 @@ export function DataTable<T = any>({
   renderSubComponent,
   initialSearch = '',
   initialExpandedRowIds,
+  initialFilters,
+  expandOnRowClick = false,
+  singleExpand = false,
+  rowLabel,
   isLoading,
   error,
   className,
@@ -869,8 +908,8 @@ export function DataTable<T = any>({
   }, [defaultViewMode]);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
-  const [searchTerm, setSearchTerm] = useState(initialSearch);
-  const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
+  const [searchTerm, setSearchTermState] = useState(initialSearch);
+  const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>(() => initialFilters ?? {});
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(() => new Set(initialExpandedRowIds));
   const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(
@@ -878,6 +917,12 @@ export function DataTable<T = any>({
   );
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(defaultPageSize);
+
+  // WATA: what is found is shown from its first page, wherever the reader was.
+  const setSearchTerm = (term: string) => {
+    setSearchTermState(term);
+    setCurrentPage(1);
+  };
 
   const handleSort = (columnId: string) => {
     if (sortColumn !== columnId) {
@@ -904,7 +949,7 @@ export function DataTable<T = any>({
 
   const clearFilters = () => {
     setActiveFilters({});
-    setSearchTerm('');
+    setSearchTermState('');
     setCurrentPage(1);
   };
 
@@ -919,6 +964,7 @@ export function DataTable<T = any>({
 
   const toggleRowExpansion = (id: string) => {
     setExpandedRowIds((prev) => {
+      if (singleExpand) return prev.has(id) ? new Set() : new Set([id]);
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -1042,6 +1088,8 @@ export function DataTable<T = any>({
     expandedRowIds,
     toggleRowExpansion,
     renderSubComponent,
+    expandOnRowClick,
+    rowLabel,
     hiddenColumnIds,
     toggleColumnVisibility,
     currentPage,

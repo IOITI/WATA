@@ -467,11 +467,21 @@ export interface LiveEvent {
   [key: string]: unknown
 }
 
-// ── recorded prices (src/admin/routers/prices.py) ──
+// ── stored prices (src/admin/routers/data.py) ──
 
+export type DataProviderId = 'saxo' | 'dukascopy'
+
+/**
+ * An instrument whose prices WATA keeps, as every answer about its prices
+ * describes it. `ref` ("saxo/12", "dukascopy/us100") is what identifies it;
+ * `id` and `uic` are the recorder's and Saxo's, absent from a Dukascopy history.
+ */
 export interface PriceInstrument {
-  id: number
-  uic: number
+  provider: DataProviderId
+  key: string
+  ref: string
+  id: number | null
+  uic: number | null
   asset_type: string
   symbol: string | null
   description: string | null
@@ -492,13 +502,6 @@ export interface PriceInstrument {
   last_bid?: number | null
   last_ask?: number | null
   volume?: number | null
-}
-
-export interface PriceInstruments {
-  from: string
-  to: string
-  timezone: string
-  items: PriceInstrument[]
 }
 
 /**
@@ -630,8 +633,235 @@ export interface PriceContext {
   instrument: PriceInstrument
   trades: Position[]
   signals: JournalEntry[]
-  /** null when the period is too long for the gaps to be worked out. */
+  /** null when the period is too long for the gaps to be worked out, or nothing recorded it (Dukascopy). */
   gaps: PriceGap[] | null
+  /** What Saxo counted as traded in the period; null when it was not recorded. */
+  volume: number | null
+}
+
+export type AssetStatus = 'recording' | 'ended' | 'downloaded'
+export type AssetSeen = 'all' | '30d' | '7d' | 'today'
+
+/** An asset of the Data pages: an instrument, its first and last bar, and what became of it. */
+export interface DataAsset extends PriceInstrument {
+  first_t: number | null
+  last_t: number | null
+  last_bid: number | null
+  last_ask: number | null
+  status: AssetStatus
+  /** When the recorder first and last named it (Saxo). */
+  first_seen_at?: string | null
+  last_seen_at?: string | null
+  /** Days of bars fetched (Dukascopy). */
+  days?: number
+  /**
+   * The days of its first and last files (Dukascopy): days of UTC, as they
+   * are fetched. East of UTC, the last hours of the last one fall on the next
+   * day, which is not the day to open it on.
+   */
+  first_day?: string
+  last_day?: string
+}
+
+export interface DataAssets {
+  timezone: string
+  seen: AssetSeen
+  items: DataAsset[]
+  /** More than `max` recorded instruments: the oldest are left out. */
+  truncated: boolean
+  max: number
+  /** Why the assets recorded from Saxo are missing (the database is down). */
+  saxo_error: string | null
+}
+
+export interface SaxoRecording {
+  first_seen_at: string | null
+  last_seen_at: string | null
+  retention_months: number | null
+  record_volume: boolean | null
+  refresh_interval_seconds: number | null
+}
+
+export interface HistoryRecording {
+  symbol: string | null
+  label: string
+  /** Still one of the instruments that can be fetched. */
+  fetchable: boolean
+  days: number
+  first_file: string | null
+  last_file: string | null
+  bytes: number
+  location: string
+  source: string
+  price_scale: number
+}
+
+/** The longest period, in days, each view of an asset is worked out for. */
+export interface AssetLimits {
+  chart: number
+  range: number
+  statistics: number
+  availability: number
+  gaps: number
+}
+
+export interface AssetDetails {
+  asset: DataAsset
+  timezone: string
+  /** The first and last days of the trading timezone with a bar. */
+  first_day: string
+  last_day: string
+  /** Under a turbo, the index of its indice recorded in the period asked. */
+  index: PriceInstrument | null
+  recording: SaxoRecording | HistoryRecording
+  max_days: AssetLimits
+}
+
+export interface AssetDayStatistics {
+  day: string
+  first: string
+  last: string
+  bars: number
+  updates: number
+  open: number
+  high: number
+  low: number
+  close: number
+  change: number
+  change_percent: number | null
+  range: number
+  range_percent: number | null
+  spread_average: number | null
+  spread_widest: number | null
+  without_ask: number
+  /** How long the day was trading time, and the share of it with a bar. */
+  trading_seconds: number
+  covered: number | null
+  volume: number | null
+}
+
+export interface AssetSpreadSlot {
+  /** Start of the slot, HH:MM in the trading timezone. */
+  slot: string
+  bars: number
+  spread_average: number | null
+  spread_widest: number | null
+  without_ask: number
+}
+
+export interface AssetStatistics {
+  instrument: PriceInstrument
+  from: string
+  to: string
+  timezone: string
+  /** False for an instrument quoted with one price, which has no spread to speak of. */
+  spread: boolean
+  days: AssetDayStatistics[]
+  spread_by_time: AssetSpreadSlot[]
+}
+
+export interface CatalogEntry {
+  id: string
+  name: string
+  kind: 'live' | 'download'
+  available: boolean
+  description: string
+}
+
+export interface DataProvider extends CatalogEntry {
+  id: DataProviderId
+  status: ServiceStatus
+  detail: string
+  enabled: boolean
+  /** Switched on or holding data: listed, rather than offered to be added. */
+  active: boolean
+  /** null: not known (the database is down). */
+  assets: number | null
+  first_t: number | null
+  last_t: number | null
+  /**
+   * The days its data covers: those of its bars for a stream, those of its
+   * files (days of UTC) for a downloaded history.
+   */
+  first_day: string | null
+  last_day: string | null
+  /** Its settings can be changed from the interface. */
+  configurable: boolean
+  /** The recorder's last line of coverage (Saxo). */
+  heartbeat?: { ts: string; feed_ok: boolean; instruments: number; bars: number } | null
+  /** The downloads (Dukascopy). */
+  fetch?: PriceFetchStatus | null
+  keep?: PriceKeepStatus | null
+}
+
+export interface DataProviders {
+  items: DataProvider[]
+  catalog: CatalogEntry[]
+  timezone: string
+}
+
+export interface RecorderInstrument {
+  label: string
+  uic: number
+  asset_type: string
+}
+
+/** The settings of the price recorder (trade.config.price_recorder). */
+export interface RecorderSettings {
+  enabled: boolean
+  record_volume: boolean
+  max_instruments: number
+  refresh_interval_seconds: number
+  refresh_rate_ms: number
+  retention_months: number
+  alert_after_seconds: number
+  instruments: RecorderInstrument[]
+}
+
+export interface SaxoProviderDetails extends DataProvider {
+  settings: RecorderSettings
+  /** What the recorder missed today in trading hours; null when it cannot be read. */
+  gaps_today: PriceGap[] | null
+  restart_required: boolean
+}
+
+export interface HistoryInstrument {
+  symbol: string
+  label: string
+  name: string
+  currency: string
+  /** The Nasdaq history backtests read: it cannot be removed. */
+  built_in: boolean
+  days: number
+  first_day: string | null
+  last_day: string | null
+  bytes: number
+}
+
+export interface HistoryOffer {
+  symbol: string
+  label: string
+  name: string
+  currency: string
+}
+
+export interface DukascopyProviderDetails extends DataProvider {
+  instruments: HistoryInstrument[]
+  offered: HistoryOffer[]
+  storage: BacktestStorage | null
+  source: string
+}
+
+/** The recorder's section as it is on disk, and what its dialog needs. */
+export interface RecorderConfig {
+  section: JsonObject
+  defaults: RecorderSettings
+  /** What an index can be at Saxo, offered for an extra instrument. */
+  asset_types: string[]
+  /** The indices signals may name: an extra instrument labelled like one replaces its index. */
+  indices: string[]
+  revision: string
+  editable: boolean
 }
 
 // ── backtests (src/admin/routers/backtests.py) ──
@@ -1165,6 +1395,9 @@ export interface PriceFetchStatus {
   state: 'idle' | 'running' | 'done' | 'incomplete' | 'stopped' | 'failed' | 'interrupted'
   from?: string
   to?: string
+  /** The Dukascopy instrument downloaded; absent before downloads said it (the history backtests read). */
+  label?: string
+  symbol?: string
   started_at?: string
   finished_at?: string
   exit_code?: number | null
@@ -1177,6 +1410,9 @@ export interface PriceFetchStatus {
 export interface PriceCoverage {
   from: string
   to: string
+  /** The Dukascopy instrument these days are of. */
+  label: string
+  symbol: string
   days: PriceCoverageDay[]
   ready: { count: number; first: string | null; last: string | null }
   fetch: PriceFetchStatus

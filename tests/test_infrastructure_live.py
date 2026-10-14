@@ -261,6 +261,70 @@ def test_the_tracker_and_the_admin_agree_on_an_order_from_its_signal_to_its_posi
     assert [(o["order_id"], o["purpose"]) for o in detail["orders"]] == [("5012", "open"), ("5013", "close")]
 
 
+def test_the_assets_the_recorder_kept_are_listed_as_the_data_pages_read_them(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import AsyncDbPriceHistoryManager, init_price_history_schema
+
+    async def scenario(writer, reader):
+        await init_price_history_schema(writer)
+        history = AsyncDbPriceHistoryManager(writer)
+        # Two months of partitions: the index's bars are in both.
+        await history.ensure_partitions(date(2026, 9, 1), months_ahead=1)
+        index = await history.upsert_instrument(
+            {"uic": 1909050, "asset_type": "StockIndex", "role": "underlying", "indice": "us100"},
+            datetime(2026, 9, 14, 6, tzinfo=timezone.utc),
+        )
+        await history.upsert_instrument({"uic": 1909050, "asset_type": "StockIndex", "role": "underlying"}, T0)
+        turbo = await history.upsert_instrument(
+            {"uic": 40000002, "asset_type": "WarrantOpenEndKnockOut", "role": "turbo", "indice": "us100",
+             "direction": "long", "barrier": 24150.0, "issuer": "SG"},
+            datetime(2026, 10, 12, 6, tzinfo=timezone.utc),
+        )
+        # Named by the recorder once, then nothing kept of it: retention dropped its month.
+        await history.upsert_instrument(
+            {"uic": 40000003, "asset_type": "WarrantOpenEndKnockOut", "role": "turbo", "indice": "us100"},
+            datetime(2026, 8, 3, 6, tzinfo=timezone.utc),
+        )
+        bar = lambda ts, instrument, bid: (ts, instrument, bid, bid, bid, bid, bid + 0.05, bid + 0.05, bid + 0.05, bid + 0.05, 1, 0)
+        await history.insert_bars([
+            bar(datetime(2026, 9, 14, 6, 0, 10, tzinfo=timezone.utc), index, 24800.0),
+            bar(datetime(2026, 10, 13, 7, 30, tzinfo=timezone.utc), index, 25010.0),
+            # A turbo's first bar can come before the recorder names it at its next refresh.
+            bar(datetime(2026, 10, 12, 5, 59, 50, tzinfo=timezone.utc), turbo, 8.40),
+            bar(datetime(2026, 10, 12, 19, 59, 50, tzinfo=timezone.utc), turbo, 8.65),
+        ])
+        await history.record_volumes([(turbo, datetime(2026, 10, 12, 9, tzinfo=timezone.utc), 1200.0),
+                                      (turbo, datetime(2026, 10, 12, 15, tzinfo=timezone.utc), 1500.0)])
+
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        listed = await queries.price_assets(100)
+        recent = await queries.price_assets(100, since=datetime(2026, 10, 13, tzinfo=timezone.utc))
+        one = await queries.price_assets(1, instrument_id=turbo)
+        index_of = await queries.price_index_of(
+            "us100", datetime(2026, 10, 12, 22, tzinfo=timezone.utc), datetime(2026, 10, 13, 22, tzinfo=timezone.utc),
+        )
+        volumes = await queries.price_volume_days(
+            turbo, datetime(2026, 10, 11, 22, tzinfo=timezone.utc), datetime(2026, 10, 12, 22, tzinfo=timezone.utc),
+        )
+        return index, turbo, listed, recent, one, index_of, volumes
+
+    index, turbo, listed, recent, one, index_of, volumes = in_a_database_of_its_own(scenario)
+
+    # The index first, then the turbo; the one without a bar left is not listed.
+    assert [row["id"] for row in listed] == [index, turbo]
+    assert (listed[0]["first_t"], listed[0]["last_t"], listed[0]["last_bid"]) == (
+        int(datetime(2026, 9, 14, 6, 0, 10, tzinfo=timezone.utc).timestamp()),
+        int(datetime(2026, 10, 13, 7, 30, tzinfo=timezone.utc).timestamp()),
+        25010.0,
+    )
+    assert listed[1]["first_t"] == int(datetime(2026, 10, 12, 5, 59, 50, tzinfo=timezone.utc).timestamp())
+    assert (listed[1]["last_bid"], listed[1]["last_ask"]) == (8.65, pytest.approx(8.70))
+    assert [row["id"] for row in recent] == [index]
+    assert [row["id"] for row in one] == [turbo]
+    assert index_of["id"] == index
+    assert volumes == {"2026-10-12": 1500.0}
+
+
 # ── RabbitMQ, through what the services publish and consume with ──
 
 

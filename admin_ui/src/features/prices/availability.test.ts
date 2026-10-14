@@ -26,6 +26,22 @@ function period(items: PriceAvailability['items'], to = '2026-10-12'): PriceAvai
   return { from: '2026-10-12', to, timezone: PARIS, max_days: 7, items }
 }
 
+describe('a Dukascopy history', () => {
+  const HISTORY = {
+    ...TURBO, ref: 'dukascopy/us100', id: null, uic: null, role: 'underlying', symbol: 'USATECHIDXUSD', currency: 'USD',
+  } as PriceInstrument
+
+  it('has no availability: it is worked out for the instruments of the recorder alone', () => {
+    expect(availabilityOf(period({ null: recorded() } as PriceAvailability['items']), HISTORY)).toBeUndefined()
+  })
+
+  it('is described without a Saxo number it does not have', () => {
+    const described = instrumentFacts(HISTORY, undefined, PARIS)
+
+    expect(described.find((fact) => fact.label === 'Instrument')?.value).toBe('USATECHIDXUSD · USD')
+  })
+})
+
 const facts = (item: InstrumentAvailability | undefined, instrument = TURBO) =>
   Object.fromEntries(
     instrumentFacts(instrument, item === undefined ? undefined : period({ 2: item }), PARIS).map((fact) => [fact.label, fact]),

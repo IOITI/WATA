@@ -1,6 +1,6 @@
 import type { PriceInstrument } from '@/lib/types'
 
-import type { PriceView } from './view'
+import type { ChartView } from './view'
 
 /**
  * The range last chosen for each kind of instrument, kept in this browser.
@@ -21,7 +21,7 @@ export function rememberedRange(kind: Kind): number | 'auto' {
   }
 }
 
-export function rememberRange(kind: Kind, range: PriceView['range']): void {
+export function rememberRange(kind: Kind, range: ChartView['range']): void {
   try {
     if (typeof range === 'number') window.localStorage.setItem(key(kind), String(range))
     else window.localStorage.removeItem(key(kind))

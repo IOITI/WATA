@@ -9,8 +9,8 @@ const utc = (iso: string) => Date.parse(iso) / 1000
 const T0 = utc('2026-10-12T08:00:00Z')
 const SHOWN = utc('2026-10-12T10:00:00Z')
 
-const TURBO = { id: 2, uic: 40000002, role: 'turbo', indice: 'us100', symbol: 'SG-NDX-L2', direction: 'long', barrier: 24150, issuer: 'SG' } as PriceInstrument
-const INDEX = { id: 1, uic: 1909050, role: 'underlying', indice: 'us100', description: 'NASDAQ 100' } as PriceInstrument
+const TURBO = { ref: 'saxo/2', id: 2, uic: 40000002, role: 'turbo', indice: 'us100', symbol: 'SG-NDX-L2', direction: 'long', barrier: 24150, issuer: 'SG' } as PriceInstrument
+const INDEX = { ref: 'saxo/1', id: 1, uic: 1909050, role: 'underlying', indice: 'us100', description: 'NASDAQ 100' } as PriceInstrument
 
 // Two bars born in the same ten seconds: the chart is given 10:00:10 and 10:00:11 for them.
 const ROWS: PriceRangeRow[] = [
@@ -34,7 +34,7 @@ describe('range bars as a chart', () => {
     expect(chart.rowAt.get(SHOWN + 11)).toBe(ROWS[2])
     expect(chart.lastTime).toBe(SHOWN + 11)
     expect(chart.barsLabel).toBe('range bars of 0.10')
-    expect(chart.key).toBe('2|2026-10-12|2026-10-12|range|0.1|bid')
+    expect(chart.key).toBe('saxo/2|2026-10-12|2026-10-12|range|0.1|bid')
   })
 
   it('carry the index as a line on the same times, named', () => {

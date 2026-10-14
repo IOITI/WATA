@@ -86,6 +86,8 @@ const keeping = (changes: Partial<PriceKeepStatus> = {}): PriceKeepStatus => ({
 const coverage = (changes: Partial<PriceCoverage> = {}): PriceCoverage => ({
   from: '2026-09-14',
   to: '2026-09-18',
+  label: 'us100',
+  symbol: 'USATECHIDXUSD',
   days: [
     { day: '2026-09-14', state: 'incomplete', hours: 20, hours_expected: 24 },
     { day: '2026-09-15', state: 'ready', hours: 24, hours_expected: 24 },

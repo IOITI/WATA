@@ -538,6 +538,9 @@ export function heldLonger(seconds: number): string {
 // ── prices kept up to date, and the turbo measured ──
 
 /** What the service is doing about the prices that are missing, in a sentence. */
+// How far back the service can be told to keep the prices: a month and a half to two years of trading days.
+export const KEEP_DAYS = [30, 60, 120, 250, 500]
+
 export function keepSentence(keep: PriceKeepStatus, formatMoment: (iso: string) => string): string {
   const missing = `${keep.missing} day${keep.missing === 1 ? '' : 's'}`
   switch (keep.state) {

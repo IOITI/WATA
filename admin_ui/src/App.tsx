@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MotionConfig } from 'framer-motion'
 import { lazy, Suspense, useState } from 'react'
 import type { ReactNode } from 'react'
-import { createBrowserRouter, createRoutesFromElements, Outlet, Route, RouterProvider } from 'react-router'
+import { createBrowserRouter, createRoutesFromElements, Navigate, Outlet, Route, RouterProvider, useLocation } from 'react-router'
 
 import { AppShell } from '@/components/AppShell'
 import { ThemeProvider } from '@/components/ThemeProvider'
@@ -16,6 +16,9 @@ import { LoginPage } from '@/features/auth/LoginPage'
 import { RequireAuth } from '@/features/auth/RequireAuth'
 import { ConfigPage } from '@/features/config/ConfigPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
+import { legacyPricesTarget } from '@/features/data/assets'
+import { ProviderPage } from '@/features/data/ProviderPage'
+import { ProvidersPage } from '@/features/data/ProvidersPage'
 import { LogsPage } from '@/features/logs/LogsPage'
 import { NotFoundPage } from '@/features/NotFoundPage'
 import { OrdersPage } from '@/features/positions/OrdersPage'
@@ -43,10 +46,15 @@ const ComparePage = lazy(() =>
 const BacktestDayPage = lazy(() =>
   import('@/features/backtests/BacktestDayPage').then((module) => ({ default: module.BacktestDayPage })),
 )
-// Its own charting library, for candles: loaded with the page as well.
-const PricesPage = lazy(() =>
-  import('@/features/prices/PricesPage').then((module) => ({ default: module.PricesPage })),
-)
+// Their own charting library, for candles: loaded with the pages as well.
+const AssetsPage = lazy(() => import('@/features/data/AssetsPage').then((module) => ({ default: module.AssetsPage })))
+const AssetPage = lazy(() => import('@/features/data/AssetPage').then((module) => ({ default: module.AssetPage })))
+
+/** An address of the former Prices page: to the Assets View, or to the asset it showed. */
+function PricesRedirect() {
+  const location = useLocation()
+  return <Navigate to={legacyPricesTarget(location.search)} replace />
+}
 
 function ChartPage({ children }: { children: ReactNode }) {
   return <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>{children}</Suspense>
@@ -116,14 +124,26 @@ const router = createBrowserRouter(
             </ChartPage>
           }
         />
+        <Route path="data" element={<Navigate to="/data/assets" replace />} />
         <Route
-          path="prices"
+          path="data/assets"
           element={
             <ChartPage>
-              <PricesPage />
+              <AssetsPage />
             </ChartPage>
           }
         />
+        <Route
+          path="data/assets/:provider/:key"
+          element={
+            <ChartPage>
+              <AssetPage />
+            </ChartPage>
+          }
+        />
+        <Route path="data/providers" element={<ProvidersPage />} />
+        <Route path="data/providers/:providerId" element={<ProviderPage />} />
+        <Route path="prices" element={<PricesRedirect />} />
         <Route path="backtests" element={<BacktestsPage />} />
         <Route path="backtests/new" element={<BacktestFormPage />} />
         <Route

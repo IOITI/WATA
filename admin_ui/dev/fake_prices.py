@@ -222,6 +222,40 @@ def volumes(start: datetime, end: datetime, now: datetime) -> dict[int, float]:
     return {instrument_id: volume * days for instrument_id, volume in DAILY_VOLUMES.items()} if days else {}
 
 
+def volume_days(instrument_id: int, start: datetime, end: datetime, now: datetime) -> dict[str, float]:
+    """Saxo's total of each day of the period for one instrument, by day of the trading timezone."""
+    volume = DAILY_VOLUMES.get(instrument_id)
+    if volume is None:
+        return {}
+    return {day.isoformat(): volume for day in _trading_days(start, min(end, now)) if _at(day, "08:00:00") <= now}
+
+
+# How long the made-up recorder has been running: the first bar of every instrument is that far back.
+RECORDED_DAYS = 30
+
+
+def assets(now: datetime, instrument_id: int | None = None) -> list[dict]:
+    """
+    Every instrument with when the recorder first and last named it and its
+    first and last bar, like ``AdminQueries.price_assets``: the index first.
+    """
+    first_seen = (now - timedelta(days=RECORDED_DAYS)).replace(microsecond=0)
+    rows = []
+    for instrument in INSTRUMENTS:
+        if instrument_id is not None and instrument["id"] != instrument_id:
+            continue
+        last = last_quote(instrument["id"], now - timedelta(days=7), now, now)
+        first = bars(instrument["id"], first_seen, first_seen + timedelta(days=7), 10, 1, now)
+        if last["last_t"] is None or not first:
+            continue
+        rows.append({
+            **instrument,
+            "first_seen_at": first_seen, "last_seen_at": now - timedelta(seconds=40),
+            "first_t": first[0][0], **last,
+        })
+    return rows
+
+
 def coverage(start: datetime, end: datetime, now: datetime) -> list[dict]:
     """The recorder ran day and night; quotes only arrived in trading hours."""
     rows = []

@@ -1,4 +1,7 @@
 import type {
+  AssetDetails,
+  AssetSeen,
+  AssetStatistics,
   AuditEntry,
   BacktestBreakdowns,
   BacktestCalibration,
@@ -19,9 +22,14 @@ import type {
   ConfigDocument,
   ConfigRestored,
   ConfigSaved,
+  DataAssets,
+  DataProviders,
+  DukascopyProviderDetails,
   ExecutionTimings,
   Exits,
   Health,
+  HistoryInstrument,
+  HistoryOffer,
   JournalEntry,
   JsonObject,
   LogServices,
@@ -38,9 +46,10 @@ import type {
   PriceCoverage,
   PriceFetchStatus,
   PriceKeepStatus,
-  PriceInstruments,
   PriceRangeBars,
+  RecorderConfig,
   Report,
+  SaxoProviderDetails,
   SaxoStatus,
   Session,
   Signal,
@@ -133,6 +142,11 @@ function query(params: Record<string, string | number | null | undefined>): stri
   return text ? `?${text}` : ''
 }
 
+/** An asset's address under /api/data/assets: its provider and key, each part encoded. */
+function assetPath(ref: string): string {
+  return ref.split('/').map(encodeURIComponent).join('/')
+}
+
 export interface DateRangeParams {
   from?: string | null
   to?: string | null
@@ -169,25 +183,43 @@ export const api = {
     request<{ items: JournalEntry[] }>('GET', `/api/journal${query({ ...params, limit: 500 })}`),
   watchlist: () => request<Watchlist>('GET', '/api/watchlist'),
   executionTimings: (days: number) => request<ExecutionTimings>('GET', `/api/execution-timing${query({ days })}`),
-  priceInstruments: (period: PricePeriod) =>
-    request<PriceInstruments>('GET', `/api/prices/instruments${query({ ...period })}`),
-  priceBars: (instrumentId: number, period: PricePeriod, interval: number) =>
-    request<PriceBars>('GET', `/api/prices/bars${query({ instrument_id: instrumentId, ...period, interval })}`),
-  /** Range bars of one side. Without a size the server chooses one; `under` is the index shown under a turbo. */
-  priceRangeBars: (
-    instrumentId: number,
+
+  // ── the Data pages: providers, and the assets whose prices WATA keeps ──
+  dataProviders: () => request<DataProviders>('GET', '/api/data/providers'),
+  saxoProvider: () => request<SaxoProviderDetails>('GET', '/api/data/providers/saxo'),
+  dukascopyProvider: () => request<DukascopyProviderDetails>('GET', '/api/data/providers/dukascopy'),
+  recorderConfig: () => request<RecorderConfig>('GET', '/api/data/providers/saxo/config'),
+  saveRecorderConfig: (section: JsonObject, revision: string) =>
+    request<ConfigSaved>('PUT', '/api/data/providers/saxo/config', { body: { section, revision } }),
+  /** What was recorded of each instrument of the period, and when Saxo left it without a quote. */
+  priceAvailability: (period: PricePeriod) =>
+    request<PriceAvailability>('GET', `/api/data/providers/saxo/availability${query({ ...period })}`),
+  historyInstruments: () =>
+    request<{ items: HistoryInstrument[]; offered: HistoryOffer[] }>('GET', '/api/data/providers/dukascopy/instruments'),
+  addHistoryInstrument: (body: { symbol: string; label: string }) =>
+    request<HistoryInstrument>('POST', '/api/data/providers/dukascopy/instruments', { body }),
+  removeHistoryInstrument: (label: string) =>
+    request<void>('DELETE', `/api/data/providers/dukascopy/instruments/${encodeURIComponent(label)}`),
+  dataAssets: (seen: AssetSeen = 'all') => request<DataAssets>('GET', `/api/data/assets${query({ seen })}`),
+  /** One asset; `period` chooses the index returned under a turbo (its last day by default). */
+  asset: (ref: string, period: Partial<PricePeriod> = {}) =>
+    request<AssetDetails>('GET', `/api/data/assets/${assetPath(ref)}${query({ ...period })}`),
+  assetBars: (ref: string, period: PricePeriod, interval: number) =>
+    request<PriceBars>('GET', `/api/data/assets/${assetPath(ref)}/bars${query({ ...period, interval })}`),
+  /** Range bars of one side. Without a size the server chooses one; `under` is the recorded index shown under a turbo. */
+  assetRangeBars: (
+    ref: string,
     period: PricePeriod,
     options: { side: 'bid' | 'ask'; size: number | null; under: number | null },
   ) =>
     request<PriceRangeBars>(
       'GET',
-      `/api/prices/range-bars${query({ instrument_id: instrumentId, ...period, side: options.side, size: options.size, under: options.under })}`,
+      `/api/data/assets/${assetPath(ref)}/range-bars${query({ ...period, side: options.side, size: options.size, under: options.under })}`,
     ),
-  /** What was recorded of each instrument of the period, and when Saxo left it without a quote. */
-  priceAvailability: (period: PricePeriod) =>
-    request<PriceAvailability>('GET', `/api/prices/availability${query({ ...period })}`),
-  priceContext: (instrumentId: number, period: PricePeriod) =>
-    request<PriceContext>('GET', `/api/prices/context${query({ instrument_id: instrumentId, ...period })}`),
+  assetContext: (ref: string, period: PricePeriod) =>
+    request<PriceContext>('GET', `/api/data/assets/${assetPath(ref)}/context${query({ ...period })}`),
+  assetStatistics: (ref: string, period: PricePeriod) =>
+    request<AssetStatistics>('GET', `/api/data/assets/${assetPath(ref)}/statistics${query({ ...period })}`),
   audit: () => request<{ items: AuditEntry[] }>('GET', '/api/audit?limit=500'),
 
   signals: () => request<{ items: Signal[] }>('GET', '/api/signals'),
@@ -230,9 +262,11 @@ export const api = {
       'GET',
       `/api/backtests/${encodeURIComponent(runId)}/days/${encodeURIComponent(day)}/chart${query({ leverage })}`,
     ),
-  priceCoverage: (period: Partial<PricePeriod> = {}) =>
-    request<PriceCoverage>('GET', `/api/backtests/prices${query({ ...period })}`),
-  fetchPrices: (period: PricePeriod) => request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch', { body: period }),
+  // `label`: another Dukascopy instrument than the history backtests read, which is meant when it is left out.
+  priceCoverage: (period: Partial<PricePeriod> = {}, label?: string) =>
+    request<PriceCoverage>('GET', `/api/backtests/prices${query({ ...period, label })}`),
+  fetchPrices: (period: PricePeriod, label?: string) =>
+    request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch', { body: label ? { ...period, label } : period }),
   stopFetchingPrices: () => request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch/stop'),
   keepPrices: (body: { enabled: boolean; days: number }) =>
     request<PriceKeepStatus>('PUT', '/api/backtests/prices/keep', { body }),
