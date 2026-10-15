@@ -10,7 +10,7 @@ import { api } from '@/lib/api'
 import type { DataAsset } from '@/lib/types'
 
 import { AssetChart } from './AssetChart'
-import { assetHref, historyFacts, openingDay } from './assets'
+import { assetHref, capitalFacts, historyFacts, openingDay } from './assets'
 import type { AssetRow } from './assets'
 import { Facts } from './Facts'
 
@@ -36,7 +36,8 @@ export function AssetSummary({ asset, assets, timeZone, today }: AssetSummaryPro
     recorded && asset.role === 'turbo'
       ? (assets.find((item) => item.provider === 'saxo' && item.role === 'underlying' && item.indice === asset.indice) ?? null)
       : null
-  const live = recorded && asset.status === 'recording' && view.to >= today
+  const streamed = asset.provider === 'capital'
+  const live = (recorded || streamed) && asset.status === 'recording' && view.to >= today
 
   // The day it shows, shared with the page's own reading of today: the same request.
   const availabilityQuery = useQuery({
@@ -53,7 +54,9 @@ export function AssetSummary({ asset, assets, timeZone, today }: AssetSummaryPro
   const availability = availabilityQuery.data
   const facts = recorded
     ? instrumentFacts({ ...asset, volume: contextQuery.data?.volume ?? null }, availability, timeZone)
-    : historyFacts(asset, timeZone)
+    : streamed
+      ? capitalFacts(asset, timeZone)
+      : historyFacts(asset, timeZone)
 
   return (
     <div className="grid gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">

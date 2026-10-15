@@ -1,5 +1,5 @@
 import { Maximize2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { ExportButton } from '@/components/ExportButton'
@@ -14,6 +14,7 @@ import { RangeBarsTable, TimeBarsTable } from '@/features/prices/BarsTable'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import {
   allowedIntervals,
+  chartTime,
   daysBetween,
   instrumentLabel,
   intervalLabel,
@@ -25,6 +26,7 @@ import type { ChartMarker, Side } from '@/features/prices/chartData'
 import { rangeBarsCsv, timeBarsCsv } from '@/features/prices/chartModel'
 import type { ChartModel } from '@/features/prices/chartModel'
 import { GapsPanel } from '@/features/prices/GapsPanel'
+import { rowVolume } from '@/features/prices/liveTail'
 import { PriceChart } from '@/features/prices/PriceChart'
 import { PriceReadout, RangeReadout } from '@/features/prices/PriceReadout'
 import { RangeControl } from '@/features/prices/RangeControl'
@@ -35,6 +37,11 @@ import type { InstrumentAvailability, PriceInstrument } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { useAssetChart } from './useAssetChart'
+import { useLiveTail } from './useLiveTail'
+import type { LiveStatus } from './useLiveTail'
+
+/** Range bars are made of closed ten seconds: asked for again at most this often while the stream closes them. */
+const RANGE_RELOAD_MS = 10_000
 
 const NO_MARKERS: ChartMarker[] = []
 const SIDES: { id: Side; label: string }[] = [
@@ -42,7 +49,58 @@ const SIDES: { id: Side; label: string }[] = [
   { id: 'ask', label: 'Ask' },
 ]
 
-function Legend({ indexName, hasTrades, hasSignals }: { indexName?: string; hasTrades: boolean; hasSignals: boolean }) {
+/**
+ * Whether the chart follows the stream, and how late it is: Capital.com's
+ * time of the last quote to now. Words beside the dot, never the dot alone.
+ */
+export function LiveBadge({ status }: { status: LiveStatus }) {
+  let tone: 'live' | 'quiet' | 'off'
+  let text: string
+  if (!status.connected) {
+    tone = 'off'
+    text = 'Reconnecting…'
+  } else if (!status.live) {
+    tone = 'off'
+    text = status.detail ? `Not live: ${status.detail}` : 'Not live'
+  } else if (status.market === 'closed') {
+    tone = 'quiet'
+    text = 'Live · market closed'
+  } else {
+    tone = 'live'
+    text = status.delayMs === null ? 'Live' : `Live · ${Math.round(status.delayMs)} ms`
+  }
+  return (
+    <span
+      role="status"
+      aria-live="off"
+      title="Capital.com's time of the last quote to now, as the server's clock counts"
+      className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs tabular-nums"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'size-1.5 rounded-full',
+          tone === 'live' && 'animate-pulse bg-[var(--positive)]',
+          tone === 'quiet' && 'bg-[var(--text-secondary)]',
+          tone === 'off' && 'bg-[var(--warning)]',
+        )}
+      />
+      {text}
+    </span>
+  )
+}
+
+function Legend({
+  indexName,
+  hasTrades,
+  hasSignals,
+  hasVolume,
+}: {
+  indexName?: string
+  hasTrades: boolean
+  hasSignals: boolean
+  hasVolume: boolean
+}) {
   return (
     <ul aria-label="Legend" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
       <li className="flex items-center gap-1.5">
@@ -72,6 +130,12 @@ function Legend({ indexName, hasTrades, hasSignals }: { indexName?: string; hasT
       {hasSignals && (
         <li>
           <span aria-hidden>●</span> Signal
+        </li>
+      )}
+      {hasVolume && (
+        <li className="flex items-center gap-1.5">
+          <span aria-hidden className="h-3 w-1.5 rounded-[1px] opacity-40" style={{ backgroundColor: 'var(--chart-series)' }} />
+          Quote changes, bottom
         </li>
       )}
     </ul>
@@ -154,12 +218,35 @@ export function AssetChart({
   const { theme } = useTheme()
   const { timezone } = useSession()
   const full = variant === 'full'
-  const { chart, stale, ranged, chartQuery, contextQuery, context, refusal, built, chooseAutoAgain } = useAssetChart({
+  // Capital.com's prices come as a stream: the chart moves with each quote.
+  const streaming = live && asset.provider === 'capital'
+  const { chart, stale, ranged, chartQuery, contextQuery, context, refusal, built, chooseAutoAgain, prices, reload } = useAssetChart({
     asset,
     index,
     view,
     live,
+    streaming,
   })
+  const rangeReloadedAt = useRef(0)
+  const { chart: liveChart, status: liveStatus } = useLiveTail({
+    assetRef: streaming ? asset.ref : null,
+    prices,
+    side: view.side,
+    timeZone: chart?.timeZone ?? timezone,
+    onBar: () => {
+      // Range bars are built from closed ten seconds, on the server.
+      if (!ranged || Date.now() - rangeReloadedAt.current < RANGE_RELOAD_MS) return
+      rangeReloadedAt.current = Date.now()
+      void chartQuery.refetch()
+    },
+    onResync: () => void reload(),
+  })
+  // The quote changes of each bar, along the bottom: shown by default where they are the stream's own volume.
+  const [volumeShown, setVolumeShown] = useState(asset.provider === 'capital')
+  const volume = useMemo(
+    () => (volumeShown && chart?.kind === 'time' ? chart.bars.map((row) => rowVolume(row, chart.timeZone)) : undefined),
+    [volumeShown, chart],
+  )
   const possibleIntervals = allowedIntervals(daysBetween(view.from, view.to))
 
   // The signals can be left out of the chart: on a busy day they hide the prices they are about.
@@ -177,7 +264,9 @@ export function AssetChart({
 
   const [hoveredTime, setHoveredTime] = useState<number | null>(null)
   const [refits, setRefits] = useState(0)
-  const readTime = hoveredTime ?? chart?.lastTime ?? null
+  // Nothing pointed at, on a chart that follows the stream: the bar still moving.
+  const liveRow = streaming && chart?.kind === 'time' && hoveredTime === null ? liveStatus.lastRow : null
+  const readTime = hoveredTime ?? (liveRow && chart ? chartTime(liveRow[0], chart.timeZone) : chart?.lastTime) ?? null
   const shownLabel = chart ? instrumentLabel(chart.instrument) : instrumentLabel(asset)
   const sideLabel = chart?.side === 'ask' ? 'Ask' : 'Bid'
   // A price move is counted in the asset's currency; an index moves in points.
@@ -242,6 +331,7 @@ export function AssetChart({
       <Button variant="ghost" size="sm" leftIcon={<Maximize2 className="size-3.5" />} onClick={() => setRefits((count) => count + 1)}>
         Whole period
       </Button>
+      {streaming && <LiveBadge status={liveStatus} />}
       {full && (
         <div className="sm:ml-auto">
           <Export chart={chart} asset={asset} />
@@ -262,7 +352,7 @@ export function AssetChart({
           {chart.kind === 'time' ? (
             <PriceReadout
               time={readTime}
-              bar={chart.barAt.get(readTime)}
+              bar={liveRow ?? chart.barAt.get(readTime)}
               decimals={chart.decimals}
               isLast={hoveredTime === null}
               indexName={chart.indexName}
@@ -283,19 +373,24 @@ export function AssetChart({
           )}
           {/* Under the chart on a phone: the chart is what was come for. */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-sm:order-last">
-            <Legend indexName={chart.indexName} hasTrades={hasTrades} hasSignals={hasSignals} />
+            <Legend indexName={chart.indexName} hasTrades={hasTrades} hasSignals={hasSignals} hasVolume={!!volume} />
             {/* With the legend, which says what is drawn, and not in the row of buttons above: one more
                 there wraps it. Not "Signals" alone: that is the name of a page in the menu. */}
             {full && (
-              <StretchSwitch
-                label="Signal marks"
-                checked={signalsShown}
-                onChange={(shown) => {
-                  rememberSignals(shown)
-                  setSignalsShown(shown)
-                }}
-                className="gap-2"
-              />
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                {chart.kind === 'time' && (
+                  <StretchSwitch label="Volume" checked={volumeShown} onChange={setVolumeShown} className="gap-2" />
+                )}
+                <StretchSwitch
+                  label="Signal marks"
+                  checked={signalsShown}
+                  onChange={(shown) => {
+                    rememberSignals(shown)
+                    setSignalsShown(shown)
+                  }}
+                  className="gap-2"
+                />
+              </div>
             )}
           </div>
           <PriceChart
@@ -308,6 +403,8 @@ export function AssetChart({
             indexLine={chart.indexLine}
             indexMarkers={indexMarkers}
             indexDecimals={chart.indexDecimals}
+            volume={volume}
+            live={streaming && chart.kind === 'time' ? liveChart : null}
             showSeconds={chart.showSeconds}
             viewKey={`${chart.key}|${refits}`}
             onHover={setHoveredTime}
@@ -331,7 +428,14 @@ export function AssetChart({
   const footer = (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
       <p className="text-xs text-muted-foreground">
-        Scroll or pinch to zoom, drag to move.{live ? ' Read again every 30 seconds.' : ''}
+        Scroll or pinch to zoom, drag to move.
+        {streaming
+          ? ranged
+            ? ' Range bars are built again as the stream closes each ten seconds.'
+            : ' Follows Capital.com’s stream: each quote moves the last bar.'
+          : live
+            ? ' Read again every 30 seconds.'
+            : ''}
       </p>
       <ChartAttribution />
     </div>
@@ -370,6 +474,7 @@ export function AssetChart({
           own={availability}
           error={contextQuery.error}
           timeZone={chart?.timeZone ?? timezone}
+          hours={asset.provider === 'capital' ? 'the market’s opening hours' : undefined}
         />
       )}
 

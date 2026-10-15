@@ -11,6 +11,12 @@ import type { PriceInstrument } from '@/lib/types'
 
 /** How often a period that includes today is read again. A bar closes every ten seconds; nobody watches that closely. */
 export const REFRESH_MS = 30_000
+/**
+ * The same for an asset followed live (Capital.com): the stream moves the
+ * chart, the bars are read again now and then all the same, should it have
+ * missed something without saying so.
+ */
+export const STREAMED_REFRESH_MS = 5 * 60_000
 /** How long the bars of a past period are kept without asking again: they no longer change. */
 const PAST_FRESH_MS = 10 * 60_000
 
@@ -21,6 +27,8 @@ interface AssetChartOptions {
   view: ChartView
   /** The period includes today and the asset is still recorded: read again every half minute. */
   live: boolean
+  /** Live and followed by the stream (Capital.com): the stream moves it, the bars are read again rarely. */
+  streaming?: boolean
 }
 
 /**
@@ -29,9 +37,9 @@ interface AssetChartOptions {
  * queries are named after the asset's ref and never after anything a live
  * event makes out of date: an event must not have every chart read again.
  */
-export function useAssetChart({ asset, index, view, live }: AssetChartOptions) {
+export function useAssetChart({ asset, index, view, live, streaming = false }: AssetChartOptions) {
   const period = useMemo(() => ({ from: view.from, to: view.to }), [view.from, view.to])
-  const refetchInterval = live ? REFRESH_MS : false
+  const refetchInterval = live ? (streaming ? STREAMED_REFRESH_MS : REFRESH_MS) : false
   // Range bars (a bar ends when the price has moved enough) or bars of a fixed length.
   const ranged = view.range !== null
 
@@ -118,11 +126,34 @@ export function useAssetChart({ asset, index, view, live }: AssetChartOptions) {
     return undefined
   }, [refusal, view.range, chart, fresh, asset.ref])
 
+  /**
+   * Read the bars again from the server, past the copy kept for the index
+   * under the next turbo: the stream may have missed some.
+   */
+  const reload = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['asset-bars', asset.ref] })
+    await (ranged ? rangeQuery : timeQuery).refetch()
+  }
+
   /** Asking for Auto is asking for the choice to be made again. */
   const chooseAutoAgain = () => {
     autoSizes.current.delete(autoKey)
     if (view.range === 'auto') void rangeQuery.refetch()
   }
 
-  return { chart, fresh, stale, ranged, chartQuery, contextQuery, context, refusal, built, chooseAutoAgain }
+  return {
+    chart,
+    fresh,
+    stale,
+    ranged,
+    chartQuery,
+    contextQuery,
+    context,
+    refusal,
+    built,
+    chooseAutoAgain,
+    reload,
+    // The bars read, as the server answered: what a live chart adds the stream to.
+    prices: ranged ? undefined : timeData?.prices,
+  }
 }

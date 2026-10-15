@@ -40,6 +40,7 @@ import {
   localDay,
   middleLeverage,
   parameterChanges,
+  pricesWording,
   ruleChanges,
   runName,
   sampleWarning,
@@ -428,7 +429,7 @@ function Asked({ run }: { run: BacktestRun }) {
   return (
     <Panel
       title="What was asked"
-      description={`${what}, ${formatDay(run.from)} to ${formatDay(run.to)}. Turbo paid ${run.turbo.entry_price}, spread ${run.turbo.spread}.`}
+      description={`${what}, ${formatDay(run.from)} to ${formatDay(run.to)}, on ${pricesWording(run)}. Turbo paid ${run.turbo.entry_price}, spread ${run.turbo.spread}.`}
     >
       {(fills || (run.axes && run.axes.length > 0)) && (
         <div className="mb-5 flex flex-col gap-2 text-sm">

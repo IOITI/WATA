@@ -7,6 +7,9 @@ pages of the admin (src/admin/routers/data.py).
 - ``dukascopy``: the days of ten-second bars fetched from Dukascopy
   (src/strategy/history/dukascopy.py), one asset per folder of bars, read
   here as files.
+- ``capital``: what the Capital.com feed keeps in PostgreSQL
+  (src/capital_feed), one asset per instrument of Capital.com, read through
+  AdminQueries as the price recorder's are, and live through LivePrices.
 
 The downloader and the code that reads its files are only imported, never
 changed from here: src/strategy/fingerprint.py hashes them, and a change
@@ -63,8 +66,11 @@ CATALOG = (
         "description": "Index history downloaded from Dukascopy's public tick files, as ten-second bars: what backtests run on.",
     },
     {
-        "id": CAPITAL, "name": "Capital.com", "kind": LIVE, "available": False,
-        "description": "The index as the TradingView chart shows it, recorded live. Not integrated yet.",
+        "id": CAPITAL, "name": "Capital.com", "kind": LIVE, "available": True,
+        "description": (
+            "The Nasdaq 100 as TradingView's Capital.com chart shows it: streamed live, recorded every ten seconds "
+            "with Capital.com's own volume of each minute, and kept a file a day for backtests."
+        ),
     },
 )
 PROVIDERS = tuple(entry["id"] for entry in CATALOG if entry["available"])
@@ -88,6 +94,11 @@ SPREAD_SLOT_MINUTES = 30
 INDEX_ASSET_TYPES = ("StockIndex", "CfdOnIndex")
 
 _SAXO_KEY = re.compile(r"^[1-9][0-9]{0,9}$")
+# Capital.com's name of an instrument, as the feed accepts it (src/capital_feed/settings.py).
+_CAPITAL_KEY = re.compile(r"^[A-Z0-9][A-Z0-9_.]{0,63}$")
+CAPITAL_ASSET_TYPE = "Capital.com"
+# The feed writes its state every ten seconds, and every minute while it is idle.
+CAPITAL_STATE_FRESH_SECONDS = 90
 LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 REGISTRY_FILE = "instruments.json"
 _QUARTER = 900
@@ -110,6 +121,13 @@ def saxo_instrument_id(key: str) -> int:
     if not _SAXO_KEY.match(key):
         raise AssetNotFound(f"No recorded instrument {key!r}")
     return int(key)
+
+
+def capital_epic(key: str) -> str:
+    """A Capital.com epic from the key of an address; checked before any query."""
+    if not _CAPITAL_KEY.match(key):
+        raise AssetNotFound(f"No Capital.com instrument {key!r}")
+    return key
 
 
 def history_label(key: str) -> str:
@@ -147,6 +165,91 @@ def saxo_status(instrument: dict, now: datetime, refresh_seconds: int) -> str:
     if seen is None:
         return ENDED
     return RECORDING if (now - seen).total_seconds() <= 2 * refresh_seconds + BAR_SECONDS else ENDED
+
+
+def capital_asset(row: dict) -> dict:
+    """
+    An instrument of the Capital.com feed as an asset: an index, as the
+    Dukascopy histories are, named by its epic. Its label is the indice it
+    stands for in WATA's rules.
+    """
+    asset = {
+        "id": row["id"], "uic": None, "asset_type": CAPITAL_ASSET_TYPE,
+        "symbol": row["epic"], "description": row.get("name") or row["epic"],
+        "currency": row.get("currency"), "role": "underlying", "indice": row.get("label"),
+        "underlying_uic": None, "direction": None, "barrier": None, "issuer": None,
+        "epic": row["epic"], "instrument_type": row.get("instrument_type"), "decimals": row.get("decimals"),
+        "provider": CAPITAL, "key": row["epic"], "ref": ref_of(CAPITAL, row["epic"]),
+    }
+    for name in ("first_t", "last_t", "last_bid", "last_ask", "first_seen_at", "last_seen_at"):
+        if name in row:
+            asset[name] = row[name]
+    return asset
+
+
+def capital_feed_running(state: dict | None, now: datetime) -> bool:
+    """Whether the feed wrote its state lately: it does every ten seconds, every minute while idle."""
+    if state is None or state.get("updated_at") is None:
+        return False
+    return (now - state["updated_at"]).total_seconds() <= CAPITAL_STATE_FRESH_SECONDS
+
+
+def _figures(state: dict | None) -> dict:
+    figures = (state or {}).get("figures")
+    return figures if isinstance(figures, dict) else {}
+
+
+def capital_status(asset: dict, state: dict | None, now: datetime) -> str:
+    """Recording while the feed runs and follows it; ended otherwise."""
+    if not capital_feed_running(state, now) or (state or {}).get("state") in ("disabled", "no_credentials", "invalid_config"):
+        return ENDED
+    followed = {instrument.get("epic") for instrument in _figures(state).get("instruments") or [] if isinstance(instrument, dict)}
+    return RECORDING if asset.get("epic") in followed else ENDED
+
+
+def _streaming_detail(state: dict) -> str:
+    figures = _figures(state)
+    parts = [state.get("detail") or "Streaming"]
+    per_minute = figures.get("quotes_per_minute")
+    if isinstance(per_minute, (int, float)):
+        parts.append(f"{per_minute / 60:.1f} quotes/s")
+    delay = (figures.get("delay_ms") or {}).get("p50")
+    if isinstance(delay, (int, float)):
+        parts.append(f"delay {delay:.0f} ms")
+    return " · ".join(parts)
+
+
+def capital_provider_state(enabled_on_disk: bool, state: dict | None, now: datetime) -> tuple[str, str]:
+    """
+    The Capital.com feed as the Providers page and the System page say it:
+    switched on or off in the configuration as it is on disk now, and what
+    the feed last wrote of itself (``capital_feed_state``).
+    """
+    if not capital_feed_running(state, now):
+        if not enabled_on_disk:
+            return DISABLED, "Switched off in the configuration"
+        if state is None:
+            return DOWN, "Never started: add \"capital\" to COMPOSE_PROFILES in .env and start it"
+        minutes = int((now - state["updated_at"]).total_seconds() // 60)
+        return DOWN, f"No sign of it for {minutes} min"
+    kind, detail = state.get("state"), state.get("detail") or ""
+    if kind == "disabled":
+        if enabled_on_disk:
+            return WARNING, "Switched on in the configuration: it starts at its next start"
+        return DISABLED, "Switched off in the configuration"
+    if not enabled_on_disk:
+        return WARNING, "Switched off in the configuration: it records until it is restarted"
+    if kind == "streaming":
+        return OK, _streaming_detail(state)
+    if kind == "market_closed":
+        openings = sorted(
+            instrument["next_opening"] for instrument in _figures(state).get("instruments") or []
+            if isinstance(instrument, dict) and instrument.get("next_opening")
+        )
+        return OK, "Markets closed" + (f": the first opens at {openings[0]}" if openings else "")
+    if kind in ("connecting", "starting"):
+        return WARNING, detail or "Connecting"
+    return DOWN, detail or kind or "Unknown state"
 
 
 @dataclass(frozen=True)

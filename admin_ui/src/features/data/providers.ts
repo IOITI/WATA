@@ -1,4 +1,5 @@
 import type {
+  CapitalSettings,
   CatalogEntry,
   DataProvider,
   DataProviders,
@@ -62,13 +63,14 @@ export const RECORDER_KEYS = [
 const same = (a: JsonValue | undefined, b: JsonValue | undefined) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
- * What the dialog shows: the section as it is on disk, each setting it leaves
+ * What a dialog shows: the section as it is on disk, each setting it leaves
  * out at its default. A number field with nothing in it could not be saved.
  */
-export function recorderDraft(section: JsonObject, defaults: RecorderSettings): JsonObject {
+function draftOf(section: JsonObject, defaults: object, keys: readonly string[]): JsonObject {
+  const known = defaults as Record<string, unknown>
   const draft: JsonObject = {}
-  for (const key of RECORDER_KEYS) {
-    draft[key] = (key in section ? section[key] : defaults[key]) as JsonValue
+  for (const key of keys) {
+    draft[key] = (key in section ? section[key] : known[key]) as JsonValue
   }
   return draft
 }
@@ -79,12 +81,21 @@ export function recorderDraft(section: JsonObject, defaults: RecorderSettings): 
  * the file says what someone chose, and a default changed in a later version
  * still applies to it. Anything the dialog does not know of is kept.
  */
-export function sectionToSave(onDisk: JsonObject, draft: JsonObject, defaults: RecorderSettings): JsonObject {
+function sectionWith(onDisk: JsonObject, draft: JsonObject, defaults: object, keys: readonly string[]): JsonObject {
+  const known = defaults as Record<string, unknown>
   const saved: JsonObject = { ...onDisk }
-  for (const key of RECORDER_KEYS) {
-    if (key in onDisk || !same(draft[key], defaults[key] as JsonValue)) saved[key] = draft[key]
+  for (const key of keys) {
+    if (key in onDisk || !same(draft[key], known[key] as JsonValue)) saved[key] = draft[key]
   }
   return saved
+}
+
+export function recorderDraft(section: JsonObject, defaults: RecorderSettings): JsonObject {
+  return draftOf(section, defaults, RECORDER_KEYS)
+}
+
+export function sectionToSave(onDisk: JsonObject, draft: JsonObject, defaults: RecorderSettings): JsonObject {
+  return sectionWith(onDisk, draft, defaults, RECORDER_KEYS)
 }
 
 /**
@@ -157,3 +168,102 @@ export function recorderWarnings(before: JsonObject, after: JsonObject, indices:
   }
   return warnings
 }
+
+// ── the Capital.com feed's settings ──
+
+export const CAPITAL_KEYS = [
+  'enabled',
+  'environment',
+  'instruments',
+  'minute_volume',
+  'day_files',
+  'retention_months',
+  'alert_after_seconds',
+] as const
+
+/** Capital.com's limit of instruments in one subscription of its stream. */
+export const CAPITAL_MAX_INSTRUMENTS = 40
+const EPIC = /^[A-Z0-9][A-Z0-9_.]{0,63}$/
+const LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/
+
+export function capitalDraft(section: JsonObject, defaults: CapitalSettings): JsonObject {
+  return draftOf(section, defaults, CAPITAL_KEYS)
+}
+
+export function capitalSectionToSave(onDisk: JsonObject, draft: JsonObject, defaults: CapitalSettings): JsonObject {
+  return sectionWith(onDisk, draft, defaults, CAPITAL_KEYS)
+}
+
+function entries(instruments: JsonValue | undefined): { epic: unknown; label: unknown }[] {
+  if (!Array.isArray(instruments)) return []
+  return instruments.map((entry) =>
+    typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      ? { epic: entry.epic, label: entry.label }
+      : { epic: undefined, label: undefined },
+  )
+}
+
+/**
+ * What is wrong with the instruments typed, refused before anything is sent,
+ * as the feed would refuse it at its start: an epic of Capital.com, a label
+ * of WATA's, each once.
+ */
+export function capitalInstrumentProblems(instruments: JsonValue | undefined): string[] {
+  const rows = entries(instruments)
+  const problems: string[] = []
+  if (rows.length === 0) problems.push('At least one instrument: the Nasdaq is US100, labelled us100')
+  if (rows.length > CAPITAL_MAX_INSTRUMENTS) problems.push(`${CAPITAL_MAX_INSTRUMENTS} instruments at most: Capital.com's limit`)
+  const epics = new Set<string>()
+  const labels = new Set<string>()
+  rows.forEach(({ epic, label }, index) => {
+    const row = `Instrument ${index + 1}`
+    if (typeof epic !== 'string' || !EPIC.test(epic)) problems.push(`${row} needs an epic, Capital.com's name of it in capitals (US100)`)
+    if (typeof label !== 'string' || !LABEL.test(label))
+      problems.push(`${row} needs a label: lower-case letters, digits, - or _ (us100)`)
+    if (typeof epic === 'string' && epic !== '') {
+      if (epics.has(epic)) problems.push(`${epic} is listed twice`)
+      epics.add(epic)
+    }
+    if (typeof label === 'string' && label !== '') {
+      if (labels.has(label)) problems.push(`Two instruments are labelled "${label}"`)
+      labels.add(label)
+    }
+  })
+  return problems
+}
+
+function labelsByEpic(instruments: JsonValue | undefined): Map<string, string> {
+  const found = new Map<string, string>()
+  for (const { epic, label } of entries(instruments)) {
+    if (typeof epic === 'string' && typeof label === 'string') found.set(epic, label)
+  }
+  return found
+}
+
+/** What a save would do that cannot be taken back, or does more than it says: said in the review. */
+export function capitalWarnings(before: JsonObject, after: JsonObject): string[] {
+  const warnings: string[] = []
+  if (before.enabled === true && after.enabled === false) {
+    warnings.push('The feed stops at its next start: the prices of the time it is off can never be fetched afterwards.')
+  }
+  if (before.environment !== after.environment && after.environment === 'live') {
+    warnings.push('The key logs into the live account at the feed’s next start: it must be a key of that account.')
+  }
+  const kept = typeof after.retention_months === 'number' ? after.retention_months : 0
+  const keptBefore = typeof before.retention_months === 'number' ? before.retention_months : 0
+  if (kept > 0 && (keptBefore === 0 || kept < keptBefore)) {
+    warnings.push(
+      `Only ${kept} month${kept === 1 ? '' : 's'} kept in the database: the bars of the months before, their coverage and Capital.com's minutes are deleted at the feed's next start, for good. The day files stay.`,
+    )
+  }
+  const beforeLabels = labelsByEpic(before.instruments)
+  const afterLabels = labelsByEpic(after.instruments)
+  for (const [epic, label] of beforeLabels) {
+    const next = afterLabels.get(epic)
+    if (next === undefined) warnings.push(`${epic} is no longer recorded from the feed's next start: what was recorded of it stays.`)
+    else if (next !== label)
+      warnings.push(`The day files of ${epic} go under "${next}" from the feed's next start; those written stay under "${label}".`)
+  }
+  return warnings
+}
+

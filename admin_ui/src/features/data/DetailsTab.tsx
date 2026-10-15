@@ -6,7 +6,7 @@ import { formatBytes } from '@/features/backtests/model'
 import { instrumentLabel } from '@/features/prices/chartData'
 import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
-import type { AssetDetails, HistoryRecording, SaxoRecording } from '@/lib/types'
+import type { AssetDetails, CapitalRecording, HistoryRecording, SaxoRecording } from '@/lib/types'
 
 import { assetHref, assetType, PROVIDER_LABELS, STATUS_LABELS, TYPE_LABELS } from './assets'
 
@@ -27,6 +27,7 @@ function isoOf(epoch: number | null): string | null {
 export function DetailsTab({ details, timeZone }: { details: AssetDetails; timeZone: string }) {
   const { asset } = details
   const recorded = asset.provider === 'saxo'
+  const streamed = asset.provider === 'capital'
   const recording = details.recording
 
   return (
@@ -67,14 +68,20 @@ export function DetailsTab({ details, timeZone }: { details: AssetDetails; timeZ
         </dl>
       </Panel>
 
-      <Panel title={recorded ? 'How it is recorded' : 'How it was fetched'}>
+      <Panel title={recorded || streamed ? 'How it is recorded' : 'How it was fetched'}>
         <dl>
           <Row label="First bar">{formatDateTime(isoOf(asset.first_t), timeZone)}</Row>
           <Row label="Last bar">{formatDateTime(isoOf(asset.last_t), timeZone)}</Row>
           <Row label="Days with data">
             {formatDay(details.first_day)} to {formatDay(details.last_day)}
           </Row>
-          {recorded ? <RecordedRows recording={recording as SaxoRecording} timeZone={timeZone} /> : <FetchedRows recording={recording as HistoryRecording} />}
+          {recorded ? (
+            <RecordedRows recording={recording as SaxoRecording} timeZone={timeZone} />
+          ) : streamed ? (
+            <StreamedRows recording={recording as CapitalRecording} timeZone={timeZone} />
+          ) : (
+            <FetchedRows recording={recording as HistoryRecording} />
+          )}
         </dl>
       </Panel>
     </div>
@@ -99,6 +106,81 @@ function RecordedRows({ recording, timeZone }: { recording: SaxoRecording; timeZ
           : recording.retention_months === 0
             ? 'For good'
             : `For ${recording.retention_months} month${recording.retention_months === 1 ? '' : 's'}: older months are dropped`}
+      </Row>
+    </>
+  )
+}
+
+const DAY_NAMES: [string, string][] = [
+  ['mon', 'Monday'],
+  ['tue', 'Tuesday'],
+  ['wed', 'Wednesday'],
+  ['thu', 'Thursday'],
+  ['fri', 'Friday'],
+  ['sat', 'Saturday'],
+  ['sun', 'Sunday'],
+]
+
+/** Capital.com's opening hours as it gives them, a day a line. */
+function OpeningHours({ hours }: { hours: CapitalRecording['opening_hours'] }) {
+  if (!hours) return null
+  const zone = typeof hours.zone === 'string' ? hours.zone : 'UTC'
+  return (
+    <ul className="space-y-0.5">
+      {DAY_NAMES.map(([key, name]) => {
+        const stretches = Array.isArray(hours[key]) ? (hours[key] as string[]) : []
+        return (
+          <li key={key}>
+            {name}: {stretches.length === 0 ? 'closed' : stretches.join(', ')}
+          </li>
+        )
+      })}
+      <li className="text-xs text-muted-foreground">Times of {zone}, as Capital.com gives them</li>
+    </ul>
+  )
+}
+
+function StreamedRows({ recording, timeZone }: { recording: CapitalRecording; timeZone: string }) {
+  const delays = recording.delay_ms
+  const files = recording.day_files
+  return (
+    <>
+      <Row label="Capital.com epic">{recording.epic}</Row>
+      <Row label="Account">{recording.environment === 'live' ? 'Live account' : recording.environment === 'demo' ? 'Demo account' : recording.environment}</Row>
+      <Row label="Bars">Ten seconds each, bid and ask, by the Capital.com feed from its stream; each quote also goes live to the charts</Row>
+      <Row label="The feed now">{recording.feed_detail ?? recording.feed_state}</Row>
+      <Row label="Market">
+        {recording.market === 'open'
+          ? 'Open'
+          : recording.market === 'closed'
+            ? `Closed${recording.next_opening ? `, opens ${formatDateTime(recording.next_opening, timeZone)}` : ''}`
+            : null}
+      </Row>
+      <Row label="Opening hours">
+        <OpeningHours hours={recording.opening_hours} />
+      </Row>
+      <Row label="Quotes, last minute">{recording.quotes_per_minute === null ? null : formatNumber(recording.quotes_per_minute)}</Row>
+      <Row label="Delay, last minute">
+        {delays && delays.p50 !== null
+          ? `Median ${formatNumber(Math.round(delays.p50))} ms, 95 % under ${formatNumber(Math.round(delays.p95 ?? delays.p50))} ms: Capital.com's time of a quote to the feed's receipt`
+          : null}
+      </Row>
+      <Row label="Capital.com's volume">
+        {recording.minute_volume === null ? null : recording.minute_volume ? 'Fetched for each minute' : 'Not fetched'}
+      </Row>
+      <Row label="Day files for backtests">
+        {files.days === 0
+          ? 'None yet: a day is written once it is over'
+          : `${formatNumber(files.days)} day${files.days === 1 ? '' : 's'}, from ${formatDay(files.first_day)} to ${formatDay(files.last_day)} (days of UTC), ${formatBytes(files.bytes)}, in `}
+        {files.days > 0 && <code className="text-xs">{files.location}</code>}
+      </Row>
+      <Row label="First recorded">{formatDateTime(recording.first_seen_at, timeZone)}</Row>
+      <Row label="Kept">
+        {recording.retention_months === null
+          ? null
+          : recording.retention_months === 0
+            ? 'For good'
+            : `For ${recording.retention_months} month${recording.retention_months === 1 ? '' : 's'}: older months are dropped (the day files stay)`}
       </Row>
     </>
   )

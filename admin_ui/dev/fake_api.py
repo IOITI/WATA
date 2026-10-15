@@ -56,6 +56,7 @@ from src.admin.config_editor import ConfigEditor
 from src.admin.context import AdminContext, AdminSettings
 from src.admin.data import PriceHistory
 from src.admin.events import EventHub
+from src.admin.live_prices import LivePrices
 from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.queries import (
     _ORDER_POSITION_COLUMNS,
@@ -72,6 +73,7 @@ from src.strategy.history import dukascopy
 from src.strategy.signals import decisions_of
 from src.strategy.sources import FileBars
 
+import fake_capital
 import fake_prices
 
 DEV_PASSWORD = "wata-admin-dev"
@@ -683,6 +685,43 @@ class FakeQueries:
     async def price_trades(self, instrument, start, end, limit=500):
         return fake_prices.trades(instrument, start, end, datetime.now(timezone.utc))
 
+    # ── the Capital.com feed: made up, see fake_capital.py ──
+
+    async def capital_feed_state(self):
+        return fake_capital.feed_state(datetime.now(timezone.utc))
+
+    async def capital_assets(self, epic=None):
+        if epic not in (None, fake_capital.EPIC):
+            return []
+        return [fake_capital.asset(datetime.now(timezone.utc))]
+
+    async def capital_instrument(self, epic):
+        rows = await self.capital_assets(epic)
+        return rows[0] if rows else None
+
+    async def capital_opening_hours(self, epic):
+        return fake_capital.HOURS if epic == fake_capital.EPIC else None
+
+    async def capital_coverage(self, start, end):
+        return fake_capital.coverage(start, end, datetime.now(timezone.utc))
+
+    async def capital_bars(self, instrument_id, start, end, interval, limit):
+        return fake_capital.bars(start, end, interval, limit, datetime.now(timezone.utc))
+
+    async def capital_series(self, instrument_id, start, end, side, limit):
+        first = 1 if side == "bid" else 5
+        rows = fake_capital.ten_second_bars(start, end, datetime.now(timezone.utc))[:limit]
+        return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3]) for row in rows]
+
+    async def capital_volume(self, instrument_id, start, end, interval, limit):
+        return fake_capital.volume(start, end, interval, limit, datetime.now(timezone.utc))
+
+    async def capital_volume_days(self, instrument_id, start, end):
+        return fake_capital.volume_days(start, end, datetime.now(timezone.utc))
+
+    async def index_trades(self, indice, start, end, *, every_position, limit=500):
+        return fake_prices.trades(dict(fake_prices.INDEX), start, end, datetime.now(timezone.utc))
+
     async def open_positions(self):
         """Open positions with a made-up price that moves a little at every call."""
         self._ticks += 1
@@ -1073,8 +1112,9 @@ def build_dev_context(work_dir: str) -> AdminContext:
         token_dir = os.path.join(work_dir, "lib", name)
         config[name]["persistant"]["token_path"] = os.path.join(token_dir, "persist_token.json")
     config["trade"]["persistant"]["last_action_file"] = os.path.join(work_dir, "lib", "last_action.json")
-    # Shown in the service list, as on a server where the price recorder runs.
+    # Shown in the service list, as on a server where the price recorder and the Capital.com feed run.
     config["trade"]["config"]["price_recorder"]["enabled"] = True
+    config["trade"]["config"]["capital_feed"]["enabled"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))
@@ -1126,6 +1166,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
         backtests=backtests,
         history=PriceHistory(prices_root),
+        # The made-up Capital.com stream, in place of RabbitMQ.
+        live_prices=LivePrices(fake_capital.source),
         events=events,
         notifier=notifier,
         version="dev",

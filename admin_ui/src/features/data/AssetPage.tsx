@@ -143,7 +143,11 @@ function AssetView({ details }: { details: AssetDetails }) {
   const view = useMemo(() => parseView(searchParams, anchor), [searchParams, anchor])
   const tab = parseTab(searchParams.get('tab'))
   const name = instrumentLabel(asset)
+  // Saxo's recorder (an index under a turbo, what Saxo left without a quote), Dukascopy's files (days fetched),
+  // Capital.com's stream (followed live).
   const recorded = asset.provider === 'saxo'
+  const downloaded = asset.provider === 'dukascopy'
+  const streamed = asset.provider === 'capital'
 
   // Going through bars and periods must not leave as many steps to go back through.
   const show = useCallback(
@@ -155,8 +159,8 @@ function AssetView({ details }: { details: AssetDetails }) {
     [anchor, setSearchParams, tab],
   )
 
-  // Live while the recorder still names it and the period reaches today.
-  const live = recorded && asset.status === 'recording' && view.to >= today
+  // Live while the recorder still names it (or the feed follows it) and the period reaches today.
+  const live = (recorded || streamed) && asset.status === 'recording' && view.to >= today
   // Under a turbo, the index recorded in the period: the one of its last day comes with the asset.
   const otherPeriod = view.from !== details.last_day || view.to !== details.last_day
   const indexQuery = useQuery({
@@ -179,9 +183,9 @@ function AssetView({ details }: { details: AssetDetails }) {
   const coverageQuery = useQuery({
     queryKey: ['backtest-prices', asset.key, view.from, view.to],
     queryFn:
-      !recorded && downloads && tab === 'chart' ? () => api.priceCoverage({ from: view.from, to: view.to }, asset.key) : skipToken,
+      downloaded && downloads && tab === 'chart' ? () => api.priceCoverage({ from: view.from, to: view.to }, asset.key) : skipToken,
   })
-  const tooLong = !recorded && daysBetween(view.from, view.to) > details.max_days.chart
+  const tooLong = downloaded && daysBetween(view.from, view.to) > details.max_days.chart
 
   return (
     <>
@@ -223,7 +227,7 @@ function AssetView({ details }: { details: AssetDetails }) {
             live={live}
             availability={availabilityOf(availabilityQuery.data, asset)}
             coverage={
-              recorded ? undefined : (
+              !downloaded ? undefined : (
                 <Panel
                   title="Days fetched"
                   description="Dukascopy's files are by day of UTC; a day is written once every one of its hours was fetched."

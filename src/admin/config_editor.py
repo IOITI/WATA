@@ -23,6 +23,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 
 from src.configuration import ConfigurationManager
+from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.settings import RecorderSettings
 
 logger = logging.getLogger(__name__)
@@ -64,9 +65,11 @@ PROTECTED_PATHS = (
 )
 
 # Sections a page other than the configuration page may read and save alone:
-# the price recorder's, edited from the Data pages (src/admin/routers/data.py).
+# the price recorder's and the Capital.com feed's, edited from the Data pages
+# (src/admin/routers/data.py).
 SECTION_PATHS = (
     "trade.config.price_recorder",
+    "trade.config.capital_feed",
 )
 
 _DAY_TRADING_FLOAT_FIELDS = (
@@ -294,9 +297,12 @@ class ConfigEditor:
         current, revision = self._read()
         candidate_path = self._write_candidate(merge_editable(current, submitted, keep_protected=keep_protected))
         try:
-            # The price recorder checks its own section, which the shared
-            # validator leaves alone: said here, rather than found idle later.
-            RecorderSettings.from_config(ConfigurationManager(candidate_path))
+            # The price recorder and the Capital.com feed check their own
+            # sections, which the shared validator leaves alone: said here,
+            # rather than found idle later.
+            candidate = ConfigurationManager(candidate_path)
+            RecorderSettings.from_config(candidate)
+            CapitalSettings.from_config(candidate)
         except Exception as e:
             os.remove(candidate_path)
             # The validator raises ValueError for the cases it checks, and

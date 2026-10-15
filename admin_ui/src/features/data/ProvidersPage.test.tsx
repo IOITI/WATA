@@ -7,6 +7,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { ToastContext } from '@/components/toast-context'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
+  CapitalProviderDetails,
+  CapitalSettings,
   DataProvider,
   DukascopyProviderDetails,
   RecorderConfig,
@@ -40,8 +42,12 @@ const DEFAULTS: RecorderSettings = {
 const CATALOG = [
   { id: 'saxo', name: 'Saxo Bank', kind: 'live' as const, available: true, description: 'Recorded from Saxo.' },
   { id: 'dukascopy', name: 'Dukascopy', kind: 'download' as const, available: true, description: 'Downloaded history.' },
-  { id: 'capital', name: 'Capital.com', kind: 'live' as const, available: false, description: 'Not integrated yet.' },
+  { id: 'capital', name: 'Capital.com', kind: 'live' as const, available: true, description: 'The Nasdaq 100 streamed live.' },
 ]
+const CAPITAL_DEFAULTS: CapitalSettings = {
+  enabled: false, environment: 'demo', instruments: [{ epic: 'US100', label: 'us100' }], minute_volume: true, day_files: true,
+  retention_months: 0, alert_after_seconds: 300,
+}
 
 function saxo(changes: Partial<SaxoProviderDetails> = {}): SaxoProviderDetails {
   return {
@@ -71,9 +77,35 @@ function dukascopy(changes: Partial<DukascopyProviderDetails> = {}): DukascopyPr
   }
 }
 
+function capital(changes: Partial<CapitalProviderDetails> = {}): CapitalProviderDetails {
+  return {
+    ...CATALOG[2], id: 'capital', status: 'ok', detail: 'Streaming US100 · 4.1 quotes/s · delay 38 ms', enabled: true, active: true,
+    assets: 1, first_t: utc('2026-10-08T00:00:00Z'), last_t: utc('2026-10-12T10:29:50Z'), first_day: '2026-10-08',
+    last_day: '2026-10-12', configurable: true,
+    feed: {
+      updated_at: '2026-10-12T10:29:55Z', started_at: '2026-10-12T08:00:00Z', version: '0.20.0', environment: 'demo',
+      state: 'streaming', detail: 'Streaming US100',
+      figures: {
+        instruments: [{ epic: 'US100', label: 'us100', name: 'US Tech 100', market: 'open', status: 'TRADEABLE',
+                        last_quote_at: '2026-10-12T10:29:59Z', next_opening: null, subscription: 'PROCESSED' }],
+        quotes_per_minute: 246, delay_ms: { p50: 38, p95: 95, max: 140, count: 246 },
+        stream: { connected: true, since: '2026-10-12T08:00:05Z', connections: 1, last_error: null },
+        live: { sent: 12000, dropped: 0, failing: false, last_error: null },
+        minutes: { enabled: true, last: '2026-10-12T10:29:05Z', error: null },
+        last_bar_at: '2026-10-12T10:29:50Z', pending_buckets: 0,
+      },
+    },
+    settings: { ...CAPITAL_DEFAULTS, enabled: true }, gaps_today: [],
+    day_files: [{ label: 'us100', days: 3, first_day: '2026-10-08', last_day: '2026-10-10', bytes: 900000, location: 'capital/bars/us100' }],
+    credential_variables: ['CAPITAL_API_KEY', 'CAPITAL_IDENTIFIER', 'CAPITAL_PASSWORD'], restart_required: false,
+    ...changes,
+  }
+}
+
 interface Server {
   providers?: DataProvider[]
   saxoDetails?: SaxoProviderDetails
+  capitalDetails?: CapitalProviderDetails
   config?: Partial<RecorderConfig>
   /** How the save of the recorder's section is answered. */
   saved?: { status: number; detail?: string }
@@ -81,7 +113,7 @@ interface Server {
 
 let requests: { method: string; path: string; body: unknown }[] = []
 
-function serve({ providers, saxoDetails = saxo(), config = {}, saved = { status: 200 } }: Server = {}) {
+function serve({ providers, saxoDetails = saxo(), capitalDetails = capital(), config = {}, saved = { status: 200 } }: Server = {}) {
   requests = []
   const json = (body: unknown, status = 200) =>
     new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -100,6 +132,11 @@ function serve({ providers, saxoDetails = saxo(), config = {}, saved = { status:
       }
       if (url.pathname === '/api/data/providers/saxo') return json(saxoDetails)
       if (url.pathname === '/api/data/providers/dukascopy') return json(dukascopy())
+      if (url.pathname === '/api/data/providers/capital') return json(capitalDetails)
+      if (url.pathname === '/api/data/providers/capital/config') {
+        if (method === 'PUT') return json({ revision: 'r2', backup: 'config.json.bak-20261012-123000', restart_required: true })
+        return json({ section: {}, defaults: CAPITAL_DEFAULTS, environments: ['demo', 'live'], indices: ['us100'], revision: 'r1', editable: true })
+      }
       if (url.pathname === '/api/data/providers/saxo/config') {
         if (method === 'PUT') {
           if (saved.status !== 200) return json({ detail: saved.detail }, saved.status)
@@ -193,7 +230,7 @@ describe('the providers', () => {
     expect(await screen.findByRole('heading', { name: 'No provider is switched on yet' })).toBeInTheDocument()
   })
 
-  it('that can be added are offered in a catalog, Capital.com to come', async () => {
+  it('that can be added are offered in a catalog', async () => {
     serve()
     const user = userEvent.setup()
     renderPage()
@@ -202,11 +239,35 @@ describe('the providers', () => {
     await user.click(screen.getByRole('button', { name: 'Add provider' }))
 
     const dialog = await screen.findByRole('dialog', { name: 'Add a provider' })
-    const entry = (name: string) => within(dialog).getByText(name, { exact: false, selector: 'p' }).closest('li') as HTMLElement
+    // Its name comes first in its entry; another entry's text may name it too.
+    const entry = (name: string) => within(dialog).getAllByText(name, { exact: false, selector: 'p' })[0].closest('li') as HTMLElement
     expect(within(entry('Saxo Bank')).getByText('Active')).toBeInTheDocument()
     expect(within(entry('Dukascopy')).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
-    expect(within(entry('Capital.com')).getByText('Coming later')).toBeInTheDocument()
-    expect(within(entry('Capital.com')).queryByRole('button', { name: 'Set up' })).not.toBeInTheDocument()
+    expect(within(entry('Capital.com')).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
+    expect(within(entry('Capital.com')).getByText(/three/)).toHaveTextContent('CAPITAL_*')
+  })
+
+  it('switch Capital.com on from the catalog, through its settings', async () => {
+    serve()
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole('table')
+    await user.click(screen.getByRole('button', { name: 'Add provider' }))
+    const catalog = await screen.findByRole('dialog', { name: 'Add a provider' })
+    const entry = within(catalog).getAllByText('Capital.com', { exact: false, selector: 'p' })[0].closest('li') as HTMLElement
+
+    await user.click(within(entry).getByRole('button', { name: 'Set up' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Capital.com feed settings' })
+    expect(await within(dialog).findByRole('switch', { name: "Record Capital.com's prices" })).toBeChecked()
+    await user.click(within(dialog).getByRole('button', { name: 'Review the changes' }))
+    within(dialog).getByRole('slider').focus()
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(writes()[0]).toEqual({
+      method: 'PUT', path: '/api/data/providers/capital/config', body: { section: { enabled: true }, revision: 'r1' },
+    })
   })
 
   it('lead to the Dukascopy page to set it up', async () => {
@@ -216,7 +277,9 @@ describe('the providers', () => {
     await screen.findByRole('table')
     await user.click(screen.getByRole('button', { name: 'Add provider' }))
 
-    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Set up' }))
+    const catalog = await screen.findByRole('dialog')
+    const entry = within(catalog).getAllByText('Dukascopy', { exact: false, selector: 'p' })[0].closest('li') as HTMLElement
+    await user.click(within(entry).getByRole('button', { name: 'Set up' }))
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Dukascopy' })).toBeInTheDocument()
   })
@@ -405,11 +468,66 @@ describe('the Dukascopy provider’s page', () => {
   })
 })
 
-describe('a provider to come', () => {
-  it('says that it is not integrated yet', async () => {
+describe('the Capital.com provider’s page', () => {
+  it('says what the stream is doing, each instrument, the day files and how to set it up', async () => {
     serve()
     renderPage('/data/providers/capital')
 
-    expect(await screen.findByRole('heading', { name: 'Capital.com is not integrated yet' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Capital.com' })).toBeInTheDocument()
+    const stream = screen.getByText('The stream now').closest('section') ?? document.body
+    expect(within(stream).getByText('246 in the last minute')).toBeInTheDocument()
+    expect(within(stream).getByText('Median 38 ms, 95 % under 95 ms, worst 140 ms')).toBeInTheDocument()
+    expect(within(stream).getByText('12,000 sent through RabbitMQ')).toBeInTheDocument()
+    expect(screen.getByText(/Market open/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View asset' })).toHaveAttribute('href', '/data/assets/capital/US100')
+    expect(screen.getByText(/3 days, 08 Oct 2026 to 10 Oct 2026/)).toBeInTheDocument()
+    // The names of the login's variables: the page never has their values.
+    for (const name of ['CAPITAL_API_KEY', 'CAPITAL_IDENTIFIER', 'CAPITAL_PASSWORD']) {
+      expect(screen.getByText(`${name}=…`)).toBeInTheDocument()
+    }
+  })
+
+  it('says what to do on the server when the feed has no login', async () => {
+    serve({
+      capitalDetails: capital({
+        status: 'down', detail: 'No Capital.com login: CAPITAL_API_KEY missing in .env.',
+        feed: { ...capital().feed!, state: 'no_credentials', detail: 'No Capital.com login: CAPITAL_API_KEY missing in .env.', figures: {} },
+      }),
+    })
+    renderPage('/data/providers/capital')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No Capital.com login: CAPITAL_API_KEY missing in .env.')
+    expect(screen.getByRole('alert')).toHaveTextContent('docker restart capital_feed1')
+  })
+
+  it('refuses an instrument that is not an epic before anything is sent, and warns of the live account', async () => {
+    serve()
+    const user = userEvent.setup()
+    renderPage('/data/providers/capital')
+    await user.click(await screen.findByRole('button', { name: 'Edit configuration' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Capital.com feed settings' })
+    await within(dialog).findByRole('switch', { name: "Record Capital.com's prices" })
+
+    await user.click(within(dialog).getByRole('button', { name: 'Live' }))
+    const epic = within(dialog).getByRole('textbox', { name: /Epic/ })
+    await user.clear(epic)
+    await user.type(epic, 'us100')
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent("Instrument 1 needs an epic, Capital.com's name of it in capitals (US100)")
+    expect(within(dialog).getByRole('button', { name: 'Review the changes' })).toBeDisabled()
+
+    await user.clear(epic)
+    await user.type(epic, 'US100')
+    await user.click(within(dialog).getByRole('button', { name: 'Review the changes' }))
+    expect(within(dialog).getByText(/logs into the live account/)).toBeInTheDocument()
+  })
+})
+
+describe('a provider WATA has no code for', () => {
+  it('is said to be none', async () => {
+    serve()
+    renderPage('/data/providers/elsewhere')
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such provider' })).toBeInTheDocument()
   })
 })

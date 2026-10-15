@@ -38,9 +38,11 @@ import {
   localDay,
   METRICS,
   middleLeverage,
+  mixedPrices,
   numberOf,
   parameterChanges,
   pathView,
+  pricesWording,
   randomSentence,
   randomVerdict,
   roomSentences,
@@ -94,6 +96,10 @@ describe('what a run is called', () => {
 
     expect(whatDiffers(changed)).toBe('entry mode cross_catchup · day profit target 3 · trailing enabled off')
     expect(runName(changed)).toBe(whatDiffers(changed))
+    // Dukascopy's history goes without saying; Capital.com's recorded prices do not.
+    expect(whatDiffers({ ...changed, prices: 'capital' })).toBe(
+      'on Capital.com prices · entry mode cross_catchup · day profit target 3 · trailing enabled off',
+    )
   })
 
   it('says so when it changed nothing', () => {
@@ -595,3 +601,18 @@ describe('names and days', () => {
     expect([date.getFullYear(), date.getMonth(), date.getDate()]).toEqual([2026, 9, 12])
   })
 })
+
+describe('the prices a run is made on', () => {
+  it('are said in words, Dukascopy’s for a run made before there was a choice', () => {
+    expect(pricesWording({ prices: 'capital' })).toBe('Capital.com’s recorded prices')
+    expect(pricesWording({ prices: 'dukascopy' })).toBe('Dukascopy’s history')
+    expect(pricesWording({})).toBe('Dukascopy’s history')
+  })
+
+  it('are told apart when runs compared were not made on the same ones', () => {
+    expect(mixedPrices([{ prices: 'capital' }, {}])).toBe(true)
+    expect(mixedPrices([{ prices: 'dukascopy' }, {}])).toBe(false)
+    expect(mixedPrices([{ prices: 'capital' }, { prices: 'capital' }])).toBe(false)
+  })
+})
+

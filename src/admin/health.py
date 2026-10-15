@@ -13,9 +13,12 @@ from datetime import datetime, timezone
 
 from starlette.concurrency import run_in_threadpool
 
+from src.admin.data import DISABLED as PROVIDER_DISABLED
+from src.admin.data import capital_provider_state
 from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
 from src.admin.logs import last_lifecycle_event
 from src.admin.services import OPS_QUEUE, TELEGRAM_QUEUE
+from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
 
@@ -161,6 +164,27 @@ async def _price_recorder(ctx) -> list[dict]:
     return [_entry("price_recorder", name, *recorder_state(settings, status, datetime.now(timezone.utc)))]
 
 
+async def _capital_feed(ctx) -> list[dict]:
+    """
+    The Capital.com feed, when it is switched on: like the price recorder, what
+    it misses cannot be fetched afterwards. Down without a login or after a
+    refused one, said by the state it writes itself.
+    """
+    name = "Capital.com feed"
+    try:
+        settings = CapitalSettings.from_config(ctx.config_manager)
+    except ValueError as e:
+        return [_entry("capital_feed", name, DOWN, f"Invalid configuration: {e}")]
+    if not settings.enabled:
+        return []
+    try:
+        state = await ctx.queries.capital_feed_state()
+    except DatabaseUnavailable:
+        return [_entry("capital_feed", name, UNKNOWN, "The database is unavailable")]
+    status, detail = capital_provider_state(True, state, datetime.now(timezone.utc))
+    return [_entry("capital_feed", name, DOWN if status == PROVIDER_DISABLED else status, detail)]
+
+
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:
     if queue["consumers"] > 0:
         return _entry(service_id, name, OK, f"Consuming {queue['name']}")
@@ -211,6 +235,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
+        capital_feed,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -219,9 +244,10 @@ async def collect_health(ctx) -> dict:
         run_in_threadpool(_log_observed, ctx.settings.log_path),
         _saxo(ctx),
         _price_recorder(ctx),
+        _capital_feed(ctx),
     )
     services = [
-        *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *postgres, rabbitmq[0],
+        *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *postgres, rabbitmq[0],
     ]
     return {
         "version": ctx.version,

@@ -104,6 +104,8 @@ class AdminContext:
     backtests: Any = None
     # The prices fetched from Dukascopy, read as files for the Data pages (src/admin/data.py).
     history: Any = None
+    # The live prices of the Capital.com feed, for the charts that follow them (src/admin/live_prices.py).
+    live_prices: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -151,6 +153,7 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.backtests import BacktestService
     from src.admin.config_editor import ConfigEditor
     from src.admin.data import PriceHistory
+    from src.admin.live_prices import LivePrices, rabbitmq_source
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.services import SaxoAccess, WataServices
     from src.database.postgres import AsyncDbRiskStateManager, PostgresConnectionManager
@@ -189,6 +192,10 @@ def build_context(config_manager) -> AdminContext:
     pause_database = LazyDatabase(PostgresConnectionManager(dsn=dsn, min_size=0, max_size=1))
     http_client = httpx.AsyncClient(timeout=3.0)
     telegram_sender = AsyncTelegramSender(config_manager)
+    rabbitmq = config_manager.get_rabbitmq_config()
+    rabbitmq_url = (
+        f"amqp://{rabbitmq['authentication']['username']}:{rabbitmq['authentication']['password']}@{rabbitmq['hostname']}/"
+    )
 
     return AdminContext(
         config_manager=config_manager,
@@ -211,6 +218,7 @@ def build_context(config_manager) -> AdminContext:
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
         backtests=backtests,
         history=PriceHistory(settings.price_history_path),
+        live_prices=LivePrices(rabbitmq_source(rabbitmq_url)),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,

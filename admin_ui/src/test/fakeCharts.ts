@@ -6,12 +6,16 @@
  */
 
 export interface FakeSeries {
-  type: 'Candlestick' | 'Line'
+  type: 'Candlestick' | 'Line' | 'Histogram'
   /** The panel it was added to: 0 for the prices, 1 under them. */
   pane: number
   options: Record<string, unknown>
   data: Record<string, unknown>[]
+  /** What was given to `update`, in order: the last bar changed, or one added after it. */
+  updates: Record<string, unknown>[]
   markers: Record<string, unknown>[]
+  /** The options of its price scale (the volume's margins under the prices). */
+  scaleOptions: Record<string, unknown>
   removed: boolean
 }
 
@@ -64,7 +68,9 @@ function createChart(container: HTMLElement, options: Record<string, any>) {
 
   return {
     addSeries(type: FakeSeries['type'], seriesOptions: Record<string, unknown> = {}, pane = 0) {
-      const series: FakeSeries = { type, pane, options: { ...seriesOptions }, data: [], markers: [], removed: false }
+      const series: FakeSeries = {
+        type, pane, options: { ...seriesOptions }, data: [], updates: [], markers: [], scaleOptions: {}, removed: false,
+      }
       chart.series.push(series)
       chart.calls.push(`add ${type}`)
       return {
@@ -72,6 +78,22 @@ function createChart(container: HTMLElement, options: Record<string, any>) {
         setData(data: Record<string, unknown>[]) {
           series.data = data
           chart.calls.push(`${type} data ${data.length}`)
+        },
+        update(point: Record<string, unknown>) {
+          // As the library: a point before the last one is refused.
+          const last = series.data[series.data.length - 1]
+          if (last && (point.time as number) < (last.time as number)) throw new Error('Cannot update oldest data')
+          series.updates.push(point)
+          if (last && last.time === point.time) series.data = [...series.data.slice(0, -1), point]
+          else series.data = [...series.data, point]
+          chart.calls.push(`${type} update`)
+        },
+        priceScale() {
+          return {
+            applyOptions(changes: Record<string, unknown>) {
+              Object.assign(series.scaleOptions, changes)
+            },
+          }
         },
         applyOptions(changes: Record<string, unknown>) {
           Object.assign(series.options, changes)
@@ -127,6 +149,7 @@ function createSeriesMarkers(api: { fake: FakeSeries }, markers: Record<string, 
 export const fakeLightweightCharts = {
   CandlestickSeries: 'Candlestick',
   LineSeries: 'Line',
+  HistogramSeries: 'Histogram',
   ColorType: { Solid: 'solid' },
   CrosshairMode: { Normal: 0 },
   LineStyle: { Solid: 0, Dashed: 2 },

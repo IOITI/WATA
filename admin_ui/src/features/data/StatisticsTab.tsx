@@ -30,7 +30,13 @@ function signed(value: number | null, decimals: number): string {
   return `${value > 0 ? '+' : ''}${formatNumber(value, decimals)}`
 }
 
-function dayColumns(decimals: number, timeZone: string, spread: boolean, volume: boolean): ColumnDef<AssetDayStatistics>[] {
+function dayColumns(
+  decimals: number,
+  timeZone: string,
+  spread: boolean,
+  volume: boolean,
+  volumeLabel = 'Volume',
+): ColumnDef<AssetDayStatistics>[] {
   const price = (value: number | null) => (value === null ? '—' : formatNumber(value, decimals))
   const columns: ColumnDef<AssetDayStatistics>[] = [
     { id: 'day', header: 'Day', accessorKey: 'day', sortable: true, cell: ({ row }) => formatDay(row.day) },
@@ -99,7 +105,7 @@ function dayColumns(decimals: number, timeZone: string, spread: boolean, volume:
   if (volume) {
     columns.push({
       id: 'volume',
-      header: 'Volume',
+      header: volumeLabel,
       accessorKey: 'volume',
       sortable: true,
       align: 'right',
@@ -163,9 +169,11 @@ export function StatisticsTab({ asset, from, to, limits, timeZone }: StatisticsT
   const figures = useMemo(() => periodFigures(days), [days])
   const decimals = statisticsDecimals(days)
   const volume = days.some((day) => day.volume !== null)
+  // Capital.com's own figure for its minutes, beside the quote changes the feed counted itself.
+  const volumeLabel = asset.provider === 'capital' ? 'Capital.com volume' : 'Volume'
   const columns = useMemo(
-    () => dayColumns(decimals, timeZone, statistics?.spread ?? false, volume),
-    [decimals, timeZone, statistics?.spread, volume],
+    () => dayColumns(decimals, timeZone, statistics?.spread ?? false, volume, volumeLabel),
+    [decimals, timeZone, statistics?.spread, volume, volumeLabel],
   )
   const dearest = statistics ? dearestSlot(statistics.spread_by_time) : null
 
@@ -207,7 +215,11 @@ export function StatisticsTab({ asset, from, to, limits, timeZone }: StatisticsT
                   hint={
                     statistics.spread
                       ? `Widest ${figures.spreadWidest === null ? '—' : formatNumber(figures.spreadWidest, decimals)}${
-                          asset.provider === 'dukascopy' ? ': Dukascopy’s, not Saxo’s' : ''
+                          asset.provider === 'dukascopy'
+                            ? ': Dukascopy’s, not Saxo’s'
+                            : asset.provider === 'capital'
+                              ? ': Capital.com’s CFD, not Saxo’s turbos'
+                              : ''
                         }`
                       : 'Saxo quotes the index with one price'
                   }

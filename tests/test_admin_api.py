@@ -84,6 +84,10 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/data/assets/saxo/2/range-bars"),
     ("GET", "/api/data/assets/saxo/2/context"),
     ("GET", "/api/data/assets/saxo/2/statistics"),
+    ("GET", "/api/data/assets/saxo/2/volume"),
+    ("GET", "/api/data/assets/saxo/2/live"),
+    ("GET", "/api/data/providers/capital/config"),
+    ("PUT", "/api/data/providers/capital/config"),
     ("GET", "/api/config"),
     ("POST", "/api/config/validate"),
     ("PUT", "/api/config"),
@@ -160,6 +164,16 @@ class FakeQueries:
         # What price_assets adds to an instrument's row, by id, and Saxo's volume by instrument and day.
         self.price_asset_extras = {}
         self.price_volume_by_day = {}
+        # The Capital.com feed: its instruments with their first and last bar (none unless a
+        # test adds some), what it wrote of itself, and what its tables hold.
+        self.capital_rows = []
+        self.capital_state = None
+        self.capital_bar_rows = []
+        self.capital_series_rows = []
+        self.capital_coverage_rows = []
+        self.capital_volume_rows = []
+        self.capital_volume_by_day = {}
+        self.capital_hours = None
 
     def _check(self):
         if self.failing:
@@ -284,6 +298,52 @@ class FakeQueries:
     async def price_volume_days(self, instrument_id, start, end):
         self.calls.append(("price_volume_days", instrument_id, start, end))
         return dict(self.price_volume_by_day.get(instrument_id, {}))
+
+    # ── the Capital.com feed ──
+
+    async def capital_feed_state(self):
+        self._check()
+        return self.capital_state
+
+    async def capital_assets(self, epic=None):
+        self._check()
+        self.calls.append(("capital_assets", epic))
+        return [dict(row) for row in self.capital_rows if epic is None or row["epic"] == epic]
+
+    async def capital_instrument(self, epic):
+        rows = await self.capital_assets(epic)
+        return rows[0] if rows else None
+
+    async def capital_opening_hours(self, epic):
+        self.calls.append(("capital_opening_hours", epic))
+        return self.capital_hours
+
+    async def capital_coverage(self, start, end):
+        self._check()
+        self.calls.append(("capital_coverage", start, end))
+        return self.capital_coverage_rows
+
+    async def capital_bars(self, instrument_id, start, end, interval, limit):
+        self.calls.append(("capital_bars", instrument_id, start, end, interval, limit))
+        rows = [row for row in self.capital_bar_rows if start.timestamp() <= row[0] < end.timestamp()][:limit]
+        return rows, rows[-1][0] if rows else None
+
+    async def capital_series(self, instrument_id, start, end, side, limit):
+        self.calls.append(("capital_series", instrument_id, start, end, side, limit))
+        return [row for row in self.capital_series_rows if start.timestamp() <= row[0] < end.timestamp()][:limit]
+
+    async def capital_volume(self, instrument_id, start, end, interval, limit):
+        self.calls.append(("capital_volume", instrument_id, start, end, interval, limit))
+        return self.capital_volume_rows[:limit]
+
+    async def capital_volume_days(self, instrument_id, start, end):
+        self.calls.append(("capital_volume_days", instrument_id, start, end))
+        return dict(self.capital_volume_by_day)
+
+    async def index_trades(self, indice, start, end, *, every_position, limit=500):
+        self._check()
+        self.calls.append(("index_trades", indice, start, end, every_position))
+        return [CLOSED_POSITION]
 
     async def exits(self, start=None, end=None):
         self.calls.append(("exits", start, end))
@@ -1997,10 +2057,10 @@ def _provider(body, provider_id):
     return next(item for item in body["items"] if item["id"] == provider_id)
 
 
-def test_the_providers_are_saxo_and_dukascopy_and_capital_com_is_to_come(client, ctx):
+def test_the_providers_are_saxo_dukascopy_and_capital_com(client, ctx):
     body = client.get("/api/data/providers").json()
 
-    saxo, dukascopy = body["items"]
+    saxo, dukascopy, capital = body["items"]
     assert (saxo["id"], saxo["kind"], dukascopy["id"], dukascopy["kind"]) == ("saxo", "live", "dukascopy", "download")
     # Switched off in the configuration, but two instruments were recorded: it is listed.
     assert (saxo["status"], saxo["detail"], saxo["enabled"], saxo["active"]) == (
@@ -2010,8 +2070,12 @@ def test_the_providers_are_saxo_and_dukascopy_and_capital_com_is_to_come(client,
     assert (saxo["first_day"], saxo["last_day"]) == ("2026-10-12", "2026-10-12")
     # No backtest service and nothing fetched: offered to be added.
     assert (dukascopy["status"], dukascopy["enabled"], dukascopy["active"], dukascopy["assets"]) == ("disabled", False, False, 0)
+    # Switched off and never run: offered to be added.
+    assert (capital["id"], capital["kind"], capital["status"], capital["active"], capital["assets"]) == (
+        "capital", "live", "disabled", False, 0,
+    )
     assert [(entry["id"], entry["available"]) for entry in body["catalog"]] == [
-        ("saxo", True), ("dukascopy", True), ("capital", False),
+        ("saxo", True), ("dukascopy", True), ("capital", True),
     ]
 
 
@@ -2070,7 +2134,6 @@ def test_the_saxo_provider_says_how_it_is_set_and_what_it_missed_today(client, c
     }
     assert body["gaps_today"] is not None
     assert body["restart_required"] is False
-    assert client.get("/api/data/providers/capital").status_code == 404
     assert client.get("/api/data/providers/elsewhere").status_code == 404
 
 
@@ -2199,7 +2262,7 @@ def test_every_asset_of_every_provider_is_listed(client, ctx, history):
     turbo = body["items"][1]
     assert (turbo["provider"], turbo["key"], turbo["barrier"], turbo["last_bid"]) == ("saxo", "2", 24150.0, 8.45)
     assert body["items"][2]["days"] == 2
-    assert ctx.queries.calls[-1][:4] == ("price_assets", 5001, None, None)
+    assert next(call for call in ctx.queries.calls if call[0] == "price_assets")[:4] == ("price_assets", 5001, None, None)
 
 
 def test_an_instrument_no_longer_named_by_the_recorder_has_ended(client, ctx):
@@ -2283,6 +2346,7 @@ def test_a_dukascopy_history_opens_on_the_day_of_its_last_file(client, ctx, tmp_
 @pytest.mark.parametrize("path", [
     "/api/data/assets/saxo/99", "/api/data/assets/saxo/abc", "/api/data/assets/saxo/0",
     "/api/data/assets/dukascopy/de40", "/api/data/assets/dukascopy/US100", "/api/data/assets/capital/1",
+    "/api/data/assets/capital/us100", "/api/data/assets/capital/US100/bars",
     "/api/data/assets/saxo/99/bars", "/api/data/assets/dukascopy/de40/bars", "/api/data/assets/elsewhere/1/statistics",
 ])
 def test_an_asset_that_does_not_exist_is_not_found(client, ctx, history, path):
@@ -2554,6 +2618,9 @@ class FakeBacktests:
     def coverage(self, first_day, last_day, label=None):
         return self._answer("coverage", first_day, last_day, label, answer={"days": []})
 
+    def recorded_coverage(self, first_day, last_day):
+        return self._answer("recorded_coverage", first_day, last_day, answer={"days": [], "prices": "capital"})
+
     def fetch_status(self):
         return {"state": "idle", "lines": []}
 
@@ -2686,6 +2753,8 @@ def test_a_backtest_is_asked_for_with_its_period_and_what_differs(client, backte
         "rules": {"day_profit_target": 3.0, "trailing_enabled": False},
         "entry_price": None, "spread": None, "leverages": [80.0, 110.0], "note": "higher target",
         "capital": None, "fill_delay": None, "slippage": None,
+        # Dukascopy's history unless Capital.com's recorded days are asked for.
+        "prices": "dukascopy",
     })]
 
 
@@ -2773,6 +2842,25 @@ def test_the_prices_panel_reads_the_last_months_unless_told_a_period(client, bac
     ]
 
 
+def test_the_days_recorded_from_capital_com_are_read_when_its_prices_are_asked_for(client, backtests):
+    assert client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30&prices=capital").json() == {
+        "days": [], "prices": "capital",
+    }
+    assert backtests.asked == [("recorded_coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date())]
+    assert client.get("/api/backtests/prices?prices=saxo").status_code == 422
+
+
+def test_a_run_on_capital_coms_recorded_days_is_asked_for_as_such(client, backtests):
+    response = client.post(
+        "/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", "prices": "capital"}, headers=SAME_ORIGIN,
+    )
+
+    assert response.status_code == 202
+    assert backtests.asked[0][1]["prices"] == "capital"
+    refused = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", "prices": "saxo"}, headers=SAME_ORIGIN)
+    assert refused.status_code == 422
+
+
 def test_a_download_of_prices_is_started_and_stopped(client, backtests):
     started = client.post("/api/backtests/prices/fetch", json={"from": "2026-10-05", "to": "2026-10-09"}, headers=SAME_ORIGIN)
     stopped = client.post("/api/backtests/prices/fetch/stop", headers=SAME_ORIGIN)
@@ -2822,7 +2910,7 @@ def test_the_signals_wata_received_are_replayed_with_its_journal_and_its_positio
     assert backtests.asked == [("create_from_signals", {
         "first_day": first_day, "last_day": last_day, "journal": [JOURNAL_ENTRY], "positions": [CLOSED_POSITION],
         "rules": {"day_profit_target": 3}, "entry_price": None, "spread": None, "leverages": [104.0], "note": "real",
-        "capital": None, "fill_delay": None, "slippage": None,
+        "capital": None, "fill_delay": None, "slippage": None, "prices": "dukascopy",
     })]
     # A replay has no strategy to give a parameter to.
     assert client.post("/api/backtests/signals", json={"from": "2026-09-14"}, headers=SAME_ORIGIN).status_code == 422
@@ -2870,7 +2958,7 @@ def test_a_sweep_is_asked_for_with_the_values_to_try(client, ctx, backtests):
         "rules": {"stoploss_percent": -10}, "entry_price": None, "spread": None, "leverage": 104.0, "note": "targets",
         "fill_delay": None, "slippage": 1.0,
         # A strategy's sweep reads nothing from the database.
-        "journal": None, "positions": None,
+        "journal": None, "positions": None, "prices": "dukascopy",
     })]
     assert not [call for call in ctx.queries.calls if call[0] in ("journal_between", "closed_positions")]
 

@@ -43,6 +43,7 @@ from typing import Awaitable, Callable, Protocol
 
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
 from src.admin.data import PriceHistory
+from src.capital_feed import day_files as capital_day_files
 from src.price_recorder.bars import BAR_SECONDS
 from src.strategy import backtest, signals, sweep
 from src.strategy.comparison import Leg, compare
@@ -373,6 +374,18 @@ def _decimals_of(tick: float) -> int:
     return len(text) - text.index(".") - 1
 
 
+# The prices a backtest can run on: the days downloaded from Dukascopy, or those
+# the Capital.com feed recorded and wrote a file of once over (src/capital_feed/day_files.py).
+PRICES_DUKASCOPY = dukascopy.SOURCE
+PRICES_CAPITAL = capital_day_files.SOURCE
+PRICE_SOURCES = (PRICES_DUKASCOPY, PRICES_CAPITAL)
+
+
+def prices_of(request: dict) -> str:
+    """The prices a run was made on: Dukascopy's for a run made before there was a choice."""
+    return request.get("prices") or PRICES_DUKASCOPY
+
+
 class BacktestService:
     def __init__(
         self,
@@ -463,6 +476,38 @@ class BacktestService:
             "entry_price": measured["entry_price"], "spread": measured["spread"],
             "leverages": sorted({round(value, 1) for value in leverages}), "measured": True,
         }
+
+    # ── the prices runs are made on ──
+
+    def _location(self, prices: str) -> str:
+        """The folder of the days of ``prices``, for the indice backtests read."""
+        if prices == PRICES_CAPITAL:
+            return capital_day_files.bars_directory(self._prices_root, self._indice)
+        return backtest.price_location(dukascopy.SOURCE, self._prices_root, self._indice)
+
+    @staticmethod
+    def _checked_prices(prices: str | None) -> str:
+        prices = prices or PRICES_DUKASCOPY
+        if prices not in PRICE_SOURCES:
+            raise InvalidRequest(f"A backtest runs on the prices of {' or '.join(PRICE_SOURCES)}")
+        return prices
+
+    def _checked_recorded(self, prices: str, first_day: date, last_day: date) -> None:
+        """Capital.com's days exist only once recorded: a period with none of them is said so before it is queued."""
+        if prices != PRICES_CAPITAL:
+            return
+        written = capital_day_files.written_days(self._prices_root, self._indice)
+        if not any(first_day <= day <= last_day for day in written):
+            raise NotPossible(
+                "No day of that period was recorded from Capital.com: the feed writes each day's file once the day is over"
+            )
+
+    def _source_arguments(self, request: dict) -> list[str]:
+        """Where the command reads its prices: the history fetched under the root, or the folder of the recorded days."""
+        prices = prices_of(request)
+        if prices == PRICES_CAPITAL:
+            return ["--source", self._location(prices), "--indice", self._indice]
+        return ["--root", self._prices_root, "--indice", self._indice]
 
     # ── folders ──
 
@@ -568,8 +613,11 @@ class BacktestService:
         capital: float | None = None,
         fill_delay: int | None = None,
         slippage: float | None = None,
+        prices: str | None = None,
     ) -> dict:
         self._checked_period(first_day, last_day, note)
+        prices = self._checked_prices(prices)
+        self._checked_recorded(prices, first_day, last_day)
         if strategy not in backtest.STRATEGIES:
             raise InvalidRequest(f"Unknown strategy '{strategy}'")
 
@@ -591,6 +639,7 @@ class BacktestService:
             "kind": KIND_STRATEGY,
             "from": first_day.isoformat(),
             "to": last_day.isoformat(),
+            "prices": prices,
             "strategy": strategy,
             "parameters": changed,
             "rules": rule_changes,
@@ -616,6 +665,7 @@ class BacktestService:
         capital: float | None = None,
         fill_delay: int | None = None,
         slippage: float | None = None,
+        prices: str | None = None,
     ) -> dict:
         """
         A backtest of the signals WATA really received in the period (the
@@ -623,6 +673,8 @@ class BacktestService:
         (its closed positions) to be set beside the model's.
         """
         self._checked_period(first_day, last_day, note)
+        prices = self._checked_prices(prices)
+        self._checked_recorded(prices, first_day, last_day)
         replayed = signals_to_replay(journal, self._indice)
         if not any(signals.ACTIONS[signal["action"]][0] in (LONG, SHORT) for signal in replayed):
             raise NotPossible("WATA's journal has no entry signal in that period: there is nothing to replay")
@@ -633,6 +685,7 @@ class BacktestService:
             "kind": KIND_SIGNALS,
             "from": first_day.isoformat(),
             "to": last_day.isoformat(),
+            "prices": prices,
             "strategy": backtest.SIGNALS,
             "parameters": {},
             "rules": rule_changes,
@@ -696,6 +749,7 @@ class BacktestService:
         slippage: float | None = None,
         journal: list[dict] | None = None,
         positions: list[dict] | None = None,
+        prices: str | None = None,
     ) -> dict:
         """
         The same backtest for every combination of the values given to one or
@@ -703,6 +757,8 @@ class BacktestService:
         strategy, or of the signals WATA received when its ``journal`` is given.
         """
         self._checked_period(first_day, last_day, note)
+        prices = self._checked_prices(prices)
+        self._checked_recorded(prices, first_day, last_day)
         if not sweep.LEAST_HELD_OUT <= held_out <= sweep.MOST_HELD_OUT:
             raise InvalidRequest(
                 f"Between {sweep.LEAST_HELD_OUT:.0%} and {sweep.MOST_HELD_OUT:.0%} of the days can be held out"
@@ -739,6 +795,7 @@ class BacktestService:
             "replays": KIND_SIGNALS if replaying else KIND_STRATEGY,
             "from": first_day.isoformat(),
             "to": last_day.isoformat(),
+            "prices": prices,
             "strategy": backtest.SIGNALS if replaying else strategy,
             "parameters": changed,
             "rules": rule_changes,
@@ -767,6 +824,8 @@ class BacktestService:
             "leverages": request["turbo"]["leverages"],
             "fill_delay": request["execution"]["fill_delay"], "slippage": request["execution"]["slippage"],
             "note": (request.get("note") or "")[:MAX_NOTE_LENGTH],
+            # On the prices the sweep ran on.
+            "prices": prices_of(request),
         }
         if request.get("replays") == KIND_SIGNALS:
             # The same signals and real trades the sweep was given, kept with it.
@@ -783,6 +842,7 @@ class BacktestService:
             "kind": KIND_SIGNALS,
             "from": asked["first_day"].isoformat(),
             "to": asked["last_day"].isoformat(),
+            "prices": self._checked_prices(asked.get("prices")),
             "strategy": backtest.SIGNALS,
             "parameters": {},
             "rules": rule_changes,
@@ -824,7 +884,7 @@ class BacktestService:
         arguments = [
             "src.strategy.sweep",
             "--from", request["from"], "--to", request["to"],
-            "--root", self._prices_root, "--indice", self._indice,
+            *self._source_arguments(request),
             "--rules", os.path.join(directory, "rules.json"),
             "--points-per-unit", f"{turbo['leverages'][0]:g}",
             "--entry-price", str(turbo["entry_price"]), "--spread", str(turbo["spread"]),
@@ -854,7 +914,7 @@ class BacktestService:
         arguments = [
             "src.strategy.backtest",
             "--from", request["from"], "--to", request["to"],
-            "--root", self._prices_root, "--indice", self._indice,
+            *self._source_arguments(request),
             "--rules", os.path.join(directory, "rules.json"),
             "--points-per-unit", ",".join(f"{leverage:g}" for leverage in turbo["leverages"]),
             "--entry-price", str(turbo["entry_price"]), "--spread", str(turbo["spread"]),
@@ -1022,9 +1082,9 @@ class BacktestService:
             "beaten": (figures.get("against_random") or {}).get("beaten"),
         }
 
-    def _price_files(self) -> dict[str, str]:
-        """The digest of every file of prices there is, by its path; read again only for a file that changed."""
-        location = backtest.price_location(dukascopy.SOURCE, self._prices_root, self._indice)
+    def _price_files(self, prices: str = PRICES_DUKASCOPY) -> dict[str, str]:
+        """The digest of every file of ``prices`` there is, by its path; read again only for a file that changed."""
+        location = self._location(prices)
         try:
             names = os.listdir(location)
         except OSError:
@@ -1056,7 +1116,7 @@ class BacktestService:
         start, end = backtest.day_bounds(
             LocalClock(timezone_name), date.fromisoformat(request["from"]), date.fromisoformat(request["to"]),
         )
-        location = backtest.price_location(dukascopy.SOURCE, self._prices_root, self._indice)
+        location = self._location(prices_of(request))
         paths = files_of_period(location, [os.path.basename(path) for path in price_files], start, end)
         today = prices_fingerprint(paths, digest_of=price_files.__getitem__)
         return {
@@ -1066,7 +1126,7 @@ class BacktestService:
             "version": summary["code"].get("version"),
         }
 
-    def _described(self, run_id: str, *, whole: bool, price_files: dict[str, str] | None = None) -> dict:
+    def _described(self, run_id: str, *, whole: bool, price_files: dict[str, dict[str, str]] | None = None) -> dict:
         directory = self._directory(run_id)
         request = _read_json(os.path.join(directory, "request.json")) or {}
         status = self._status(run_id)
@@ -1075,9 +1135,11 @@ class BacktestService:
         summary = _read_json(os.path.join(directory, "summary.json")) if done and not is_sweep else None
         swept = _read_json(os.path.join(directory, "sweep.json")) if done and is_sweep else None
         described = {"id": run_id, **request, "status": status, "headline": self._headline(summary)}
+        prices = prices_of(request)
+        described["prices"] = prices
         try:
             described["stale"] = self._stale(
-                request, summary or swept, self._price_files() if price_files is None else price_files,
+                request, summary or swept, self._price_files(prices) if price_files is None else price_files[prices],
             )
         except (KeyError, ValueError, TypeError):
             described["stale"] = None
@@ -1100,8 +1162,8 @@ class BacktestService:
 
     def list_runs(self) -> list[dict]:
         """Every run, the newest first, with the few figures a list shows."""
-        # Looked at once for the whole list: which prices there are today.
-        price_files = self._price_files()
+        # Looked at once for the whole list: which prices there are today, of each source.
+        price_files = {prices: self._price_files(prices) for prices in PRICE_SOURCES}
         return [self._described(run_id, whole=False, price_files=price_files) for run_id in self._run_ids()[:MAX_LISTED]]
 
     def rows(self, run_id: str, kind: str, leverage: float) -> list[dict]:
@@ -1251,7 +1313,7 @@ class BacktestService:
         day_before = compounded(earlier)
         day_target = ((1 + rules.day_profit_target / 100.0) / (1 + day_before / 100.0) - 1) * 100
 
-        location = backtest.price_location(dukascopy.SOURCE, self._prices_root, self._indice)
+        location = self._location(prices_of(request))
         bars = FileBars(location, self._indice).bars(
             datetime.fromtimestamp(entered, timezone.utc), datetime.fromtimestamp(left + BAR_SECONDS, timezone.utc),
         )
@@ -1316,7 +1378,7 @@ class BacktestService:
         strategy = CHART_STRATEGY if replayed_signals else request["strategy"]
         params_type, _ = backtest.STRATEGIES[strategy]
         params = params_type().with_overrides({name: str(value) for name, value in request["parameters"].items()})
-        location = backtest.price_location(dukascopy.SOURCE, self._prices_root, self._indice)
+        location = self._location(prices_of(request))
         traced, decisions = backtest.replay_day(strategy, request["parameters"], clock, location, day, indice=self._indice)
         if replayed_signals:
             decisions = [
@@ -1433,6 +1495,37 @@ class BacktestService:
                 "count": len(ready),
                 "first": min(ready).isoformat() if ready else None,
                 "last": max(ready).isoformat() if ready else None,
+            },
+            "fetch": self.fetch_status(),
+            "keep": self.keep_status(),
+        }
+
+    def recorded_coverage(self, first_day: date, last_day: date) -> dict:
+        """
+        Which days of the period have Capital.com's recorded prices to backtest
+        on: a file a day, written by the feed once the day is over. In the
+        shape of ``coverage``; nothing of them can be fetched.
+        """
+        if last_day < first_day or (last_day - first_day).days >= MAX_PERIOD_DAYS:
+            raise InvalidRequest(f"A period of {MAX_PERIOD_DAYS} days at most")
+        written = capital_day_files.written_days(self._prices_root, self._indice)
+        days = []
+        for offset in range((last_day - first_day).days + 1):
+            day = first_day + timedelta(days=offset)
+            # Capital.com's Nasdaq does not quote on Saturdays (days of UTC, as the files are).
+            state = "ready" if day in written else ("closed" if day.weekday() == 5 else "missing")
+            days.append({"day": day.isoformat(), "state": state, "hours": 0, "hours_expected": 0})
+        return {
+            "from": first_day.isoformat(),
+            "to": last_day.isoformat(),
+            "label": self._indice,
+            "symbol": None,
+            "prices": PRICES_CAPITAL,
+            "days": days,
+            "ready": {
+                "count": len(written),
+                "first": min(written).isoformat() if written else None,
+                "last": max(written).isoformat() if written else None,
             },
             "fetch": self.fetch_status(),
             "keep": self.keep_status(),

@@ -279,6 +279,8 @@ interface Server {
   runs?: BacktestRunListed[]
   run?: Record<string, BacktestRun>
   prices?: PriceCoverage
+  /** The days recorded from Capital.com. */
+  recorded?: PriceCoverage
   /** What the server answers to a request for a new run, when it refuses it. */
   refused?: { status: number; detail: string }
   options?: BacktestOptions
@@ -293,7 +295,10 @@ interface Sent {
 
 let sent: Sent[] = []
 
-function serve({ runs = [], run = {}, prices = coverage(), refused, options = OPTIONS, calibration: measured = calibration() }: Server = {}) {
+function serve({
+  runs = [], run = {}, prices = coverage(), recorded = coverage({ prices: 'capital', symbol: null, days: [], ready: { count: 0, first: null, last: null } }),
+  refused, options = OPTIONS, calibration: measured = calibration(),
+}: Server = {}) {
   sent = []
   const json = (body: unknown, status = 200) =>
     new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -306,7 +311,11 @@ function serve({ runs = [], run = {}, prices = coverage(), refused, options = OP
       const [, , , runId, what, day] = url.pathname.split('/')
 
       if (url.pathname === '/api/backtests/options') return json(options)
-      if (url.pathname === '/api/backtests/prices') return json(prices)
+      if (url.pathname === '/api/backtests/prices') {
+        // The days recorded from Capital.com: none unless a test says so.
+        if (url.searchParams.get('prices') === 'capital') return json(recorded)
+        return json(prices)
+      }
       if (url.pathname === '/api/backtests/prices/keep') return json(keeping({ enabled: true, state: 'due' }))
       if (url.pathname === '/api/backtests/calibration') {
         return method === 'GET' ? json(measured) : json(calibration({ status: { state: 'running', trades: 42 } }), 202)
@@ -679,8 +688,8 @@ describe('asking for a backtest', () => {
       method: 'POST',
       path: '/api/backtests',
       body: {
-        // The days that have prices, by default.
-        from: '2026-09-15', to: '2026-09-17', strategy: 'kernel_vwap',
+        // The days that have prices, by default, of Dukascopy's history.
+        from: '2026-09-15', to: '2026-09-17', prices: 'dukascopy', strategy: 'kernel_vwap',
         parameters: { kernel_bandwidth: 8 },
         rules: { stoploss_percent: -10, trailing_enabled: false },
         entry_price: 4.4, spread: 0.03, leverages: [80, 110, 140],
@@ -689,6 +698,40 @@ describe('asking for a backtest', () => {
         capital: 10000, fill_delay: 0, slippage: 0,
       },
     }])
+  })
+
+  it('runs on the days recorded from Capital.com when they are chosen, and says what they are', async () => {
+    const user = userEvent.setup()
+    serve({
+      recorded: coverage({
+        prices: 'capital', symbol: null,
+        days: [{ day: '2026-10-12', state: 'ready', hours: 0, hours_expected: 0 }],
+        ready: { count: 3, first: '2026-10-08', last: '2026-10-12' },
+      }),
+    })
+    renderAt('/backtests/new')
+    await screen.findByLabelText('Kernel bandwidth')
+
+    await user.click(screen.getByRole('button', { name: 'Capital.com, recorded' }))
+
+    expect(screen.getByRole('button', { name: 'Capital.com, recorded' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/the prices of the chart the signals come from/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Run the backtest' }))
+
+    await waitFor(() => expect(requests('POST')).toHaveLength(1))
+    expect(requests('POST')[0].body).toMatchObject({ prices: 'capital' })
+    expect(sent.some((request) => request.path.includes('/api/backtests/prices?prices=capital'))).toBe(true)
+  })
+
+  it('says when nothing was recorded from Capital.com yet', async () => {
+    const user = userEvent.setup()
+    serve()
+    renderAt('/backtests/new')
+    await screen.findByLabelText('Kernel bandwidth')
+
+    await user.click(screen.getByRole('button', { name: 'Capital.com, recorded' }))
+
+    expect(screen.getByText(/No day has been recorded from Capital.com yet/)).toBeInTheDocument()
   })
 
   it('sends nothing as changed when nothing was', async () => {
@@ -758,7 +801,7 @@ describe('asking for a backtest', () => {
       method: 'POST',
       path: '/api/backtests/signals',
       body: {
-        from: '2026-09-15', to: '2026-09-17', rules: { day_profit_target: 3 },
+        from: '2026-09-15', to: '2026-09-17', prices: 'dukascopy', rules: { day_profit_target: 3 },
         entry_price: 4.4, spread: 0.03, leverages: [80, 110, 140], note: '',
         capital: 10000, fill_delay: 0, slippage: 0,
       },
@@ -836,7 +879,7 @@ describe('asking for a backtest', () => {
       method: 'POST',
       path: '/api/backtests/sweeps',
       body: {
-        from: '2026-09-15', to: '2026-09-17', replay: 'strategy',
+        from: '2026-09-15', to: '2026-09-17', replay: 'strategy', prices: 'dukascopy',
         axes: [
           { kind: 'rule', name: 'day_profit_target', values: [1, 1.7, 3] },
           { kind: 'parameter', name: 'kernel_bandwidth', values: [8, 15] },

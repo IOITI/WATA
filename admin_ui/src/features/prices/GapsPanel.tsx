@@ -24,6 +24,8 @@ interface GapsPanelProps {
   /** Why the gaps, the trades and the signals could not be read. */
   error?: Error | null
   timeZone: string
+  /** When a missing bar counts: WATA's trading hours, or a market's own hours (Capital.com). */
+  hours?: string
 }
 
 /**
@@ -31,7 +33,7 @@ interface GapsPanelProps {
  * know where its data has holes. The recorder's own gaps, which every
  * instrument has, and those of the instrument shown.
  */
-export function GapsPanel({ gaps: recorded, own, error, timeZone }: GapsPanelProps) {
+export function GapsPanel({ gaps: recorded, own, error, timeZone, hours = 'trading hours' }: GapsPanelProps) {
   const gaps = useMemo<(PriceGap | PriceStretch)[] | null | undefined>(
     () => recorded && [...recorded, ...(own?.stretches ?? [])].sort((a, b) => a.start.localeCompare(b.start)),
     [recorded, own],
@@ -45,10 +47,10 @@ export function GapsPanel({ gaps: recorded, own, error, timeZone }: GapsPanelPro
       title="Recording gaps"
       description={
         gaps && gaps.length > 0
-          ? `${gaps.length} in trading hours, ${formatDuration(total * 1000)} in all. No bar exists for these times.${
+          ? `${gaps.length} in ${hours}, ${formatDuration(total * 1000)} in all. No bar exists for these times.${
               left > 0 ? ` ${left} shorter ones of this instrument are not listed.` : ''
             }`
-          : 'Times in trading hours for which no bar exists.'
+          : `Times in ${hours} for which no bar exists.`
       }
       bodyClassName="pt-3"
     >

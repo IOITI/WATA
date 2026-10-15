@@ -115,7 +115,7 @@ export function AssetsPage() {
     <>
       <PageHeader
         title="Assets View"
-        description={`Every asset whose prices WATA keeps: the turbos and their index recorded from Saxo, the history downloaded from Dukascopy. Click a row to see its last day; its name opens its page. Times are in ${timezone}.`}
+        description={`Every asset whose prices WATA keeps: the Nasdaq followed live from Capital.com, the turbos and their index recorded from Saxo, the history downloaded from Dukascopy. Click a row to see its last day; its name opens its page. Times are in ${timezone}.`}
         actions={
           <SeenFilter
             seen={seen}
