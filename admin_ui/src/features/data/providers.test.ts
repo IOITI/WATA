@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import type { DataProvider, DataProviders, JsonObject, RecorderSettings } from '@/lib/types'
+import type { CapitalSettings, DataProvider, DataProviders, JsonObject, RecorderSettings } from '@/lib/types'
 
 import {
+  capitalDraft,
+  capitalInstrumentProblems,
+  capitalSectionToSave,
+  capitalWarnings,
   catalogItems,
   instrumentProblems,
   listedProviders,
@@ -130,3 +134,47 @@ describe('what a save says before it is confirmed', () => {
     expect(recorderWarnings(before, { ...before, record_volume: true, max_instruments: 80 }, ['us100'])).toEqual([])
   })
 })
+
+describe('the Capital.com feed’s settings', () => {
+  const CAPITAL: CapitalSettings = {
+    enabled: false, environment: 'demo', instruments: [{ epic: 'US100', label: 'us100' }], minute_volume: true,
+    day_files: true, retention_months: 0, alert_after_seconds: 300,
+  }
+
+  it('show what the file leaves out at its default, and save only what was chosen', () => {
+    const draft = capitalDraft({ enabled: true, extra: 1 }, CAPITAL)
+    expect(draft).toEqual({ ...CAPITAL, enabled: true })
+
+    const saved = capitalSectionToSave({ enabled: true, extra: 1 }, { ...draft, environment: 'live' }, CAPITAL)
+    expect(saved).toEqual({ enabled: true, extra: 1, environment: 'live' })
+  })
+
+  it('refuse what the feed would refuse: an epic of capitals, a label of WATA, each once', () => {
+    expect(capitalInstrumentProblems([{ epic: 'US100', label: 'us100' }])).toEqual([])
+    expect(capitalInstrumentProblems([])).toEqual(['At least one instrument: the Nasdaq is US100, labelled us100'])
+    expect(capitalInstrumentProblems([{ epic: 'us100', label: 'US 100' }])).toEqual([
+      "Instrument 1 needs an epic, Capital.com's name of it in capitals (US100)",
+      'Instrument 1 needs a label: lower-case letters, digits, - or _ (us100)',
+    ])
+    expect(capitalInstrumentProblems([{ epic: 'US100', label: 'a' }, { epic: 'US100', label: 'a' }])).toEqual([
+      'US100 is listed twice', 'Two instruments are labelled "a"',
+    ])
+    expect(capitalInstrumentProblems(Array.from({ length: 41 }, (_, index) => ({ epic: `E${index}`, label: `e${index}` })))).toEqual([
+      "40 instruments at most: Capital.com's limit",
+    ])
+  })
+
+  it('warn of what cannot be taken back, or does more than it says', () => {
+    const before: JsonObject = { enabled: true, environment: 'demo', retention_months: 0, instruments: [{ epic: 'US100', label: 'us100' }, { epic: 'US500', label: 'us500' }] }
+
+    expect(capitalWarnings(before, before)).toEqual([])
+    expect(capitalWarnings(before, { ...before, enabled: false })[0]).toMatch(/can never be fetched afterwards/)
+    expect(capitalWarnings(before, { ...before, environment: 'live' })[0]).toMatch(/live account/)
+    expect(capitalWarnings(before, { ...before, retention_months: 3 })[0]).toMatch(/Only 3 months kept in the database/)
+    expect(capitalWarnings(before, { ...before, instruments: [{ epic: 'US100', label: 'nas100' }] })).toEqual([
+      'The day files of US100 go under "nas100" from the feed\'s next start; those written stay under "us100".',
+      "US500 is no longer recorded from the feed's next start: what was recorded of it stays.",
+    ])
+  })
+})
+

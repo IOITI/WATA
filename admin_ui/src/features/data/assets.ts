@@ -12,7 +12,7 @@ import type { AssetSeen, AssetStatus, DataAsset, DataProviderId, PriceInstrument
 export type AssetType = 'index' | 'long' | 'short'
 
 export const TYPE_LABELS: Record<AssetType, string> = { index: 'Index', long: 'Long turbo', short: 'Short turbo' }
-export const PROVIDER_LABELS: Record<DataProviderId, string> = { saxo: 'Saxo', dukascopy: 'Dukascopy' }
+export const PROVIDER_LABELS: Record<DataProviderId, string> = { saxo: 'Saxo', dukascopy: 'Dukascopy', capital: 'Capital.com' }
 export const STATUS_LABELS: Record<AssetStatus, string> = {
   recording: 'Recording',
   ended: 'Ended',
@@ -119,6 +119,16 @@ export function openingDay(asset: DataAsset, timeZone: string, today: string): s
   return asset.last_t === null ? today : dayOf(asset.last_t, timeZone)
 }
 
+function lastPrice(asset: DataAsset, timeZone: string): Fact | null {
+  if (asset.last_bid === null || asset.last_t === null) return null
+  const decimals = valueDecimals([asset.last_bid, asset.last_ask])
+  const quote =
+    asset.last_ask === null
+      ? formatNumber(asset.last_bid, decimals)
+      : `Bid ${formatNumber(asset.last_bid, decimals)} · Ask ${formatNumber(asset.last_ask, decimals)} · spread ${formatNumber(asset.last_ask - asset.last_bid, decimals)}`
+  return { label: 'Last price', value: `${quote} at ${formatDateTime(isoOf(asset.last_t), timeZone)}` }
+}
+
 /**
  * What an opened row says of a Dukascopy history: its last quote, the days
  * fetched and the symbol they are of. A recorded instrument says what the
@@ -126,14 +136,8 @@ export function openingDay(asset: DataAsset, timeZone: string, today: string): s
  */
 export function historyFacts(asset: DataAsset, timeZone: string): Fact[] {
   const facts: Fact[] = []
-  if (asset.last_bid !== null && asset.last_t !== null) {
-    const decimals = valueDecimals([asset.last_bid, asset.last_ask])
-    const quote =
-      asset.last_ask === null
-        ? formatNumber(asset.last_bid, decimals)
-        : `Bid ${formatNumber(asset.last_bid, decimals)} · Ask ${formatNumber(asset.last_ask, decimals)} · spread ${formatNumber(asset.last_ask - asset.last_bid, decimals)}`
-    facts.push({ label: 'Last price', value: `${quote} at ${formatDateTime(isoOf(asset.last_t), timeZone)}` })
-  }
+  const price = lastPrice(asset, timeZone)
+  if (price) facts.push(price)
   facts.push({
     label: 'Fetched',
     value: `${formatNumber(asset.days ?? 0)} day${asset.days === 1 ? '' : 's'}${
@@ -143,3 +147,28 @@ export function historyFacts(asset: DataAsset, timeZone: string): Fact[] {
   facts.push({ label: 'Instrument', value: [asset.symbol, asset.currency, 'Dukascopy'].filter(Boolean).join(' · ') })
   return facts
 }
+
+/**
+ * What an opened row says of an instrument of the Capital.com feed: its last
+ * recorded quote (the chart beside it follows the stream), since when it is
+ * recorded, and what it is at Capital.com.
+ */
+export function capitalFacts(asset: DataAsset, timeZone: string): Fact[] {
+  const facts: Fact[] = []
+  const price = lastPrice(asset, timeZone)
+  if (price) facts.push({ ...price, label: 'Last bar recorded' })
+  facts.push({
+    label: 'Recorded',
+    value:
+      asset.first_t === null || asset.last_t === null
+        ? 'Nothing yet'
+        : `Every ten seconds, from ${formatDay(dayOf(asset.first_t, timeZone))} (${STATUS_LABELS[asset.status].toLowerCase()})`,
+  })
+  facts.push({
+    label: 'Instrument',
+    value: [asset.epic ?? asset.symbol, asset.instrument_type, asset.currency, 'Capital.com'].filter(Boolean).join(' · '),
+  })
+  if (asset.indice) facts.push({ label: 'For WATA', value: `The index of ${asset.indice}` })
+  return facts
+}
+

@@ -7,6 +7,7 @@ import {
   assetRows,
   assetsLink,
   assetType,
+  capitalFacts,
   dayOf,
   historyFacts,
   legacyPricesTarget,
@@ -64,7 +65,8 @@ describe('the filters an address opens the table on', () => {
   })
 
   it('leaves out what a column does not take', () => {
-    expect(tableFilters(new URLSearchParams('provider=capital&type=,index&colour=red'))).toEqual({ type: ['index'] })
+    expect(tableFilters(new URLSearchParams('provider=elsewhere&type=,index&colour=red'))).toEqual({ type: ['index'] })
+    expect(tableFilters(new URLSearchParams('provider=capital'))).toEqual({ provider: ['capital'] })
   })
 
   it('is what a link from the Providers page writes', () => {
@@ -123,3 +125,27 @@ describe('what an opened row says of a Dukascopy history', () => {
     ])
   })
 })
+
+describe('what an opened row says of an instrument of the Capital.com feed', () => {
+  const US100: DataAsset = {
+    provider: 'capital', key: 'US100', ref: 'capital/US100', id: 3, uic: null, asset_type: 'Capital.com', symbol: 'US100',
+    description: 'US Tech 100', currency: 'USD', role: 'underlying', indice: 'us100', underlying_uic: null, direction: null,
+    barrier: null, issuer: null, first_t: 1791417600, last_t: 1791842390, last_bid: 25000.5, last_ask: 25001.5,
+    status: 'recording', epic: 'US100', instrument_type: 'INDICES', decimals: 1,
+  }
+
+  it('its last bar recorded, since when it is recorded, and what it is at Capital.com and for WATA', () => {
+    expect(capitalFacts(US100, 'Europe/Paris')).toEqual([
+      { label: 'Last bar recorded', value: 'Bid 25,000.50 · Ask 25,001.50 · spread 1.00 at 12 Oct, 23:59:50' },
+      { label: 'Recorded', value: 'Every ten seconds, from 08 Oct 2026 (recording)' },
+      { label: 'Instrument', value: 'US100 · INDICES · USD · Capital.com' },
+      { label: 'For WATA', value: 'The index of us100' },
+    ])
+  })
+
+  it('a provider of its own on the table', () => {
+    expect(assetRows([US100])[0].type).toBe('index')
+    expect(assetHref(US100)).toBe('/data/assets/capital/US100')
+  })
+})
+

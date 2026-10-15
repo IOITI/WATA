@@ -227,6 +227,17 @@
         "alert_after_seconds": 300,
         "record_volume": false
       },
+      "capital_feed": {
+        "enabled": false,
+        "environment": "demo",
+        "instruments": [
+          {"epic": "US100", "label": "us100"}
+        ],
+        "minute_volume": true,
+        "day_files": true,
+        "retention_months": 0,
+        "alert_after_seconds": 300
+      },
       "watchlist_manager": {
         "enabled": true,
         "api_host": "0.0.0.0",

@@ -392,6 +392,59 @@ def test_the_assets_the_recorder_kept_are_listed_as_the_data_pages_read_them(in_
     assert volumes == {"2026-10-12": 1500.0}
 
 
+def test_what_the_capital_com_feed_writes_is_what_the_data_pages_read(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import AsyncDbCapitalManager, init_capital_schema
+
+    start = datetime(2026, 10, 13, 6, 0, tzinfo=timezone.utc)
+
+    async def scenario(writer, reader):
+        await init_capital_schema(writer)
+        await init_capital_schema(writer)  # each start of the feed runs it again
+        store = AsyncDbCapitalManager(writer)
+        await store.ensure_partitions(start.date())
+        us100 = await store.upsert_instrument(
+            {"epic": "US100", "label": "us100", "name": "US Tech 100", "instrument_type": "INDICES",
+             "currency": "USD", "decimals": 1, "opening_hours": {"mon": ["00:00 - 21:59"], "zone": "UTC"}},
+            start,
+        )
+        # Described again without its details: what was known is kept.
+        assert await store.upsert_instrument({"epic": "US100", "label": "us100"}, start + timedelta(hours=1)) == us100
+        await store.insert_bars([
+            (start + timedelta(seconds=10 * n), us100, 25000.0 + n, 25001.0 + n, 24999.0 + n, 25000.5 + n,
+             25001.8 + n, 25002.8 + n, 25000.8 + n, 25002.3 + n, 3, 0)
+            for n in range(12)
+        ])
+        await store.record_coverage(start, True, 1, 1)
+        await store.upsert_minutes([(us100, start, 1, 2, 0.5, 1.5, 1.1, 2.1, 0.6, 1.6, 168.0)])
+        await store.upsert_minutes([(us100, start, 1, 2, 0.5, 1.5, 1.1, 2.1, 0.6, 1.6, 187.0)])
+        await store.write_state({
+            "updated_at": start, "started_at": start, "version": "test", "environment": "demo", "state": "streaming",
+            "detail": "Streaming US100", "figures": {"quotes_per_minute": 240, "delay_ms": {"p50": 38.0}},
+        })
+
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        listed = await queries.capital_assets()
+        bars, through = await queries.capital_bars(us100, start, start + timedelta(hours=1), 60, 100)
+        state = await queries.capital_feed_state()
+        volume = await queries.capital_volume_days(us100, start - timedelta(days=1), start + timedelta(days=1))
+        coverage = await queries.capital_coverage(start, start + timedelta(minutes=1))
+        hours = await queries.capital_opening_hours("US100")
+        return us100, listed, bars, through, state, volume, coverage, hours
+
+    us100, listed, bars, through, state, volume, coverage, hours = in_a_database_of_its_own(scenario)
+
+    assert [(row["id"], row["epic"], row["name"], row["decimals"]) for row in listed] == [(us100, "US100", "US Tech 100", 1)]
+    assert listed[0]["last_t"] == int((start + timedelta(seconds=110)).timestamp())
+    # A minute of six ten-second bars, then the next: and the last ten seconds they hold.
+    assert [(bar[0], bar[9]) for bar in bars] == [(int(start.timestamp()), 18), (int(start.timestamp()) + 60, 18)]
+    assert through == int((start + timedelta(seconds=110)).timestamp())
+    assert (state["state"], state["figures"]["delay_ms"]["p50"]) == ("streaming", 38.0)
+    assert volume == {"2026-10-13": 187.0}
+    assert coverage == [{"ts": start, "feed_ok": True}]
+    assert hours == {"mon": ["00:00 - 21:59"], "zone": "UTC"}
+
+
 # ── RabbitMQ, through what the services publish and consume with ──
 
 
@@ -508,3 +561,34 @@ def test_a_message_the_admin_publishes_is_consumed_the_way_the_position_monitor_
 
     assert message in bodies
     assert left == 0
+
+
+def test_a_quote_the_capital_com_feed_publishes_reaches_a_chart_through_the_admin(settings):
+    from src.admin.live_prices import LivePrices, rabbitmq_source
+    from src.capital_feed.live import LivePublisher, RabbitExchange
+
+    epic = f"T{uuid.uuid4().hex[:8].upper()}"
+    ref = f"capital/{epic}"
+
+    async def scenario():
+        prices = LivePrices(rabbitmq_source(settings.url))
+        chart = prices.subscribe(ref)
+        hub = asyncio.create_task(prices.run())
+        # The admin says when it listens: only then is the quote sent.
+        assert (await asyncio.wait_for(chart.get(), 15))["type"] == "live"
+        exchange = RabbitExchange(settings.url)
+        publisher = LivePublisher(exchange.open)
+        sending = asyncio.create_task(publisher.run())
+        publisher.quote(epic, bid=25000.5, ask=25002.3, quoted_ms=1792051200123, received_at=1792051200.15, bar=None)
+        received = await asyncio.wait_for(chart.get(), 15)
+        sending.cancel()
+        hub.cancel()
+        await asyncio.gather(sending, hub, return_exceptions=True)
+        await exchange.close()
+        return received, publisher
+
+    received, publisher = asyncio.run(asyncio.wait_for(scenario(), timeout=45))
+
+    assert (received["type"], received["ref"], received["bid"], received["t"]) == ("quote", ref, 25000.5, 1792051200123)
+    assert publisher.sent == 1 and publisher.dropped == 0
+

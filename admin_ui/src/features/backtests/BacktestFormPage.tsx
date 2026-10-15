@@ -19,6 +19,7 @@ import { lastDays, rangeParams } from '@/lib/dateRange'
 import { formatDay } from '@/lib/format'
 import type {
   BacktestOptions,
+  BacktestPrices,
   BacktestRun,
   BacktestSignalsRequest,
   BacktestValue,
@@ -119,6 +120,19 @@ function daysWithoutPrices(coverage: PriceCoverage, from: string, to: string): n
 
 type Replayed = 'strategy' | 'signals'
 
+const PRICES: { value: BacktestPrices; label: string; help: string }[] = [
+  {
+    value: 'dukascopy',
+    label: 'Dukascopy, downloaded',
+    help: "The history fetched from Dukascopy's public files: another broker's prices, but as far back as is fetched.",
+  },
+  {
+    value: 'capital',
+    label: 'Capital.com, recorded',
+    help: "The Nasdaq as the Capital.com feed recorded it, the prices of the chart the signals come from: a day once it is over, from the day the feed began.",
+  },
+]
+
 const REPLAYED: { value: Replayed; label: string; help: string }[] = [
   {
     value: 'strategy',
@@ -151,12 +165,13 @@ interface TypedAxis {
 
 interface FormProps {
   options: BacktestOptions
-  coverage: PriceCoverage
+  /** The days of each source of prices. */
+  coverages: Record<BacktestPrices, PriceCoverage>
   /** A run to start from: "run again with changes". */
   source: BacktestRun | null
 }
 
-function BacktestForm({ options, coverage, source }: FormProps) {
+function BacktestForm({ options, coverages, source }: FormProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const strategy = options.strategies.find((candidate) => candidate.name === source?.strategy) ?? options.strategies[0]
@@ -165,6 +180,9 @@ function BacktestForm({ options, coverage, source }: FormProps) {
   const switchRules = options.rules.editable.filter((rule) => rule.kind === 'boolean')
   const turbo = source?.turbo ?? options.turbo
 
+  // The prices of the run it starts from, else Dukascopy's: the history backtests have always read.
+  const [prices, setPrices] = useState<BacktestPrices>(source?.prices ?? 'dukascopy')
+  const coverage = coverages[prices]
   const [range, setRange] = useState<DateRange>(() =>
     source ? { from: dayToDate(source.from), to: dayToDate(source.to) } : defaultPeriod(coverage),
   )
@@ -311,6 +329,7 @@ function BacktestForm({ options, coverage, source }: FormProps) {
       const body: BacktestSignalsRequest = {
         from: period.from ?? '',
         to: period.to ?? '',
+        prices,
         rules: Object.fromEntries(changedRules),
         entry_price: entryPriceValue ?? 0,
         spread: spreadValue ?? 0,
@@ -328,6 +347,7 @@ function BacktestForm({ options, coverage, source }: FormProps) {
           from: body.from,
           to: body.to,
           replay: replaying ? 'signals' : 'strategy',
+          prices,
           axes: sweptAxes,
           held_out: Number(heldOut) / 100,
           strategy: strategy.name,
@@ -370,6 +390,21 @@ function BacktestForm({ options, coverage, source }: FormProps) {
         }
       >
         <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Prices">
+            {PRICES.map((choice) => (
+              <Button
+                key={choice.value}
+                type="button"
+                variant={choice.value === prices ? 'primary' : 'outline'}
+                size="sm"
+                aria-pressed={choice.value === prices}
+                onClick={() => setPrices(choice.value)}
+              >
+                {choice.label}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{PRICES.find((choice) => choice.value === prices)?.help}</p>
           <DateRangePicker
             value={range}
             onChange={setRange}
@@ -381,8 +416,9 @@ function BacktestForm({ options, coverage, source }: FormProps) {
           {!coverage.ready.first && (
             <Alert tone="warning">
               <AlertDescription>
-                No day of prices has been fetched yet: a backtest would find nothing to replay. Fetch some from the
-                Backtests page first.
+                {prices === 'capital'
+                  ? 'No day has been recorded from Capital.com yet: the feed writes each day once it is over (Data › Providers › Capital.com).'
+                  : 'No day of prices has been fetched yet: a backtest would find nothing to replay. Fetch some from the Backtests page first.'}
               </AlertDescription>
             </Alert>
           )}
@@ -667,12 +703,18 @@ export function BacktestFormPage() {
 
   const optionsQuery = useQuery({ queryKey: ['backtest-options'], queryFn: api.backtestOptions, enabled })
   const coverageQuery = useQuery({ queryKey: ['backtest-prices'], queryFn: () => api.priceCoverage(), enabled })
+  // The days recorded from Capital.com, the other prices a run can be made on.
+  const recordedQuery = useQuery({
+    queryKey: ['backtest-prices', 'capital'],
+    queryFn: () => api.priceCoverage({}, undefined, 'capital'),
+    enabled,
+  })
   const sourceQuery = useQuery({
     queryKey: ['backtest', sourceId],
     queryFn: sourceId ? () => api.backtest(sourceId) : skipToken,
   })
   const waitingForSource = !!sourceId && sourceQuery.isPending
-  const ready = !!optionsQuery.data && !!coverageQuery.data && !waitingForSource
+  const ready = !!optionsQuery.data && !!coverageQuery.data && !!recordedQuery.data && !waitingForSource
 
   return (
     <>
@@ -684,8 +726,8 @@ export function BacktestFormPage() {
         <BacktestsDisabled />
       ) : (
         <QueryState
-          isPending={optionsQuery.isPending || coverageQuery.isPending || waitingForSource}
-          error={optionsQuery.error ?? coverageQuery.error}
+          isPending={optionsQuery.isPending || coverageQuery.isPending || recordedQuery.isPending || waitingForSource}
+          error={optionsQuery.error ?? coverageQuery.error ?? recordedQuery.error}
           hasData={ready}
         >
           {sourceId && sourceQuery.error && (
@@ -693,12 +735,12 @@ export function BacktestFormPage() {
               <AlertDescription>The run to start from could not be read: the form has the defaults.</AlertDescription>
             </Alert>
           )}
-          {optionsQuery.data && coverageQuery.data && (
+          {optionsQuery.data && coverageQuery.data && recordedQuery.data && (
             // Made once what it starts from is there: its fields take their first values from it.
             <BacktestForm
               key={sourceQuery.data?.id ?? 'new'}
               options={optionsQuery.data}
-              coverage={coverageQuery.data}
+              coverages={{ dukascopy: coverageQuery.data, capital: recordedQuery.data }}
               source={sourceQuery.data ?? null}
             />
           )}

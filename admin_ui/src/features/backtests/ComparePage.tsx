@@ -14,7 +14,17 @@ import { api } from '@/lib/api'
 import { formatDay, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestFigures, BacktestRun } from '@/lib/types'
 
-import { commonLeverages, compounded, differing, figuresAt, middleLeverage, runName, showValue, wording } from './model'
+import {
+  commonLeverages,
+  compounded,
+  differing,
+  figuresAt,
+  middleLeverage,
+  mixedPrices,
+  runName,
+  showValue,
+  wording,
+} from './model'
 import { BacktestsDisabled, LeveragePicker } from './parts'
 
 interface Measure {
@@ -208,6 +218,14 @@ export function ComparePage() {
               <AlertDescription>
                 {MAX_COMPARED} runs at most are compared at once: the first {MAX_COMPARED} of the {asked.length} chosen
                 are shown.
+              </AlertDescription>
+            </Alert>
+          )}
+          {mixedPrices(runs) && (
+            <Alert tone="warning">
+              <AlertDescription>
+                These runs were not made on the same prices (Dukascopy’s history and Capital.com’s recorded prices):
+                part of what differs between them may be the prices.
               </AlertDescription>
             </Alert>
           )}

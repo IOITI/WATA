@@ -12,14 +12,16 @@ services:
       - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      # Set up HTTP (port 80) and HTTPS (port 443) entrypoints
+      # Set up HTTP (port 80) and HTTPS (port 443) entrypoints. These are the ports inside
+      # the container: the server's own are HTTP_PORT and HTTPS_PORT in .env (see ports below).
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       # Second HTTPS port, for the admin interface when it has no domain of its own
       # (ADMIN_ENTRYPOINT=adminsecure in .env). Nothing else is routed on it.
       - "--entrypoints.adminsecure.address=:8443"
-      # Global HTTP to HTTPS redirection
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      # Global HTTP to HTTPS redirection, to the port HTTPS is published on: the name of
+      # the entrypoint would send browsers to 443 whatever HTTPS_PORT says.
+      - "--entrypoints.web.http.redirections.entryPoint.to=:${HTTPS_PORT:-443}"
       - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
       # Let's Encrypt configuration
       - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
@@ -27,8 +29,11 @@ services:
       - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
     ports:
-      - "80:80"
-      - "443:443"
+      # 80 and 443 unless HTTP_PORT or HTTPS_PORT in .env say otherwise (a port number).
+      # TradingView sends webhooks to 80 and 443 only, and Let's Encrypt checks the domain
+      # on 80: another port needs something in front that forwards those to it.
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
       # Only on this machine unless ADMIN_PORT says otherwise (ADMIN_PORT=0.0.0.0:8443 in .env).
       - "${ADMIN_PORT:-127.0.0.1:8443}:8443"
     expose:
@@ -360,6 +365,47 @@ services:
       - ../../var/log/wata-price-recorder:/app/var/log/wata-price-recorder
       - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
       - ../../var/lib/price_export:/app/var/lib/price_export
+      - ../../etc/config.json:/app/etc/config.json:ro
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      postgres1:
+        condition: service_healthy
+
+  # Capital.com feed: the Nasdaq 100 streamed from Capital.com, recorded every
+  # ten seconds, sent live to the admin's charts and kept as one file a day for
+  # backtests. Not started unless the "capital" profile is enabled
+  # (COMPOSE_PROFILES=capital in .env, or admin,capital with the admin) and
+  # trade.config.capital_feed.enabled is true. Its login is the three CAPITAL_*
+  # lines of .env, handed to this container alone: Capital.com has no key that
+  # can only read prices. No trading service uses it.
+  capital_feed1:
+    image: wata-base:latest
+    hostname: capital_feed1
+    container_name: 'capital_feed1'
+    profiles: ["capital"]
+    environment:
+      - WATA_APP_ROLE=capital_feed
+      - CAPITAL_API_KEY=${CAPITAL_API_KEY:-}
+      - CAPITAL_IDENTIFIER=${CAPITAL_IDENTIFIER:-}
+      - CAPITAL_PASSWORD=${CAPITAL_PASSWORD:-}
+    volumes:
+      # Only what it needs: its own log, the folder of its day files, and the
+      # configuration, read only.
+      - ../../var/log/wata-capital-feed:/app/var/log/wata-capital-feed
+      - ../../var/lib/price_history/capital:/app/var/lib/price_history/capital
       - ../../etc/config.json:/app/etc/config.json:ro
     networks:
       - trade-net

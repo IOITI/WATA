@@ -6,6 +6,7 @@ Uses asyncpg connection pool for high-performance async I/O.
 """
 
 import asyncio
+import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -1018,7 +1019,6 @@ CREATE INDEX IF NOT EXISTS idx_price_volume_ts ON price_volume (ts);
 """
 
 PRICE_BAR_TABLE = "price_bar_10s"
-_PRICE_PARTITION_NAME = re.compile(rf"^{PRICE_BAR_TABLE}_y(\d{{4}})m(\d{{2}})$")
 
 
 async def init_price_history_schema(conn_mgr: PostgresConnectionManager):
@@ -1030,61 +1030,106 @@ def _month_start(day: date, months_later: int = 0) -> date:
     return date(months // 12, months % 12 + 1, 1)
 
 
-def price_bar_partition(day: date) -> tuple[str, date, date]:
-    """Name of the monthly partition holding ``day``, and its bounds (first day in, first day out)."""
+def month_partition(table: str, day: date) -> tuple[str, date, date]:
+    """Name of the monthly partition of ``table`` holding ``day``, and its bounds (first day in, first day out)."""
     start = _month_start(day)
-    return f"{PRICE_BAR_TABLE}_y{start.year:04d}m{start.month:02d}", start, _month_start(day, 1)
+    return f"{table}_y{start.year:04d}m{start.month:02d}", start, _month_start(day, 1)
+
+
+def price_bar_partition(day: date) -> tuple[str, date, date]:
+    """Name of the monthly partition of the recorder's bars holding ``day``, and its bounds."""
+    return month_partition(PRICE_BAR_TABLE, day)
+
+
+BAR_COLUMNS = (
+    "ts", "instrument_id", "bid_open", "bid_high", "bid_low", "bid_close",
+    "ask_open", "ask_high", "ask_low", "ask_close", "updates", "delayed_minutes",
+)
+
+
+async def insert_bar_rows(db, table: str, bars: list[tuple]) -> None:
+    """Write ten-second bars (tuples in BAR_COLUMNS order) in one statement. A bar already there is left as it is."""
+    if not bars:
+        return
+    columns = list(zip(*bars))
+    await db.execute(
+        f"""
+        INSERT INTO {table} ({", ".join(BAR_COLUMNS)})
+        SELECT * FROM unnest(
+            $1::timestamptz[], $2::int4[],
+            $3::float8[], $4::float8[], $5::float8[], $6::float8[],
+            $7::float8[], $8::float8[], $9::float8[], $10::float8[],
+            $11::int2[], $12::int2[]
+        )
+        ON CONFLICT (instrument_id, ts) DO NOTHING
+        """,
+        *[list(column) for column in columns],
+    )
+
+
+async def ensure_month_partitions(db, table: str, today: date, months_ahead: int = 1) -> list[str]:
+    """Create the partitions of ``table`` for this month and the next ones, so that a bar never arrives without one."""
+    names = []
+    for offset in range(months_ahead + 1):
+        name, start, end = month_partition(table, _month_start(today, offset))
+        # Bounds in UTC whatever the session's timezone: a bucket belongs to the month it starts in, in UTC.
+        await db.execute(
+            f"CREATE TABLE IF NOT EXISTS {name} PARTITION OF {table} "
+            f"FOR VALUES FROM ('{start.isoformat()} 00:00:00+00') TO ('{end.isoformat()} 00:00:00+00')"
+        )
+        names.append(name)
+    return names
+
+
+async def drop_month_partitions(db, table: str, today: date, months: int) -> tuple[list[str], datetime | None]:
+    """
+    Remove the partitions of ``table`` for the months that ended more than
+    ``months`` months ago. Returns their names and the first moment kept
+    (None when nothing was dropped), for the tables kept beside them.
+    """
+    if months <= 0:
+        return [], None
+    cutoff = _month_start(today, -months)
+    pattern = re.compile(rf"^{re.escape(table)}_y(\d{{4}})m(\d{{2}})$")
+    rows = await db.fetch(
+        "SELECT child.relname AS name FROM pg_inherits "
+        "JOIN pg_class parent ON pg_inherits.inhparent = parent.oid "
+        "JOIN pg_class child ON pg_inherits.inhrelid = child.oid "
+        "WHERE parent.relname = $1",
+        table,
+    )
+    dropped = []
+    for row in rows:
+        match = pattern.match(row["name"])
+        if not match:
+            continue
+        if date(int(match.group(1)), int(match.group(2)), 1) < cutoff:
+            await db.execute(f"DROP TABLE IF EXISTS {row['name']}")
+            dropped.append(row["name"])
+    if not dropped:
+        return [], None
+    return dropped, datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc)
 
 
 class AsyncDbPriceHistoryManager:
     """Instruments, bars and coverage written by the price recorder (see PRICE_HISTORY_SCHEMA_SQL)."""
 
-    BAR_COLUMNS = (
-        "ts", "instrument_id", "bid_open", "bid_high", "bid_low", "bid_close",
-        "ask_open", "ask_high", "ask_low", "ask_close", "updates", "delayed_minutes",
-    )
+    BAR_COLUMNS = BAR_COLUMNS
 
     def __init__(self, conn_mgr: PostgresConnectionManager):
         self.db = conn_mgr
 
     async def ensure_partitions(self, today: date, months_ahead: int = 1) -> list[str]:
         """Create the partitions of this month and the next ones, so that a bar never arrives without one."""
-        names = []
-        for offset in range(months_ahead + 1):
-            name, start, end = price_bar_partition(_month_start(today, offset))
-            # Bounds in UTC whatever the session's timezone: a bucket belongs to the month it starts in, in UTC.
-            await self.db.execute(
-                f"CREATE TABLE IF NOT EXISTS {name} PARTITION OF {PRICE_BAR_TABLE} "
-                f"FOR VALUES FROM ('{start.isoformat()} 00:00:00+00') TO ('{end.isoformat()} 00:00:00+00')"
-            )
-            names.append(name)
-        return names
+        return await ensure_month_partitions(self.db, PRICE_BAR_TABLE, today, months_ahead)
 
     async def drop_partitions_older_than(self, today: date, months: int) -> list[str]:
         """
         Remove the bars of the months that ended more than ``months`` months ago
         (and their coverage). Only called when a retention is configured.
         """
-        if months <= 0:
-            return []
-        cutoff = _month_start(today, -months)
-        rows = await self.db.fetch(
-            "SELECT child.relname AS name FROM pg_inherits "
-            "JOIN pg_class parent ON pg_inherits.inhparent = parent.oid "
-            "JOIN pg_class child ON pg_inherits.inhrelid = child.oid "
-            "WHERE parent.relname = $1",
-            PRICE_BAR_TABLE,
-        )
-        dropped = []
-        for row in rows:
-            match = _PRICE_PARTITION_NAME.match(row["name"])
-            if not match:
-                continue
-            if date(int(match.group(1)), int(match.group(2)), 1) < cutoff:
-                await self.db.execute(f"DROP TABLE IF EXISTS {row['name']}")
-                dropped.append(row["name"])
+        dropped, oldest_kept = await drop_month_partitions(self.db, PRICE_BAR_TABLE, today, months)
         if dropped:
-            oldest_kept = datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc)
             await self.db.execute("DELETE FROM price_recorder_coverage WHERE ts < $1", oldest_kept)
             await self.db.execute("DELETE FROM price_volume WHERE ts < $1", oldest_kept)
         return dropped
@@ -1118,22 +1163,7 @@ class AsyncDbPriceHistoryManager:
 
     async def insert_bars(self, bars: list[tuple]) -> None:
         """Write bars (tuples in BAR_COLUMNS order) in one statement. A bar already there is left as it is."""
-        if not bars:
-            return
-        columns = list(zip(*bars))
-        await self.db.execute(
-            f"""
-            INSERT INTO {PRICE_BAR_TABLE} ({", ".join(self.BAR_COLUMNS)})
-            SELECT * FROM unnest(
-                $1::timestamptz[], $2::int4[],
-                $3::float8[], $4::float8[], $5::float8[], $6::float8[],
-                $7::float8[], $8::float8[], $9::float8[], $10::float8[],
-                $11::int2[], $12::int2[]
-            )
-            ON CONFLICT (instrument_id, ts) DO NOTHING
-            """,
-            *[list(column) for column in columns],
-        )
+        await insert_bar_rows(self.db, PRICE_BAR_TABLE, bars)
 
     async def record_coverage(self, ts: datetime, feed_ok: bool, instruments: int, bars: int) -> None:
         await self.db.execute(
@@ -1207,4 +1237,221 @@ class AsyncDbPriceHistoryManager:
             start, end, indice, after_ts, after_id, limit,
         )
         return [dict(row) for row in rows]
+
+
+# ──────────────────────────────────────────────
+#  Capital.com feed
+# ──────────────────────────────────────────────
+
+# Created by the Capital.com feed alone (src/capital_feed), as the price
+# recorder creates its own: no trading service uses these tables.
+CAPITAL_SCHEMA_SQL = """
+-- The instruments of Capital.com that are recorded. The epic is Capital.com's
+-- name for one, the label WATA's (the indice of its rules, the folder of the
+-- day files).
+CREATE TABLE IF NOT EXISTS capital_instrument (
+    id               SERIAL PRIMARY KEY,
+    epic             VARCHAR(64) NOT NULL UNIQUE,
+    label            VARCHAR(32) NOT NULL,
+    name             TEXT,
+    instrument_type  VARCHAR(32),
+    currency         VARCHAR(8),
+    decimals         SMALLINT,
+    opening_hours    JSONB,
+    first_seen_at    TIMESTAMPTZ NOT NULL,
+    last_seen_at     TIMESTAMPTZ NOT NULL
+);
+
+-- Ten-second bars of the bid and the ask, in the columns of price_bar_10s and
+-- made by the same rules (src/price_recorder/bars.py). ts is the start of the
+-- bucket, updates the quote changes received in it.
+CREATE TABLE IF NOT EXISTS capital_bar_10s (
+    ts               TIMESTAMPTZ NOT NULL,
+    instrument_id    INTEGER NOT NULL,
+    bid_open         DOUBLE PRECISION NOT NULL,
+    bid_high         DOUBLE PRECISION NOT NULL,
+    bid_low          DOUBLE PRECISION NOT NULL,
+    bid_close        DOUBLE PRECISION NOT NULL,
+    ask_open         DOUBLE PRECISION,
+    ask_high         DOUBLE PRECISION,
+    ask_low          DOUBLE PRECISION,
+    ask_close        DOUBLE PRECISION,
+    updates          SMALLINT NOT NULL,
+    delayed_minutes  SMALLINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (instrument_id, ts)
+) PARTITION BY RANGE (ts);
+
+-- One row per ten seconds the feed lived through, as price_recorder_coverage:
+-- whether quotes were arriving, and how much it wrote. No row: not recorded.
+CREATE TABLE IF NOT EXISTS capital_coverage (
+    ts           TIMESTAMPTZ PRIMARY KEY,
+    feed_ok      BOOLEAN NOT NULL,
+    instruments  SMALLINT NOT NULL,
+    bars         SMALLINT NOT NULL
+);
+
+-- Capital.com's own candle of each minute, with the volume it gives it
+-- (lastTradedVolume): beside the bars, not in them.
+CREATE TABLE IF NOT EXISTS capital_minute (
+    instrument_id  INTEGER NOT NULL,
+    ts             TIMESTAMPTZ NOT NULL,
+    bid_open       DOUBLE PRECISION,
+    bid_high       DOUBLE PRECISION,
+    bid_low        DOUBLE PRECISION,
+    bid_close      DOUBLE PRECISION,
+    ask_open       DOUBLE PRECISION,
+    ask_high       DOUBLE PRECISION,
+    ask_low        DOUBLE PRECISION,
+    ask_close      DOUBLE PRECISION,
+    volume         DOUBLE PRECISION,
+    PRIMARY KEY (instrument_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_capital_minute_ts ON capital_minute (ts);
+
+-- What the feed is doing, written again every ten seconds: one row, which the
+-- admin reads (its age says whether the feed runs at all).
+CREATE TABLE IF NOT EXISTS capital_feed_state (
+    id           SMALLINT PRIMARY KEY CHECK (id = 1),
+    updated_at   TIMESTAMPTZ NOT NULL,
+    started_at   TIMESTAMPTZ NOT NULL,
+    version      VARCHAR(32),
+    environment  VARCHAR(8),
+    state        VARCHAR(32) NOT NULL,
+    detail       TEXT,
+    figures      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+"""
+
+CAPITAL_BAR_TABLE = "capital_bar_10s"
+
+
+async def init_capital_schema(conn_mgr: PostgresConnectionManager):
+    await conn_mgr.execute(CAPITAL_SCHEMA_SQL)
+
+
+class AsyncDbCapitalManager:
+    """Instruments, bars, coverage, minutes and state written by the Capital.com feed (see CAPITAL_SCHEMA_SQL)."""
+
+    BAR_COLUMNS = BAR_COLUMNS
+    MINUTE_COLUMNS = (
+        "instrument_id", "ts", "bid_open", "bid_high", "bid_low", "bid_close",
+        "ask_open", "ask_high", "ask_low", "ask_close", "volume",
+    )
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def ensure_partitions(self, today: date, months_ahead: int = 1) -> list[str]:
+        return await ensure_month_partitions(self.db, CAPITAL_BAR_TABLE, today, months_ahead)
+
+    async def drop_partitions_older_than(self, today: date, months: int) -> list[str]:
+        """Remove the bars of the months that ended more than ``months`` months ago, with their coverage and minutes."""
+        dropped, oldest_kept = await drop_month_partitions(self.db, CAPITAL_BAR_TABLE, today, months)
+        if dropped:
+            await self.db.execute("DELETE FROM capital_coverage WHERE ts < $1", oldest_kept)
+            await self.db.execute("DELETE FROM capital_minute WHERE ts < $1", oldest_kept)
+        return dropped
+
+    async def upsert_instrument(self, instrument: dict, seen_at: datetime) -> int:
+        """Record (or refresh) an instrument; returns its id. What Capital.com did not say this time is kept."""
+        opening_hours = instrument.get("opening_hours")
+        return await self.db.fetchval(
+            """
+            INSERT INTO capital_instrument (
+                epic, label, name, instrument_type, currency, decimals, opening_hours, first_seen_at, last_seen_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $8)
+            ON CONFLICT (epic) DO UPDATE SET
+                label = EXCLUDED.label,
+                name = COALESCE(EXCLUDED.name, capital_instrument.name),
+                instrument_type = COALESCE(EXCLUDED.instrument_type, capital_instrument.instrument_type),
+                currency = COALESCE(EXCLUDED.currency, capital_instrument.currency),
+                decimals = COALESCE(EXCLUDED.decimals, capital_instrument.decimals),
+                opening_hours = COALESCE(EXCLUDED.opening_hours, capital_instrument.opening_hours),
+                last_seen_at = EXCLUDED.last_seen_at
+            RETURNING id
+            """,
+            instrument["epic"], instrument["label"], instrument.get("name"), instrument.get("instrument_type"),
+            instrument.get("currency"), instrument.get("decimals"),
+            None if opening_hours is None else json.dumps(opening_hours), seen_at,
+        )
+
+    async def insert_bars(self, bars: list[tuple]) -> None:
+        await insert_bar_rows(self.db, CAPITAL_BAR_TABLE, bars)
+
+    async def record_coverage(self, ts: datetime, feed_ok: bool, instruments: int, bars: int) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO capital_coverage (ts, feed_ok, instruments, bars)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (ts) DO NOTHING
+            """,
+            ts, feed_ok, instruments, bars,
+        )
+
+    async def upsert_minutes(self, minutes: list[tuple]) -> None:
+        """
+        Write Capital.com's candles of some minutes (tuples in MINUTE_COLUMNS
+        order) in one statement. A minute fetched again replaces the one kept:
+        the last minute can still change when it is first fetched.
+        """
+        if not minutes:
+            return
+        columns = list(zip(*minutes))
+        await self.db.execute(
+            f"""
+            INSERT INTO capital_minute ({", ".join(self.MINUTE_COLUMNS)})
+            SELECT * FROM unnest(
+                $1::int4[], $2::timestamptz[],
+                $3::float8[], $4::float8[], $5::float8[], $6::float8[],
+                $7::float8[], $8::float8[], $9::float8[], $10::float8[],
+                $11::float8[]
+            )
+            ON CONFLICT (instrument_id, ts) DO UPDATE SET
+                bid_open = EXCLUDED.bid_open, bid_high = EXCLUDED.bid_high,
+                bid_low = EXCLUDED.bid_low, bid_close = EXCLUDED.bid_close,
+                ask_open = EXCLUDED.ask_open, ask_high = EXCLUDED.ask_high,
+                ask_low = EXCLUDED.ask_low, ask_close = EXCLUDED.ask_close,
+                volume = EXCLUDED.volume
+            """,
+            *[list(column) for column in columns],
+        )
+
+    async def write_state(self, state: dict) -> None:
+        """The one row saying what the feed is doing (CAPITAL_SCHEMA_SQL)."""
+        await self.db.execute(
+            """
+            INSERT INTO capital_feed_state (id, updated_at, started_at, version, environment, state, detail, figures)
+            VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+                updated_at = EXCLUDED.updated_at, started_at = EXCLUDED.started_at,
+                version = EXCLUDED.version, environment = EXCLUDED.environment,
+                state = EXCLUDED.state, detail = EXCLUDED.detail, figures = EXCLUDED.figures
+            """,
+            state["updated_at"], state["started_at"], state.get("version"), state.get("environment"),
+            state["state"], state.get("detail"), json.dumps(state.get("figures") or {}),
+        )
+
+    async def first_bar_at(self, instrument_id: int) -> datetime | None:
+        """The start of an instrument's first bar, None without one: reached through the key, never scanned."""
+        return await self.db.fetchval(
+            f"SELECT ts FROM {CAPITAL_BAR_TABLE} WHERE instrument_id = $1 ORDER BY ts LIMIT 1",
+            instrument_id,
+        )
+
+    DAY_FILE_COLUMNS = (
+        "ts", "bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close", "updates",
+    )
+
+    async def bars_between(self, instrument_id: int, start: datetime, end: datetime) -> list[tuple]:
+        """The bars of one instrument in [start, end), oldest first, as tuples of DAY_FILE_COLUMNS."""
+        rows = await self.db.fetch(
+            f"""
+            SELECT {", ".join(self.DAY_FILE_COLUMNS)}
+            FROM {CAPITAL_BAR_TABLE}
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+            ORDER BY ts
+            """,
+            instrument_id, start, end,
+        )
+        return [tuple(row[name] for name in self.DAY_FILE_COLUMNS) for row in rows]
 

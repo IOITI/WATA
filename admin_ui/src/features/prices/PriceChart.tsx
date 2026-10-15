@@ -4,6 +4,7 @@ import {
   createChart,
   createSeriesMarkers,
   CrosshairMode,
+  HistogramSeries,
   LineSeries,
   LineStyle,
 } from 'lightweight-charts'
@@ -16,12 +17,13 @@ import type {
   Time,
   UTCTimestamp,
 } from 'lightweight-charts'
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import { cn } from '@/lib/utils'
 
 import { withAlpha } from './chartData'
 import type { Candle, ChartMarker, ChartOverlay, EmptyPoint, LinePoint, MarkerTone } from './chartData'
+import type { LiveChart, LiveUpdate } from './liveTail'
 
 /**
  * The price chart. The only file that knows the charting library: what it is
@@ -100,6 +102,19 @@ function overlayData(overlay: ChartOverlay, colors: Palette) {
 // How much taller the prices are than the index under them.
 const MAIN_PANE_SHARE = 3
 const INDEX_PANE = 1
+// The volume takes the bottom fifth of the prices' panel, on a scale of its own.
+const VOLUME_SCALE = 'volume'
+const VOLUME_TOP_MARGIN = 0.8
+
+/** A point given to `update`: a time before the last one drawn is refused by the library, and left to the next read. */
+function updated(series: ISeriesApi<'Candlestick'> | ISeriesApi<'Histogram'> | null, point: Candle | LinePoint) {
+  if (!series) return
+  try {
+    series.update(point as never)
+  } catch {
+    // The bars read next put it right.
+  }
+}
 
 export interface PriceChartProps {
   candles: readonly (Candle | EmptyPoint)[]
@@ -112,6 +127,10 @@ export interface PriceChartProps {
   indexDecimals?: number
   /** Lines over the prices, on their scale: what was measured on them. */
   overlays?: readonly ChartOverlay[]
+  /** The quote changes of each bar, along the bottom of the prices: what stands for volume. */
+  volume?: readonly (LinePoint | EmptyPoint)[]
+  /** The last bars moving with the stream, drawn as they come without the page being drawn again. */
+  live?: LiveChart | null
   /** Bars shorter than a minute: the time axis then shows the seconds. */
   showSeconds: boolean
   /** Changes when another view is shown: the whole period comes back into view. A refresh keeps the zoom. */
@@ -132,6 +151,8 @@ export function PriceChart({
   indexMarkers,
   indexDecimals = 2,
   overlays,
+  volume,
+  live,
   showSeconds,
   viewKey,
   focus,
@@ -147,6 +168,8 @@ export function PriceChart({
   const lineSeries = useRef<ISeriesApi<'Line'> | null>(null)
   const lineMarkers = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const overlaySeries = useRef(new Map<string, ISeriesApi<'Line'>>())
+  const volumeSeries = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const liveChart = useRef(live)
   const hover = useRef(onHover)
 
   useEffect(() => {
@@ -213,8 +236,14 @@ export function PriceChart({
       candleMarkers.current = null
       lineSeries.current = null
       lineMarkers.current = null
+      volumeSeries.current = null
       lines.clear()
     }
+  }, [])
+
+  const drawLive = useCallback((update: LiveUpdate) => {
+    for (const candle of update.candles) updated(candleSeries.current, candle)
+    for (const point of update.volume) updated(volumeSeries.current, point)
   }, [])
 
   useEffect(() => {
@@ -257,6 +286,7 @@ export function PriceChart({
 
     // The lines over the prices: those no longer asked for go, the new ones join.
     const lines = overlaySeries.current
+    const alone = () => lines.size === 0 && !lineSeries.current && !volumeSeries.current
     const wanted = new Map((overlays ?? []).map((overlay) => [overlay.id, overlay]))
     for (const [id, line] of lines) {
       if (wanted.has(id)) continue
@@ -266,8 +296,26 @@ export function PriceChart({
     for (const [id, overlay] of wanted) {
       if (lines.has(id)) continue
       // A second series joining the prices: emptied first, for the same reason as above.
-      if (lines.size === 0 && !lineSeries.current) prices.setData([])
+      if (alone()) prices.setData([])
       lines.set(id, created.addSeries(LineSeries, overlayOptions(overlay.tone, colors)))
+    }
+
+    // The volume, along the bottom of the prices on a scale of its own.
+    if (!volume && volumeSeries.current) {
+      created.removeSeries(volumeSeries.current)
+      volumeSeries.current = null
+    }
+    if (volume && !volumeSeries.current) {
+      if (alone()) prices.setData([])
+      const series = created.addSeries(HistogramSeries, {
+        priceScaleId: VOLUME_SCALE,
+        priceFormat: { type: 'volume' },
+        color: withAlpha(colors.line, 0.35),
+        priceLineVisible: false,
+        lastValueVisible: false,
+      })
+      series.priceScale().applyOptions({ scaleMargins: { top: VOLUME_TOP_MARGIN, bottom: 0 } })
+      volumeSeries.current = series
     }
 
     prices.setData(timed(candles))
@@ -276,7 +324,20 @@ export function PriceChart({
       const overlay = wanted.get(id)
       if (overlay) line.setData(timed(overlayData(overlay, colors)))
     }
-  }, [candles, indexLine, overlays])
+    if (volume) volumeSeries.current?.setData(timed(volume))
+    // The bars read are older than what the stream moved since: put back on them.
+    const moving = liveChart.current?.current()
+    if (moving) drawLive(moving)
+  }, [candles, indexLine, overlays, volume, drawLive])
+
+  // What the stream moves, drawn as it comes: no render of the page for a quote.
+  useEffect(() => {
+    liveChart.current = live
+    if (!live) return
+    const moving = live.current()
+    if (moving) drawLive(moving)
+    return live.subscribe(drawLive)
+  }, [live, drawLive])
 
   // A change of format makes the library lay the whole chart out again: only when it does change.
   useEffect(() => {

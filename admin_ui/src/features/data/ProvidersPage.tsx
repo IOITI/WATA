@@ -17,6 +17,8 @@ import type { DataProvider, DataProviders } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { assetsLink, PROVIDERS_PATH } from './assets'
+import { CapitalSettingsDialog } from './CapitalSettingsDialog'
+import type { CapitalDialogStart } from './CapitalSettingsDialog'
 import { HistorySettingsDialog } from './HistorySettingsDialog'
 import { catalogItems, KIND_LABELS, listedProviders } from './providers'
 import type { CatalogItem } from './providers'
@@ -26,7 +28,11 @@ import type { RecorderDialogStart } from './RecorderSettingsDialog'
 /** The state of the providers is read again now and then: the recorder writes every ten seconds. */
 const REFRESH_MS = 30_000
 
-type Editing = { provider: 'saxo'; start: RecorderDialogStart } | { provider: 'dukascopy' } | null
+type Editing =
+  | { provider: 'saxo'; start: RecorderDialogStart }
+  | { provider: 'capital'; start: CapitalDialogStart }
+  | { provider: 'dukascopy' }
+  | null
 
 const linkClass = 'text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground'
 
@@ -168,6 +174,13 @@ function CatalogDialog({
                 <code>watastart</code>).
               </p>
             )}
+            {item.state === 'available' && item.entry.id === 'capital' && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Switches the feed on in the configuration. On the server, its login goes in <code>.env</code> (three{' '}
+                <code>CAPITAL_*</code> lines: a key made in Capital.com&rsquo;s settings, a demo account is enough),{' '}
+                <code>capital</code> is added to <code>COMPOSE_PROFILES</code>, and the application is stopped and started.
+              </p>
+            )}
             {item.state === 'available' && item.entry.id === 'dukascopy' && (
               <p className="mt-2 text-xs text-muted-foreground">
                 Nothing to switch on: fetch a first period from its page, or have the Nasdaq history kept up to date.
@@ -201,7 +214,13 @@ export function ProvidersPage() {
   const columns = useMemo(
     () =>
       providerColumns(timezone, (provider) =>
-        setEditing(provider.id === 'saxo' ? { provider: 'saxo', start: 'edit' } : { provider: 'dukascopy' }),
+        setEditing(
+          provider.id === 'saxo'
+            ? { provider: 'saxo', start: 'edit' }
+            : provider.id === 'capital'
+              ? { provider: 'capital', start: 'edit' }
+              : { provider: 'dukascopy' },
+        ),
       ),
     [timezone],
   )
@@ -248,6 +267,7 @@ export function ProvidersPage() {
         onSetUp={(item) => {
           setCatalogOpen(false)
           if (item.entry.id === 'saxo') setEditing({ provider: 'saxo', start: 'enable' })
+          else if (item.entry.id === 'capital') setEditing({ provider: 'capital', start: 'enable' })
           else navigate(`${PROVIDERS_PATH}/${item.entry.id}`)
         }}
       />
@@ -257,6 +277,11 @@ export function ProvidersPage() {
         onClose={() => setEditing(null)}
       />
       <HistorySettingsDialog open={editing?.provider === 'dukascopy'} onClose={() => setEditing(null)} />
+      <CapitalSettingsDialog
+        open={editing?.provider === 'capital'}
+        start={editing?.provider === 'capital' ? editing.start : 'edit'}
+        onClose={() => setEditing(null)}
+      />
     </>
   )
 }

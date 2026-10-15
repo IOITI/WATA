@@ -117,6 +117,21 @@ function RecordedQuality({ asset, from, to, limits, timeZone }: Omit<QualityTabP
   )
 }
 
+/** What the Capital.com feed missed while its market was open, and how much of each day it holds. */
+function StreamedQuality({ asset, from, to, limits, timeZone }: Omit<QualityTabProps, 'downloads'>) {
+  const contextQuery = useQuery({
+    queryKey: ['asset-context', asset.ref, from, to],
+    queryFn: () => api.assetContext(asset.ref, { from, to }),
+    placeholderData: keepPreviousData,
+  })
+  return (
+    <div className="flex flex-col gap-6">
+      <GapsPanel gaps={contextQuery.data?.gaps} error={contextQuery.error} timeZone={timeZone} hours="the market’s opening hours" />
+      <CoverageByDay asset={asset} from={from} to={to} limits={limits} timeZone={timeZone} />
+    </div>
+  )
+}
+
 /** Which days and hours were fetched from Dukascopy. */
 function HistoryQuality({ asset, from, to, limits, timeZone, downloads }: QualityTabProps) {
   const coverageQuery = useQuery({
@@ -150,5 +165,7 @@ function HistoryQuality({ asset, from, to, limits, timeZone, downloads }: Qualit
  * and why when it is known (the recorder down, Saxo silent, hours not fetched).
  */
 export function QualityTab(props: QualityTabProps) {
-  return props.asset.provider === 'dukascopy' ? <HistoryQuality {...props} /> : <RecordedQuality {...props} />
+  if (props.asset.provider === 'dukascopy') return <HistoryQuality {...props} />
+  if (props.asset.provider === 'capital') return <StreamedQuality {...props} />
+  return <RecordedQuality {...props} />
 }

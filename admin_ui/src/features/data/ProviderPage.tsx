@@ -16,9 +16,11 @@ import { PricesPanel } from '@/features/backtests/PricesPanel'
 import { GapsPanel } from '@/features/prices/GapsPanel'
 import { api } from '@/lib/api'
 import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
-import type { DataProvider, DukascopyProviderDetails, SaxoProviderDetails } from '@/lib/types'
+import type { CapitalProviderDetails, DataProvider, DukascopyProviderDetails, SaxoProviderDetails } from '@/lib/types'
 
 import { assetHref, assetsLink, PROVIDERS_PATH } from './assets'
+import { CapitalSettingsDialog } from './CapitalSettingsDialog'
+import type { CapitalDialogStart } from './CapitalSettingsDialog'
 import { HistorySettingsDialog } from './HistorySettingsDialog'
 import { KIND_LABELS, PROVIDER_NAMES } from './providers'
 import { RecorderSettingsDialog } from './RecorderSettingsDialog'
@@ -253,6 +255,249 @@ function DukascopyProvider({ provider }: { provider: DukascopyProviderDetails })
   )
 }
 
+function milliseconds(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : `${formatNumber(Math.round(value))} ms`
+}
+
+/** How to give the feed its login and start it: what is done on the server, never here. */
+function SettingUp({ variables }: { variables: string[] }) {
+  return (
+    <Panel title="Setting it up" description="Done once, on the server: the admin never holds the key.">
+      <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
+        <li>
+          In Capital.com, <em>Settings › API integrations</em> (two-factor authentication must be on): make a key and
+          choose its password. The demo account is enough.
+        </li>
+        <li>
+          In <code>/app/wata/.env</code>, three lines (a value with a <code>$</code> in single quotes):{' '}
+          {variables.map((name, index) => (
+            <span key={name}>
+              <code>{name}=…</code>
+              {index < variables.length - 1 ? ', ' : ''}
+            </span>
+          ))}
+          . Only the feed&rsquo;s container receives them.
+        </li>
+        <li>
+          Add <code>capital</code> to <code>COMPOSE_PROFILES</code> in the same file, switch the feed on here, then{' '}
+          <code>watastop</code> and <code>watastart</code>.
+        </li>
+        <li>
+          To see what Capital.com gives the key: <code>docker exec capital_feed1 python -m src.capital_feed.probe --epic US100</code>{' '}
+          (its quotes, how late they are, and what its volume counts).
+        </li>
+      </ol>
+    </Panel>
+  )
+}
+
+function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
+  const { timezone } = useSession()
+  const [editing, setEditing] = useState<CapitalDialogStart | null>(null)
+  const { settings, feed } = provider
+  const figures = feed?.figures ?? {}
+  const delays = figures.delay_ms
+  const stream = figures.stream
+  const live = figures.live
+  const minutes = figures.minutes
+  const followed = new Map((figures.instruments ?? []).map((instrument) => [instrument.epic, instrument]))
+  // Switched on in the file, and not writing: the server has to start it.
+  const notRunning = provider.enabled && provider.status === 'down'
+  const needsLogin = feed?.state === 'no_credentials' || feed?.state === 'refused'
+
+  return (
+    <>
+      <PageHeader
+        title={provider.name}
+        description={`${KIND_LABELS[provider.kind]}. ${provider.description}`}
+        actions={
+          <Button size="sm" leftIcon={<Settings2 className="size-3.5" />} onClick={() => setEditing('edit')}>
+            Edit configuration
+          </Button>
+        }
+      />
+      <Overview provider={provider} timeZone={timezone} />
+      {provider.restart_required && (
+        <Alert tone="warning">
+          <AlertDescription>
+            The configuration changed since the services started: the feed applies its settings at its next start.
+          </AlertDescription>
+        </Alert>
+      )}
+      {notRunning && (
+        <Alert tone="danger" role="alert">
+          <AlertDescription>
+            {needsLogin ? (
+              <>
+                {provider.detail}. On the server, the three <code>CAPITAL_*</code> lines of <code>.env</code> give its
+                login; then <code>docker restart capital_feed1</code>.
+              </>
+            ) : (
+              <>
+                Switched on in the configuration, and not recording. On the server, <code>capital</code> must be in{' '}
+                <code>COMPOSE_PROFILES</code> (then <code>watastop</code>, <code>watastart</code>), or the feed
+                restarted: <code>docker restart capital_feed1</code>.
+              </>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {feed && (
+        <Panel
+          title="The stream now"
+          description={`As the feed wrote it ${formatDateTime(feed.updated_at, timezone)}, over the last minute. The delay is Capital.com's time of a quote to the feed's receipt.`}
+        >
+          <dl>
+            <Row label="Account">{feed.environment === 'live' ? 'Live' : feed.environment === 'demo' ? 'Demo' : feed.environment ?? '—'}</Row>
+            <Row label="Quotes">
+              {figures.quotes_per_minute === undefined ? '—' : `${formatNumber(figures.quotes_per_minute)} in the last minute`}
+            </Row>
+            <Row label="Delay">
+              {delays && delays.p50 !== null
+                ? `Median ${milliseconds(delays.p50)}, 95 % under ${milliseconds(delays.p95)}, worst ${milliseconds(delays.max)}`
+                : '—'}
+            </Row>
+            <Row label="Connection">
+              {stream
+                ? stream.connected
+                  ? `Open since ${formatDateTime(stream.since, timezone)} (${formatNumber(stream.connections)} since the feed started)`
+                  : `Connecting${stream.last_error ? `: ${stream.last_error}` : ''}`
+                : '—'}
+            </Row>
+            <Row label="To the charts">
+              {live
+                ? live.failing
+                  ? `Not sent: ${live.last_error ?? 'RabbitMQ unavailable'}`
+                  : `${formatNumber(live.sent)} sent through RabbitMQ${live.dropped ? `, ${formatNumber(live.dropped)} dropped` : ''}`
+                : '—'}
+            </Row>
+            <Row label="Capital.com's minutes">
+              {minutes
+                ? !minutes.enabled
+                  ? 'Not fetched'
+                  : minutes.error
+                    ? `Not fetched: ${minutes.error}`
+                    : `Last fetched ${formatDateTime(minutes.last, timezone)}`
+                : '—'}
+            </Row>
+            <Row label="Last bar written">{formatDateTime(figures.last_bar_at ?? null, timezone)}</Row>
+            {(figures.pending_buckets ?? 0) > 0 && (
+              <Row label="Waiting for the database">{formatNumber(figures.pending_buckets ?? 0)} ten seconds</Row>
+            )}
+            <Row label="Feed">
+              v{feed.version ?? '?'}, started {formatDateTime(feed.started_at, timezone)}
+            </Row>
+          </dl>
+        </Panel>
+      )}
+
+      <GapsPanel gaps={provider.gaps_today} timeZone={timezone} hours="the markets’ opening hours" />
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Panel
+          title="Instruments"
+          description="Capital.com's epic, and the label WATA gives it: the indice of the rules, the folder of its day files."
+          action={
+            <Button variant="ghost" size="sm" onClick={() => setEditing('edit')}>
+              Change
+            </Button>
+          }
+        >
+          <ul className="divide-y divide-border/60 text-sm">
+            {settings.instruments.map((instrument) => {
+              const state = followed.get(instrument.epic)
+              return (
+                <li key={instrument.epic} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="font-medium">
+                      {state?.name ?? instrument.epic}{' '}
+                      <span className="font-normal text-muted-foreground">
+                        · {instrument.epic} as {instrument.label}
+                      </span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {state
+                        ? [
+                            state.market === 'open'
+                              ? 'Market open'
+                              : state.market === 'closed'
+                                ? `Market closed${state.next_opening ? `, opens ${formatDateTime(state.next_opening, timezone)}` : ''}`
+                                : 'Market not known yet',
+                            state.subscription && state.subscription !== 'PROCESSED'
+                              ? `Capital.com refused it: ${state.subscription}`
+                              : null,
+                            state.last_quote_at ? `last quote ${formatDateTime(state.last_quote_at, timezone)}` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : 'Not followed by the feed running now'}
+                    </p>
+                  </div>
+                  <Link
+                    to={assetHref({ ref: `capital/${instrument.epic}` })}
+                    className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                  >
+                    View asset
+                  </Link>
+                </li>
+              )
+            })}
+          </ul>
+        </Panel>
+        <Panel
+          title="Settings"
+          description="trade.config.capital_feed, as the file holds it now."
+          action={
+            <Button variant="ghost" size="sm" onClick={() => setEditing('edit')}>
+              Edit
+            </Button>
+          }
+        >
+          <dl>
+            <Row label="Recording">{settings.enabled ? 'Switched on' : 'Switched off'}</Row>
+            <Row label="Account">{settings.environment === 'live' ? 'Live' : 'Demo'}</Row>
+            <Row label="Capital.com's volume">{settings.minute_volume ? 'Fetched for each minute' : 'Not fetched'}</Row>
+            <Row label="Day files">{settings.day_files ? 'Written for each day over' : 'Not written'}</Row>
+            <Row label="Kept in the database">
+              {settings.retention_months === 0
+                ? 'For good'
+                : `${settings.retention_months} month${settings.retention_months === 1 ? '' : 's'}`}
+            </Row>
+            <Row label="Said to have stopped after">{formatNumber(settings.alert_after_seconds)} s</Row>
+          </dl>
+        </Panel>
+      </div>
+
+      <Panel
+        title="Day files for backtests"
+        description="Each day of UTC, once over, as a file of ten-second bars in the format of the Dukascopy days: a backtest can run on it."
+      >
+        {provider.day_files.every((files) => files.days === 0) ? (
+          <p className="text-sm text-muted-foreground">None yet: a day is written once it is over.</p>
+        ) : (
+          <ul className="divide-y divide-border/60 text-sm">
+            {provider.day_files.map((files) => (
+              <li key={files.label} className="flex flex-wrap items-center justify-between gap-3 py-2">
+                <span className="font-medium">{files.label}</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {files.days === 0
+                    ? 'None yet'
+                    : `${formatNumber(files.days)} day${files.days === 1 ? '' : 's'}, ${formatDay(files.first_day)} to ${formatDay(files.last_day)}, ${formatBytes(files.bytes)}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      <SettingUp variables={provider.credential_variables} />
+
+      <CapitalSettingsDialog open={editing !== null} start={editing ?? 'edit'} onClose={() => setEditing(null)} />
+    </>
+  )
+}
+
 /** One provider: what it is doing, how it is set, and what it holds. */
 export function ProviderPage() {
   const { providerId = '' } = useParams()
@@ -268,6 +513,13 @@ export function ProviderPage() {
     enabled: providerId === 'dukascopy',
     refetchInterval: REFRESH_MS,
   })
+  const capitalQuery = useQuery({
+    queryKey: ['data-provider', 'capital'],
+    queryFn: api.capitalProvider,
+    enabled: providerId === 'capital',
+    // The feed writes what it does every ten seconds.
+    refetchInterval: 10_000,
+  })
 
   if (providerId === 'saxo') {
     return (
@@ -280,6 +532,13 @@ export function ProviderPage() {
     return (
       <QueryState isPending={dukascopyQuery.isPending} error={dukascopyQuery.error} hasData={!!dukascopyQuery.data}>
         {dukascopyQuery.data && <DukascopyProvider provider={dukascopyQuery.data} />}
+      </QueryState>
+    )
+  }
+  if (providerId === 'capital') {
+    return (
+      <QueryState isPending={capitalQuery.isPending} error={capitalQuery.error} hasData={!!capitalQuery.data}>
+        {capitalQuery.data && <CapitalProvider provider={capitalQuery.data} />}
       </QueryState>
     )
   }

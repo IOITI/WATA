@@ -102,9 +102,21 @@ export function isSweep(run: BacktestRunListed): boolean {
   return run.kind === 'sweep'
 }
 
+/** The prices of a run, in words: Dukascopy's for a run made before there was a choice. */
+export function pricesWording(run: Pick<BacktestRunListed, 'prices'>): string {
+  return run.prices === 'capital' ? 'Capital.com’s recorded prices' : 'Dukascopy’s history'
+}
+
+/** Runs made on different prices: part of what differs between them may be the prices. */
+export function mixedPrices(runs: readonly Pick<BacktestRunListed, 'prices'>[]): boolean {
+  return new Set(runs.map((run) => run.prices ?? 'dukascopy')).size > 1
+}
+
 /** In a few words, what sets a run apart: for a list. */
 export function whatDiffers(run: BacktestRunListed): string {
   const parts = [
+    // Dukascopy's history is what runs are made on unless said otherwise.
+    ...(run.prices === 'capital' ? ['on Capital.com prices'] : []),
     ...Object.entries(run.parameters).map(([name, value]) => `${wording(name).toLowerCase()} ${showValue(value)}`),
     ...Object.entries(run.rules).map(([name, value]) => `${wording(name).toLowerCase()} ${showValue(value)}`),
   ]

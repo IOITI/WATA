@@ -107,6 +107,50 @@ def test_no_trading_service_waits_for_the_price_recorder(compose_services):
         assert "price_recorder1" not in depends_on, name
 
 
+def test_the_capital_com_feed_is_only_started_on_request_and_reachable_by_nothing(compose_services):
+    feed = compose_services["capital_feed1"]
+
+    assert feed["profiles"] == ["capital"]
+    # It serves nothing: no port, no route. Its live prices leave through RabbitMQ.
+    assert "ports" not in feed and "expose" not in feed and "labels" not in feed
+    for name, service in compose_services.items():
+        assert "capital_feed1" not in (service.get("depends_on") or {}), name
+
+
+def test_the_capital_com_login_is_handed_to_the_feed_alone_and_never_written_in_the_file(compose_services):
+    variables = ("CAPITAL_API_KEY", "CAPITAL_IDENTIFIER", "CAPITAL_PASSWORD")
+
+    assert compose_services["capital_feed1"]["environment"] == [
+        "WATA_APP_ROLE=capital_feed", *(f"{name}=${{{name}:-}}" for name in variables),
+    ]
+    for name, service in compose_services.items():
+        if name == "capital_feed1":
+            continue
+        assert not any("CAPITAL_" in str(variable) for variable in service.get("environment") or []), name
+    example = open("deploy/.env.example", encoding="utf-8").read()
+    for name in variables:
+        assert f"# {name}=" in example
+
+
+def test_the_capital_com_feed_mounts_only_what_it_uses(compose_services):
+    modes = _mount_modes(compose_services["capital_feed1"])
+
+    assert modes == {
+        "/app/var/log/wata-capital-feed": "rw",
+        # Its day files, which the admin reads through its own mount of the history of prices.
+        "/app/var/lib/price_history/capital": "rw",
+        "/app/etc/config.json": "ro",
+    }
+    assert not any("docker.sock" in volume for volume in compose_services["capital_feed1"]["volumes"])
+
+
+def test_the_install_script_makes_the_folders_of_the_capital_com_feed():
+    script = open("deploy/install_package.sh").read()
+
+    assert 'mkdir -p "$APP_BASE_DIR/var/log/wata-capital-feed"' in script
+    assert 'mkdir -p "$APP_BASE_DIR/var/lib/price_history/capital"' in script
+
+
 def test_the_start_script_knows_every_role_of_the_compose_file(compose_services):
     script = open("src/start_python_script.sh").read()
     roles = {
@@ -152,6 +196,43 @@ def test_second_https_port_stays_on_the_machine_unless_asked(compose_services):
     # Published on the loopback address by default: an upgrade opens nothing.
     assert "${ADMIN_PORT:-127.0.0.1:8443}:8443" in traefik["ports"]
     assert not any(port.endswith(":8443") and not port.startswith("${ADMIN_PORT") for port in traefik["ports"])
+
+
+def test_http_and_https_ports_of_the_server_are_80_and_443_unless_asked(compose_services):
+    traefik = compose_services["traefik"]
+
+    assert "${HTTP_PORT:-80}:80" in traefik["ports"]
+    assert "${HTTPS_PORT:-443}:443" in traefik["ports"]
+    # The ports inside the container stay the same: the routes and the redirection name them.
+    assert "--entrypoints.web.address=:80" in traefik["command"]
+    assert "--entrypoints.websecure.address=:443" in traefik["command"]
+    assert len(traefik["ports"]) == 3
+
+
+def test_http_is_redirected_to_the_port_https_is_published_on(compose_services):
+    # The name of the entrypoint would send browsers to 443 whatever HTTPS_PORT says.
+    assert (
+        "--entrypoints.web.http.redirections.entryPoint.to=:${HTTPS_PORT:-443}"
+        in compose_services["traefik"]["command"]
+    )
+
+
+def test_the_install_script_opens_the_ports_of_the_env_file():
+    script = open("deploy/install_package.sh").read()
+
+    assert 'sudo ufw allow "$HTTP_PORT/tcp"' in script
+    assert 'sudo ufw allow "$HTTPS_PORT/tcp"' in script
+    assert "HTTP_PORT=$(env_port HTTP_PORT 80)" in script
+    assert "HTTPS_PORT=$(env_port HTTPS_PORT 443)" in script
+
+
+def test_the_env_example_names_every_port_the_compose_file_reads():
+    compose = open("deploy/docker-compose.yml").read()
+    example = open("deploy/.env.example").read()
+
+    for variable in ("HTTP_PORT", "HTTPS_PORT", "ADMIN_PORT"):
+        assert "${" + variable + ":-" in compose, variable
+        assert f"# {variable}=" in example, variable
 
 
 def test_admin_is_on_the_usual_https_port_unless_asked(compose_services):

@@ -43,7 +43,12 @@ class Period(BaseModel):
     last_day: date = Field(alias="to")
 
 
+# The prices a run is made on: downloaded from Dukascopy, or recorded from Capital.com.
+Prices = Literal["dukascopy", "capital"]
+
+
 class SignalsRequest(Period):
+    prices: Prices = "dukascopy"
     # Only what differs from the live rules.
     rules: dict[str, bool | int | float] = Field(default_factory=dict)
     entry_price: float | None = Field(None, gt=0)
@@ -72,6 +77,7 @@ class SweepRequest(Period):
     """The same backtest for every combination of the values of one or two settings."""
 
     replay: Literal["strategy", "signals"] = "strategy"
+    prices: Prices = "dukascopy"
     axes: list[Axis]
     # The share of the days, the last ones, that have no say in the choice.
     held_out: float = Field(0.3, gt=0, lt=1)
@@ -117,16 +123,20 @@ async def prices(
     first_day: date | None = Query(None, alias="from"),
     last_day: date | None = Query(None, alias="to"),
     label: str | None = Query(None),
+    prices: Prices = Query("dukascopy"),
     service=Depends(backtests),
 ):
     """
     Which days have prices to backtest on, and the download in progress if
     there is one. Of another Dukascopy instrument than the one backtests read
-    when ``label`` says so. Off the event loop: each day's hours are looked
-    for on the disk.
+    when ``label`` says so; of the days recorded from Capital.com when
+    ``prices`` says so. Off the event loop: each day's hours are looked for on
+    the disk.
     """
     last_day = last_day or datetime.now(timezone.utc).date()
     first_day = first_day or last_day - timedelta(days=DEFAULT_COVERAGE_DAYS - 1)
+    if prices == "capital":
+        return await run_in_threadpool(service.recorded_coverage, first_day, last_day)
     return await run_in_threadpool(service.coverage, first_day, last_day, label)
 
 
@@ -170,6 +180,7 @@ async def replay_signals(body: SignalsRequest, request: Request, service=Depends
         positions=await queries.closed_positions(body.first_day, body.last_day),
         rules=body.rules, entry_price=body.entry_price, spread=body.spread, leverages=body.leverages,
         note=body.note.strip(), capital=body.capital, fill_delay=body.fill_delay, slippage=body.slippage,
+        prices=body.prices,
     )
 
 
@@ -186,6 +197,7 @@ async def sweep(body: SweepRequest, request: Request, service=Depends(backtests)
         held_out=body.held_out, strategy=body.strategy, parameters=body.parameters, rules=body.rules,
         entry_price=body.entry_price, spread=body.spread, leverage=body.leverage, note=body.note.strip(),
         fill_delay=body.fill_delay, slippage=body.slippage, journal=journal, positions=positions,
+        prices=body.prices,
     )
 
 
@@ -213,7 +225,7 @@ async def create(body: RunRequest, service=Depends(backtests)):
         first_day=body.first_day, last_day=body.last_day, strategy=body.strategy,
         parameters=body.parameters, rules=body.rules,
         entry_price=body.entry_price, spread=body.spread, leverages=body.leverages, note=body.note.strip(),
-        capital=body.capital, fill_delay=body.fill_delay, slippage=body.slippage,
+        capital=body.capital, fill_delay=body.fill_delay, slippage=body.slippage, prices=body.prices,
     )
 
 

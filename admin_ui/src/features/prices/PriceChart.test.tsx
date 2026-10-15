@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
 
 import type { Candle, ChartMarker, ChartOverlay, LinePoint } from './chartData'
+import type { LiveChart, LiveUpdate } from './liveTail'
 import { PriceChart } from './PriceChart'
 import type { PriceChartProps } from './PriceChart'
 
@@ -298,5 +299,93 @@ describe('the pointer', () => {
     expect(charts).toHaveLength(1)
     expect(first).not.toHaveBeenCalled()
     expect(second).toHaveBeenCalledWith(110)
+  })
+})
+
+describe('the volume', () => {
+  const VOLUME = [point(100, 3), point(110, 0), point(120, 7)]
+
+  it('is drawn along the bottom of the prices, on a scale of its own, and taken away when not asked for', () => {
+    const { rerender } = render(<PriceChart {...props({ volume: VOLUME })} />)
+
+    const chart = theChart()
+    const volume = seriesOf(chart, 'Histogram')
+    expect(volume?.data).toEqual(VOLUME)
+    expect(volume?.options.priceScaleId).toBe('volume')
+    expect(volume?.scaleOptions).toEqual({ scaleMargins: { top: 0.8, bottom: 0 } })
+    // A second series joins the prices only after they were emptied (Lightweight Charts 5.2.1).
+    expect(chart.calls.slice(0, 3)).toEqual(['add Candlestick', 'Candlestick data 0', 'add Histogram'])
+    expect(seriesOf(chart, 'Candlestick')?.data).toEqual(CANDLES)
+
+    rerender(<PriceChart {...props()} />)
+    expect(seriesOf(chart, 'Histogram')).toBeUndefined()
+  })
+})
+
+describe('the stream', () => {
+  function channel() {
+    let listener: ((update: LiveUpdate) => void) | null = null
+    let current: LiveUpdate | null = null
+    const live: LiveChart = {
+      current: () => current,
+      subscribe: (next) => {
+        listener = next
+        return () => {
+          listener = null
+        }
+      },
+    }
+    return {
+      live,
+      send(update: LiveUpdate) {
+        current = update
+        listener?.(update)
+      },
+      get listening() {
+        return listener !== null
+      },
+    }
+  }
+
+  it('moves the last candles as it sends them, without the bars being set again', () => {
+    const stream = channel()
+    render(<PriceChart {...props({ volume: [point(120, 4)], live: stream.live })} />)
+    const chart = theChart()
+    const settings = chart.calls.filter((call) => call.endsWith('data 3')).length
+
+    stream.send({ candles: [candle(120, 8.4, 8.5), candle(130, 8.5, 8.55)], volume: [point(120, 5), point(130, 1)] })
+
+    expect(seriesOf(chart, 'Candlestick')?.data.at(-1)).toEqual(candle(130, 8.5, 8.55))
+    expect(seriesOf(chart, 'Candlestick')?.data).toHaveLength(4)
+    expect(seriesOf(chart, 'Histogram')?.updates).toEqual([point(120, 5), point(130, 1)])
+    expect(chart.calls.filter((call) => call.endsWith('data 3')).length).toBe(settings)
+  })
+
+  it('puts back what it moved after the bars are read again', () => {
+    const stream = channel()
+    const { rerender } = render(<PriceChart {...props({ live: stream.live })} />)
+    stream.send({ candles: [candle(130, 8.5, 8.55)], volume: [] })
+
+    rerender(<PriceChart {...props({ candles: [...CANDLES], live: stream.live })} />)
+
+    expect(seriesOf(theChart(), 'Candlestick')?.data.at(-1)).toEqual(candle(130, 8.5, 8.55))
+  })
+
+  it('leaves alone a candle older than the last one drawn, which the library refuses', () => {
+    const stream = channel()
+    render(<PriceChart {...props({ live: stream.live })} />)
+
+    expect(() => stream.send({ candles: [candle(90)], volume: [] })).not.toThrow()
+    expect(seriesOf(theChart(), 'Candlestick')?.data).toEqual(CANDLES)
+  })
+
+  it('stops listening when it is no longer given', () => {
+    const stream = channel()
+    const { rerender } = render(<PriceChart {...props({ live: stream.live })} />)
+    expect(stream.listening).toBe(true)
+
+    rerender(<PriceChart {...props({ live: null })} />)
+
+    expect(stream.listening).toBe(false)
   })
 })

@@ -580,7 +580,7 @@ export interface LiveEvent {
 
 // ── stored prices (src/admin/routers/data.py) ──
 
-export type DataProviderId = 'saxo' | 'dukascopy'
+export type DataProviderId = 'saxo' | 'dukascopy' | 'capital'
 
 /**
  * An instrument whose prices WATA keeps, as every answer about its prices
@@ -642,6 +642,11 @@ export interface PriceBars {
   interval: number
   columns: string[]
   bars: PriceBarRow[]
+  /**
+   * The start of the last ten-second bar these bars hold (Capital.com): a live
+   * chart adds only what follows it. Null for the other providers.
+   */
+  through?: number | null
 }
 
 /**
@@ -772,6 +777,10 @@ export interface DataAsset extends PriceInstrument {
    */
   first_day?: string
   last_day?: string
+  /** Capital.com's name of the instrument (Capital.com). */
+  epic?: string
+  instrument_type?: string | null
+  decimals?: number | null
 }
 
 export interface DataAssets {
@@ -816,6 +825,46 @@ export interface AssetLimits {
   gaps: number
 }
 
+/** How late quotes arrived over the last minute, in milliseconds: Capital.com's time of a quote to the feed's receipt. */
+export interface CapitalDelays {
+  p50: number | null
+  p95: number | null
+  max: number | null
+  count: number
+}
+
+/** The day files written for backtests, of one label. */
+export interface CapitalDayFiles {
+  label: string
+  days: number
+  first_day: string | null
+  last_day: string | null
+  bytes: number
+  location: string
+}
+
+export interface CapitalRecording {
+  epic: string
+  label: string
+  environment: string | null
+  feed_state: string | null
+  feed_detail: string | null
+  feed_updated_at: string | null
+  market: 'open' | 'closed' | 'unknown' | null
+  next_opening: string | null
+  /** As Capital.com gives them: {mon: ["00:00 - 21:59", ...], zone: "UTC"}. */
+  opening_hours: Record<string, string[] | string> | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+  quotes_per_minute: number | null
+  delay_ms: CapitalDelays | null
+  minute_volume: boolean | null
+  retention_months: number | null
+  day_files: CapitalDayFiles
+  /** The chart of a day still going follows the stream. */
+  live: boolean
+}
+
 export interface AssetDetails {
   asset: DataAsset
   timezone: string
@@ -824,7 +873,7 @@ export interface AssetDetails {
   last_day: string
   /** Under a turbo, the index of its indice recorded in the period asked. */
   index: PriceInstrument | null
-  recording: SaxoRecording | HistoryRecording
+  recording: SaxoRecording | HistoryRecording | CapitalRecording
   max_days: AssetLimits
 }
 
@@ -903,6 +952,124 @@ export interface DataProvider extends CatalogEntry {
   /** The downloads (Dukascopy). */
   fetch?: PriceFetchStatus | null
   keep?: PriceKeepStatus | null
+  /** What the Capital.com feed last wrote of itself; null when it never ran. */
+  feed?: CapitalFeedState | null
+}
+
+export interface CapitalFeedInstrument {
+  epic: string
+  label: string
+  name: string | null
+  market: 'open' | 'closed' | 'unknown'
+  status: string | null
+  last_quote_at: string | null
+  next_opening: string | null
+  subscription: string | null
+}
+
+export interface CapitalFeedState {
+  updated_at: string
+  started_at: string
+  version: string | null
+  environment: string | null
+  /** streaming, market_closed, connecting, starting, refused, database, no_credentials, disabled, invalid_config. */
+  state: string
+  detail: string | null
+  figures: {
+    instruments?: CapitalFeedInstrument[]
+    quotes_per_minute?: number
+    delay_ms?: CapitalDelays
+    stream?: { connected: boolean; since: string | null; connections: number; last_error: string | null }
+    live?: { sent: number; dropped: number; failing: boolean; last_error: string | null }
+    minutes?: { enabled: boolean; last: string | null; error: string | null }
+    day_files?: { enabled: boolean; written: number; last: string | null }
+    pending_buckets?: number
+    dropped_buckets?: number
+    last_bar_at?: string | null
+  }
+}
+
+export interface CapitalInstrumentSetting {
+  epic: string
+  label: string
+}
+
+/** The settings of the Capital.com feed (trade.config.capital_feed). */
+export interface CapitalSettings {
+  enabled: boolean
+  environment: string
+  instruments: CapitalInstrumentSetting[]
+  minute_volume: boolean
+  day_files: boolean
+  retention_months: number
+  alert_after_seconds: number
+}
+
+export interface CapitalProviderDetails extends DataProvider {
+  settings: CapitalSettings
+  gaps_today: PriceGap[] | null
+  day_files: CapitalDayFiles[]
+  /** The names of the variables of .env the login is given in: never anything of their values. */
+  credential_variables: string[]
+  restart_required: boolean
+}
+
+export interface CapitalConfig {
+  section: JsonObject | null
+  defaults: CapitalSettings
+  environments: string[]
+  indices: string[]
+  revision: string
+  editable: boolean
+}
+
+/** Capital.com's own volume of the minutes of a period, added up by interval. */
+export interface CapitalVolume {
+  instrument: PriceInstrument
+  from: string
+  to: string
+  timezone: string
+  interval: number
+  columns: ['t', 'volume']
+  volume: [t: number, volume: number | null][]
+}
+
+// ── the live stream of an asset (/api/data/assets/capital/<epic>/live) ──
+
+/** Times of a message in milliseconds: quoted by Capital.com (t), received by the feed (rx), sent by the admin (sx). */
+export interface LiveQuoteMessage {
+  type: 'quote'
+  ref: string
+  t: number | null
+  rx: number
+  sx?: number
+  bid: number
+  ask: number
+  /** The ten seconds the quote is part of, as recorded bars are. */
+  bar: PriceBarRow | null
+}
+
+export interface LiveBarMessage {
+  type: 'bar'
+  ref: string
+  bar: PriceBarRow
+  sx?: number
+}
+
+export interface LiveStateMessage {
+  type: 'state'
+  ref: string
+  market?: 'open' | 'closed'
+  status?: string
+  sx?: number
+}
+
+export interface LiveSnapshot {
+  server_ms: number
+  live: boolean
+  detail: string | null
+  quote: LiveQuoteMessage | null
+  state: LiveStateMessage | null
 }
 
 export interface DataProviders {
@@ -1184,8 +1351,13 @@ export interface BacktestHeadline {
   beaten?: number | null
 }
 
+/** The prices a run is made on: downloaded from Dukascopy, or recorded from Capital.com. */
+export type BacktestPrices = 'dukascopy' | 'capital'
+
 export interface BacktestRunListed {
   id: string
+  /** Absent in the runs made before there was a choice: Dukascopy's. */
+  prices?: BacktestPrices
   /** A strategy replayed, the signals WATA really received, or a sweep of either. Absent in the first runs: a strategy. */
   kind?: 'strategy' | 'signals' | 'sweep'
   /** For a sweep: what it replays, the settings it gives several values to, and the share of the days it holds out. */
@@ -1358,6 +1530,7 @@ export interface BacktestDayChart {
 export interface BacktestSignalsRequest {
   from: string
   to: string
+  prices?: BacktestPrices
   rules: Record<string, BacktestValue>
   entry_price: number
   spread: number
@@ -1373,6 +1546,7 @@ export interface BacktestSweepRequest {
   from: string
   to: string
   replay: 'strategy' | 'signals'
+  prices?: BacktestPrices
   axes: SweepAxis[]
   held_out: number
   strategy: string
@@ -1521,9 +1695,11 @@ export interface PriceFetchStatus {
 export interface PriceCoverage {
   from: string
   to: string
-  /** The Dukascopy instrument these days are of. */
+  /** The Dukascopy instrument these days are of, or the indice of the days recorded from Capital.com. */
   label: string
-  symbol: string
+  symbol: string | null
+  /** 'capital': the days the Capital.com feed recorded, a file each once over; nothing of them is fetched. */
+  prices?: BacktestPrices
   days: PriceCoverageDay[]
   ready: { count: number; first: string | null; last: string | null }
   fetch: PriceFetchStatus

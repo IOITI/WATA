@@ -214,6 +214,22 @@ WATA uses token-based authentication to secure webhook endpoints:
 
 In the Docker Compose deployment, Traefik redirects HTTP to HTTPS and obtains certificates through Let's Encrypt. Configure `API_DOMAIN` and `ACME_EMAIL` in `deploy/.env`, point the domain at the server, and allow inbound ports 80 and 443. HTTPS and the IP allowlist supplement the webhook token; they do not replace it.
 
+### Other ports than 80 and 443
+
+When another program on the server already uses port 80 or 443, Traefik can be published on others, set in `/app/wata/.env` as a number:
+
+```
+HTTP_PORT=8080
+HTTPS_PORT=4443
+```
+
+HTTP is then redirected to `HTTPS_PORT`, and the install script opens both in the firewall at the next deploy (`watastop`, then `watastart`, is enough to apply a change to a running server, with the firewall rule added by hand: `sudo ufw allow 8080/tcp`). Two things outside WATA still need 80 and 443:
+
+- TradingView sends webhooks to ports 80 and 443 only;
+- Let's Encrypt checks the domain on port 80 before it gives or renews the certificate.
+
+Another port is therefore only of use behind something that forwards 80 and 443 to it: a router or a cloud firewall's port forwarding, or a reverse proxy that passes TLS through untouched (Traefik's certificate is the one the caller sees). The port of the admin interface on the API domain is `ADMIN_PORT` (see below), and must differ from `HTTPS_PORT`. Inside Docker, the services keep their own ports (web server 80, watchlist manager 8081, admin 8082): they are reached only on WATA's network and conflict with nothing on the server.
+
 ## 📖 Detailed How-To Guide
 
 For a comprehensive, step-by-step guide on setting up and using WATA, including:
@@ -620,6 +636,80 @@ Days are those of the trading timezone, both included.
 - **Resolution**: inside a bar, the extremes are those of the stream (one second), not of every tick.
 - **Not yet run against Saxo**: see the verification status in the changelog. Try it in Saxo's simulation environment first.
 
+## 📡 Capital.com Feed
+
+Saxo quotes the Nasdaq 100 index only from 15:30 to 22:15 in Paris. Capital.com quotes its US Tech 100 CFD almost around the clock, and its prices are those of the TradingView chart the signals come from. The Capital.com feed follows them with a free demo account:
+
+- **Live**: each quote is sent at once to the admin's charts, which move with it. An asset page says how late the last quote is ("Live · 85 ms"): from Capital.com's time of the quote to now.
+- **Recorded**: every ten seconds, bid and ask, into PostgreSQL, in the columns and by the rules of the price recorder. `updates`, the quote changes of each ten seconds, is the volume the feed counts itself.
+- **Capital.com's own volume**: Capital.com's candle of each minute, with the volume it gives it, is fetched each minute and kept beside the bars.
+- **For backtests**: each day of UTC, once over, is written as a file in the format of the Dukascopy days, under `var/lib/price_history/capital/bars/us100/`. The backtest form can run on them in place of Dukascopy's history.
+
+It is a separate service: no trading service uses it, and it cannot slow one down. It never places an order: it can only ask Capital.com for a session, the state of markets and past prices, which a test holds it to.
+
+### Enabling it
+
+1. In Capital.com, turn two-factor authentication on, then **Settings › API integrations**: make a key and choose a password for it. The demo account is enough.
+2. In `/app/wata/.env`, the key, the email of the account and the key's password. Only the feed's container receives them, never the admin. Put a value in single quotes if it contains a `$`:
+   ```
+   CAPITAL_API_KEY=...
+   CAPITAL_IDENTIFIER=you@example.com
+   CAPITAL_PASSWORD='...'
+   ```
+3. In the same file, add `capital` to the profiles: `COMPOSE_PROFILES=admin,capital` (or `admin,recorder,capital`).
+4. Switch it on: `trade.config.capital_feed.enabled`. In the admin interface: Providers, "Add provider", Capital.com.
+5. `watastop`, then `watastart`.
+
+Before relying on it, ask what Capital.com gives the key, in a market's opening hours:
+
+```bash
+docker exec capital_feed1 python -m src.capital_feed.probe --epic US100 --minutes 3
+docker exec capital_feed1 python -m src.capital_feed.probe --search "US Tech 100"
+```
+
+It prints the instrument with its opening hours, the quotes per second and how late they arrive. Minute by minute, it sets the quotes received and the price changes counted beside Capital.com's volume of the same minute. Capital.com does not say what its volume counts: this says which of the two it matches, if either. It reads the three variables of the environment, so it also runs on any machine they are exported in.
+
+When nothing is recorded for five minutes while the market is open, a Telegram message says so, and another when it resumes. A refused login is said once, with what to check. With the admin interface, "Capital.com feed" is listed with the services, and its provider page shows the stream: quotes in the last minute, delays, the connection, what was sent to the charts, and Capital.com's minutes.
+
+| Setting (`trade.config.capital_feed`) | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Switches the feed on |
+| `environment` | `demo` | Which of Capital.com's accounts the key logs into: `demo` or `live` |
+| `instruments` | `[{"epic": "US100", "label": "us100"}]` | The epic is Capital.com's name of the instrument, the label WATA's (an indice of the rules, and the folder of its day files). 40 at most |
+| `minute_volume` | `true` | Fetches Capital.com's candle and volume of each minute |
+| `day_files` | `true` | Writes each finished day as a file for backtests |
+| `retention_months` | `0` | `0` keeps everything; otherwise whole months older than this are deleted from the database (the day files stay) |
+| `alert_after_seconds` | `300` | Silence, while a market is open, after which Telegram is told |
+
+### Reading the data
+
+On the **Assets View**, `capital/US100` comes first. Its page and its opened row follow the stream while the period reaches today:
+- each quote moves the last bar, at any bar length;
+- the quote changes are drawn along the bottom (the "Volume" switch);
+- range bars are built again each time ten seconds close.
+
+Its statistics give Capital.com's volume of each day beside the quote changes. Its Data quality tab gives the times the feed missed while the market was open, by Capital.com's opening hours.
+
+In PostgreSQL, created by the feed:
+
+- `capital_instrument`: `epic`, `label`, `name`, `instrument_type`, `currency`, `decimals`, `opening_hours` (as Capital.com gives them).
+- `capital_bar_10s`: the columns of `price_bar_10s`, read the same way. One partition per month.
+- `capital_coverage`: one row per ten seconds the feed was running, with `feed_ok`.
+- `capital_minute`: Capital.com's candle of each minute, bid and ask, with `volume`.
+- `capital_feed_state`: one row, what the feed is doing, written every ten seconds.
+
+Bars are bucketed by the time a quote was received, as the price recorder's are: what is recorded is what a strategy reading the stream would have seen. Capital.com's own time of a quote only measures how late it was.
+
+### What to keep in mind
+
+- **The key can trade**: Capital.com has no key that only reads prices. It stays in `.env`, given to the feed alone, and the feed's code refuses any request but those it needs.
+- **Not yet run against Capital.com**: everything was built and tested against an imitation of its documented API. Three things wait for a real key, and the probe answers them:
+  - where the demo account's stream is;
+  - how many quotes arrive, and how late;
+  - what Capital.com's volume counts.
+- **Size**: about 8,640 rows a day per instrument quoted around the clock, some 300 MB a year in the database. A day file is a few hundred kilobytes.
+- **What is not recorded cannot be fetched afterwards** at ten seconds. Capital.com's minutes are kept apart and are not used to fill holes.
+
 ## 🧪 Strategy Backtester
 
 WATA can replay a strategy on prices of the past and say what it would have done with it: which entries the Trader would have taken or refused, and where the Position Monitor would have sold.
@@ -632,7 +722,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 
 - **Prices**: which days have prices, by month, and "Fetch these days" for more. The download runs in the background, one at a time, and can be stopped. It is slow: see below. **"Keep the prices up to date"** has the service fetch what is missing by itself, as far back as chosen: the newest days first, a few at a time, **only while the market is closed**, waiting longer each time the source stops answering (half an hour, then twice as long, up to twelve hours). Off until switched on.
 - **Turbo**: "Measure on real trades" reads WATA's closed positions and the index at the open and the close of each, and finds the turbo they describe: what was paid, how many index points move it by 1.00, its spread, with the range the leverage could be in and how far the result is from the real trades. Backtests are then made with it instead of the assumed one. It needs the prices of the days WATA traded.
-- **New backtest**: the period, the strategy's parameters, the turbo and, **for that run only, other values of WATA's rules** (stop, take-profit, trailing stop, daily target, entry cap, cooldown, trade limit, minimum confidence). The live configuration is not touched. Instead of a strategy, **"The signals WATA received"** replays the signals of WATA's own journal for the period.
+- **New backtest**: the period, the strategy's parameters, the turbo and, **for that run only, other values of WATA's rules** (stop, take-profit, trailing stop, daily target, entry cap, cooldown, trade limit, minimum confidence). The live configuration is not touched. Instead of a strategy, **"The signals WATA received"** replays the signals of WATA's own journal for the period. **Prices**: Dukascopy's downloaded history, or the days the [Capital.com feed](#-capitalcom-feed) recorded, which are the prices of the chart the signals come from but only from the day the feed began; the run says which, and runs compared on different prices are said to be. The turbo is still measured on Dukascopy's history, which goes back to the first trades.
 - **A run**: what was asked, the days that could not be tested, then for each leverage its figures, the curve of all days, the result of each day, why trades were entered and left and which rules refused entries, and the trades, days and refusals as tables with CSV export. "Run again with changes" starts a new one from it.
 - **How far to trust a run**, on its page: where its total stands among **the same days traded with entries at random** (see below), what a trade brings on average, what was won for 1 lost, the longest losing streak, the range the total falls in when the days are drawn again, and how far winning trades fell before they won. A run of fewer than 30 trades or 20 days says so in words.
 - **A replay of real signals** is also set **against what WATA really did**: each real trade beside the model's, how far apart their results are, whether they ended the same way, the trades only one of the two made, and the days of both. It is the model that is tested there, not a strategy.
@@ -667,6 +757,10 @@ PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-
 # The same with a parameter changed, and the trades written to files
 PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 \
     --set entry_mode=cross_catchup --out var/lib/backtests/catchup
+
+# On the days the Capital.com feed recorded instead of Dukascopy's
+PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-10-12 --to 2026-10-16 \
+    --source var/lib/price_history/capital/bars/us100
 
 # Signals WATA received (a JSON list: at, action, confidence) instead of a strategy
 PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 --signals signals.json

@@ -8,6 +8,7 @@ configured trading timezone.
 """
 
 import asyncio
+import json
 import logging
 import math
 from datetime import date, datetime
@@ -172,6 +173,16 @@ def json_safe(value):
 def _finite(value):
     """``value``, or None where it is a float that is not a number."""
     return None if isinstance(value, float) and not math.isfinite(value) else value
+
+
+def _json_value(value):
+    """A jsonb column as asyncpg returns it without a codec (text), as Python values."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value
 
 
 def _is_missing_table(error: DatabaseUnavailable) -> bool:
@@ -516,20 +527,28 @@ class AdminQueries:
         )
         return _clean_row(rows[0]) if rows else None
 
-    async def price_bars(self, instrument_id: int, start: datetime, end: datetime, interval: int, limit: int) -> list[list]:
+    # The tables of ten-second bars a chart can be read from: a request chooses
+    # between these names, it never writes one into a statement.
+    _BAR_TABLES = {"saxo": "price_bar_10s", "capital": "capital_bar_10s"}
+
+    async def _bars(self, provider: str, instrument_id: int, start: datetime, end: datetime, interval: int,
+                    limit: int) -> tuple[list[list], int | None]:
         """
         Bars of one instrument in [start, end), oldest first, as rows of
-        PRICE_BAR_COLUMNS. ``interval`` is ten seconds, as recorded, or a
-        multiple: the bars of each bucket are then merged into one (first open,
-        highest high, lowest low, last close).
+        PRICE_BAR_COLUMNS, and the start of the last ten-second bar they hold.
+        ``interval`` is ten seconds, as recorded, or a multiple: the bars of
+        each bucket are then merged into one (first open, highest high, lowest
+        low, last close).
         """
         if interval not in PRICE_INTERVALS:
             raise ValueError(f"Unsupported interval: {interval}")
+        table = self._BAR_TABLES[provider]
         if interval == PRICE_INTERVALS[0]:
-            query = """
+            query = f"""
                 SELECT extract(epoch FROM ts)::bigint AS t,
-                       bid_open, bid_high, bid_low, bid_close, ask_open, ask_high, ask_low, ask_close, updates
-                FROM price_bar_10s
+                       bid_open, bid_high, bid_low, bid_close, ask_open, ask_high, ask_low, ask_close, updates,
+                       extract(epoch FROM ts)::bigint AS through
+                FROM {table}
                 WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
                 ORDER BY ts
                 LIMIT $4
@@ -547,15 +566,30 @@ class AdminQueries:
                        max(ask_high) AS ask_high,
                        min(ask_low) AS ask_low,
                        (array_agg(ask_close ORDER BY ts DESC) FILTER (WHERE ask_close IS NOT NULL))[1] AS ask_close,
-                       sum(updates)::int AS updates
-                FROM price_bar_10s
+                       sum(updates)::int AS updates,
+                       extract(epoch FROM max(ts))::bigint AS through
+                FROM {table}
                 WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
                 GROUP BY 1
                 ORDER BY 1
                 LIMIT $4
             """
         rows = await self._fetch_optional(query, instrument_id, start, end, limit)
-        return [json_safe([row[column] for column in PRICE_BAR_COLUMNS]) for row in rows]
+        through = rows[-1].get("through") if rows else None
+        return [json_safe([row[column] for column in PRICE_BAR_COLUMNS]) for row in rows], through
+
+    async def price_bars(self, instrument_id: int, start: datetime, end: datetime, interval: int, limit: int) -> list[list]:
+        """Bars of one recorded instrument (the price recorder's), as ``_bars`` reads them."""
+        rows, _ = await self._bars("saxo", instrument_id, start, end, interval, limit)
+        return rows
+
+    async def capital_bars(self, instrument_id: int, start: datetime, end: datetime, interval: int,
+                           limit: int) -> tuple[list[list], int | None]:
+        """
+        Bars of one instrument of the Capital.com feed, and the start of the
+        last ten-second bar they hold: a live chart adds only what came after it.
+        """
+        return await self._bars("capital", instrument_id, start, end, interval, limit)
 
     # The four prices of each side. Which side is asked for chooses between these
     # names; nothing of the request itself is ever written into a statement.
@@ -564,15 +598,11 @@ class AdminQueries:
         "ask": ("ask_open", "ask_high", "ask_low", "ask_close"),
     }
 
-    async def price_series(self, instrument_id: int, start: datetime, end: datetime, side: str, limit: int) -> list[tuple]:
-        """
-        The ten-second bars of one side of an instrument in [start, end), oldest
-        first, as (epoch seconds, open, high, low, close). Bars without that
-        side (an instrument with no ask) are left out. Read a page at a time:
-        pass the moment after the last row as ``start`` for the next.
-        """
+    async def _series(self, provider: str, instrument_id: int, start: datetime, end: datetime, side: str,
+                      limit: int) -> list[tuple]:
         if side not in self._PRICE_SIDE_COLUMNS:
             raise ValueError(f"Unsupported side: {side}")
+        table = self._BAR_TABLES[provider]
         opened, high, low, closed = self._PRICE_SIDE_COLUMNS[side]
         # The bid is never missing (NOT NULL); the ask can be.
         present = "" if side == "bid" else f" AND {opened} IS NOT NULL AND {high} IS NOT NULL AND {low} IS NOT NULL AND {closed} IS NOT NULL"
@@ -580,7 +610,7 @@ class AdminQueries:
             f"""
             SELECT extract(epoch FROM ts)::bigint AS t,
                    {opened} AS open, {high} AS high, {low} AS low, {closed} AS close
-            FROM price_bar_10s
+            FROM {table}
             WHERE instrument_id = $1 AND ts >= $2 AND ts < $3{present}
             ORDER BY ts
             LIMIT $4
@@ -588,6 +618,19 @@ class AdminQueries:
             instrument_id, start, end, limit,
         )
         return [(row["t"], row["open"], row["high"], row["low"], row["close"]) for row in rows]
+
+    async def price_series(self, instrument_id: int, start: datetime, end: datetime, side: str, limit: int) -> list[tuple]:
+        """
+        The ten-second bars of one side of an instrument in [start, end), oldest
+        first, as (epoch seconds, open, high, low, close). Bars without that
+        side (an instrument with no ask) are left out. Read a page at a time:
+        pass the moment after the last row as ``start`` for the next.
+        """
+        return await self._series("saxo", instrument_id, start, end, side, limit)
+
+    async def capital_series(self, instrument_id: int, start: datetime, end: datetime, side: str, limit: int) -> list[tuple]:
+        """``price_series`` for an instrument of the Capital.com feed."""
+        return await self._series("capital", instrument_id, start, end, side, limit)
 
     async def price_coverage(self, start: datetime, end: datetime) -> list[dict]:
         """One row per ten seconds the recorder lived through in [start, end), in time order."""
@@ -619,6 +662,123 @@ class AdminQueries:
             LIMIT {min(max(limit, 1), MAX_ROWS)}
             """,
             target, start, end,
+        )
+        return [_clean_row(row) for row in rows]
+
+    # ── the Capital.com feed (src/capital_feed) ──
+
+    async def capital_assets(self, epic: str | None = None) -> list[dict]:
+        """
+        Every instrument of the Capital.com feed that has a bar, with its first
+        and last one (the last with its quote), the one quoted last first.
+        Each is reached through the key of the bars, never scanned.
+        """
+        where, args = ("WHERE i.epic = $1", (epic,)) if epic is not None else ("", ())
+        rows = await self._fetch_optional(
+            f"""
+            SELECT i.id, i.epic, i.label, i.name, i.instrument_type, i.currency, i.decimals,
+                   i.first_seen_at, i.last_seen_at,
+                   extract(epoch FROM first_bar.ts)::bigint AS first_t,
+                   extract(epoch FROM last_bar.ts)::bigint AS last_t,
+                   last_bar.bid_close AS last_bid, last_bar.ask_close AS last_ask
+            FROM capital_instrument i
+            CROSS JOIN LATERAL (
+                SELECT b.ts, b.bid_close, b.ask_close FROM capital_bar_10s b
+                WHERE b.instrument_id = i.id ORDER BY b.ts DESC LIMIT 1
+            ) last_bar
+            CROSS JOIN LATERAL (
+                SELECT b.ts FROM capital_bar_10s b WHERE b.instrument_id = i.id ORDER BY b.ts LIMIT 1
+            ) first_bar
+            {where}
+            ORDER BY last_bar.ts DESC, i.epic
+            """,
+            *args,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def capital_instrument(self, epic: str) -> dict | None:
+        """One instrument of the feed with its first and last bar; None without a bar."""
+        rows = await self.capital_assets(epic)
+        return rows[0] if rows else None
+
+    async def capital_opening_hours(self, epic: str) -> dict | None:
+        """The opening hours Capital.com gave for the instrument, as it gave them."""
+        rows = await self._fetch_optional("SELECT opening_hours FROM capital_instrument WHERE epic = $1", epic)
+        return _json_value(rows[0]["opening_hours"]) if rows else None
+
+    async def capital_feed_state(self) -> dict | None:
+        """What the feed last wrote of itself; None when it never ran."""
+        rows = await self._fetch_optional(
+            "SELECT updated_at, started_at, version, environment, state, detail, figures FROM capital_feed_state WHERE id = 1"
+        )
+        if not rows:
+            return None
+        row = dict(rows[0])
+        row["figures"] = _json_value(row.get("figures")) or {}
+        return row
+
+    async def capital_coverage(self, start: datetime, end: datetime) -> list[dict]:
+        """One row per ten seconds the feed lived through in [start, end), in time order."""
+        rows = await self._fetch_optional(
+            "SELECT ts, feed_ok FROM capital_coverage WHERE ts >= $1 AND ts < $2 ORDER BY ts", start, end,
+        )
+        return [dict(row) for row in rows]
+
+    async def capital_volume(self, instrument_id: int, start: datetime, end: datetime, interval: int,
+                             limit: int) -> list[list]:
+        """
+        Capital.com's volume of the minutes of [start, end), added up by
+        ``interval`` (a minute or a multiple of one), as [epoch seconds, volume].
+        """
+        if interval not in PRICE_INTERVALS or interval < 60:
+            raise ValueError(f"Unsupported interval for Capital.com's volume: {interval}")
+        rows = await self._fetch_optional(
+            f"""
+            SELECT (floor(extract(epoch FROM ts) / {interval}) * {interval})::bigint AS t, sum(volume) AS volume
+            FROM capital_minute
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3 AND volume IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
+            LIMIT $4
+            """,
+            instrument_id, start, end, limit,
+        )
+        return [[row["t"], _finite(row["volume"])] for row in rows]
+
+    async def capital_volume_days(self, instrument_id: int, start: datetime, end: datetime) -> dict[str, float]:
+        """Capital.com's volume of each day of [start, end), by day of the trading timezone."""
+        rows = await self._fetch_optional(
+            """
+            SELECT (ts AT TIME ZONE $4)::date AS day, sum(volume) AS volume
+            FROM capital_minute
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3 AND volume IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            instrument_id, start, end, self.timezone,
+        )
+        return {row["day"].isoformat(): row["volume"] for row in rows if _finite(row["volume"]) is not None}
+
+    async def index_trades(self, indice: str, start: datetime, end: datetime, *, every_position: bool,
+                           limit: int = 500) -> list[dict]:
+        """
+        The positions that were open at some point of [start, end) and were
+        opened by a signal of ``indice``; every position when ``every_position``
+        (WATA trades that indice alone, and positions older than the signal
+        journal are then of it too).
+        """
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {_POSITION_COLUMNS}
+            FROM turbo_data_position
+            WHERE ($4::bool OR position_id IN (
+                      SELECT position_id FROM signal_journal WHERE indice = $1 AND position_id IS NOT NULL))
+              AND execution_time_open < $3
+              AND COALESCE(execution_time_close, now()) >= $2
+            ORDER BY execution_time_open ASC, position_id ASC
+            LIMIT {min(max(limit, 1), MAX_ROWS)}
+            """,
+            indice, start, end, every_position,
         )
         return [_clean_row(row) for row in rows]
 

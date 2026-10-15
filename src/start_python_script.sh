@@ -32,6 +32,9 @@ case $WATA_APP_ROLE in
     "price_recorder")
         python -u /app/src/price_recorder/__init__.py
         ;;
+    "capital_feed")
+        python -u /app/src/capital_feed/__init__.py
+        ;;
     *)
         echo "Unknown environment variable value for WATA_APP_ROLE: $WATA_APP_ROLE"
         exit 1

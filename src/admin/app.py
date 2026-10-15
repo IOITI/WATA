@@ -114,6 +114,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
             # Keeps the address of the reverse proxy up to date.
             asyncio.create_task(ctx.trusted_proxies.keep_refreshed()),
         ]
+        if ctx.live_prices is not None:
+            # Listens to the Capital.com feed's live prices while a chart follows them.
+            background.append(asyncio.create_task(ctx.live_prices.run()))
         if ctx.backtests is not None and ctx.settings.backtests_enabled:
             # Runs the backtests asked for, one at a time.
             background.append(asyncio.create_task(ctx.backtests.run()))

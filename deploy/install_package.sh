@@ -40,6 +40,7 @@ mkdir -p "$APP_BASE_DIR/var/lib/trade"
 mkdir -p "$APP_BASE_DIR/var/lib/admin"
 mkdir -p "$APP_BASE_DIR/var/lib/price_export"
 mkdir -p "$APP_BASE_DIR/var/lib/price_history"
+mkdir -p "$APP_BASE_DIR/var/lib/price_history/capital"
 mkdir -p "$APP_BASE_DIR/var/lib/backtests"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik/letsencrypt"
@@ -51,17 +52,37 @@ mkdir -p "$APP_BASE_DIR/var/log/wata-telegram"
 mkdir -p "$APP_BASE_DIR/var/log/wata-scheduler"
 mkdir -p "$APP_BASE_DIR/var/log/wata-admin"
 mkdir -p "$APP_BASE_DIR/var/log/wata-price-recorder"
+mkdir -p "$APP_BASE_DIR/var/log/wata-capital-feed"
 
 # Ensure docker service is enabled
 echo "Ensuring Docker service is enabled..."
 sudo systemctl enable docker
 
+# The port Traefik is published on for HTTP or HTTPS: HTTP_PORT or HTTPS_PORT in .env,
+# read without running the file, or the default when it does not set one.
+env_port() {
+    local name="$1" default="$2" value=""
+    if [ -f "$APP_BASE_DIR/.env" ]; then
+        value=$(sed -n "s/^[[:space:]]*$name=[\"']\{0,1\}\([^\"'[:space:]]*\)[\"']\{0,1\}[[:space:]]*$/\1/p" "$APP_BASE_DIR/.env" | tail -n 1)
+    fi
+    if [ -z "$value" ]; then
+        echo "$default"
+    elif [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 1 ] && [ "$value" -le 65535 ]; then
+        echo "$value"
+    else
+        echo "WARNING: $name=$value in $APP_BASE_DIR/.env is not a port number (see .env.example): the firewall opens $default instead." >&2
+        echo "$default"
+    fi
+}
+HTTP_PORT=$(env_port HTTP_PORT 80)
+HTTPS_PORT=$(env_port HTTPS_PORT 443)
+
 # Configure UFW firewall rules
 echo "Configuring UFW rules..."
 # Allow all connections to the SSH server
 sudo ufw allow ssh
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+sudo ufw allow "$HTTP_PORT/tcp"
+sudo ufw allow "$HTTPS_PORT/tcp"
 
 echo "UFW rules added successfully."
 sudo ufw --force enable

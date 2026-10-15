@@ -9,6 +9,7 @@ import type {
   BacktestDay,
   BacktestDayChart,
   BacktestOptions,
+  BacktestPrices,
   BacktestRefusal,
   BacktestRequest,
   BacktestRun,
@@ -18,6 +19,9 @@ import type {
   BacktestSweepRequest,
   BacktestTrade,
   BacktestTradePath,
+  CapitalConfig,
+  CapitalProviderDetails,
+  CapitalVolume,
   ConfigBackup,
   ConfigDocument,
   ConfigRestored,
@@ -147,6 +151,11 @@ function assetPath(ref: string): string {
   return ref.split('/').map(encodeURIComponent).join('/')
 }
 
+/** Where the live prices of an asset are streamed (server-sent events): read with an EventSource, not fetch. */
+export function assetLiveUrl(ref: string): string {
+  return `/api/data/assets/${assetPath(ref)}/live`
+}
+
 export interface DateRangeParams {
   from?: string | null
   to?: string | null
@@ -188,6 +197,10 @@ export const api = {
   dataProviders: () => request<DataProviders>('GET', '/api/data/providers'),
   saxoProvider: () => request<SaxoProviderDetails>('GET', '/api/data/providers/saxo'),
   dukascopyProvider: () => request<DukascopyProviderDetails>('GET', '/api/data/providers/dukascopy'),
+  capitalProvider: () => request<CapitalProviderDetails>('GET', '/api/data/providers/capital'),
+  capitalConfig: () => request<CapitalConfig>('GET', '/api/data/providers/capital/config'),
+  saveCapitalConfig: (section: JsonObject, revision: string) =>
+    request<ConfigSaved>('PUT', '/api/data/providers/capital/config', { body: { section, revision } }),
   recorderConfig: () => request<RecorderConfig>('GET', '/api/data/providers/saxo/config'),
   saveRecorderConfig: (section: JsonObject, revision: string) =>
     request<ConfigSaved>('PUT', '/api/data/providers/saxo/config', { body: { section, revision } }),
@@ -218,6 +231,9 @@ export const api = {
     ),
   assetContext: (ref: string, period: PricePeriod) =>
     request<PriceContext>('GET', `/api/data/assets/${assetPath(ref)}/context${query({ ...period })}`),
+  /** Capital.com's own volume of the minutes of a period, added up by `interval` (a minute or longer). */
+  assetVolume: (ref: string, period: PricePeriod, interval: number) =>
+    request<CapitalVolume>('GET', `/api/data/assets/${assetPath(ref)}/volume${query({ ...period, interval })}`),
   assetStatistics: (ref: string, period: PricePeriod) =>
     request<AssetStatistics>('GET', `/api/data/assets/${assetPath(ref)}/statistics${query({ ...period })}`),
   audit: () => request<{ items: AuditEntry[] }>('GET', '/api/audit?limit=500'),
@@ -263,8 +279,9 @@ export const api = {
       `/api/backtests/${encodeURIComponent(runId)}/days/${encodeURIComponent(day)}/chart${query({ leverage })}`,
     ),
   // `label`: another Dukascopy instrument than the history backtests read, which is meant when it is left out.
-  priceCoverage: (period: Partial<PricePeriod> = {}, label?: string) =>
-    request<PriceCoverage>('GET', `/api/backtests/prices${query({ ...period, label })}`),
+  // `prices`: the days recorded from Capital.com in place of Dukascopy's.
+  priceCoverage: (period: Partial<PricePeriod> = {}, label?: string, prices?: BacktestPrices) =>
+    request<PriceCoverage>('GET', `/api/backtests/prices${query({ ...period, label, prices })}`),
   fetchPrices: (period: PricePeriod, label?: string) =>
     request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch', { body: label ? { ...period, label } : period }),
   stopFetchingPrices: () => request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch/stop'),
