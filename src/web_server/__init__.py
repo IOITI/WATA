@@ -37,6 +37,9 @@ SIGNAL_STORE = SignalStore()
 # allowlist below but still require the Bearer token (see verify_bearer_token).
 INTERNAL_ONLY_PATHS = {"/latest-signals", "/internal/signal"}
 
+# Upper bound on how long /latest-signals holds a long-poll request open.
+MAX_LONG_POLL_WAIT_MS = 30000
+
 # List of allowed IP addresses
 ALLOWED_IPS = [
     "127.0.0.1",
@@ -54,7 +57,11 @@ async def check_ip(request: Request, call_next):
     # Internal-only endpoints are never routed from the internet (Traefik's own
     # IP allowlist covers the whole domain already) and are protected by the
     # Bearer token instead, so skip the IP check for them.
-    if request.url.path in INTERNAL_ONLY_PATHS:
+    # The path comes from the ASGI scope, which is what the router dispatches on.
+    # request.url is rebuilt from the Host header: with a Host such as
+    # "x/latest-signals?" its path named an internal endpoint for a request
+    # routed to /webhook, which then skipped the IP check (Starlette before 1.0.1).
+    if request.scope["path"] in INTERNAL_ONLY_PATHS:
         return await call_next(request)
 
     # Traefik will pass the real IP in the X-Forwarded-For header
@@ -170,12 +177,22 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
 
 
 @app.get("/latest-signals", include_in_schema=False)
-async def latest_signals(_: None = Depends(verify_bearer_token)):
-    """Polled by the async trader every trade.config.signal_polling.interval_ms.
+async def latest_signals(
+    after: int | None = None,
+    wait_ms: int = 0,
+    _: None = Depends(verify_bearer_token),
+):
+    """Polled by the async trader (see trade.config.signal_polling).
 
-    Returns the latest stored signal per indice (list, one entry per indice).
+    Without ``after``: returns the latest stored signal per indice (list, one
+    entry per indice). With ``after=<seq>``: returns only the signals stored
+    since that ``seq``, holding the request up to ``wait_ms`` until one arrives.
     """
-    return JSONResponse(content=await SIGNAL_STORE.get_all(), status_code=200)
+    if after is None:
+        return JSONResponse(content=await SIGNAL_STORE.get_all(), status_code=200)
+
+    wait_seconds = min(max(wait_ms, 0), MAX_LONG_POLL_WAIT_MS) / 1000
+    return JSONResponse(content=await SIGNAL_STORE.get_newer(after, wait_seconds), status_code=200)
 
 
 if __name__ == "__main__":

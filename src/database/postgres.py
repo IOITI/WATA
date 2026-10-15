@@ -6,8 +6,10 @@ Uses asyncpg connection pool for high-performance async I/O.
 """
 
 import asyncio
+import json
 import logging
-from datetime import date, datetime, timedelta
+import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -99,10 +101,12 @@ def _normalize_temporal_fields(
 class PostgresConnectionManager:
     """Manages an asyncpg connection pool (singleton-friendly)."""
 
-    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10):
+    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10, server_settings: dict | None = None):
         self._dsn = dsn
         self._min_size = min_size
         self._max_size = max_size
+        # Session parameters applied to every connection (e.g. a read-only pool).
+        self._server_settings = server_settings
         self._pool: asyncpg.Pool | None = None
 
     @classmethod
@@ -121,6 +125,7 @@ class PostgresConnectionManager:
                 min_size=self._min_size,
                 max_size=self._max_size,
                 command_timeout=30,
+                server_settings=self._server_settings,
             )
             logger.info("asyncpg connection pool created.")
         return self._pool
@@ -226,11 +231,103 @@ CREATE TABLE IF NOT EXISTS trade_risk_state (
     value_time  TIMESTAMPTZ
 );
 
+-- Latest price and performance of each open position, as seen by the position
+-- monitor. Written on a timer for the admin interface; nothing trades on it.
+CREATE TABLE IF NOT EXISTS position_live_value (
+    position_id         VARCHAR(64) PRIMARY KEY,
+    bid                 DOUBLE PRECISION,
+    performance_percent DOUBLE PRECISION,
+    observed_at         TIMESTAMPTZ
+);
+
+-- What the trader did with each signal it received (executed, refused, ...).
+CREATE TABLE IF NOT EXISTS signal_journal (
+    signal_uuid        VARCHAR(64) PRIMARY KEY,
+    action             VARCHAR(32),
+    indice             VARCHAR(64),
+    confidence         DOUBLE PRECISION,
+    signal_timestamp   TIMESTAMPTZ,
+    received_timestamp TIMESTAMPTZ,
+    decided_at         TIMESTAMPTZ,
+    outcome            VARCHAR(16),
+    reason             TEXT,
+    position_id        VARCHAR(64),
+    order_id           VARCHAR(64)
+);
+
+-- What became of each order sent to Saxo, and when, as the service that sent it
+-- saw it. Written in the background for the admin interface; nothing trades on it.
+CREATE TABLE IF NOT EXISTS order_execution (
+    order_id        VARCHAR(64) PRIMARY KEY,
+    purpose         VARCHAR(8),
+    position_id     VARCHAR(64),
+    sent_at         TIMESTAMPTZ,
+    accepted_at     TIMESTAMPTZ,
+    confirmed_at    TIMESTAMPTZ,
+    gave_up_at      TIMESTAMPTZ,
+    lookups         INTEGER,
+    outcome         VARCHAR(16),
+    cancel_accepted BOOLEAN,
+    detail          TEXT,
+    recorded_by     VARCHAR(32)
+);
+
+-- Every request sent to Saxo's order endpoint (an order placed, orders
+-- cancelled) and what Saxo answered, accepted or not, as the service that sent
+-- it saw it. One row per request, written once its answer is known, in the
+-- background, for the admin interface; nothing trades on it.
+CREATE TABLE IF NOT EXISTS order_request (
+    request_id          VARCHAR(36) PRIMARY KEY,
+    requested_at        TIMESTAMPTZ,
+    answered_at         TIMESTAMPTZ,
+    recorded_by         VARCHAR(32),
+    operation           VARCHAR(8),
+    purpose             VARCHAR(8),
+    position_id         VARCHAR(64),
+    signal_uuid         VARCHAR(64),
+    action              TEXT,
+    reason              TEXT,
+    instrument_uic      INTEGER,
+    asset_type          TEXT,
+    instrument_name     TEXT,
+    instrument_symbol   TEXT,
+    instrument_currency TEXT,
+    buy_sell            VARCHAR(8),
+    amount              DOUBLE PRECISION,
+    order_type          TEXT,
+    price_seen          DOUBLE PRECISION,
+    outcome             VARCHAR(16),
+    order_id            TEXT,
+    http_status         INTEGER,
+    error_code          TEXT,
+    error_message       TEXT,
+    request_body        TEXT,
+    response_body       TEXT
+);
+
+-- Total account value, recorded with each daily report.
+CREATE TABLE IF NOT EXISTS account_balance_history (
+    date_day     DATE PRIMARY KEY,
+    total_value  DOUBLE PRECISION,
+    recorded_at  TIMESTAMPTZ
+);
+
 -- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_signal_journal_decided_at ON signal_journal (decided_at);
 CREATE INDEX IF NOT EXISTS idx_position_status ON turbo_data_position (position_status);
 CREATE INDEX IF NOT EXISTS idx_position_close_time ON turbo_data_position (execution_time_close);
 CREATE INDEX IF NOT EXISTS idx_position_open_time ON turbo_data_position (execution_time_open);
+CREATE INDEX IF NOT EXISTS idx_order_request_requested_at ON order_request (requested_at);
+CREATE INDEX IF NOT EXISTS idx_order_request_position ON order_request (position_id);
 """
+
+# The columns of order_request, in the order of its table: the writer and the admin read the same list.
+ORDER_REQUEST_COLUMNS = (
+    "request_id", "requested_at", "answered_at", "recorded_by", "operation", "purpose", "position_id",
+    "signal_uuid", "action", "reason", "instrument_uic", "asset_type", "instrument_name", "instrument_symbol",
+    "instrument_currency", "buy_sell", "amount", "order_type", "price_seen", "outcome", "order_id",
+    "http_status", "error_code", "error_message", "request_body", "response_body",
+)
 
 
 async def init_schema(conn_mgr: PostgresConnectionManager):
@@ -654,6 +751,8 @@ class AsyncDbRiskStateManager:
     """
 
     LAST_LOSS_KEY = "last_loss_timestamp"
+    # Set (to the time of the pause) while the operator has paused new entries.
+    ENTRIES_PAUSED_KEY = "entries_paused_since"
 
     def __init__(self, conn_mgr: PostgresConnectionManager):
         self.db = conn_mgr
@@ -672,3 +771,687 @@ class AsyncDbRiskStateManager:
             "SELECT value_time FROM trade_risk_state WHERE key = $1",
             self.LAST_LOSS_KEY,
         )
+
+    async def pause_entries(self, ts: datetime):
+        """Pause new entries; an existing pause keeps the time it started at."""
+        await self.db.execute(
+            """
+            INSERT INTO trade_risk_state (key, value_time) VALUES ($1, $2)
+            ON CONFLICT (key) DO NOTHING
+            """,
+            self.ENTRIES_PAUSED_KEY, ts,
+        )
+
+    async def resume_entries(self):
+        await self.db.execute("DELETE FROM trade_risk_state WHERE key = $1", self.ENTRIES_PAUSED_KEY)
+
+    async def get_entries_paused_since(self) -> datetime | None:
+        return await self.db.fetchval(
+            "SELECT value_time FROM trade_risk_state WHERE key = $1",
+            self.ENTRIES_PAUSED_KEY,
+        )
+
+
+class AsyncDbLiveValueManager:
+    """Latest observed price and performance of the open positions (see position_live_value)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def replace_live_values(self, values: dict[str, tuple[float, float, datetime]]):
+        """
+        Make the table hold exactly ``values`` ({position_id: (bid, performance
+        percent, observed at)}): rows of positions that are no longer open go.
+        """
+        position_ids = list(values)
+        await self.db.execute(
+            "DELETE FROM position_live_value WHERE NOT (position_id = ANY($1::text[]))",
+            position_ids,
+        )
+        if not position_ids:
+            return
+        await self.db.execute(
+            """
+            INSERT INTO position_live_value (position_id, bid, performance_percent, observed_at)
+            SELECT * FROM unnest($1::text[], $2::float8[], $3::float8[], $4::timestamptz[])
+            ON CONFLICT (position_id) DO UPDATE SET
+                bid = EXCLUDED.bid,
+                performance_percent = EXCLUDED.performance_percent,
+                observed_at = EXCLUDED.observed_at
+            """,
+            position_ids,
+            [values[pid][0] for pid in position_ids],
+            [values[pid][1] for pid in position_ids],
+            [values[pid][2] for pid in position_ids],
+        )
+
+
+class AsyncDbSignalJournalManager:
+    """What the trader did with each signal (see signal_journal)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record_decision(self, entry: dict):
+        normalized = _normalize_temporal_fields(
+            entry,
+            datetime_fields=frozenset({"signal_timestamp", "received_timestamp", "decided_at"}),
+        )
+        await self.db.execute(
+            """
+            INSERT INTO signal_journal
+                (signal_uuid, action, indice, confidence, signal_timestamp, received_timestamp,
+                 decided_at, outcome, reason, position_id, order_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            ON CONFLICT (signal_uuid) DO NOTHING
+            """,
+            normalized["signal_uuid"],
+            normalized.get("action"),
+            normalized.get("indice"),
+            normalized.get("confidence"),
+            normalized.get("signal_timestamp"),
+            normalized.get("received_timestamp"),
+            normalized.get("decided_at"),
+            normalized["outcome"],
+            normalized.get("reason"),
+            normalized.get("position_id"),
+            normalized.get("order_id"),
+        )
+
+
+class AsyncDbOrderExecutionManager:
+    """What became of each order sent to Saxo (see order_execution)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record(self, entry: dict):
+        """
+        Keep what is known of an order. It is written twice, once Saxo has it
+        and once its outcome is known, both in the background: they may arrive
+        in either order, so a row that has its outcome is never changed.
+        """
+        await self.db.execute(
+            """
+            INSERT INTO order_execution
+                (order_id, purpose, position_id, sent_at, accepted_at, confirmed_at,
+                 gave_up_at, lookups, outcome, cancel_accepted, detail, recorded_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ON CONFLICT (order_id) DO UPDATE SET
+                position_id = EXCLUDED.position_id,
+                confirmed_at = EXCLUDED.confirmed_at,
+                gave_up_at = EXCLUDED.gave_up_at,
+                lookups = EXCLUDED.lookups,
+                outcome = EXCLUDED.outcome,
+                cancel_accepted = EXCLUDED.cancel_accepted,
+                detail = EXCLUDED.detail
+            WHERE order_execution.outcome IS NULL
+            """,
+            entry["order_id"],
+            entry.get("purpose"),
+            entry.get("position_id"),
+            entry.get("sent_at"),
+            entry.get("accepted_at"),
+            entry.get("confirmed_at"),
+            entry.get("gave_up_at"),
+            entry.get("lookups"),
+            entry.get("outcome"),
+            entry.get("cancel_accepted"),
+            entry.get("detail"),
+            entry.get("recorded_by"),
+        )
+
+
+class AsyncDbOrderRequestManager:
+    """Every request sent to Saxo's order endpoint and its answer (see order_request)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record(self, entry: dict):
+        """Keep one request. It is written once, its answer known: writing it again changes nothing."""
+        placeholders = ", ".join(f"${index}" for index in range(1, len(ORDER_REQUEST_COLUMNS) + 1))
+        await self.db.execute(
+            f"""
+            INSERT INTO order_request ({", ".join(ORDER_REQUEST_COLUMNS)})
+            VALUES ({placeholders})
+            ON CONFLICT (request_id) DO NOTHING
+            """,
+            *(entry.get(column) for column in ORDER_REQUEST_COLUMNS),
+        )
+
+
+class AsyncDbBalanceHistoryManager:
+    """Total account value over time (see account_balance_history)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record_balance(self, day: date, total_value: float):
+        """Keep the latest value seen on ``day``."""
+        await self.db.execute(
+            """
+            INSERT INTO account_balance_history (date_day, total_value, recorded_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (date_day) DO UPDATE SET
+                total_value = EXCLUDED.total_value,
+                recorded_at = EXCLUDED.recorded_at
+            """,
+            day, total_value, datetime.now().astimezone(),
+        )
+
+    async def record_balance_safely(self, day: date, total_value: float | None) -> None:
+        """``record_balance`` for callers that must not fail because of it (the daily report)."""
+        if total_value is None:
+            return
+        try:
+            await self.record_balance(day, total_value)
+        except Exception as e:
+            logger.error("Failed to record the account balance: %s", e)
+
+
+# ──────────────────────────────────────────────
+#  Price history (price recorder)
+# ──────────────────────────────────────────────
+
+# Created by the price recorder alone, not by init_schema(): the trading
+# services have no use for these tables and must not depend on them.
+PRICE_HISTORY_SCHEMA_SQL = """
+-- Instruments whose prices are recorded. Saxo reuses a UIC across asset types,
+-- so the two together identify one.
+CREATE TABLE IF NOT EXISTS price_instrument (
+    id              SERIAL PRIMARY KEY,
+    uic             INTEGER NOT NULL,
+    asset_type      VARCHAR(40) NOT NULL,
+    symbol          VARCHAR(64),
+    description     TEXT,
+    currency        VARCHAR(8),
+    role            VARCHAR(16) NOT NULL,
+    indice          VARCHAR(32),
+    underlying_uic  INTEGER,
+    direction       VARCHAR(8),
+    barrier         DOUBLE PRECISION,
+    issuer          VARCHAR(32),
+    first_seen_at   TIMESTAMPTZ NOT NULL,
+    last_seen_at    TIMESTAMPTZ NOT NULL,
+    UNIQUE (uic, asset_type)
+);
+
+-- Ten-second bars of the bid and the ask. ts is the start of the bucket.
+-- updates = 0: the quote did not move in the bucket. No row: not quotable, or
+-- not recorded (see price_recorder_coverage).
+CREATE TABLE IF NOT EXISTS price_bar_10s (
+    ts               TIMESTAMPTZ NOT NULL,
+    instrument_id    INTEGER NOT NULL,
+    bid_open         DOUBLE PRECISION NOT NULL,
+    bid_high         DOUBLE PRECISION NOT NULL,
+    bid_low          DOUBLE PRECISION NOT NULL,
+    bid_close        DOUBLE PRECISION NOT NULL,
+    ask_open         DOUBLE PRECISION,
+    ask_high         DOUBLE PRECISION,
+    ask_low          DOUBLE PRECISION,
+    ask_close        DOUBLE PRECISION,
+    updates          SMALLINT NOT NULL,
+    delayed_minutes  SMALLINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (instrument_id, ts)
+) PARTITION BY RANGE (ts);
+
+-- One row per bucket the recorder lived through: whether quotes were arriving,
+-- and how much it wrote. A bucket with no row here was not recorded at all.
+CREATE TABLE IF NOT EXISTS price_recorder_coverage (
+    ts           TIMESTAMPTZ PRIMARY KEY,
+    feed_ok      BOOLEAN NOT NULL,
+    instruments  SMALLINT NOT NULL,
+    bars         SMALLINT NOT NULL
+);
+
+-- What Saxo counts as traded on an instrument: its total of the day, one row
+-- each time it changes (ts is the start of the ten seconds it changed in).
+-- Only filled when the recorder is asked to (record_volume), and beside the
+-- bars, not in them: a turbo trades a few times a day.
+CREATE TABLE IF NOT EXISTS price_volume (
+    instrument_id  INTEGER NOT NULL,
+    ts             TIMESTAMPTZ NOT NULL,
+    day_volume     DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (instrument_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_price_volume_ts ON price_volume (ts);
+"""
+
+PRICE_BAR_TABLE = "price_bar_10s"
+
+
+async def init_price_history_schema(conn_mgr: PostgresConnectionManager):
+    await conn_mgr.execute(PRICE_HISTORY_SCHEMA_SQL)
+
+
+def _month_start(day: date, months_later: int = 0) -> date:
+    months = day.year * 12 + (day.month - 1) + months_later
+    return date(months // 12, months % 12 + 1, 1)
+
+
+def month_partition(table: str, day: date) -> tuple[str, date, date]:
+    """Name of the monthly partition of ``table`` holding ``day``, and its bounds (first day in, first day out)."""
+    start = _month_start(day)
+    return f"{table}_y{start.year:04d}m{start.month:02d}", start, _month_start(day, 1)
+
+
+def price_bar_partition(day: date) -> tuple[str, date, date]:
+    """Name of the monthly partition of the recorder's bars holding ``day``, and its bounds."""
+    return month_partition(PRICE_BAR_TABLE, day)
+
+
+BAR_COLUMNS = (
+    "ts", "instrument_id", "bid_open", "bid_high", "bid_low", "bid_close",
+    "ask_open", "ask_high", "ask_low", "ask_close", "updates", "delayed_minutes",
+)
+
+
+async def insert_bar_rows(db, table: str, bars: list[tuple]) -> None:
+    """Write ten-second bars (tuples in BAR_COLUMNS order) in one statement. A bar already there is left as it is."""
+    if not bars:
+        return
+    columns = list(zip(*bars))
+    await db.execute(
+        f"""
+        INSERT INTO {table} ({", ".join(BAR_COLUMNS)})
+        SELECT * FROM unnest(
+            $1::timestamptz[], $2::int4[],
+            $3::float8[], $4::float8[], $5::float8[], $6::float8[],
+            $7::float8[], $8::float8[], $9::float8[], $10::float8[],
+            $11::int2[], $12::int2[]
+        )
+        ON CONFLICT (instrument_id, ts) DO NOTHING
+        """,
+        *[list(column) for column in columns],
+    )
+
+
+async def ensure_month_partitions(db, table: str, today: date, months_ahead: int = 1) -> list[str]:
+    """Create the partitions of ``table`` for this month and the next ones, so that a bar never arrives without one."""
+    names = []
+    for offset in range(months_ahead + 1):
+        name, start, end = month_partition(table, _month_start(today, offset))
+        # Bounds in UTC whatever the session's timezone: a bucket belongs to the month it starts in, in UTC.
+        await db.execute(
+            f"CREATE TABLE IF NOT EXISTS {name} PARTITION OF {table} "
+            f"FOR VALUES FROM ('{start.isoformat()} 00:00:00+00') TO ('{end.isoformat()} 00:00:00+00')"
+        )
+        names.append(name)
+    return names
+
+
+async def drop_month_partitions(db, table: str, today: date, months: int) -> tuple[list[str], datetime | None]:
+    """
+    Remove the partitions of ``table`` for the months that ended more than
+    ``months`` months ago. Returns their names and the first moment kept
+    (None when nothing was dropped), for the tables kept beside them.
+    """
+    if months <= 0:
+        return [], None
+    cutoff = _month_start(today, -months)
+    pattern = re.compile(rf"^{re.escape(table)}_y(\d{{4}})m(\d{{2}})$")
+    rows = await db.fetch(
+        "SELECT child.relname AS name FROM pg_inherits "
+        "JOIN pg_class parent ON pg_inherits.inhparent = parent.oid "
+        "JOIN pg_class child ON pg_inherits.inhrelid = child.oid "
+        "WHERE parent.relname = $1",
+        table,
+    )
+    dropped = []
+    for row in rows:
+        match = pattern.match(row["name"])
+        if not match:
+            continue
+        if date(int(match.group(1)), int(match.group(2)), 1) < cutoff:
+            await db.execute(f"DROP TABLE IF EXISTS {row['name']}")
+            dropped.append(row["name"])
+    if not dropped:
+        return [], None
+    return dropped, datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc)
+
+
+class AsyncDbPriceHistoryManager:
+    """Instruments, bars and coverage written by the price recorder (see PRICE_HISTORY_SCHEMA_SQL)."""
+
+    BAR_COLUMNS = BAR_COLUMNS
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def ensure_partitions(self, today: date, months_ahead: int = 1) -> list[str]:
+        """Create the partitions of this month and the next ones, so that a bar never arrives without one."""
+        return await ensure_month_partitions(self.db, PRICE_BAR_TABLE, today, months_ahead)
+
+    async def drop_partitions_older_than(self, today: date, months: int) -> list[str]:
+        """
+        Remove the bars of the months that ended more than ``months`` months ago
+        (and their coverage). Only called when a retention is configured.
+        """
+        dropped, oldest_kept = await drop_month_partitions(self.db, PRICE_BAR_TABLE, today, months)
+        if dropped:
+            await self.db.execute("DELETE FROM price_recorder_coverage WHERE ts < $1", oldest_kept)
+            await self.db.execute("DELETE FROM price_volume WHERE ts < $1", oldest_kept)
+        return dropped
+
+    async def upsert_instrument(self, instrument: dict, seen_at: datetime) -> int:
+        """Record (or refresh) an instrument's description; returns its id."""
+        return await self.db.fetchval(
+            """
+            INSERT INTO price_instrument (
+                uic, asset_type, symbol, description, currency, role, indice,
+                underlying_uic, direction, barrier, issuer, first_seen_at, last_seen_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+            ON CONFLICT (uic, asset_type) DO UPDATE SET
+                symbol = COALESCE(EXCLUDED.symbol, price_instrument.symbol),
+                description = COALESCE(EXCLUDED.description, price_instrument.description),
+                currency = COALESCE(EXCLUDED.currency, price_instrument.currency),
+                role = EXCLUDED.role,
+                indice = COALESCE(EXCLUDED.indice, price_instrument.indice),
+                underlying_uic = COALESCE(EXCLUDED.underlying_uic, price_instrument.underlying_uic),
+                direction = COALESCE(EXCLUDED.direction, price_instrument.direction),
+                barrier = COALESCE(EXCLUDED.barrier, price_instrument.barrier),
+                issuer = COALESCE(EXCLUDED.issuer, price_instrument.issuer),
+                last_seen_at = EXCLUDED.last_seen_at
+            RETURNING id
+            """,
+            instrument["uic"], instrument["asset_type"], instrument.get("symbol"), instrument.get("description"),
+            instrument.get("currency"), instrument["role"], instrument.get("indice"),
+            instrument.get("underlying_uic"), instrument.get("direction"), instrument.get("barrier"),
+            instrument.get("issuer"), seen_at,
+        )
+
+    async def insert_bars(self, bars: list[tuple]) -> None:
+        """Write bars (tuples in BAR_COLUMNS order) in one statement. A bar already there is left as it is."""
+        await insert_bar_rows(self.db, PRICE_BAR_TABLE, bars)
+
+    async def record_coverage(self, ts: datetime, feed_ok: bool, instruments: int, bars: int) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO price_recorder_coverage (ts, feed_ok, instruments, bars)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (ts) DO NOTHING
+            """,
+            ts, feed_ok, instruments, bars,
+        )
+
+    async def record_volumes(self, volumes: list[tuple]) -> None:
+        """
+        Write the day's totals that changed, as (instrument_id, ts, day_volume),
+        in one statement. A total that changed again in the same ten seconds
+        replaces the one written for them.
+        """
+        if not volumes:
+            return
+        columns = list(zip(*volumes))
+        await self.db.execute(
+            """
+            INSERT INTO price_volume (instrument_id, ts, day_volume)
+            SELECT * FROM unnest($1::int4[], $2::timestamptz[], $3::float8[])
+            ON CONFLICT (instrument_id, ts) DO UPDATE SET day_volume = EXCLUDED.day_volume
+            """,
+            *[list(column) for column in columns],
+        )
+
+    async def instruments_recorded_since(self, since: datetime) -> list[dict]:
+        """The instruments that have a bar since ``since``: what to keep recording after a restart."""
+        rows = await self.db.fetch(
+            f"""
+            SELECT i.id, i.uic, i.asset_type, i.symbol, i.description, i.currency, i.role, i.indice,
+                   i.underlying_uic, i.direction, i.barrier, i.issuer
+            FROM price_instrument i
+            WHERE EXISTS (SELECT 1 FROM {PRICE_BAR_TABLE} b WHERE b.instrument_id = i.id AND b.ts >= $1)
+            """,
+            since,
+        )
+        return [dict(row) for row in rows]
+
+    async def bars_page(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        indice: str | None = None,
+        after: tuple[datetime, int] | None = None,
+        limit: int = 20000,
+    ) -> list[dict]:
+        """
+        Bars of [start, end) with their instrument, oldest first, one page at a
+        time: pass the (ts, instrument_id) of the last row as ``after`` for the next.
+        """
+        after_ts, after_id = after if after is not None else (start, -1)
+        rows = await self.db.fetch(
+            f"""
+            SELECT b.ts, b.instrument_id, i.uic, i.asset_type, i.symbol, i.description, i.role, i.indice,
+                   i.direction, i.barrier, i.issuer,
+                   b.bid_open, b.bid_high, b.bid_low, b.bid_close,
+                   b.ask_open, b.ask_high, b.ask_low, b.ask_close, b.updates, b.delayed_minutes
+            FROM {PRICE_BAR_TABLE} b
+            JOIN price_instrument i ON i.id = b.instrument_id
+            WHERE b.ts >= $1 AND b.ts < $2
+              AND ($3::text IS NULL OR i.indice = $3)
+              AND (b.ts, b.instrument_id) > ($4::timestamptz, $5::int4)
+            ORDER BY b.ts, b.instrument_id
+            LIMIT $6
+            """,
+            start, end, indice, after_ts, after_id, limit,
+        )
+        return [dict(row) for row in rows]
+
+
+# ──────────────────────────────────────────────
+#  Capital.com feed
+# ──────────────────────────────────────────────
+
+# Created by the Capital.com feed alone (src/capital_feed), as the price
+# recorder creates its own: no trading service uses these tables.
+CAPITAL_SCHEMA_SQL = """
+-- The instruments of Capital.com that are recorded. The epic is Capital.com's
+-- name for one, the label WATA's (the indice of its rules, the folder of the
+-- day files).
+CREATE TABLE IF NOT EXISTS capital_instrument (
+    id               SERIAL PRIMARY KEY,
+    epic             VARCHAR(64) NOT NULL UNIQUE,
+    label            VARCHAR(32) NOT NULL,
+    name             TEXT,
+    instrument_type  VARCHAR(32),
+    currency         VARCHAR(8),
+    decimals         SMALLINT,
+    opening_hours    JSONB,
+    first_seen_at    TIMESTAMPTZ NOT NULL,
+    last_seen_at     TIMESTAMPTZ NOT NULL
+);
+
+-- Ten-second bars of the bid and the ask, in the columns of price_bar_10s and
+-- made by the same rules (src/price_recorder/bars.py). ts is the start of the
+-- bucket, updates the quote changes received in it.
+CREATE TABLE IF NOT EXISTS capital_bar_10s (
+    ts               TIMESTAMPTZ NOT NULL,
+    instrument_id    INTEGER NOT NULL,
+    bid_open         DOUBLE PRECISION NOT NULL,
+    bid_high         DOUBLE PRECISION NOT NULL,
+    bid_low          DOUBLE PRECISION NOT NULL,
+    bid_close        DOUBLE PRECISION NOT NULL,
+    ask_open         DOUBLE PRECISION,
+    ask_high         DOUBLE PRECISION,
+    ask_low          DOUBLE PRECISION,
+    ask_close        DOUBLE PRECISION,
+    updates          SMALLINT NOT NULL,
+    delayed_minutes  SMALLINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (instrument_id, ts)
+) PARTITION BY RANGE (ts);
+
+-- One row per ten seconds the feed lived through, as price_recorder_coverage:
+-- whether quotes were arriving, and how much it wrote. No row: not recorded.
+CREATE TABLE IF NOT EXISTS capital_coverage (
+    ts           TIMESTAMPTZ PRIMARY KEY,
+    feed_ok      BOOLEAN NOT NULL,
+    instruments  SMALLINT NOT NULL,
+    bars         SMALLINT NOT NULL
+);
+
+-- Capital.com's own candle of each minute, with the volume it gives it
+-- (lastTradedVolume): beside the bars, not in them.
+CREATE TABLE IF NOT EXISTS capital_minute (
+    instrument_id  INTEGER NOT NULL,
+    ts             TIMESTAMPTZ NOT NULL,
+    bid_open       DOUBLE PRECISION,
+    bid_high       DOUBLE PRECISION,
+    bid_low        DOUBLE PRECISION,
+    bid_close      DOUBLE PRECISION,
+    ask_open       DOUBLE PRECISION,
+    ask_high       DOUBLE PRECISION,
+    ask_low        DOUBLE PRECISION,
+    ask_close      DOUBLE PRECISION,
+    volume         DOUBLE PRECISION,
+    PRIMARY KEY (instrument_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_capital_minute_ts ON capital_minute (ts);
+
+-- What the feed is doing, written again every ten seconds: one row, which the
+-- admin reads (its age says whether the feed runs at all).
+CREATE TABLE IF NOT EXISTS capital_feed_state (
+    id           SMALLINT PRIMARY KEY CHECK (id = 1),
+    updated_at   TIMESTAMPTZ NOT NULL,
+    started_at   TIMESTAMPTZ NOT NULL,
+    version      VARCHAR(32),
+    environment  VARCHAR(8),
+    state        VARCHAR(32) NOT NULL,
+    detail       TEXT,
+    figures      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+"""
+
+CAPITAL_BAR_TABLE = "capital_bar_10s"
+
+
+async def init_capital_schema(conn_mgr: PostgresConnectionManager):
+    await conn_mgr.execute(CAPITAL_SCHEMA_SQL)
+
+
+class AsyncDbCapitalManager:
+    """Instruments, bars, coverage, minutes and state written by the Capital.com feed (see CAPITAL_SCHEMA_SQL)."""
+
+    BAR_COLUMNS = BAR_COLUMNS
+    MINUTE_COLUMNS = (
+        "instrument_id", "ts", "bid_open", "bid_high", "bid_low", "bid_close",
+        "ask_open", "ask_high", "ask_low", "ask_close", "volume",
+    )
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def ensure_partitions(self, today: date, months_ahead: int = 1) -> list[str]:
+        return await ensure_month_partitions(self.db, CAPITAL_BAR_TABLE, today, months_ahead)
+
+    async def drop_partitions_older_than(self, today: date, months: int) -> list[str]:
+        """Remove the bars of the months that ended more than ``months`` months ago, with their coverage and minutes."""
+        dropped, oldest_kept = await drop_month_partitions(self.db, CAPITAL_BAR_TABLE, today, months)
+        if dropped:
+            await self.db.execute("DELETE FROM capital_coverage WHERE ts < $1", oldest_kept)
+            await self.db.execute("DELETE FROM capital_minute WHERE ts < $1", oldest_kept)
+        return dropped
+
+    async def upsert_instrument(self, instrument: dict, seen_at: datetime) -> int:
+        """Record (or refresh) an instrument; returns its id. What Capital.com did not say this time is kept."""
+        opening_hours = instrument.get("opening_hours")
+        return await self.db.fetchval(
+            """
+            INSERT INTO capital_instrument (
+                epic, label, name, instrument_type, currency, decimals, opening_hours, first_seen_at, last_seen_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $8)
+            ON CONFLICT (epic) DO UPDATE SET
+                label = EXCLUDED.label,
+                name = COALESCE(EXCLUDED.name, capital_instrument.name),
+                instrument_type = COALESCE(EXCLUDED.instrument_type, capital_instrument.instrument_type),
+                currency = COALESCE(EXCLUDED.currency, capital_instrument.currency),
+                decimals = COALESCE(EXCLUDED.decimals, capital_instrument.decimals),
+                opening_hours = COALESCE(EXCLUDED.opening_hours, capital_instrument.opening_hours),
+                last_seen_at = EXCLUDED.last_seen_at
+            RETURNING id
+            """,
+            instrument["epic"], instrument["label"], instrument.get("name"), instrument.get("instrument_type"),
+            instrument.get("currency"), instrument.get("decimals"),
+            None if opening_hours is None else json.dumps(opening_hours), seen_at,
+        )
+
+    async def insert_bars(self, bars: list[tuple]) -> None:
+        await insert_bar_rows(self.db, CAPITAL_BAR_TABLE, bars)
+
+    async def record_coverage(self, ts: datetime, feed_ok: bool, instruments: int, bars: int) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO capital_coverage (ts, feed_ok, instruments, bars)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (ts) DO NOTHING
+            """,
+            ts, feed_ok, instruments, bars,
+        )
+
+    async def upsert_minutes(self, minutes: list[tuple]) -> None:
+        """
+        Write Capital.com's candles of some minutes (tuples in MINUTE_COLUMNS
+        order) in one statement. A minute fetched again replaces the one kept:
+        the last minute can still change when it is first fetched.
+        """
+        if not minutes:
+            return
+        columns = list(zip(*minutes))
+        await self.db.execute(
+            f"""
+            INSERT INTO capital_minute ({", ".join(self.MINUTE_COLUMNS)})
+            SELECT * FROM unnest(
+                $1::int4[], $2::timestamptz[],
+                $3::float8[], $4::float8[], $5::float8[], $6::float8[],
+                $7::float8[], $8::float8[], $9::float8[], $10::float8[],
+                $11::float8[]
+            )
+            ON CONFLICT (instrument_id, ts) DO UPDATE SET
+                bid_open = EXCLUDED.bid_open, bid_high = EXCLUDED.bid_high,
+                bid_low = EXCLUDED.bid_low, bid_close = EXCLUDED.bid_close,
+                ask_open = EXCLUDED.ask_open, ask_high = EXCLUDED.ask_high,
+                ask_low = EXCLUDED.ask_low, ask_close = EXCLUDED.ask_close,
+                volume = EXCLUDED.volume
+            """,
+            *[list(column) for column in columns],
+        )
+
+    async def write_state(self, state: dict) -> None:
+        """The one row saying what the feed is doing (CAPITAL_SCHEMA_SQL)."""
+        await self.db.execute(
+            """
+            INSERT INTO capital_feed_state (id, updated_at, started_at, version, environment, state, detail, figures)
+            VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+                updated_at = EXCLUDED.updated_at, started_at = EXCLUDED.started_at,
+                version = EXCLUDED.version, environment = EXCLUDED.environment,
+                state = EXCLUDED.state, detail = EXCLUDED.detail, figures = EXCLUDED.figures
+            """,
+            state["updated_at"], state["started_at"], state.get("version"), state.get("environment"),
+            state["state"], state.get("detail"), json.dumps(state.get("figures") or {}),
+        )
+
+    async def first_bar_at(self, instrument_id: int) -> datetime | None:
+        """The start of an instrument's first bar, None without one: reached through the key, never scanned."""
+        return await self.db.fetchval(
+            f"SELECT ts FROM {CAPITAL_BAR_TABLE} WHERE instrument_id = $1 ORDER BY ts LIMIT 1",
+            instrument_id,
+        )
+
+    DAY_FILE_COLUMNS = (
+        "ts", "bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close", "updates",
+    )
+
+    async def bars_between(self, instrument_id: int, start: datetime, end: datetime) -> list[tuple]:
+        """The bars of one instrument in [start, end), oldest first, as tuples of DAY_FILE_COLUMNS."""
+        rows = await self.db.fetch(
+            f"""
+            SELECT {", ".join(self.DAY_FILE_COLUMNS)}
+            FROM {CAPITAL_BAR_TABLE}
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+            ORDER BY ts
+            """,
+            instrument_id, start, end,
+        )
+        return [tuple(row[name] for name in self.DAY_FILE_COLUMNS) for row in rows]
+

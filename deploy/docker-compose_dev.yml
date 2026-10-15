@@ -11,7 +11,7 @@ services:
         - ../var/log/rabbitmq:/var/log/rabbitmq
         - ../etc/rabbitmq/01-conf-custom.conf:/etc/rabbitmq/conf.d/01-conf-custom.conf
     ports:
-      - 5672:5672
+      - "${DEV_RABBITMQ_PORT:-5672}:5672"
     expose:
       - '5672'
     networks:
@@ -39,7 +39,7 @@ services:
     environment:
       - WATA_APP_ROLE=web_server
     ports:
-        - 80:80
+        - "${DEV_WEB_SERVER_PORT:-80}:80"
     expose:
       - '80'
     volumes:

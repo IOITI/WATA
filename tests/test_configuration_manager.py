@@ -52,3 +52,54 @@ class TestConfigurationManager:
         with patch.object(ConfigurationManager, 'validate_config', return_value=None):
             config_manager = ConfigurationManager("dummy_path")
             assert config_manager.get_rabbitmq_config() == {"host": "localhost"}
+
+
+def _config_with_protective_stop(tmp_path, protective_stop):
+    with open("tests/test_config.json") as config_file:
+        config = json.load(config_file)
+    # tests/test_config.json sets the monitor's stop-loss at -20%
+    config["trade"]["config"]["position_management"]["protective_stop"] = protective_stop
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    return str(path)
+
+
+class TestProtectiveStopValidation:
+
+    def test_wider_than_the_stoploss_is_accepted(self, tmp_path):
+        path = _config_with_protective_stop(tmp_path, {"enabled": True, "percent": -30, "order_type": "StopIfTraded"})
+
+        config_manager = ConfigurationManager(path)
+
+        assert config_manager.get_config_value("trade.config.position_management.protective_stop.percent") == -30
+
+    @pytest.mark.parametrize("percent", [-20, -10, 5, -100, -150])
+    def test_not_wider_than_the_stoploss_or_impossible_is_rejected(self, tmp_path, percent):
+        path = _config_with_protective_stop(tmp_path, {"enabled": True, "percent": percent})
+
+        with pytest.raises(ValueError, match="Protective stop percentage"):
+            ConfigurationManager(path)
+
+    @pytest.mark.parametrize("percent", [None, "-30", True])
+    def test_enabled_without_a_numeric_percent_is_rejected(self, tmp_path, percent):
+        path = _config_with_protective_stop(tmp_path, {"enabled": True, "percent": percent})
+
+        with pytest.raises(ValueError, match="protective_stop.percent"):
+            ConfigurationManager(path)
+
+    def test_disabled_does_not_need_a_percent(self, tmp_path):
+        path = _config_with_protective_stop(tmp_path, {"enabled": False})
+
+        ConfigurationManager(path)
+
+    def test_enabled_must_be_a_boolean(self, tmp_path):
+        path = _config_with_protective_stop(tmp_path, {"enabled": "yes", "percent": -30})
+
+        with pytest.raises(ValueError, match="protective_stop.enabled"):
+            ConfigurationManager(path)
+
+    def test_order_type_must_be_a_string(self, tmp_path):
+        path = _config_with_protective_stop(tmp_path, {"enabled": True, "percent": -30, "order_type": 3})
+
+        with pytest.raises(ValueError, match="protective_stop.order_type"):
+            ConfigurationManager(path)

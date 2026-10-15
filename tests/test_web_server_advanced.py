@@ -38,6 +38,33 @@ def test_forbidden_ip(client):
             client.get("/webhook?token=test_token", headers={"X-Forwarded-For": "1.2.3.4"})
         assert exc_info.value.status_code == 403
 
+def test_forbidden_ip_with_a_host_header_naming_an_internal_path(client):
+    with patch("src.web_server.ALLOWED_IPS", new=["192.168.1.1"]):
+        # The internal paths skip the IP check. A Host header that is not a host
+        # name must not make a request to /webhook pass for one of them.
+        with pytest.raises(HTTPException) as exc_info:
+            client.post(
+                "/webhook?token=test_token",
+                json={
+                    "action": "long",
+                    "indice": "us100",
+                    "signal_timestamp": "2023-07-01T12:00:00Z",
+                    "alert_timestamp": "2023-07-01T12:00:01Z",
+                },
+                headers={"X-Forwarded-For": "1.2.3.4", "Host": "x/latest-signals?"},
+            )
+        assert exc_info.value.status_code == 403
+
+def test_internal_paths_still_skip_the_ip_check(client):
+    with patch("src.web_server.ALLOWED_IPS", new=["192.168.1.1"]):
+        # The trader and the scheduler call these from inside the Docker network:
+        # they are held by the Bearer token, not by the address.
+        response = client.get(
+            "/latest-signals",
+            headers={"X-Forwarded-For": "1.2.3.4", "Authorization": "Bearer test_token"},
+        )
+        assert response.status_code == 200
+
 def test_webhook_success_with_allowed_ip(client):
     response = client.post(
         "/webhook?token=test_token",

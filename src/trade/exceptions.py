@@ -1,5 +1,46 @@
 # src/trade/exceptions.py
 
+
+def saxo_error_parts(details) -> tuple[str | None, str | None]:
+    """
+    Saxo's error code and message in the body of an answer, wherever Saxo put
+    them: under ``ErrorInfo`` (how it refuses an order), at the top level (most
+    other refusals), with the fields it did not accept in ``ModelState``. A body
+    that is not JSON is its own message. (None, None) when nothing says it.
+    """
+    if isinstance(details, str):
+        return None, details.strip() or None
+    if not isinstance(details, dict):
+        return None, None
+    info = details.get("ErrorInfo")
+    if isinstance(info, dict) and (info.get("ErrorCode") or info.get("Message")):
+        code, message = info.get("ErrorCode"), info.get("Message")
+    else:
+        code, message = details.get("ErrorCode"), details.get("Message")
+    model_state = details.get("ModelState")
+    if isinstance(model_state, dict):
+        fields = []
+        for field, problems in model_state.items():
+            problems = problems if isinstance(problems, list) else [problems]
+            fields += [f"{field}: {problem}" for problem in problems if problem]
+        if fields:
+            message = f"{message} ({'; '.join(fields)})" if message else "; ".join(fields)
+    return (None if code is None else str(code)), (None if message is None else str(message))
+
+
+def _saxo_suffix(saxo_error_details) -> str:
+    """What Saxo answered, as the messages of these exceptions end: its message and its code."""
+    if not saxo_error_details:
+        return ""
+    if not isinstance(saxo_error_details, dict):
+        return f" (Saxo Details: {saxo_error_details})"
+    code, message = saxo_error_parts(saxo_error_details)
+    if code is None and message is None:
+        # A shape Saxo does not document: shown as it came.
+        return f" (Saxo: {saxo_error_details})"
+    return f" (Saxo: {message or 'no message'}" + (f" [{code}])" if code else ")")
+
+
 class NoTurbosAvailableException(Exception):
     """Raised when no turbos are available matching the search criteria."""
     # Changed 'context' to 'search_context' for clarity and consistency with usage
@@ -25,11 +66,13 @@ class TradingRuleViolation(Exception):
 class PositionNotFoundException(Exception):
      """Raised when a position cannot be found after an order, potentially after retries."""
      # Added cancellation_attempted and cancellation_succeeded
-     def __init__(self, message, order_id=None, cancellation_attempted=None, cancellation_succeeded=None):
+     def __init__(self, message, order_id=None, cancellation_attempted=None, cancellation_succeeded=None,
+                  cancellation_error=None):
         super().__init__(message)
         self.order_id = order_id
         self.cancellation_attempted = cancellation_attempted # Boolean flag
         self.cancellation_succeeded = cancellation_succeeded # Boolean flag or None if not attempted
+        self.cancellation_error = cancellation_error # What Saxo answered when it refused the cancellation
 
      def __str__(self):
         base = super().__str__()
@@ -37,6 +80,8 @@ class PositionNotFoundException(Exception):
         cancel_info = ""
         if self.cancellation_attempted is not None:
             status = "succeeded" if self.cancellation_succeeded else "failed"
+            if not self.cancellation_succeeded and self.cancellation_error:
+                status = f"{status}: {self.cancellation_error}"
             cancel_info = f" (Order cancellation attempt: {status})"
         return f"{base}{order_info}{cancel_info}"
 
@@ -55,17 +100,7 @@ class InsufficientFundsException(Exception):
         details = ""
         if self.available_funds is not None and self.required_price is not None:
              details = f" (Available: {self.available_funds:.2f}, Required per unit: {self.required_price})"
-        saxo_info = ""
-        if self.saxo_error_details:
-            # Try to extract core message if details are dict, otherwise show raw
-            if isinstance(self.saxo_error_details, dict):
-                 saxo_msg = self.saxo_error_details.get('Message', str(self.saxo_error_details))
-                 saxo_code = self.saxo_error_details.get('ErrorCode')
-                 saxo_info = f" (Saxo: {saxo_msg}" + (f" [{saxo_code}])" if saxo_code else ")")
-            else:
-                 saxo_info = f" (Saxo Details: {self.saxo_error_details})"
-
-        return f"{super().__str__()}{details}{saxo_info}"
+        return f"{super().__str__()}{details}{_saxo_suffix(self.saxo_error_details)}"
 
 class ApiRequestException(Exception):
     """Raised when a request to the Saxo API fails (e.g., connection, timeout)."""
@@ -144,15 +179,7 @@ class SaxoApiError(Exception):
     def __str__(self):
         base = super().__str__()
         details = f" (Status: {self.status_code})" if self.status_code else ""
-        if self.saxo_error_details:
-            # Try to extract core message if details are dict, otherwise show raw
-            if isinstance(self.saxo_error_details, dict):
-                 saxo_msg = self.saxo_error_details.get('Message', str(self.saxo_error_details))
-                 saxo_code = self.saxo_error_details.get('ErrorCode')
-                 details += f" (Saxo: {saxo_msg}" + (f" [{saxo_code}])" if saxo_code else ")")
-            else:
-                 details += f" (Saxo Details: {self.saxo_error_details})"
-        return f"{base}{details}"
+        return f"{base}{details}{_saxo_suffix(self.saxo_error_details)}"
 
 class OrderPlacementError(SaxoApiError):
     """Raised when Saxo explicitly rejects an order placement request (subtype of SaxoApiError)."""

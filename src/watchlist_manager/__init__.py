@@ -160,9 +160,5 @@ if __name__ == "__main__":
     import uvicorn
 
     host, port = get_server_bind()
-    try:
-        import uvloop
-        uvloop.install()
-    except ImportError:
-        pass
+    # uvicorn runs on uvloop by itself when it is installed.
     uvicorn.run(app, host=host, port=port)

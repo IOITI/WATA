@@ -9,19 +9,32 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Python the image is built with (Dockerfile), and the one it was built
+        # with before: kept until 3.14 has run in production, so that going back
+        # to 3.12 stays something that is tested.
+        python-version: ['3.12', '3.14']
 
     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install --only-binary=:all: -r requirements.txt
+
+    - name: requirements.txt is the whole environment
+      run: |
+        pip check
+        pip freeze > installed.txt
+        python tests/requirements_lock.py requirements.txt installed.txt
 
     - name: Run tests with coverage
       run: |
@@ -30,5 +43,137 @@ jobs:
     - name: Upload coverage report
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-report
+        name: coverage-report-${{ matrix.python-version }}
         path: htmlcov
+
+  # The image, built as the server builds it.
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build the image
+      run: docker build -t wata-base:ci --platform=linux/amd64 --build-arg PYTHON_VERSION=${{ matrix.python-version }} .
+
+    - name: It has the Python asked for, and the libraries of requirements.txt and no other
+      run: |
+        docker run --rm wata-base:ci python --version | grep -F "Python ${{ matrix.python-version }}."
+        docker run --rm wata-base:ci python -m pip check
+        docker run --rm wata-base:ci python -m pip freeze > installed.txt
+        python3 tests/requirements_lock.py requirements.txt installed.txt
+
+    - name: Every service can be loaded in it
+      run: |
+        docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
+          python -W error::SyntaxWarning -m compileall -q /app/src
+        docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
+          python -c "import importlib; [importlib.import_module(name) for name in ('src.web_server', 'src.trader', 'src.position_monitor', 'src.watchlist_manager', 'src.price_recorder', 'src.admin', 'src.mq_telegram', 'src.saxo_authen', 'src.strategy.backtest', 'schedule', 'duckdb', 'uvloop', 'httptools')]"
+
+  # The image exactly as the server builds it: no Python asked for.
+  image-as-deployed:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build the image with the server's own command
+      run: docker build -t wata-base . --platform=linux/amd64
+
+    - name: It has the Python the Dockerfile names
+      run: |
+        expected=$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)
+        test -n "$expected"
+        docker run --rm wata-base python --version | grep -F "Python $expected."
+
+  # The database and the queue for real, with the libraries that talk to them.
+  infrastructure:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wata
+          POSTGRES_PASSWORD: wata
+          POSTGRES_DB: wata
+        ports:
+        - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wata"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      rabbitmq:
+        image: rabbitmq:3-management
+        env:
+          RABBITMQ_DEFAULT_USER: wata
+          RABBITMQ_DEFAULT_PASS: wata
+        ports:
+        - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install --only-binary=:all: -r requirements.txt
+
+    - name: PostgreSQL and RabbitMQ through the services' own code
+      env:
+        WATA_TEST_POSTGRES_DSN: postgresql://wata:wata@localhost:5432/wata
+        WATA_TEST_RABBITMQ: wata:wata@localhost
+        # A missing address fails here instead of skipping the tests.
+        WATA_TEST_REQUIRE_LIVE: '1'
+      run: |
+        PYTHONPATH=./:src/ pytest -vv tests/test_infrastructure_live.py
+
+  admin-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin_ui
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: admin_ui/.nvmrc
+        cache: npm
+        cache-dependency-path: admin_ui/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Lint
+      run: npm run lint
+
+    - name: Type-check
+      run: npm run typecheck
+
+    - name: Run tests
+      run: npm test
+
+    - name: Build
+      run: npm run build

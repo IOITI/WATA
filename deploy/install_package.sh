@@ -37,6 +37,11 @@ mkdir -p "$APP_BASE_DIR/var/lib/saxo_auth"
 mkdir -p "$APP_BASE_DIR/var/lib/web_server"
 mkdir -p "$APP_BASE_DIR/var/lib/rabbitmq"
 mkdir -p "$APP_BASE_DIR/var/lib/trade"
+mkdir -p "$APP_BASE_DIR/var/lib/admin"
+mkdir -p "$APP_BASE_DIR/var/lib/price_export"
+mkdir -p "$APP_BASE_DIR/var/lib/price_history"
+mkdir -p "$APP_BASE_DIR/var/lib/price_history/capital"
+mkdir -p "$APP_BASE_DIR/var/lib/backtests"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik"
 mkdir -p "$APP_BASE_DIR/var/lib/traefik/letsencrypt"
 mkdir -p "$APP_BASE_DIR/var/log/"
@@ -45,17 +50,39 @@ mkdir -p "$APP_BASE_DIR/var/log/wata-api"
 mkdir -p "$APP_BASE_DIR/var/log/wata-trader"
 mkdir -p "$APP_BASE_DIR/var/log/wata-telegram"
 mkdir -p "$APP_BASE_DIR/var/log/wata-scheduler"
+mkdir -p "$APP_BASE_DIR/var/log/wata-admin"
+mkdir -p "$APP_BASE_DIR/var/log/wata-price-recorder"
+mkdir -p "$APP_BASE_DIR/var/log/wata-capital-feed"
 
 # Ensure docker service is enabled
 echo "Ensuring Docker service is enabled..."
 sudo systemctl enable docker
 
+# The port Traefik is published on for HTTP or HTTPS: HTTP_PORT or HTTPS_PORT in .env,
+# read without running the file, or the default when it does not set one.
+env_port() {
+    local name="$1" default="$2" value=""
+    if [ -f "$APP_BASE_DIR/.env" ]; then
+        value=$(sed -n "s/^[[:space:]]*$name=[\"']\{0,1\}\([^\"'[:space:]]*\)[\"']\{0,1\}[[:space:]]*$/\1/p" "$APP_BASE_DIR/.env" | tail -n 1)
+    fi
+    if [ -z "$value" ]; then
+        echo "$default"
+    elif [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 1 ] && [ "$value" -le 65535 ]; then
+        echo "$value"
+    else
+        echo "WARNING: $name=$value in $APP_BASE_DIR/.env is not a port number (see .env.example): the firewall opens $default instead." >&2
+        echo "$default"
+    fi
+}
+HTTP_PORT=$(env_port HTTP_PORT 80)
+HTTPS_PORT=$(env_port HTTPS_PORT 443)
+
 # Configure UFW firewall rules
 echo "Configuring UFW rules..."
 # Allow all connections to the SSH server
 sudo ufw allow ssh
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+sudo ufw allow "$HTTP_PORT/tcp"
+sudo ufw allow "$HTTPS_PORT/tcp"
 
 echo "UFW rules added successfully."
 sudo ufw --force enable
@@ -102,6 +129,43 @@ fi
 docker exec web_server1 python -m src.web_server.cli $OPTIONS
 EOF
 chmod +x /usr/local/bin/watawebtoken
+
+# Create the wataadminpasswd command wrapper
+cat << 'EOF' > /usr/local/bin/wataadminpasswd
+#!/bin/bash
+set -euo pipefail
+
+docker exec -it admin1 python -m src.admin.cli --set-password
+EOF
+chmod +x /usr/local/bin/wataadminpasswd
+
+# Create the wataadmintotp command wrapper (second factor of the admin login)
+cat << 'EOF' > /usr/local/bin/wataadmintotp
+#!/bin/bash
+set -euo pipefail
+OPTIONS="--enable-totp"
+if [ "$#" -gt 0 ] && [ "$1" == "--disable" ]; then
+    OPTIONS="--disable-totp"
+fi
+
+docker exec -it admin1 python -m src.admin.cli $OPTIONS
+EOF
+chmod +x /usr/local/bin/wataadmintotp
+
+# Create the wataprices command wrapper (price recorder: export a period, or check an instrument)
+cat << 'EOF' > /usr/local/bin/wataprices
+#!/bin/bash
+set -euo pipefail
+# wataprices --from 2026-10-12 --to 2026-10-16     export to /app/wata/var/lib/price_export/
+# wataprices probe --keywords "US Tech 100"        does Saxo price this instrument for the account?
+if [ "$#" -gt 0 ] && [ "$1" == "probe" ]; then
+    shift
+    docker exec price_recorder1 python -m src.price_recorder.probe "$@"
+else
+    docker exec price_recorder1 python -m src.price_recorder.export "$@"
+fi
+EOF
+chmod +x /usr/local/bin/wataprices
 
 # --- Helper function definition for other scripts ---
 # Note: This is a string that will be embedded into other scripts.
@@ -277,4 +341,9 @@ echo "  - watasaxoauth <AUTH_CODE>"
 echo ""
 echo "To manage the WebServer token:"
 echo "  - watawebtoken [--new]"
+echo ""
+echo "To set the password of the admin web interface (when enabled in .env):"
+echo "  - wataadminpasswd"
+echo "To require a one-time code from an authenticator app as well:"
+echo "  - wataadmintotp [--disable]"
 echo "---------------------------------------------------------------------"

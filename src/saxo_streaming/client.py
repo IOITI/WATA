@@ -35,6 +35,7 @@ from typing import Any, Callable, Coroutine
 
 import websockets
 import websockets.exceptions
+from websockets.protocol import State
 
 from src.saxo_openapi.async_client import AsyncAPI, TRADING_ENVIRONMENTS
 from src.saxo_openapi.contrib.ws.stream import decode_ws_msg
@@ -132,7 +133,7 @@ class SaxoStreamClient:
         # Connection state
         self._context_id: str = ""
         self._pos_ref_id: str = ""
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: websockets.ClientConnection | None = None
         self._last_message_id: int | None = None
         self._running = False
         self._receive_task: asyncio.Task | None = None
@@ -141,6 +142,10 @@ class SaxoStreamClient:
 
         # Snapshot cache:  {position_id: full_position_dict}
         self._positions: dict[str, dict] = {}
+        # Set by the receive loop when the cache changes. The callback runs in its
+        # own task, so a slow callback never holds up reading the socket.
+        self._positions_changed = asyncio.Event()
+        self._positions_delivery_task: asyncio.Task | None = None
         self._desired_info_price_subscriptions: dict[str, dict] = {}
         self._active_info_price_subscriptions: dict[str, dict] = {}
         self._info_price_subscriptions_lock = asyncio.Lock()
@@ -151,35 +156,41 @@ class SaxoStreamClient:
         """Start the streaming loop (run forever until ``stop()`` is called)."""
         self._running = True
         backoff = self._reconnect_delay
+        if self._on_positions_update is not None:
+            self._positions_delivery_task = asyncio.create_task(self._deliver_position_updates())
 
-        while self._running:
-            try:
-                await self._connect_and_subscribe()
-                backoff = self._reconnect_delay  # reset on success
-                await self._receive_loop()
-            except asyncio.CancelledError:
-                break
-            except websockets.exceptions.ConnectionClosed as e:
-                logger.warning("WebSocket closed: code=%s reason=%s", e.code, e.reason)
-            except Exception as e:
-                logger.error("Stream error: %s", e, exc_info=True)
+        try:
+            while self._running:
+                try:
+                    await self._connect_and_subscribe()
+                    backoff = self._reconnect_delay  # reset on success
+                    await self._receive_loop()
+                except asyncio.CancelledError:
+                    break
+                except websockets.exceptions.ConnectionClosed as e:
+                    logger.warning("WebSocket closed: code=%s reason=%s", *_close_code_and_reason(e))
+                except Exception as e:
+                    logger.error("Stream error: %s", e, exc_info=True)
 
-            if not self._running:
-                break
+                if not self._running:
+                    break
 
-            logger.info("Reconnecting in %.1fs …", backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, self._max_reconnect_delay)
+                logger.info("Reconnecting in %.1fs …", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, self._max_reconnect_delay)
+        finally:
+            self._stop_position_delivery()
 
     async def stop(self):
         """Gracefully tear down the connection & subscriptions."""
         self._running = False
+        self._stop_position_delivery()
         if self._reauth_task and not self._reauth_task.done():
             self._reauth_task.cancel()
         if self._receive_task and not self._receive_task.done():
             self._receive_task.cancel()
         await self._cleanup_subscriptions()
-        if self._ws and not self._ws.closed:
+        if self._has_connection():
             await self._ws.close()
             logger.info("WebSocket closed gracefully.")
 
@@ -217,10 +228,14 @@ class SaxoStreamClient:
         async with self._info_price_subscriptions_lock:
             self._desired_info_price_subscriptions = normalized
 
-        if self._ws is not None and not self._ws.closed:
+        if self._has_connection():
             await self._sync_desired_info_price_subscriptions()
 
     # ── Connection ────────────────────────────────────────────────
+
+    def _has_connection(self) -> bool:
+        """Whether there is a WebSocket that is not closed yet (one being closed still counts)."""
+        return self._ws is not None and self._ws.state is not State.CLOSED
 
     async def _connect_and_subscribe(self):
         """Open WS, create position subscription, start reauth timer."""
@@ -242,6 +257,9 @@ class SaxoStreamClient:
             ping_timeout=20,
             close_timeout=5,
             max_size=2 ** 22,  # 4 MiB
+            # Straight to Saxo, as it always was: the library would otherwise
+            # look for a proxy in the environment.
+            proxy=None,
         )
         logger.info("WebSocket connected.")
 
@@ -297,7 +315,7 @@ class SaxoStreamClient:
 
         # Fire initial callback with snapshot
         if self._positions:
-            await self._fire_callback()
+            self._fire_callback()
 
     async def _create_info_price_subscription(self, definition: dict):
         if not definition.get("uics"):
@@ -481,16 +499,31 @@ class SaxoStreamClient:
             changed = True
 
         if changed:
-            await self._fire_callback()
+            self._fire_callback()
 
-    async def _fire_callback(self):
-        """Invoke the user callback with the full position snapshot."""
-        if self._on_positions_update is None:
-            return
-        try:
-            await self._on_positions_update(copy.deepcopy(self._positions))
-        except Exception as e:
-            logger.error("Error in positions-update callback: %s", e, exc_info=True)
+    def _fire_callback(self):
+        """Flag the position snapshot as changed; the delivery task calls the user callback."""
+        self._positions_changed.set()
+
+    async def _deliver_position_updates(self):
+        """
+        Invoke the user callback with the full position snapshot each time it changed.
+
+        Changes arriving while the callback is still running are coalesced: it is
+        then called once more with the newest snapshot, not once per change, so a
+        slow callback always works on current prices instead of a backlog.
+        """
+        while True:
+            await self._positions_changed.wait()
+            self._positions_changed.clear()
+            try:
+                await self._on_positions_update(copy.deepcopy(self._positions))
+            except Exception as e:
+                logger.error("Error in positions-update callback: %s", e, exc_info=True)
+
+    def _stop_position_delivery(self):
+        if self._positions_delivery_task and not self._positions_delivery_task.done():
+            self._positions_delivery_task.cancel()
 
     async def _handle_info_price_subscription_update(self, reference_id: str, payload: dict | list | Any):
         updates: list[dict] = []
@@ -726,6 +759,13 @@ class SaxoStreamClient:
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
+def _close_code_and_reason(closed: websockets.exceptions.ConnectionClosed) -> tuple[int, str]:
+    """What Saxo closed the connection with; 1006 when it was lost without a closing frame."""
+    if closed.rcvd is None:
+        return 1006, ""
+    return closed.rcvd.code, closed.rcvd.reason
+
 
 def _short_id(prefix: str) -> str:
     """Generate a short alphanumeric ID suitable for Saxo context/ref IDs."""

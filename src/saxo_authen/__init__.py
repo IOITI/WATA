@@ -7,6 +7,8 @@ import datetime
 import os
 import logging
 import base64
+import fcntl
+from contextlib import contextmanager
 import pika
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -17,6 +19,9 @@ from src.configuration import ConfigurationManager
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
 
 logger = logging.getLogger(__name__)
+
+# Without a timeout a stalled token endpoint would block the caller forever.
+TOKEN_REQUEST_TIMEOUT_SECONDS = 10
 
 
 class SaxoAuth:
@@ -35,7 +40,8 @@ class SaxoAuth:
             "authentication.persistant.token_path"
         )
         self.auth_code_path = os.path.join(os.path.dirname(self.token_file_path), "saxo_auth_code.txt")
-        
+        self.token_lock_path = os.path.join(os.path.dirname(self.token_file_path), ".token_refresh.lock")
+
         # Ensure token directory exists
         os.makedirs(os.path.dirname(self.token_file_path), exist_ok=True)
         
@@ -88,9 +94,13 @@ class SaxoAuth:
 
     def _write_encrypted_token_file(self, encrypted_data):
         """Persist encrypted token bytes to the configured token file."""
-        with open(self.token_file_path, "wb") as token_file:
+        # Written aside then renamed, so the other services reading this file
+        # never see it empty or half-written.
+        tmp_path = f"{self.token_file_path}.tmp"
+        with open(tmp_path, "wb") as token_file:
             token_file.write(encrypted_data)
-        os.chmod(self.token_file_path, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
+        os.replace(tmp_path, self.token_file_path)
 
     def _read_encrypted_token_file(self):
         """Read encrypted token bytes from the configured token file."""
@@ -99,6 +109,30 @@ class SaxoAuth:
 
         with open(self.token_file_path, "rb") as token_file:
             return token_file.read()
+
+    def _load_token_data(self):
+        """Read and decrypt the stored token data ({} when there is none)."""
+        encrypted_data = self._read_encrypted_token_file()
+        if not encrypted_data:
+            return {}
+        token_data = self._decrypt_data(encrypted_data) or {}
+        logger.debug("Token data retrieved from encrypted file")
+        return token_data
+
+    @contextmanager
+    def _token_refresh_lock(self):
+        """
+        Exclusive lock held while renewing the token.
+
+        Several services share this token file. A Saxo refresh token can only be
+        used once, so they must not renew at the same time.
+        """
+        with open(self.token_lock_path, "a") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     def _send_telegram_notification(self, message):
         """
@@ -238,7 +272,7 @@ class SaxoAuth:
             "client_secret": self.app_data["AppSecret"],
         }
         try:
-            response = requests.post(self.app_data["TokenEndpoint"], data=data)
+            response = requests.post(self.app_data["TokenEndpoint"], data=data, timeout=TOKEN_REQUEST_TIMEOUT_SECONDS)
             if response.status_code == 201:
                 logger.info("Successfully exchanged code for token")
                 return response.json()
@@ -263,7 +297,7 @@ class SaxoAuth:
             "client_secret": self.app_data["AppSecret"],
         }
         try:
-            response = requests.post(self.app_data["TokenEndpoint"], data=data)
+            response = requests.post(self.app_data["TokenEndpoint"], data=data, timeout=TOKEN_REQUEST_TIMEOUT_SECONDS)
             if response.status_code == 201:
                 logger.info("Successfully refreshed access token")
                 return response.json()
@@ -354,35 +388,61 @@ class SaxoAuth:
         logger.debug(f"Refresh token wanted expiration time: {refresh_token_expiration_time}, current time: {datetime.datetime.now()}")
         return datetime.datetime.now() > refresh_token_expiration_time
 
+    def get_token_status(self):
+        """
+        Describe the stored token without exposing it (used by the admin interface).
+        """
+        token_data = self._load_token_data()
+        date_saved = None
+        if token_data.get("date_saved"):
+            date_saved = datetime.datetime.fromisoformat(token_data["date_saved"])
+
+        def to_utc(naive_local):
+            # date_saved is naive local time, which is how astimezone() reads it.
+            return naive_local.astimezone(datetime.timezone.utc).isoformat()
+
+        def expiry(lifetime_key):
+            if date_saved is None or lifetime_key not in token_data:
+                return None
+            return to_utc(date_saved + datetime.timedelta(seconds=token_data[lifetime_key]))
+
+        return {
+            "has_token": bool(token_data.get("access_token")),
+            "saved_at": to_utc(date_saved) if date_saved else None,
+            "access_token_expires_at": expiry("expires_in"),
+            "refresh_token_expires_at": expiry("refresh_token_expires_in"),
+            "access_token_expired": self.is_token_expired(token_data),
+            "refresh_token_expired": self.is_refresh_token_expired(token_data),
+        }
+
     def get_token(self):
         """
         Get a valid access token, either by refreshing an existing token or obtaining a new one.
         """
         try:
-            token_data = {}
-
-            encrypted_data = self._read_encrypted_token_file()
-            if encrypted_data:
-                token_data = self._decrypt_data(encrypted_data) or {}
-                logger.debug("Token data retrieved from encrypted file")
+            token_data = self._load_token_data()
 
             if self.is_token_expired(token_data):
-                if self.is_refresh_token_expired(token_data):
-                    new_token_data = self.ask_new_token()
-                    if new_token_data:
-                        self.save_token_data(new_token_data)
-                        token_data = new_token_data
-                    else:
-                        logger.error("Failed to obtain new tokens")
-                        raise Exception("Failed to obtain new tokens")
-                else:
-                    new_token_data = self.refresh_token(token_data["refresh_token"])
-                    if new_token_data:
-                        self.save_token_data(new_token_data)
-                        token_data = new_token_data
-                    else:
-                        logger.error("Failed to renew token")
-                        raise Exception("Failed to renew token")
+                with self._token_refresh_lock():
+                    # Another service may have renewed it while this one waited for the lock.
+                    token_data = self._load_token_data()
+                    if self.is_token_expired(token_data):
+                        if self.is_refresh_token_expired(token_data):
+                            new_token_data = self.ask_new_token()
+                            if new_token_data:
+                                self.save_token_data(new_token_data)
+                                token_data = new_token_data
+                            else:
+                                logger.error("Failed to obtain new tokens")
+                                raise Exception("Failed to obtain new tokens")
+                        else:
+                            new_token_data = self.refresh_token(token_data["refresh_token"])
+                            if new_token_data:
+                                self.save_token_data(new_token_data)
+                                token_data = new_token_data
+                            else:
+                                logger.error("Failed to renew token")
+                                raise Exception("Failed to renew token")
             if token_data["access_token"]:
                 logger.debug("Give token for Saxo API")
             return token_data["access_token"]

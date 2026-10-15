@@ -1,5 +1,7 @@
 ./wata_app*.zip
 ./var/
+# The line above matches nothing ("./" is not a pattern): this one does.
+/var/
 /.idea/**
 .idea/**
 .idea/
@@ -18,3 +20,6 @@ wata_app*.zip
 .DS_Store
 
 execution_timing_*.jsonl
+
+# Admin interface: built from admin_ui/ by package.sh
+src/admin/static/

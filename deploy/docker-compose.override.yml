@@ -49,5 +49,26 @@ services:
       rabbitmq1:
         condition: service_healthy
 
+  admin1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+
+  price_recorder1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+
+  capital_feed1:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      rabbitmq1:
+        condition: service_healthy
+
 networks:
   trade-net: 

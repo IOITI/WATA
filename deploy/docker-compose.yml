@@ -12,11 +12,16 @@ services:
       - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      # Set up HTTP (port 80) and HTTPS (port 443) entrypoints
+      # Set up HTTP (port 80) and HTTPS (port 443) entrypoints. These are the ports inside
+      # the container: the server's own are HTTP_PORT and HTTPS_PORT in .env (see ports below).
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
-      # Global HTTP to HTTPS redirection
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      # Second HTTPS port, for the admin interface when it has no domain of its own
+      # (ADMIN_ENTRYPOINT=adminsecure in .env). Nothing else is routed on it.
+      - "--entrypoints.adminsecure.address=:8443"
+      # Global HTTP to HTTPS redirection, to the port HTTPS is published on: the name of
+      # the entrypoint would send browsers to 443 whatever HTTPS_PORT says.
+      - "--entrypoints.web.http.redirections.entryPoint.to=:${HTTPS_PORT:-443}"
       - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
       # Let's Encrypt configuration
       - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
@@ -24,8 +29,13 @@ services:
       - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
     ports:
-      - "80:80"
-      - "443:443"
+      # 80 and 443 unless HTTP_PORT or HTTPS_PORT in .env say otherwise (a port number).
+      # TradingView sends webhooks to 80 and 443 only, and Let's Encrypt checks the domain
+      # on 80: another port needs something in front that forwards those to it.
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      # Only on this machine unless ADMIN_PORT says otherwise (ADMIN_PORT=0.0.0.0:8443 in .env).
+      - "${ADMIN_PORT:-127.0.0.1:8443}:8443"
     expose:
       - '80'
       - '443'
@@ -175,6 +185,7 @@ services:
       - WATA_APP_ROLE=scheduler
     volumes:
       - ../../var/log:/app/var/log/
+      - ../../var/lib:/app/var/lib/
       - ../../etc/config.json:/app/etc/config.json
     networks:
       - trade-net
@@ -269,6 +280,150 @@ services:
       resources:
         limits:
           memory: 1024M
+
+  # Administrative web interface. Not started unless the "admin" profile is
+  # enabled (COMPOSE_PROFILES=admin in .env, with ADMIN_DOMAIN and ADMIN_ALLOWED_IPS,
+  # and ADMIN_ENTRYPOINT and ADMIN_PORT when it has no domain of its own).
+  admin1:
+    image: wata-base:latest
+    hostname: admin1
+    container_name: 'admin1'
+    profiles: ["admin"]
+    environment:
+      - WATA_APP_ROLE=admin
+    expose:
+      - '8082'
+    volumes:
+      # The logs of the other services are only read. Its own directory (log and
+      # audit trail) is the one place under var/log it writes to.
+      - ../../var/log:/app/var/log/:ro
+      - ../../var/log/wata-admin:/app/var/log/wata-admin
+      # Only what the admin needs from var/lib (which also holds the PostgreSQL data files):
+      # the Saxo token and authorization code, the web server token, its own password hash.
+      - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
+      - ../../var/lib/web_server:/app/var/lib/web_server
+      - ../../var/lib/admin:/app/var/lib/admin
+      # Backtests asked for from the interface: the prices they run on, and their results.
+      - ../../var/lib/price_history:/app/var/lib/price_history
+      - ../../var/lib/backtests:/app/var/lib/backtests
+      # The directory rather than the file: the config editor replaces config.json atomically.
+      # The RabbitMQ configuration kept beside it is not the admin's to change.
+      - ../../etc:/app/etc
+      - ../../etc/rabbitmq:/app/etc/rabbitmq:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.admin.rule=Host(`${ADMIN_DOMAIN:-admin.invalid}`)"
+      # On its own domain, the usual HTTPS port. Without one, ADMIN_DOMAIN is the API
+      # domain and ADMIN_ENTRYPOINT=adminsecure serves it on the second HTTPS port.
+      - "traefik.http.routers.admin.entrypoints=${ADMIN_ENTRYPOINT:-websecure}"
+      # The lowest priority: given the API domain without the second port, the admin
+      # is unreachable and the webhook keeps its route.
+      - "traefik.http.routers.admin.priority=1"
+      - "traefik.http.routers.admin.tls.certresolver=myresolver"
+      - "traefik.http.services.admin.loadbalancer.server.port=8082"
+      # Your own addresses only (add /32 to the end of single IPs). Nothing is allowed by default.
+      - "traefik.http.middlewares.admin-ip-allowlist.ipallowlist.sourcerange=${ADMIN_ALLOWED_IPS:-127.0.0.1/32}"
+      - "traefik.http.middlewares.admin-headers.headers.stsSeconds=31536000"
+      - "traefik.http.routers.admin.middlewares=admin-ip-allowlist,admin-headers"
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          # Backtests run in this container, one at a time and at the lowest priority.
+          # One processor at most: the rest stays with the services that trade.
+          cpus: '1.0'
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      postgres1:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+
+  # Price recorder: ten-second bars of the turbos and their index, kept for
+  # backtesting. Not started unless the "recorder" profile is enabled
+  # (COMPOSE_PROFILES=recorder in .env, or admin,recorder for both) and
+  # trade.config.price_recorder.enabled is true. No trading service uses it.
+  price_recorder1:
+    image: wata-base:latest
+    hostname: price_recorder1
+    container_name: 'price_recorder1'
+    profiles: ["recorder"]
+    environment:
+      - WATA_APP_ROLE=price_recorder
+    volumes:
+      # Only what it needs: its own log, the Saxo token it shares with the other
+      # services, and the directory its exports are written to.
+      - ../../var/log/wata-price-recorder:/app/var/log/wata-price-recorder
+      - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
+      - ../../var/lib/price_export:/app/var/lib/price_export
+      - ../../etc/config.json:/app/etc/config.json:ro
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      postgres1:
+        condition: service_healthy
+
+  # Capital.com feed: the Nasdaq 100 streamed from Capital.com, recorded every
+  # ten seconds, sent live to the admin's charts and kept as one file a day for
+  # backtests. Not started unless the "capital" profile is enabled
+  # (COMPOSE_PROFILES=capital in .env, or admin,capital with the admin) and
+  # trade.config.capital_feed.enabled is true. Its login is the three CAPITAL_*
+  # lines of .env, handed to this container alone: Capital.com has no key that
+  # can only read prices. No trading service uses it.
+  capital_feed1:
+    image: wata-base:latest
+    hostname: capital_feed1
+    container_name: 'capital_feed1'
+    profiles: ["capital"]
+    environment:
+      - WATA_APP_ROLE=capital_feed
+      - CAPITAL_API_KEY=${CAPITAL_API_KEY:-}
+      - CAPITAL_IDENTIFIER=${CAPITAL_IDENTIFIER:-}
+      - CAPITAL_PASSWORD=${CAPITAL_PASSWORD:-}
+    volumes:
+      # Only what it needs: its own log, the folder of its day files, and the
+      # configuration, read only.
+      - ../../var/log/wata-capital-feed:/app/var/log/wata-capital-feed
+      - ../../var/lib/price_history/capital:/app/var/lib/price_history/capital
+      - ../../etc/config.json:/app/etc/config.json:ro
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      postgres1:
+        condition: service_healthy
 
 networks:
   trade-net:

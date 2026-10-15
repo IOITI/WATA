@@ -26,6 +26,15 @@ case $WATA_APP_ROLE in
     "telegram")
         python -u /app/src/mq_telegram/__init__.py
         ;;
+    "admin")
+        python -u /app/src/admin/__init__.py
+        ;;
+    "price_recorder")
+        python -u /app/src/price_recorder/__init__.py
+        ;;
+    "capital_feed")
+        python -u /app/src/capital_feed/__init__.py
+        ;;
     *)
         echo "Unknown environment variable value for WATA_APP_ROLE: $WATA_APP_ROLE"
         exit 1
