@@ -309,7 +309,7 @@ export const DataTableFilters: React.FC<DataTableFiltersProps> = ({ className })
       {filterableColumns.map((col) => {
         const selectedValues = activeFilters[col.id] || [];
         return (
-          <div key={col.id} className="flex items-center gap-1 bg-surface-raised/30 border border-border/50 p-0.5 rounded-lg shrink-0">
+          <div key={col.id} className="flex items-center gap-1 bg-surface-raised/30 border border-border/50 p-0.5 rounded-lg shrink-0 sm:shrink sm:flex-wrap sm:max-w-full">
             <span className="text-xs text-muted-foreground px-2 font-normal">{col.header}:</span>
             {col.filterOptions?.map((opt) => {
               const isSelected = selectedValues.includes(opt.value);

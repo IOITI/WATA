@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.19.0 - Orders: every request to Saxo, and why Saxo refused one
+
+**Release date:** not released yet (`VERSION` still reads 0.17.0)
+
+On 2026-10-14 Saxo refused a market sell during a volatile market: "À ce stade, seuls des ordres limites sont autorisés" (at this stage only limit orders are allowed). The admin showed nothing of it. An order Saxo refuses has no id, and only the orders Saxo accepted were kept. The only traces were a log line and a Telegram message, and there Saxo's message was read in the wrong place: "Bad Request", then Saxo's whole answer, twice.
+
+- **Every request to Saxo's order endpoint is kept with Saxo's answer** (table `order_request`): orders placed (buys, sells, the opt-in protective stop) and cancellations, accepted or not. Each one keeps:
+  - what was sent, without the account's keys;
+  - why it was sent: the exit rule, the explicit close, or the signal behind a buy;
+  - what came back: the HTTP status, Saxo's code and message, and its answer as received.
+
+  A request that got no answer (a timeout) is kept as such: Saxo may have taken the order all the same. The trader and the position monitor write these rows in the background, as they do the orders' moments: nothing on the way to an order waits for them, and a failure to write changes nothing of a trade (tested). How WATA trades is unchanged.
+- **Orders page: what Saxo did not take is a row among the orders.** All the attempts made with one intent (selling one position, buying for one signal) form one row, placed at the first attempt: "Refused by Saxo ×37", how long it lasted, and the position.
+  - Opened, the row shows:
+    - what happened, in a sentence;
+    - Saxo's answers, each with how many times it was given;
+    - the order that went through afterwards, or "The position is still open";
+    - every attempt, with what was sent and what came back.
+  - The Result filter shows these rows alone, and the search finds them by the position's id or by a word of Saxo's message. A fourth figure above the table counts them, and the CSV export carries Saxo's code, message and status.
+  - The sale that finally went through shows the refusals as the first step of its timeline.
+- **Positions page.** An open position whose sell Saxo does not take says so under its name ("Sell refused ×37 · 14:04:30"), with Saxo's message on hover. Its details list every request about it, preceded by a sentence while it is still open.
+- **A live notice** when Saxo refuses to sell an open position: at most once a minute per position, with the count since the last notice, and a browser notification when the tab is hidden. A refused buy was already announced, as its signal failing.
+- **Saxo's answer said once, where Saxo put it**, in the logs, on Telegram and in the signal journal. The line of 2026-10-14 now reads: `ERROR closing 7779123400: API error placing order (Status: 400) (Saxo: À ce stade, seuls des ordres limites sont autorisés [OtherError]) (Order: Sell 6.0 units of 61252187)`. The Telegram message of a refused buy gives Saxo's code and message (it said "N/A"), and no longer prints the account key inside the order it shows.
+
+**Verification status:** covered by tests: 1,552 in the Python suite, in an environment built from `requirements.txt`, and 642 in the interface's. One of them sends the refusal of 2026-10-14 through the real client: the record says 400, OtherError and Saxo's message, the error's text gives that message once, and the position can still be sold. The new table and the admin's reads were run on a real PostgreSQL 16, through the live tests and a new one in which refused requests written by the real manager are read back as a run, as an order's requests and as an open position's refused sells. The pages were driven in a browser against the admin application over made-up data, in both themes, at phone width and at 1,280 pixels:
+- the run of 37 refusals, opened, filtered, and found by a word of Saxo's message;
+- the marker and the details of an open position;
+- the live notice.
+
+**Not run against Saxo, the server's data or Docker**: the first refusal recorded on the server will be the first real one. Run on Python 3.12 only: CI runs 3.12 and 3.14.
+
+### Upgrade Notes
+
+- Nothing to configure. The trader and the position monitor create `order_request` at their next start; until then the admin reads it as empty.
+- The Orders page reads the period's requests at each refresh: at most the 20,000 most recent.
+
+### Known Limits
+
+- **Not changed, on purpose:**
+  - A sell decided by an exit rule that Saxo refuses is sent again at each price update, about once a second, for as long as the rule holds, with a Telegram message each time.
+  - On a stop-loss, the start of the cooldown moves forward with each attempt.
+  - A protective stop cancelled before a refused sell is not placed again.
+  - WATA sends market orders only: while Saxo accepts nothing but limit orders, every attempt is refused.
+- Which exception a refusal raises is unchanged. The client still reads Saxo's code at the top level to decide it, so an `InsufficientFunds` that Saxo puts under `ErrorInfo` is not recognised as one (it was not before either), and the client's order-endpoint branch still never runs.
+- A request is written once its answer is known: a service stopped in between leaves no row for it.
+- What is shown is bounded:
+  - a run of refusals ends after five minutes without an attempt;
+  - a run shows its 50 most recent attempts, and a position's details its 500 most recent requests.
+- The Open tab's marker counts every refused sell of the position, including any from before an accepted sell that did not close it.
+
+---
+
 ## v0.18.0 - Data section: Providers and Assets View
 
 **Release date:** not released yet (`VERSION` still reads 0.17.0)

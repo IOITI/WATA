@@ -310,3 +310,65 @@ def test_slow_listener_does_not_block_the_others():
     assert fast_size == 0
     hub_empty = EventHub()
     hub_empty.publish("nobody listening")
+
+
+# ── Saxo refusing to sell an open position ──
+
+LIMIT_ONLY = "À ce stade, seuls des ordres limites sont autorisés"
+
+
+def _refused(count):
+    return {"count": count, "outcome": "refused", "http_status": 400, "error_code": "OtherError",
+            "error_message": LIMIT_ONLY, "last_at": f"14:0{count % 10}"}
+
+
+def test_refused_sells_are_announced_at_most_once_a_minute_with_the_count_since():
+    async def scenario(ctx, watcher, look):
+        now = [1000.0]
+        watcher._clock = lambda: now[0]
+        ctx.queries.open = {"p1": _position("p1", sell_refusals=_refused(3))}
+        first = await look()
+        ctx.queries.open = {"p1": _position("p1", sell_refusals=_refused(5))}
+        announced = await look()
+        ctx.queries.open = {"p1": _position("p1", sell_refusals=_refused(9))}
+        now[0] += 30
+        held_back = await look()
+        now[0] += 31
+        announced_again = await look()
+        return first, announced, held_back, announced_again, await look()
+
+    first, announced, held_back, announced_again, quiet = _watch(scenario)
+
+    # Refused before the page opened: not news to it.
+    assert first == []
+    assert announced == [{
+        "type": "order_refused", "position_id": "p1", "action": "long", "instrument_name": "TURBO",
+        "purpose": "close", "count": 2, "total": 5, "outcome": "refused", "http_status": 400,
+        "error_code": "OtherError", "error_message": LIMIT_ONLY, "last_at": "14:05",
+    }]
+    assert held_back == []
+    assert [(event["count"], event["total"]) for event in announced_again] == [(4, 9)]
+    assert quiet == []
+
+
+def test_a_position_that_opens_already_refused_is_announced():
+    async def scenario(ctx, watcher, look):
+        await look()
+        ctx.queries.open = {"p2": _position("p2", sell_refusals=_refused(1))}
+        return await look()
+
+    events = _watch(scenario)
+
+    assert [event["type"] for event in events] == ["order_refused", "position_opened"]
+    assert events[0]["count"] == 1
+
+
+def test_a_position_sold_at_last_is_forgotten():
+    async def scenario(ctx, watcher, look):
+        ctx.queries.open = {"p1": _position("p1", sell_refusals=_refused(2))}
+        await look()
+        ctx.queries.open = {}
+        await look()
+        return dict(watcher._refusals_told), dict(watcher._refusals_told_at)
+
+    assert _watch(scenario) == ({}, {})

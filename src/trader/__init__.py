@@ -41,6 +41,7 @@ from src.database.postgres import (
     AsyncDbRiskStateManager,
     AsyncDbSignalJournalManager,
     AsyncDbOrderExecutionManager,
+    AsyncDbOrderRequestManager,
     AsyncDbBalanceHistoryManager,
     init_schema,
 )
@@ -192,6 +193,7 @@ async def handle_trading_signal(
                 underlying_uics=indice_id,
                 keywords=action,
                 confidence=confidence,
+                signal_uuid=data.get("signal_uuid"),
             )
             close_result = await performance_monitor.close_managed_positions_by_criteria(
                 action_filter=None,
@@ -221,6 +223,7 @@ async def handle_trading_signal(
                 underlying_uics=indice_id,
                 keywords=action,
                 confidence=confidence,
+                signal_uuid=data.get("signal_uuid"),
             )
 
         # 3. Broker-side stop, when enabled (the entry and closes above come first)
@@ -653,8 +656,12 @@ async def main():
         db_balance_manager = AsyncDbBalanceHistoryManager(pg)
         # What was done with each signal, for the admin interface (written in the background)
         journal = SignalJournal(AsyncDbSignalJournalManager(pg))
-        # What became of each order, for the admin interface (written in the background too)
-        order_tracker = OrderTracker(AsyncDbOrderExecutionManager(pg), db_order_manager, recorded_by="trader")
+        # What became of each order, and every request sent to Saxo's order endpoint with its
+        # answer, for the admin interface (written in the background too)
+        order_tracker = OrderTracker(
+            AsyncDbOrderExecutionManager(pg), db_order_manager, recorded_by="trader",
+            db_request_manager=AsyncDbOrderRequestManager(pg),
+        )
 
         # 4. Trading rules (async DB-backed checks; risk state shared with position_monitor)
         trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
@@ -675,7 +682,7 @@ async def main():
 
         # 7. Async services
         instrument_service = AsyncInstrumentService(api_client, config_manager, account_key)
-        order_service = AsyncOrderService(api_client, account_key, client_key)
+        order_service = AsyncOrderService(api_client, account_key, client_key, order_tracker=order_tracker)
         position_service = AsyncPositionService(api_client, order_service, config_manager, account_key, client_key)
         watchlist_client = AsyncWatchlistClient(config_manager)
         trading_orchestrator = AsyncTradingOrchestrator(

@@ -50,8 +50,21 @@ from .exceptions import (
     DatabaseOperationException,
     SaxoApiError,
     OrderPlacementError,
+    saxo_error_parts,
 )
-from .order_tracker import CLOSE, OPEN, OrderTrace, track_order
+from .order_tracker import (
+    CANCEL,
+    CLOSE,
+    OPEN,
+    PLACE,
+    STOP,
+    OrderContext,
+    OrderTrace,
+    request_accepted,
+    request_failed,
+    start_request,
+    track_order,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -381,14 +394,18 @@ class AsyncSaxoApiClient:
             saxo_error_details = None
             try:
                 saxo_error_details = json.loads(content_str)
-                error_message = saxo_error_details.get("Message", e.reason)
+                if not isinstance(saxo_error_details, dict):
+                    raise ValueError("not a JSON object")
+                # Saxo's message is read wherever it put it (under ErrorInfo for an order)...
+                error_message = saxo_error_parts(saxo_error_details)[1] or e.reason
+                # ...while which exception is raised below still depends on the top-level code alone.
                 error_code = saxo_error_details.get("ErrorCode")
             except (json.JSONDecodeError, Exception):
                 saxo_error_details = content_str
 
             logger.error(
                 "Saxo API Error (async): Status=%s, Code=%s, Msg=%s, Endpoint=%s",
-                status_code, error_code, error_message,
+                status_code, saxo_error_parts(saxo_error_details)[0], error_message,
                 type(endpoint_request_obj).__name__,
             )
 
@@ -815,29 +832,52 @@ class AsyncInstrumentService:
 # ──────────────────────────────────────────────
 
 class AsyncOrderService:
-    def __init__(self, api_client: AsyncSaxoApiClient, account_key: str, client_key: str):
+    """
+    Everything WATA asks of Saxo's order endpoint goes through here, and each
+    request is kept with Saxo's answer (``order_request``) by ``order_tracker``,
+    in the background: it is described before it leaves and handed over once
+    answered, so that nothing more is awaited and what is raised is unchanged.
+    """
+
+    def __init__(self, api_client: AsyncSaxoApiClient, account_key: str, client_key: str, order_tracker=None):
         self.api_client = api_client
         self.account_key = account_key
         self.client_key = client_key
+        self.order_tracker = order_tracker
 
-    async def place_market_order(self, uic: int, asset_type: str, amount: int, buy_sell: str) -> dict:
+    async def place_market_order(
+        self, uic: int, asset_type: str, amount: int, buy_sell: str, context: OrderContext | None = None,
+    ) -> dict:
         logger.info("Placing Market Order: %s %d of %d (%s)", buy_sell, amount, uic, asset_type)
         pre_order = MarketOrder(Uic=uic, AssetType=asset_type, Amount=amount, BuySell=buy_sell)
         final_payload = tie_account_to_order(self.account_key, pre_order)
         req = tr.orders.Order(data=final_payload)
+        request = start_request(PLACE, final_payload, context)
 
         try:
             result = await self.api_client.request(req)
         except SaxoApiError as e:
+            request_failed(self.order_tracker, request, e)
+            # Its status and Saxo's answer are said by this exception: its own text is only what is not.
+            detail = "" if e.saxo_error_details else f": {e.args[0] if e.args else e}"
             raise OrderPlacementError(
-                f"API error placing order: {e}",
+                f"API error placing order{detail}",
+                status_code=e.status_code,
                 saxo_error_details=e.saxo_error_details,
                 order_details=final_payload,
             ) from e
+        except BaseException as e:
+            request_failed(self.order_tracker, request, e)
+            raise
 
-        if not result or not result.get("OrderId"):
-            raise OrderPlacementError("Response missing OrderId.", order_details=final_payload, saxo_error_details=result)
+        try:
+            if not result or not result.get("OrderId"):
+                raise OrderPlacementError("Response missing OrderId.", order_details=final_payload, saxo_error_details=result)
+        except BaseException as e:
+            request_failed(self.order_tracker, request, e, response=result)
+            raise
 
+        request_accepted(self.order_tracker, request, response=result, order_id=result["OrderId"])
         logger.info("Order placed — OrderId: %s", result["OrderId"])
         return result
 
@@ -849,6 +889,7 @@ class AsyncOrderService:
         amount: int,
         stop_price: float,
         order_type: str,
+        context: OrderContext | None = None,
     ) -> str:
         """
         Attach a resting stop order to an open position and return its OrderId.
@@ -868,31 +909,50 @@ class AsyncOrderService:
             "ManualOrder": False,
         }
         final_payload = tie_account_to_order(self.account_key, {"PositionId": position_id, "Orders": [stop_order]})
-        result = await self.api_client.request(tr.orders.Order(data=final_payload)) or {}
+        request = start_request(PLACE, final_payload, context)
+        try:
+            result = await self.api_client.request(tr.orders.Order(data=final_payload)) or {}
+        except BaseException as e:
+            request_failed(self.order_tracker, request, e)
+            raise
 
-        order_ids = [result.get("OrderId")] + [related.get("OrderId") for related in result.get("Orders") or []]
-        order_id = next((order_id for order_id in order_ids if order_id), None)
-        if not order_id:
-            raise OrderPlacementError("Response missing OrderId.", order_details=final_payload, saxo_error_details=result)
+        try:
+            order_ids = [result.get("OrderId")] + [related.get("OrderId") for related in result.get("Orders") or []]
+            order_id = next((order_id for order_id in order_ids if order_id), None)
+            if not order_id:
+                raise OrderPlacementError("Response missing OrderId.", order_details=final_payload, saxo_error_details=result)
+        except BaseException as e:
+            request_failed(self.order_tracker, request, e, response=result)
+            raise
 
+        request_accepted(self.order_tracker, request, response=result, order_id=order_id)
         logger.info("Stop order placed on position %s — OrderId: %s", position_id, order_id)
         return order_id
 
-    async def cancel_order(self, order_id: str) -> bool:
-        cancelled, _ = await self.cancel_order_with_reason(order_id)
+    async def cancel_order(self, order_id: str, context: OrderContext | None = None) -> bool:
+        cancelled, _ = await self.cancel_order_with_reason(order_id, context=context)
         return cancelled
 
-    async def cancel_order_with_reason(self, order_id: str) -> tuple[bool, str | None]:
+    async def cancel_order_with_reason(
+        self, order_id: str, context: OrderContext | None = None,
+    ) -> tuple[bool, str | None]:
         """Cancel an order: whether Saxo accepted that, and what it answered when it did not."""
         logger.info("Cancelling order: %s", order_id)
         req = tr.orders.CancelOrders(OrderIds=order_id, params={"AccountKey": self.account_key})
+        request = start_request(CANCEL, {"OrderIds": order_id}, context, order_ids=order_id)
         try:
-            await self.api_client.request(req)
+            result = await self.api_client.request(req)
+            request_accepted(self.order_tracker, request, response=result)
             logger.info("Order %s cancelled.", order_id)
             return True, None
         except Exception as e:
+            request_failed(self.order_tracker, request, e)
             logger.error("Failed to cancel order %s: %s", order_id, e)
             return False, f"{type(e).__name__}: {e}"
+        except BaseException as e:
+            # Stopped in flight (the service stopping): kept too, and let through as before.
+            request_failed(self.order_tracker, request, e)
+            raise
 
 
 # ──────────────────────────────────────────────
@@ -983,7 +1043,9 @@ class AsyncPositionService:
 
         # All retries exhausted — attempt cancellation
         logger.critical("Position not found for order %s after %d retries. Cancelling.", order_id, max_attempts)
-        cancelled, cancel_error = await self.order_service.cancel_order_with_reason(order_id)
+        cancelled, cancel_error = await self.order_service.cancel_order_with_reason(
+            order_id, context=OrderContext(purpose=OPEN, reason="Saxo showed no position for the order"),
+        )
         trace.gave_up(detail=cancel_error, cancel_accepted=cancelled)
         raise PositionNotFoundException(
             f"Position not found after {max_attempts} retries for order {order_id}",
@@ -1169,6 +1231,16 @@ class AsyncTradingOrchestrator:
                 amount=position["position_amount"],
                 stop_price=stop_price,
                 order_type=order_type,
+                context=OrderContext(
+                    purpose=STOP,
+                    position_id=None if position_id is None else str(position_id),
+                    action=position.get("action"),
+                    reason=f"Protective stop at {percent}%",
+                    instrument_name=instrument.get("description"),
+                    instrument_symbol=instrument.get("symbol"),
+                    instrument_currency=instrument.get("currency"),
+                    price_seen=stop_price,
+                ),
             )
         except Exception as e:
             logger.error("Protective stop NOT placed on position %s: %s", position_id, e)
@@ -1202,10 +1274,20 @@ class AsyncTradingOrchestrator:
             return cached[0]
         return await self.refresh_spending_power()
 
-    async def execute_trade_signal(self, exchange_id: str, underlying_uics: str, keywords: str, confidence: float = None) -> dict:
+    async def execute_trade_signal(
+        self,
+        exchange_id: str,
+        underlying_uics: str,
+        keywords: str,
+        confidence: float = None,
+        signal_uuid: str | None = None,
+    ) -> dict:
         """
         Full async trade workflow.
         Key optimisation: the turbo selection and get_spending_power run **in parallel**.
+
+        ``signal_uuid`` is kept with the requests sent to Saxo: an order Saxo
+        refuses has no id, and that is what links it to its signal.
         """
         logger.info("--- Executing trade signal: %s on %s (conf=%s) ---", keywords, underlying_uics, confidence)
         timestamps = {"start": time.time()}
@@ -1240,12 +1322,14 @@ class AsyncTradingOrchestrator:
             timestamps["amount_calculated"] = time.time()
 
             # 4. Place order
+            context = self._entry_context(keywords, turbo_info, signal_uuid)
             trace.sent()
             validated_order = await self.order_service.place_market_order(
                 uic=turbo_info["selected_instrument"]["uic"],
                 asset_type=turbo_info["selected_instrument"]["asset_type"],
                 amount=amount,
                 buy_sell="Buy",
+                context=context,
             )
             self.invalidate_spending_power()
             order_id = validated_order["OrderId"]
@@ -1317,10 +1401,33 @@ class AsyncTradingOrchestrator:
                 oid = validated_order.get("OrderId")
                 if oid:
                     logger.warning("Cancelling orphan order %s due to failure: %s", oid, e)
-                    cancelled = await self.order_service.cancel_order(oid)
+                    cancelled = await self.order_service.cancel_order(
+                        oid,
+                        context=OrderContext(
+                            purpose=OPEN, signal_uuid=signal_uuid, action=keywords,
+                            reason=f"Stopped by an error once Saxo had the order: {type(e).__name__}",
+                        ),
+                    )
                     trace.failed(detail=f"{type(e).__name__}: {e}", cancel_accepted=cancelled)
                     self._track_entry_without_position(trace, keywords, amount, turbo_info)
             raise
+
+    @staticmethod
+    def _entry_context(keywords, turbo_info: dict, signal_uuid) -> OrderContext:
+        """Why the buy is sent, for the record of the requests. Never raises: it is made just before the order leaves."""
+        try:
+            instrument = turbo_info["selected_instrument"]
+            return OrderContext(
+                purpose=OPEN,
+                signal_uuid=None if signal_uuid is None else str(signal_uuid),
+                action=keywords,
+                instrument_name=instrument.get("description"),
+                instrument_symbol=instrument.get("symbol"),
+                instrument_currency=instrument.get("currency"),
+                price_seen=instrument.get("latest_ask"),
+            )
+        except Exception:
+            return OrderContext(purpose=OPEN, signal_uuid=None if signal_uuid is None else str(signal_uuid), action=keywords)
 
     @staticmethod
     def _entry_order_data(keywords, order_id, amount, turbo_info: dict, sent_at: datetime | None, position_id) -> dict:
@@ -1695,8 +1802,11 @@ class AsyncPerformanceMonitor:
                     return
 
                 self._closing_position_ids.add(pid)
+                closure_reason = f"Performance ({reason})"
                 try:
-                    trace = await self._send_close_order(api_pos, position_id=pid, action=pos_info.get("action"))
+                    trace = await self._send_close_order(
+                        api_pos, position_id=pid, action=pos_info.get("action"), reason=closure_reason,
+                    )
                 except Exception as e:
                     self._closing_position_ids.discard(pid)
                     logger.error("Failed to close %s: %s", pid, e, exc_info=True)
@@ -1707,7 +1817,7 @@ class AsyncPerformanceMonitor:
 
                 # Not awaited: the next price update must not wait for Saxo to
                 # list this closure before the other positions are checked again.
-                self._record_closed_position_in_background(pid, f"Performance ({reason})", trace=trace)
+                self._record_closed_position_in_background(pid, closure_reason, trace=trace)
                 processed.append({"id": pid, "status": "Close order sent"})
 
         await asyncio.gather(*[_close_one(p) for p in positions_to_close])
@@ -1852,11 +1962,11 @@ class AsyncPerformanceMonitor:
                     return
 
                 self._closing_position_ids.add(pid)
+                reason = f"Explicit Close ({close_scope})"
                 try:
-                    trace = await self._send_close_order(api_pos, position_id=pid, action=action)
+                    trace = await self._send_close_order(api_pos, position_id=pid, action=action, reason=reason)
                     closed_count += 1
                     closed_position_ids.append(pid)
-                    reason = f"Explicit Close ({close_scope})"
                     if defer_bookkeeping:
                         self._record_closed_position_in_background(pid, reason, trace=trace)
                     else:
@@ -1875,14 +1985,18 @@ class AsyncPerformanceMonitor:
             "closed_position_ids": closed_position_ids,
         }
 
-    async def _send_close_order(self, api_pos: dict, position_id=None, action: str | None = None) -> OrderTrace:
+    async def _send_close_order(
+        self, api_pos: dict, position_id=None, action: str | None = None, reason: str | None = None,
+    ) -> OrderTrace:
         """
         Sell a position at market, after cancelling any order resting on it (e.g. its protective stop).
 
         Returns the marks of the sell order, to be completed once the position
-        is seen closed. Nothing is awaited here but Saxo.
+        is seen closed. Nothing is awaited here but Saxo. ``reason`` is why it
+        is sold, kept with the requests sent to Saxo.
         """
         pos_base = api_pos["PositionBase"]
+        context = self._close_context(api_pos, position_id, action, reason)
         related_order_ids = [
             related["OrderId"]
             for related in pos_base.get("RelatedOpenOrders") or []
@@ -1890,7 +2004,7 @@ class AsyncPerformanceMonitor:
         ]
         if related_order_ids:
             # Left working, that order would compete with this sell for the same holding.
-            await self.order_service.cancel_order(",".join(related_order_ids))
+            await self.order_service.cancel_order(",".join(related_order_ids), context=context)
 
         direction = direction_from_amount(pos_base["Amount"])
         trace = OrderTrace(CLOSE, position_id=position_id)
@@ -1900,9 +2014,30 @@ class AsyncPerformanceMonitor:
             asset_type=pos_base["AssetType"],
             amount=pos_base["Amount"],
             buy_sell=direction_invert(direction),
+            context=context,
         )
         self._track_close_order(trace, result, api_pos, action)
         return trace
+
+    @staticmethod
+    def _close_context(api_pos: dict, position_id, action: str | None, reason: str | None) -> OrderContext:
+        """Why the position is sold, for the record of the requests. Never raises: it is made on the way to the sell."""
+        position_id = None if position_id is None else str(position_id)
+        try:
+            display = api_pos.get("DisplayAndFormat") or {}
+            view = api_pos.get("PositionView") or {}
+            return OrderContext(
+                purpose=CLOSE,
+                position_id=position_id,
+                action=action,
+                reason=reason,
+                instrument_name=display.get("Description"),
+                instrument_symbol=display.get("Symbol"),
+                instrument_currency=display.get("Currency"),
+                price_seen=view.get("Bid"),
+            )
+        except Exception:
+            return OrderContext(purpose=CLOSE, position_id=position_id, action=action, reason=reason)
 
     def _track_close_order(self, trace: OrderTrace, result, api_pos: dict, action: str | None) -> None:
         """

@@ -106,7 +106,8 @@ Changes made to the copied files:
   except on a link, a button, a field or the end of a selection of its text; the arrow stays for the
   keyboard), `singleExpand` (one row open at a time) and `rowLabel` (each arrow named after its row, "Open
   …", instead of all of them "Expand row details"); a search goes back to the first page, where what it
-  found starts.
+  found starts; from a tablet up, a filter with more options than the bar is wide wraps onto a second line
+  (the Orders page's Result has nine), where it went past the edge.
 - `breadcrumb.tsx`: its text in `text-muted-foreground` and `text-foreground`, not `neutral-500` (4.54:1 on
   the light background, a hair from the limit) and `neutral-900`. Copied by hand at the pinned commit: the
   CLI would also offer to overwrite `src/lib/utils.ts`, which is the same. React Router's `Link` reads `to`

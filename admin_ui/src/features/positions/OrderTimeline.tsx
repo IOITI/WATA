@@ -3,11 +3,12 @@ import { Link } from 'react-router'
 import { PnlValue } from '@/components/status'
 import { Badge } from '@/components/ui/badge'
 import { formatClock, formatDateTime, formatMoney, formatNumber } from '@/lib/format'
-import type { Order, OrderPosition } from '@/lib/types'
+import type { Order, OrderPosition, Refusal } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { orderLife, orderLink, positionLink, RESULTS } from './orderLife'
 import type { LifeStep } from './orderLife'
+import { RequestList } from './RequestList'
 
 const STEP_TONE: Record<NonNullable<LifeStep['tone']>, string> = {
   danger: 'text-negative',
@@ -57,11 +58,22 @@ interface OrderTimelineProps {
   heading?: string
   /** The position the order gave or closed, with a link to it. Left out where the position is the row itself. */
   showPosition?: boolean
+  /** The sells of the same position Saxo refused just before this order went through. */
+  refusal?: Refusal | null
+  /** Its requests to Saxo under the steps. Left out where every request about the position is listed below. */
+  showRequests?: boolean
 }
 
 /** The moments of an order, a line each: what, when, on whose clock, and how long after the step before. */
-export function OrderTimeline({ order, timeZone, heading, showPosition = true }: OrderTimelineProps) {
-  const life = orderLife(order)
+export function OrderTimeline({
+  order,
+  timeZone,
+  heading,
+  showPosition = true,
+  refusal = null,
+  showRequests = true,
+}: OrderTimelineProps) {
+  const life = orderLife(order, refusal)
   const result = RESULTS[life.result]
 
   return (
@@ -108,6 +120,13 @@ export function OrderTimeline({ order, timeZone, heading, showPosition = true }:
           ))}
         </ol>
       </div>
+
+      {showRequests && order.requests && order.requests.length > 0 && (
+        <div className="space-y-1">
+          <p className="font-medium text-foreground">Requests to Saxo</p>
+          <RequestList requests={order.requests} timeZone={timeZone} label={`The requests of order ${order.order_id}`} />
+        </div>
+      )}
 
       {showPosition &&
         (order.position ? (

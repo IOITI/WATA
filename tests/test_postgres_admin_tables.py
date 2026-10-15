@@ -13,10 +13,12 @@ asyncpg_stub.create_pool = None
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 
 from src.database.postgres import (
+    ORDER_REQUEST_COLUMNS,
     SCHEMA_SQL,
     AsyncDbBalanceHistoryManager,
     AsyncDbLiveValueManager,
     AsyncDbOrderExecutionManager,
+    AsyncDbOrderRequestManager,
     AsyncDbRiskStateManager,
     AsyncDbSignalJournalManager,
 )
@@ -45,7 +47,7 @@ NOW = datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
 
 
 def test_schema_creates_the_tables_the_admin_reads_without_touching_existing_ones():
-    for table in ("position_live_value", "signal_journal", "account_balance_history", "order_execution"):
+    for table in ("position_live_value", "signal_journal", "account_balance_history", "order_execution", "order_request"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in SCHEMA_SQL
     assert "DROP " not in SCHEMA_SQL
     assert "ALTER " not in SCHEMA_SQL
@@ -230,6 +232,40 @@ def test_an_order_known_only_by_its_id_is_accepted():
     asyncio.run(AsyncDbOrderExecutionManager(db).record({"order_id": "order-2"}))
 
     assert db.calls[0][1] == ("order-2",) + (None,) * 11
+
+
+# ── every request to Saxo's order endpoint ──
+
+
+def test_the_table_of_requests_has_the_columns_the_writer_and_the_admin_name():
+    table = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS order_request"):]
+    table = table[table.index("(") + 1:table.index(");")]
+    columns = [line.split()[0] for line in table.strip().splitlines()]
+    assert columns == list(ORDER_REQUEST_COLUMNS)
+
+
+def test_a_request_is_written_once_with_a_value_for_each_column():
+    db = FakeConnMgr()
+    entry = {column: f"value of {column}" for column in ORDER_REQUEST_COLUMNS}
+
+    asyncio.run(AsyncDbOrderRequestManager(db).record(entry))
+
+    query, args = db.calls[0]
+    assert "INSERT INTO order_request" in query
+    # Written once its answer is known: a second write of the same request changes nothing.
+    assert query.rstrip().endswith("ON CONFLICT (request_id) DO NOTHING")
+    named = query[query.index("(") + 1:query.index(")")].split(",")
+    assert [column.strip() for column in named] == list(ORDER_REQUEST_COLUMNS)
+    assert args == tuple(f"value of {column}" for column in ORDER_REQUEST_COLUMNS)
+    assert f"${len(ORDER_REQUEST_COLUMNS)})" in query
+
+
+def test_a_request_known_only_by_its_id_is_accepted():
+    db = FakeConnMgr()
+
+    asyncio.run(AsyncDbOrderRequestManager(db).record({"request_id": "request-1"}))
+
+    assert db.calls[0][1] == ("request-1",) + (None,) * (len(ORDER_REQUEST_COLUMNS) - 1)
 
 
 # ── account balance history ──

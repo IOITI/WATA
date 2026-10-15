@@ -6,6 +6,7 @@ import type { LiveEvent } from '@/lib/types'
 export const LIVE_EVENT_TYPES = [
   'position_opened',
   'position_closed',
+  'order_refused',
   'signal_decided',
   'entries_paused',
   'entries_resumed',
@@ -65,6 +66,21 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         title: 'Position closed',
         body: [text(event.instrument_name), result].filter(Boolean).join(' · '),
         variant: profit === null ? 'info' : profit >= 0 ? 'success' : 'warning',
+      }
+    }
+    case 'order_refused': {
+      // A sell Saxo did not take (src/admin/events.py): announced at most once a minute per position.
+      const count = number(event.count) ?? 1
+      const message = text(event.error_message)
+      const status = number(event.http_status)
+      const labels = [text(event.error_code), status !== null ? `HTTP ${status}` : undefined].filter(Boolean).join(', ')
+      const answer = message ? `“${message}”${labels ? ` (${labels})` : ''}` : undefined
+      const position = text(event.position_id)
+      const what = text(event.outcome) === 'no_answer' ? 'Saxo did not answer a sell' : 'Saxo refused a sell'
+      return {
+        title: count > 1 ? `${what} (×${count})` : what,
+        body: [text(event.instrument_name), position && `position ${position}`, answer].filter(Boolean).join(' · '),
+        variant: 'error',
       }
     }
     case 'signal_decided': {
@@ -136,6 +152,8 @@ export function staleQueries(event: LiveEvent): string[] {
       return ['overview', 'positions', 'orders']
     case 'position_closed':
       return ['overview', 'positions', 'position', 'orders', 'performance', 'exits', 'report']
+    case 'order_refused':
+      return ['overview', 'positions', 'position', 'orders']
     case 'signal_decided':
       return ['journal', 'signals']
     case 'entries_paused':

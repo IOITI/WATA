@@ -189,13 +189,16 @@ class FakeQueries:
     async def get_position(self, position_id):
         for position in (POSITION, CLOSED_POSITION):
             if position_id == position["position_id"]:
-                return {"position": position, "orders": []}
+                return {"position": position, "orders": [], "requests": [], "requests_total": 0}
         return None
 
     async def open_positions(self):
         self._check()
         self.calls.append(("open_positions",))
-        return [{**POSITION, "live_bid": 8.75, "live_performance_percent": 2.94, "live_observed_at": None}]
+        return [{
+            **POSITION, "live_bid": 8.75, "live_performance_percent": 2.94, "live_observed_at": None,
+            "sell_refusals": None,
+        }]
 
     async def entries_paused_since(self):
         return self.paused_since
@@ -292,7 +295,7 @@ class FakeQueries:
 
     async def list_orders(self, start=None, end=None, limit=500):
         self.calls.append(("list_orders", start, end, limit))
-        return {"items": [], "total": 0}
+        return {"items": [], "total": 0, "refusals": []}
 
     async def performance(self, start=None, end=None):
         self.calls.append(("performance", start, end))

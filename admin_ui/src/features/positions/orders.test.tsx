@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { Order, Position, Session } from '@/lib/types'
+import type { Order, OrderRequest, Position, Refusal, Session } from '@/lib/types'
 
 import { OrdersPage } from './OrdersPage'
 import { PositionsPage } from './PositionsPage'
@@ -132,7 +132,15 @@ const OLD = {
 
 let requests: string[] = []
 
-function serve(orders: Order[], { position = POSITION, positionOrders = [BUY, SELL] } = {}) {
+function serve(
+  orders: Order[],
+  {
+    position = POSITION,
+    positionOrders = [BUY, SELL],
+    refusals = undefined as Refusal[] | undefined,
+    positionRequests = undefined as OrderRequest[] | undefined,
+  } = {},
+) {
   requests = []
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -141,9 +149,11 @@ function serve(orders: Order[], { position = POSITION, positionOrders = [BUY, SE
     vi.fn(async (path: string) => {
       requests.push(path)
       const url = new URL(path, 'http://admin.test')
-      if (url.pathname === '/api/orders') return json({ items: orders, total: orders.length })
+      if (url.pathname === '/api/orders') return json({ items: orders, total: orders.length, refusals })
       if (url.pathname === '/api/positions') return json({ items: [position], total: 1 })
-      if (url.pathname === `/api/positions/${position.position_id}`) return json({ position, orders: positionOrders })
+      if (url.pathname === `/api/positions/${position.position_id}`) {
+        return json({ position, orders: positionOrders, requests: positionRequests, requests_total: positionRequests?.length })
+      }
       throw new Error(`Unexpected request: ${path}`)
     }),
   )
@@ -374,5 +384,172 @@ describe('the orders of a position', () => {
     await open(POSITION, [])
 
     expect(screen.getByText('No order recorded for this position.')).toBeInTheDocument()
+  })
+})
+
+
+// ── what Saxo did not take ──
+
+const LIMIT_ONLY = 'À ce stade, seuls des ordres limites sont autorisés'
+
+/** A market sell of position 5098 Saxo refused at 09:59:52 Paris time. */
+const REFUSED_SELL = {
+  request_id: 'request-1',
+  requested_at: '2026-10-13T07:59:52.000Z',
+  answered_at: '2026-10-13T07:59:52.120Z',
+  recorded_by: 'position_monitor',
+  operation: 'place',
+  purpose: 'close',
+  position_id: '5098',
+  signal_uuid: null,
+  action: 'long',
+  reason: 'Performance (Stoploss (-7%) hit at -7.4%)',
+  instrument_uic: 61252187,
+  asset_type: 'WarrantOpenEndKnockOut',
+  instrument_name: POSITION.instrument_name,
+  instrument_symbol: 'SG-NDX-L1',
+  instrument_currency: 'EUR',
+  buy_sell: 'Sell',
+  amount: 120,
+  order_type: 'Market',
+  price_seen: 8.66,
+  outcome: 'refused',
+  order_id: null,
+  http_status: 400,
+  error_code: 'OtherError',
+  error_message: LIMIT_ONLY,
+  request_body: '{"Uic": 61252187, "Amount": 120, "BuySell": "Sell", "OrderType": "Market"}',
+  response_body: `{"ErrorInfo": {"ErrorCode": "OtherError", "Message": "${LIMIT_ONLY}"}}`,
+} as OrderRequest
+
+/** 37 sells of position 5098 refused over 2 min 19 s, before order 5013 went through. */
+const RUN = {
+  run_id: 'request-1',
+  purpose: 'close',
+  position_id: '5098',
+  signal_uuid: null,
+  action: 'long',
+  reason: REFUSED_SELL.reason,
+  instrument_name: POSITION.instrument_name,
+  instrument_symbol: 'SG-NDX-L1',
+  instrument_uic: 61252187,
+  instrument_currency: 'EUR',
+  asset_type: 'WarrantOpenEndKnockOut',
+  buy_sell: 'Sell',
+  order_amount: 120,
+  order_type: 'Market',
+  instrument_price: 8.66,
+  first_at: '2026-10-13T07:59:52.000Z',
+  last_at: '2026-10-13T08:02:10.880Z',
+  answered_at: '2026-10-13T08:02:11.000Z',
+  count: 37,
+  outcome: 'refused',
+  http_status: 400,
+  error_code: 'OtherError',
+  error_message: LIMIT_ONLY,
+  recorded_by: ['position_monitor'],
+  answers: [{
+    outcome: 'refused', http_status: 400, error_code: 'OtherError', error_message: LIMIT_ONLY, count: 37,
+    first_at: '2026-10-13T07:59:52.000Z', last_at: '2026-10-13T08:02:10.880Z',
+  }],
+  requests: [REFUSED_SELL, { ...REFUSED_SELL, request_id: 'request-37', requested_at: '2026-10-13T08:02:10.880Z' }],
+  requests_total: 37,
+  followed_by: { order_id: '5013', requested_at: SELL.sent_at },
+  position: LINKED,
+  signal: null,
+} as unknown as Refusal
+
+describe('orders Saxo did not take', () => {
+  it('are a row among the orders: how often, for how long, and for which position', async () => {
+    serve([BUY, SELL], { refusals: [RUN] })
+    renderAt('/orders')
+
+    const row = (await screen.findByText('Refused by Saxo ×37')).closest('tr') as HTMLElement
+    expect(within(row).getByText('2 min 19 s')).toBeInTheDocument()
+    expect(within(row).getByText('37 requests')).toBeInTheDocument()
+    expect(within(row).getByRole('link', { name: 'Position 5098' })).toHaveAttribute('href', '/positions?find=5098')
+    expect(screen.getByText('2 orders and 1 refused')).toBeInTheDocument()
+    // Newest first: the sale, then the refusals before it, then the buy.
+    const rows = screen.getAllByRole('row').map((line) => line.textContent ?? '')
+    const at = (text: string) => rows.findIndex((line) => line.includes(text))
+    expect(at('5013')).toBeLessThan(at('Refused by Saxo ×37'))
+    expect(at('Refused by Saxo ×37')).toBeLessThan(at('5012'))
+
+    const tile = screen.getByText('Refused by Saxo', { selector: 'p' }).parentElement as HTMLElement
+    expect(within(tile).getByText('37')).toBeInTheDocument()
+    expect(within(tile).getByText(/1 run of attempts\. Last at 10:02:10/)).toBeInTheDocument()
+  })
+
+  it('open onto what happened, Saxo\'s answers counted, and every attempt with what was sent', async () => {
+    const user = userEvent.setup()
+    serve([SELL], { refusals: [RUN] })
+    renderAt('/orders')
+
+    const row = (await screen.findByText('Refused by Saxo ×37')).closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Expand row details' }))
+
+    expect(
+      screen.getByText(
+        `Saxo refused to sell 120 of ${POSITION.instrument_name} 37 times in 2 min 19 s, answering “${LIMIT_ONLY}” (OtherError, HTTP 400). ` +
+          'The position was sold by order 5013 at 10:02:11.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Why WATA sent it: Performance (Stoploss (-7%) hit at -7.4%)')).toBeInTheDocument()
+    const answers = screen.getByRole('list', { name: 'Saxo’s answers' })
+    expect(within(answers).getByText('37 times, 09:59:52 to 10:02:10')).toBeInTheDocument()
+    const attempts = screen.getByRole('list', { name: 'The attempts of refused by saxo ×37' })
+    expect(within(attempts).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(attempts).getAllByText('Sell 120 · Market')[0]).toBeInTheDocument()
+    expect(screen.getByText('35 earlier requests are not shown.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '5013' })).toHaveAttribute('href', '/orders?find=5013')
+
+    await user.click(within(attempts).getAllByText('What was sent and received')[0])
+    expect(screen.getAllByText(/"OrderType": "Market"/)[0]).toBeVisible()
+  })
+
+  it('can be shown alone, and found with the sale by the position\'s id', async () => {
+    const user = userEvent.setup()
+    serve([BUY, SELL, GIVEN_UP], { refusals: [RUN] })
+    renderAt('/orders')
+
+    await user.click(await screen.findByRole('button', { name: 'Refused by Saxo' }))
+    expect(screen.getByText('Refused by Saxo ×37')).toBeInTheDocument()
+    expect(screen.queryByText('5012')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /Reset/ }))
+    await user.type(screen.getByPlaceholderText(/Search/), 'ordres limites')
+    expect(screen.getByText('Refused by Saxo ×37')).toBeInTheDocument()
+    expect(screen.queryByText('5013')).not.toBeInTheDocument()
+  })
+
+  it('come before the sale in its timeline', async () => {
+    const user = userEvent.setup()
+    serve([SELL], { refusals: [RUN] })
+    renderAt('/orders')
+
+    const sale = (await screen.findByText('5013')).closest('tr') as HTMLElement
+    await user.click(within(sale).getByRole('button', { name: 'Expand row details' }))
+
+    const moments = within(screen.getByRole('list', { name: 'The moments of order 5013' })).getAllByRole('listitem')
+    expect(moments[0]).toHaveTextContent('Refused by Saxo ×37')
+    expect(moments[1]).toHaveTextContent('Sell order sent')
+    expect(screen.getByText(/Saxo had refused 37 sell orders of this position before taking this one\./)).toBeInTheDocument()
+  })
+
+  it('are said first in the details of a position Saxo still does not sell, followed by every request', async () => {
+    const open = { ...POSITION, position_status: 'Open', execution_time_close: null } as Position
+    serve([], { position: open, positionOrders: [BUY], positionRequests: [REFUSED_SELL] })
+    renderAt('/positions?find=5098')
+
+    expect(
+      await screen.findByText(
+        `Saxo refused to sell this position at 09:59:52. Last answer: “${LIMIT_ONLY}” (OtherError, HTTP 400). It is still open.`,
+        { exact: false },
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'See them among the orders' })).toHaveAttribute('href', '/orders?find=5098')
+    const list = screen.getByRole('list', { name: 'The requests about position 5098' })
+    expect(within(list).getByText('Sell 120 · Market')).toBeInTheDocument()
+    expect(within(list).getByText(`“${LIMIT_ONLY}” (OtherError, HTTP 400)`)).toBeInTheDocument()
   })
 })

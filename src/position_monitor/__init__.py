@@ -34,6 +34,7 @@ from src.database.postgres import (
     PostgresConnectionManager,
     AsyncDbOrderManager,
     AsyncDbOrderExecutionManager,
+    AsyncDbOrderRequestManager,
     AsyncDbPositionManager,
     AsyncDbTradePerformanceManager,
     AsyncDbRiskStateManager,
@@ -366,9 +367,11 @@ async def main():
         db_risk_state_manager = AsyncDbRiskStateManager(pg)
         db_live_value_manager = AsyncDbLiveValueManager(pg)
         db_balance_manager = AsyncDbBalanceHistoryManager(pg)
-        # The sell orders and what became of them, for the admin interface (written in the background)
+        # The sell orders and what became of them, and every request sent to Saxo's order
+        # endpoint with its answer, for the admin interface (written in the background)
         order_tracker = OrderTracker(
             AsyncDbOrderExecutionManager(pg), AsyncDbOrderManager(pg), recorded_by="position_monitor",
+            db_request_manager=AsyncDbOrderRequestManager(pg),
         )
 
         # Saxo API client
@@ -383,7 +386,7 @@ async def main():
         client_key = acct.ClientKey
 
         # Services
-        order_service = AsyncOrderService(api_client, account_key, client_key)
+        order_service = AsyncOrderService(api_client, account_key, client_key, order_tracker=order_tracker)
         position_service = AsyncPositionService(api_client, order_service, config_manager, account_key, client_key)
         trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
         milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))

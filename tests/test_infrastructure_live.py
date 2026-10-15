@@ -124,7 +124,8 @@ def test_the_schema_is_created_and_creating_it_again_changes_nothing(in_a_databa
     tables = {row["table_name"] for row in in_a_database_of_its_own(scenario)}
 
     assert {"turbo_data_order", "turbo_data_position", "trade_performance", "trade_risk_state",
-            "position_live_value", "signal_journal", "order_execution", "account_balance_history"} <= tables
+            "position_live_value", "signal_journal", "order_execution", "order_request",
+            "account_balance_history"} <= tables
 
 
 def test_a_trade_is_written_followed_and_closed_as_the_services_do(in_a_database_of_its_own):
@@ -259,6 +260,72 @@ def test_the_tracker_and_the_admin_agree_on_an_order_from_its_signal_to_its_posi
     assert lost["detail"] == "SaxoApiError: Order not found"
 
     assert [(o["order_id"], o["purpose"]) for o in detail["orders"]] == [("5012", "open"), ("5013", "close")]
+
+
+def test_the_requests_saxo_refused_are_read_back_as_the_pages_show_them(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import (
+        AsyncDbOrderExecutionManager, AsyncDbOrderManager, AsyncDbOrderRequestManager, AsyncDbPositionManager,
+    )
+    from src.saxo_openapi.exceptions import OpenAPIError
+    from src.trade.order_tracker import CLOSE, PLACE, OrderContext, OrderRequest, OrderTracker
+
+    limit_only = {"ErrorInfo": {"ErrorCode": "OtherError", "Message": "À ce stade, seuls des ordres limites sont autorisés"}}
+    sell = {"Uic": 40000002, "AssetType": "WarrantOpenEndKnockOut", "Amount": 120, "BuySell": "Sell",
+            "OrderType": "Market", "AccountKey": "account-secret"}
+    context = OrderContext(purpose=CLOSE, position_id="5098", action="long", reason="Performance (Stoploss)",
+                           instrument_name="TURBO LONG NASDAQ-100 KO 24150 SG", price_seen=8.66)
+
+    def request_at(offset_seconds):
+        request = OrderRequest(PLACE, sell, context)
+        request.requested_at = T0 + timedelta(seconds=offset_seconds)
+        return request
+
+    async def scenario(writer, reader):
+        orders, positions = AsyncDbOrderManager(writer), AsyncDbPositionManager(writer)
+        tracker = OrderTracker(
+            AsyncDbOrderExecutionManager(writer), orders, recorded_by="position_monitor",
+            db_request_manager=AsyncDbOrderRequestManager(writer),
+        )
+        await positions.insert_turbo_open_position_data(_position("5098", "5012"))
+        for offset in range(3):
+            refused = request_at(offset)
+            refused.failed(OpenAPIError(400, "Bad Request", json.dumps(limit_only)))
+            tracker.record_request(refused)
+        await tracker.wait_for_pending()
+
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        still_open = await queries.open_positions()
+
+        sold = request_at(4)
+        sold.accepted({"OrderId": "5013"}, order_id="5013")
+        tracker.record_request(sold)
+        tracker.record_request(sold)  # written twice: the first one stays
+        await orders.insert_turbo_order_data(_order("5013", "Sell", "5098", T0 + timedelta(seconds=4)))
+        await tracker.wait_for_pending()
+
+        listing = await queries.list_orders()
+        detail = await queries.get_position("5098")
+        json.dumps(listing, default=str)
+        stored = await writer.fetchval("SELECT request_body FROM order_request WHERE order_id = '5013'")
+        return still_open, listing, detail, stored
+
+    still_open, listing, detail, stored = in_a_database_of_its_own(scenario)
+
+    refusals = still_open[0]["sell_refusals"]
+    assert (refusals["count"], refusals["outcome"], refusals["http_status"], refusals["error_code"]) == (3, "refused", 400, "OtherError")
+    assert refusals["error_message"] == "À ce stade, seuls des ordres limites sont autorisés"
+    assert (refusals["first_at"], refusals["last_at"]) == (T0, T0 + timedelta(seconds=2))
+
+    [run] = listing["refusals"]
+    assert (run["count"], run["position_id"], run["followed_by"]["order_id"]) == (3, "5098", "5013")
+    assert (run["instrument_price"], run["reason"], run["position"]["position_status"]) == (8.66, "Performance (Stoploss)", "Open")
+    [order] = listing["items"]
+    assert [(request["outcome"], request["order_id"]) for request in order["requests"]] == [("accepted", "5013")]
+
+    assert [request["outcome"] for request in detail["requests"]] == ["refused", "refused", "refused", "accepted"]
+    assert detail["requests_total"] == 4
+    assert "account-secret" not in stored
 
 
 def test_the_assets_the_recorder_kept_are_listed_as_the_data_pages_read_them(in_a_database_of_its_own):

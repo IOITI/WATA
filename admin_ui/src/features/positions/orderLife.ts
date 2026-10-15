@@ -1,5 +1,7 @@
-import { formatWait } from '@/lib/format'
-import type { Order } from '@/lib/types'
+import { formatNumber, formatWait } from '@/lib/format'
+import type { Order, Refusal } from '@/lib/types'
+
+import { answerText } from './orderRequests'
 
 /**
  * What became of an order, read from what the service that sent it kept: the
@@ -176,10 +178,63 @@ function cancellation(order: Order): LifeStep | null {
   }
 }
 
+/** The sells of the same position Saxo refused before taking this one. */
+function refusedBefore(refusal: Refusal): LifeStep {
+  const span = between(refusal.first_at, refusal.last_at)
+  const attempts = refusal.count === 1 ? '1 attempt' : `${formatNumber(refusal.count)} attempts`
+  const answer =
+    refusal.answers.length === 1 ? answerText(refusal.answers[0]) : `${refusal.answers.length} different answers`
+  return {
+    key: 'refused',
+    label: refusal.count === 1 ? 'Refused by Saxo' : `Refused by Saxo ×${formatNumber(refusal.count)}`,
+    at: refusal.first_at,
+    clock: 'wata',
+    note: `${attempts}${span != null && span > 0 ? ` over ${formatWait(span)}` : ''}: ${answer}`,
+    tone: 'danger',
+  }
+}
+
+/** Orders resting on the position (its protective stop) cancelled on the way to this sell. */
+function restingOrdersCancelled(order: Order): LifeStep[] {
+  return (order.requests ?? [])
+    .filter((request) => request.operation === 'cancel' && request.purpose === 'close')
+    .map((request) => ({
+      key: `cancel-${request.request_id}`,
+      label: request.outcome === 'accepted' ? 'Resting orders cancelled' : 'Resting orders not cancelled',
+      at: request.requested_at,
+      clock: 'wata' as const,
+      note:
+        request.outcome === 'accepted'
+          ? `Order ${request.order_id ?? ''}`.trim()
+          : `Order ${request.order_id ?? ''}: ${answerText(request)}`.trim(),
+      tone: request.outcome === 'accepted' ? undefined : ('warning' as const),
+    }))
+}
+
 const REFUSED_CANCEL =
   'Saxo refused the cancellation, so the order may have been filled after the trader stopped looking: check the account at Saxo for a position WATA does not know.'
 
-function trackedLife(order: Order, purpose: Purpose, result: OrderResult): Pick<OrderLife, 'steps' | 'summary'> {
+function trackedLife(
+  order: Order,
+  purpose: Purpose,
+  result: OrderResult,
+  refusal: Refusal | null,
+): Pick<OrderLife, 'steps' | 'summary'> {
+  const life = trackedSteps(order, purpose, result)
+  // What came before the order left: the sells Saxo refused, the resting orders cancelled.
+  const before = [...(refusal ? [refusedBefore(refusal)] : []), ...restingOrdersCancelled(order)]
+  if (before.length > 0) {
+    const sent = life.steps.findIndex((step) => step.key === 'sent')
+    life.steps.splice(sent < 0 ? 0 : sent, 0, ...before)
+  }
+  if (refusal) {
+    const sells = refusal.count === 1 ? 'a sell order' : `${formatNumber(refusal.count)} sell orders`
+    life.summary = `${life.summary} Saxo had refused ${sells} of this position before taking this one.`
+  }
+  return life
+}
+
+function trackedSteps(order: Order, purpose: Purpose, result: OrderResult): Pick<OrderLife, 'steps' | 'summary'> {
   const steps = sentAndAccepted(order, purpose)
   const saxo = saxoStep(order, purpose)
   const took = tookMs(order)
@@ -292,11 +347,12 @@ function untrackedLife(order: Order, purpose: Purpose): Pick<OrderLife, 'steps' 
   }
 }
 
-export function orderLife(order: Order): OrderLife {
+/** ``refusal``: the sells of the same position Saxo refused just before this order went through. */
+export function orderLife(order: Order, refusal: Refusal | null = null): OrderLife {
   const purpose = purposeOf(order)
   const tracked = isTracked(order)
   const result = orderResult(order)
-  const life = tracked ? trackedLife(order, purpose, result) : untrackedLife(order, purpose)
+  const life = tracked ? trackedLife(order, purpose, result, refusal) : untrackedLife(order, purpose)
   return { purpose, tracked, result, tookMs: tookMs(order), ...life }
 }
 

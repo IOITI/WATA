@@ -327,3 +327,22 @@ def test_build_daily_trading_report_message_includes_balance_and_milestones():
     assert "Milestones (simu per week) :" in message
     assert "100,000 €:" in message
     assert "500,000 €:" in message
+
+def test_a_refused_order_says_saxo_s_code_and_message_and_never_the_account_key():
+    from src.trade.exceptions import OrderPlacementError
+
+    refusal = OrderPlacementError(
+        "API error placing order",
+        status_code=400,
+        saxo_error_details={"ErrorInfo": {"ErrorCode": "OtherError", "Message": "À ce stade, seuls des ordres limites sont autorisés"}},
+        order_details={"Uic": 61252187, "Amount": 98, "BuySell": "Buy", "AccountKey": "account-secret"},
+    )
+    composer = TelegramMessageComposer({"action": "long", "signal_uuid": "signal-123"})
+
+    composer.add_generic_error("OrderPlacementError", refusal)
+    message = composer.get_message()
+
+    assert "Saxo Code: OtherError" in message
+    assert "Saxo Msg: À ce stade, seuls des ordres limites sont autorisés" in message
+    assert '"Uic": 61252187' in message
+    assert "account-secret" not in message

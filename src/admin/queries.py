@@ -15,10 +15,11 @@ from typing import Any
 
 from src.admin.analysis import summarise_exits
 from src.admin.errors import DatabaseUnavailable
+from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
 from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.admin.prices import Run as PriceRun
-from src.database.postgres import AsyncDbPositionManager, AsyncDbRiskStateManager
+from src.database.postgres import ORDER_REQUEST_COLUMNS, AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,10 @@ _ORDER_POSITION_COLUMNS = (
 )
 # The signal an order came from.
 _ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp", "decided_at")
+# The signal behind a buy Saxo refused: what the trader made of it too.
+_REFUSED_SIGNAL_COLUMNS = (*_ORDER_SIGNAL_COLUMNS, "outcome", "reason")
+# The requests about one position a page shows at most (a sell Saxo kept refusing is retried about once a second).
+MAX_POSITION_REQUESTS = 500
 
 # An order with what became of it, its position and its signal. What a sell
 # order could not say of its instrument is taken from the position it closed.
@@ -626,15 +631,44 @@ class AdminQueries:
         return {row["position_id"]: _clean_row(row) for row in rows}
 
     async def open_positions(self) -> list[dict]:
-        """Open positions with the price and performance the position monitor last saw."""
+        """
+        Open positions with the price and performance the position monitor
+        last saw, and the sells of each that Saxo did not take.
+        """
         positions = (await self.list_positions(status="Open"))["items"]
         live = await self.live_values() if positions else {}
+        refused = await self.sell_refusals([position["position_id"] for position in positions]) if positions else {}
         for position in positions:
             value = live.get(position["position_id"], {})
             position["live_bid"] = value.get("bid")
             position["live_performance_percent"] = value.get("performance_percent")
             position["live_observed_at"] = value.get("observed_at")
+            position["sell_refusals"] = refused.get(position["position_id"])
         return positions
+
+    async def sell_refusals(self, position_ids: list[str]) -> dict[str, dict]:
+        """
+        For each of these positions whose sell Saxo did not take: how many
+        times, since when, until when, and its latest answer.
+        """
+        rows = await self._fetch_optional(
+            """
+            SELECT position_id,
+                   COUNT(*) AS count,
+                   MIN(requested_at) AS first_at,
+                   MAX(requested_at) AS last_at,
+                   (ARRAY_AGG(outcome ORDER BY requested_at DESC))[1] AS outcome,
+                   (ARRAY_AGG(http_status ORDER BY requested_at DESC))[1] AS http_status,
+                   (ARRAY_AGG(error_code ORDER BY requested_at DESC))[1] AS error_code,
+                   (ARRAY_AGG(error_message ORDER BY requested_at DESC))[1] AS error_message
+            FROM order_request
+            WHERE position_id = ANY($1::text[])
+              AND operation = 'place' AND purpose = 'close' AND outcome <> 'accepted'
+            GROUP BY position_id
+            """,
+            [str(position_id) for position_id in position_ids],
+        )
+        return {row["position_id"]: _clean_row(row) for row in rows}
 
     async def signal_journal(self, start: date | None = None, end: date | None = None, limit: int = 200) -> list[dict]:
         args: list[Any] = []
@@ -754,7 +788,30 @@ class AdminQueries:
             position["order_id"],
             position["related_order_id"] or [],
         )
-        return {"position": _clean_row(position), "orders": orders}
+        # Every request about it: its sells, the stops and cancellations on it, and the buy that opened it.
+        where = "WHERE position_id = $1 OR order_id = $2"
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(ORDER_REQUEST_COLUMNS)} FROM order_request {where}
+            ORDER BY requested_at DESC NULLS LAST, request_id DESC
+            LIMIT {MAX_POSITION_REQUESTS}
+            """,
+            position_id,
+            position["order_id"],
+        )
+        requests = [_clean_row(row) for row in reversed(rows)]
+        total = len(requests)
+        if total >= MAX_POSITION_REQUESTS:
+            total = await self.db.fetchval(f"SELECT COUNT(*) FROM order_request {where}", position_id, position["order_id"])
+        attached = requests_by_order(requests, [order["order_id"] for order in orders])
+        for order in orders:
+            order["requests"] = attached.get(order["order_id"], [])
+        return {
+            "position": _clean_row(position),
+            "orders": orders,
+            "requests": requests,
+            "requests_total": total or 0,
+        }
 
     async def _linked_orders(self, selection: str, *args) -> list[dict]:
         """
@@ -789,7 +846,54 @@ class AdminQueries:
             """,
             *args,
         )
-        return {"items": orders, "total": total or 0}
+        requests = await self.order_requests(start, end)
+        attached = requests_by_order(requests, [order["order_id"] for order in orders])
+        for order in orders:
+            order["requests"] = attached.get(order["order_id"], [])
+        refusals = refusal_runs(requests)
+        await self._link_refusals(refusals)
+        return {"items": orders, "total": total or 0, "refusals": refusals}
+
+    async def order_requests(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """
+        The requests sent to Saxo's order endpoint between two days (both
+        included), oldest first: the most recent ``MAX_REPLAYED_ROWS``. Empty
+        until the trading services have created their table.
+        """
+        args: list[Any] = []
+        conditions = self._date_range_conditions("requested_at", start, end, args)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(ORDER_REQUEST_COLUMNS)} FROM order_request
+            {where}
+            ORDER BY requested_at DESC NULLS LAST, request_id DESC
+            LIMIT {MAX_REPLAYED_ROWS}
+            """,
+            *args,
+        )
+        return [_clean_row(row) for row in reversed(rows)]
+
+    async def _link_refusals(self, runs: list[dict]) -> None:
+        """Each run of refusals with its position as it is now, or the signal behind it and what became of it."""
+        position_ids = sorted({run["position_id"] for run in runs if run.get("position_id")})
+        signal_ids = sorted({run["signal_uuid"] for run in runs if run.get("signal_uuid")})
+        positions, signals = {}, {}
+        if position_ids:
+            rows = await self._fetch_optional(
+                f"SELECT {', '.join(_ORDER_POSITION_COLUMNS)} FROM turbo_data_position WHERE position_id = ANY($1::text[])",
+                position_ids,
+            )
+            positions = {row["position_id"]: _clean_row(row) for row in rows}
+        if signal_ids:
+            rows = await self._fetch_optional(
+                f"SELECT {', '.join(_REFUSED_SIGNAL_COLUMNS)} FROM signal_journal WHERE signal_uuid = ANY($1::text[])",
+                signal_ids,
+            )
+            signals = {row["signal_uuid"]: _clean_row(row) for row in rows}
+        for run in runs:
+            run["position"] = positions.get(run.get("position_id"))
+            run["signal"] = signals.get(run.get("signal_uuid"))
 
     # ── reporting ──
 

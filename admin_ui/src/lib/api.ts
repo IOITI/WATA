@@ -34,7 +34,7 @@ import type {
   JsonObject,
   LogServices,
   LogTail,
-  Order,
+  OrdersPage,
   Overview,
   Page,
   Performance,
@@ -174,7 +174,7 @@ export const api = {
   position: (positionId: string) =>
     request<PositionDetail>('GET', `/api/positions/${encodeURIComponent(positionId)}`),
   orders: (params: DateRangeParams = {}) =>
-    request<Page<Order>>('GET', `/api/orders${query({ ...params, limit: 2000 })}`),
+    request<OrdersPage>('GET', `/api/orders${query({ ...params, limit: 2000 })}`),
   performance: (params: DateRangeParams = {}) =>
     request<Performance>('GET', `/api/performance${query({ ...params })}`),
   exits: (params: DateRangeParams = {}) => request<Exits>('GET', `/api/exits${query({ ...params })}`),

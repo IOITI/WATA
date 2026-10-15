@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { Order } from '@/lib/types'
+import type { Order, OrderRequest, Refusal } from '@/lib/types'
 
 import { entryFigures, orderLife, orderResult, purposeOf, tookMs } from './orderLife'
 
@@ -289,5 +289,62 @@ describe('the figures of a period', () => {
 
   it('count an entry stopped by an error among those without a position', () => {
     expect(entryFigures([{ ...GIVEN_UP, outcome: 'error' } as Order]).withoutPosition).toBe(1)
+  })
+})
+
+
+describe('a sell order Saxo had refused before taking it', () => {
+  const LIMIT_ONLY = 'À ce stade, seuls des ordres limites sont autorisés'
+  const answer = {
+    outcome: 'refused' as const,
+    http_status: 400,
+    error_code: 'OtherError',
+    error_message: LIMIT_ONLY,
+    count: 37,
+    first_at: '2026-10-13T08:00:00.000Z',
+    last_at: '2026-10-13T08:02:10.000Z',
+  }
+  const refusal = { run_id: 'r1', count: 37, first_at: answer.first_at, last_at: answer.last_at, answers: [answer] } as Refusal
+
+  it('shows the refusals before the order left, and says so', () => {
+    const life = orderLife(SELL, refusal)
+
+    expect(life.steps.map((step) => step.label)).toEqual([
+      'Refused by Saxo ×37',
+      'Sell order sent',
+      'Accepted by Saxo',
+      'Closed at Saxo',
+      'Seen closed by WATA',
+    ])
+    expect(life.steps[0]).toMatchObject({
+      at: answer.first_at,
+      tone: 'danger',
+      note: `37 attempts over 2 min 10 s: “${LIMIT_ONLY}” (OtherError, HTTP 400)`,
+    })
+    expect(life.summary).toBe(
+      'WATA saw the position closed 500 ms after the sell order left. Saxo had refused 37 sell orders of this position before taking this one.',
+    )
+  })
+
+  it('shows the resting orders cancelled on the way to the sell', () => {
+    const cancel = {
+      request_id: 'c1',
+      operation: 'cancel',
+      purpose: 'close',
+      order_id: 'stop-1',
+      outcome: 'accepted',
+      requested_at: '2026-10-13T08:02:11.050Z',
+    } as OrderRequest
+    const refusedCancel = { ...cancel, request_id: 'c2', outcome: 'refused', error_message: 'Order not found', http_status: 404, error_code: null } as OrderRequest
+
+    expect(steps({ ...SELL, requests: [cancel] } as Order).slice(0, 2)).toEqual([
+      ['Resting orders cancelled', 'Order stop-1'],
+      ['Sell order sent', ''],
+    ])
+    expect(orderLife({ ...SELL, requests: [refusedCancel] } as Order).steps[0]).toMatchObject({
+      label: 'Resting orders not cancelled',
+      note: 'Order stop-1: “Order not found” (HTTP 404)',
+      tone: 'warning',
+    })
   })
 })
