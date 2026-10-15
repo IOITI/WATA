@@ -56,7 +56,14 @@ from src.admin.config_editor import ConfigEditor
 from src.admin.context import AdminContext, AdminSettings
 from src.admin.data import PriceHistory
 from src.admin.events import EventHub
-from src.admin.queries import _ORDER_POSITION_COLUMNS, _ORDER_SIGNAL_COLUMNS, json_safe, summarise_trades
+from src.admin.order_requests import refusal_runs, requests_by_order
+from src.admin.queries import (
+    _ORDER_POSITION_COLUMNS,
+    _ORDER_SIGNAL_COLUMNS,
+    _REFUSED_SIGNAL_COLUMNS,
+    json_safe,
+    summarise_trades,
+)
 from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
 from src.strategy.engine import LocalClock
@@ -304,6 +311,139 @@ def add_orders_worth_a_look(positions: list[dict], orders: list[dict], rng: rand
     position_of(unseen)["position_close_reason"] = "SaxoAPI"
 
 
+# What Saxo answered on 2026-10-14, refusing a market sell in a volatile market.
+LIMIT_ONLY = "À ce stade, seuls des ordres limites sont autorisés"
+LIMIT_ONLY_BODY = json.dumps({"ErrorInfo": {"ErrorCode": "OtherError", "Message": LIMIT_ONLY}}, ensure_ascii=False)
+# The open position whose sell Saxo keeps refusing, while the server runs.
+STILL_REFUSED = "5999999"
+
+
+def fake_request(at: datetime, order: dict | None = None, operation: str = "place", outcome: str = "accepted",
+                 answered_ms: int = 140, **fields) -> dict:
+    """A request to Saxo's order endpoint as order_request keeps it, about ``order`` when given."""
+    order = order or {}
+    selling = order.get("buy_sell") == "Sell"
+    purpose = fields.pop("purpose", "close" if selling else "open")
+    body = None
+    if operation == "place":
+        body = {
+            "Uic": order.get("instrument_uic"), "AssetType": "WarrantOpenEndKnockOut",
+            "Amount": order.get("order_amount"), "BuySell": order.get("buy_sell"), "ManualOrder": False,
+            "OrderType": "Market", "AmountType": "Quantity", "OrderDuration": {"DurationType": "DayOrder"},
+        }
+    elif operation == "cancel":
+        body = {"OrderIds": fields.get("order_id")}
+    refused = outcome == "refused"
+    request = {
+        "request_id": str(uuid.uuid4()),
+        "requested_at": at,
+        "answered_at": at + (timedelta(seconds=30) if outcome == "no_answer" else timedelta(milliseconds=answered_ms)),
+        "recorded_by": "trader" if purpose == "open" else "position_monitor",
+        "operation": operation,
+        "purpose": purpose,
+        "position_id": order.get("position_id") if purpose != "open" else None,
+        "signal_uuid": None,
+        "action": order.get("action"),
+        "reason": None,
+        "instrument_uic": order.get("instrument_uic"),
+        "asset_type": "WarrantOpenEndKnockOut",
+        "instrument_name": order.get("instrument_name"),
+        "instrument_symbol": order.get("instrument_symbol"),
+        "instrument_currency": order.get("instrument_currency", "EUR"),
+        "buy_sell": order.get("buy_sell") if operation == "place" else None,
+        "amount": order.get("order_amount") if operation == "place" else None,
+        "order_type": "Market" if operation == "place" else None,
+        "price_seen": order.get("instrument_price"),
+        "outcome": outcome,
+        "order_id": order.get("order_id") if outcome == "accepted" and operation == "place" else None,
+        "http_status": 400 if refused else None,
+        "error_code": "OtherError" if refused else None,
+        "error_message": LIMIT_ONLY if refused else ("ApiRequestException: Unexpected request error: ReadTimeout" if outcome == "no_answer" else None),
+        "request_body": json.dumps(body) if body else None,
+        "response_body": LIMIT_ONLY_BODY if refused else (json.dumps({"OrderId": order.get("order_id")}) if outcome == "accepted" and operation == "place" else None),
+    }
+    request.update(fields)
+    return request
+
+
+def build_requests(positions: list[dict], orders: list[dict]) -> tuple[list[dict], dict | None]:
+    """
+    The requests a server keeps from the version that records them: every
+    tracked order's, a run of refusals like the one of 2026-10-14 before a sale,
+    a sell left without an answer, resting orders cancelled, a buy Saxo refused
+    (with the journal entry of its signal), and the sells of the open position
+    Saxo has been refusing for a few minutes.
+    """
+    by_position = {position["position_id"]: position for position in positions}
+    requests = []
+    tracked = [order for order in orders if order["sent_at"] is not None]
+    for order in tracked:
+        position = by_position.get(order["position_id"]) if order["position_id"] else None
+        reason = position["position_close_reason"] if position and order["buy_sell"] == "Sell" else None
+        requests.append(fake_request(order["sent_at"], order, reason=reason,
+                                     answered_ms=int((order["accepted_at"] - order["sent_at"]).total_seconds() * 1000)))
+        if order["cancel_accepted"] is not None:
+            requests.append(fake_request(
+                order["gave_up_at"], order, operation="cancel", order_id=order["order_id"],
+                outcome="accepted" if order["cancel_accepted"] else "refused",
+                reason="Saxo showed no position for the order",
+                **({} if order["cancel_accepted"] else {
+                    "http_status": 404, "error_code": "OrderNotFound", "error_message": "Order not found",
+                    "response_body": json.dumps({"ErrorInfo": {"ErrorCode": "OrderNotFound", "Message": "Order not found"}}),
+                }),
+            ))
+
+    sells = [order for order in tracked if order["buy_sell"] == "Sell" and order["outcome"] == "confirmed"]
+    refused_buy = None
+    if len(sells) >= 4:
+        # 37 sells refused over 2 min 19 s, about one a price update, before the sale went through.
+        sale = sells[-2]
+        reason = by_position[sale["position_id"]]["position_close_reason"]
+        first = sale["sent_at"] - timedelta(seconds=140)
+        for attempt in range(37):
+            requests.append(fake_request(first + timedelta(milliseconds=round(attempt * 139_000 / 36)), sale,
+                                         outcome="refused", answered_ms=110 + attempt % 5 * 20, reason=reason))
+        # A sell left without an answer, sold at the next try.
+        unanswered = sells[-4]
+        requests.append(fake_request(unanswered["sent_at"] - timedelta(seconds=31), unanswered, outcome="no_answer",
+                                     reason=by_position[unanswered["position_id"]]["position_close_reason"]))
+        # The protective stop resting on a position, cancelled on the way to its sale.
+        resting = sells[-5] if len(sells) >= 5 else sells[0]
+        requests.append(fake_request(resting["sent_at"] - timedelta(milliseconds=180), resting, operation="cancel",
+                                     order_id=f"stop-{resting['order_id']}", reason="Explicit Close (All)"))
+
+        # A buy Saxo refused: no order, no position, the signal journaled "failed".
+        like = next(order for order in reversed(tracked) if order["buy_sell"] == "Buy")
+        at = like["sent_at"] - timedelta(minutes=95)
+        signal_uuid = str(uuid.uuid4())
+        buy = {**like, "order_id": None, "position_id": None}
+        requests.append(fake_request(at, buy, outcome="refused", signal_uuid=signal_uuid))
+        refused_buy = {
+            "signal": {"action": like["action"], "indice": "us100", "signal_uuid": signal_uuid},
+            "decided_at": at + timedelta(milliseconds=160),
+            "reason": (
+                f"Order rejected: API error placing order (Status: 400) (Saxo: {LIMIT_ONLY} [OtherError]) "
+                f"(Order: Buy {like['order_amount']} units of {like['instrument_uic']})"
+            ),
+        }
+
+    # The open position: Saxo has been refusing its sell for a few minutes.
+    still_open = by_position.get(STILL_REFUSED)
+    if still_open is not None:
+        sale = {
+            "buy_sell": "Sell", "position_id": STILL_REFUSED, "action": still_open["action"],
+            "instrument_uic": still_open["instrument_uic"], "instrument_name": still_open["instrument_name"],
+            "instrument_symbol": still_open["instrument_symbol"], "order_amount": still_open["position_amount"],
+            "instrument_price": round(still_open["position_open_price"] * 0.93, 2), "instrument_currency": "EUR",
+        }
+        now = datetime.now(timezone.utc)
+        for attempt in range(12):
+            requests.append(fake_request(now - timedelta(seconds=240 - attempt * 20), sale, outcome="refused",
+                                         reason="Performance (Stoploss (-7%) hit at -7.1%)"))
+    requests.sort(key=lambda request: request["requested_at"])
+    return requests, refused_buy
+
+
 # The turbo the made-up real trades were "bought": what measuring it should find.
 REAL_TURBO = TurboModel(entry_price=5.2, points_per_unit=104.0, spread=0.04)
 # When TradingView "sent" a signal on each day, in the trading timezone.
@@ -393,9 +533,12 @@ class FakeQueries:
         self.real_journal, self.real_positions = real
         self.today = datetime.now(timezone.utc).date()
         self.positions, self.orders = build_history(self.today)
+        self.requests, refused_buy = build_requests(self.positions, self.orders)
         self.paused_since = None
         self.journal: list[dict] = []
         self._ticks = 0
+        if refused_buy is not None:
+            self.add_decision(refused_buy["signal"], "failed", refused_buy["reason"], decided_at=refused_buy["decided_at"])
         now = datetime.now(timezone.utc)
         self.add_decision(
             {"action": "close-position", "indice": "n/a"}, "closed", "Closed 1 position(s). Errors: 0",
@@ -543,6 +686,7 @@ class FakeQueries:
     async def open_positions(self):
         """Open positions with a made-up price that moves a little at every call."""
         self._ticks += 1
+        self._keep_refusing()
         positions = (await self.list_positions(status="Open"))["items"]
         result = []
         for position in positions:
@@ -552,6 +696,7 @@ class FakeQueries:
                 "live_bid": round(position["position_open_price"] * (1 + performance / 100), 2),
                 "live_performance_percent": performance,
                 "live_observed_at": datetime.now(timezone.utc) - timedelta(seconds=2),
+                "sell_refusals": self._sell_refusals(position["position_id"]),
             })
         return result
 
@@ -662,7 +807,41 @@ class FakeQueries:
         if position is None:
             return None
         orders = sorted((o for o in self.orders if o["position_id"] == position_id), key=lambda o: o["order_time"])
-        return {"position": position, "orders": [self._linked(order) for order in orders]}
+        requests = [
+            request for request in self.requests
+            if request["position_id"] == position_id or (request["order_id"] and request["order_id"] == position["order_id"])
+        ]
+        linked = [self._linked(order) for order in orders]
+        attached = requests_by_order(requests, [order["order_id"] for order in linked])
+        for order in linked:
+            order["requests"] = attached.get(order["order_id"], [])
+        return {"position": position, "orders": linked, "requests": requests, "requests_total": len(requests)}
+
+    def _sell_refusals(self, position_id: str) -> dict | None:
+        """What AdminQueries.sell_refusals says of a position."""
+        refused = [
+            request for request in self.requests
+            if request["position_id"] == position_id and request["operation"] == "place"
+            and request["purpose"] == "close" and request["outcome"] != "accepted"
+        ]
+        if not refused:
+            return None
+        last = refused[-1]
+        return {
+            "position_id": position_id, "count": len(refused), "first_at": refused[0]["requested_at"],
+            "last_at": last["requested_at"], "outcome": last["outcome"], "http_status": last["http_status"],
+            "error_code": last["error_code"], "error_message": last["error_message"],
+        }
+
+    def _keep_refusing(self) -> None:
+        """Now and then, one more sell of the open position refused: what the live alert is for."""
+        position = next((p for p in self.positions if p["position_id"] == STILL_REFUSED and p["position_status"] == "Open"), None)
+        last = next((r for r in reversed(self.requests) if r["position_id"] == STILL_REFUSED), None)
+        now = datetime.now(timezone.utc)
+        if position is None or last is None or now - last["requested_at"] < timedelta(seconds=20):
+            return
+        self.requests.append({**last, "request_id": str(uuid.uuid4()), "requested_at": now,
+                              "answered_at": now + timedelta(milliseconds=130)})
 
     def _linked(self, order: dict) -> dict:
         """An order as the admin's query gives it: with the position it gave or closed and its signal."""
@@ -677,7 +856,18 @@ class FakeQueries:
     async def list_orders(self, start=None, end=None, limit=500):
         rows = [o for o in self.orders if in_range(o["order_time"], start, end)]
         rows.sort(key=lambda o: o["order_time"], reverse=True)
-        return {"items": [self._linked(order) for order in rows[:limit]], "total": len(rows)}
+        items = [self._linked(order) for order in rows[:limit]]
+        requests = [request for request in self.requests if in_range(request["requested_at"], start, end)]
+        attached = requests_by_order(requests, [order["order_id"] for order in items])
+        for order in items:
+            order["requests"] = attached.get(order["order_id"], [])
+        refusals = refusal_runs(requests)
+        for run in refusals:
+            position = next((p for p in self.positions if p["position_id"] == run["position_id"]), None)
+            signal = next((entry for entry in self.journal if entry["signal_uuid"] == run["signal_uuid"]), None)
+            run["position"] = position and {column: position[column] for column in _ORDER_POSITION_COLUMNS}
+            run["signal"] = signal and {column: signal[column] for column in _REFUSED_SIGNAL_COLUMNS}
+        return {"items": items, "total": len(rows), "refusals": refusals}
 
     async def performance(self, start=None, end=None):
         before = sum(t["profit_loss"] for t in self._closed_trades(None, start - timedelta(days=1))) if start else 0.0

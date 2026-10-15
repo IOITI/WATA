@@ -1,12 +1,14 @@
 import asyncio
+import json
 import sys
 import threading
 import time
 import types
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from src.configuration import ConfigurationManager
 
@@ -27,8 +29,15 @@ from src.trade.async_services import (
     round_down_to_tick,
     stop_order_tick_size,
 )
-from src.trade.exceptions import OrderPlacementError, PositionNotFoundException, TokenAuthenticationException
-from src.trade.order_tracker import CLOSE, OPEN, OrderTrace
+from src.trade.exceptions import (
+    ApiRequestException,
+    InsufficientFundsException,
+    OrderPlacementError,
+    PositionNotFoundException,
+    SaxoApiError,
+    TokenAuthenticationException,
+)
+from src.trade.order_tracker import CLOSE, OPEN, STOP, OrderContext, OrderTrace
 from src.saxo_openapi.exceptions import OpenAPIError
 
 
@@ -492,7 +501,9 @@ def test_position_confirmation_keeps_its_patience_then_cancels_the_order(mock_co
             asyncio.run(position_service.find_position_by_order_id_with_retry("order-1"))
 
     assert sum(_slept(mock_sleep)) == pytest.approx(1.8)
-    order_service.cancel_order_with_reason.assert_awaited_once_with("order-1")
+    order_service.cancel_order_with_reason.assert_awaited_once_with(
+        "order-1", context=OrderContext(purpose=OPEN, reason="Saxo showed no position for the order"),
+    )
 
 
 # ── AsyncSaxoApiClient: token handling ──
@@ -953,7 +964,10 @@ def test_close_cancels_orders_resting_on_the_position_before_selling_it():
         asyncio.run(monitor.close_managed_positions_by_criteria())
 
     assert [call[0] for call in calls.mock_calls] == ["cancel", "sell"]
-    monitor.order_service.cancel_order.assert_awaited_once_with("stop-1,tp-1")
+    # The cancellation is kept with the same reason as the sell it makes way for.
+    context = monitor.order_service.place_market_order.await_args.kwargs["context"]
+    assert (context.purpose, context.position_id, context.reason) == (CLOSE, "p1", "Explicit Close (All)")
+    monitor.order_service.cancel_order.assert_awaited_once_with("stop-1,tp-1", context=context)
 
 
 def test_close_without_resting_orders_cancels_nothing():
@@ -1342,6 +1356,11 @@ def test_protective_stop_is_placed_below_the_open_price_on_a_valid_tick(tmp_path
         amount=98,
         stop_price=7.05,
         order_type="StopIfTraded",
+        context=ANY,
+    )
+    context = orchestrator.order_service.place_related_stop_order.await_args.kwargs["context"]
+    assert (context.purpose, context.position_id, context.reason, context.price_seen) == (
+        STOP, "position-1", "Protective stop at -30%", 7.05,
     )
     orchestrator.db_position_manager.update_turbo_position_data.assert_awaited_once_with(
         "position-1", {"related_order_id": ["stop-1"]},
@@ -1699,7 +1718,10 @@ def test_error_after_saxo_accepted_the_order_is_tracked_with_its_cancellation(tm
     with pytest.raises(RuntimeError, match="Saxo is unreachable"):
         asyncio.run(_execute(orchestrator))
 
-    orchestrator.order_service.cancel_order.assert_awaited_once_with("order-1")
+    orchestrator.order_service.cancel_order.assert_awaited_once_with("order-1", context=ANY)
+    assert orchestrator.order_service.cancel_order.await_args.kwargs["context"].reason == (
+        "Stopped by an error once Saxo had the order: RuntimeError"
+    )
     last, order_row = tracker.records[-1]
     assert (last["outcome"], last["cancel_accepted"]) == ("error", True)
     assert last["detail"] == "RuntimeError: Saxo is unreachable"
@@ -1857,3 +1879,233 @@ def test_a_sell_order_that_cannot_be_described_is_still_a_sell_that_went_through
     assert monitor._closing_position_ids == set()
     # The order could not be written, what became of it still is.
     assert [entry["outcome"] for entry in tracker.entries] == ["confirmed"]
+
+
+
+# ── Every request to Saxo's order endpoint, kept with its answer ──
+
+# What Saxo answered on 2026-10-14, refusing a market sell in a volatile market.
+LIMIT_ONLY = {"ErrorInfo": {"ErrorCode": "OtherError", "Message": "À ce stade, seuls des ordres limites sont autorisés"}}
+SAID_ONCE = "(Saxo: À ce stade, seuls des ordres limites sont autorisés [OtherError])"
+
+
+class RequestRecorder:
+    """Stands for the OrderTracker's record of requests: keeps each one as it was handed over."""
+
+    def __init__(self, error=None):
+        self.entries = []
+        self.error = error
+
+    def record_request(self, request):
+        if self.error:
+            raise self.error
+        self.entries.append(request.as_entry("test"))
+
+
+def _saxo_refusal(details=None):
+    """What the client raises when Saxo refuses an order: its own error, raised from Saxo's answer."""
+    details = LIMIT_ONLY if details is None else details
+    error = SaxoApiError("Saxo API Error (400): Bad Request", status_code=400, saxo_error_details=details)
+    error.__cause__ = OpenAPIError(400, "Bad Request", json.dumps(details))
+    return error
+
+
+def _order_service(answers, recorder=None):
+    api_client = MagicMock()
+    api_client.request = AsyncMock(side_effect=answers)
+    return AsyncOrderService(api_client, "account-1", "client-1", order_tracker=recorder or RequestRecorder())
+
+
+def test_an_order_saxo_accepts_is_kept_with_the_id_it_gave_and_why_it_was_sent():
+    service = _order_service([{"OrderId": "5012"}])
+    context = OrderContext(purpose=OPEN, signal_uuid="uuid-1", action="long", instrument_name="Turbo", price_seen=10.1)
+
+    asyncio.run(service.place_market_order(uic=101, asset_type="WarrantKnockOut", amount=98, buy_sell="Buy", context=context))
+
+    [entry] = service.order_tracker.entries
+    assert (entry["operation"], entry["purpose"], entry["outcome"], entry["order_id"]) == ("place", OPEN, "accepted", "5012")
+    assert (entry["signal_uuid"], entry["action"], entry["instrument_name"], entry["price_seen"]) == (
+        "uuid-1", "long", "Turbo", 10.1,
+    )
+    assert (entry["instrument_uic"], entry["buy_sell"], entry["amount"], entry["order_type"]) == (101, "Buy", 98.0, "Market")
+    assert "account-1" not in entry["request_body"]
+
+
+def test_the_refusal_of_2026_10_14_is_kept_as_saxo_said_it_and_said_once():
+    api_client, _ = _api_client(["token-1"])
+    recorder = RequestRecorder()
+    service = AsyncOrderService(api_client, "account-1", "client-1", order_tracker=recorder)
+    context = OrderContext(purpose=CLOSE, position_id="7779123400", reason="Performance (Stoploss (-7%) hit at -7.4%)")
+
+    async def scenario():
+        await service.place_market_order(
+            uic=61252187, asset_type="WarrantOpenEndKnockOut", amount=6.0, buy_sell="Sell", context=context,
+        )
+
+    with patch("src.trade.async_services.AsyncAPI") as api_cls:
+        api_cls.return_value.request = AsyncMock(side_effect=OpenAPIError(400, "Bad Request", json.dumps(LIMIT_ONLY)))
+        with pytest.raises(OrderPlacementError) as raised:
+            asyncio.run(scenario())
+
+    # What the logs and Telegram say of it: Saxo's message once, with its code and the HTTP status.
+    assert str(raised.value) == f"API error placing order (Status: 400) {SAID_ONCE} (Order: Sell 6.0 units of 61252187)"
+    assert raised.value.status_code == 400
+    [entry] = recorder.entries
+    assert (entry["outcome"], entry["http_status"], entry["error_code"], entry["order_id"]) == (
+        "refused", 400, "OtherError", None,
+    )
+    assert entry["error_message"] == "À ce stade, seuls des ordres limites sont autorisés"
+    assert (entry["position_id"], entry["reason"]) == ("7779123400", "Performance (Stoploss (-7%) hit at -7.4%)")
+    assert json.loads(entry["response_body"]) == LIMIT_ONLY
+    assert "account-1" not in entry["request_body"]
+
+
+def test_which_exception_a_refusal_raises_is_unchanged():
+    # Read at the top level only, as before: a code under ErrorInfo does not make it an InsufficientFundsException.
+    nested = OpenAPIError(400, "Bad Request", json.dumps({"ErrorInfo": {"ErrorCode": "InsufficientFunds", "Message": "No"}}))
+    top_level = OpenAPIError(400, "Bad Request", json.dumps({"ErrorCode": "InsufficientFunds", "Message": "No"}))
+
+    def raised_by(answer):
+        api_client, _ = _api_client(["token-1"])
+        with patch("src.trade.async_services.AsyncAPI") as api_cls:
+            api_cls.return_value.request = AsyncMock(side_effect=answer)
+            try:
+                asyncio.run(api_client.request(MagicMock()))
+            except Exception as error:
+                return error
+
+    assert type(raised_by(nested)) is SaxoApiError
+    assert str(raised_by(nested)) == "Saxo API Error (400): No (Status: 400) (Saxo: No [InsufficientFunds])"
+    assert type(raised_by(top_level)) is InsufficientFundsException
+
+
+def test_a_request_left_without_answer_is_kept_and_raises_as_before():
+    # What the client raises when Saxo never answered (the order may have been taken all the same).
+    timeout = ApiRequestException("Unexpected request error: timed out")
+    timeout.__cause__ = httpx.ReadTimeout("timed out")
+    service = _order_service([timeout])
+
+    with pytest.raises(ApiRequestException):
+        asyncio.run(service.place_market_order(uic=101, asset_type="WarrantKnockOut", amount=98, buy_sell="Buy"))
+
+    [entry] = service.order_tracker.entries
+    assert (entry["outcome"], entry["http_status"]) == ("no_answer", None)
+
+
+def test_an_answer_without_order_id_is_kept_as_an_error_with_what_saxo_sent():
+    service = _order_service([{"Unexpected": True}])
+
+    with pytest.raises(OrderPlacementError):
+        asyncio.run(service.place_market_order(uic=101, asset_type="WarrantKnockOut", amount=98, buy_sell="Buy"))
+
+    [entry] = service.order_tracker.entries
+    assert (entry["outcome"], entry["response_body"]) == ("error", '{"Unexpected": true}')
+
+
+def test_cancellations_and_protective_stops_are_kept_too():
+    recorder = RequestRecorder()
+    service = _order_service([{}, RuntimeError("Order not found"), {"Orders": [{"OrderId": "stop-1"}]}], recorder)
+    context = OrderContext(purpose=CLOSE, position_id="p1", reason="Explicit Close (All)")
+
+    async def scenario():
+        await service.cancel_order("stop-0", context=context)
+        await service.cancel_order_with_reason("order-2")
+        await service.place_related_stop_order(
+            position_id="p1", uic=101, asset_type="WarrantKnockOut", amount=98, stop_price=7.05,
+            order_type="StopIfTraded", context=OrderContext(purpose="stop", position_id="p1"),
+        )
+
+    asyncio.run(scenario())
+
+    assert [(e["operation"], e["purpose"], e["order_id"], e["outcome"]) for e in recorder.entries] == [
+        ("cancel", CLOSE, "stop-0", "accepted"),
+        ("cancel", None, "order-2", "error"),
+        ("place", "stop", "stop-1", "accepted"),
+    ]
+    assert recorder.entries[1]["error_message"] == "RuntimeError: Order not found"
+    assert (recorder.entries[2]["order_type"], recorder.entries[2]["amount"]) == ("StopIfTraded", 98.0)
+
+
+def test_a_recorder_that_breaks_changes_nothing_of_what_saxo_answered():
+    broken = RequestRecorder(error=RuntimeError("tracker is broken"))
+    accepted = _order_service([{"OrderId": "5012"}], broken)
+    refused = _order_service([_saxo_refusal()], broken)
+    cancelled = _order_service([{}], broken)
+
+    assert asyncio.run(accepted.place_market_order(uic=1, asset_type="X", amount=1, buy_sell="Buy")) == {"OrderId": "5012"}
+    with pytest.raises(OrderPlacementError):
+        asyncio.run(refused.place_market_order(uic=1, asset_type="X", amount=1, buy_sell="Sell"))
+    assert asyncio.run(cancelled.cancel_order_with_reason("order-1")) == (True, None)
+
+
+def test_a_sell_saxo_refuses_is_kept_and_sold_at_the_next_try():
+    monitor = _performance_monitor(open_positions={"return_value": {"Data": [SELLABLE_POSITION]}})
+    recorder = RequestRecorder()
+    monitor.order_service = _order_service([_saxo_refusal(), {"OrderId": "sell-2"}], recorder)
+
+    async def scenario():
+        return (
+            await monitor.close_managed_positions_by_criteria(),
+            await monitor.close_managed_positions_by_criteria(),
+        )
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        first, second = asyncio.run(scenario())
+
+    assert (first["closed_initiated_count"], first["errors_count"]) == (0, 1)
+    assert (second["closed_initiated_count"], second["errors_count"]) == (1, 0)
+    assert monitor._closing_position_ids == set()
+    assert [(e["outcome"], e["position_id"], e["action"], e["reason"], e["price_seen"]) for e in recorder.entries] == [
+        ("refused", "p1", "long", "Explicit Close (All)", 11.0),
+        ("accepted", "p1", "long", "Explicit Close (All)", 11.0),
+    ]
+    assert (recorder.entries[0]["instrument_name"], recorder.entries[0]["instrument_currency"]) == ("Turbo Long", "EUR")
+    message = monitor.send_telegram.await_args_list[0].args[0]
+    assert message.startswith("ERROR closing p1: API error placing order (Status: 400)")
+    assert message.count("À ce stade") == 1
+
+
+def test_a_sell_decided_by_an_exit_rule_is_kept_with_that_rule(tmp_path):
+    monitor = _performance_monitor(
+        open_positions={"return_value": {"Data": [SELLABLE_POSITION]}},
+        position_management={"performance_thresholds": {"stoploss_percent": -5, "max_profit_percent": 5}},
+    )
+    # Each position check writes its performance line: out of the repository.
+    monitor.logging_config = {"persistant": {"log_path": str(tmp_path)}}
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        asyncio.run(monitor.check_positions_from_stream({"p1": SELLABLE_POSITION}))
+        asyncio.run(monitor.wait_for_background_tasks())
+
+    context = monitor.order_service.place_market_order.await_args.kwargs["context"]
+    assert (context.purpose, context.position_id, context.reason) == (CLOSE, "p1", "Performance (Takeprofit (5%) hit at 10.0%)")
+    assert monitor.db_position_manager.update_turbo_position_data.await_args.args[1]["position_close_reason"] == (
+        "Performance (Takeprofit (5%) hit at 10.0%)"
+    )
+
+
+def test_a_buy_is_sent_with_its_signal_and_the_price_it_was_decided_on(tmp_path):
+    orchestrator, _ = _orchestrator(tmp_path)
+
+    asyncio.run(orchestrator.execute_trade_signal(
+        exchange_id="exchange1", underlying_uics="1909050", keywords="long", signal_uuid="uuid-1",
+    ))
+
+    context = orchestrator.order_service.place_market_order.await_args.kwargs["context"]
+    assert context == OrderContext(
+        purpose=OPEN, signal_uuid="uuid-1", action="long", instrument_name="Cached Turbo",
+        instrument_symbol="CACHED", instrument_currency="EUR", price_seen=10.1,
+    )
+
+
+def test_a_sell_of_a_position_saxo_describes_in_part_is_still_sent():
+    monitor = _performance_monitor(
+        open_positions={"return_value": {"Data": [{**SELLABLE_POSITION, "DisplayAndFormat": ["not what Saxo documents"]}]}},
+    )
+
+    with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
+        result = asyncio.run(monitor.close_managed_positions_by_criteria())
+
+    assert result["closed_initiated_count"] == 1
+    context = monitor.order_service.place_market_order.await_args.kwargs["context"]
+    assert (context.purpose, context.position_id, context.instrument_name) == (CLOSE, "p1", None)

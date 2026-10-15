@@ -271,6 +271,39 @@ CREATE TABLE IF NOT EXISTS order_execution (
     recorded_by     VARCHAR(32)
 );
 
+-- Every request sent to Saxo's order endpoint (an order placed, orders
+-- cancelled) and what Saxo answered, accepted or not, as the service that sent
+-- it saw it. One row per request, written once its answer is known, in the
+-- background, for the admin interface; nothing trades on it.
+CREATE TABLE IF NOT EXISTS order_request (
+    request_id          VARCHAR(36) PRIMARY KEY,
+    requested_at        TIMESTAMPTZ,
+    answered_at         TIMESTAMPTZ,
+    recorded_by         VARCHAR(32),
+    operation           VARCHAR(8),
+    purpose             VARCHAR(8),
+    position_id         VARCHAR(64),
+    signal_uuid         VARCHAR(64),
+    action              TEXT,
+    reason              TEXT,
+    instrument_uic      INTEGER,
+    asset_type          TEXT,
+    instrument_name     TEXT,
+    instrument_symbol   TEXT,
+    instrument_currency TEXT,
+    buy_sell            VARCHAR(8),
+    amount              DOUBLE PRECISION,
+    order_type          TEXT,
+    price_seen          DOUBLE PRECISION,
+    outcome             VARCHAR(16),
+    order_id            TEXT,
+    http_status         INTEGER,
+    error_code          TEXT,
+    error_message       TEXT,
+    request_body        TEXT,
+    response_body       TEXT
+);
+
 -- Total account value, recorded with each daily report.
 CREATE TABLE IF NOT EXISTS account_balance_history (
     date_day     DATE PRIMARY KEY,
@@ -283,7 +316,17 @@ CREATE INDEX IF NOT EXISTS idx_signal_journal_decided_at ON signal_journal (deci
 CREATE INDEX IF NOT EXISTS idx_position_status ON turbo_data_position (position_status);
 CREATE INDEX IF NOT EXISTS idx_position_close_time ON turbo_data_position (execution_time_close);
 CREATE INDEX IF NOT EXISTS idx_position_open_time ON turbo_data_position (execution_time_open);
+CREATE INDEX IF NOT EXISTS idx_order_request_requested_at ON order_request (requested_at);
+CREATE INDEX IF NOT EXISTS idx_order_request_position ON order_request (position_id);
 """
+
+# The columns of order_request, in the order of its table: the writer and the admin read the same list.
+ORDER_REQUEST_COLUMNS = (
+    "request_id", "requested_at", "answered_at", "recorded_by", "operation", "purpose", "position_id",
+    "signal_uuid", "action", "reason", "instrument_uic", "asset_type", "instrument_name", "instrument_symbol",
+    "instrument_currency", "buy_sell", "amount", "order_type", "price_seen", "outcome", "order_id",
+    "http_status", "error_code", "error_message", "request_body", "response_body",
+)
 
 
 async def init_schema(conn_mgr: PostgresConnectionManager):
@@ -855,6 +898,25 @@ class AsyncDbOrderExecutionManager:
             entry.get("cancel_accepted"),
             entry.get("detail"),
             entry.get("recorded_by"),
+        )
+
+
+class AsyncDbOrderRequestManager:
+    """Every request sent to Saxo's order endpoint and its answer (see order_request)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def record(self, entry: dict):
+        """Keep one request. It is written once, its answer known: writing it again changes nothing."""
+        placeholders = ", ".join(f"${index}" for index in range(1, len(ORDER_REQUEST_COLUMNS) + 1))
+        await self.db.execute(
+            f"""
+            INSERT INTO order_request ({", ".join(ORDER_REQUEST_COLUMNS)})
+            VALUES ({placeholders})
+            ON CONFLICT (request_id) DO NOTHING
+            """,
+            *(entry.get(column) for column in ORDER_REQUEST_COLUMNS),
         )
 
 

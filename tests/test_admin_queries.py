@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import types
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -296,7 +296,13 @@ def test_orders_are_read_with_their_links_filtered_by_local_day_and_bounded():
     # One signal at most per order, or an order would be listed twice.
     assert "DISTINCT ON (order_id)" in list_query
     assert f"LIMIT {MAX_ROWS}" in list_query
-    assert result == {"items": [], "total": 3}
+    # The requests sent to Saxo in the same days, the most recent first and bounded.
+    requests_query, requests_args = db.calls[2]
+    assert requests_args == ("Europe/Paris", DAY_1, DAY_2)
+    assert "FROM order_request" in requests_query
+    assert "(requested_at AT TIME ZONE $1)::date >= $2::date" in requests_query
+    assert f"LIMIT {MAX_REPLAYED_ROWS}" in requests_query
+    assert result == {"items": [], "total": 3, "refusals": []}
 
 
 @pytest.mark.parametrize("missing", ["order_execution", "signal_journal"])
@@ -306,7 +312,9 @@ def test_orders_are_read_alone_until_the_trading_services_have_created_what_link
 
     result = asyncio.run(queries.list_orders(start=DAY_1))
 
-    plain_query, plain_args = db.calls[-1]
+    plain_query, plain_args = next(
+        call for call in db.calls if "FROM turbo_data_order o" in call[0] and "COUNT" not in call[0] and "JOIN" not in call[0]
+    )
     assert "order_execution" not in plain_query and "signal_journal" not in plain_query
     assert "FROM turbo_data_order o" in plain_query
     assert plain_args == ("Europe/Paris", DAY_1)
@@ -414,3 +422,134 @@ def test_lazy_database_recovers_once_the_server_is_back():
     conn_mgr.fail_connect = False
 
     assert asyncio.run(database.fetchval("SELECT 1")) == 1
+
+
+# ── the requests sent to Saxo's order endpoint ──
+
+
+SENT = datetime(2026, 10, 14, 12, 2, 11, tzinfo=timezone.utc)
+LIMIT_ONLY = "À ce stade, seuls des ordres limites sont autorisés"
+
+
+def _sent(seconds, outcome="refused", **extra):
+    refused = outcome == "refused"
+    return {
+        "request_id": f"request-{seconds}", "requested_at": SENT + timedelta(seconds=seconds),
+        "operation": "place", "purpose": "close", "position_id": "5001", "outcome": outcome,
+        "http_status": 400 if refused else None, "error_code": "OtherError" if refused else None,
+        "error_message": LIMIT_ONLY if refused else None, "order_id": None, **extra,
+    }
+
+
+class TablesDb(FakeDb):
+    """Rows by table: the first table of ``tables`` named in a query gives its rows."""
+
+    def __init__(self, tables, value=0):
+        super().__init__(value=value)
+        self.tables = tables
+
+    async def fetch(self, query, *args):
+        self.calls.append((query, args))
+        return next((rows for table, rows in self.tables.items() if table in query), [])
+
+    async def fetchrow(self, query, *args):
+        self.calls.append((query, args))
+        rows = next((rows for table, rows in self.tables.items() if table in query), [])
+        return rows[0] if rows else None
+
+
+def test_orders_come_with_the_runs_saxo_refused_and_the_requests_that_belong_to_them():
+    sale = {**LINKED_ORDER_ROW, "order_id": "7002", "buy_sell": "Sell", "purpose": "close"}
+    requests = [_sent(0), _sent(1), _sent(2, outcome="accepted", order_id="7002")]
+    db = TablesDb({
+        "order_execution": [sale],
+        # Newest first, as the query asks: read back oldest first.
+        "order_request": list(reversed(requests)),
+        "turbo_data_position": [{"position_id": "5001", "position_status": "Closed"}],
+    }, value=1)
+
+    result = asyncio.run(AdminQueries(db, "Europe/Paris").list_orders())
+
+    [order] = result["items"]
+    assert [request["request_id"] for request in order["requests"]] == ["request-2"]
+    [run] = result["refusals"]
+    assert (run["count"], run["error_message"], run["followed_by"]["order_id"]) == (2, LIMIT_ONLY, "7002")
+    assert run["position"] == {"position_id": "5001", "position_status": "Closed"}
+    assert run["signal"] is None
+    position_query, position_args = next(call for call in db.calls if "FROM turbo_data_position WHERE" in call[0])
+    assert position_args == (["5001"],)
+
+
+def test_a_refused_buy_comes_with_its_signal_and_what_the_trader_made_of_it():
+    buy = _sent(0, purpose="open", position_id=None, signal_uuid="uuid-1")
+    journal = {"signal_uuid": "uuid-1", "outcome": "failed", "reason": "Order rejected: ..."}
+    db = TablesDb({"order_execution": [], "order_request": [buy], "signal_journal WHERE signal_uuid": [journal]}, value=0)
+
+    [run] = asyncio.run(AdminQueries(db, "Europe/Paris").list_orders())["refusals"]
+
+    assert (run["signal_uuid"], run["position"], run["signal"]) == ("uuid-1", None, journal)
+    signal_query, signal_args = next(call for call in db.calls if "FROM signal_journal WHERE signal_uuid" in call[0])
+    assert "outcome, reason" in signal_query
+    assert signal_args == (["uuid-1"],)
+
+
+def test_orders_have_no_requests_until_the_trading_services_have_created_their_table():
+    db = DbWithoutOrderLinks(rows=[LINKED_ORDER_ROW], missing="order_request")
+
+    result = asyncio.run(AdminQueries(db, "Europe/Paris").list_orders())
+
+    assert result["refusals"] == []
+    assert result["items"][0]["requests"] == []
+
+
+def test_position_detail_gives_every_request_about_it_oldest_first():
+    position = {"position_id": "5001", "order_id": "7001", "related_order_id": None}
+    requests = [_sent(0), _sent(1)]
+    db = TablesDb({"order_execution": [], "order_request": list(reversed(requests)), "turbo_data_position": [position]})
+
+    result = asyncio.run(AdminQueries(db, "Europe/Paris").get_position("5001"))
+
+    requests_query, requests_args = next(call for call in db.calls if "FROM order_request" in call[0])
+    assert requests_args == ("5001", "7001")
+    assert "WHERE position_id = $1 OR order_id = $2" in requests_query
+    assert [request["request_id"] for request in result["requests"]] == ["request-0", "request-1"]
+    assert result["requests_total"] == 2
+
+
+def test_position_detail_counts_the_requests_it_does_not_show(monkeypatch):
+    monkeypatch.setattr("src.admin.queries.MAX_POSITION_REQUESTS", 2)
+    position = {"position_id": "5001", "order_id": "7001", "related_order_id": None}
+    db = TablesDb({"order_execution": [], "order_request": [_sent(1), _sent(0)], "turbo_data_position": [position]}, value=37)
+
+    result = asyncio.run(AdminQueries(db, "Europe/Paris").get_position("5001"))
+
+    assert (len(result["requests"]), result["requests_total"]) == (2, 37)
+    count_query, count_args = db.calls[-1]
+    assert "COUNT(*) FROM order_request WHERE position_id = $1 OR order_id = $2" in count_query
+    assert count_args == ("5001", "7001")
+
+
+def test_an_open_position_says_how_often_saxo_refused_to_sell_it():
+    refused = {"position_id": "5001", "count": 37, "first_at": SENT, "last_at": SENT, "outcome": "refused",
+               "http_status": 400, "error_code": "OtherError", "error_message": LIMIT_ONLY}
+    db = TablesDb({
+        "position_live_value": [],
+        "FROM order_request": [refused],
+        "turbo_data_position": [{"position_id": "5001", "position_status": "Open"}, {"position_id": "5002", "position_status": "Open"}],
+    }, value=2)
+
+    positions = asyncio.run(AdminQueries(db, "Europe/Paris").open_positions())
+
+    assert positions[0]["sell_refusals"] == refused
+    assert positions[1]["sell_refusals"] is None
+    query, args = next(call for call in db.calls if "FROM order_request" in call[0])
+    assert args == (["5001", "5002"],)
+    assert "operation = 'place' AND purpose = 'close' AND outcome <> 'accepted'" in query
+
+
+def test_open_positions_are_still_given_before_the_table_of_requests_exists():
+    db = DbWithoutOrderLinks(rows=[{"position_id": "5001", "position_status": "Open"}], missing="order_request")
+
+    positions = asyncio.run(AdminQueries(db, "Europe/Paris").open_positions())
+
+    assert positions[0]["sell_refusals"] is None

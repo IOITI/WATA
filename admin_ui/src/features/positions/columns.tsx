@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { ActionBadge, PnlValue } from '@/components/status'
@@ -10,6 +11,10 @@ import type { Order, Position } from '@/lib/types'
 import { ClosePositionButton } from './ClosePositionButton'
 import { LiveValue } from './LiveValue'
 import { orderResult, positionLink, purposeOf, RESULT_FILTER, RESULTS, tookMs } from './orderLife'
+import type { OrderResult } from './orderLife'
+import { REQUEST_RESULTS, rowTime, runLabel, runTookMs } from './orderRequests'
+import type { OrderRow } from './orderRequests'
+import { SellRefused } from './SellRefused'
 
 export const POSITION_CSV: CsvColumn<Position>[] = [
   { header: 'position_id', value: (row) => row.position_id },
@@ -29,33 +34,76 @@ export const POSITION_CSV: CsvColumn<Position>[] = [
   { header: 'currency', value: (row) => row.instrument_currency },
 ]
 
-export const ORDER_CSV: CsvColumn<Order>[] = [
-  { header: 'order_id', value: (row) => row.order_id },
+/** A row's result: what came of an order, or of a run of attempts Saxo did not take. */
+export type RowResult = OrderResult | 'refused' | 'no_answer' | 'not_placed'
+
+const RUN_RESULTS: Record<'refused' | 'no_answer' | 'not_placed', { label: string; tone: 'warning' | 'danger' }> = {
+  refused: { label: REQUEST_RESULTS.refused.label, tone: 'danger' },
+  no_answer: { label: REQUEST_RESULTS.no_answer.label, tone: 'warning' },
+  not_placed: { label: 'Not placed', tone: 'danger' },
+}
+
+export const ROW_RESULT_FILTER = [
+  ...RESULT_FILTER,
+  ...(Object.keys(RUN_RESULTS) as (keyof typeof RUN_RESULTS)[]).map((value) => ({ value, label: RUN_RESULTS[value].label })),
+]
+
+export function rowResult(row: OrderRow): RowResult {
+  if (row.kind === 'order') return orderResult(row)
+  return row.outcome === 'error' ? 'not_placed' : row.outcome
+}
+
+function rowTookMs(row: OrderRow): number | null {
+  return row.kind === 'order' ? tookMs(row) : runTookMs(row)
+}
+
+/** For an order: what Saxo said when it did not take a request about it (a cancellation, say). */
+function firstRefusal(row: OrderRow) {
+  if (row.kind === 'refusal') return row
+  return (row.requests ?? []).find((request) => request.outcome && request.outcome !== 'accepted') ?? null
+}
+
+export const ORDER_CSV: CsvColumn<OrderRow>[] = [
+  { header: 'order_id', value: (row) => (row.kind === 'order' ? row.order_id : null) },
   { header: 'position_id', value: (row) => row.position_id },
-  { header: 'time', value: (row) => row.order_time },
+  { header: 'time', value: (row) => (row.kind === 'order' ? row.order_time : row.first_at) },
   { header: 'direction', value: (row) => row.action },
   { header: 'side', value: (row) => row.buy_sell },
   { header: 'type', value: (row) => row.order_type },
   { header: 'instrument', value: (row) => row.instrument_name },
   { header: 'quantity', value: (row) => row.order_amount },
   { header: 'price', value: (row) => row.instrument_price },
-  { header: 'cost', value: (row) => row.order_cost },
+  { header: 'cost', value: (row) => (row.kind === 'order' ? row.order_cost : null) },
   { header: 'currency', value: (row) => row.instrument_currency },
-  { header: 'result', value: (row) => orderResult(row) },
-  { header: 'sent_at', value: (row) => row.sent_at },
-  { header: 'accepted_at', value: (row) => row.accepted_at },
+  { header: 'result', value: (row) => rowResult(row) },
+  { header: 'sent_at', value: (row) => (row.kind === 'order' ? row.sent_at : row.first_at) },
+  { header: 'accepted_at', value: (row) => (row.kind === 'order' ? row.accepted_at : null) },
   // Saxo's clock: the fill for a buy, the closure for a sell.
   {
     header: 'saxo_time',
     value: (row) =>
-      purposeOf(row) === 'open' ? row.position?.execution_time_open : row.position?.execution_time_close,
+      row.kind !== 'order'
+        ? null
+        : purposeOf(row) === 'open'
+          ? row.position?.execution_time_open
+          : row.position?.execution_time_close,
   },
-  { header: 'seen_at', value: (row) => row.confirmed_at },
-  { header: 'gave_up_at', value: (row) => row.gave_up_at },
-  { header: 'looks', value: (row) => row.lookups },
-  { header: 'took_ms', value: (row) => tookMs(row) },
-  { header: 'cancel_accepted', value: (row) => (row.cancel_accepted == null ? null : row.cancel_accepted ? 'yes' : 'no') },
-  { header: 'detail', value: (row) => row.detail },
+  { header: 'seen_at', value: (row) => (row.kind === 'order' ? row.confirmed_at : null) },
+  { header: 'gave_up_at', value: (row) => (row.kind === 'order' ? row.gave_up_at : null) },
+  { header: 'looks', value: (row) => (row.kind === 'order' ? row.lookups : null) },
+  { header: 'took_ms', value: (row) => rowTookMs(row) },
+  {
+    header: 'cancel_accepted',
+    value: (row) =>
+      row.kind !== 'order' || row.cancel_accepted == null ? null : row.cancel_accepted ? 'yes' : 'no',
+  },
+  { header: 'detail', value: (row) => (row.kind === 'order' ? row.detail : row.reason) },
+  // Requests sent to Saxo: how many, and what Saxo said when it did not take one.
+  { header: 'requests', value: (row) => (row.kind === 'order' ? (row.requests?.length ?? null) : row.requests_total) },
+  { header: 'last_attempt_at', value: (row) => (row.kind === 'order' ? null : row.last_at) },
+  { header: 'http_status', value: (row) => firstRefusal(row)?.http_status },
+  { header: 'saxo_code', value: (row) => firstRefusal(row)?.error_code },
+  { header: 'saxo_message', value: (row) => firstRefusal(row)?.error_message },
 ]
 
 const DIRECTION_FILTER = [
@@ -63,11 +111,12 @@ const DIRECTION_FILTER = [
   { label: 'Short', value: 'short' },
 ]
 
-function instrumentCell(name: string | null, symbol: string | null) {
+function instrumentCell(name: string | null, symbol: string | null, below?: ReactNode) {
   return (
     <div className="min-w-0">
       <p className="max-w-[22rem] truncate font-medium text-foreground">{name ?? '—'}</p>
       {symbol && <p className="text-xs text-muted-foreground">{symbol}</p>}
+      {below}
     </div>
   )
 }
@@ -91,7 +140,14 @@ export function positionColumns(
     header: 'Instrument',
     accessorKey: 'instrument_name',
     sortable: true,
-    cell: ({ row }) => instrumentCell(row.instrument_name, row.instrument_symbol),
+    cell: ({ row }) =>
+      instrumentCell(
+        row.instrument_name,
+        row.instrument_symbol,
+        view === 'open' && row.sell_refusals ? (
+          <SellRefused positionId={row.position_id} refusals={row.sell_refusals} timeZone={timeZone} />
+        ) : null,
+      ),
   }
   const direction: ColumnDef<Position> = {
     id: 'action',
@@ -252,8 +308,28 @@ export function positionColumns(
   ]
 }
 
-/** What came of an order, and the position it gave or closed, as a link to it. */
-function resultCell(order: Order) {
+/** What came of an order, or of a run Saxo did not take, and the position it was about, as a link to it. */
+function resultCell(row: OrderRow) {
+  if (row.kind === 'refusal') {
+    return (
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <Badge tone={RUN_RESULTS[rowResult(row) as keyof typeof RUN_RESULTS].tone}>{runLabel(row)}</Badge>
+        {row.position_id && (
+          <Link
+            to={positionLink(row.position_id)}
+            className="font-mono text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+            aria-label={`Position ${row.position_id}`}
+          >
+            {row.position_id}
+          </Link>
+        )}
+      </div>
+    )
+  }
+  return orderResultCell(row)
+}
+
+function orderResultCell(order: Order) {
   const result = orderResult(order)
   const cancel =
     result === 'no_position' && order.cancel_accepted != null
@@ -278,15 +354,15 @@ function resultCell(order: Order) {
   )
 }
 
-export function orderColumns(timeZone: string): ColumnDef<Order>[] {
+export function orderColumns(timeZone: string): ColumnDef<OrderRow>[] {
   return [
     {
       id: 'time',
       header: 'Time',
-      // When it left; for the orders placed before that was kept, when it was written down.
-      accessorFn: (row) => row.sent_at ?? row.order_time,
+      // When it left (for the orders placed before that was kept, when it was written down); a run at its first attempt.
+      accessorFn: rowTime,
       sortable: true,
-      cell: ({ row }) => formatDateTime(row.sent_at ?? row.order_time, timeZone),
+      cell: ({ row }) => formatDateTime(rowTime(row), timeZone),
     },
     {
       id: 'instrument',
@@ -316,21 +392,22 @@ export function orderColumns(timeZone: string): ColumnDef<Order>[] {
     {
       id: 'result',
       header: 'Result',
-      accessorFn: orderResult,
+      accessorFn: rowResult,
       sortable: true,
       filterable: true,
-      filterOptions: RESULT_FILTER,
+      filterOptions: ROW_RESULT_FILTER,
       cell: ({ row }) => resultCell(row),
     },
     {
       id: 'took',
-      // From the order leaving to its position being seen open (or closed), or to the giving up.
+      // From the order leaving to its position being seen open (or closed), or to the giving up;
+      // for a run, from its first attempt to Saxo's last answer.
       header: 'Took',
-      accessorFn: tookMs,
+      accessorFn: rowTookMs,
       sortable: true,
       align: 'right',
       cell: ({ row }) => {
-        const took = tookMs(row)
+        const took = rowTookMs(row)
         return <span className="tabular-nums">{took == null ? '—' : formatWait(took)}</span>
       },
     },
@@ -357,22 +434,31 @@ export function orderColumns(timeZone: string): ColumnDef<Order>[] {
       accessorKey: 'order_type',
       sortable: true,
       defaultHidden: true,
-      cell: ({ row }) => [row.order_type, row.order_kind].filter(Boolean).join(' · ') || '—',
+      cell: ({ row }) =>
+        [row.order_type, row.kind === 'order' ? row.order_kind : null].filter(Boolean).join(' · ') || '—',
     },
     {
       id: 'cost',
       header: 'Cost',
-      accessorKey: 'order_cost',
+      accessorFn: (row) => (row.kind === 'order' ? row.order_cost : null),
       sortable: true,
       align: 'right',
       defaultHidden: true,
-      cell: ({ row }) => formatMoney(row.order_cost, row.instrument_currency),
+      cell: ({ row }) => formatMoney(row.kind === 'order' ? row.order_cost : null, row.instrument_currency),
     },
     {
       id: 'order_id',
       header: 'Order',
-      accessorKey: 'order_id',
-      cell: ({ row }) => <span className="font-mono text-xs text-muted-foreground">{row.order_id}</span>,
+      accessorFn: (row) => (row.kind === 'order' ? row.order_id : null),
+      // Saxo gave a run no order: what it has instead is the number of attempts.
+      cell: ({ row }) =>
+        row.kind === 'order' ? (
+          <span className="font-mono text-xs text-muted-foreground">{row.order_id}</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {row.requests_total === 1 ? '1 request' : `${formatNumber(row.requests_total)} requests`}
+          </span>
+        ),
     },
   ]
 }

@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { MemoryRouter } from 'react-router'
 
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { Position } from '@/lib/types'
@@ -122,5 +123,52 @@ describe('unrealised profit and loss', () => {
   it('is unknown until the monitor has seen a price', () => {
     expect(unrealisedProfitLoss({ ...CLOSED, live_bid: null } as Position)).toBeNull()
     expect(unrealisedProfitLoss({ ...CLOSED, live_bid: 8.5, position_amount: null } as Position)).toBeNull()
+  })
+})
+
+
+describe('an open position whose sell Saxo does not take', () => {
+  function renderOpen(position: Position) {
+    render(
+      <MemoryRouter>
+        <AdvancedDataTable<Position>
+          title="Positions"
+          data={[position]}
+          columns={positionColumns('Europe/Paris', 'open', { ...OPTIONS, canClose: false })}
+          getRowId={(row) => row.position_id}
+          defaultViewMode="table"
+          selectable={false}
+          emptyTitle="No open position"
+        />
+      </MemoryRouter>,
+    )
+  }
+
+  const OPEN = { ...CLOSED, position_status: 'Open', execution_time_close: null, live_bid: 8.0 } as Position
+
+  it('says so under its name, how often and when last, with a way to the attempts', () => {
+    renderOpen({
+      ...OPEN,
+      sell_refusals: {
+        count: 37,
+        first_at: '2026-10-12T08:02:11Z',
+        last_at: '2026-10-12T08:04:29Z',
+        outcome: 'refused',
+        http_status: 400,
+        error_code: 'OtherError',
+        error_message: 'À ce stade, seuls des ordres limites sont autorisés',
+      },
+    })
+
+    const marker = screen.getByRole('link', { name: /^Sell refused ×37 · 10:04:29/ })
+    expect(marker).toHaveAttribute('href', '/orders?find=5002')
+    expect(marker).toHaveAttribute('title', expect.stringContaining('“À ce stade, seuls des ordres limites sont autorisés”'))
+    expect(marker).toHaveAccessibleName(expect.stringContaining('It is still open.'))
+  })
+
+  it('says nothing more while Saxo takes its sells', () => {
+    renderOpen({ ...OPEN, sell_refusals: null })
+
+    expect(screen.queryByText(/Sell refused/)).not.toBeInTheDocument()
   })
 })

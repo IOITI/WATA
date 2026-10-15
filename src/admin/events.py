@@ -1,6 +1,7 @@
 """
-Live events for the interface (positions opening and closing, a service going
-down, a signal being decided, the Saxo token needing a new authorisation).
+Live events for the interface (positions opening and closing, Saxo refusing to
+sell one, a service going down, a signal being decided, the Saxo token needing
+a new authorisation).
 
 The admin has nothing pushing to it: a watcher looks at the same sources the
 pages read, on a timer, and publishes what changed since its previous look. It
@@ -9,6 +10,7 @@ only runs while a browser is listening.
 
 import asyncio
 import logging
+import time
 
 from starlette.concurrency import run_in_threadpool
 
@@ -21,6 +23,8 @@ WATCH_INTERVAL_SECONDS = 3.0
 # Health asks every service: less often than the database.
 HEALTH_EVERY_N_ROUNDS = 5
 WATCH_ROUND_TIMEOUT_SECONDS = 20.0
+# A sell Saxo keeps refusing is retried about once a second: announced at most this often, with the count since.
+REFUSAL_ALERT_EVERY_SECONDS = 60.0
 
 
 class EventHub:
@@ -64,14 +68,24 @@ def _position_label(position: dict) -> dict:
     }
 
 
+def _refusals(position: dict) -> dict:
+    """What Saxo did not take of a position's sells (``AdminQueries.open_positions``), empty when nothing."""
+    refusals = position.get("sell_refusals")
+    return refusals if isinstance(refusals, dict) else {}
+
+
 class StateWatcher:
     """Publishes on ``hub`` what changed between two looks at the system."""
 
-    def __init__(self, ctx, hub: EventHub):
+    def __init__(self, ctx, hub: EventHub, clock=time.monotonic):
         self._ctx = ctx
         self._hub = hub
+        self._clock = clock
         self._round = 0
         self._open_positions: dict[str, dict] | None = None
+        # Per open position: how many refused sells were already announced (or there when the page opened), and when.
+        self._refusals_told: dict[str, int] = {}
+        self._refusals_told_at: dict[str, float] = {}
         self._last_decision: str | None = None
         self._decisions_seen = False
         self._paused: bool | None = None
@@ -82,6 +96,8 @@ class StateWatcher:
         """Without a listener nothing is compared: the next one starts from what is true then."""
         self._round = 0
         self._open_positions = None
+        self._refusals_told = {}
+        self._refusals_told_at = {}
         self._decisions_seen = False
         self._paused = None
         self._service_statuses = None
@@ -92,7 +108,10 @@ class StateWatcher:
         previous = self._open_positions
         self._open_positions = positions
         if previous is None:
+            # What Saxo refused before the page opened is not news to it.
+            self._refusals_told = {pid: _refusals(position).get("count") or 0 for pid, position in positions.items()}
             return
+        self._watch_refusals(positions)
         for position_id in positions.keys() - previous.keys():
             self._hub.publish("position_opened", **_position_label(positions[position_id]))
         for position_id in previous.keys() - positions.keys():
@@ -105,6 +124,37 @@ class StateWatcher:
                 performance_percent=details.get("position_total_performance_percent"),
                 close_reason=details.get("position_close_reason"),
             )
+
+    def _watch_refusals(self, positions: dict[str, dict]) -> None:
+        """Saxo refused to sell an open position since the last look: say so, at most once a minute for each."""
+        now = self._clock()
+        for position_id in list(self._refusals_told):
+            if position_id not in positions:
+                del self._refusals_told[position_id]
+                self._refusals_told_at.pop(position_id, None)
+        for position_id, position in positions.items():
+            refusals = _refusals(position)
+            count = refusals.get("count") or 0
+            told = self._refusals_told.setdefault(position_id, 0)
+            if count <= told:
+                continue
+            told_at = self._refusals_told_at.get(position_id)
+            if told_at is not None and now - told_at < REFUSAL_ALERT_EVERY_SECONDS:
+                continue
+            self._hub.publish(
+                "order_refused",
+                **_position_label(position),
+                purpose="close",
+                count=count - told,
+                total=count,
+                outcome=refusals.get("outcome"),
+                http_status=refusals.get("http_status"),
+                error_code=refusals.get("error_code"),
+                error_message=refusals.get("error_message"),
+                last_at=refusals.get("last_at"),
+            )
+            self._refusals_told[position_id] = count
+            self._refusals_told_at[position_id] = now
 
     async def _watch_journal(self) -> None:
         entries = await self._ctx.queries.signal_journal(limit=20)

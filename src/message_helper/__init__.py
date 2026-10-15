@@ -20,8 +20,10 @@ from src.trade.exceptions import (
     WebSocketConnectionException,
     SaxoApiError,
     OrderPlacementError,
-    ConfigurationError
+    ConfigurationError,
+    saxo_error_parts,
 )
+from src.trade.order_tracker import without_account_keys
 
 
 class TelegramMessageComposer:
@@ -362,15 +364,16 @@ class TelegramMessageComposer:
                 message_body += f"\nStatus Code: {status_code}"
                 if saxo_error_details:
                     if isinstance(saxo_error_details, dict):
-                        error_code = saxo_error_details.get('ErrorCode', 'N/A')
-                        error_msg = saxo_error_details.get('Message', str(saxo_error_details))  # Fallback
-                        message_body += f"\nSaxo Code: {error_code}\nSaxo Msg: {error_msg}"
+                        # Where Saxo put them: under ErrorInfo when it refuses an order.
+                        error_code, error_msg = saxo_error_parts(saxo_error_details)
+                        message_body += f"\nSaxo Code: {error_code or 'N/A'}\nSaxo Msg: {error_msg or saxo_error_details}"
                     else:
                         message_body += f"\nSaxo Details: {saxo_error_details}"
+                # Without the account's keys: this message is kept in the Telegram service's log too.
                 if order_details:  # Specific for OrderPlacementError
-                    message_body += f"\nOrder Payload: {json.dumps(order_details, indent=2)}"
+                    message_body += f"\nOrder Payload: {json.dumps(without_account_keys(order_details), indent=2)}"
                 elif request_details:  # Generic request details
-                    message_body += f"\nRequest Details: {json.dumps(request_details, indent=2)}"
+                    message_body += f"\nRequest Details: {json.dumps(without_account_keys(request_details), indent=2)}"
 
 
             elif isinstance(error, ConfigurationError):

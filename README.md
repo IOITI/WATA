@@ -167,6 +167,7 @@ PostgreSQL 16 is the primary runtime database. The application uses an `asyncpg`
 
 - **Order tracking**: Orders and execution details
 - **Order follow-up**: for each order Saxo accepted, when it left, when Saxo answered and when its position was seen open or closed, or when the service gave up (`order_execution`, written in the background for the admin interface)
+- **Requests to Saxo**: every request sent to Saxo's order endpoint (an order placed, orders cancelled, a protective stop), accepted or not, with what was sent (without the account's keys), why it was sent, and Saxo's answer: its HTTP status, its code, its message, its body as received (`order_request`, written in the background too; nothing trades on it)
 - **Position management**: Open and closed positions, including profit/loss data
 - **Performance analytics**: Trade performance and daily statistics
 - **DuckDB migration**: `src/database/migration.py` imports existing DuckDB data into PostgreSQL. DuckDB is no longer used by the live trading services.
@@ -399,6 +400,9 @@ An optional web interface for the operator, served on its own domain or on a por
   - *accepted* to *seen by WATA* also holds WATA's own waits between two looks (a look at once, then after 0.1 s, 0.2 s, 0.4 s...), so it is an upper bound.
 
   An order whose position never shows is cancelled once the trader's patience runs out (`trade.config.general.retry_config.max_retries`, about ten seconds at most); the page then gives Saxo's answer to that cancellation. Orders placed before v0.14.0 have none of these moments.
+- **Orders Saxo did not take**: a refused order has no id at Saxo, but WATA keeps every request it sends and Saxo's answer (since v0.19.0). The attempts Saxo did not take for one position (or for one signal) are one row among the orders, at its first attempt: "Refused by Saxo ×37", for how long, and for which position. It opens onto what happened, Saxo's answers counted (its message as Saxo wrote it, in the account's language, with its code and the HTTP status), the order that went through after them, and every attempt with what was sent and what came back. The Result filter shows them alone, and the search finds them by the position's id or a word of Saxo's message. The sale that came after them shows the refusals as a step before it. An open position whose sell Saxo does not take says so on the Positions page, under its name; its details list every request about it; and a notice comes up in the admin, at most once a minute for each position. A request Saxo never answered (a timeout) is shown as such: Saxo may have taken the order all the same, and the account at Saxo says whether it did.
+
+  When an exit rule decides a sale and Saxo refuses it, the position monitor tries again at the next price update, about once a second, for as long as the rule holds: each attempt is a request of its own. WATA only sends market orders, so when Saxo accepts nothing but limit orders (in a volatile market, for one), every attempt is refused until it accepts market orders again.
 - **Report and exits**: the figures of the daily Telegram report with the account balance over time, and an analysis of how trades ended (by exit, hour of entry, holding time, and how much of the best level was given back).
 - **Signals, watchlist and execution timing**: what the Trader did with each signal and why, the turbo that would be bought now, and how long each step of a trade took.
 - **Data: Providers and Assets View**: where the prices WATA keeps come from, and every asset they hold.

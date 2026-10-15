@@ -34,6 +34,21 @@ describe('describeEvent', () => {
     expect(failed?.variant).toBe('error')
   })
 
+  it("says Saxo refused to sell a position, how often since the last notice, and Saxo's answer", () => {
+    const refused = describeEvent({
+      type: 'order_refused', position_id: '7779123400', instrument_name: 'TURBO LONG', count: 5, outcome: 'refused',
+      http_status: 400, error_code: 'OtherError', error_message: 'À ce stade, seuls des ordres limites sont autorisés',
+    })
+    const unanswered = describeEvent({ type: 'order_refused', position_id: '7779123400', count: 1, outcome: 'no_answer' })
+
+    expect(refused).toEqual({
+      title: 'Saxo refused a sell (×5)',
+      body: 'TURBO LONG · position 7779123400 · “À ce stade, seuls des ordres limites sont autorisés” (OtherError, HTTP 400)',
+      variant: 'error',
+    })
+    expect(unanswered).toEqual({ title: 'Saxo did not answer a sell', body: 'position 7779123400', variant: 'error' })
+  })
+
   it('distinguishes a service going down from one coming back', () => {
     const down = describeEvent({ type: 'service_status', name: 'Position monitor', status: 'down', detail: 'No consumer' })
     const up = describeEvent({ type: 'service_status', name: 'Position monitor', status: 'ok' })
@@ -102,6 +117,7 @@ describe('staleQueries', () => {
       expect.arrayContaining(['overview', 'positions', 'performance', 'exits', 'report']),
     )
     expect(staleQueries({ type: 'entries_paused' })).toEqual(['overview'])
+    expect(staleQueries({ type: 'order_refused' })).toEqual(['overview', 'positions', 'position', 'orders'])
     expect(staleQueries({ type: 'service_status' })).toEqual(['health', 'data-providers', 'data-provider'])
     expect(staleQueries({ type: 'backtest_finished' })).toEqual(['backtests', 'backtest'])
     expect(staleQueries({ type: 'prices_fetch_finished' })).toEqual([

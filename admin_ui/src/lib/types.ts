@@ -38,6 +38,19 @@ export interface Position {
   live_bid?: number | null
   live_performance_percent?: number | null
   live_observed_at?: string | null
+  /** Open positions only: the sells of it Saxo did not take, null when there were none. */
+  sell_refusals?: SellRefusals | null
+}
+
+/** How often Saxo did not take the sell of an open position, and its latest answer. */
+export interface SellRefusals {
+  count: number
+  first_at: string | null
+  last_at: string | null
+  outcome: RequestOutcome | null
+  http_status: number | null
+  error_code: string | null
+  error_message: string | null
 }
 
 export interface Order {
@@ -83,6 +96,101 @@ export interface Order {
   position?: OrderPosition | null
   /** The signal a buy came from, when the journal knows it. */
   signal?: OrderSignal | null
+  /** The requests sent to Saxo for it: the one that placed it, the cancellations about it. Absent before they were kept. */
+  requests?: OrderRequest[]
+}
+
+export type RequestOutcome = 'accepted' | 'refused' | 'no_answer' | 'error'
+
+/** One request sent to Saxo's order endpoint and what Saxo answered (src/trade/order_tracker.py). */
+export interface OrderRequest {
+  request_id: string
+  /** When it left, and when the answer (or the failure) came back: the server's clock. */
+  requested_at: string | null
+  answered_at: string | null
+  recorded_by: string | null
+  operation: 'place' | 'cancel' | null
+  purpose: 'open' | 'close' | 'stop' | null
+  position_id: string | null
+  signal_uuid: string | null
+  action: string | null
+  /** Why WATA sent it: the exit rule, "Explicit Close (...)"... */
+  reason: string | null
+  instrument_uic: number | null
+  asset_type: string | null
+  instrument_name: string | null
+  instrument_symbol: string | null
+  instrument_currency: string | null
+  buy_sell: string | null
+  amount: number | null
+  order_type: string | null
+  /** The bid (a sell) or the ask (a buy) it was decided on. */
+  price_seen: number | null
+  outcome: RequestOutcome | null
+  /** The order Saxo gave, or the orders a cancellation names. */
+  order_id: string | null
+  http_status: number | null
+  error_code: string | null
+  error_message: string | null
+  /** The JSON sent, without the account's keys, and Saxo's answer as received. */
+  request_body: string | null
+  response_body: string | null
+}
+
+/** One of Saxo's answers within a run, and how many times it was given. */
+export interface RequestAnswer {
+  outcome: RequestOutcome | null
+  http_status: number | null
+  error_code: string | null
+  error_message: string | null
+  count: number
+  first_at: string
+  last_at: string
+}
+
+/**
+ * Attempts made with one intent (selling a position, buying for a signal) that
+ * Saxo did not take (src/admin/order_requests.py). Its fields that mean what an
+ * order's mean carry the order's names, so that a row of the Orders page reads both.
+ */
+export interface Refusal {
+  run_id: string
+  purpose: 'open' | 'close' | 'stop' | null
+  position_id: string | null
+  signal_uuid: string | null
+  action: string | null
+  reason: string | null
+  instrument_name: string | null
+  instrument_symbol: string | null
+  instrument_uic: number | null
+  instrument_currency: string | null
+  asset_type: string | null
+  buy_sell: string | null
+  order_amount: number | null
+  order_type: string | null
+  instrument_price: number | null
+  first_at: string
+  last_at: string
+  answered_at: string | null
+  count: number
+  outcome: 'refused' | 'no_answer' | 'error'
+  /** Saxo's latest answer. */
+  http_status: number | null
+  error_code: string | null
+  error_message: string | null
+  recorded_by: string[]
+  answers: RequestAnswer[]
+  /** The latest attempts, oldest first, with the cancellations made on the way: `requests_total` attempts in all. */
+  requests: OrderRequest[]
+  requests_total: number
+  /** The order Saxo took after them, if any. */
+  followed_by: { order_id: string | null; requested_at: string } | null
+  position?: OrderPosition | null
+  signal?: (OrderSignal & { outcome: string | null; reason: string | null }) | null
+}
+
+export interface OrdersPage extends Page<Order> {
+  refusals?: Refusal[]
 }
 
 export type OrderPosition = Pick<
@@ -114,6 +222,9 @@ export interface Page<T> {
 export interface PositionDetail {
   position: Position
   orders: Order[]
+  /** Every request about it, oldest first: the latest ones when there are more than `requests_total` shows. */
+  requests?: OrderRequest[]
+  requests_total?: number
 }
 
 export interface DailyPerformance {

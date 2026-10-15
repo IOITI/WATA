@@ -154,12 +154,13 @@ def test_open_positions_carry_the_value_the_monitor_last_saw():
 def test_tables_not_created_yet_read_as_empty(call):
     db = FakeDb(
         rows={"FROM turbo_data_position": [OPEN]},
-        missing_tables=("position_live_value", "signal_journal", "account_balance_history"),
+        missing_tables=("position_live_value", "signal_journal", "account_balance_history", "order_request"),
     )
 
     result = asyncio.run(getattr(AdminQueries(db, "Europe/Paris"), call)())
 
-    assert result == ([{**OPEN, "live_bid": None, "live_performance_percent": None, "live_observed_at": None}]
+    assert result == ([{**OPEN, "live_bid": None, "live_performance_percent": None, "live_observed_at": None,
+                        "sell_refusals": None}]
                       if call == "open_positions" else [])
 
 
