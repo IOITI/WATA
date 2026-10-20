@@ -11,8 +11,10 @@ import asyncio
 import json
 import logging
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
+
+import pytz
 
 from src.admin.analysis import summarise_exits
 from src.admin.errors import DatabaseUnavailable
@@ -58,6 +60,14 @@ _ORDER_POSITION_COLUMNS = (
     "position_profit_loss", "position_total_performance_percent", "execution_time_open",
     "execution_time_close", "position_close_reason",
 )
+# A signal of the TA engine, and what the trader made of it once sent.
+_TA_SIGNAL_COLUMNS = (
+    "id", "rule_id", "rule_name", "script_id", "script_version", "asset", "side", "bars", "bar_time",
+    "bar_closed_at", "alert_key", "alert_title", "alert_message", "action", "indice", "confidence", "mode",
+    "raised_at", "outcome", "sent_at", "http_status", "signal_uuid", "detail",
+)
+_TA_TRADER_COLUMNS = ("decided_at", "outcome", "reason", "position_id")
+
 # The signal an order came from.
 _ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp", "decided_at")
 # The signal behind a buy Saxo refused: what the trader made of it too.
@@ -124,6 +134,15 @@ class LazyDatabase:
 
     async def execute(self, query: str, *args):
         return await self._call("execute", query, *args)
+
+    async def copy_from_query(self, query: str, *args, output, **options):
+        try:
+            async with self._connect_lock:
+                await self._conn_mgr.connect()
+            return await self._conn_mgr.copy_from_query(query, *args, output=output, **options)
+        except Exception as e:
+            logger.error(f"PostgreSQL copy failed: {e}")
+            raise DatabaseUnavailable(str(e)) from e
 
     async def close(self):
         await self._conn_mgr.close()
@@ -293,6 +312,20 @@ class AdminQueries:
 
     async def ping(self) -> bool:
         return await self.db.fetchval("SELECT 1") == 1
+
+    async def copy_csv(self, query: str, *args, output, timeout: float | None = None) -> bool:
+        """
+        The rows of ``query`` as CSV with a header, written to ``output`` (a
+        coroutine function given each chunk). False when its table does not
+        exist yet: a service that creates it has not run with this version.
+        """
+        try:
+            await self.db.copy_from_query(query, *args, output=output, format="csv", header=True, timeout=timeout)
+        except DatabaseUnavailable as e:
+            if _is_missing_table(e):
+                return False
+            raise
+        return True
 
     # ── today, as the trading rules see it ──
 
@@ -609,7 +642,7 @@ class AdminQueries:
         rows = await self._fetch_optional(
             f"""
             SELECT extract(epoch FROM ts)::bigint AS t,
-                   {opened} AS open, {high} AS high, {low} AS low, {closed} AS close
+                   {opened} AS open, {high} AS high, {low} AS low, {closed} AS close, updates
             FROM {table}
             WHERE instrument_id = $1 AND ts >= $2 AND ts < $3{present}
             ORDER BY ts
@@ -617,14 +650,14 @@ class AdminQueries:
             """,
             instrument_id, start, end, limit,
         )
-        return [(row["t"], row["open"], row["high"], row["low"], row["close"]) for row in rows]
+        return [(row["t"], row["open"], row["high"], row["low"], row["close"], row["updates"]) for row in rows]
 
     async def price_series(self, instrument_id: int, start: datetime, end: datetime, side: str, limit: int) -> list[tuple]:
         """
         The ten-second bars of one side of an instrument in [start, end), oldest
-        first, as (epoch seconds, open, high, low, close). Bars without that
-        side (an instrument with no ask) are left out. Read a page at a time:
-        pass the moment after the last row as ``start`` for the next.
+        first, as (epoch seconds, open, high, low, close, quote changes). Bars
+        without that side (an instrument with no ask) are left out. Read a page
+        at a time: pass the moment after the last row as ``start`` for the next.
         """
         return await self._series("saxo", instrument_id, start, end, side, limit)
 
@@ -664,6 +697,88 @@ class AdminQueries:
             target, start, end,
         )
         return [_clean_row(row) for row in rows]
+
+    # ── what a backtest can be run on (src/backtest) ──
+
+    async def backtest_turbo_days(self, indice: str, first_day: date, last_day: date) -> list[dict]:
+        """
+        By local day and direction, how many turbos of the indice the recorder
+        kept bars of, and the first and last of those bars. Each turbo's bars
+        are reached through their primary key: two probes per turbo and day.
+        """
+        rows = await self._fetch_optional(
+            """
+            WITH days AS (
+                SELECT d::date AS day,
+                       (d::timestamp AT TIME ZONE $2) AS day_start,
+                       ((d + interval '1 day')::timestamp AT TIME ZONE $2) AS day_end
+                FROM generate_series($3::date, $4::date, interval '1 day') AS d
+            )
+            SELECT days.day, i.direction, count(*) AS turbos, min(b.first_ts) AS first_ts, max(b.last_ts) AS last_ts
+            FROM days
+            JOIN price_instrument i
+              ON i.role = 'turbo' AND i.indice = $1 AND i.barrier IS NOT NULL
+             AND i.first_seen_at < days.day_end AND i.last_seen_at >= days.day_start - interval '1 day'
+            CROSS JOIN LATERAL (
+                SELECT (SELECT ts FROM price_bar_10s
+                        WHERE instrument_id = i.id AND ts >= days.day_start AND ts < days.day_end
+                        ORDER BY ts ASC LIMIT 1) AS first_ts,
+                       (SELECT ts FROM price_bar_10s
+                        WHERE instrument_id = i.id AND ts >= days.day_start AND ts < days.day_end
+                        ORDER BY ts DESC LIMIT 1) AS last_ts
+            ) b
+            WHERE b.first_ts IS NOT NULL
+            GROUP BY days.day, i.direction
+            ORDER BY days.day, i.direction
+            """,
+            indice, self.timezone, first_day, last_day,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def backtest_recorder_days(self, first_day: date, last_day: date) -> list[dict]:
+        """By local day, how many ten seconds the price recorder listened to quotes in."""
+        start, end = self._local_bounds(first_day, last_day)
+        rows = await self._fetch_optional(
+            """
+            SELECT (ts AT TIME ZONE $3)::date AS day, count(*) FILTER (WHERE feed_ok) AS listened,
+                   min(ts) AS first_ts, max(ts) AS last_ts
+            FROM price_recorder_coverage
+            WHERE ts >= $1 AND ts < $2
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            start, end, self.timezone,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def backtest_asset_days(self, provider: str, instrument_id: int, first_day: date, last_day: date) -> list[dict]:
+        """By local day, the ten-second bars of one instrument of the recorder or of the Capital.com feed."""
+        table = {"saxo": "price_bar_10s", "capital": "capital_bar_10s"}[provider]
+        start, end = self._local_bounds(first_day, last_day)
+        rows = await self._fetch_optional(
+            f"""
+            SELECT (ts AT TIME ZONE $4)::date AS day, count(*) AS bars
+            FROM {table}
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            instrument_id, start, end, self.timezone,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def last_balance(self) -> float | None:
+        """The account's value at the last daily report: what a backtest's money starts from."""
+        rows = await self._fetch_optional(
+            "SELECT total_value FROM account_balance_history WHERE total_value IS NOT NULL ORDER BY date_day DESC LIMIT 1"
+        )
+        return float(rows[0]["total_value"]) if rows else None
+
+    def _local_bounds(self, first_day: date, last_day: date) -> tuple[datetime, datetime]:
+        zone = pytz.timezone(self.timezone)
+        start = zone.localize(datetime.combine(first_day, datetime.min.time()))
+        end = zone.localize(datetime.combine(last_day + timedelta(days=1), datetime.min.time()))
+        return start, end
 
     # ── the Capital.com feed (src/capital_feed) ──
 
@@ -782,6 +897,99 @@ class AdminQueries:
         )
         return [_clean_row(row) for row in rows]
 
+    # ── the TA engine's signals (written by src/ta_engine, absent until it ran) ──
+
+    async def ta_signals(
+        self,
+        start: date | None = None,
+        end: date | None = None,
+        rule_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """
+        The signals the TA engine raised between two days (both included), newest
+        first, each with what the trader made of it when it was sent (``trader``).
+        """
+        args: list[Any] = []
+        conditions = self._date_range_conditions("s.raised_at", start, end, args)
+        if rule_id is not None:
+            args.append(rule_id)
+            conditions.append(f"s.rule_id = ${len(args)}")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(f"s.{column}" for column in _TA_SIGNAL_COLUMNS)},
+                   {", ".join(f"j.{column} AS trader__{column}" for column in _TA_TRADER_COLUMNS)}
+            FROM ta_signal s
+            LEFT JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            {where}
+            ORDER BY s.raised_at DESC, s.id DESC
+            LIMIT {min(max(limit, 1), MAX_ROWS)}
+            """,
+            *args,
+        )
+        signals = []
+        for row in rows:
+            signal = _clean_row(row)
+            trader = {key[len("trader__"):]: signal.pop(key) for key in list(signal) if key.startswith("trader__")}
+            signal["trader"] = trader if trader["decided_at"] is not None else None
+            signals.append(signal)
+        return signals
+
+    async def ta_other_signals(self, indice: str, day: date) -> list[dict]:
+        """
+        The signals the trader received for ``indice`` on ``day``, oldest first,
+        except those the TA engine sent: TradingView's, for setting beside WATA's.
+        """
+        args: list[Any] = [indice]
+        conditions = ["j.indice = $1", *self._date_range_conditions("j.decided_at", day, day, args)]
+        columns = "j.signal_uuid, j.action, j.indice, j.confidence, j.signal_timestamp, j.received_timestamp, " \
+                  "j.decided_at, j.outcome, j.reason, j.position_id"
+        query = f"""
+            SELECT {columns}
+            FROM signal_journal j
+            WHERE {' AND '.join(conditions)} {{wata}}
+            ORDER BY j.signal_timestamp ASC NULLS LAST, j.signal_uuid ASC
+            LIMIT {MAX_ROWS}
+        """
+        try:
+            rows = await self.db.fetch(
+                query.format(wata="AND NOT EXISTS (SELECT 1 FROM ta_signal s WHERE s.signal_uuid = j.signal_uuid)"), *args,
+            )
+        except DatabaseUnavailable as e:
+            if not _is_missing_table(e):
+                raise
+            # The engine never ran: none of them is WATA's.
+            rows = await self._fetch_optional(query.format(wata=""), *args)
+        return [_clean_row(row) for row in rows]
+
+    async def ta_engine_state(self) -> dict | None:
+        """What the TA engine last wrote of itself; None when it never ran."""
+        rows = await self._fetch_optional(
+            "SELECT updated_at, started_at, version, state, detail, figures FROM ta_engine_state WHERE id = 1"
+        )
+        if not rows:
+            return None
+        row = _clean_row(rows[0])
+        row["figures"] = _json_value(row.get("figures")) or {}
+        return row
+
+    async def ta_rule_states(self) -> dict[str, dict]:
+        """Each rule as the TA engine runs it, by rule id."""
+        rows = await self._fetch_optional(
+            """
+            SELECT rule_id, updated_at, state, detail, mode, script_version, bars, last_bar_time,
+                   last_alert_at, figures
+            FROM ta_rule_state
+            """
+        )
+        states = {}
+        for record in rows:
+            row = _clean_row(record)
+            row["figures"] = _json_value(row.get("figures")) or {}
+            states[row.pop("rule_id")] = row
+        return states
+
     # ── live values, journal, balance (written by the trading services) ──
 
     async def live_values(self) -> dict[str, dict]:
@@ -865,6 +1073,12 @@ class AdminQueries:
         )
         return [_clean_row(row) for row in rows]
 
+    async def execution_rows(self, start: datetime, end: datetime) -> dict:
+        """What WATA's orders took and cost between two moments: the rows src/backtest/execution_calibration.py measures."""
+        from src.backtest.execution_calibration import read_rows
+
+        return await read_rows(self._fetch_optional, start, end)
+
     async def closed_positions(self, start: date | None = None, end: date | None = None) -> list[dict]:
         """The closed positions opened between two days (both included), oldest first, with what each was bought and sold at."""
         args: list[Any] = []
@@ -874,7 +1088,7 @@ class AdminQueries:
             f"""
             SELECT position_id, action, execution_time_open, execution_time_close,
                    position_open_price, position_close_price, position_total_performance_percent,
-                   position_max_performance_percent, position_close_reason, instrument_name
+                   position_max_performance_percent, position_close_reason, instrument_name, instrument_uic
             FROM turbo_data_position
             WHERE {' AND '.join(conditions)}
             ORDER BY execution_time_open ASC, position_id ASC

@@ -14,26 +14,15 @@ import { Checkbox } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay, formatPercent } from '@/lib/format'
+import { formatBytes, formatDateTime, formatDay, formatPercent } from '@/lib/format'
 import type { BacktestRunListed } from '@/lib/types'
 
-import { formatBytes, isActive, isSweep, runName, STATE_LABEL } from './model'
+import { comparable, isActive, sourceLabel, STATE_LABEL } from './model'
 import { BacktestsDisabled, StateBadge } from './parts'
-import { PricesPanel } from './PricesPanel'
-import { TurboPanel } from './TurboPanel'
+import { ResearchFiles } from './ResearchFiles'
+import { TurboModelPanel } from './TurboModelPanel'
 
-/** A run whose figures can be set beside another's: finished, and one backtest, not a sweep of them. */
-function isComparable(run: BacktestRunListed): boolean {
-  return run.status.state === 'done' && !isSweep(run)
-}
-
-const OLD_DAYS = 30
-
-function runColumns(
-  timezone: string,
-  selected: ReadonlySet<string>,
-  toggle: (runId: string) => void,
-): ColumnDef<BacktestRunListed>[] {
+function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (runId: string) => void): ColumnDef<BacktestRunListed>[] {
   return [
     {
       id: 'select',
@@ -42,33 +31,38 @@ function runColumns(
       cell: ({ row }) =>
         // A run that waits or runs can neither be compared nor removed.
         isActive(row.status.state) ? null : (
-          <Checkbox aria-label={`Select: ${runName(row)}`} checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
+          <Checkbox aria-label={`Select: ${row.name}`} checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
         ),
     },
     {
       id: 'run',
       header: 'Backtest',
-      // Searched by its name and by its tags.
-      accessorFn: (row) => [runName(row), ...(row.tags ?? [])].join(' '),
+      // Searched by its name, what it runs and its tags.
+      accessorFn: (row) => [row.name, sourceLabel(row), ...row.tags].join(' '),
       sortable: true,
       cell: ({ row }) => (
-        // A long name takes two lines, not the width the figures need.
-        <div className="min-w-0 max-w-80 whitespace-normal">
+        <div className="min-w-0 max-w-96 whitespace-normal">
           <Link to={`/backtests/${row.id}`} className="font-medium underline-offset-4 hover:underline">
-            {runName(row)}
+            {row.name}
           </Link>
+          {row.kind === 'sweep' && (
+            <Badge tone="neutral" className="ml-2">
+              Sweep
+            </Badge>
+          )}
+          <p className="text-xs text-muted-foreground">{sourceLabel(row)}</p>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span>
               {formatDay(row.from)} to {formatDay(row.to)}
             </span>
-            {row.tags?.map((tag) => (
+            {row.tags.map((tag) => (
               <Badge key={tag} tone="neutral">
                 {tag}
               </Badge>
             ))}
-            {(row.stale?.code || row.stale?.prices) && (
-              <span className="text-warning" title="The code or the prices changed since: it would come out otherwise today">
-                stale
+            {row.stale && (
+              <span className="text-warning" title="Made by other code than this admin's: it could come out otherwise today">
+                made with other code
               </span>
             )}
           </p>
@@ -87,7 +81,20 @@ function runColumns(
       header: 'State',
       accessorFn: (row) => STATE_LABEL[row.status.state],
       sortable: true,
-      cell: ({ row }) => <StateBadge status={row.status} />,
+      cell: ({ row }) => (
+        <div>
+          <StateBadge status={row.status} />
+          {row.position !== null && <p className="text-xs text-muted-foreground">number {row.position} in line</p>}
+        </div>
+      ),
+    },
+    {
+      id: 'days',
+      header: 'Days traded',
+      accessorFn: (row) => row.headline?.days_tested ?? null,
+      sortable: true,
+      align: 'right',
+      cell: ({ row }) => row.headline?.days_tested ?? '-',
     },
     {
       id: 'trades',
@@ -95,12 +102,15 @@ function runColumns(
       accessorFn: (row) => row.headline?.trades ?? null,
       sortable: true,
       align: 'right',
-      cell: ({ row }) => (
-        <div>
-          {row.headline?.trades ?? '-'}
-          {row.headline?.sample === 'too_few' && <p className="text-xs text-warning">too few to conclude</p>}
-        </div>
-      ),
+      cell: ({ row }) =>
+        row.kind === 'sweep' ? (
+          <span className="text-muted-foreground">{row.headline?.cells ?? '-'} combinations</span>
+        ) : (
+          <div>
+            {row.headline?.trades ?? '-'}
+            {row.headline?.sample === 'too_few' && <p className="text-xs text-warning">too few to conclude</p>}
+          </div>
+        ),
     },
     {
       id: 'win_rate',
@@ -119,6 +129,14 @@ function runColumns(
       cell: ({ row }) => <PnlValue value={row.headline?.total_percent} kind="percent" />,
     },
     {
+      id: 'money',
+      header: 'In money',
+      accessorFn: (row) => row.headline?.profit_loss ?? null,
+      sortable: true,
+      align: 'right',
+      cell: ({ row }) => <PnlValue value={row.headline?.profit_loss} kind="money" />,
+    },
+    {
       id: 'beaten',
       // The share of the same days traded with entries at random that did worse.
       header: 'Beats random',
@@ -126,14 +144,6 @@ function runColumns(
       sortable: true,
       align: 'right',
       cell: ({ row }) => formatPercent(row.headline?.beaten, false, 0),
-    },
-    {
-      id: 'drawdown',
-      header: 'Worst drawdown',
-      accessorFn: (row) => row.headline?.worst_drawdown ?? null,
-      sortable: true,
-      align: 'right',
-      cell: ({ row }) => <PnlValue value={row.headline?.worst_drawdown} kind="percent" />,
     },
   ]
 }
@@ -144,21 +154,17 @@ export function BacktestsPage() {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [removing, setRemoving] = useState(false)
-  // When the page was opened: what "older than" is counted from.
-  const [openedAt] = useState(() => Date.now())
+  const [clearing, setClearing] = useState(false)
 
   const runsQuery = useQuery({
     queryKey: ['backtests'],
     queryFn: api.backtests,
     enabled,
     // A run that waits or runs changes state by itself: follow it closely.
-    refetchInterval: (query) =>
-      query.state.data?.items.some((run) => isActive(run.status.state)) ? 2_000 : 30_000,
+    refetchInterval: (query) => (query.state.data?.items.some((run) => isActive(run.status.state)) ? 2_000 : 30_000),
   })
   const runs = runsQuery.data?.items
-
-  const storageQuery = useQuery({ queryKey: ['backtest-storage'], queryFn: api.backtestStorage, enabled, staleTime: 60_000 })
-  const storage = storageQuery.data
+  const storage = runsQuery.data?.storage
 
   const columns = useMemo(
     () =>
@@ -173,22 +179,23 @@ export function BacktestsPage() {
   )
   // A run removed meanwhile is no longer selected.
   const chosen = (runs ?? []).filter((run) => selected.has(run.id))
-  // No more than the chart of a comparison has colours for.
-  const comparable = chosen.filter(isComparable).map((run) => run.id)
-  const canCompare = comparable.length >= 2 && comparable.length <= MAX_COMPARED
-  const settled = (runs ?? []).filter((run) => !isActive(run.status.state))
-  const unfinished = settled.filter((run) => run.status.state !== 'done')
-  const old = settled.filter(
-    (run) => run.status.created_at && openedAt - Date.parse(run.status.created_at) > OLD_DAYS * 86_400_000,
-  )
+  const compared = comparable(runs ?? [], selected)
+  const canCompare = compared.length >= 2 && compared.length <= MAX_COMPARED
 
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtests'] })
   const removeMutation = useMutation({
     mutationFn: () => api.removeBacktests(chosen.map((run) => run.id)),
     onSuccess: (outcome) => {
-      void queryClient.invalidateQueries({ queryKey: ['backtests'] })
-      void queryClient.invalidateQueries({ queryKey: ['backtest-storage'] })
+      void refresh()
       setSelected(new Set(outcome.kept.map((entry) => entry.id)))
       if (outcome.kept.length === 0) setRemoving(false)
+    },
+  })
+  const clearMutation = useMutation({
+    mutationFn: api.removeFormerBacktests,
+    onSuccess: () => {
+      void refresh()
+      setClearing(false)
     },
   })
 
@@ -196,7 +203,7 @@ export function BacktestsPage() {
     <>
       <PageHeader
         title="Backtests"
-        description="A strategy, or the signals WATA received, replayed on prices of the past with WATA's own rules. Nothing here trades."
+        description="A Pine script, or the signals WATA received, traded as WATA trades on the turbos the price recorder kept. Nothing here trades."
         actions={
           enabled && (
             <>
@@ -217,9 +224,9 @@ export function BacktestsPage() {
                 size="sm"
                 leftIcon={<Columns3 className="size-3.5" />}
                 disabled={!canCompare}
-                onClick={() => navigate(`/backtests/compare?runs=${comparable.join(',')}`)}
+                onClick={() => navigate(`/backtests/compare?runs=${compared.map((run) => run.id).join(',')}`)}
               >
-                Compare{canCompare ? ` ${comparable.length}` : ''}
+                Compare{canCompare ? ` ${compared.length}` : ''}
               </Button>
               <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={() => navigate('/backtests/new')}>
                 New backtest
@@ -232,7 +239,7 @@ export function BacktestsPage() {
       {!enabled ? (
         <BacktestsDisabled />
       ) : (
-        <>
+        <div className="flex flex-col gap-6">
           <QueryState isPending={runsQuery.isPending} error={runsQuery.error} hasData={!!runs}>
             {runs && (
               <div className="flex flex-col gap-2">
@@ -240,7 +247,7 @@ export function BacktestsPage() {
                   title="Runs"
                   searchPlaceholder="Search…"
                   emptyTitle="No backtest yet"
-                  emptyDescription="Ask for one with “New backtest”. It needs prices: see below."
+                  emptyDescription="Ask for one with “New backtest”: a Pine script or the signals WATA received, on days the price recorder kept turbos."
                   data={runs}
                   columns={columns}
                   getRowId={(row) => row.id}
@@ -248,42 +255,40 @@ export function BacktestsPage() {
                   selectable={false}
                 />
                 <p className="text-xs text-muted-foreground">
-                  The figures are those of the middle leverage each run was made with. A run shows them all. “Beats
-                  random” is the share of the same days traded with entries at random that did worse: near 50%, the
-                  entries have shown nothing. Two to {MAX_COMPARED} finished backtests can be compared; a sweep shows
-                  its own combinations side by side.
+                  Every trade buys a turbo the price recorder kept, at its recorded ask, and sells it at its recorded bid.
+                  “Beats random” is the share of the same days traded with entries at random that did worse: near 50 %, the
+                  entries have shown nothing. Two to {MAX_COMPARED} finished runs can be compared.
                 </p>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
-                  {storage && (
+                {storage && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
                     <span>
-                      {storage.runs.count} run{storage.runs.count === 1 ? '' : 's'} take {formatBytes(storage.runs.bytes)}{' '}
-                      on disk; {storage.prices.days} day{storage.prices.days === 1 ? '' : 's'} of prices,{' '}
-                      {formatBytes(storage.prices.bars_bytes + storage.prices.fetched_bytes)}.
+                      {storage.runs.count} run{storage.runs.count === 1 ? '' : 's'} take {formatBytes(storage.runs.bytes)} on disk.
                     </span>
-                  )}
-                  {unfinished.length > 0 && (
-                    <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(unfinished.map((run) => run.id)))}>
-                      Select the {unfinished.length} failed or stopped
-                    </Button>
-                  )}
-                  {old.length > 0 && (
-                    <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(old.map((run) => run.id)))}>
-                      Select the {old.length} older than {OLD_DAYS} days
-                    </Button>
-                  )}
-                  {selected.size > 0 && (
-                    <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-                      Select none
-                    </Button>
-                  )}
-                </div>
+                    {storage.former.bytes > 0 && (
+                      <>
+                        <span>
+                          The former backtester left {storage.former.count} run{storage.former.count === 1 ? '' : 's'} (
+                          {formatBytes(storage.former.bytes)}), which nothing reads any more.
+                        </span>
+                        <Button variant="ghost" size="sm" onClick={() => setClearing(true)}>
+                          Remove them
+                        </Button>
+                      </>
+                    )}
+                    {selected.size > 0 && (
+                      <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                        Select none
+                      </Button>
+                    )}
+                  </div>
+                )}
+                <ResearchFiles />
               </div>
             )}
           </QueryState>
 
-          <PricesPanel />
-          <TurboPanel />
-        </>
+          <TurboModelPanel />
+        </div>
       )}
 
       <SettleModal
@@ -303,12 +308,12 @@ export function BacktestsPage() {
         }
       >
         <p className="text-sm leading-relaxed text-text-secondary">
-          Their figures, trades and days are deleted from the server. The prices they ran on are kept.
+          Their signals, trades and days are deleted from the server. The recorded prices they ran on are kept.
         </p>
         <ul className="mt-3 flex max-h-48 flex-col gap-1 overflow-auto text-sm">
           {chosen.map((run) => (
             <li key={run.id} className="truncate">
-              {runName(run)}
+              {run.name}
             </li>
           ))}
         </ul>
@@ -320,6 +325,33 @@ export function BacktestsPage() {
         {removeMutation.data && removeMutation.data.kept.length > 0 && (
           <p role="alert" className="mt-2 text-sm text-warning">
             {removeMutation.data.kept.length} could not be removed: {removeMutation.data.kept[0].reason}.
+          </p>
+        )}
+      </SettleModal>
+
+      <SettleModal
+        open={clearing}
+        onClose={() => setClearing(false)}
+        title="Remove the former backtester's runs?"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setClearing(false)}>
+              Keep them
+            </Button>
+            <Button variant="destructive" size="sm" isLoading={clearMutation.isPending} onClick={() => clearMutation.mutate()}>
+              Remove
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-text-secondary">
+          The runs of the backtester this one replaced, on a model of the turbo, and its measures of the turbo. Nothing
+          reads them any more. The prices downloaded from Dukascopy are kept.
+        </p>
+        {clearMutation.error && (
+          <p role="alert" className="mt-2 text-sm text-negative">
+            {clearMutation.error.message}
           </p>
         )}
       </SettleModal>

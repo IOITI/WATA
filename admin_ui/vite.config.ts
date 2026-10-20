@@ -4,9 +4,24 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
+import { velaPineWorker } from './vite/velaPineWorker.ts'
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), velaPineWorker()],
+  // The Pine worker of the Technical Analysis pages: one classic file whose name the
+  // admin recognises, so that it gets the only policy allowing PineTS to compile
+  // (src/admin/app.py, WORKER_PATH). Any other worker keeps an ordinary name, and
+  // with it the pages' policy.
+  worker: {
+    format: 'iife',
+    rolldownOptions: {
+      output: {
+        entryFileNames: (chunk) =>
+          chunk.name === 'pine.worker' ? 'assets/pine-worker-[hash].js' : 'assets/[name]-[hash].js',
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

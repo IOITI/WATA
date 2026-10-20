@@ -1,0 +1,7 @@
+# The research lab's own needs (lab/), installed beside requirements.txt by lab/setup.sh
+# into .venv-lab on a research machine; never in the image. Each one at one exact version,
+# as requirements.txt is.
+pgserver==0.1.4
+fasteners==0.20
+platformdirs==4.13.5
+psutil==7.2.2

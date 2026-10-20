@@ -154,6 +154,11 @@ class PostgresConnectionManager:
     async def fetchval(self, query: str, *args) -> Any:
         return await self.pool.fetchval(query, *args)
 
+    async def copy_from_query(self, query: str, *args, output, **options):
+        """The rows of ``query`` as COPY writes them (``format``, ``header``...) to ``output``: a path, a file or a coroutine function."""
+        async with self.pool.acquire() as connection:
+            return await connection.copy_from_query(query, *args, output=output, **options)
+
 
 # ──────────────────────────────────────────────
 #  Schema Initialization
@@ -1455,3 +1460,166 @@ class AsyncDbCapitalManager:
         )
         return [tuple(row[name] for name in self.DAY_FILE_COLUMNS) for row in rows]
 
+
+
+# ──────────────────────────────────────────────
+#  TA engine
+# ──────────────────────────────────────────────
+
+# Created by the TA engine alone (src/ta_engine), as the Capital.com feed creates
+# its own: the trading services do not use these tables, and the admin only reads them.
+TA_SCHEMA_SQL = """
+-- Each alert of a signal rule's script that its rule turns into a signal, as
+-- the TA engine raised it: journaled before anything is sent, then completed
+-- with what the web server answered when the rule is live. One row per rule,
+-- bar and alert: a bar evaluated again adds nothing, and sends nothing.
+CREATE TABLE IF NOT EXISTS ta_signal (
+    id              BIGSERIAL PRIMARY KEY,
+    rule_id         VARCHAR(12) NOT NULL,
+    rule_name       TEXT NOT NULL,
+    script_id       VARCHAR(12) NOT NULL,
+    script_version  INTEGER NOT NULL,
+    asset           VARCHAR(80) NOT NULL,
+    side            VARCHAR(4) NOT NULL,
+    bars            VARCHAR(16) NOT NULL,
+    bar_time        TIMESTAMPTZ NOT NULL,
+    bar_closed_at   TIMESTAMPTZ NOT NULL,
+    alert_key       TEXT NOT NULL,
+    alert_title     TEXT,
+    alert_message   TEXT,
+    action          VARCHAR(32),
+    indice          VARCHAR(64) NOT NULL,
+    confidence      DOUBLE PRECISION,
+    mode            VARCHAR(8) NOT NULL,
+    raised_at       TIMESTAMPTZ NOT NULL,
+    outcome         VARCHAR(16) NOT NULL,
+    sent_at         TIMESTAMPTZ,
+    http_status     INTEGER,
+    signal_uuid     VARCHAR(64),
+    detail          TEXT,
+    UNIQUE (rule_id, bar_time, alert_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ta_signal_raised_at ON ta_signal (raised_at);
+CREATE INDEX IF NOT EXISTS idx_ta_signal_signal_uuid ON ta_signal (signal_uuid);
+
+-- What the engine is doing, written again every ten seconds: one row, as
+-- capital_feed_state (its age says whether the engine runs at all).
+CREATE TABLE IF NOT EXISTS ta_engine_state (
+    id           SMALLINT PRIMARY KEY CHECK (id = 1),
+    updated_at   TIMESTAMPTZ NOT NULL,
+    started_at   TIMESTAMPTZ NOT NULL,
+    version      VARCHAR(32),
+    state        VARCHAR(32) NOT NULL,
+    detail       TEXT,
+    figures      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+-- Each rule as the engine runs it, one row per rule of rules.json.
+CREATE TABLE IF NOT EXISTS ta_rule_state (
+    rule_id         VARCHAR(12) PRIMARY KEY,
+    updated_at      TIMESTAMPTZ NOT NULL,
+    state           VARCHAR(16) NOT NULL,
+    detail          TEXT,
+    mode            VARCHAR(8) NOT NULL,
+    script_version  INTEGER,
+    bars            INTEGER,
+    last_bar_time   TIMESTAMPTZ,
+    last_alert_at   TIMESTAMPTZ,
+    figures         JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+"""
+
+# The columns of ta_signal the engine writes when it raises a signal, in the order of its table.
+TA_SIGNAL_COLUMNS = (
+    "rule_id", "rule_name", "script_id", "script_version", "asset", "side", "bars", "bar_time", "bar_closed_at",
+    "alert_key", "alert_title", "alert_message", "action", "indice", "confidence", "mode", "raised_at", "outcome",
+    "detail",
+)
+TA_RULE_STATE_COLUMNS = (
+    "rule_id", "updated_at", "state", "detail", "mode", "script_version", "bars", "last_bar_time", "last_alert_at",
+    "figures",
+)
+
+
+async def init_ta_schema(conn_mgr: PostgresConnectionManager):
+    await conn_mgr.execute(TA_SCHEMA_SQL)
+
+
+class AsyncDbTaManager:
+    """The journal of the TA engine's signals and what it says of itself (see TA_SCHEMA_SQL)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def journal_signal(self, signal: dict) -> int | None:
+        """
+        Journal a signal (keys of TA_SIGNAL_COLUMNS) and return its id; None when
+        that rule's alert of that bar is already in the journal, so that it is
+        never sent twice.
+        """
+        placeholders = ", ".join(f"${index}" for index in range(1, len(TA_SIGNAL_COLUMNS) + 1))
+        return await self.db.fetchval(
+            f"""
+            INSERT INTO ta_signal ({", ".join(TA_SIGNAL_COLUMNS)})
+            VALUES ({placeholders})
+            ON CONFLICT (rule_id, bar_time, alert_key) DO NOTHING
+            RETURNING id
+            """,
+            *(signal.get(column) for column in TA_SIGNAL_COLUMNS),
+        )
+
+    async def complete_signal(
+        self,
+        signal_id: int,
+        outcome: str,
+        *,
+        sent_at: datetime | None = None,
+        http_status: int | None = None,
+        signal_uuid: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """What became of a journaled signal: sent, refused or failed, and what the web server answered."""
+        await self.db.execute(
+            """
+            UPDATE ta_signal
+            SET outcome = $2, sent_at = $3, http_status = $4, signal_uuid = $5, detail = COALESCE($6, detail)
+            WHERE id = $1
+            """,
+            signal_id, outcome, sent_at, http_status, signal_uuid, detail,
+        )
+
+    async def write_state(self, state: dict) -> None:
+        """The one row saying what the engine is doing (TA_SCHEMA_SQL)."""
+        await self.db.execute(
+            """
+            INSERT INTO ta_engine_state (id, updated_at, started_at, version, state, detail, figures)
+            VALUES (1, $1, $2, $3, $4, $5, $6::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+                updated_at = EXCLUDED.updated_at, started_at = EXCLUDED.started_at,
+                version = EXCLUDED.version, state = EXCLUDED.state,
+                detail = EXCLUDED.detail, figures = EXCLUDED.figures
+            """,
+            state["updated_at"], state["started_at"], state.get("version"), state["state"], state.get("detail"),
+            json.dumps(state.get("figures") or {}),
+        )
+
+    async def write_rule_states(self, states: list[dict]) -> None:
+        """Each rule as the engine runs it; the rows of rules no longer in the file are removed."""
+        await self.db.execute(
+            "DELETE FROM ta_rule_state WHERE NOT (rule_id = ANY($1::text[]))",
+            [state["rule_id"] for state in states],
+        )
+        for state in states:
+            await self.db.execute(
+                f"""
+                INSERT INTO ta_rule_state ({", ".join(TA_RULE_STATE_COLUMNS)})
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+                ON CONFLICT (rule_id) DO UPDATE SET
+                    updated_at = EXCLUDED.updated_at, state = EXCLUDED.state, detail = EXCLUDED.detail,
+                    mode = EXCLUDED.mode, script_version = EXCLUDED.script_version, bars = EXCLUDED.bars,
+                    last_bar_time = EXCLUDED.last_bar_time, last_alert_at = EXCLUDED.last_alert_at,
+                    figures = EXCLUDED.figures
+                """,
+                *(state.get(column) for column in TA_RULE_STATE_COLUMNS[:-1]),
+                json.dumps(state.get("figures") or {}),
+            )

@@ -1,15 +1,14 @@
 """
-Each finished day of a Capital.com instrument as a file of ten-second bars,
-for backtests: ``<prices_root>/capital/bars/<label>/<YYYY-MM-DD>.csv.gz``.
+Each finished day of a Capital.com instrument as a file of ten-second bars:
+``<prices_root>/capital/bars/<label>/<YYYY-MM-DD>.csv.gz``.
 
 Days of UTC, in the columns of ``wataprices`` (src/price_recorder/export.py),
-as the days fetched from Dukascopy are: the backtest command reads both
-through ``FileBars``, ``--source`` naming the folder. A file is written
-without the time in its gzip header: the same bars give the same bytes, and a
-backtest's fingerprint of its prices only changes when its prices do.
-
-Written here, not under src/strategy/: everything there is part of each
-backtest's fingerprint, and a change would mark every run stale.
+as the days fetched from Dukascopy are, so that one piece of code reads both
+(``FileBars``, src/price_history/files.py). A backtest reads the strategy's
+asset from them when it runs on files (``python -m src.backtest.run --data
+files:<folder>``, through the replay's ``AssetRows``); on the server it reads
+the feed's tables. A file is written without the time in its gzip header: the
+same bars give the same bytes.
 
 A day is written once it is over and nothing of it is still waiting to be
 written to the database; a day the feed was partly away for is written all

@@ -31,7 +31,8 @@ build_admin_interface() {
             . "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
             nvm use > /dev/null || exit 1
         fi
-        npm ci && npm run build
+        # The interface, then the TA engine's Pine runner (src/ta_engine/runner/runner.mjs).
+        npm ci && npm run build && npm run build:runner
     )
 }
 

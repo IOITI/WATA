@@ -10,8 +10,8 @@ import { ToastProvider } from '@/components/ToastProvider'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AuditPage } from '@/features/audit/AuditPage'
 import { AuthProvider } from '@/features/auth/AuthProvider'
-import { BacktestFormPage } from '@/features/backtests/BacktestFormPage'
 import { BacktestsPage } from '@/features/backtests/BacktestsPage'
+import { NewBacktestPage } from '@/features/backtests/NewBacktestPage'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { RequireAuth } from '@/features/auth/RequireAuth'
 import { ConfigPage } from '@/features/config/ConfigPage'
@@ -37,18 +37,25 @@ const ReportPage = lazy(() =>
   import('@/features/report/ReportPage').then((module) => ({ default: module.ReportPage })),
 )
 const ExitsPage = lazy(() => import('@/features/exits/ExitsPage').then((module) => ({ default: module.ExitsPage })))
-const BacktestRunPage = lazy(() =>
-  import('@/features/backtests/BacktestRunPage').then((module) => ({ default: module.BacktestRunPage })),
-)
-const ComparePage = lazy(() =>
-  import('@/features/backtests/ComparePage').then((module) => ({ default: module.ComparePage })),
-)
-const BacktestDayPage = lazy(() =>
-  import('@/features/backtests/BacktestDayPage').then((module) => ({ default: module.BacktestDayPage })),
-)
 // Their own charting library, for candles: loaded with the pages as well.
 const AssetsPage = lazy(() => import('@/features/data/AssetsPage').then((module) => ({ default: module.AssetsPage })))
 const AssetPage = lazy(() => import('@/features/data/AssetPage').then((module) => ({ default: module.AssetPage })))
+// Technical Analysis: an editor and charts of their own (CodeMirror, Vela, PineTS), loaded with these pages only.
+const IndicatorsPage = lazy(() => import('@/features/ta/IndicatorsPage').then((module) => ({ default: module.IndicatorsPage })))
+const ScriptEditorPage = lazy(() =>
+  import('@/features/ta/ScriptEditorPage').then((module) => ({ default: module.ScriptEditorPage })),
+)
+const ChartsPage = lazy(() => import('@/features/ta/ChartsPage').then((module) => ({ default: module.ChartsPage })))
+const SignalRulesPage = lazy(() =>
+  import('@/features/ta/signals/SignalRulesPage').then((module) => ({ default: module.SignalRulesPage })),
+)
+
+// A run's pages: the performance charts, and a day's candles (Lightweight Charts).
+const BacktestRunPage = lazy(() => import('@/features/backtests/RunPage').then((module) => ({ default: module.RunPage })))
+const BacktestDayPage = lazy(() => import('@/features/backtests/DayPage').then((module) => ({ default: module.DayPage })))
+const BacktestComparePage = lazy(() =>
+  import('@/features/backtests/ComparePage').then((module) => ({ default: module.ComparePage })),
+)
 
 /** An address of the former Prices page: to the Assets View, or to the asset it showed. */
 function PricesRedirect() {
@@ -142,15 +149,56 @@ const router = createBrowserRouter(
           }
         />
         <Route path="data/providers" element={<ProvidersPage />} />
+        <Route path="ta" element={<Navigate to="/ta/indicators" replace />} />
+        <Route
+          path="ta/indicators"
+          element={
+            <ChartPage>
+              <IndicatorsPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/indicators/new"
+          element={
+            <ChartPage>
+              <ScriptEditorPage key="new" />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/indicators/:id"
+          element={
+            <ChartPage>
+              <ScriptEditorPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/charts"
+          element={
+            <ChartPage>
+              <ChartsPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/signals"
+          element={
+            <ChartPage>
+              <SignalRulesPage />
+            </ChartPage>
+          }
+        />
         <Route path="data/providers/:providerId" element={<ProviderPage />} />
         <Route path="prices" element={<PricesRedirect />} />
         <Route path="backtests" element={<BacktestsPage />} />
-        <Route path="backtests/new" element={<BacktestFormPage />} />
+        <Route path="backtests/new" element={<NewBacktestPage />} />
         <Route
           path="backtests/compare"
           element={
             <ChartPage>
-              <ComparePage />
+              <BacktestComparePage />
             </ChartPage>
           }
         />

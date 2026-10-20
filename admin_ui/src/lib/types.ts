@@ -654,7 +654,7 @@ export interface PriceBars {
  * seconds, UTC, never twice the same: a place on the axis, not a time to show),
  * open, high, low, close, when it really began and ended (to the ten seconds),
  * whether it reached its range, whether it is the first after a pause in the data,
- * and the index at its end (under a turbo).
+ * the index at its end (under a turbo), and its quote changes (what stands for volume).
  */
 export type PriceRangeRow = [
   t: number,
@@ -667,6 +667,7 @@ export type PriceRangeRow = [
   complete: boolean,
   afterPause: boolean,
   index: number | null,
+  volume?: number | null,
 ]
 
 export interface PriceRangeBars {
@@ -1108,7 +1109,7 @@ export interface HistoryInstrument {
   label: string
   name: string
   currency: string
-  /** The Nasdaq history backtests read: it cannot be removed. */
+  /** The Nasdaq history kept up to date: it cannot be removed. */
   built_in: boolean
   days: number
   first_day: string | null
@@ -1126,7 +1127,7 @@ export interface HistoryOffer {
 export interface DukascopyProviderDetails extends DataProvider {
   instruments: HistoryInstrument[]
   offered: HistoryOffer[]
-  storage: BacktestStorage | null
+  storage: HistoryStorage | null
   source: string
 }
 
@@ -1142,74 +1143,290 @@ export interface RecorderConfig {
   editable: boolean
 }
 
-// ── backtests (src/admin/routers/backtests.py) ──
+// ── backtests on the recorded turbos (src/admin/routers/backtests.py, src/backtest) ──
 
 export type BacktestState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+/** What became of a signal: a position bought, refused by a rule, failed as the trader fails, nothing recorded to trade on... */
+export type BacktestFate = 'executed' | 'refused' | 'failed' | 'unpriced' | 'closed' | 'ignored' | 'not_a_signal'
+export type BacktestDayStatus = 'tested' | 'no_recorded_turbos' | 'no_strategy_bars' | 'closed'
 export type BacktestValue = string | number | boolean
+export type BacktestProvider = 'capital' | 'dukascopy' | 'saxo'
 
-/** A parameter of a strategy, as the form offers it. */
-export interface BacktestParameter {
+/** A setting a run may change, with its value in the live configuration. */
+export interface BacktestField {
   name: string
-  kind: 'integer' | 'number' | 'text'
-  default: string | number
-  help: string
-  least: number | null
-  most: number | null
-  choices: string[]
-  advanced: boolean
-}
-
-/** A rule of WATA that one backtest may be run with another value of. */
-export interface BacktestEditableRule {
-  name: string
-  kind: 'integer' | 'number' | 'boolean'
+  group: string
+  kind: 'number' | 'integer' | 'boolean' | 'time' | 'choice'
   label: string
   least: number | null
   most: number | null
-}
-
-export interface BacktestTurbo {
-  entry_price: number
-  spread: number
-  leverages: number[]
-}
-
-/** The turbo a run is made with unless it says otherwise: measured on real trades, or assumed. */
-export interface BacktestDefaultTurbo extends BacktestTurbo {
-  measured: boolean
-}
-
-/** How unkind the fills of a run are taken to be, and the account its money is counted on. */
-export interface BacktestExecution {
-  /** 0: no money figures. */
-  capital: number
-  /** Seconds between a decision and its fill, on top of the next ten seconds. */
-  fill_delay: number
-  /** Index points lost against the trade on each fill. */
-  slippage: number
+  choices: string[]
+  unit: string
+  /** Where the trading services read it; empty for the backtest's own. */
+  source: string
+  value: BacktestValue
 }
 
 export interface BacktestOptions {
-  strategies: { name: string; parameters: BacktestParameter[] }[]
-  turbo: BacktestDefaultTurbo
-  execution: BacktestExecution
-  rules: { live: Record<string, BacktestValue | string[] | number[][]>; editable: BacktestEditableRule[] }
-  limits: {
-    period_days: number
-    leverages: number
-    queued: number
-    fetch_days: number
-    note_length: number
-    fill_delay: number
-    slippage: number
-    sweep_cells: number
-    sweep_values: number
-    tags: number
-    tag_length: number
-  }
-  /** The share of the days a sweep holds out, and between what it can be set. */
-  held_out: { share: number; least: number; most: number }
+  fields: BacktestField[]
+  groups: string[]
   timezone: string
+  indices: string[]
+  /** The account a run starts with: the last daily report's value when there is one. */
+  capital: { value: number; from_balance: boolean }
+  signal_delay: { pine: number; journal: number }
+  fixed: {
+    time_periods: { start_minute: number; end_minute: number; scale_percent: number; label: string }[]
+    confidence_bands: { least: number; below: number; scale_percent: number; label: string }[]
+    default_confidence: number
+    closed_dates: number
+  }
+  baseline: { repetitions: number; most: number; seed: number }
+  sweep: { axes: number; cells: number; values: number; input_sets: number; held_out: number; least: number; most: number }
+  limits: { period_days: number; queued: number; name_length: number; tags: number; tag_length: number; modelled_period_days?: number }
+  /** Turbos made up from an index, once measured on the recorded ones. */
+  turbo_model?: BacktestTurboMeasure | null
+}
+
+interface BacktestSpread {
+  count: number
+  median: number | null
+  p90: number | null
+}
+
+/** What WATA's own orders took and cost (src/backtest/execution_calibration.py). */
+export interface BacktestExecution {
+  from: string
+  to: string
+  signals: number
+  orders: number
+  requests: number
+  signal_delay_seconds: { from_signal: BacktestSpread; from_receipt: BacktestSpread }
+  order_seconds: BacktestSpread
+  /** Euros a turbo worse than the quote recorded when the order left. */
+  slippage: Record<'buy' | 'sell' | 'all', BacktestSpread & { median_ticks: number | null }>
+  refusals: { share_percent: number | null; by_hour: { hour: number; requests: number; refused: number }[]; codes: Record<string, number> }
+  suggested: Partial<Record<'signal_delay_seconds' | 'order_seconds' | 'slippage', number>>
+  /** Measures of a kind needed before a value is suggested. */
+  least: number
+}
+
+/** A replay of the journal set beside WATA's real positions of the same signals (src/backtest/reconciliation.py). */
+export interface BacktestReconciliationSummary {
+  paired: number
+  backtest_only: number
+  live_only: number
+  backtest_only_live_outcomes: Record<string, number>
+  live_only_backtest_fates: Record<string, number>
+  mean_result_difference: number | null
+  median_result_difference: number | null
+  correlation: number | null
+  same_exit_percent: number | null
+  same_turbo_percent: number | null
+  median_entry_seconds: number | null
+  backtest_total_percent: number | null
+  real_total_percent: number | null
+}
+
+export interface BacktestReconciledPair {
+  signal_uuid: string
+  trade_id: number
+  position_id: string
+  day: string
+  direction: 'long' | 'short'
+  /** Seconds the backtest bought or sold after (positive) or before WATA. */
+  entry_seconds: number | null
+  exit_seconds: number | null
+  same_turbo: boolean | null
+  entry_price: { backtest: number | null; real: number | null }
+  exit_price: { backtest: number | null; real: number | null }
+  result: { backtest: number | null; real: number | null }
+  exit: { backtest: string; real: string }
+  same_exit: boolean
+}
+
+export interface BacktestReconciliation {
+  summary: BacktestReconciliationSummary
+  pairs: BacktestReconciledPair[]
+  backtest_only: { trade_id: number; signal_uuid: string | null; live_outcome: string | null }[]
+  live_only: { signal_uuid: string; position_id: string; backtest_fate: string }[]
+}
+
+/** A shadow rule's day traded on paper (src/admin/paper.py). */
+export interface BacktestPaperDay {
+  day: string
+  run_id: string
+  state: BacktestState
+  day_percent: number | null
+  trades: number | null
+  /** Outside the 5 % to 95 % of its reference run's days; none without a result or a reference. */
+  outside: boolean | null
+}
+
+export interface BacktestPaperReference {
+  run_id: string
+  name: string | null
+  days: number
+  low: number | null
+  median: number | null
+  high: number | null
+}
+
+export interface BacktestPaper {
+  rules: Record<string, { days: BacktestPaperDay[]; reference: BacktestPaperReference | null }>
+}
+
+/** Recorded by WATA, or made up from an index (src/backtest/turbo_model.py). */
+export type BacktestTurbos = 'recorded' | 'modelled'
+
+export interface BacktestTurboDirection {
+  /** Euros of turbo per point of index. */
+  factor: number
+  /** Points between the level its price would be nothing at and its knock-out level. */
+  offset: number
+  /** Points between two levels. */
+  spacing: number
+  turbos: number
+  bars: number
+  r2: number | null
+  error_eur: number | null
+  error_percent: number | null
+}
+
+export interface BacktestTurboMeasure {
+  made_at: string
+  underlying: { provider: BacktestProvider; key: string; side: 'bid' | 'ask' }
+  indice: string
+  days: number
+  first: string | null
+  last: string | null
+  few_days: boolean
+  directions: Record<'long' | 'short', BacktestTurboDirection>
+  quoting: { first_minute: number; last_minute: number } | null
+  issuer: string | null
+}
+
+export interface BacktestTurboModel {
+  state: 'idle' | 'running' | 'done' | 'failed' | 'interrupted'
+  error: string | null
+  asked: { from: string; to: string } | null
+  finished_at: string | null
+  measure: BacktestTurboMeasure | null
+  /** The index the turbos are made up from. */
+  underlying: string
+  max_days: number
+}
+
+export interface BacktestAsset {
+  provider: BacktestProvider
+  key: string
+}
+
+/** The asset a run's days are drawn on, and its bars. */
+export interface BacktestChart {
+  asset: BacktestAsset
+  side: 'bid' | 'ask'
+  bars: TaRuleBars
+}
+
+export interface BacktestSweepAxis {
+  kind: 'setting' | 'input'
+  name: string
+  values: BacktestValue[]
+}
+
+export type BacktestSourceBody =
+  | {
+      kind: 'pine'
+      script: { id: string; version: number }
+      asset: BacktestAsset
+      side: 'bid' | 'ask'
+      bars: TaRuleBars
+      inputs: TaRuleInput[]
+      alerts: { title: string; action: TaAlertAction }[]
+      alert_calls: 'ignore' | 'message'
+      confidence_plot: string | null
+      from_rule?: { id: string; name: string } | null
+    }
+  | { kind: 'journal' }
+
+/** What the form sends. */
+export interface BacktestRequestBody {
+  name?: string
+  tags?: string[]
+  from: string
+  to: string
+  indice: string
+  source: BacktestSourceBody
+  /** For a replay of the journal: the asset its days are drawn on. */
+  chart?: BacktestChart
+  changes: Record<string, BacktestValue>
+  baseline?: { repetitions: number; seed: number } | null
+  sweep?: { axes: BacktestSweepAxis[]; held_out: number; walk_forward?: BacktestWindows | null } | null
+  turbos?: BacktestTurbos
+}
+
+/** A walk-forward's windows: so many days to choose a combination on, then so many to keep it. */
+export interface BacktestWindows {
+  train_days: number
+  test_days: number
+}
+
+export interface BacktestCoverageDay {
+  day: string
+  /** Turbos of the indice the recorder kept bars of, by direction. */
+  turbos: { long: number; short: number }
+  first: string | null
+  last: string | null
+  recorded_minutes: number
+  /** Ten-second bars of the asset (1 for a day of Dukascopy fetched); null when no asset was asked of. */
+  asset_bars: number | null
+  /** Entries WATA received that day; null unless asked of. */
+  signals: number | null
+}
+
+export interface BacktestCoverage {
+  days: BacktestCoverageDay[]
+  /** False when the database could not be read: only the files are known. */
+  database: boolean
+  timezone: string
+}
+
+/** The rule a Pine run runs as: the fields of a signal rule. */
+export interface BacktestRule {
+  id: string
+  name: string
+  asset: BacktestAsset
+  side: 'bid' | 'ask'
+  bars: TaRuleBars
+  script: TaPin
+  libraries: (TaPin & { name: string })[]
+  inputs: TaRuleInput[]
+  alerts: { title: string; action: TaAlertAction }[]
+  alert_calls: 'ignore' | 'message'
+  confidence_plot: string | null
+  indice: string
+}
+
+export interface BacktestStoredRequest {
+  kind: 'run' | 'sweep'
+  name: string
+  tags: string[]
+  from: string
+  to: string
+  indice: string
+  source:
+    | { kind: 'pine'; rule: BacktestRule; from_rule: { id: string; name: string } | null }
+    | { kind: 'journal'; signals: number; entries: number }
+  chart: BacktestChart
+  changes: Record<string, BacktestValue>
+  baseline: { repetitions: number; seed: number } | null
+  sweep: { axes: BacktestSweepAxis[]; held_out: number; walk_forward?: BacktestWindows | null; trials_before?: number } | null
+  asked_at: string
+  from_sweep?: { id: string; cell: number }
+  /** A stress sweep: the run it made again with later and dearer fills. */
+  stress_of?: string
+  turbos?: BacktestTurbos
 }
 
 export interface BacktestStatus {
@@ -1220,433 +1437,469 @@ export interface BacktestStatus {
   error?: string | null
 }
 
-/** How much the figures of a run rest on: under 30 trades or 20 days, under 100 trades or 60 days, or more. */
-export type BacktestSample = 'too_few' | 'few' | 'fair'
-
-/** The same days traded with entries at random under the same rules, many times over. */
-export interface BacktestAgainstRandom {
-  repetitions: number
-  seed: number
-  /** Entries drawn in each repetition: as many as the run asked for. */
-  entries: number
-  /** Share of the repetitions the run did better than, in percent. */
-  beaten: number
-  median: number
-  /** `level` percent of the repetitions ended between `low` and `high`. */
-  low: number
-  high: number
-  level: number
-  worst: number
-  best: number
-  trades: number
+export interface BacktestHeadline {
+  total_percent: number | null
+  trades: number | null
   win_rate: number | null
-  /** Every repetition's total, lowest first. */
-  totals: number[]
+  worst_drawdown: number | null
+  sample: BacktestSample | null
+  beaten: number | null
+  days_tested: number | null
+  profit_loss: number | null
+  cells: number | null
 }
 
-/** Where the total falls when the days tested are drawn again, with replacement. */
+export type BacktestSample = 'too_few' | 'few' | 'fair'
+
+export interface BacktestRunListed {
+  id: string
+  kind: 'run' | 'sweep'
+  name: string
+  tags: string[]
+  from: string
+  to: string
+  indice: string
+  source: {
+    kind: 'pine' | 'journal'
+    script: { id: string; version: number; name: string } | null
+    from_rule: { id: string; name: string } | null
+    signals: number | null
+  }
+  chart: BacktestChart
+  changes: Record<string, BacktestValue>
+  status: BacktestStatus
+  headline: BacktestHeadline | null
+  /** Its place in the queue, while it waits. */
+  position: number | null
+  /** Made by other code than the admin's: what it found may differ now. */
+  stale?: boolean
+  /** A stress sweep: the run it made again with later and dearer fills. */
+  stress_of?: string | null
+  turbos?: BacktestTurbos
+}
+
 export interface BacktestTotalRange {
   low: number
   high: number
   level: number
   resamples: number
-  /** Share of the draws that end in a loss, in percent. */
   losing_share: number
 }
 
-/** What a backtest found for one leverage of the turbo. */
 export interface BacktestFigures {
   days: number
   days_with_an_entry: number
   trades: number
+  sample: BacktestSample
   win_rate: number | null
   average_win: number | null
   average_loss: number | null
+  expectancy: number | null
+  profit_factor: number | null
+  longest_losing_streak: number
   total_percent: number
+  total_range: BacktestTotalRange | null
   best_day: number | null
   worst_day: number | null
+  median_day: number | null
+  day_spread: number | null
+  winning_days: number
+  losing_days: number
   worst_drawdown: number
-  index_points: number
+  winners_lowest: { median: number; tenth: number } | null
+  losers_highest: { median: number; tenth: number } | null
   exits: Record<string, number>
-  entries: Record<string, number>
-  refusals: Record<string, number>
-  // What follows is not in a run made before it was measured.
-  sample?: BacktestSample
-  /** What a trade brings on average, in percent. */
-  expectancy?: number | null
-  /** What was won for 1 lost; null without a loss. */
-  profit_factor?: number | null
-  longest_losing_streak?: number
-  total_range?: BacktestTotalRange | null
-  median_day?: number | null
-  day_spread?: number | null
-  winning_days?: number
-  losing_days?: number
-  /** Half of the winning trades never fell below `median`, nine in ten never below `tenth`. */
-  winners_lowest?: { median: number; tenth: number } | null
-  /** Half of the losing trades had been above `median`, one in ten above `tenth`. */
-  losers_highest?: { median: number; tenth: number } | null
-  against_random?: BacktestAgainstRandom | null
-  /** The same trades at the size WATA gives each, on an account of the run's capital. */
-  money?: BacktestMoney | null
+  /** Absent from runs made before it was. */
+  risk?: BacktestRisk
+}
+
+/** What the days and the trades say of the risk taken (src/backtest/robustness.py). Annualised from 20 days only. */
+export interface BacktestRisk {
+  sharpe: number | null
+  sortino: number | null
+  calmar: number | null
+  yearly_percent: number | null
+  longest_under_water_days: number
+  worst_5_percent_days: number | null
+  skew: number | null
+  kurtosis: number | null
+  /** What a winning trade won for what a losing one lost. */
+  payoff: number | null
+  /** Of the best a winning trade reached, the share it kept, in percent. */
+  exit_efficiency: number | null
+  trades_per_day: number | null
+  hours_held_per_day: number | null
+}
+
+/** The same days in another order, and without the best of them. */
+export interface BacktestStress {
+  monte_carlo: { draws: number; median: number; worst_5_percent: number; actual: number } | null
+  without_best_days: { removed: number; total_percent: number }[]
+}
+
+export interface BacktestWalkWindow {
+  /** First and last day. */
+  train: [string, string]
+  test: [string, string]
+  cell: number
+  values: BacktestValue[] | null
+  train_percent: number
+  test_percent: number
+  /** Where the one chosen stood among all on the days kept: 1 is the best. */
+  test_rank: number
+  cells: number
+}
+
+export interface BacktestWalkForward extends BacktestWindows {
+  windows: BacktestWalkWindow[]
+  days: number
+  total_percent: number
+  worst_day: number | null
+  worst_drawdown: number
+  changes: number
+  /** The best single combination over the same days, known only afterwards. */
+  best_in_hindsight_percent: number
+  /** Day, and the total up to it. */
+  curve: [string, number][]
+}
+
+/** How the asset moved after a run's entry signals (src/backtest/edge.py), in basis points in each signal's direction. */
+export interface BacktestEdgeHorizon {
+  minutes: number
+  signals: number
+  mean_bp: number | null
+  median_bp: number | null
+  /** The share of signals the asset moved their way after, in percent. */
+  hit_rate: number | null
+  /** On the way, on average. */
+  best_bp: number | null
+  worst_bp: number | null
+  /** The signals whose windows do not overlap: the ones the t-statistic counts. */
+  independent: number
+  t: number | null
+  random: { mean_bp: number | null; hit_rate: number | null; beaten: number | null; draws: number }
+}
+
+export type BacktestEdgeGroup = Record<string, { signals: number; mean_bp: number | null; hit_rate: number | null }> & {
+  hour?: number
+  direction?: string
+  fate?: 'executed' | 'not_taken'
+  /** A kind of day's group (`by_day`). */
+  group?: string
+}
+
+/** The groups a day is put in (src/backtest/regimes.py `label_days`). */
+export type BacktestDayKind = 'volatility' | 'gap' | 'day_type' | 'us_open' | 'news'
+
+export interface BacktestEdge {
+  horizons: BacktestEdgeHorizon[]
+  by_hour: BacktestEdgeGroup[]
+  by_direction: BacktestEdgeGroup[]
+  by_fate: BacktestEdgeGroup[]
+  /** By the kind of day the signals came on; absent from runs made before. */
+  by_day?: Partial<Record<BacktestDayKind, BacktestEdgeGroup[]>>
+  unpriced: number
+  draws: number
+  seed: number
+}
+
+export interface BacktestDeflatedSharpe {
+  probability: number
+  sharpe_daily: number
+  expected_max_sharpe_daily: number
+  trials: number
+  days: number
+  sentence: string
+}
+
+export interface BacktestPbo {
+  probability: number
+  splits: number
+  combinations: number
+  sentence: string
 }
 
 export interface BacktestMoney {
   capital: number
   final: number
   profit_loss: number
-  return_percent: number
+  return_percent: number | null
   worst_drawdown: number
   worst_drawdown_percent: number
-  /** What WATA's sizing put on a trade on average, of what an order may use. */
+  average_stake: number | null
   average_scale_percent: number | null
-  /** Entries the account could not buy a single turbo for. */
+  commissions: number
   unfunded: number
 }
 
-/** A setting a sweep gives several values to. */
-export interface SweepAxis {
-  kind: 'parameter' | 'rule'
-  name: string
-  values: BacktestValue[]
+export interface BacktestAgainstRandom {
+  repetitions: number
+  seed: number
+  entries: number
+  beaten: number
+  median: number
+  low: number
+  high: number
+  level: number
+  worst: number
+  best: number
 }
 
-/** One combination of a sweep: its figures before the days held out, on them, and on the whole period. */
-export interface SweepCell {
-  values: BacktestValue[]
-  tuning: BacktestFigures
-  /** null when the period had too few days to hold any out. */
-  held_out: BacktestFigures | null
-  whole: BacktestFigures
+export interface BacktestCurvePoint {
+  day: string
+  percent: number
+  cumulative: number
+  profit_loss: number
+  equity: number | null
 }
 
-export interface BacktestSweep {
-  axes: SweepAxis[]
-  held_out: { share: number; from: string | null; days: number; tuning_days: number }
-  cells: SweepCell[]
-  days_without_prices?: string[]
-  bars?: number
-  seconds?: number
-}
-
-/** Whether a run would come out otherwise today: made with other code, or with other prices. */
-export interface BacktestStale {
-  code: boolean
-  prices: boolean
-  /** The version of WATA it was made with. */
-  version: string | null
-}
-
-/** The figures of the middle leverage: what a list shows of a run. */
-export interface BacktestHeadline {
-  leverage: number
-  days: number | null
-  days_with_an_entry: number | null
-  trades: number | null
-  win_rate: number | null
-  total_percent: number | null
-  worst_drawdown: number | null
-  sample?: BacktestSample | null
-  /** Share of the random entries it did better than. */
-  beaten?: number | null
-}
-
-/** The prices a run is made on: downloaded from Dukascopy, or recorded from Capital.com. */
-export type BacktestPrices = 'dukascopy' | 'capital'
-
-export interface BacktestRunListed {
-  id: string
-  /** Absent in the runs made before there was a choice: Dukascopy's. */
-  prices?: BacktestPrices
-  /** A strategy replayed, the signals WATA really received, or a sweep of either. Absent in the first runs: a strategy. */
-  kind?: 'strategy' | 'signals' | 'sweep'
-  /** For a sweep: what it replays, the settings it gives several values to, and the share of the days it holds out. */
-  replays?: 'strategy' | 'signals'
-  axes?: SweepAxis[]
-  held_out?: number
-  execution?: BacktestExecution
-  tags?: string[]
-  /** null for a run that did not keep what it was made with. */
-  stale?: BacktestStale | null
-  /** For a run of real signals: how many were replayed, and the real trades to set beside. */
-  signals?: number
-  real_trades?: number
-  from: string
-  to: string
-  strategy: string
-  /** Only what differs from the strategy's defaults. */
-  parameters: Record<string, BacktestValue>
-  /** Only the rules that differ from the live configuration, and what that said. */
-  rules: Record<string, BacktestValue>
-  rules_before?: Record<string, BacktestValue>
-  turbo: BacktestTurbo
-  note: string
-  status: BacktestStatus
-  headline: BacktestHeadline | null
+export interface BacktestSignalTallies {
+  total: number
+  by_fate: Partial<Record<BacktestFate, number>>
+  by_source: Record<string, number>
+  refusals: Record<string, number>
+  failures: Record<string, number>
 }
 
 export interface BacktestSummary {
-  parameters: Record<string, BacktestValue>
-  bars: number
-  decisions: number
-  seconds: number
-  days_without_prices: string[]
-  days_incomplete: string[]
-  /** For a run of real signals: those replayed, and the moments of those that came without prices. */
-  signals?: { replayed: number; without_prices: string[] } | null
-  runs: { turbo: { entry_price: number; points_per_unit: number; spread: number }; summary: BacktestFigures }[]
+  made_with: {
+    format: number
+    version: string
+    code: string
+    engine: { runner: { pinets: string; node: string }; milliseconds: number; history_days: number; restart_time: string } | null
+    calendar?: { digest: string; until: string | null }
+    turbos?:
+      | { kind: 'recorded' }
+      | {
+          kind: 'modelled'
+          made_at: string
+          underlying: BacktestTurboMeasure['underlying']
+          days: number
+          few_days: boolean
+          error_percent: Record<'long' | 'short', number | null>
+        }
+  }
+  days: { asked: number; tested: number; by_status: Partial<Record<BacktestDayStatus, number>>; with_an_entry?: number }
+  signals?: BacktestSignalTallies
+  figures?: BacktestFigures
+  money?: BacktestMoney
+  curve?: BacktestCurvePoint[]
+  against_random?: BacktestAgainstRandom | null
+  /** A run's: absent from runs made before it was. */
+  stress?: BacktestStress
+  /** A replay of the journal's, beside WATA's real positions. */
+  reconciliation?: (BacktestReconciliationSummary & { sentence: string }) | null
+  edge?: { horizons: (Pick<BacktestEdgeHorizon, 'minutes' | 'signals' | 'mean_bp' | 'hit_rate' | 't' | 'independent'> & { random_mean_bp: number | null; beaten: number | null })[]; unpriced: number }
+  /** A sweep's: null when asked for with too few days, absent when not asked for. */
+  walk_forward?: BacktestWalkForward | null
+  pbo?: BacktestPbo | null
+  deflated_sharpe?: BacktestDeflatedSharpe | null
+  warnings: string[]
+  cells?: number
+}
+
+export interface BacktestProgress {
+  phase: 'signals' | 'days' | 'report' | 'done'
+  done: number
+  total: number
+  day: string | null
 }
 
 export interface BacktestRun extends BacktestRunListed {
+  request: BacktestStoredRequest
+  settings: { settings: Record<string, unknown>; changed: Record<string, BacktestValue>; live_before: Record<string, BacktestValue> }
   summary: BacktestSummary | null
-  progress: { day: string; days_begun: number; bars: number } | null
-  /** The whole set of rules it ran with. */
-  run_rules: Record<string, BacktestValue | string[]> | null
-  /** The last lines the command wrote, when it failed. */
-  output: string[]
-  /** Runs that will be taken before this one. */
-  waiting_before: number
-  /** What a sweep found. */
-  sweep?: BacktestSweep | null
-  /** The disk its folder takes. */
-  bytes?: number
-}
-
-export interface BacktestTrade {
-  entry_time: string
-  exit_time: string
-  direction: string
-  entry_reason: string
-  confidence: number | null
-  entry_index: number
-  exit_index: number
-  index_points: number
-  performance_percent: number
-  max_performance_percent: number
-  exit_reason: string
-  /** The worst level the trade went through. Not in a run made before it was kept. */
-  min_performance_percent?: number | null
-  /** The share of what an order may use that WATA's sizing puts on it, and in money what that was and brought. */
-  scale_percent?: number | null
-  stake?: number | null
-  profit_loss?: number | null
+  progress: BacktestProgress | null
+  lines: string[]
 }
 
 export interface BacktestDay {
   day: string
+  status: BacktestDayStatus
+  /** The day's signals by what became of them; a fate none had may be missing. */
+  signals: Partial<Record<BacktestFate, number>>
   entries: number
-  closed: number
+  trades: number
   day_percent: number
-  /** In money, and the account after the day, when the run was given a capital. */
-  profit_loss?: number | null
-  equity?: number | null
+  profit_loss: number
+  equity: number | null
+  recorded: { long: number; short: number; minutes: number; first: string | null; last: string | null } | null
+  strategy_bars: number | null
 }
 
-/** The figures of the trades of one group: an hour, a weekday, a reason... */
-export interface BacktestGroup {
-  group: string | number
+/** One of the turbos the trader looked at when it chose. */
+export interface BacktestCandidate {
+  instrument_id: number
+  symbol: string | null
+  issuer: string | null
+  barrier: number
+  bid: number | null
+  ask: number | null
+  in_range: boolean
+  chosen: boolean
+}
+
+export interface BacktestSignal {
+  id: number
+  day: string
+  source: 'pine' | 'journal' | 'schedule'
+  action: string | null
+  indice: string
+  confidence: number | null
+  arrived_at: string | null
+  decided_at: string | null
+  fate: BacktestFate
+  rule: string | null
+  reason: string | null
+  trade_id: number | null
+  closed_trade_ids: number[]
+  candidates: { looked_at: number; quoted: number; in_range: number } | null
+  selection?: BacktestCandidate[]
+  // A Pine script's: the bar it was raised on and the alert.
+  bar_time?: string
+  bar_closed_at?: string
+  alert?: { type: string; title: string | null; message: string }
+  note?: string | null
+  // The journal's: what the live trader did of it.
+  signal_uuid?: string | null
+  signal_time?: string | null
+  received_at?: string | null
+  live_outcome?: string | null
+  live_reason?: string | null
+}
+
+export interface BacktestTurbo {
+  instrument_id: number
+  uic: number | null
+  asset_type: string
+  symbol: string | null
+  description: string | null
+  issuer: string | null
+  barrier: number
+  direction: string
+  currency: string | null
+}
+
+export interface BacktestTrade {
+  id: number
+  day: string
+  direction: 'long' | 'short'
+  signal_id: number | null
+  confidence: number | null
+  scale_percent: number
+  turbo: BacktestTurbo
+  entry: {
+    decided_at: string
+    selected_at: string
+    filled_at: string
+    ask: number
+    bid: number
+    selected_ask: number
+    selected_bid: number
+    price: number
+    asset_price: number | null
+    candidates: BacktestCandidate[]
+  }
+  exit: {
+    filled_at: string
+    bid: number
+    reason: string
+    group: string
+    kind: string
+    signal_id: number | null
+    asset_price: number | null
+  }
+  units: number
+  cost: number
+  proceeds: number
+  commission: number
+  profit_loss: number
+  performance_percent: number
+  max_performance_percent: number
+  min_performance_percent: number | null
+  holding_seconds: number
+  day_percent_before: number
+  cash_after: number
+  notes: string[]
+}
+
+export interface BacktestGroupRow {
   trade_count: number
   win_count: number
   loss_count: number
   win_rate: number | null
-  /** In money, when the run was given a capital. */
   profit_loss: number
   average_percent: number | null
   average_best_percent: number | null
-  /** The sum of the results, in points of percent. */
-  total_percent: number
+  [name: string]: string | number | null
 }
 
 export interface BacktestBreakdowns {
-  id: string
-  leverage: number
-  timezone: string
-  summary: Omit<BacktestGroup, 'group'> & {
-    average_given_back: number | null
-    turned_negative_count: number
-    turned_negative_percent: number | null
-  }
-  groups: Record<'hour' | 'weekday' | 'direction' | 'entry_reason' | 'confidence' | 'holding_time' | 'exit', BacktestGroup[]>
+  trades: number
+  groups: Record<'hour' | 'weekday' | 'direction' | 'exit' | 'confidence' | 'holding' | 'turbo_price' | 'issuer', BacktestGroupRow[]> &
+    /** The kind of day a trade was made on and its place against the US open (src/backtest/regimes.py), under `group`. */
+    Partial<Record<BacktestDayKind | 'session_part', BacktestGroupRow[]>>
+  given_back: { average_given_back: number | null; turned_negative_count: number; turned_negative_percent: number | null }
 }
 
-/** One trade as the position monitor lived it. */
-export interface BacktestTradePath {
-  id: string
-  leverage: number
-  timezone: string
-  trade: BacktestTrade
-  day_before_percent: number
-  /** Each: when its ten seconds began (epoch), the turbo's result at their end, worst and best, and the trailing stop once armed. */
-  points: [number, number, number, number, number | null][]
-  levels: {
-    stop: number
-    take_profit: number
-    day_target: number
-    trailing_activation: number | null
-    trailing_drawdown: number | null
-  }
+export interface BacktestBaseline {
+  repetitions: number
+  seed: number
+  entries: number
+  hours: [number, number] | null
+  totals: number[]
+  trades: number[]
+  histogram: { from: number; to: number; count: number }[]
+}
+
+export interface BacktestSweepCell {
+  values: BacktestValue[]
+  tuning: BacktestFigures | null
+  held_out: BacktestFigures | null
+  whole: BacktestFigures | null
+  money: BacktestMoney
+  signals: BacktestSignalTallies
+  /** Day, its result in percent, its trades. Absent from sweeps made before it was. */
+  curve?: [string, number, number][]
+}
+
+export interface BacktestSweep {
+  axes: BacktestSweepAxis[]
+  held_out: number
+  held_out_from: string | null
+  cells: BacktestSweepCell[]
+}
+
+/** Each finished day written as files for a research machine (src/admin/research_export.py). */
+export interface ResearchFiles {
+  enabled: boolean
+  keep_days: number
+  state: 'off' | 'waiting_for_close' | 'up_to_date' | 'due' | 'exporting'
+  /** The day being written, while one is. */
+  exporting: string | null
+  days: number
+  first: string | null
+  last: string | null
+  bytes: number
+  error: string | null
+  /** Under the price history folder of the server. */
+  location: string
+  limits: { keep_days: number }
 }
 
 export interface BacktestStorage {
   runs: { count: number; bytes: number }
-  prices: { days: number; bars_bytes: number; fetched_bytes: number }
+  /** What the former backtester left on the disk. */
+  former: { count: number; bytes: number }
 }
 
-export interface BacktestRefusal {
-  time: string
-  direction: string
-  reason: string
-}
+// ── Dukascopy's history: what is there and its downloads (src/admin/downloads.py) ──
 
-export interface BacktestDecision {
-  at: number
-  target: 'flat' | 'long' | 'short'
-  reason: string
-  confidence: number | null
-}
-
-/** One day of a run as the strategy saw it: a value per range bar in each list. */
-export interface BacktestDayChart {
-  id: string
-  day: string
-  timezone: string
-  leverage: number
-  tick: number
-  decimals: number
-  size: number
-  session: { start: number; end: number }
-  bars: PriceRangeRow[]
-  kernel: (number | null)[]
-  vwap: (number | null)[]
-  upper: (number | null)[]
-  lower: (number | null)[]
-  entries_allowed: boolean[]
-  decisions: BacktestDecision[]
-  trades: BacktestTrade[]
-  refusals: BacktestRefusal[]
-}
-
-/** A replay of the signals WATA received in a period. */
-export interface BacktestSignalsRequest {
-  from: string
-  to: string
-  prices?: BacktestPrices
-  rules: Record<string, BacktestValue>
-  entry_price: number
-  spread: number
-  leverages: number[]
-  note: string
-  capital: number
-  fill_delay: number
-  slippage: number
-}
-
-/** The same backtest for every combination of the values of one or two settings. */
-export interface BacktestSweepRequest {
-  from: string
-  to: string
-  replay: 'strategy' | 'signals'
-  prices?: BacktestPrices
-  axes: SweepAxis[]
-  held_out: number
-  strategy: string
-  parameters: Record<string, BacktestValue>
-  rules: Record<string, BacktestValue>
-  entry_price: number
-  spread: number
-  leverage: number
-  note: string
-  fill_delay: number
-  slippage: number
-}
-
-export interface BacktestRequest extends BacktestSignalsRequest {
-  strategy: string
-  parameters: Record<string, BacktestValue>
-}
-
-/** A trade, real or of the model, in what the two have in common. */
-export interface BacktestLeg {
-  direction: string
-  /** Epoch seconds. */
-  entered_at: number
-  left_at: number
-  performance: number
-  exit: string
-  /** The position at Saxo, for a real trade. */
-  reference: string
-}
-
-/** A run of real signals set against what WATA really did with them. */
-export interface BacktestComparison {
-  id: string
-  leverage: number
-  timezone: string
-  /** What the trader made of the signals, as its journal has it. */
-  journal: Record<string, number>
-  summary: {
-    real_trades: number
-    model_trades: number
-    paired: number
-    /** Model minus real, in points of percent. */
-    average_gap: number | null
-    median_gap: number | null
-    ninth_gap: number | null
-    same_exit: number
-    real_total: number
-    model_total: number
-    days: number
-    median_day_gap: number | null
-  }
-  pairs: { real: BacktestLeg; model: BacktestLeg; gap: number; same_exit: boolean; left_later: number }[]
-  only_real: BacktestLeg[]
-  only_model: BacktestLeg[]
-  days: {
-    day: string
-    real_percent: number
-    model_percent: number
-    gap: number
-    real_trades: number
-    model_trades: number
-  }[]
-}
-
-/** The turbo measured on WATA's closed trades. */
-export interface BacktestCalibrationResult {
-  trades: number
-  used: number
-  without_prices: number
-  unreadable: number
-  set_aside: number
-  fitted: boolean
-  reason: string | null
-  sample: BacktestSample
-  entry_price: number | null
-  entry_price_low: number | null
-  entry_price_high: number | null
-  points_per_unit?: number
-  points_per_unit_low?: number
-  /** null: the trades do not bound it above. */
-  points_per_unit_high?: number | null
-  level?: number
-  spread?: number
-  /** Points of percent between this turbo and half of the real trades, and nine in ten of them. */
-  median_error?: number
-  ninth_error?: number
-  measured_at?: string
-}
-
-export interface BacktestCalibration {
-  status: {
-    state: 'idle' | 'running' | 'done' | 'failed' | 'interrupted'
-    trades?: number
-    started_at?: string
-    finished_at?: string
-    error?: string | null
-  }
-  result: BacktestCalibrationResult | null
-  turbo: BacktestDefaultTurbo
-  lines: string[]
+/** The disk the downloaded prices take, of every instrument. */
+export interface HistoryStorage {
+  days: number
+  bars_bytes: number
+  fetched_bytes: number
 }
 
 export interface PriceCoverageDay {
@@ -1680,7 +1933,7 @@ export interface PriceFetchStatus {
   state: 'idle' | 'running' | 'done' | 'incomplete' | 'stopped' | 'failed' | 'interrupted'
   from?: string
   to?: string
-  /** The Dukascopy instrument downloaded; absent before downloads said it (the history backtests read). */
+  /** The Dukascopy instrument downloaded; absent before downloads said it (the history kept up to date). */
   label?: string
   symbol?: string
   started_at?: string
@@ -1695,13 +1948,214 @@ export interface PriceFetchStatus {
 export interface PriceCoverage {
   from: string
   to: string
-  /** The Dukascopy instrument these days are of, or the indice of the days recorded from Capital.com. */
+  /** The Dukascopy instrument these days are of. */
   label: string
   symbol: string | null
-  /** 'capital': the days the Capital.com feed recorded, a file each once over; nothing of them is fetched. */
-  prices?: BacktestPrices
   days: PriceCoverageDay[]
   ready: { count: number; first: string | null; last: string | null }
   fetch: PriceFetchStatus
   keep: PriceKeepStatus
+}
+
+// ── Technical Analysis: the Pine scripts kept by the admin (src/admin/ta_scripts.py) ──
+
+export type TaScriptKind = 'indicator' | 'strategy' | 'library'
+
+/** An `import user/Name/1 as alias` line of a script. */
+export interface TaImport {
+  user: string
+  name: string
+  version: number
+  alias: string
+}
+
+/** One saved version: each save of a changed source is a new one, never written again. */
+export interface TaVersionEntry {
+  number: number
+  saved_at: string
+  size: number
+  sha256: string
+}
+
+export interface TaScriptSummary {
+  id: string
+  name: string
+  kind: TaScriptKind
+  description: string
+  pine_version: number
+  /** The name a library declares, library("Name"): what `import user/Name/1` finds. */
+  library_name: string | null
+  imports: TaImport[]
+  /** The current version. */
+  version: number
+  versions: TaVersionEntry[]
+  created_at: string
+  updated_at: string
+}
+
+export interface TaScript extends TaScriptSummary {
+  source: string
+}
+
+export interface TaVersion extends TaVersionEntry {
+  source: string
+}
+
+// ── Technical Analysis: the signal rules (src/admin/ta_rules.py) and what the TA engine did ──
+
+export type TaRuleMode = 'off' | 'shadow' | 'live'
+/** What an alertcondition() of the script becomes. */
+export type TaAlertAction = 'ignore' | 'long' | 'short' | 'close-position' | 'message'
+
+export type TaRuleBars = { type: 'time'; timeframe: string } | { type: 'range'; ticks: number }
+
+/** A version of a script or library the rule runs, with the sha256 it was saved with. */
+export interface TaPin {
+  id: string
+  version: number
+  sha256: string
+}
+
+export interface TaRuleInput {
+  /** The input's id in the script, as PineTS reads it: in_0, in_1... */
+  id: string
+  var: string | null
+  title: string | null
+  value: number | string | boolean
+}
+
+/** What a rule saves: everything but its id, mode and times. */
+export interface TaRuleFields {
+  name: string
+  asset: { provider: 'capital'; key: string }
+  side: 'bid' | 'ask'
+  bars: TaRuleBars
+  script: { id: string; version: number }
+  inputs: TaRuleInput[]
+  alerts: { title: string; action: TaAlertAction }[]
+  alert_calls: 'ignore' | 'message'
+  confidence_plot: string | null
+  indice: string
+}
+
+export interface TaRule extends Omit<TaRuleFields, 'script'> {
+  id: string
+  script: TaPin
+  libraries: (TaPin & { name: string })[]
+  mode: TaRuleMode
+  created_at: string
+  updated_at: string
+  mode_changed_at: string
+  /** Added by the admin: the script's name, and the versions there are now. */
+  script_name: string | null
+  latest: { script: number | null; libraries: Record<string, number | null> }
+}
+
+export interface TaRules {
+  revision: string
+  rules: TaRule[]
+  /** The indices the trader accepts (the allowed_indices rule). */
+  indices: string[]
+  /** The instruments the Capital.com feed records: what a rule can run on. */
+  instruments: { epic: string; label: string }[]
+}
+
+export interface TaRuleSaved {
+  rule: TaRule
+  revision: string
+}
+
+/** A rule as the engine runs it (ta_rule_state). */
+export interface TaRuleState {
+  updated_at: string
+  state: 'loading' | 'waiting' | 'running' | 'error' | 'off'
+  detail: string | null
+  mode: TaRuleMode
+  script_version: number | null
+  bars: number | null
+  last_bar_time: string | null
+  last_alert_at: string | null
+  figures: { milliseconds?: number | null } & Record<string, unknown>
+}
+
+export interface TaEngine {
+  enabled: boolean
+  status: 'ok' | 'warning' | 'down' | 'disabled' | 'unknown'
+  detail: string
+  engine: {
+    updated_at: string
+    started_at: string
+    version: string | null
+    state: string
+    detail: string | null
+    figures: Record<string, unknown>
+  } | null
+  rules: Record<string, TaRuleState>
+}
+
+/** What the trader made of a signal the engine sent (signal_journal). */
+export interface TaTraderDecision {
+  decided_at: string
+  outcome: string
+  reason: string | null
+  position_id: string | null
+}
+
+export interface TaSignal {
+  id: number
+  rule_id: string
+  rule_name: string
+  script_id: string
+  script_version: number
+  asset: string
+  side: string
+  bars: string
+  bar_time: string
+  bar_closed_at: string
+  alert_key: string
+  alert_title: string | null
+  alert_message: string | null
+  action: string | null
+  indice: string
+  confidence: number | null
+  mode: 'shadow' | 'live'
+  raised_at: string
+  outcome: 'shadow' | 'sending' | 'sent' | 'refused' | 'failed'
+  sent_at: string | null
+  http_status: number | null
+  signal_uuid: string | null
+  detail: string | null
+  trader: TaTraderDecision | null
+}
+
+/** A signal the trader received from elsewhere than the engine (TradingView's). */
+export interface TaOtherSignal {
+  signal_uuid: string
+  action: string
+  indice: string
+  confidence: number | null
+  signal_timestamp: string | null
+  received_timestamp: string | null
+  decided_at: string | null
+  outcome: string | null
+  reason: string | null
+  position_id: string | null
+}
+
+export interface TaComparisonRow {
+  at: string
+  action: string | null
+  wata: TaSignal | null
+  tradingview: TaOtherSignal | null
+  delta_seconds: number | null
+}
+
+export interface TaComparison {
+  day: string
+  indice: string
+  tolerance_seconds: number
+  rows: TaComparisonRow[]
+  paired: number
+  only_wata: number
+  only_tradingview: number
 }

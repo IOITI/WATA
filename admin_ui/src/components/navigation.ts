@@ -3,7 +3,7 @@
  * lists it, and the trail of the top bar says it, from this one table.
  */
 
-export type MenuSection = 'Trading' | 'Analysis' | 'Data' | 'Operations'
+export type MenuSection = 'Trading' | 'Analysis' | 'Data' | 'Technical Analysis' | 'Operations'
 
 export interface MenuEntry {
   id: string
@@ -12,7 +12,7 @@ export interface MenuEntry {
   section: MenuSection
 }
 
-export const MENU_SECTIONS: MenuSection[] = ['Trading', 'Analysis', 'Data', 'Operations']
+export const MENU_SECTIONS: MenuSection[] = ['Trading', 'Analysis', 'Data', 'Technical Analysis', 'Operations']
 
 export const MENU: MenuEntry[] = [
   { id: 'dashboard', path: '/', label: 'Dashboard', section: 'Trading' },
@@ -27,11 +27,23 @@ export const MENU: MenuEntry[] = [
   { id: 'backtests', path: '/backtests', label: 'Backtests', section: 'Analysis' },
   { id: 'providers', path: '/data/providers', label: 'Providers', section: 'Data' },
   { id: 'assets', path: '/data/assets', label: 'Assets View', section: 'Data' },
+  { id: 'ta-indicators', path: '/ta/indicators', label: 'Indicators', section: 'Technical Analysis' },
+  { id: 'ta-charts', path: '/ta/charts', label: 'Charts', section: 'Technical Analysis' },
+  // "Signal rules": the Trading section's Signals page sends signals by hand.
+  { id: 'ta-signals', path: '/ta/signals', label: 'Signal rules', section: 'Technical Analysis' },
   { id: 'system', path: '/system', label: 'System', section: 'Operations' },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations' },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations' },
   { id: 'config', path: '/config', label: 'Configuration', section: 'Operations' },
 ]
+
+// The pages that take the whole width: an editor beside its test, a chart.
+const WIDE_PAGES = [/^\/ta\/indicators\/[^/]+\/?$/, /^\/ta\/charts\/?$/]
+
+/** A page without the width cap of the others. */
+export function isWidePage(pathname: string): boolean {
+  return WIDE_PAGES.some((pattern) => pattern.test(pathname))
+}
 
 /** A step of a trail: a link unless it is the page shown, or a section, which has no page. */
 export interface Crumb {

@@ -5,6 +5,7 @@ import type {
   DataProviders,
   JsonObject,
   JsonValue,
+  PriceKeepStatus,
   RecorderSettings,
 } from '@/lib/types'
 
@@ -267,3 +268,30 @@ export function capitalWarnings(before: JsonObject, after: JsonObject): string[]
   return warnings
 }
 
+// ── Dukascopy's history kept up to date by the service ──
+
+/** How far back the service may be told to keep the history up to date, in days. */
+export const KEEP_DAYS = [30, 60, 120, 250, 500]
+
+export function keepSentence(keep: PriceKeepStatus, formatMoment: (iso: string) => string): string {
+  const missing = `${keep.missing} day${keep.missing === 1 ? '' : 's'}`
+  switch (keep.state) {
+    case 'off':
+      return 'Prices are fetched only when asked for below.'
+    case 'fetching':
+      return `Fetching: ${missing} still to complete.`
+    case 'up_to_date':
+      return 'Up to date. The day that ends is fetched during the night.'
+    case 'waiting_for_close':
+      return `${missing} to fetch, once the market has closed: nothing is downloaded while WATA may be trading.`
+    case 'backing_off':
+      return (
+        `${missing} to fetch. The source stopped answering ${keep.failures} time${keep.failures === 1 ? '' : 's'} in a row: ` +
+        `left alone until ${keep.next_at ? formatMoment(keep.next_at) : 'later'}.`
+      )
+    case 'pausing':
+      return `${missing} to fetch. Next download ${keep.next_at ? `at ${formatMoment(keep.next_at)}` : 'shortly'}: a few days at a time.`
+    case 'due':
+      return `${missing} to fetch: the next download starts within a minute.`
+  }
+}

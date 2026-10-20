@@ -5,14 +5,28 @@ import os
 from datetime import date, datetime, timedelta, timezone
 
 from src.capital_feed.day_files import ASSET_TYPE, DayFiles, bars_directory, day_path, write_day_file, written_days
+from src.price_history.dukascopy import write_day_file as write_dukascopy_day
+from src.price_history.files import FileBars
+from src.price_recorder.bars import Bar
 from src.price_recorder.export import COLUMNS
-from src.strategy import backtest
-from src.strategy.history.dukascopy import write_day_file as write_dukascopy_day
-from src.strategy.sources import FileBars
-
-from tests.test_strategy_backtest import CLOCK, CONFIG, DAY, leg, recorded
 
 T0 = datetime(2026, 10, 12, 7, 0, tzinfo=timezone.utc)
+DAY = date(2026, 10, 12)
+
+
+def leg(first: float, last: float, step: float = 2) -> list[float]:
+    """The prices after ``first`` on the way to ``last``, two points at a time."""
+    step = step if last > first else -step
+    return [first + step * index for index in range(1, int(abs(last - first) / abs(step)) + 1)]
+
+
+def recorded(start: int, prices: list[float]) -> list[Bar]:
+    """Ten-second bars going from each price to the next, the ask one point above the bid."""
+    bars = []
+    for index, (opened, closed) in enumerate(zip(prices, prices[1:])):
+        high, low = max(opened, closed), min(opened, closed)
+        bars.append(Bar("index", start + 10 * index, opened, high, low, closed, opened + 1, high + 1, low + 1, closed + 1, 5, 0))
+    return bars
 
 
 def _rows(bars):
@@ -25,10 +39,11 @@ def _rows(bars):
 
 
 def _session_bars():
-    """The day of tests/test_strategy_backtest.py: back and forth before the session, then down 200 points and up 400."""
+    """Back and forth before the session, then down 200 points and up 400 (08:00 and 09:00 in Paris)."""
     night = [30000.0] + leg(30000, 30060) + leg(30060, 30000) + leg(30000, 30060) + leg(30060, 30000)
     session = [30000.0] + leg(30000, 29800) + leg(29800, 30200) + [30200.0] * 6
-    return recorded(CLOCK.epoch(DAY, "07:00"), night) + recorded(CLOCK.epoch(DAY, "08:00"), session)
+    seven = int(datetime(2026, 10, 12, 5, 0, tzinfo=timezone.utc).timestamp())
+    return recorded(seven, night) + recorded(seven + 3600, session)
 
 
 def test_a_day_file_has_the_columns_of_wataprices_and_says_where_it_comes_from(tmp_path):
@@ -62,30 +77,23 @@ def test_the_same_bars_give_the_same_bytes(tmp_path):
         assert one.read() == other.read()
 
 
-def test_backtests_read_a_capital_com_day_as_they_read_a_dukascopy_one(tmp_path, capsys):
-    """The same bars, in a file of each: the same trades, the same days, the same bars counted."""
+def test_a_capital_com_day_reads_back_as_a_dukascopy_one(tmp_path):
+    """The same bars, in a file of each: the same bars read, with their ask and their quote changes."""
     bars = _session_bars()
     capital = bars_directory(str(tmp_path), "us100")
     write_day_file(day_path(str(tmp_path), "us100", DAY), _rows(bars), epic="US100", label="us100", name="US Tech 100")
     dukascopy = str(tmp_path / "dukascopy")
     write_dukascopy_day(os.path.join(dukascopy, "2026-10-12.csv.gz"), bars, symbol="TEST", label="us100")
-
-    def run(source, out):
-        code = backtest.run(backtest.parse_arguments([
-            "--config", CONFIG, "--from", "2026-10-12", "--source", source, "--indice", "us100",
-            "--baseline", "0", "--out", out,
-        ]))
-        assert code == 0
-        return {name: open(os.path.join(out, name), encoding="utf-8").read() for name in ("trades_110.csv", "days_110.csv")}
-
-    from_capital = run(capital, str(tmp_path / "out-capital"))
-    from_dukascopy = run(dukascopy, str(tmp_path / "out-dukascopy"))
-
-    assert from_capital == from_dukascopy
-    assert from_capital["trades_110.csv"].count("\n") == 2
     whole_day = datetime(2026, 10, 12, tzinfo=timezone.utc)
-    read = list(FileBars(capital, "us100").bars(whole_day, whole_day + timedelta(days=1)))
-    assert [(bar.start, bar.bid_close, bar.ask_close, bar.updates) for bar in read] == [
+
+    def read(location):
+        return [
+            (bar.start, bar.bid_open, bar.bid_high, bar.bid_low, bar.bid_close, bar.ask_close, bar.updates)
+            for bar in FileBars(location, "us100").bars(whole_day, whole_day + timedelta(days=1))
+        ]
+
+    assert read(capital) == read(dukascopy)
+    assert [(start, close, ask, updates) for start, _, _, _, close, ask, updates in read(capital)] == [
         (bar.start, bar.bid_close, bar.ask_close, bar.updates) for bar in bars
     ]
 

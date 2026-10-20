@@ -1,0 +1,324 @@
+"""
+The backtest's rules beside the live code, on the same inputs: the trader's
+checks on an entry (``handle_trading_signal`` with a real ``TradingRule``),
+its sizing (``AsyncTradingOrchestrator``) and the position monitor's exits
+(``AsyncPerformanceMonitor._evaluate_positions``), each run with the clock
+frozen at the moment the backtest decides. A change to the live rules that is
+not made in src/backtest/rules.py fails here.
+"""
+
+import asyncio
+import json
+import sys
+import types
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+import pytz
+
+asyncpg_stub = types.ModuleType("asyncpg")
+asyncpg_stub.Pool = type("Pool", (), {})
+asyncpg_stub.Record = dict
+sys.modules.setdefault("asyncpg", asyncpg_stub)
+sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
+
+import src.trade.async_services as async_services  # noqa: E402
+import src.trade.rules as live_rules  # noqa: E402
+import src.trader as trader  # noqa: E402
+from src.backtest.clock import TradingClock  # noqa: E402
+from src.backtest.rules import entry_refusal, exit_decision, performance, position_scale, units_for  # noqa: E402
+from src.backtest.settings import DictConfig, from_config  # noqa: E402
+from src.trade.async_services import AsyncPerformanceMonitor, AsyncTradingOrchestrator  # noqa: E402
+from src.trade.exceptions import InsufficientFundsException  # noqa: E402
+from src.trade.rules import TradingRule  # noqa: E402
+
+with open("etc/config_example.json", encoding="utf-8") as config_file:
+    EXAMPLE = json.load(config_file)
+
+PARIS = pytz.timezone("Europe/Paris")
+CLOCK = TradingClock("Europe/Paris")
+
+
+def frozen_at(moment: datetime):
+    """A ``datetime`` whose ``now`` is ``moment``."""
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment.astimezone(tz) if tz is not None else moment.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return Frozen
+
+
+def config_with(**rule_changes) -> dict:
+    config = json.loads(json.dumps(EXAMPLE))
+    for rule in config["trade"]["rules"]:
+        rule["rule_config"].update(rule_changes.get(rule["rule_type"], {}))
+    return config
+
+
+class Config(DictConfig):
+    def __init__(self, config: dict, log_path: str = "."):
+        super().__init__(config)
+        self._log_path = log_path
+
+    def get_logging_config(self):
+        return {"persistant": {"log_path": self._log_path}}
+
+
+# ── the checks on an entry ──
+
+
+class Positions:
+    def __init__(self, open_actions=(), day_percent=0.0, trades_today=0):
+        self.open_actions, self.day_percent, self.trades_today = list(open_actions), day_percent, trades_today
+
+    async def get_open_positions_ids_actions(self):
+        return [{"position_id": f"p{number}", "action": action} for number, action in enumerate(self.open_actions)]
+
+    async def get_percent_of_the_day(self):
+        return self.day_percent
+
+    async def get_today_trade_count(self):
+        return self.trades_today
+
+
+class RiskState:
+    def __init__(self, last_loss: datetime | None):
+        self.last_loss = last_loss
+
+    async def get_last_loss_timestamp(self):
+        return self.last_loss
+
+    async def get_entries_paused_since(self):
+        return None
+
+
+class Journal:
+    def __init__(self):
+        self.outcomes = []
+
+    def record(self, signal, outcome, reason=None, **ids):
+        self.outcomes.append((outcome, reason))
+
+
+def live_outcome(config: dict, *, now: datetime, action: str, indice: str, alert_at: datetime, positions: Positions,
+                 last_loss: datetime | None, confidence: float | None) -> tuple[str, str | None]:
+    orchestrator = MagicMock()
+    orchestrator.reserve_cash_percent = 0
+    orchestrator.execute_trade_signal = AsyncMock(return_value={
+        "order_details": {"order_id": "o1"}, "position_details": {"position_id": "p9"}, "selected_turbo_info": {},
+    })
+    orchestrator.place_protective_stop = AsyncMock(return_value=None)
+    monitor = MagicMock()
+    monitor.close_managed_positions_by_criteria = AsyncMock(
+        return_value={"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": []},
+    )
+    monitor.wait_for_positions_closed = AsyncMock(return_value=True)
+    telegram = MagicMock()
+    telegram.send = AsyncMock()
+    journal = Journal()
+    signal = {
+        "action": action, "indice": indice, "signal_uuid": "u1",
+        "signal_timestamp": alert_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "alert_timestamp": alert_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if confidence is not None:
+        signal["confidence"] = confidence
+    rule = TradingRule(Config(config), positions, RiskState(last_loss))
+    with patch.object(live_rules, "datetime", frozen_at(now)), patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(trader.handle_trading_signal(
+            signal, orchestrator, monitor, rule, positions, "exchange", telegram, journal=journal,
+        ))
+    return journal.outcomes[0]
+
+
+# Wednesday 14 October 2026, in Paris.
+def paris(clock_time: str, day: int = 14) -> datetime:
+    hour, minute, second = (int(part) for part in (clock_time + ":00")[:8].split(":"))
+    return PARIS.localize(datetime(2026, 10, day, hour, minute, second))
+
+
+SCENARIOS = [
+    # (name, now, changes of the rules, action, indice, open actions, day %, minutes since a loss, trades today, confidence, alert age s)
+    ("taken", "10:00", {}, "long", "us100", [], 0.0, None, 0, None, 1),
+    ("taken with a position the other way", "10:00", {}, "short", "us100", ["long"], 0.5, None, 3, 0.9, 2),
+    ("too old", "10:00", {}, "long", "us100", [], 0.0, None, 0, None, 3601),
+    ("old but not too old", "10:00", {}, "long", "us100", [], 0.0, None, 0, None, 3600),
+    ("before the market", "07:59:59", {}, "long", "us100", [], 0.0, None, 0, None, 1),
+    ("after the market", "22:00", {}, "long", "us100", [], 0.0, None, 0, None, 1),
+    ("risky minute", "21:54", {}, "long", "us100", [], 0.0, None, 0, None, 1),
+    ("just before the risky minute", "21:53:59", {}, "long", "us100", [], 0.0, None, 0, None, 1),
+    ("closed date", "10:00", {"market_closed_dates": {"market_closed_dates": ["14/10/2026"]}}, "long", "us100", [], 0.0, None, 0, None, 1),
+    ("unknown indice", "10:00", {}, "long", "de40", [], 0.0, None, 0, None, 1),
+    ("duplicate", "10:00", {}, "long", "us100", ["long"], 0.0, None, 0, None, 1),
+    ("day above the limit", "10:00", {}, "long", "us100", [], 1.25, None, 0, None, 1),
+    ("day under the loss", "10:00", {}, "long", "us100", [], -25.0, None, 0, None, 1),
+    ("cooldown", "10:00", {}, "long", "us100", [], -0.5, 4, 1, None, 1),
+    ("cooldown over", "10:00", {}, "long", "us100", [], -0.5, 11, 1, None, 1),
+    ("most entries", "10:00", {}, "long", "us100", [], 0.0, None, 8, None, 1),
+    ("low confidence", "10:00", {}, "long", "us100", [], 0.0, None, 0, 0.2, 1),
+    ("confidence enough", "10:00", {}, "long", "us100", [], 0.0, None, 0, 0.3, 1),
+    ("several reasons, the first wins", "07:00", {}, "long", "de40", ["long"], 5.0, 1, 9, 0.1, 1),
+]
+
+
+@pytest.mark.parametrize(
+    "name, now, changes, action, indice, open_actions, day_percent, loss_minutes, trades_today, confidence, age", SCENARIOS,
+    ids=[scenario[0] for scenario in SCENARIOS],
+)
+def test_an_entry_is_refused_for_the_same_reason_as_live(
+    name, now, changes, action, indice, open_actions, day_percent, loss_minutes, trades_today, confidence, age,
+):
+    config = config_with(**changes)
+    moment = paris(now)
+    alert_at = moment - timedelta(seconds=age)
+    last_loss = None if loss_minutes is None else moment - timedelta(minutes=loss_minutes)
+    positions = Positions(open_actions, day_percent, trades_today)
+
+    live = live_outcome(config, now=moment, action=action, indice=indice, alert_at=alert_at, positions=positions,
+                        last_loss=last_loss, confidence=confidence)
+    refusal = entry_refusal(
+        from_config(config), CLOCK, action=action, indice=indice, decided_at=moment.timestamp(),
+        alert_at=alert_at.timestamp(), open_directions=open_actions, day_percent=day_percent,
+        last_loss_at=None if last_loss is None else last_loss.timestamp(), entries_today=trades_today,
+        confidence=confidence,
+    )
+
+    mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
+    assert mirrored == live
+
+
+# ── the size of an order ──
+
+
+@pytest.mark.parametrize("now, confidence", [
+    ("09:00", None), ("14:45", 0.4), ("15:59", 0.79), ("16:00", 0.8), ("21:30", 1.95), ("07:30", 2.5), ("12:00", 0.0),
+])
+@pytest.mark.parametrize("spending_power, ask", [(10_000.0, 5.05), (3_000.0, 13.9), (9.0, 5.0), (12.0, 5.0)])
+def test_an_order_is_scaled_and_sized_as_live(now, confidence, spending_power, ask):
+    config = config_with()
+    moment = paris(now)
+    orchestrator = AsyncTradingOrchestrator(MagicMock(), MagicMock(), MagicMock(), Config(config), MagicMock(), MagicMock())
+    settings = from_config(config)
+
+    with patch.object(async_services, "datetime", frozen_at(moment)):
+        live_scale = orchestrator._calculate_position_scale(confidence)
+    try:
+        live_units = orchestrator._calculate_bid_amount({"selected_instrument": {"latest_ask": ask}}, spending_power, live_scale)
+    except InsufficientFundsException:
+        live_units = 0
+
+    scale = position_scale(settings, CLOCK.minute_of_day(moment.timestamp()), confidence)
+    assert scale == pytest.approx(live_scale)
+    assert units_for(settings, spending_power, ask, scale) == live_units
+
+
+def test_a_cash_reserve_leaves_its_share_aside_as_live():
+    config = config_with()
+    config["trade"]["config"]["buying_power"]["reserve_cash_percent"] = 20
+    orchestrator = AsyncTradingOrchestrator(MagicMock(), MagicMock(), MagicMock(), Config(config), MagicMock(), MagicMock())
+
+    live = orchestrator._calculate_bid_amount({"selected_instrument": {"latest_ask": 5.05}}, 10_000.0, 0.75)
+
+    assert units_for(from_config(config), 10_000.0, 5.05, 0.75) == live
+
+
+# ── what makes the monitor sell ──
+
+
+class OpenPosition:
+    def __init__(self, day_percent: float):
+        self.day_percent = day_percent
+
+    async def get_open_positions_ids_actions(self):
+        return [{"position_id": "p1", "action": "long"}]
+
+    async def get_percent_of_the_day(self):
+        return self.day_percent
+
+    async def get_max_position_percent(self, position_id):
+        return 0.0
+
+    async def update_turbo_position_data(self, position_id, data):
+        return None
+
+
+def live_exits(config: dict, open_price: float, bids: list[float], day_percent: float, log_path: str) -> list[str | None]:
+    """What the live monitor decides at each bid, until it sells."""
+    trading_rule = MagicMock()
+    trading_rule.get_rule_config.side_effect = lambda rule_type: next(
+        rule["rule_config"] for rule in config["trade"]["rules"] if rule["rule_type"] == rule_type
+    )
+    trading_rule.record_loss = AsyncMock()
+    monitor = AsyncPerformanceMonitor(
+        MagicMock(), MagicMock(), Config(config, log_path), OpenPosition(day_percent), trading_rule, AsyncMock(),
+    )
+    sent = []
+
+    async def send_close_order(api_pos, *, position_id, action, reason):
+        sent.append(reason)
+
+    monitor._send_close_order = send_close_order
+    monitor._record_closed_position_in_background = MagicMock()
+
+    async def ticks():
+        decided = []
+        for bid in bids:
+            before = len(sent)
+            await monitor._evaluate_positions({"p1": {
+                "PositionBase": {"OpenPrice": open_price, "CanBeClosed": True}, "PositionView": {"Bid": bid},
+            }})
+            decided.append(sent[-1] if len(sent) > before else None)
+            if sent:
+                break
+        await asyncio.sleep(0)
+        return decided
+
+    return asyncio.run(ticks())
+
+
+def mirrored_exits(config: dict, open_price: float, bids: list[float], day_percent: float) -> list[str | None]:
+    settings = from_config(config)
+    best = 0.0
+    decided = []
+    for bid in bids:
+        perf = performance(open_price, bid)
+        decision = exit_decision(settings, open_price=open_price, perf=perf, best_before=best, day_percent=day_percent)
+        decided.append(None if decision is None else f"Performance ({decision.reason})")
+        if decision is not None:
+            break
+        best = max(best, perf)
+    return decided
+
+
+@pytest.mark.parametrize("changes, open_price, bids, day_percent", [
+    # The stop-loss, exactly at its level and beyond.
+    ({}, 5.0, [5.0, 4.6, 4.25], 0.0),
+    ({}, 5.0, [5.0, 4.24], 0.0),
+    # The take-profit, the day's target first when the day already made some.
+    ({"day_trading": {"percent_profit_wanted_per_days": 100}}, 5.0, [5.2, 7.9, 8.0], 0.0),
+    ({}, 5.0, [5.02, 5.05, 5.07, 5.09], 0.0),
+    ({}, 5.0, [5.02, 5.04], 1.5),
+    # The trailing stop: armed at +5 %, sold 8 points under the best.
+    ({"day_trading": {"percent_profit_wanted_per_days": 100}}, 5.0, [5.1, 5.3, 5.6, 5.3, 5.2, 5.19], 0.0),
+    ({"day_trading": {"percent_profit_wanted_per_days": 100}}, 5.0, [5.1, 5.24, 4.9, 4.85], 0.0),
+    # A day already lost: the target is far.
+    ({}, 6.13, [6.2, 6.4, 6.3], -3.0),
+])
+def test_the_monitor_sells_at_the_same_bid_for_the_same_reason_as_live(changes, open_price, bids, day_percent, tmp_path):
+    config = config_with(**changes)
+
+    assert mirrored_exits(config, open_price, bids, day_percent) == live_exits(config, open_price, bids, day_percent, str(tmp_path))
+
+
+def test_the_trailing_stop_switched_off_is_never_the_reason(tmp_path):
+    config = config_with(day_trading={"percent_profit_wanted_per_days": 100})
+    config["trade"]["config"]["position_management"]["performance_thresholds"]["trailing_stop"]["enabled"] = False
+    bids = [5.1, 5.6, 5.1, 5.0, 4.5, 4.25]
+
+    decided = mirrored_exits(config, 5.0, bids, 0.0)
+
+    assert decided == live_exits(config, 5.0, bids, 0.0, str(tmp_path))
+    assert decided[-1].startswith("Performance (Stoploss")

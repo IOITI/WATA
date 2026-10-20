@@ -21,6 +21,7 @@ from src.admin.services import OPS_QUEUE, TELEGRAM_QUEUE
 from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
+from src.ta_engine.settings import TaEngineSettings
 
 OK = "ok"
 WARNING = "warning"
@@ -53,6 +54,8 @@ LOG_OBSERVED_SERVICES = {
 SAXO_SERVICE_ID = "saxo"
 # The recorder writes one line every ten seconds: past this, it is not running.
 PRICE_RECORDER_SILENT_AFTER_SECONDS = 60
+# The TA engine writes its state every ten seconds, every minute while idle.
+TA_ENGINE_SILENT_AFTER_SECONDS = 180
 
 
 def _entry(service_id: str, name: str, status: str, detail: str) -> dict:
@@ -185,6 +188,53 @@ async def _capital_feed(ctx) -> list[dict]:
     return [_entry("capital_feed", name, DOWN if status == PROVIDER_DISABLED else status, detail)]
 
 
+def ta_engine_status(enabled_on_disk: bool, state: dict | None, now: datetime) -> tuple[str, str]:
+    """
+    The TA engine as the System and Signals pages say it: switched on or off in
+    the configuration as it is on disk now, and what it last wrote of itself
+    (ta_engine_state).
+    """
+    updated_at = (state or {}).get("updated_at")
+    if updated_at is None or (now - updated_at).total_seconds() > TA_ENGINE_SILENT_AFTER_SECONDS:
+        if not enabled_on_disk:
+            return DISABLED, "Switched off in the configuration"
+        if state is None:
+            return DOWN, 'Never started: add "ta" to COMPOSE_PROFILES in .env and start it'
+        minutes = int((now - updated_at).total_seconds() // 60)
+        return DOWN, f"No sign of it for {minutes} min"
+    kind, detail = state.get("state"), state.get("detail") or ""
+    if kind == "disabled":
+        if enabled_on_disk:
+            return WARNING, "Switched on in the configuration: it starts at its next start"
+        return DISABLED, "Switched off in the configuration"
+    if not enabled_on_disk:
+        return WARNING, "Switched off in the configuration: it runs until it is restarted"
+    if kind == "running":
+        return OK, detail or "Running"
+    if kind == "idle":
+        return OK, detail or "No rule is on"
+    if kind == "stale_feed":
+        return WARNING, detail or "The Capital.com feed is not recording"
+    return DOWN, detail or kind or "Unknown state"
+
+
+async def _ta_engine(ctx) -> list[dict]:
+    """The TA engine, when it is switched on: a rule in error is said on its page, not here."""
+    name = "TA engine"
+    try:
+        settings = TaEngineSettings.from_config(ctx.config_manager)
+    except ValueError as e:
+        return [_entry("ta_engine", name, DOWN, f"Invalid configuration: {e}")]
+    if not settings.enabled:
+        return []
+    try:
+        state = await ctx.queries.ta_engine_state()
+    except DatabaseUnavailable:
+        return [_entry("ta_engine", name, UNKNOWN, "The database is unavailable")]
+    status, detail = ta_engine_status(True, state, datetime.now(timezone.utc))
+    return [_entry("ta_engine", name, DOWN if status == DISABLED else status, detail)]
+
+
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:
     if queue["consumers"] > 0:
         return _entry(service_id, name, OK, f"Consuming {queue['name']}")
@@ -235,7 +285,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed,
+        capital_feed, ta_engine,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -245,9 +295,11 @@ async def collect_health(ctx) -> dict:
         _saxo(ctx),
         _price_recorder(ctx),
         _capital_feed(ctx),
+        _ta_engine(ctx),
     )
     services = [
-        *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *postgres, rabbitmq[0],
+        *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
+        *postgres, rabbitmq[0],
     ]
     return {
         "version": ctx.version,

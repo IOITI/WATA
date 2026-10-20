@@ -336,8 +336,9 @@ services:
         window: 120s
       resources:
         limits:
-          memory: 512M
-          # Backtests run in this container, one at a time and at the lowest priority.
+          # Backtests run in this container, one at a time and at the lowest priority: the
+          # admin, the backtest's command with a day of recorded turbos, and the Pine runner.
+          memory: 1024M
           # One processor at most: the rest stays with the services that trade.
           cpus: '1.0'
     depends_on:
@@ -419,6 +420,46 @@ services:
       resources:
         limits:
           memory: 256M
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      postgres1:
+        condition: service_healthy
+
+  # TA engine: WATA's own signals, from the Pine scripts of the admin's signal
+  # rules run on the bars the Capital.com feed records. Not started unless the
+  # "ta" profile is enabled (COMPOSE_PROFILES=admin,capital,ta in .env) and
+  # trade.config.ta_engine.enabled is true. A rule only journals its signals
+  # until it is switched to live in the admin. No trading service waits for it,
+  # and like them it keeps every processor: a rule runs its script on each bar.
+  ta_engine1:
+    image: wata-base:latest
+    hostname: ta_engine1
+    container_name: 'ta_engine1'
+    profiles: ["ta"]
+    environment:
+      - WATA_APP_ROLE=ta_engine
+    volumes:
+      # Only what it needs, and only its log written: the rules and scripts the
+      # admin keeps, the web server's token to send signals with, and the
+      # configuration. The admin's credentials stay out of reach.
+      - ../../var/log/wata-ta-engine:/app/var/log/wata-ta-engine
+      - ../../var/lib/admin/ta:/app/var/lib/ta:ro
+      - ../../var/lib/web_server:/app/var/lib/web_server:ro
+      - ../../etc/config.json:/app/etc/config.json:ro
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          # The Pine runner's heap (trade.config.ta_engine.runner_memory_mb) and the engine.
+          memory: 1024M
     depends_on:
       rabbitmq1:
         condition: service_healthy

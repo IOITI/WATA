@@ -11,11 +11,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth/auth-context'
-import { formatBytes } from '@/features/backtests/model'
-import { PricesPanel } from '@/features/backtests/PricesPanel'
+import { HistoryPanel } from '@/features/data/HistoryPanel'
 import { GapsPanel } from '@/features/prices/GapsPanel'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
+import { formatBytes, formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { CapitalProviderDetails, DataProvider, DukascopyProviderDetails, SaxoProviderDetails } from '@/lib/types'
 
 import { assetHref, assetsLink, PROVIDERS_PATH } from './assets'
@@ -199,7 +198,7 @@ function DukascopyProvider({ provider }: { provider: DukascopyProviderDetails })
       <Panel
         title="Instruments"
         description={`From ${provider.source}, in Dukascopy's own files. ${
-          storage ? `The prices take ${formatBytes(storage.prices.bars_bytes + storage.prices.fetched_bytes)} of disk.` : ''
+          storage ? `The prices take ${formatBytes(storage.bars_bytes + storage.fetched_bytes)} of disk.` : ''
         }`}
         action={
           <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
@@ -221,7 +220,7 @@ function DukascopyProvider({ provider }: { provider: DukascopyProviderDetails })
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                {instrument.built_in && <Badge>What backtests run on</Badge>}
+                {instrument.built_in && <Badge>Kept up to date</Badge>}
                 {instrument.days > 0 && (
                   <Link
                     to={assetHref({ ref: `dukascopy/${instrument.label}` })}
@@ -239,9 +238,9 @@ function DukascopyProvider({ provider }: { provider: DukascopyProviderDetails })
       {provider.enabled &&
         provider.instruments.map((instrument) =>
           instrument.built_in ? (
-            <PricesPanel key={instrument.label} title={`${instrument.name}: days fetched`} name={instrument.name} />
+            <HistoryPanel key={instrument.label} title={`${instrument.name}: days fetched`} name={instrument.name} />
           ) : (
-            <PricesPanel
+            <HistoryPanel
               key={instrument.label}
               label={instrument.label}
               title={`${instrument.name}: days fetched`}

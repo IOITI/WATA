@@ -196,3 +196,16 @@ export function toneOf(value: number | null | undefined): Tone {
   if (!isNumber(value) || value === 0) return 'neutral'
   return value > 0 ? 'positive' : 'negative'
 }
+
+/** A size on disk, in the units a person reads: 48.2 kB, 14.0 MB. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '-'
+  const units = ['B', 'kB', 'MB', 'GB']
+  let size = bytes
+  let unit = 0
+  while (size >= 1000 && unit < units.length - 1) {
+    size /= 1000
+    unit += 1
+  }
+  return `${unit === 0 || size >= 100 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`
+}

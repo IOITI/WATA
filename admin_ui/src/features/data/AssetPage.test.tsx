@@ -161,7 +161,7 @@ function serve({
       if (url.pathname === '/api/data/providers/saxo/availability') {
         return json({ from, to, timezone: 'Europe/Paris', max_days: 7, items: availability })
       }
-      if (url.pathname === '/api/backtests/prices') {
+      if (url.pathname === '/api/data/providers/dukascopy/coverage') {
         return json({
           from, to, label: url.searchParams.get('label') ?? 'us100', symbol: 'USATECHIDXUSD',
           days: [{ day: '2026-10-09', state: 'ready', hours: 24, hours_expected: 24 }],
@@ -1033,7 +1033,7 @@ describe('a Dukascopy history', () => {
     expect(seriesOf(theChart(), 'Line')).toBeUndefined()
     expect(await screen.findByRole('heading', { name: 'Days fetched' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Recording gaps' })).not.toBeInTheDocument()
-    expect(requests).toContain('/api/backtests/prices?from=2026-10-12&to=2026-10-12&label=us100')
+    expect(requests).toContain('/api/data/providers/dukascopy/coverage?from=2026-10-12&to=2026-10-12&label=us100')
     // Nothing is recorded live: nothing is read again by itself.
     expect(screen.queryByText(/Read again every 30 seconds/)).not.toBeInTheDocument()
   })

@@ -392,6 +392,77 @@ def test_the_assets_the_recorder_kept_are_listed_as_the_data_pages_read_them(in_
     assert volumes == {"2026-10-12": 1500.0}
 
 
+def test_a_backtest_reads_a_day_of_recorded_turbos_as_the_recorder_wrote_it(in_a_database_of_its_own):
+    from src.backtest.clock import TradingClock
+    from src.backtest.data import DatabaseData
+    from src.database.postgres import AsyncDbPriceHistoryManager, init_price_history_schema
+
+    day = date(2026, 10, 14)
+    start, end = TradingClock("Europe/Paris").day_bounds(day)
+    seven = datetime(2026, 10, 14, 7, 0, tzinfo=timezone.utc)
+
+    async def scenario(writer, reader):
+        await init_price_history_schema(writer)
+        history = AsyncDbPriceHistoryManager(writer)
+        await history.ensure_partitions(date(2026, 10, 1))
+        turbo = lambda uic, direction, barrier: {  # noqa: E731
+            "uic": uic, "asset_type": "WarrantOpenEndKnockOut", "role": "turbo", "indice": "us100", "symbol": f"S{uic}",
+            "description": f"NASDAQ 100 Turbo {direction} {barrier} SG", "currency": "EUR", "direction": direction,
+            "barrier": barrier, "issuer": "SG",
+        }
+        index = await history.upsert_instrument(
+            {"uic": 1909050, "asset_type": "StockIndex", "role": "underlying", "indice": "us100"}, seven,
+        )
+        long_id = await history.upsert_instrument(turbo(40000001, "long", 24800.0), seven - timedelta(days=1))
+        short_id = await history.upsert_instrument(turbo(40000002, "short", 25200.0), seven)
+        # Seen at a refresh of that day, but nothing kept of it.
+        await history.upsert_instrument(turbo(40000003, "long", 24900.0), seven)
+        bar = lambda ts, instrument, bid, ask: (ts, instrument, bid, bid + 0.1, bid - 0.1, bid, ask, ask, ask, ask, 1, 0)  # noqa: E731
+        await history.insert_bars([
+            bar(seven - timedelta(days=1), long_id, 4.0, 4.05),
+            bar(seven, long_id, 5.0, 5.05),
+            bar(seven + timedelta(seconds=10), long_id, 5.1, None),
+            bar(seven, short_id, 6.0, 6.05),
+            bar(seven, index, 25010.0, 25010.0),
+        ])
+        await history.record_coverage(seven, True, 3, 3)
+        await history.record_coverage(seven + timedelta(seconds=10), False, 3, 1)
+        # As the backtest's command reads: a connection that cannot write.
+        await reader.connect()
+        recorded = await DatabaseData(reader).day("us100", day, start, end)
+        # What the form reads of the same days, through the admin's queries.
+        from src.admin.queries import AdminQueries, LazyDatabase
+
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        coverage = (
+            await queries.backtest_turbo_days("us100", date(2026, 10, 13), day),
+            await queries.backtest_recorder_days(date(2026, 10, 13), day),
+            await queries.backtest_asset_days("saxo", index, date(2026, 10, 13), day),
+            await queries.last_balance(),
+        )
+        return recorded, coverage
+
+    recorded, (turbo_days, recorder_days, index_days, balance) = in_a_database_of_its_own(scenario)
+
+    (long_series,) = recorded.turbos["long"]
+    (short_series,) = recorded.turbos["short"]
+    first = int(seven.timestamp())
+    assert list(long_series.ts) == [first, first + 10]
+    assert list(long_series.bid_open) == [5.0, 5.1] and long_series.bid_high[0] == pytest.approx(5.1)
+    assert long_series.ask_open[0] == pytest.approx(5.05) and long_series.ask_open[1] != long_series.ask_open[1]
+    assert (long_series.ref.barrier, long_series.ref.issuer, long_series.ref.uic) == (24800.0, "SG", 40000001)
+    assert list(short_series.ts) == [first]
+    assert recorded.covered == {first}
+    # The day before held a bar of the long turbo only; the turbo seen without a bar is not counted.
+    assert [(row["day"].isoformat(), row["direction"], row["turbos"]) for row in turbo_days] == [
+        ("2026-10-13", "long", 1), ("2026-10-14", "long", 1), ("2026-10-14", "short", 1),
+    ]
+    assert turbo_days[1]["first_ts"] == seven and turbo_days[1]["last_ts"] == seven + timedelta(seconds=10)
+    assert [(row["day"].isoformat(), row["listened"]) for row in recorder_days] == [("2026-10-14", 1)]
+    assert [(row["day"].isoformat(), row["bars"]) for row in index_days] == [("2026-10-14", 1)]
+    assert balance is None
+
+
 def test_what_the_capital_com_feed_writes_is_what_the_data_pages_read(in_a_database_of_its_own):
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.database.postgres import AsyncDbCapitalManager, init_capital_schema
@@ -443,6 +514,93 @@ def test_what_the_capital_com_feed_writes_is_what_the_data_pages_read(in_a_datab
     assert volume == {"2026-10-13": 187.0}
     assert coverage == [{"ts": start, "feed_ok": True}]
     assert hours == {"mon": ["00:00 - 21:59"], "zone": "UTC"}
+
+
+def test_what_the_ta_engine_journals_is_what_the_signals_page_reads(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import AsyncDbSignalJournalManager, AsyncDbTaManager, init_ta_schema
+
+    bar = datetime(2026, 10, 13, 13, 30, tzinfo=timezone.utc)
+
+    def signal(rule_id, alert_key, action, mode, outcome, at):
+        return {
+            "rule_id": rule_id, "rule_name": f"Rule {rule_id[:2]}", "script_id": "0123456789ab", "script_version": 3,
+            "asset": "capital/US100", "side": "bid", "bars": "1", "bar_time": at, "bar_closed_at": at + timedelta(minutes=1),
+            "alert_key": alert_key, "alert_title": alert_key, "alert_message": '{"action": "long"}', "action": action,
+            "indice": "us100", "confidence": None, "mode": mode, "raised_at": at + timedelta(minutes=1, seconds=1),
+            "outcome": outcome, "detail": None,
+        }
+
+    async def scenario(writer, reader):
+        await init_ta_schema(writer)
+        await init_ta_schema(writer)  # each start of the engine runs it again
+        store = AsyncDbTaManager(writer)
+        live = await store.journal_signal(signal("aaaaaaaaaaaa", "Enter Long", "long", "live", "sending", bar))
+        # The same alert of the same bar, evaluated again after a restart: not journaled, so not sent.
+        again = await store.journal_signal(signal("aaaaaaaaaaaa", "Enter Long", "long", "live", "sending", bar))
+        await store.complete_signal(
+            live, "sent", sent_at=bar + timedelta(minutes=1, seconds=1), http_status=200,
+            signal_uuid="5e1f2a3b-0000-4000-8000-000000000001",
+        )
+        shadow = await store.journal_signal(signal("bbbbbbbbbbbb", "Exit", "close-position", "shadow", "shadow", bar))
+        await AsyncDbSignalJournalManager(writer).record_decision({
+            "signal_uuid": "5e1f2a3b-0000-4000-8000-000000000001", "action": "long", "indice": "us100",
+            "signal_timestamp": "2026-10-13T13:30:00Z", "received_timestamp": "2026-10-13T13:31:01.204Z",
+            "decided_at": bar + timedelta(minutes=1, seconds=2), "outcome": "executed", "position_id": "5025001",
+        })
+        await store.write_state({
+            "updated_at": bar, "started_at": bar, "version": "test", "state": "running",
+            "detail": "2 rules", "figures": {"rules": 2},
+        })
+        await store.write_rule_states([
+            {"rule_id": "aaaaaaaaaaaa", "updated_at": bar, "state": "running", "mode": "live", "script_version": 3,
+             "bars": 900, "last_bar_time": bar, "last_alert_at": bar + timedelta(minutes=1), "figures": {"ms": 12}},
+            {"rule_id": "cccccccccccc", "updated_at": bar, "state": "error", "detail": "No bars", "mode": "shadow"},
+        ])
+        # A rule removed from the file: its row goes.
+        await store.write_rule_states([
+            {"rule_id": "aaaaaaaaaaaa", "updated_at": bar, "state": "running", "mode": "live", "script_version": 3},
+        ])
+
+        await AsyncDbSignalJournalManager(writer).record_decision({
+            "signal_uuid": "tradingview-0001", "action": "long", "indice": "us100",
+            "signal_timestamp": "2026-10-13T13:30:00Z", "decided_at": bar + timedelta(minutes=1, seconds=4),
+            "outcome": "refused", "reason": "Already in a position",
+        })
+
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        listed = await queries.ta_signals(start=date(2026, 10, 13), end=date(2026, 10, 13))
+        of_one_rule = await queries.ta_signals(rule_id="bbbbbbbbbbbb")
+        others = await queries.ta_other_signals("us100", date(2026, 10, 13))
+        return live, again, shadow, listed, of_one_rule, await queries.ta_engine_state(), await queries.ta_rule_states(), others
+
+    live, again, shadow, listed, of_one_rule, engine, rules, others = in_a_database_of_its_own(scenario)
+
+    assert isinstance(live, int) and again is None and isinstance(shadow, int)
+    sent = next(row for row in listed if row["id"] == live)
+    assert (sent["outcome"], sent["http_status"], sent["signal_uuid"]) == ("sent", 200, "5e1f2a3b-0000-4000-8000-000000000001")
+    # What the trader made of it, read through the uuid the web server gave.
+    assert sent["trader"]["outcome"] == "executed" and sent["trader"]["position_id"] == "5025001"
+    assert [row["id"] for row in of_one_rule] == [shadow] and of_one_rule[0]["trader"] is None
+    assert (engine["state"], engine["figures"]) == ("running", {"rules": 2})
+    assert list(rules) == ["aaaaaaaaaaaa"] and rules["aaaaaaaaaaaa"]["state"] == "running"
+    # What the trader received for us100 from elsewhere than the engine: TradingView's.
+    assert [row["signal_uuid"] for row in others] == ["tradingview-0001"]
+
+
+def test_the_signals_from_elsewhere_are_read_before_the_ta_engine_ever_ran(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import AsyncDbSignalJournalManager
+
+    async def scenario(writer, reader):
+        await AsyncDbSignalJournalManager(writer).record_decision({
+            "signal_uuid": "tradingview-0002", "action": "short", "indice": "us100",
+            "signal_timestamp": "2026-10-13T14:00:00Z", "decided_at": datetime(2026, 10, 13, 14, 0, 2, tzinfo=timezone.utc),
+            "outcome": "executed",
+        })
+        return await AdminQueries(LazyDatabase(reader), "Europe/Paris").ta_other_signals("us100", date(2026, 10, 13))
+
+    assert [row["signal_uuid"] for row in in_a_database_of_its_own(scenario)] == ["tradingview-0002"]
 
 
 # ── RabbitMQ, through what the services publish and consume with ──

@@ -46,7 +46,9 @@ describe('range bars as a chart', () => {
   })
 
   it('have no index line for an index shown by itself', () => {
-    const alone = rangeChart(answer({ instrument: INDEX, under: null, bars: ROWS.map((row) => [...row.slice(0, 9), null] as PriceRangeRow) }))
+    const alone = rangeChart(
+      answer({ instrument: INDEX, under: null, bars: ROWS.map((row) => [...row.slice(0, 9), null] as unknown as PriceRangeRow) }),
+    )
 
     expect(alone.indexLine).toBeUndefined()
     expect(alone.indexLocate).toBeUndefined()

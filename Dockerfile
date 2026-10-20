@@ -22,6 +22,12 @@ COPY ./requirements.txt /app/requirements.txt
 
 RUN pip install --no-cache-dir --only-binary=:all: -r /app/requirements.txt
 
+# Node, for the TA engine's Pine runner (src/ta_engine/runner/runner.mjs, one
+# file package.sh builds from admin_ui/): its binary alone, from Node's own
+# image, of the version admin_ui/.nvmrc names. Before the code, like the
+# libraries: a deploy does not fetch it again.
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+
 # Copy the current directory contents into the container at /app
 COPY ./src /app/src
 

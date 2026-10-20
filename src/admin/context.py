@@ -53,7 +53,14 @@ class AdminSettings:
     # Backtests asked for from the interface: their results, and the prices they run on.
     backtests_enabled: bool = True
     backtests_path: str = "/app/var/lib/backtests"
+    # One run at a time beside the trading services; a research machine (lab/) runs several, over longer periods.
+    backtests_workers: int = 1
+    backtests_max_queued: int = 10
+    backtests_max_period_days: int = 92
     price_history_path: str = "/app/var/lib/price_history"
+    # The Pine scripts and chart layouts of the Technical Analysis pages, inside the
+    # admin's own folder: the signal engine mounts this subfolder alone, read-only.
+    ta_path: str = "/app/var/lib/admin/ta"
     session_idle_minutes: int = 60
     session_max_age_minutes: int = 720
     cookie_secure: bool = True
@@ -74,8 +81,12 @@ class AdminSettings:
             api_port=admin_config.get("api_port", cls.api_port),
             credentials_path=admin_config.get("persistant", {}).get("credentials_path", cls.credentials_path),
             backtests_enabled=admin_config.get("backtests_enabled", cls.backtests_enabled),
+            backtests_workers=int(admin_config.get("backtests_workers", cls.backtests_workers)),
+            backtests_max_queued=int(admin_config.get("backtests_max_queued", cls.backtests_max_queued)),
+            backtests_max_period_days=int(admin_config.get("backtests_max_period_days", cls.backtests_max_period_days)),
             backtests_path=admin_config.get("persistant", {}).get("backtests_path", cls.backtests_path),
             price_history_path=admin_config.get("persistant", {}).get("price_history_path", cls.price_history_path),
+            ta_path=admin_config.get("persistant", {}).get("ta_path", cls.ta_path),
             session_idle_minutes=admin_config.get("session_idle_minutes", cls.session_idle_minutes),
             session_max_age_minutes=admin_config.get("session_max_age_minutes", cls.session_max_age_minutes),
             cookie_secure=admin_config.get("cookie_secure", cls.cookie_secure),
@@ -102,10 +113,18 @@ class AdminContext:
     audit_log: Any = None
     # Backtests run as child processes, and their results kept as files (src/admin/backtests.py).
     backtests: Any = None
+    # The downloads of Dukascopy's history and keeping it up to date (src/admin/downloads.py).
+    downloads: Any = None
+    # Each finished day written as files for a research machine (src/admin/research_export.py).
+    research: Any = None
+    # Each shadow rule's finished days traded on paper (src/admin/paper.py).
+    paper: Any = None
     # The prices fetched from Dukascopy, read as files for the Data pages (src/admin/data.py).
     history: Any = None
     # The live prices of the Capital.com feed, for the charts that follow them (src/admin/live_prices.py).
     live_prices: Any = None
+    # The Pine scripts of the Technical Analysis pages, kept as files (src/admin/ta_scripts.py).
+    ta_scripts: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -147,33 +166,42 @@ def build_context(config_manager) -> AdminContext:
     """The context used in production, wired to the real services."""
     import httpx
 
-    import json
-
     from src.admin.audit import AuditLog
     from src.admin.backtests import BacktestService
     from src.admin.config_editor import ConfigEditor
     from src.admin.data import PriceHistory
+    from src.admin.downloads import HistoryDownloads, config_hours
     from src.admin.live_prices import LivePrices, rabbitmq_source
     from src.admin.queries import AdminQueries, LazyDatabase
+    from src.admin.paper import PaperTrading
+    from src.admin.research_export import ResearchExport
+    from src.admin.ta_rules import RuleStore
     from src.admin.services import SaxoAccess, WataServices
+    from src.admin.ta_scripts import ScriptStore
     from src.database.postgres import AsyncDbRiskStateManager, PostgresConnectionManager
     from src.mq_telegram.async_tools import AsyncTelegramSender
-    from src.strategy.execution import WataRules
     from src.web_server_token import WebServerToken
 
     settings = AdminSettings.from_config(config_manager)
     events = EventHub()
 
-    def live_rules() -> WataRules:
-        # Read again each time: the configuration may have been edited since the admin started.
-        with open(settings.config_path, encoding="utf-8") as config_file:
-            return WataRules.from_config(json.load(config_file))
-
-    backtests = BacktestService(
-        runs_root=settings.backtests_path,
+    downloads = HistoryDownloads(
         prices_root=settings.price_history_path,
-        rules=live_rules,
+        hours=config_hours(settings.config_path),
         publish=events.publish,
+        # The switch and the days settled, kept there by the former backtester.
+        legacy_state=os.path.join(settings.backtests_path, "_fetch"),
+    )
+    ta_scripts = ScriptStore(settings.ta_path)
+    backtests = BacktestService(
+        root=settings.backtests_path,
+        prices_root=settings.price_history_path,
+        config_path=settings.config_path,
+        scripts=ta_scripts,
+        publish=events.publish,
+        workers=settings.backtests_workers,
+        max_queued=settings.backtests_max_queued,
+        max_period_days=settings.backtests_max_period_days,
     )
 
     postgres_config = config_manager.get_config_value("postgresql", {})
@@ -197,6 +225,9 @@ def build_context(config_manager) -> AdminContext:
         f"amqp://{rabbitmq['authentication']['username']}:{rabbitmq['authentication']['password']}@{rabbitmq['hostname']}/"
     )
 
+    queries = AdminQueries(database, settings.timezone)
+    version = read_version()
+
     return AdminContext(
         config_manager=config_manager,
         settings=settings,
@@ -206,7 +237,7 @@ def build_context(config_manager) -> AdminContext:
             max_age_seconds=settings.session_max_age_minutes * 60,
         ),
         throttle=LoginThrottle(),
-        queries=AdminQueries(database, settings.timezone),
+        queries=queries,
         services=WataServices(
             config_manager,
             http_client,
@@ -217,11 +248,20 @@ def build_context(config_manager) -> AdminContext:
         risk_state=AsyncDbRiskStateManager(pause_database),
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
         backtests=backtests,
+        downloads=downloads,
+        research=ResearchExport(
+            prices_root=settings.price_history_path, queries=queries, config_path=settings.config_path, version=version,
+        ),
+        paper=PaperTrading(
+            backtests=backtests, queries=queries, rules=RuleStore(ta_scripts),
+            config_path=settings.config_path,
+        ),
         history=PriceHistory(settings.price_history_path),
         live_prices=LivePrices(rabbitmq_source(rabbitmq_url)),
+        ta_scripts=ta_scripts,
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,
-        version=read_version(),
-        closers=[backtests.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close],
+        version=version,
+        closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close],
     )

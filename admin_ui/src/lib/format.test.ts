@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { lastDays, rangeParams } from './dateRange'
 import {
+  formatBytes,
   formatDateTime,
   formatDay,
   formatDuration,
@@ -124,5 +125,14 @@ describe('toneOf', () => {
     expect(toneOf(-0.01)).toBe('negative')
     expect(toneOf(0)).toBe('neutral')
     expect(toneOf(null)).toBe('neutral')
+  })
+})
+
+describe('formatBytes', () => {
+  it('says a size in the units a person reads', () => {
+    expect([0, 999, 1000, 48_200, 600_000, 14_000_000, 2_340_000_000].map(formatBytes)).toEqual([
+      '0 B', '999 B', '1.0 kB', '48.2 kB', '600 kB', '14.0 MB', '2.3 GB',
+    ])
+    expect(formatBytes(undefined)).toBe('-')
   })
 })

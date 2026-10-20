@@ -29,6 +29,7 @@ from src.admin.prices import (
     price_decimals,
     range_bars,
     range_rows,
+    range_volumes,
     recording_gaps,
     sample_at,
 )
@@ -417,13 +418,14 @@ def test_trades_of_an_index_are_those_of_every_recorded_turbo_of_its_indice():
 
 
 def test_the_bid_of_an_instrument_is_read_as_one_series_oldest_first():
-    db = FakeDb(rows=[{"t": 1791792000, "open": 8.4, "high": 8.52, "low": 8.36, "close": 8.45}])
+    db = FakeDb(rows=[{"t": 1791792000, "open": 8.4, "high": 8.52, "low": 8.36, "close": 8.45, "updates": 7}])
 
     series = asyncio.run(AdminQueries(db, "Europe/Paris").price_series(2, START, END, "bid", 20000))
 
-    assert series == [(1791792000, 8.4, 8.52, 8.36, 8.45)]
+    # The quote changes come along: they are the range bars' volume.
+    assert series == [(1791792000, 8.4, 8.52, 8.36, 8.45, 7)]
     query, args = db.calls[0]
-    assert "bid_open AS open" in query and "bid_close AS close" in query
+    assert "bid_open AS open" in query and "bid_close AS close" in query and ", updates" in query
     assert "WHERE instrument_id = $1 AND ts >= $2 AND ts < $3" in query
     assert "IS NOT NULL" not in query
     assert "ORDER BY ts" in query and "LIMIT $4" in query
@@ -842,11 +844,25 @@ def test_prices_are_counted_in_whole_ticks_so_no_bar_is_a_hair_off_its_range():
 def test_rows_give_prices_back_in_the_unit_of_the_instrument_with_the_index_beside():
     bars = built(series(1.00, 1.12))
 
-    assert range_rows(bars, 2, index=[25000.5, None]) == [
-        [T0, 1.0, 1.1, 1.0, 1.1, T0, T0 + 20, True, False, 25000.5],
-        [T0 + 10, 1.1, 1.12, 1.1, 1.12, T0 + 10, T0 + 20, False, False, None],
+    assert range_rows(bars, 2, index=[25000.5, None], volumes=[12, 3]) == [
+        [T0, 1.0, 1.1, 1.0, 1.1, T0, T0 + 20, True, False, 25000.5, 12],
+        [T0 + 10, 1.1, 1.12, 1.1, 1.12, T0 + 10, T0 + 20, False, False, None, 3],
     ]
     assert len(range_rows(bars, 2)[0]) == len(RANGE_COLUMNS)
+    assert range_rows(bars, 2)[0][-1] is None
+
+
+def test_each_ten_seconds_of_quotes_counts_once_in_the_range_bars_volume():
+    # Three bars; the second ten seconds end the first bar and start the second.
+    bars = built(series(1.00, 1.12, 1.15, 1.30))
+    times = [T0, T0 + 10, T0 + 20, T0 + 30]
+
+    volumes = range_volumes(bars, times, [5, 7, 2, 4])
+
+    assert sum(volumes) == 5 + 7 + 2 + 4
+    assert volumes[0] == 5 + 7
+    # Ten seconds before the first bar, or after the last, are counted nowhere.
+    assert range_volumes(bars, [T0 - 10, T0 + 1000], [9, 9]) == [0] * len(bars)
 
 
 @pytest.mark.parametrize("prices, decimals", [

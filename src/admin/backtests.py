@@ -1,521 +1,744 @@
 """
-Backtests asked for from the admin interface.
+Backtests asked for from the admin interface (src/backtest).
 
-A backtest is the command of src/strategy/backtest.py run as a child process:
-it can be stopped, it cannot slow the admin's own answers, and it gives way to
+A run is the command ``python -m src.backtest.run`` run as a child process: it
+can be stopped, it cannot slow the admin's own answers, and it gives way to
 everything else on a machine that trades (lowest priority, one at a time).
+It reads the recorded turbos through one read-only connection of its own.
 
-Each run is a folder of files under the backtests directory: what was asked,
-the rules it ran with, its state, and what the command wrote. Nothing goes to
-the database.
-
-Prices come from the folder the downloader fills
-(src/strategy/history/dukascopy.py), which is run the same way: one download
-at a time, which is also what its server tolerates. Asked for from the page,
-or by the service itself when it is told to keep the prices up to date
-(``keep_prices``): then it fetches what is missing a few days at a time, only
-while the market is closed, and waits longer each time the server stops
-answering.
-
-Two things are checked against what WATA really did, with rows the routes read
-from the database and hand over (this module never reads it): the signals WATA
-received are replayed as a backtest and its trades set beside the real ones
-(``create_from_signals``, ``comparison``), and the turbo the backtests assume
-is measured on the closed trades (``start_calibration``).
+Each run is a folder under ``<backtests_path>/runs``: what was asked
+(``request.json``), the rules and settings it runs with (``settings.json``,
+with the live value of each one it changed), the sources of its Pine script as
+they were when it was asked (``sources/``), the signals of the journal it
+replays (``journal.json``, read by the route), its state, and what the command
+wrote. Nothing goes to the database. A run id is made here and matched against
+``RUN_ID`` before any path is built.
 
 None of this acts on the trading services, so it is neither in the audit
 trail nor announced on Telegram.
 """
 
 import asyncio
-import csv
 import json
 import logging
 import os
 import re
 import secrets
 import shutil
-import sys
 import time
-from dataclasses import asdict, dataclass, replace
-from datetime import date, datetime, timedelta, timezone
-from typing import Awaitable, Callable, Protocol
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Callable
+
+import pytz
 
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
-from src.admin.data import PriceHistory
-from src.capital_feed import day_files as capital_day_files
-from src.price_recorder.bars import BAR_SECONDS
-from src.strategy import backtest, signals, sweep
-from src.strategy.comparison import Leg, compare
-from src.strategy.engine import LONG, SHORT, LocalClock
-from src.strategy.execution import TurboModel, WataRules, compounded
-from src.strategy.fingerprint import code_fingerprint, file_digest, prices_fingerprint
-from src.strategy.history import dukascopy
-from src.strategy.sources import FileBars, files_of_period
+from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
+from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
+from src.admin.processes import (
+    CANCELLED,
+    DONE,
+    FAILED,
+    INTERRUPTED,
+    QUEUED,
+    RUNNING,
+    Launcher,
+    Process,
+    folder_bytes,
+    launch,
+    read_json,
+    tail,
+    utc,
+    write_json,
+)
+from src.admin.ta_rules import (
+    ALERT_CALL_ACTIONS,
+    IGNORE,
+    InvalidRule,
+    RuleStore,
+    acts,
+    checked_alerts,
+    checked_bars,
+    checked_inputs,
+)
+from src.admin.ta_scripts import ScriptNotFound, ScriptStore
+from src.backtest.baseline import DEFAULT_REPETITIONS, DEFAULT_SEED, MAX_REPETITIONS
+from src.backtest.figures import code_digest
+from src.backtest.regimes import DAY_TYPES, GAP_LABELS, MACRO_LABELS, OPEN_LABELS, SESSION_PARTS, VOLATILITY_LABELS
+from src.backtest.settings import (
+    DEFAULT_SIGNAL_DELAY,
+    GROUPS,
+    BacktestSettings,
+    InvalidSettings,
+    from_config,
+    options as setting_options,
+    with_changes,
+)
+from src.backtest.sweep import (
+    DEFAULT_HELD_OUT,
+    LEAST_HELD_OUT,
+    MAX_AXES,
+    MAX_CELLS,
+    MAX_INPUT_SETS,
+    MAX_VALUES,
+    MOST_HELD_OUT,
+    SETTING,
+    InvalidSweep,
+    checked_axes,
+)
+from src.ta_engine.replay import REPLAY_RULE_ID
 
 logger = logging.getLogger(__name__)
 
-APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-QUEUED = "queued"
-RUNNING = "running"
-DONE = "done"
-FAILED = "failed"
-CANCELLED = "cancelled"
-# The admin stopped while the run was waiting or running.
-INTERRUPTED = "interrupted"
-
-# A download that ended with days still missing: the usual end of one.
-INCOMPLETE = "incomplete"
-STOPPED = "stopped"
-IDLE = "idle"
-
-MAX_PERIOD_DAYS = 366
-MAX_LEVERAGES = 5
-MAX_QUEUED = 10
-MAX_NOTE_LENGTH = 200
-MAX_LISTED = 200
-# A year in which the rules hold every position for the day, on a small machine at the lowest priority.
-RUN_TIMEOUT_SECONDS = 3 * 3600
-FETCH_MAX_DAYS = 92
-FETCH_TIMEOUT_SECONDS = 6 * 3600
-OUTPUT_TAIL_LINES = 40
-DEFAULT_LEVERAGES = (80.0, 110.0, 140.0)
-CALIBRATION_TIMEOUT_SECONDS = 1800
-# How unkind the fills of a run may be asked to be, and the account its money is counted on.
-MAX_FILL_DELAY_SECONDS = 600
-MAX_SLIPPAGE_POINTS = 100.0
-MAX_CAPITAL = 1e9
-# A measured leverage whose range is narrower than this share of it is used alone.
-NARROW_RANGE = 0.05
-
-# Keeping the prices up to date without anyone asking.
-KEEP_DEFAULT_DAYS = 120
-KEEP_MAX_DAYS = 730
-# Days asked for in one download: the newest that are missing.
-KEEP_CHUNK_DAYS = 5
-KEEP_TICK_SECONDS = 60
-# Between two downloads that went well: nothing here is in a hurry.
-KEEP_PAUSE_SECONDS = 300
-# After the operator stopped a download: not started again behind their back for a while.
-KEEP_AFTER_STOP_SECONDS = 3600
-# After the server stopped answering, and twice as long each time it does again.
-KEEP_BACKOFF_SECONDS = 1800
-KEEP_BACKOFF_MAX_SECONDS = 12 * 3600
-# A day older than this for which the server has nothing is not asked for again.
-KEEP_GIVE_UP_AFTER_DAYS = 3
-
-# 20261012-213045-a1b2c3: made here, and the only shape a folder is ever looked for with.
+# 20261019-213045-a1b2c3: made here, and the only shape a folder is ever looked for with.
 RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
-FETCH_FOLDER = "_fetch"
-CALIBRATION_FOLDER = "_calibration"
+RUNS_FOLDER = "runs"
+# What the former backtester left at the root of the folder: its runs, its measures of the turbo.
+FORMER_FOLDERS = ("_calibration", "_fetch")
 
-KIND_STRATEGY, KIND_SIGNALS, KIND_SWEEP = "strategy", "signals", "sweep"
-# Combinations one sweep may try: each is a backtest's worth of trading, in one pass over the prices.
-MAX_SWEEP_CELLS = 64
-MAX_SWEEP_VALUES = 12
+PINE, JOURNAL = "pine", "journal"
+# The signals a rule raised live, journaled by the TA engine (``ta_signal``): paper trading.
+TA_SIGNALS = "ta_signals"
+RAISED_FILE = "ta_signals.json"
+# Each shadow rule's day made a run, every finished day (src/admin/paper.py): kept apart from the list of runs.
+PAPER_FOLDER = "paper"
+SIDES = ("bid", "ask")
+CHART_PROVIDERS = ("capital", "dukascopy", "saxo")
+MAX_PERIOD_DAYS = 92
+SIGNAL_CACHE_FOLDER = "_signal_cache"
+MAX_WINDOW_DAYS = 365
+MAX_QUEUED = 10
+MAX_LISTED = 200
+MAX_NAME_LENGTH = 120
 MAX_TAGS = 6
 MAX_TAG_LENGTH = 24
-# The strategy whose range bars and lines are drawn behind replayed signals: the one TradingView runs.
-CHART_STRATEGY = "kernel_vwap"
-
-TRADES, DAYS, REFUSALS = "trades", "days", "refusals"
-_NUMBERS = {
-    TRADES: (
-        "confidence", "entry_index", "exit_index", "index_points", "performance_percent", "max_performance_percent",
-        "min_performance_percent", "scale_percent", "stake", "profit_loss",
-    ),
-    DAYS: ("entries", "closed", "day_percent", "profit_loss", "equity"),
-    REFUSALS: (),
-}
-_WHOLE = ("entries", "closed")
+# Days of a year of recorded turbos, at the lowest priority on a small machine, with the random repetitions.
+RUN_TIMEOUT_SECONDS = 3 * 3600
+# A run made again with every order filled later and at a worse price (``stress``): seconds
+# added to its orders' time, and euros taken from each fill of a turbo (a tick is 0.01).
+STRESS_LATER_SECONDS = (0, 2, 5, 15)
+STRESS_WORSE_PRICE = (0, 0.01, 0.02, 0.05)
+# Turbos made up from an index (src/backtest/turbo_model.py): measured on the recorded ones, kept here.
+TURBO_MODEL_FOLDER = "_turbo_model"
+MODEL_FILE = "turbo_model.json"
+# A replay of the journal keeps WATA's real positions of its days beside it.
+POSITIONS_FILE = "positions.json"
+MODEL_UNDERLYING = "dukascopy/us100"
+RECORDED, MODELLED = "recorded", "modelled"
+# Two years of an index: the turbos made up cost a few tenths of a second a day.
+MODELLED_MAX_PERIOD_DAYS = 731
+# The recorded days measured at most at once, and the time it may take.
+MEASURE_MAX_DAYS = 92
+MEASURE_TIMEOUT_SECONDS = 1800
 
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # The confidences an entry is put in: (under, label). Without one: "Not given".
 _CONFIDENCES = ((0.5, "Under 0.5"), (1.0, "0.5 to 1"), (1.5, "1 to 1.5"), (float("inf"), "1.5 and above"))
 NO_CONFIDENCE = "Not given"
-# The points of a trade's path a chart is given at most: beyond, they are put together.
-MAX_PATH_POINTS = 1500
-
-# How the model says a trade ended, in the words the admin has for real ones (``exit_group``).
-_MODEL_EXITS = (
-    ("Stoploss", "Stop-loss"),
-    ("Knocked out", "Stop-loss"),
-    ("Takeprofit", "Take-profit"),
-    ("Trailing stop", "Trailing stop"),
-    ("Daily profit target", "Daily profit target"),
-    ("End of day", "Signal or end of day"),
-    ("Signal", "Signal or end of day"),
-)
+# The turbo's price at entry: (under, label).
+_PRICES = ((5.0, "Under 5"), (7.0, "5 to 7"), (10.0, "7 to 10"), (15.0, "10 to 15"), (float("inf"), "15 and above"))
 
 
-class InvalidRequest(ValueError):
-    """What was asked makes no sense; the message says why, for whoever asked."""
-
-
-class UnknownRun(LookupError):
-    pass
-
-
-class NotPossible(RuntimeError):
-    """Not in the state the request needs."""
-
-
-@dataclass(frozen=True)
-class EditableRule:
-    """A rule of WATA that one backtest may be run with another value of."""
-
-    name: str
-    kind: str
-    label: str
-    least: float | None = None
-    most: float | None = None
-
-
-EDITABLE_RULES = (
-    EditableRule("stoploss_percent", "number", "Stop-loss, in percent of the turbo", -100.0, -0.1),
-    EditableRule("max_profit_percent", "number", "Take-profit, in percent", 0.1, 10000.0),
-    EditableRule("trailing_enabled", "boolean", "Trailing stop"),
-    EditableRule("trailing_activation_percent", "number", "Gain that arms the trailing stop, in percent", 0.0, 1000.0),
-    EditableRule("trailing_drawdown_percent", "number", "Fall from the peak that sells, in percent", 0.1, 1000.0),
-    EditableRule("day_profit_target", "number", "Day's result at which the position is sold, in percent", 0.01, 10000.0),
-    EditableRule("no_entry_above_day_profit", "number", "No new entry once the day is above, in percent", 0.01, 10000.0),
-    EditableRule("max_day_loss", "number", "No new entry once the day is below, in percent", -100.0, -0.01),
-    EditableRule("cooldown_after_loss_minutes", "integer", "Minutes without entry after a loss", 0, 1440),
-    EditableRule("max_trades_per_day", "integer", "Entries per day at most (0: no limit)", 0, 1000),
-    EditableRule("min_confidence", "number", "Entries under this confidence are refused (0: none is)", 0.0, 100.0),
-)
-_EDITABLE = {rule.name: rule for rule in EDITABLE_RULES}
-
-
-def checked_rules(changes: dict) -> dict:
-    """The rules changed for a run, each of the kind and within the bounds it must have."""
-    checked = {}
-    for name, value in changes.items():
-        rule = _EDITABLE.get(name)
-        if rule is None:
-            raise InvalidRequest(f"The rule '{name}' cannot be changed for a backtest")
-        if rule.kind == "boolean":
-            if not isinstance(value, bool):
-                raise InvalidRequest(f"The rule '{name}' is on or off")
-            checked[name] = value
-            continue
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise InvalidRequest(f"The rule '{name}' needs a number")
-        if rule.kind == "integer" and value != int(value):
-            raise InvalidRequest(f"The rule '{name}' needs a whole number")
-        if not rule.least <= value <= rule.most:
-            raise InvalidRequest(f"The rule '{name}' must be between {rule.least:g} and {rule.most:g}")
-        checked[name] = int(value) if rule.kind == "integer" else float(value)
-    return checked
-
-
-class Process(Protocol):
-    returncode: int | None
-
-    async def wait(self) -> int: ...
-
-    def terminate(self) -> None: ...
-
-    def kill(self) -> None: ...
-
-
-# Runs ``python -m <arguments>`` with its output kept in the file named.
-Launcher = Callable[[list[str], str], Awaitable[Process]]
-
-
-async def launch(arguments: list[str], log_path: str) -> Process:
-    """A module of the application as a child process, from the application's directory."""
-    python_path = os.pathsep.join(
-        part for part in (APP_ROOT, os.path.join(APP_ROOT, "src"), os.environ.get("PYTHONPATH")) if part
-    )
-    with open(log_path, "ab") as log:
-        return await asyncio.create_subprocess_exec(
-            sys.executable, "-u", "-m", *arguments,
-            stdin=asyncio.subprocess.DEVNULL, stdout=log, stderr=asyncio.subprocess.STDOUT,
-            cwd=APP_ROOT, env={**os.environ, "PYTHONPATH": python_path},
-        )
-
-
-def _write_json(path: str, content: dict) -> None:
-    partial = f"{path}.part"
-    with open(partial, "w", encoding="utf-8") as out_file:
-        json.dump(content, out_file, indent=2)
-    os.replace(partial, path)
-
-
-def _read_json(path: str) -> dict | None:
-    try:
-        with open(path, encoding="utf-8") as in_file:
-            return json.load(in_file)
-    except (OSError, ValueError):
-        return None
-
-
-def _tail(path: str, lines: int = OUTPUT_TAIL_LINES) -> list[str]:
-    try:
-        with open(path, encoding="utf-8", errors="replace") as in_file:
-            return [line.rstrip("\n") for line in in_file.readlines()[-lines:]]
-    except OSError:
-        return []
-
-
-def _utc(moment: float) -> str:
-    return datetime.fromtimestamp(moment, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _epoch(text: str) -> int:
-    return int(datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
-
-
-def _folder_bytes(path: str) -> int:
-    """The size of everything under a folder; 0 when it is not there."""
-    total = 0
-    for folder, _, names in os.walk(path):
-        for name in names:
-            try:
-                total += os.path.getsize(os.path.join(folder, name))
-            except OSError:
-                pass
-    return total
-
-
-def _moment(value) -> int | None:
-    """Epoch seconds of a time as the database gives it, or as it was written to a file."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return int((value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp())
-    if isinstance(value, (int, float)):
-        return int(value)
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return int((parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp())
-
-
-def signals_to_replay(journal: list[dict], indice: str) -> list[dict]:
-    """
-    The trader's journal as the signals a backtest replays, oldest first:
-    the entries asked for on the indice, and every close (the scheduler's
-    end of day names no indice). What WATA made of each is kept beside it.
-    """
-    replayed = []
-    for row in journal:
-        action = row.get("action")
-        if action not in signals.ACTIONS:
-            continue
-        entry = signals.ACTIONS[action][0] in (LONG, SHORT)
-        if entry and str(row.get("indice") or "").lower() != indice.lower():
-            continue
-        # When the trader dealt with it: the moment its order, if any, was sent.
-        at = _moment(row.get("decided_at")) or _moment(row.get("received_timestamp")) or _moment(row.get("signal_timestamp"))
-        if at is None:
-            continue
-        replayed.append({
-            "at": _utc(at),
-            "action": action,
-            "confidence": row.get("confidence"),
-            "outcome": row.get("outcome"),
-            "reason": row.get("reason"),
-            "signal_uuid": row.get("signal_uuid"),
-            "position_id": row.get("position_id"),
-        })
-    return sorted(replayed, key=lambda signal: signal["at"])
-
-
-def real_trades_of(positions: list[dict], journal: list[dict], indice: str) -> list[dict]:
-    """
-    WATA's closed positions as trades to compare with, or to measure the turbo
-    on, oldest first. One that the journal ties to another indice is left out;
-    one from before there was a journal is kept.
-    """
-    indice_of = {row["position_id"]: str(row.get("indice") or "").lower() for row in journal if row.get("position_id")}
-    trades = []
-    for position in positions:
-        opened_at, closed_at = _moment(position.get("execution_time_open")), _moment(position.get("execution_time_close"))
-        direction = position.get("action")
-        if opened_at is None or closed_at is None or direction not in (LONG, SHORT):
-            continue
-        if indice_of.get(position.get("position_id"), indice.lower()) != indice.lower():
-            continue
-        trades.append({
-            "position_id": position.get("position_id"),
-            "direction": direction,
-            "opened_at": _utc(opened_at),
-            "closed_at": _utc(closed_at),
-            "open_price": position.get("position_open_price"),
-            "close_price": position.get("position_close_price"),
-            "performance_percent": position.get("position_total_performance_percent"),
-            "max_performance_percent": position.get("position_max_performance_percent"),
-            "close_reason": position.get("position_close_reason"),
-            "instrument_name": position.get("instrument_name"),
-        })
-    return sorted(trades, key=lambda trade: trade["opened_at"])
-
-
-def _model_exit(reason: str) -> str:
-    for marker, label in _MODEL_EXITS:
-        if reason.startswith(marker):
-            return label
-    return "Other"
-
-
-def _confidence_group(confidence: float | None) -> str:
+def _confidence_group(confidence) -> str:
     if confidence is None:
         return NO_CONFIDENCE
     return next(label for under, label in _CONFIDENCES if confidence < under)
 
 
-def _decimals_of(tick: float) -> int:
-    """Decimals a price counted in steps of ``tick`` is written with: 1 for 0.1."""
-    text = f"{tick:.10f}".rstrip("0")
-    return len(text) - text.index(".") - 1
+def _price_group(price) -> str | None:
+    if price is None:
+        return None
+    return next(label for under, label in _PRICES if price < under)
 
 
-# The prices a backtest can run on: the days downloaded from Dukascopy, or those
-# the Capital.com feed recorded and wrote a file of once over (src/capital_feed/day_files.py).
-PRICES_DUKASCOPY = dukascopy.SOURCE
-PRICES_CAPITAL = capital_day_files.SOURCE
-PRICE_SOURCES = (PRICES_DUKASCOPY, PRICES_CAPITAL)
+def _text(value, what: str, maximum: int, *, required: bool = False) -> str:
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        raise InvalidRequest(f"{what} is a text")
+    value = value.strip()
+    if required and not value:
+        raise InvalidRequest(f"{what} is needed")
+    if len(value) > maximum:
+        raise InvalidRequest(f"{what} is {maximum} characters at most")
+    return value
 
 
-def prices_of(request: dict) -> str:
-    """The prices a run was made on: Dukascopy's for a run made before there was a choice."""
-    return request.get("prices") or PRICES_DUKASCOPY
+def checked_tags(tags) -> list[str]:
+    if tags is None:
+        return []
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise InvalidRequest("Tags are texts")
+    cleaned = [tag.strip() for tag in tags if tag.strip()]
+    if len(cleaned) > MAX_TAGS or any(len(tag) > MAX_TAG_LENGTH for tag in cleaned):
+        raise InvalidRequest(f"{MAX_TAGS} tags at most, of {MAX_TAG_LENGTH} characters at most each")
+    # Each once, in the order they were given.
+    return list(dict.fromkeys(cleaned))
+
+
+def checked_asset(asset) -> dict:
+    """An asset of the Data pages a strategy can run on: Capital.com, Dukascopy, or one the recorder kept."""
+    if not isinstance(asset, dict) or asset.get("provider") not in CHART_PROVIDERS or not isinstance(asset.get("key"), str):
+        raise InvalidRequest("The asset is one of the Data pages': capital/<epic>, dukascopy/<label> or saxo/<id>")
+    provider, key = asset["provider"], asset["key"]
+    try:
+        {"capital": capital_epic, "dukascopy": history_label, "saxo": saxo_instrument_id}[provider](key)
+    except AssetNotFound as e:
+        raise InvalidRequest(str(e)) from None
+    return {"provider": provider, "key": key}
+
+
+def checked_chart(chart) -> dict:
+    if not isinstance(chart, dict):
+        raise InvalidRequest("The run needs the asset its days are drawn on")
+    side = chart.get("side", "bid")
+    if side not in SIDES:
+        raise InvalidRequest("The price side is bid or ask")
+    try:
+        bars = checked_bars(chart.get("bars"))
+    except InvalidRule as e:
+        raise InvalidRequest(str(e)) from None
+    return {"asset": checked_asset(chart.get("asset")), "side": side, "bars": bars}
+
+
+def _date(value, what: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise InvalidRequest(f"{what} is a day, YYYY-MM-DD") from None
+
+
+def _plain(value):
+    """A value of the journal as a JSON file keeps it: a moment as a time of UTC, a decimal as a number."""
+    if isinstance(value, datetime):
+        moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _checked_windows(asked) -> dict | None:
+    """The windows of a walk-forward: days to choose on, days to judge on."""
+    if asked in (None, {}):
+        return None
+    if not isinstance(asked, dict):
+        raise InvalidRequest("A walk-forward is its days to choose on and its days to judge on")
+    windows = {}
+    for name in ("train_days", "test_days"):
+        value = asked.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_WINDOW_DAYS:
+            raise InvalidRequest(f"The walk-forward's {name.replace('_', ' ')} are 1 to {MAX_WINDOW_DAYS}")
+        windows[name] = value
+    return windows
+
+
+def _checked_count(value, what: str) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1_000_000:
+        raise InvalidRequest(f"{what} is a whole number")
+    return value
 
 
 class BacktestService:
     def __init__(
         self,
         *,
-        runs_root: str,
+        root: str,
         prices_root: str,
-        rules: Callable[[], WataRules],
+        config_path: str,
+        scripts: ScriptStore,
         launcher: Launcher = launch,
         publish: Callable[..., None] | None = None,
         clock: Callable[[], float] = time.time,
-        indice: str = backtest.DEFAULT_INDICE,
+        data: str = "database",
+        node: str = "node",
+        workers: int = 1,
+        max_queued: int = MAX_QUEUED,
+        max_period_days: int = MAX_PERIOD_DAYS,
     ):
-        self._runs_root = runs_root
+        self._root = root
+        self._runs_root = os.path.join(root, RUNS_FOLDER)
         self._prices_root = prices_root
-        self._rules = rules
+        self._config_path = config_path
+        self._scripts = scripts
         self._launcher = launcher
         self._publish = publish
         self._clock = clock
-        self._indice = indice
-        # The Dukascopy instruments that can be fetched, and the days of each (src/admin/data.py).
-        self._history = PriceHistory(prices_root)
-
+        # Where the command reads the recorded turbos: the database of the configuration, or files:<folder>.
+        self._data = data
+        self._node = node
+        # On the server one at a time, beside the trading services; a research machine runs several.
+        self._workers = max(1, workers)
+        self.max_queued = max_queued
+        self.max_period_days = max_period_days
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._waiting: list[str] = []
         self._cancelled: set[str] = set()
-        self._running: str | None = None
-        self._process: Process | None = None
-        self._fetch_process: Process | None = None
-        self._fetch_task: asyncio.Task | None = None
-        self._fetch_stopped = False
-        self._calibration_process: Process | None = None
-        self._calibration_task: asyncio.Task | None = None
-        # What a backtest made now would be made with: read once, the code does not change under a running admin.
-        self._code = code_fingerprint()
-        # The digest of each file of prices, kept for as long as the file is the same: path -> (size, time, digest).
-        self._digests: dict[str, tuple[int, int, str]] = {}
+        # The runs going on, and their command.
+        self._running: dict[str, Process] = {}
+        # The turbos being measured, when they are.
+        self._measuring: Process | None = None
+        self._measure_task: asyncio.Task | None = None
+        # What a run made now is made with: read once, the code does not change under a running admin.
+        self._code = code_digest()
 
-    # ── what a form needs ──
+    # ── the live settings ──
 
-    def live_rules(self) -> WataRules:
+    def live_settings(self, capital: float | None = None) -> BacktestSettings:
         try:
-            return self._rules()
+            with open(self._config_path, encoding="utf-8") as config_file:
+                return from_config(json.load(config_file), capital=capital)
         except (OSError, ValueError, KeyError, TypeError) as e:
-            raise NotPossible(f"The rules of the live configuration cannot be read: {e}") from e
+            raise NotPossible(f"The live configuration cannot be read: {e}") from e
 
-    def options(self) -> dict:
-        rules = self.live_rules()
+    def options(self, capital: float | None = None) -> dict:
+        """What the form offers: every setting with its live value, and the limits of a run."""
+        settings = self.live_settings(capital)
         return {
-            "strategies": [
-                {"name": name, "parameters": backtest.describe_parameters(name)} for name in sorted(backtest.STRATEGIES)
-            ],
-            "turbo": self.default_turbo(),
-            # How the fills are taken and the account the money is counted on, unless a run says otherwise.
-            "execution": {"capital": backtest.DEFAULT_CAPITAL, "fill_delay": 0, "slippage": 0.0},
-            "rules": {"live": rules.to_dict(), "editable": [asdict(rule) for rule in EDITABLE_RULES]},
-            "limits": {
-                "period_days": MAX_PERIOD_DAYS, "leverages": MAX_LEVERAGES, "queued": MAX_QUEUED,
-                "fetch_days": FETCH_MAX_DAYS, "note_length": MAX_NOTE_LENGTH,
-                "fill_delay": MAX_FILL_DELAY_SECONDS, "slippage": MAX_SLIPPAGE_POINTS,
-                "sweep_cells": MAX_SWEEP_CELLS, "sweep_values": MAX_SWEEP_VALUES,
-                "tags": MAX_TAGS, "tag_length": MAX_TAG_LENGTH,
+            "fields": setting_options(settings),
+            "groups": list(GROUPS),
+            "timezone": settings.timezone,
+            "indices": list(settings.allowed_indices),
+            "capital": {"value": settings.capital, "from_balance": capital is not None},
+            "signal_delay": DEFAULT_SIGNAL_DELAY,
+            # What a run shows but does not change: they are the configuration's own.
+            "fixed": {
+                "time_periods": [vars(period) for period in settings.time_periods],
+                "confidence_bands": [vars(band) for band in settings.confidence_bands],
+                "default_confidence": settings.default_confidence,
+                "closed_dates": len(settings.closed_dates),
             },
-            # The share of the days a sweep holds out, and between what it can be set.
-            "held_out": {"share": sweep.DEFAULT_HELD_OUT, "least": sweep.LEAST_HELD_OUT, "most": sweep.MOST_HELD_OUT},
-            "timezone": rules.timezone,
+            "baseline": {"repetitions": DEFAULT_REPETITIONS, "most": MAX_REPETITIONS, "seed": DEFAULT_SEED},
+            "sweep": {
+                "axes": MAX_AXES, "cells": MAX_CELLS, "values": MAX_VALUES, "input_sets": MAX_INPUT_SETS,
+                "held_out": DEFAULT_HELD_OUT, "least": LEAST_HELD_OUT, "most": MOST_HELD_OUT,
+            },
+            "limits": {
+                "period_days": self.max_period_days, "queued": self.max_queued, "name_length": MAX_NAME_LENGTH,
+                "tags": MAX_TAGS, "tag_length": MAX_TAG_LENGTH, "modelled_period_days": self.modelled_period_days,
+            },
+            # Turbos made up from an index, once measured: what they were measured on, and how well.
+            "turbo_model": self._model_summary(read_json(self._model_path())),
         }
 
-    def default_turbo(self) -> dict:
-        """
-        The turbo a backtest is run with unless it says otherwise: the one
-        measured on real trades when there is one, else what is assumed.
-        """
-        measured = _read_json(self._calibration_file("result.json")) or {}
-        if not measured.get("fitted"):
-            return {
-                "entry_price": TurboModel.entry_price, "spread": TurboModel.spread,
-                "leverages": list(DEFAULT_LEVERAGES), "measured": False,
-            }
-        leverage, low, high = (measured[name] for name in ("points_per_unit", "points_per_unit_low", "points_per_unit_high"))
-        # One column when the trades pin it down, the two ends of its range beside it when they do not.
-        if high is None:
-            leverages = [low, leverage]
-        elif (high - low) / leverage < NARROW_RANGE:
-            leverages = [leverage]
-        else:
-            leverages = [low, leverage, high]
-        return {
-            "entry_price": measured["entry_price"], "spread": measured["spread"],
-            "leverages": sorted({round(value, 1) for value in leverages}), "measured": True,
-        }
+    @property
+    def modelled_period_days(self) -> int:
+        return max(self.max_period_days, MODELLED_MAX_PERIOD_DAYS)
 
-    # ── the prices runs are made on ──
+    # ── turbos made up from an index ──
 
-    def _location(self, prices: str) -> str:
-        """The folder of the days of ``prices``, for the indice backtests read."""
-        if prices == PRICES_CAPITAL:
-            return capital_day_files.bars_directory(self._prices_root, self._indice)
-        return backtest.price_location(dukascopy.SOURCE, self._prices_root, self._indice)
+    def _model_path(self, name: str = "calibration.json") -> str:
+        return os.path.join(self._root, TURBO_MODEL_FOLDER, name)
 
     @staticmethod
-    def _checked_prices(prices: str | None) -> str:
-        prices = prices or PRICES_DUKASCOPY
-        if prices not in PRICE_SOURCES:
-            raise InvalidRequest(f"A backtest runs on the prices of {' or '.join(PRICE_SOURCES)}")
-        return prices
+    def _model_summary(calibration: dict | None) -> dict | None:
+        if not calibration or not calibration.get("directions"):
+            return None
+        days = calibration.get("days") or []
+        return {
+            "made_at": calibration.get("made_at"), "underlying": calibration.get("underlying"), "indice": calibration.get("indice"),
+            "days": len(days), "first": days[0] if days else None, "last": days[-1] if days else None,
+            "few_days": bool(calibration.get("few_days")), "directions": calibration["directions"],
+            "quoting": calibration.get("quoting"), "issuer": calibration.get("issuer"),
+        }
 
-    def _checked_recorded(self, prices: str, first_day: date, last_day: date) -> None:
-        """Capital.com's days exist only once recorded: a period with none of them is said so before it is queued."""
-        if prices != PRICES_CAPITAL:
-            return
-        written = capital_day_files.written_days(self._prices_root, self._indice)
-        if not any(first_day <= day <= last_day for day in written):
-            raise NotPossible(
-                "No day of that period was recorded from Capital.com: the feed writes each day's file once the day is over"
-            )
+    def turbo_model(self) -> dict:
+        """The measure of the turbos the model makes up, and whether one is being made."""
+        status = read_json(self._model_path("status.json")) or {}
+        state = status.get("state") or "idle"
+        if state == RUNNING and self._measuring is None and self._measure_task is None:
+            state = INTERRUPTED
+        return {
+            "state": state, "error": status.get("error"), "asked": status.get("asked"),
+            "finished_at": status.get("finished_at"),
+            "measure": self._model_summary(read_json(self._model_path())),
+            "underlying": MODEL_UNDERLYING, "max_days": MEASURE_MAX_DAYS,
+        }
 
-    def _source_arguments(self, request: dict) -> list[str]:
-        """Where the command reads its prices: the history fetched under the root, or the folder of the recorded days."""
-        prices = prices_of(request)
-        if prices == PRICES_CAPITAL:
-            return ["--source", self._location(prices), "--indice", self._indice]
-        return ["--root", self._prices_root, "--indice", self._indice]
+    def measure_turbos(self, first_day: date, last_day: date) -> dict:
+        """Measure the recorded turbos of a period against the index, in a command of its own; one at a time."""
+        if self._measuring is not None or self._measure_task is not None:
+            raise NotPossible("The turbos are being measured already")
+        if last_day < first_day:
+            raise InvalidRequest("The period ends before it starts")
+        if (last_day - first_day).days >= MEASURE_MAX_DAYS:
+            raise InvalidRequest(f"{MEASURE_MAX_DAYS} days at most")
+        if first_day > datetime.fromtimestamp(self._clock(), timezone.utc).date():
+            raise InvalidRequest("Nothing was recorded in the future")
+        os.makedirs(self._model_path("").rstrip(os.sep), exist_ok=True)
+        write_json(self._model_path("status.json"), {
+            "state": RUNNING, "asked": {"from": first_day.isoformat(), "to": last_day.isoformat()}, "started_at": utc(self._clock()),
+        })
+        self._measure_task = asyncio.get_running_loop().create_task(self._measure(first_day, last_day))
+        return self.turbo_model()
+
+    async def _measure(self, first_day: date, last_day: date) -> None:
+        live = self.live_settings()
+        command = [
+            "src.backtest.turbo_model", "calibrate", "--from", first_day.isoformat(), "--to", last_day.isoformat(),
+            "--indice", (list(live.allowed_indices) or ["us100"])[0], "--underlying", MODEL_UNDERLYING,
+            "--timezone", live.timezone, "--data", self._data, "--prices", self._prices_root,
+            "--out", self._model_path(), "--low-priority",
+        ]
+        error, code = None, None
+        try:
+            try:
+                self._measuring = await self._launcher(command, self._model_path("output.log"))
+            except Exception as e:
+                error = f"The measure could not be started: {e}"
+            else:
+                try:
+                    code = await asyncio.wait_for(self._measuring.wait(), MEASURE_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    self._measuring.kill()
+                    await self._measuring.wait()
+                    error = f"Stopped after {MEASURE_TIMEOUT_SECONDS // 60} minutes"
+            if error is None and code != 0:
+                error = "\n".join(tail(self._model_path("output.log"), 5)) or f"The command ended with code {code}"
+            state = FAILED if error else DONE
+            status = read_json(self._model_path("status.json")) or {}
+            write_json(self._model_path("status.json"), {**status, "state": state, "error": error, "finished_at": utc(self._clock())})
+            self._announce("turbos_measured", state=state)
+        finally:
+            self._measuring = None
+            self._measure_task = None
+
+    # ── asking for one ──
+
+    def _pine_rule(self, source: dict, indice: str) -> tuple[dict, list[tuple[dict, str]], str]:
+        """The rule a Pine source runs as, the sources to keep with the run, and the script's name."""
+        script = source.get("script")
+        if not isinstance(script, dict):
+            raise InvalidRequest("A Pine run names one of the scripts and its version")
+        store = RuleStore(self._scripts)
+        try:
+            pinned, libraries = store.pin(script.get("id"), script.get("version"))
+            meta = self._scripts.script(pinned["id"])
+            rule = {
+                "id": REPLAY_RULE_ID,
+                "name": meta["name"],
+                "asset": checked_asset(source.get("asset")),
+                "side": source.get("side", "bid"),
+                "bars": checked_bars(source.get("bars")),
+                "script": pinned,
+                "libraries": libraries,
+                "inputs": checked_inputs(source.get("inputs")),
+                "alerts": checked_alerts(source.get("alerts")),
+                "alert_calls": source.get("alert_calls", IGNORE),
+                "confidence_plot": source.get("confidence_plot") or None,
+                "indice": indice,
+                "mode": "shadow",
+            }
+            if rule["side"] not in SIDES:
+                raise InvalidRequest("The price side is bid or ask")
+            if rule["alert_calls"] not in ALERT_CALL_ACTIONS:
+                raise InvalidRequest("alert() calls are ignored or read as messages")
+            if rule["confidence_plot"] is not None and (
+                not isinstance(rule["confidence_plot"], str) or len(rule["confidence_plot"]) > 120
+            ):
+                raise InvalidRequest("The confidence plot is named by its title")
+            store.verify(rule)
+            sources = [(pinned, self._scripts.source(pinned["id"], pinned["version"]))]
+            sources += [(library, self._scripts.source(library["id"], library["version"])) for library in libraries]
+        except (InvalidRule, ScriptNotFound) as e:
+            raise InvalidRequest(str(e)) from None
+        if not acts(rule):
+            raise InvalidRequest("No alert of the script is made a signal: map one to an action")
+        return rule, sources, meta["name"]
+
+    def _checked(self, body: dict, journal: list[dict] | None, capital: float | None) -> tuple[dict, dict, list, list | None]:
+        if not isinstance(body, dict):
+            raise InvalidRequest("A backtest is asked for with its source, period and settings")
+        first_day, last_day = _date(body.get("from"), "The first day"), _date(body.get("to"), "The last day")
+        if last_day < first_day:
+            raise InvalidRequest("The period ends before it starts")
+        turbos = body.get("turbos") or RECORDED
+        if turbos not in (RECORDED, MODELLED):
+            raise InvalidRequest("The turbos are the recorded ones or made up from the index")
+        model = None
+        if turbos == MODELLED:
+            model = read_json(self._model_path())
+            if not self._model_summary(model):
+                raise NotPossible("The turbos have not been measured yet: measure them on the recorded days first")
+        limit = self.modelled_period_days if turbos == MODELLED else self.max_period_days
+        if (last_day - first_day).days >= limit:
+            raise InvalidRequest(f"A period of {limit} days at most")
+        live = self.live_settings(capital)
+        today = datetime.fromtimestamp(self._clock(), timezone.utc).date()
+        if first_day > today:
+            raise InvalidRequest("Nothing was recorded in the future")
+        indice = body.get("indice")
+        if indice not in live.allowed_indices:
+            raise InvalidRequest(f"The indice is one the trader takes: {', '.join(live.allowed_indices) or 'none'}")
+        if model is not None and model.get("indice") != indice:
+            raise InvalidRequest(f"The turbos were measured for {model.get('indice')}, not {indice}")
+
+        source = body.get("source")
+        if not isinstance(source, dict) or source.get("kind") not in (PINE, JOURNAL, TA_SIGNALS):
+            raise InvalidRequest("The signals are a Pine script's, those WATA received, or those a rule raised")
+        sources: list = []
+        kept_journal = None
+        if source["kind"] == PINE:
+            rule, sources, script_name = self._pine_rule(source, indice)
+            from_rule = source.get("from_rule")
+            kept_source = {
+                "kind": PINE, "rule": rule,
+                "from_rule": {"id": str(from_rule.get("id"))[:12], "name": _text(from_rule.get("name"), "The rule's name", 80)}
+                if isinstance(from_rule, dict) else None,
+            }
+            chart = {"asset": rule["asset"], "side": rule["side"], "bars": rule["bars"]}
+            default_name = f"{script_name} on {rule['asset']['key']}"
+        elif source["kind"] == TA_SIGNALS:
+            rule_ref = source.get("rule") if isinstance(source.get("rule"), dict) else {}
+            if not rule_ref.get("id"):
+                raise InvalidRequest("The signals a rule raised are named by the rule")
+            kept_journal = [{key: _plain(value) for key, value in row.items()} for row in journal or []]
+            kept_source = {
+                "kind": TA_SIGNALS, "signals": len(kept_journal),
+                "rule": {"id": str(rule_ref["id"])[:12], "name": _text(rule_ref.get("name"), "The rule's name", 80)},
+            }
+            chart = checked_chart(body.get("chart"))
+            default_name = f"Paper: {kept_source['rule']['name'] or kept_source['rule']['id']}"
+        else:
+            entries = [row for row in journal or [] if row.get("action") in ("long", "short")]
+            if not entries:
+                raise NotPossible("WATA received no signal of entry in that period")
+            kept_journal = [{key: _plain(value) for key, value in row.items()} for row in journal or []]
+            kept_source = {"kind": JOURNAL, "signals": len(journal or []), "entries": len(entries)}
+            chart = checked_chart(body.get("chart"))
+            default_name = "Signals WATA received"
+
+        changes = body.get("changes") or {}
+        if not isinstance(changes, dict):
+            raise InvalidRequest("The changes are given by setting name")
+        # A rule's raised signals have had the engine's time already: what remains is the journal's.
+        defaults = {"signal_delay_seconds": DEFAULT_SIGNAL_DELAY.get(source["kind"], DEFAULT_SIGNAL_DELAY[JOURNAL])}
+        try:
+            base, _, _ = with_changes(live, defaults)
+            settings, kept, before = with_changes(base, changes)
+        except InvalidSettings as e:
+            raise InvalidRequest(str(e)) from None
+
+        sweep = body.get("sweep")
+        baseline = None
+        if sweep:
+            if not isinstance(sweep, dict):
+                raise InvalidRequest("A sweep names its axes")
+            known_inputs = None
+            if source["kind"] == PINE:
+                # Any input of the script: PineTS names them in_0, in_1... in their order.
+                known_inputs = {axis.get("name") for axis in sweep.get("axes") or [] if isinstance(axis, dict)}
+            try:
+                axes = checked_axes(sweep.get("axes"), inputs_known=known_inputs)
+                for axis in axes:
+                    for value in axis.values:
+                        if axis.kind == SETTING:
+                            with_changes(settings, {axis.name: value})
+                        else:
+                            checked_inputs([{"id": axis.name, "value": value}])
+            except (InvalidSweep, InvalidSettings, InvalidRule) as e:
+                raise InvalidRequest(str(e)) from None
+            held_out = sweep.get("held_out", DEFAULT_HELD_OUT)
+            if isinstance(held_out, bool) or not isinstance(held_out, (int, float)) or not LEAST_HELD_OUT <= held_out <= MOST_HELD_OUT:
+                raise InvalidRequest(f"The days held out are {LEAST_HELD_OUT:.0%} to {MOST_HELD_OUT:.0%} of them")
+            sweep = {
+                "axes": [{"kind": axis.kind, "name": axis.name, "values": list(axis.values)} for axis in axes],
+                "held_out": float(held_out),
+                "walk_forward": _checked_windows(sweep.get("walk_forward")),
+                "trials_before": _checked_count(sweep.get("trials_before"), "The trials made before"),
+            }
+        else:
+            asked = body.get("baseline") or {}
+            repetitions = asked.get("repetitions", DEFAULT_REPETITIONS)
+            seed = asked.get("seed", DEFAULT_SEED)
+            if isinstance(repetitions, bool) or not isinstance(repetitions, int) or not 0 <= repetitions <= MAX_REPETITIONS:
+                raise InvalidRequest(f"0 to {MAX_REPETITIONS} repetitions with entries at random")
+            if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+                raise InvalidRequest("The seed of the random entries is a whole number")
+            baseline = {"repetitions": repetitions, "seed": seed}
+
+        request = {
+            "format": 1,
+            "kind": "sweep" if sweep else "run",
+            "name": _text(body.get("name"), "The name", MAX_NAME_LENGTH) or default_name,
+            "tags": checked_tags(body.get("tags")),
+            "from": first_day.isoformat(),
+            "to": last_day.isoformat(),
+            "indice": indice,
+            "source": kept_source,
+            "chart": chart,
+            "changes": kept,
+            "baseline": baseline,
+            "sweep": sweep,
+            "turbos": turbos,
+            "asked_at": utc(self._clock()),
+        }
+        paper = body.get("paper")
+        if paper is not None:
+            if source["kind"] != TA_SIGNALS or not isinstance(paper, dict) or paper.get("day") != first_day.isoformat() \
+                    or first_day != last_day or paper.get("rule") != kept_source["rule"]["id"]:
+                raise InvalidRequest("A paper run is one day of the signals one rule raised")
+            request["paper"] = {"rule": kept_source["rule"]["id"], "day": first_day.isoformat()}
+        settings_doc = {"settings": settings.to_dict(), "changed": kept, "live_before": before}
+        if model is not None:
+            # The measure the run is made with goes with it: a later one does not change what it found.
+            settings_doc["turbo_model"] = model
+        return request, settings_doc, sources, kept_journal
+
+    def _new_run_id(self) -> str:
+        moment = datetime.fromtimestamp(self._clock(), timezone.utc)
+        return f"{moment:%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
+
+    def create(self, body: dict, *, journal: list[dict] | None = None, positions: list[dict] | None = None,
+               capital: float | None = None) -> dict:
+        """
+        Ask for a run (or a sweep): checked, written to its folder, and queued.
+        A replay of the journal keeps WATA's real positions of the period
+        (``positions``) beside it, to be set against them.
+        """
+        if len(self._waiting) + len(self._running) >= self.max_queued:
+            raise NotPossible(f"{self.max_queued} backtests are waiting already: let some finish")
+        request, settings_doc, sources, kept_journal = self._checked(body, journal, capital)
+        kept_positions = [{key: _plain(value) for key, value in row.items()} for row in positions] \
+            if positions is not None and kept_journal is not None and request["source"]["kind"] == JOURNAL else None
+        if request["source"]["kind"] == TA_SIGNALS:
+            made = self._queue_run(request, settings_doc, sources, None, raised=kept_journal)
+            if request.get("paper"):
+                index = self.paper_index()
+                index.setdefault(request["paper"]["rule"], {})[request["paper"]["day"]] = made["id"]
+                self._write_paper("index.json", index)
+            return made
+        return self._queue_run(request, settings_doc, sources, kept_journal, positions=kept_positions)
+
+    def _queue_run(self, request: dict, settings_doc: dict, sources: list, journal: list | None, copy_from: str | None = None,
+                   *, positions: list | None = None, raised: list | None = None) -> dict:
+        run_id = self._new_run_id()
+        folder = os.path.join(self._runs_root, run_id)
+        os.makedirs(os.path.join(folder, "sources"))
+        settings_doc = dict(settings_doc)
+        model = settings_doc.pop("turbo_model", None)
+        if model is None and copy_from is not None:
+            model = read_json(os.path.join(copy_from, MODEL_FILE))
+        if positions is None and copy_from is not None:
+            positions = read_json(os.path.join(copy_from, POSITIONS_FILE))
+        if raised is None and copy_from is not None:
+            raised = read_json(os.path.join(copy_from, RAISED_FILE))
+        try:
+            if model is not None:
+                write_json(os.path.join(folder, MODEL_FILE), model)
+            for pin, text in sources:
+                with open(os.path.join(folder, "sources", f"{pin['id']}-v{pin['version']}.pine"), "w", encoding="utf-8") as out_file:
+                    out_file.write(text)
+            if copy_from is not None:
+                for name in os.listdir(os.path.join(copy_from, "sources")):
+                    shutil.copyfile(os.path.join(copy_from, "sources", name), os.path.join(folder, "sources", name))
+            if journal is not None:
+                write_json(os.path.join(folder, "journal.json"), journal)
+            if positions is not None:
+                write_json(os.path.join(folder, POSITIONS_FILE), positions)
+            if raised is not None:
+                write_json(os.path.join(folder, RAISED_FILE), raised)
+            write_json(os.path.join(folder, "settings.json"), settings_doc)
+            write_json(os.path.join(folder, "status.json"), {"state": QUEUED, "created_at": utc(self._clock())})
+            # Last: a folder without its request is not a run.
+            write_json(os.path.join(folder, "request.json"), request)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        self._waiting.append(run_id)
+        self._queue.put_nowait(run_id)
+        return self.get(run_id)
+
+    def run_cell(self, run_id: str, cell: int) -> dict:
+        """A combination of a sweep made a run of its own, with its random repetitions."""
+        folder = self._directory(run_id)
+        request = read_json(os.path.join(folder, "request.json")) or {}
+        sweep = read_json(os.path.join(folder, "sweep.json"))
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        if request.get("kind") != "sweep" or sweep is None or settings_doc is None:
+            raise NotPossible("Only a finished sweep has combinations to run")
+        if not isinstance(cell, int) or not 0 <= cell < len(sweep["cells"]):
+            raise InvalidRequest("No such combination")
+        values = sweep["cells"][cell]["values"]
+        axes = request["sweep"]["axes"]
+        changes = dict(request.get("changes") or {})
+        source = json.loads(json.dumps(request["source"]))
+        for axis, value in zip(axes, values):
+            if axis["kind"] == SETTING:
+                changes[axis["name"]] = value
+            else:
+                inputs = [entry for entry in source["rule"]["inputs"] if entry["id"] != axis["name"]]
+                source["rule"]["inputs"] = sorted(
+                    inputs + [{"id": axis["name"], "var": None, "title": None, "value": value}],
+                    key=lambda entry: int(entry["id"][3:]),
+                )
+        settings = BacktestSettings.from_dict(settings_doc["settings"])
+        try:
+            settings, _, _ = with_changes(settings, {name: value for name, value in changes.items()})
+        except InvalidSettings as e:
+            raise InvalidRequest(str(e)) from None
+        described = ", ".join(f"{axis['name']} {value}" for axis, value in zip(axes, values))
+        new_request = {
+            **request, "kind": "run", "sweep": None, "changes": changes, "source": source,
+            "name": f"{request['name']} ({described})"[:MAX_NAME_LENGTH],
+            "baseline": {"repetitions": DEFAULT_REPETITIONS, "seed": DEFAULT_SEED},
+            "asked_at": utc(self._clock()), "from_sweep": {"id": run_id, "cell": cell},
+        }
+        new_settings = {**settings_doc, "settings": settings.to_dict(), "changed": changes}
+        journal = read_json(os.path.join(folder, "journal.json"))
+        return self._queue_run(new_request, new_settings, [], journal, copy_from=folder)
+
+    def stress(self, run_id: str) -> dict:
+        """
+        A finished run made again as a sweep, with each order filled later and
+        at a worse price than it was: the same signals on the same days, the
+        run's own fills first. What it says is how much of the result its
+        fills hold.
+        """
+        if len(self._waiting) + len(self._running) >= self.max_queued:
+            raise NotPossible(f"{self.max_queued} backtests are waiting already: let some finish")
+        folder = self._directory(run_id)
+        request = read_json(os.path.join(folder, "request.json")) or {}
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        if request.get("kind") != "run" or self._status(run_id).get("state") != DONE or settings_doc is None:
+            raise NotPossible("Only a finished run can be stressed")
+        settings = BacktestSettings.from_dict(settings_doc["settings"])
+        axes = [
+            {"kind": SETTING, "name": "order_seconds",
+             "values": [round(settings.order_seconds + later, 6) for later in STRESS_LATER_SECONDS]},
+            {"kind": SETTING, "name": "slippage",
+             "values": [round(settings.slippage + worse, 6) for worse in STRESS_WORSE_PRICE]},
+        ]
+        try:
+            for axis in checked_axes(axes, inputs_known=None):
+                for value in axis.values:
+                    with_changes(settings, {axis.name: value})
+        except (InvalidSweep, InvalidSettings) as e:
+            raise NotPossible(f"This run cannot be stressed: {e}") from None
+        new_request = {
+            **request, "kind": "sweep", "baseline": None,
+            "name": f"Stress: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
+            "sweep": {"axes": axes, "held_out": DEFAULT_HELD_OUT, "walk_forward": None, "trials_before": 0},
+            "asked_at": utc(self._clock()), "stress_of": run_id,
+        }
+        journal = read_json(os.path.join(folder, "journal.json"))
+        return self._queue_run(new_request, settings_doc, [], journal, copy_from=folder)
 
     # ── folders ──
 
     def _directory(self, run_id: str) -> str:
-        if not RUN_ID.fullmatch(run_id):
+        if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
             raise UnknownRun(run_id)
         path = os.path.join(self._runs_root, run_id)
-        if not os.path.isdir(path):
+        if not os.path.isfile(os.path.join(path, "request.json")):
             raise UnknownRun(run_id)
         return path
 
@@ -523,417 +746,87 @@ class BacktestService:
         return os.path.join(self._directory(run_id), name)
 
     def _status(self, run_id: str) -> dict:
-        return _read_json(self._file(run_id, "status.json")) or {"state": FAILED, "error": "Its state cannot be read"}
+        return read_json(self._file(run_id, "status.json")) or {"state": FAILED, "error": "Its state cannot be read"}
 
     def _set_status(self, run_id: str, **changes) -> dict:
-        status = {**(_read_json(self._file(run_id, "status.json")) or {}), **changes}
-        _write_json(self._file(run_id, "status.json"), status)
+        status = {**self._status(run_id), **changes}
+        write_json(self._file(run_id, "status.json"), status)
         return status
 
-    def _run_ids(self) -> list[str]:
+    def _run_folders(self) -> list[str]:
         try:
             names = os.listdir(self._runs_root)
         except OSError:
             return []
-        # Newest first: an id begins with the moment it was made.
-        return sorted((name for name in names if RUN_ID.fullmatch(name)), reverse=True)
+        return [name for name in names if RUN_ID.fullmatch(name)]
 
-    # ── asking for a run ──
-
-    def _checked_period(self, first_day: date, last_day: date, note: str) -> None:
-        if last_day < first_day:
-            raise InvalidRequest("The period ends before it starts")
-        if (last_day - first_day).days >= MAX_PERIOD_DAYS:
-            raise InvalidRequest(f"The period is longer than {MAX_PERIOD_DAYS} days")
-        if len(note) > MAX_NOTE_LENGTH:
-            raise InvalidRequest(f"The note is longer than {MAX_NOTE_LENGTH} characters")
-
-    def _checked_rules(self, rules: dict | None) -> tuple[WataRules, dict, dict]:
-        """The rules of a run, what it changes in the live ones, and what those said."""
-        rule_changes = checked_rules(rules or {})
-        live = self.live_rules()
-        rule_changes = {name: value for name, value in rule_changes.items() if getattr(live, name) != value}
-        return replace(live, **rule_changes), rule_changes, {name: getattr(live, name) for name in rule_changes}
-
-    def _checked_turbo(self, entry_price: float | None, spread: float | None, leverages: list[float] | None) -> dict:
-        defaults = self.default_turbo()
-        leverages = [float(value) for value in (leverages or defaults["leverages"])]
-        if not 1 <= len(leverages) <= MAX_LEVERAGES or len(set(leverages)) != len(leverages):
-            raise InvalidRequest(f"Give one to {MAX_LEVERAGES} leverages, each once")
-        entry_price = defaults["entry_price"] if entry_price is None else entry_price
-        spread = defaults["spread"] if spread is None else spread
-        try:
-            for leverage in leverages:
-                TurboModel(entry_price=entry_price, points_per_unit=leverage, spread=spread)
-        except ValueError as e:
-            raise InvalidRequest(str(e)) from e
-        return {"entry_price": entry_price, "spread": spread, "leverages": leverages}
-
-    def _checked_execution(self, capital: float | None, fill_delay: int | None, slippage: float | None) -> dict:
-        capital = backtest.DEFAULT_CAPITAL if capital is None else float(capital)
-        fill_delay = 0 if fill_delay is None else int(fill_delay)
-        slippage = 0.0 if slippage is None else float(slippage)
-        if not 0 <= capital <= MAX_CAPITAL:
-            raise InvalidRequest("The capital is an amount of money, 0 for none")
-        if not 0 <= fill_delay <= MAX_FILL_DELAY_SECONDS:
-            raise InvalidRequest(f"A fill waits between 0 and {MAX_FILL_DELAY_SECONDS} seconds")
-        if not 0 <= slippage <= MAX_SLIPPAGE_POINTS:
-            raise InvalidRequest(f"The slippage is between 0 and {MAX_SLIPPAGE_POINTS:g} index points")
-        return {"capital": capital, "fill_delay": fill_delay, "slippage": slippage}
-
-    def _new_run(self, request: dict, run_rules: WataRules, files: dict[str, list] | None = None) -> dict:
-        """A folder for the run, with what was asked, and its turn in the queue."""
-        if len(self._waiting) >= MAX_QUEUED:
-            raise NotPossible(f"{MAX_QUEUED} backtests are already waiting: let some finish first")
-        now = self._clock()
-        run_id = f"{datetime.fromtimestamp(now, timezone.utc):%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
-        directory = os.path.join(self._runs_root, run_id)
-        os.makedirs(directory)
-        for name, content in (files or {}).items():
-            _write_json(os.path.join(directory, name), content)
-        _write_json(os.path.join(directory, "request.json"), request)
-        _write_json(os.path.join(directory, "rules.json"), run_rules.to_dict())
-        _write_json(os.path.join(directory, "status.json"), {"state": QUEUED, "created_at": _utc(now)})
-        self._waiting.append(run_id)
-        self._queue.put_nowait(run_id)
-        return self.get(run_id)
-
-    def create(
-        self,
-        *,
-        first_day: date,
-        last_day: date,
-        strategy: str = "kernel_vwap",
-        parameters: dict | None = None,
-        rules: dict | None = None,
-        entry_price: float | None = None,
-        spread: float | None = None,
-        leverages: list[float] | None = None,
-        note: str = "",
-        capital: float | None = None,
-        fill_delay: int | None = None,
-        slippage: float | None = None,
-        prices: str | None = None,
-    ) -> dict:
-        self._checked_period(first_day, last_day, note)
-        prices = self._checked_prices(prices)
-        self._checked_recorded(prices, first_day, last_day)
-        if strategy not in backtest.STRATEGIES:
-            raise InvalidRequest(f"Unknown strategy '{strategy}'")
-
-        parameters = dict(parameters or {})
-        params_type, _ = backtest.STRATEGIES[strategy]
-        defaults = params_type()
-        try:
-            resolved = defaults.with_overrides({name: str(value) for name, value in parameters.items()})
-        except ValueError as e:
-            raise InvalidRequest(str(e)) from e
-        # Kept as the strategy reads them, and only where they differ from its defaults.
-        changed = {
-            name: getattr(resolved, name) for name in parameters if getattr(resolved, name) != getattr(defaults, name)
-        }
-
-        run_rules, rule_changes, rules_before = self._checked_rules(rules)
-        turbo = self._checked_turbo(entry_price, spread, leverages)
-        return self._new_run({
-            "kind": KIND_STRATEGY,
-            "from": first_day.isoformat(),
-            "to": last_day.isoformat(),
-            "prices": prices,
-            "strategy": strategy,
-            "parameters": changed,
-            "rules": rule_changes,
-            # What the live configuration said then, to read the change against.
-            "rules_before": rules_before,
-            "turbo": turbo,
-            "execution": self._checked_execution(capital, fill_delay, slippage),
-            "note": note,
-        }, run_rules)
-
-    def create_from_signals(
-        self,
-        *,
-        first_day: date,
-        last_day: date,
-        journal: list[dict],
-        positions: list[dict],
-        rules: dict | None = None,
-        entry_price: float | None = None,
-        spread: float | None = None,
-        leverages: list[float] | None = None,
-        note: str = "",
-        capital: float | None = None,
-        fill_delay: int | None = None,
-        slippage: float | None = None,
-        prices: str | None = None,
-    ) -> dict:
-        """
-        A backtest of the signals WATA really received in the period (the
-        rows of its journal), kept with the trades it really made of them
-        (its closed positions) to be set beside the model's.
-        """
-        self._checked_period(first_day, last_day, note)
-        prices = self._checked_prices(prices)
-        self._checked_recorded(prices, first_day, last_day)
-        replayed = signals_to_replay(journal, self._indice)
-        if not any(signals.ACTIONS[signal["action"]][0] in (LONG, SHORT) for signal in replayed):
-            raise NotPossible("WATA's journal has no entry signal in that period: there is nothing to replay")
-        run_rules, rule_changes, rules_before = self._checked_rules(rules)
-        turbo = self._checked_turbo(entry_price, spread, leverages)
-        real = real_trades_of(positions, journal, self._indice)
-        return self._new_run({
-            "kind": KIND_SIGNALS,
-            "from": first_day.isoformat(),
-            "to": last_day.isoformat(),
-            "prices": prices,
-            "strategy": backtest.SIGNALS,
-            "parameters": {},
-            "rules": rule_changes,
-            "rules_before": rules_before,
-            "turbo": turbo,
-            "execution": self._checked_execution(capital, fill_delay, slippage),
-            "note": note,
-            "signals": len(replayed),
-            "real_trades": len(real),
-        }, run_rules, {"signals.json": replayed, "real_trades.json": real})
-
-    def _checked_axes(self, axes: list[dict], strategy: str | None) -> list[dict]:
-        """The settings a sweep gives several values to, each value as it will be read."""
-        if not 1 <= len(axes) <= sweep.MAX_AXES:
-            raise InvalidRequest("A sweep gives several values to one setting or to two")
-        checked = []
-        for axis in axes:
-            kind, name, values = axis.get("kind"), axis.get("name"), list(axis.get("values") or [])
-            if not 2 <= len(values) <= MAX_SWEEP_VALUES:
-                raise InvalidRequest(f"Give 2 to {MAX_SWEEP_VALUES} values for '{name}'")
-            if kind == sweep.RULE:
-                # One value at a time, as a change of that rule alone would be checked.
-                read = [checked_rules({name: value})[name] for value in values]
-            elif kind == sweep.PARAMETER:
-                if strategy is None:
-                    raise InvalidRequest("Signals have no strategy: only rules can be given several values")
-                defaults = backtest.STRATEGIES[strategy][0]()
-                try:
-                    read = [getattr(defaults.with_overrides({name: str(value)}), name) for value in values]
-                except ValueError as e:
-                    raise InvalidRequest(str(e)) from e
-            else:
-                raise InvalidRequest("A sweep gives several values to a parameter of the strategy or to a rule")
-            if len(set(read)) != len(read):
-                raise InvalidRequest(f"The values of '{name}' are not all different")
-            checked.append({"kind": kind, "name": name, "values": read})
-        if len({(axis["kind"], axis["name"]) for axis in checked}) != len(checked):
-            raise InvalidRequest("The two settings of a sweep are the same one")
-        cells = 1
-        for axis in checked:
-            cells *= len(axis["values"])
-        if cells > MAX_SWEEP_CELLS:
-            raise InvalidRequest(f"{cells} combinations: {MAX_SWEEP_CELLS} at most")
-        return checked
-
-    def create_sweep(
-        self,
-        *,
-        first_day: date,
-        last_day: date,
-        axes: list[dict],
-        held_out: float = sweep.DEFAULT_HELD_OUT,
-        strategy: str = "kernel_vwap",
-        parameters: dict | None = None,
-        rules: dict | None = None,
-        entry_price: float | None = None,
-        spread: float | None = None,
-        leverage: float | None = None,
-        note: str = "",
-        fill_delay: int | None = None,
-        slippage: float | None = None,
-        journal: list[dict] | None = None,
-        positions: list[dict] | None = None,
-        prices: str | None = None,
-    ) -> dict:
-        """
-        The same backtest for every combination of the values given to one or
-        two of its settings, the last part of the period held out. Of a
-        strategy, or of the signals WATA received when its ``journal`` is given.
-        """
-        self._checked_period(first_day, last_day, note)
-        prices = self._checked_prices(prices)
-        self._checked_recorded(prices, first_day, last_day)
-        if not sweep.LEAST_HELD_OUT <= held_out <= sweep.MOST_HELD_OUT:
-            raise InvalidRequest(
-                f"Between {sweep.LEAST_HELD_OUT:.0%} and {sweep.MOST_HELD_OUT:.0%} of the days can be held out"
-            )
-        replaying = journal is not None
-        files: dict[str, list] = {}
-        changed: dict = {}
-        if replaying:
-            replayed = signals_to_replay(journal, self._indice)
-            if not any(signals.ACTIONS[signal["action"]][0] in (LONG, SHORT) for signal in replayed):
-                raise NotPossible("WATA's journal has no entry signal in that period: there is nothing to replay")
-            files = {"signals.json": replayed, "real_trades.json": real_trades_of(positions or [], journal, self._indice)}
-        else:
-            if strategy not in backtest.STRATEGIES:
-                raise InvalidRequest(f"Unknown strategy '{strategy}'")
-            defaults = backtest.STRATEGIES[strategy][0]()
-            try:
-                resolved = defaults.with_overrides({name: str(value) for name, value in (parameters or {}).items()})
-            except ValueError as e:
-                raise InvalidRequest(str(e)) from e
-            changed = {
-                name: getattr(resolved, name) for name in (parameters or {}) if getattr(resolved, name) != getattr(defaults, name)
-            }
-        run_rules, rule_changes, rules_before = self._checked_rules(rules)
-        checked_axes = self._checked_axes(axes, None if replaying else strategy)
-        defaults_turbo = self.default_turbo()
-        # One turbo: the leverage named, else the middle one of those a backtest is made with.
-        turbo = self._checked_turbo(
-            entry_price, spread, [leverage if leverage is not None else defaults_turbo["leverages"][len(defaults_turbo["leverages"]) // 2]],
+    def _run_ids(self) -> list[str]:
+        """The runs, newest first: the folders that hold their request (it is written last)."""
+        return sorted(
+            (name for name in self._run_folders() if os.path.isfile(os.path.join(self._runs_root, name, "request.json"))),
+            reverse=True,
         )
-        execution = self._checked_execution(0, fill_delay, slippage)
-        return self._new_run({
-            "kind": KIND_SWEEP,
-            "replays": KIND_SIGNALS if replaying else KIND_STRATEGY,
-            "from": first_day.isoformat(),
-            "to": last_day.isoformat(),
-            "prices": prices,
-            "strategy": backtest.SIGNALS if replaying else strategy,
-            "parameters": changed,
-            "rules": rule_changes,
-            "rules_before": rules_before,
-            "turbo": turbo,
-            "execution": execution,
-            "axes": checked_axes,
-            "held_out": held_out,
-            "note": note,
-        }, run_rules, files)
-
-    def run_cell(self, run_id: str, cell: int) -> dict:
-        """One combination of a sweep as a backtest of its own, to be read with all a backtest says."""
-        request = _read_json(self._file(run_id, "request.json")) or {}
-        result = _read_json(self._file(run_id, "sweep.json"))
-        if request.get("kind") != KIND_SWEEP or result is None:
-            raise NotPossible("Only a combination of a finished sweep can be made a backtest")
-        if not 0 <= cell < len(result["cells"]):
-            raise InvalidRequest("This sweep has no such combination")
-        values = dict(zip(((axis["kind"], axis["name"]) for axis in request["axes"]), result["cells"][cell]["values"]))
-        parameters = {**request["parameters"], **{name: value for (kind, name), value in values.items() if kind == sweep.PARAMETER}}
-        rules = {**request["rules"], **{name: value for (kind, name), value in values.items() if kind == sweep.RULE}}
-        common = {
-            "first_day": date.fromisoformat(request["from"]), "last_day": date.fromisoformat(request["to"]),
-            "rules": rules, "entry_price": request["turbo"]["entry_price"], "spread": request["turbo"]["spread"],
-            "leverages": request["turbo"]["leverages"],
-            "fill_delay": request["execution"]["fill_delay"], "slippage": request["execution"]["slippage"],
-            "note": (request.get("note") or "")[:MAX_NOTE_LENGTH],
-            # On the prices the sweep ran on.
-            "prices": prices_of(request),
-        }
-        if request.get("replays") == KIND_SIGNALS:
-            # The same signals and real trades the sweep was given, kept with it.
-            return self._from_kept_signals(run_id, common)
-        return self.create(strategy=request["strategy"], parameters=parameters, **common)
-
-    def _from_kept_signals(self, run_id: str, asked: dict) -> dict:
-        """A replay of the signals kept with another run, with what is asked now."""
-        replayed = _read_json(self._file(run_id, "signals.json")) or []
-        real = _read_json(self._file(run_id, "real_trades.json")) or []
-        run_rules, rule_changes, rules_before = self._checked_rules(asked["rules"])
-        turbo = self._checked_turbo(asked["entry_price"], asked["spread"], asked["leverages"])
-        return self._new_run({
-            "kind": KIND_SIGNALS,
-            "from": asked["first_day"].isoformat(),
-            "to": asked["last_day"].isoformat(),
-            "prices": self._checked_prices(asked.get("prices")),
-            "strategy": backtest.SIGNALS,
-            "parameters": {},
-            "rules": rule_changes,
-            "rules_before": rules_before,
-            "turbo": turbo,
-            "execution": self._checked_execution(None, asked["fill_delay"], asked["slippage"]),
-            "note": asked["note"],
-            "signals": len(replayed),
-            "real_trades": len(real),
-        }, run_rules, {"signals.json": replayed, "real_trades.json": real})
 
     # ── running them, one at a time ──
 
     def recover(self) -> None:
-        """Runs a previous admin left waiting or running were never finished: say so."""
+        """
+        Runs a previous admin left waiting or running were never finished: say
+        so. A folder left without its request (the admin stopped while making
+        it) was never a run: it goes.
+        """
+        for name in self._run_folders():
+            if not os.path.isfile(os.path.join(self._runs_root, name, "request.json")):
+                shutil.rmtree(os.path.join(self._runs_root, name), ignore_errors=True)
         for run_id in self._run_ids():
             if self._status(run_id).get("state") in (QUEUED, RUNNING) and run_id not in self._waiting:
                 self._set_status(run_id, state=INTERRUPTED, error="The admin stopped before this run was finished")
 
     async def run(self) -> None:
-        """Take the runs asked for in turn, until cancelled."""
+        """Take the runs asked for in turn, ``workers`` at a time, until cancelled."""
         self.recover()
-        while True:
-            run_id = await self._queue.get()
+        slots = asyncio.Semaphore(self._workers)
+        going: set[asyncio.Task] = set()
+        try:
+            while True:
+                # A run leaves the queue only when it can start: its place in line stays true meanwhile.
+                await slots.acquire()
+                run_id = await self._queue.get()
+                task = asyncio.create_task(self._execute_in(run_id, slots))
+                going.add(task)
+                task.add_done_callback(going.discard)
+        finally:
+            for task in going:
+                task.cancel()
+
+    async def _execute_in(self, run_id: str, slots: asyncio.Semaphore) -> None:
+        try:
+            await self._execute(run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Backtest {run_id} failed outside the command itself: {e}", exc_info=True)
             try:
-                await self._execute(run_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(f"Backtest {run_id} failed outside the command itself: {e}", exc_info=True)
-                try:
-                    self._set_status(run_id, state=FAILED, error=str(e), finished_at=_utc(self._clock()))
-                except Exception:
-                    pass
+                self._set_status(run_id, state=FAILED, error=str(e), finished_at=utc(self._clock()))
+            except Exception:
+                pass
+        finally:
+            slots.release()
 
-    def _sweep_command(self, run_id: str, request: dict) -> list[str]:
-        directory = self._directory(run_id)
-        turbo, execution = request["turbo"], request["execution"]
-        arguments = [
-            "src.strategy.sweep",
-            "--from", request["from"], "--to", request["to"],
-            *self._source_arguments(request),
-            "--rules", os.path.join(directory, "rules.json"),
-            "--points-per-unit", f"{turbo['leverages'][0]:g}",
-            "--entry-price", str(turbo["entry_price"]), "--spread", str(turbo["spread"]),
-            "--fill-delay", str(execution["fill_delay"]), "--slippage", f"{execution['slippage']:g}",
-            "--held-out", f"{request['held_out']:g}",
-            "--out", directory, "--progress", os.path.join(directory, "progress.json"),
-            "--low-priority",
+    def _command(self, run_id: str) -> list[str]:
+        folder = self._directory(run_id)
+        data = ["--data", self._data]
+        if (read_json(os.path.join(folder, "request.json")) or {}).get("turbos") == MODELLED:
+            # Turbos made up from the index, by the measure the run keeps; the index read where the recorded days are.
+            data = ["--data", f"model:{os.path.join(folder, MODEL_FILE)}"]
+            if self._data.startswith("files:"):
+                data += ["--files", self._data.removeprefix("files:")]
+        return [
+            "src.backtest.run", "--run", folder, *data,
+            "--prices", self._prices_root, "--node", self._node, "--low-priority",
+            # The runner's answers, read back by the runs of the same script on the same days.
+            "--signal-cache", os.path.join(self._root, SIGNAL_CACHE_FOLDER),
         ]
-        for axis in request["axes"]:
-            arguments += ["--axis", f"{axis['kind']}:{axis['name']}=" + ",".join(str(value) for value in axis["values"])]
-        if request.get("replays") == KIND_SIGNALS:
-            return arguments + ["--signals", os.path.join(directory, "signals.json")]
-        arguments += ["--strategy", request["strategy"]]
-        for name, value in request["parameters"].items():
-            arguments += ["--set", f"{name}={value}"]
-        return arguments
-
-    def _result_file(self, run_id: str, request: dict) -> str:
-        """What the command of a run writes when it is done."""
-        return self._file(run_id, "sweep.json" if request.get("kind") == KIND_SWEEP else "summary.json")
-
-    def _command(self, run_id: str, request: dict) -> list[str]:
-        if request.get("kind") == KIND_SWEEP:
-            return self._sweep_command(run_id, request)
-        directory = self._directory(run_id)
-        turbo = request["turbo"]
-        arguments = [
-            "src.strategy.backtest",
-            "--from", request["from"], "--to", request["to"],
-            *self._source_arguments(request),
-            "--rules", os.path.join(directory, "rules.json"),
-            "--points-per-unit", ",".join(f"{leverage:g}" for leverage in turbo["leverages"]),
-            "--entry-price", str(turbo["entry_price"]), "--spread", str(turbo["spread"]),
-            "--out", directory, "--progress", os.path.join(directory, "progress.json"),
-            "--low-priority",
-        ]
-        # A run asked for before fills could be made less kind has none of this: as it was then.
-        execution = request.get("execution")
-        if execution:
-            arguments += [
-                "--capital", f"{execution['capital']:g}", "--fill-delay", str(execution["fill_delay"]),
-                "--slippage", f"{execution['slippage']:g}",
-            ]
-        if request.get("kind") == KIND_SIGNALS:
-            return arguments + ["--signals", os.path.join(directory, "signals.json")]
-        arguments += ["--strategy", request["strategy"]]
-        for name, value in request["parameters"].items():
-            arguments += ["--set", f"{name}={value}"]
-        return arguments
 
     async def _execute(self, run_id: str) -> None:
         if run_id in self._waiting:
@@ -942,22 +835,20 @@ class BacktestService:
             self._cancelled.discard(run_id)
             return
         try:
-            request = _read_json(self._file(run_id, "request.json"))
+            request = read_json(self._file(run_id, "request.json"))
         except UnknownRun:
             return
         if request is None:
             self._set_status(run_id, state=FAILED, error="What was asked cannot be read")
             return
-
-        self._set_status(run_id, state=RUNNING, started_at=_utc(self._clock()))
-        error = None
-        code = None
+        self._set_status(run_id, state=RUNNING, started_at=utc(self._clock()))
+        error, code = None, None
         try:
-            process = await self._launcher(self._command(run_id, request), self._file(run_id, "output.log"))
+            process = await self._launcher(self._command(run_id), self._file(run_id, "output.log"))
         except Exception as e:
             error = f"The backtest could not be started: {e}"
         else:
-            self._running, self._process = run_id, process
+            self._running[run_id] = process
             try:
                 code = await asyncio.wait_for(process.wait(), RUN_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
@@ -965,18 +856,17 @@ class BacktestService:
                 await process.wait()
                 error = f"Stopped after {RUN_TIMEOUT_SECONDS // 60} minutes"
             finally:
-                self._running, self._process = None, None
-
+                self._running.pop(run_id, None)
         if run_id in self._cancelled:
             self._cancelled.discard(run_id)
             state, error = CANCELLED, None
-        elif error is None and code == 0 and os.path.exists(self._result_file(run_id, request)):
+        elif error is None and code == 0 and os.path.exists(self._file(run_id, "summary.json")):
             state = DONE
         else:
             state = FAILED
-            error = error or "\n".join(_tail(self._file(run_id, "output.log"), 5)) or f"The command ended with code {code}"
-        self._set_status(run_id, state=state, error=error, finished_at=_utc(self._clock()))
-        self._announce("backtest_finished", run_id=run_id, state=state, note=request.get("note") or "")
+            error = error or "\n".join(tail(self._file(run_id, "output.log"), 5)) or f"The command ended with code {code}"
+        self._set_status(run_id, state=state, error=error, finished_at=utc(self._clock()))
+        self._announce("backtest_finished", run_id=run_id, state=state, name=request.get("name") or "")
 
     def _announce(self, event: str, **data) -> None:
         if self._publish is None:
@@ -991,17 +881,17 @@ class BacktestService:
         if state == QUEUED and run_id in self._waiting:
             self._waiting.remove(run_id)
             self._cancelled.add(run_id)
-            self._set_status(run_id, state=CANCELLED, finished_at=_utc(self._clock()))
-        elif state == RUNNING and run_id == self._running and self._process is not None:
+            self._set_status(run_id, state=CANCELLED, finished_at=utc(self._clock()))
+        elif state == RUNNING and run_id in self._running:
             self._cancelled.add(run_id)
-            self._process.terminate()
+            self._running[run_id].terminate()
         else:
             raise NotPossible("Only a backtest that is waiting or running can be stopped")
         return self.get(run_id)
 
     def delete(self, run_id: str) -> None:
         directory = self._directory(run_id)
-        if run_id in self._waiting or run_id == self._running:
+        if run_id in self._waiting or run_id in self._running:
             raise NotPossible("Stop this backtest before removing it")
         shutil.rmtree(directory)
 
@@ -1018,814 +908,291 @@ class BacktestService:
                 kept.append({"id": run_id, "reason": str(e)})
         return {"removed": removed, "kept": kept}
 
-    def update(self, run_id: str, *, note: str | None = None, tags: list[str] | None = None) -> dict:
+    def update(self, run_id: str, *, name: str | None = None, tags: list[str] | None = None) -> dict:
         """Name a run again, or tag it: what it is called, not what it was asked."""
         path = self._file(run_id, "request.json")
-        request = _read_json(path)
+        request = read_json(path)
         if request is None:
             raise NotPossible("What was asked of this backtest cannot be read")
-        if note is not None:
-            if len(note) > MAX_NOTE_LENGTH:
-                raise InvalidRequest(f"The note is longer than {MAX_NOTE_LENGTH} characters")
-            request["note"] = note
+        if name is not None:
+            request["name"] = _text(name, "The name", MAX_NAME_LENGTH, required=True)
         if tags is not None:
-            cleaned = [tag.strip() for tag in tags if tag.strip()]
-            if len(cleaned) > MAX_TAGS or any(len(tag) > MAX_TAG_LENGTH for tag in cleaned):
-                raise InvalidRequest(f"{MAX_TAGS} tags at most, of {MAX_TAG_LENGTH} characters at most each")
-            # Each once, in the order they were given.
-            request["tags"] = list(dict.fromkeys(cleaned))
-        _write_json(path, request)
+            request["tags"] = checked_tags(tags)
+        write_json(path, request)
         return self.get(run_id)
 
-    def storage(self) -> dict:
-        """The disk the runs and the prices take."""
-        runs = [_folder_bytes(os.path.join(self._runs_root, run_id)) for run_id in self._run_ids()]
-        prices = os.path.join(self._prices_root, dukascopy.SOURCE)
-        return {
-            "runs": {"count": len(runs), "bytes": sum(runs)},
-            "prices": {
-                # Of every instrument fetched, as the bytes below.
-                "days": sum(len(self._history.days(label)) for label in self._history.labels()),
-                # The ten-second bars the backtests read, and the hours as they were fetched, kept to complete a day.
-                "bars_bytes": _folder_bytes(os.path.join(prices, "bars")),
-                "fetched_bytes": _folder_bytes(os.path.join(prices, "raw")),
-            },
-        }
-
     async def close(self) -> None:
-        """The admin is stopping: its child processes stop with it."""
-        for process in (self._process, self._fetch_process, self._calibration_process):
-            if process is not None and process.returncode is None:
+        """The admin is stopping: the runs, and a measure of the turbos, stop with it."""
+        for process in [*self._running.values(), *([self._measuring] if self._measuring is not None else [])]:
+            if process.returncode is None:
                 try:
                     process.terminate()
                 except ProcessLookupError:
                     pass
-        for task in (self._fetch_task, self._calibration_task):
-            if task is not None:
-                task.cancel()
+
+    # ── disk ──
+
+    def _former(self) -> list[str]:
+        try:
+            names = os.listdir(self._root)
+        except OSError:
+            return []
+        return [name for name in names if RUN_ID.fullmatch(name) or name in FORMER_FOLDERS]
+
+    def storage(self) -> dict:
+        """The disk the runs take, and what the former backtester left."""
+        runs = [folder_bytes(os.path.join(self._runs_root, run_id)) for run_id in self._run_ids()]
+        former = self._former()
+        return {
+            "runs": {"count": len(runs), "bytes": sum(runs)},
+            "former": {
+                "count": sum(1 for name in former if RUN_ID.fullmatch(name)),
+                "bytes": sum(folder_bytes(os.path.join(self._root, name)) for name in former),
+            },
+        }
+
+    def delete_former(self) -> dict:
+        """Remove what the former backtester left: its runs, its measures of the turbo."""
+        removed = 0
+        for name in self._former():
+            shutil.rmtree(os.path.join(self._root, name), ignore_errors=True)
+            removed += 1 if RUN_ID.fullmatch(name) else 0
+        return {"removed": removed}
 
     # ── reading them ──
 
     def _headline(self, summary: dict | None) -> dict | None:
-        """The figures of the middle leverage: what a list can show of a run."""
-        runs = (summary or {}).get("runs") or []
-        if not runs:
+        if not summary:
             return None
-        middle = runs[len(runs) // 2]
-        figures = middle["summary"]
+        figures = summary.get("figures") or {}
+        against = summary.get("against_random") or {}
         return {
-            "leverage": middle["turbo"]["points_per_unit"],
-            **{name: figures.get(name) for name in (
-                "days", "days_with_an_entry", "trades", "win_rate", "total_percent", "worst_drawdown", "sample",
-            )},
-            # The share of the random entries it did better than: what the total is worth.
-            "beaten": (figures.get("against_random") or {}).get("beaten"),
+            "total_percent": figures.get("total_percent"),
+            "trades": figures.get("trades"),
+            "win_rate": figures.get("win_rate"),
+            "worst_drawdown": figures.get("worst_drawdown"),
+            "sample": figures.get("sample"),
+            "beaten": against.get("beaten"),
+            "days_tested": (summary.get("days") or {}).get("tested"),
+            "profit_loss": (summary.get("money") or {}).get("profit_loss"),
+            "cells": summary.get("cells"),
         }
 
-    def _price_files(self, prices: str = PRICES_DUKASCOPY) -> dict[str, str]:
-        """The digest of every file of ``prices`` there is, by its path; read again only for a file that changed."""
-        location = self._location(prices)
-        try:
-            names = os.listdir(location)
-        except OSError:
-            names = []
-        digests = {}
-        for name in names:
-            path = os.path.join(location, name)
-            try:
-                found = os.stat(path)
-            except OSError:
-                continue
-            kept = self._digests.get(path)
-            if kept is None or kept[:2] != (found.st_size, found.st_mtime_ns):
-                kept = (found.st_size, found.st_mtime_ns, file_digest(path))
-                self._digests[path] = kept
-            digests[path] = kept[2]
-        return digests
-
-    def _stale(self, request: dict, summary: dict | None, price_files: dict[str, str]) -> dict | None:
-        """
-        Whether a run would come out otherwise today: the code that replays
-        changed, or the prices of its period did. None for a run that did not
-        keep what it was made with.
-        """
-        if not summary or "code" not in summary or "price_files" not in summary:
-            return None
-        # The days of a run are those of the timezone it was made in.
-        timezone_name = (summary.get("rules") or {}).get("timezone", "Europe/Paris")
-        start, end = backtest.day_bounds(
-            LocalClock(timezone_name), date.fromisoformat(request["from"]), date.fromisoformat(request["to"]),
-        )
-        location = self._location(prices_of(request))
-        paths = files_of_period(location, [os.path.basename(path) for path in price_files], start, end)
-        today = prices_fingerprint(paths, digest_of=price_files.__getitem__)
-        return {
-            "code": summary["code"].get("digest") != self._code["digest"],
-            "prices": summary["price_files"] != today,
-            # The version it was made with, to say so when the code changed.
-            "version": summary["code"].get("version"),
-        }
-
-    def _described(self, run_id: str, *, whole: bool, price_files: dict[str, dict[str, str]] | None = None) -> dict:
-        directory = self._directory(run_id)
-        request = _read_json(os.path.join(directory, "request.json")) or {}
+    def _described(self, run_id: str, *, whole: bool) -> dict:
+        request = read_json(self._file(run_id, "request.json")) or {}
         status = self._status(run_id)
-        is_sweep = request.get("kind") == KIND_SWEEP
-        done = status.get("state") == DONE
-        summary = _read_json(os.path.join(directory, "summary.json")) if done and not is_sweep else None
-        swept = _read_json(os.path.join(directory, "sweep.json")) if done and is_sweep else None
-        described = {"id": run_id, **request, "status": status, "headline": self._headline(summary)}
-        prices = prices_of(request)
-        described["prices"] = prices
-        try:
-            described["stale"] = self._stale(
-                request, summary or swept, self._price_files(prices) if price_files is None else price_files[prices],
-            )
-        except (KeyError, ValueError, TypeError):
-            described["stale"] = None
-        if whole and is_sweep:
-            described["sweep"] = swept
+        if status.get("state") == RUNNING and run_id not in self._running:
+            status = {**status, "state": INTERRUPTED}
+        summary = read_json(self._file(run_id, "summary.json")) if status.get("state") == DONE else None
+        source = request.get("source") or {}
+        rule = source.get("rule") or {}
+        described = {
+            "id": run_id,
+            "kind": request.get("kind"),
+            "name": request.get("name"),
+            "tags": request.get("tags") or [],
+            "from": request.get("from"),
+            "to": request.get("to"),
+            "indice": request.get("indice"),
+            "source": {
+                "kind": source.get("kind"),
+                "script": {"id": rule["script"]["id"], "version": rule["script"]["version"], "name": rule.get("name")}
+                if rule.get("script") else None,
+                # A paper run is the rule's own signals.
+                "from_rule": source.get("from_rule") or (rule if source.get("kind") == TA_SIGNALS else None),
+                "signals": source.get("signals"),
+            },
+            "chart": request.get("chart"),
+            "changes": request.get("changes") or {},
+            # The run a stress sweep made again with worse fills.
+            "stress_of": request.get("stress_of"),
+            "turbos": request.get("turbos") or RECORDED,
+            "paper": request.get("paper"),
+            "status": status,
+            "headline": self._headline(summary),
+            "position": self._waiting.index(run_id) + 1 if run_id in self._waiting else None,
+        }
+        if summary is not None:
+            described["stale"] = (summary.get("made_with") or {}).get("code") != self._code
         if whole:
-            described["bytes"] = _folder_bytes(directory)
-        if whole:
-            described["summary"] = summary
-            described["progress"] = (
-                _read_json(os.path.join(directory, "progress.json")) if status.get("state") == RUNNING else None
+            settings = read_json(self._file(run_id, "settings.json")) or {}
+            described.update(
+                request=request,
+                settings=settings,
+                summary=summary,
+                progress=read_json(self._file(run_id, "progress.json")) if status.get("state") == RUNNING else None,
+                lines=tail(self._file(run_id, "output.log")) if status.get("state") in (FAILED, RUNNING) else [],
             )
-            described["run_rules"] = _read_json(os.path.join(directory, "rules.json"))
-            described["output"] = _tail(os.path.join(directory, "output.log")) if status.get("state") == FAILED else []
-            described["waiting_before"] = self._waiting.index(run_id) if run_id in self._waiting else 0
         return described
 
     def get(self, run_id: str) -> dict:
         return self._described(run_id, whole=True)
 
     def list_runs(self) -> list[dict]:
-        """Every run, the newest first, with the few figures a list shows."""
-        # Looked at once for the whole list: which prices there are today, of each source.
-        price_files = {prices: self._price_files(prices) for prices in PRICE_SOURCES}
-        return [self._described(run_id, whole=False, price_files=price_files) for run_id in self._run_ids()[:MAX_LISTED]]
+        """The runs, newest first; the paper runs of the signal rules have their own place."""
+        paper = self._paper_ids()
+        return [self._described(run_id, whole=False) for run_id in [run for run in self._run_ids() if run not in paper][:MAX_LISTED]]
 
-    def rows(self, run_id: str, kind: str, leverage: float) -> list[dict]:
-        """The trades, the days or the refused entries of a run, for one of its leverages."""
-        if kind not in _NUMBERS:
-            raise InvalidRequest(f"Unknown kind of rows '{kind}'")
-        request = _read_json(self._file(run_id, "request.json")) or {}
-        if leverage not in (request.get("turbo") or {}).get("leverages", []):
-            raise InvalidRequest("This backtest was not run with that leverage")
-        path = self._file(run_id, f"{kind}_{leverage:g}.csv")
-        if not os.path.exists(path):
-            return []
-        numbers = _NUMBERS[kind]
-        with open(path, newline="", encoding="utf-8") as in_file:
-            rows = []
-            for row in csv.DictReader(in_file):
-                for name in numbers:
-                    # A column added since the run was made is not in its files.
-                    text = row.get(name) or ""
-                    row[name] = None if text == "" else (int(float(text)) if name in _WHOLE else float(text))
-                rows.append(row)
+    # ── paper trading of the signal rules ──
+
+    def _paper_path(self, name: str) -> str:
+        return os.path.join(self._root, PAPER_FOLDER, name)
+
+    def _write_paper(self, name: str, content) -> None:
+        os.makedirs(os.path.join(self._root, PAPER_FOLDER), exist_ok=True)
+        write_json(self._paper_path(name), content)
+
+    def paper_index(self) -> dict:
+        """By rule, by day: the run made of the signals the rule raised that day."""
+        found = read_json(self._paper_path("index.json"))
+        return found if isinstance(found, dict) else {}
+
+    def _paper_ids(self) -> set[str]:
+        return {run_id for days in self.paper_index().values() for run_id in days.values()}
+
+    def references(self) -> dict:
+        found = read_json(self._paper_path("references.json"))
+        return found if isinstance(found, dict) else {}
+
+    def set_reference(self, run_id: str) -> dict:
+        """A finished run made from a rule becomes the one its paper days are set against."""
+        request = read_json(self._file(run_id, "request.json")) or {}
+        rule = ((request.get("source") or {}).get("from_rule") or {}).get("id")
+        if request.get("kind") != "run" or self._status(run_id).get("state") != DONE:
+            raise NotPossible("Only a finished run can be a rule's reference")
+        if not rule:
+            raise NotPossible("This run was not made from a signal rule: start one from the rule to make it its reference")
+        references = self.references()
+        references[rule] = run_id
+        self._write_paper("references.json", references)
+        return self.paper()
+
+    def _reference_range(self, run_id: str) -> dict | None:
+        try:
+            days = read_json(self._file(run_id, "days.json")) or []
+            name = (read_json(self._file(run_id, "request.json")) or {}).get("name")
+        except UnknownRun:
+            return None
+        results = sorted(day["day_percent"] for day in days if day.get("status") == "tested" and day.get("day_percent") is not None)
+        if len(results) < 5:
+            return {"run_id": run_id, "name": name, "days": len(results), "low": None, "median": None, "high": None}
+        pick = lambda share: results[min(len(results) - 1, max(0, round(share * (len(results) - 1))))]  # noqa: E731
+        return {"run_id": run_id, "name": name, "days": len(results), "low": pick(0.05), "median": pick(0.5), "high": pick(0.95)}
+
+    def paper(self) -> dict:
+        """Each rule's paper days, newest first, beside the daily range of its reference run."""
+        references = self.references()
+        rules = {}
+        for rule_id, days in self.paper_index().items():
+            reference = self._reference_range(references[rule_id]) if rule_id in references else None
+            listed = []
+            for day, run_id in sorted(days.items(), reverse=True):
+                try:
+                    status = self._status(run_id)
+                    record = next(iter(read_json(self._file(run_id, "days.json")) or []), None) if status.get("state") == DONE else None
+                except UnknownRun:
+                    continue
+                result = record.get("day_percent") if record and record.get("status") == "tested" else None
+                outside = None
+                if result is not None and reference and reference["low"] is not None:
+                    outside = result < reference["low"] or result > reference["high"]
+                listed.append({
+                    "day": day, "run_id": run_id, "state": status.get("state"), "day_percent": result,
+                    "trades": record.get("trades") if record else None, "outside": outside,
+                })
+            rules[rule_id] = {"days": listed, "reference": reference}
+        return {"rules": rules}
+
+    def prune_paper(self, keep_days: int, today: date) -> int:
+        """The paper runs of days older than ``keep_days`` removed, with their place in the index."""
+        index, removed = self.paper_index(), 0
+        for days in index.values():
+            for day in [day for day in days if (today - date.fromisoformat(day)).days > keep_days]:
+                run_id = days.pop(day)
+                try:
+                    self.delete(run_id)
+                except (UnknownRun, NotPossible):
+                    pass
+                removed += 1
+        if removed:
+            self._write_paper("index.json", index)
+        return removed
+
+    def _done_file(self, run_id: str, name: str):
+        content = read_json(self._file(run_id, name))
+        if content is None:
+            raise NotPossible("This backtest has no results yet")
+        return content
+
+    def days(self, run_id: str) -> list[dict]:
+        return self._done_file(run_id, "days.json")
+
+    def signals(self, run_id: str, day: date | None = None, fate: str | None = None) -> list[dict]:
+        rows = self._done_file(run_id, "signals.json")
+        if day is not None:
+            rows = [row for row in rows if row.get("day") == day.isoformat()]
+        if fate is not None:
+            rows = [row for row in rows if row.get("fate") == fate]
         return rows
 
-    def comparison(self, run_id: str, leverage: float) -> dict:
-        """
-        A run of real signals set against what WATA really did with them:
-        each real trade beside the model's, and the days of both.
-        """
-        real = _read_json(self._file(run_id, "real_trades.json"))
-        replayed = _read_json(self._file(run_id, "signals.json"))
-        if real is None or replayed is None:
-            raise NotPossible("This backtest did not replay real signals: there is nothing to compare it with")
-        rules = WataRules.from_dict(_read_json(self._file(run_id, "rules.json")) or {})
-        model = [
-            Leg(
-                direction=trade["direction"], entered_at=_epoch(trade["entry_time"]), left_at=_epoch(trade["exit_time"]),
-                performance=trade["performance_percent"], exit=_model_exit(trade["exit_reason"]),
-            )
-            for trade in self.rows(run_id, TRADES, leverage)
-        ]
-        ours = [
-            Leg(
-                direction=trade["direction"], entered_at=_epoch(trade["opened_at"]), left_at=_epoch(trade["closed_at"]),
-                performance=trade["performance_percent"], exit=exit_group(trade.get("close_reason")),
-                reference=trade.get("position_id") or "",
-            )
-            for trade in real if trade.get("performance_percent") is not None
-        ]
-        outcomes: dict[str, int] = {}
-        for signal in replayed:
-            outcome = signal.get("outcome") or "unknown"
-            outcomes[outcome] = outcomes.get(outcome, 0) + 1
-        return {
-            "id": run_id,
-            "leverage": leverage,
-            "timezone": rules.timezone,
-            # What the trader made of the signals, as its journal has it.
-            "journal": outcomes,
-            **compare(ours, model, LocalClock(rules.timezone)),
+    def trades(self, run_id: str, day: date | None = None) -> list[dict]:
+        rows = self._done_file(run_id, "trades.json")
+        if day is not None:
+            rows = [row for row in rows if row.get("day") == day.isoformat()]
+        return rows
+
+    def edge(self, run_id: str) -> dict | None:
+        """How the asset moved after the run's entry signals; None for a run made before it was measured."""
+        found = read_json(self._file(run_id, "edge.json"))
+        if found is not None:
+            # The signals one by one are for the lab: the pages read the figures.
+            found = {key: value for key, value in found.items() if key != "signals"}
+        return found
+
+    def reconciliation(self, run_id: str) -> dict | None:
+        """A replay of the journal beside WATA's real positions; None for any other run, or one made before."""
+        return read_json(self._file(run_id, "reconciliation.json"))
+
+    def baseline(self, run_id: str) -> dict | None:
+        return read_json(self._file(run_id, "baseline.json"))
+
+    def sweep(self, run_id: str) -> dict:
+        return self._done_file(run_id, "sweep.json")
+
+    def breakdowns(self, run_id: str) -> dict:
+        """The trades of a run by what could explain them, with the figures of the Exits page."""
+        days = {row["day"]: row for row in self.days(run_id)}
+        trades = [trade for trade in self.trades(run_id) if (days.get(trade["day"]) or {}).get("status") == "tested"]
+        settings = (read_json(self._file(run_id, "settings.json")) or {}).get("settings") or {}
+        local = pytz.timezone(settings.get("timezone", "Europe/Paris"))
+
+        def opened(trade):
+            moment = datetime.strptime(trade["entry"]["filled_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            return moment.astimezone(local)
+
+        groups = {
+            "hour": stats_by(trades, lambda trade: opened(trade).hour, name="hour"),
+            "weekday": stats_by(trades, lambda trade: WEEKDAYS[opened(trade).weekday()], list(WEEKDAYS[:5]), name="weekday"),
+            "direction": stats_by(trades, lambda trade: trade["direction"], ["long", "short"], name="direction"),
+            "exit": stats_by(trades, lambda trade: exit_group(trade["exit"]["reason"]), name="exit"),
+            "confidence": stats_by(
+                trades, lambda trade: _confidence_group(trade.get("confidence")),
+                [label for _, label in _CONFIDENCES] + [NO_CONFIDENCE], name="confidence",
+            ),
+            "holding": stats_by(trades, lambda trade: holding_bucket(trade.get("holding_seconds")), list(HOLDING_LABELS), name="holding"),
+            "turbo_price": stats_by(
+                trades, lambda trade: _price_group(trade["entry"].get("price")), [label for _, label in _PRICES], name="price",
+            ),
+            "issuer": stats_by(trades, lambda trade: trade["turbo"].get("issuer") or "Unknown", name="issuer"),
         }
 
-    def breakdowns(self, run_id: str, leverage: float) -> dict:
-        """
-        The trades of a run by what could explain them: the hour and the
-        weekday they were entered on, their direction, what they were entered
-        and left on, their confidence, how long they were held. With the same
-        figures as the trades WATA really made have on the Exits page.
-        """
-        rules = WataRules.from_dict(_read_json(self._file(run_id, "rules.json")) or {})
-        clock = LocalClock(rules.timezone)
-        trades = []
-        for row in self.rows(run_id, TRADES, leverage):
-            entered, left = _epoch(row["entry_time"]), _epoch(row["exit_time"])
-            day, seconds = clock.at(entered)
-            trades.append({
-                "performance_percent": row["performance_percent"],
-                "max_performance_percent": row["max_performance_percent"],
-                # In money when the run was given a capital.
-                "profit_loss": row.get("profit_loss"),
-                "hour": seconds // 3600,
-                "weekday": WEEKDAYS[day.weekday()],
-                "direction": row["direction"],
-                "entry_reason": row["entry_reason"],
-                "exit": row["exit_reason"],
-                "confidence": _confidence_group(row.get("confidence")),
-                "holding_time": holding_bucket(left - entered),
-            })
+        # The kind of day a trade was made on, and its place against the US open: runs made before have neither.
+        def label(kind):
+            return lambda trade: ((days[trade["day"]].get("regime") or {}).get("labels") or {}).get(kind)
 
-        def by(name: str, order: list | None = None) -> list[dict]:
-            totals: dict = {}
-            for trade in trades:
-                totals[trade[name]] = totals.get(trade[name], 0.0) + trade["performance_percent"]
-            groups = stats_by(trades, lambda trade: trade[name], order)
-            # The sum of the results, in points of percent: what the group weighs, each trade as the whole stake.
-            return [{**group, "total_percent": round(totals.get(group["group"], 0.0), 2)} for group in groups]
+        for kind, order in (("volatility", VOLATILITY_LABELS), ("gap", GAP_LABELS), ("day_type", DAY_TYPES),
+                            ("us_open", OPEN_LABELS), ("news", MACRO_LABELS)):
+            groups[kind] = stats_by(trades, label(kind), list(order), name="group")
+        groups["session_part"] = stats_by(trades, lambda trade: trade.get("session_part"), list(SESSION_PARTS), name="group")
+        return {"trades": len(trades), "groups": groups, "given_back": given_back(trades)}
 
-        present = {name: {trade[name] for trade in trades} for name in ("weekday", "confidence", "holding_time")}
-        (whole,) = stats_by(trades, lambda trade: "all", ["all"])
-        return {
-            "id": run_id,
-            "leverage": leverage,
-            "timezone": rules.timezone,
-            "summary": {
-                **{name: value for name, value in whole.items() if name != "group"},
-                **given_back(trades),
-                "total_percent": round(sum(trade["performance_percent"] for trade in trades), 2),
-            },
-            "groups": {
-                "hour": by("hour"),
-                "weekday": by("weekday", [weekday for weekday in WEEKDAYS if weekday in present["weekday"]]),
-                "direction": by("direction"),
-                "entry_reason": by("entry_reason"),
-                "confidence": by("confidence", [
-                    label for label in (*(label for _, label in _CONFIDENCES), NO_CONFIDENCE) if label in present["confidence"]
-                ]),
-                "holding_time": by("holding_time", [label for label in HOLDING_LABELS if label in present["holding_time"]]),
-                "exit": sorted(by("exit"), key=lambda group: group["trade_count"], reverse=True),
-            },
-        }
-
-    def trade_path(self, run_id: str, leverage: float, entry_time: str) -> dict:
-        """
-        One trade as the position monitor lived it: the turbo's result every
-        ten seconds from the entry to the exit (its last, its worst and its
-        best), with the levels that could sell it. Replayed when asked.
-        """
-        request = _read_json(self._file(run_id, "request.json")) or {}
-        rules = WataRules.from_dict(_read_json(self._file(run_id, "rules.json")) or {})
-        trades = self.rows(run_id, TRADES, leverage)
-        trade = next((row for row in trades if row["entry_time"] == entry_time), None)
-        if trade is None:
-            raise InvalidRequest("No trade of this backtest was entered at that moment")
-        turbo = TurboModel(
-            entry_price=request["turbo"]["entry_price"], points_per_unit=leverage, spread=request["turbo"]["spread"],
-        )
-        clock = LocalClock(rules.timezone)
-        direction = trade["direction"]
-        barrier = turbo.barrier(direction, trade["entry_index"])
-        entered, left = _epoch(trade["entry_time"]), _epoch(trade["exit_time"])
-
-        # What the day had made before it: the daily target sells where the two together reach it.
-        day = clock.at(entered)[0]
-        earlier = [
-            row["performance_percent"] for row in trades
-            if clock.at(_epoch(row["entry_time"]))[0] == day and _epoch(row["exit_time"]) <= entered
-        ]
-        day_before = compounded(earlier)
-        day_target = ((1 + rules.day_profit_target / 100.0) / (1 + day_before / 100.0) - 1) * 100
-
-        location = self._location(prices_of(request))
-        bars = FileBars(location, self._indice).bars(
-            datetime.fromtimestamp(entered, timezone.utc), datetime.fromtimestamp(left + BAR_SECONDS, timezone.utc),
-        )
-        points = []
-        peak = 0.0
-        for bar in bars:
-            against, with_it = (bar.mid_low, bar.mid_high) if direction == LONG else (bar.mid_high, bar.mid_low)
-            worst = turbo.performance(direction, barrier, against)
-            best = turbo.performance(direction, barrier, with_it)
-            last = turbo.performance(direction, barrier, bar.mid_close)
-            if bar.start >= left:
-                # Sold in these ten seconds: what they did after it is not the trade's.
-                opened = turbo.performance(direction, barrier, bar.mid_open)
-                last = trade["performance_percent"]
-                worst, best = min(opened, last), max(opened, last)
-            peak = max(peak, best)
-            armed = rules.trailing_enabled and peak >= rules.trailing_activation_percent
-            points.append([bar.start, last, worst, best, round(peak - rules.trailing_drawdown_percent, 2) if armed else None])
-        if len(points) > MAX_PATH_POINTS:
-            size = -(-len(points) // MAX_PATH_POINTS)
-            points = [
-                [
-                    group[0][0], group[-1][1], min(point[2] for point in group), max(point[3] for point in group),
-                    group[-1][4],
-                ]
-                for group in (points[place:place + size] for place in range(0, len(points), size))
-            ]
-        return {
-            "id": run_id,
-            "leverage": leverage,
-            "timezone": rules.timezone,
-            "trade": trade,
-            "day_before_percent": day_before,
-            # Each point: when its ten seconds began, then the turbo's result at their end, at their worst and at
-            # their best, and where the trailing stop stood once armed.
-            "points": points,
-            "levels": {
-                "stop": rules.stoploss_percent,
-                "take_profit": rules.max_profit_percent,
-                "day_target": round(day_target, 2),
-                "trailing_activation": rules.trailing_activation_percent if rules.trailing_enabled else None,
-                "trailing_drawdown": rules.trailing_drawdown_percent if rules.trailing_enabled else None,
-            },
-        }
-
-    def day_chart(self, run_id: str, day: date, leverage: float) -> dict:
-        """
-        One day of a run as the strategy saw it: its range bars, what was
-        measured on each, what it decided, and what the trader and the monitor
-        made of it at that leverage. Replayed when asked: a fraction of a second.
-        """
-        request = _read_json(self._file(run_id, "request.json")) or {}
-        rules = WataRules.from_dict(_read_json(self._file(run_id, "rules.json")) or {})
-        if not request.get("from", "") <= day.isoformat() <= request.get("to", ""):
-            raise InvalidRequest("That day is not in the period of this backtest")
-        trades = self.rows(run_id, TRADES, leverage)
-        refusals = self.rows(run_id, REFUSALS, leverage)
-
-        clock = LocalClock(rules.timezone)
-        replayed_signals = request.get("kind") == KIND_SIGNALS
-        # Signals have no bars of their own: they are drawn on those of the strategy TradingView runs.
-        strategy = CHART_STRATEGY if replayed_signals else request["strategy"]
-        params_type, _ = backtest.STRATEGIES[strategy]
-        params = params_type().with_overrides({name: str(value) for name, value in request["parameters"].items()})
-        location = self._location(prices_of(request))
-        traced, decisions = backtest.replay_day(strategy, request["parameters"], clock, location, day, indice=self._indice)
-        if replayed_signals:
-            decisions = [
-                decision for decision in signals.decisions_of(_read_json(self._file(run_id, "signals.json")) or [])
-                if clock.at(decision.at)[0] == day
-            ]
-
-        bars, kernel, vwap, upper, lower, allowed = [], [], [], [], [], []
-        place = None
-        for row in traced:
-            # No two bars at the same place on the chart's axis: several can begin in the same ten seconds.
-            place = row["began"] if place is None else max(row["began"], place + 1)
-            bars.append([
-                place, row["open"], row["high"], row["low"], row["close"],
-                row["began"], row["ended"], row["complete"], row["after_pause"], None,
-            ])
-            kernel.append(row["kernel"])
-            vwap.append(row["vwap"])
-            banded = row["vwap"] is not None and row["band"] is not None
-            upper.append(row["vwap"] + row["band"] if banded else None)
-            lower.append(row["vwap"] - row["band"] if banded else None)
-            allowed.append(row["entries_allowed"])
-
-        def of_the_day(rows: list[dict], column: str) -> list[dict]:
-            return [row for row in rows if clock.at(_epoch(row[column]))[0] == day]
-
-        return {
-            "id": run_id,
-            "day": day.isoformat(),
-            "timezone": rules.timezone,
-            "leverage": leverage,
-            "tick": params.tick,
-            "decimals": _decimals_of(params.tick),
-            "size": params.range_points,
-            "session": {
-                "start": clock.epoch(day, params.session_start), "end": clock.epoch(day, params.session_end),
-            },
-            "bars": bars,
-            "kernel": kernel,
-            "vwap": vwap,
-            "upper": upper,
-            "lower": lower,
-            "entries_allowed": allowed,
-            "decisions": [
-                {"at": decision.at, "target": decision.target, "reason": decision.reason, "confidence": decision.confidence}
-                for decision in decisions
-            ],
-            "trades": of_the_day(trades, "entry_time"),
-            "refusals": of_the_day(refusals, "time"),
-        }
-
-    # ── prices ──
-
-    def _instrument(self, label: str | None) -> tuple[str, str]:
-        """
-        The label asked for (the history backtests read when none is) and the
-        Dukascopy symbol fetched for it. A label that is not one of the
-        instruments is refused before any path or command is made of it.
-        """
-        label = label or self._indice
-        symbol = self._history.symbol_of(label)
-        if symbol is None:
-            raise InvalidRequest(f"No Dukascopy instrument {label!r}")
-        return label, symbol
-
-    def _ready_days(self, label: str | None = None) -> set[date]:
-        """The days that have a file of bars."""
-        return set(self._history.days(label or self._indice))
-
-    def _day_states(self, first_day: date, last_day: date, label: str | None = None) -> list[dict]:
-        """
-        What there is of each day: "ready", "partial" (it can be backtested on,
-        but hours of it were not there yet when it was written), "incomplete"
-        (some hours, not enough to write it), "missing", "closed" (the market
-        was), or "unavailable" (the source has nothing for it). A day the
-        source was found to have no more of is settled: not asked for again.
-        Days are only settled for the history backtests read, the one kept
-        up to date.
-        """
-        label, symbol = self._instrument(label)
-        ready = self._ready_days(label)
-        settled = (self._keeper().get("settled") or {}) if label == self._indice else {}
-        days = []
-        for offset in range((last_day - first_day).days + 1):
-            day = first_day + timedelta(days=offset)
-            open_hours = [hour for hour in dukascopy.day_hours(day) if not dukascopy.market_is_closed(hour)]
-            kept = sum(
-                1 for hour in open_hours if os.path.exists(dukascopy.raw_path(self._prices_root, symbol, hour))
-            )
-            if day in ready:
-                state = "ready" if kept == len(open_hours) or day.isoformat() in settled else "partial"
-            elif not open_hours:
-                state = "closed"
-            elif day.isoformat() in settled:
-                state = "unavailable"
-            else:
-                state = "incomplete" if kept else "missing"
-            days.append({"day": day.isoformat(), "state": state, "hours": kept, "hours_expected": len(open_hours)})
-        return days
-
-    def coverage(self, first_day: date, last_day: date, label: str | None = None) -> dict:
-        """Which days of the period have prices to backtest on, of ``label`` (the history backtests read by default)."""
-        if last_day < first_day or (last_day - first_day).days >= MAX_PERIOD_DAYS:
-            raise InvalidRequest(f"A period of {MAX_PERIOD_DAYS} days at most")
-        label, symbol = self._instrument(label)
-        ready = self._ready_days(label)
-        return {
-            "from": first_day.isoformat(),
-            "to": last_day.isoformat(),
-            "label": label,
-            "symbol": symbol,
-            "days": self._day_states(first_day, last_day, label),
-            "ready": {
-                "count": len(ready),
-                "first": min(ready).isoformat() if ready else None,
-                "last": max(ready).isoformat() if ready else None,
-            },
-            "fetch": self.fetch_status(),
-            "keep": self.keep_status(),
-        }
-
-    def recorded_coverage(self, first_day: date, last_day: date) -> dict:
-        """
-        Which days of the period have Capital.com's recorded prices to backtest
-        on: a file a day, written by the feed once the day is over. In the
-        shape of ``coverage``; nothing of them can be fetched.
-        """
-        if last_day < first_day or (last_day - first_day).days >= MAX_PERIOD_DAYS:
-            raise InvalidRequest(f"A period of {MAX_PERIOD_DAYS} days at most")
-        written = capital_day_files.written_days(self._prices_root, self._indice)
-        days = []
-        for offset in range((last_day - first_day).days + 1):
-            day = first_day + timedelta(days=offset)
-            # Capital.com's Nasdaq does not quote on Saturdays (days of UTC, as the files are).
-            state = "ready" if day in written else ("closed" if day.weekday() == 5 else "missing")
-            days.append({"day": day.isoformat(), "state": state, "hours": 0, "hours_expected": 0})
-        return {
-            "from": first_day.isoformat(),
-            "to": last_day.isoformat(),
-            "label": self._indice,
-            "symbol": None,
-            "prices": PRICES_CAPITAL,
-            "days": days,
-            "ready": {
-                "count": len(written),
-                "first": min(written).isoformat() if written else None,
-                "last": max(written).isoformat() if written else None,
-            },
-            "fetch": self.fetch_status(),
-            "keep": self.keep_status(),
-        }
-
-    def _fetch_file(self, name: str) -> str:
-        return os.path.join(self._runs_root, FETCH_FOLDER, name)
-
-    def _fetching(self) -> bool:
-        return self._fetch_process is not None or (self._fetch_task is not None and not self._fetch_task.done())
-
-    def fetch_status(self) -> dict:
-        status = _read_json(self._fetch_file("status.json")) or {"state": IDLE}
-        if status.get("state") == RUNNING and (self._fetch_task is None or self._fetch_task.done()):
-            # Written by an admin that is no longer there.
-            status = {**status, "state": INTERRUPTED}
-        return {**status, "lines": _tail(self._fetch_file("output.log")) if status.get("state") != IDLE else []}
-
-    def start_fetch(self, first_day: date, last_day: date, *, automatic: bool = False, label: str | None = None) -> dict:
-        """
-        Download the days of a period, of ``label`` (the history backtests read
-        by default). One download at a time, whatever the instrument: the server
-        shuts out an address, not a symbol.
-        """
-        label, symbol = self._instrument(label)
-        today = datetime.fromtimestamp(self._clock(), timezone.utc).date()
-        if last_day < first_day:
-            raise InvalidRequest("The period ends before it starts")
-        if (last_day - first_day).days >= FETCH_MAX_DAYS:
-            raise InvalidRequest(f"{FETCH_MAX_DAYS} days at most are fetched at a time")
-        if last_day > today:
-            raise InvalidRequest("Prices of the future cannot be fetched")
-        if self._fetching():
-            raise NotPossible("A download is already running: one at a time is all the server tolerates")
-
-        os.makedirs(self._fetch_file(""), exist_ok=True)
-        for name in ("output.log", "report.json"):
-            try:
-                os.remove(self._fetch_file(name))
-            except OSError:
-                pass
-        _write_json(self._fetch_file("status.json"), {
-            "state": RUNNING, "from": first_day.isoformat(), "to": last_day.isoformat(),
-            "label": label, "symbol": symbol,
-            "started_at": _utc(self._clock()),
-            # Started by the service itself, to keep the prices up to date.
-            "automatic": automatic,
-        })
-        self._fetch_stopped = False
-        self._fetch_task = asyncio.create_task(self._fetch(first_day, last_day, label, symbol))
-        return self.fetch_status()
-
-    async def _fetch(self, first_day: date, last_day: date, label: str, symbol: str) -> None:
-        arguments = [
-            "src.strategy.history.dukascopy",
-            "--from", first_day.isoformat(), "--to", last_day.isoformat(),
-            "--root", self._prices_root, "--symbol", symbol, "--label", label, "--low-priority",
-            "--report", self._fetch_file("report.json"),
-        ]
-        state, code = FAILED, None
-        try:
-            self._fetch_process = await self._launcher(arguments, self._fetch_file("output.log"))
-            try:
-                code = await asyncio.wait_for(self._fetch_process.wait(), FETCH_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
-                self._fetch_process.kill()
-                await self._fetch_process.wait()
-            # The downloader ends with 1 when days are still missing: that is not a failure of it.
-            state = STOPPED if self._fetch_stopped else {0: DONE, 1: INCOMPLETE}.get(code, FAILED)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"The download of prices could not be run: {e}")
-        finally:
-            self._fetch_process = None
-        status = _read_json(self._fetch_file("status.json")) or {}
-        _write_json(self._fetch_file("status.json"), {
-            **status, "state": state, "exit_code": code, "finished_at": _utc(self._clock()),
-        })
-        try:
-            self._after_fetch(state, _read_json(self._fetch_file("report.json")), label)
-        except Exception as e:
-            logger.warning(f"Could not note how the download of prices went: {e}")
-        # A download the service started by itself is not news to whoever is on the page.
-        self._announce("prices_fetch_finished", state=state, automatic=bool(status.get("automatic")), label=label)
-
-    def stop_fetch(self) -> dict:
-        if self._fetch_process is None:
-            raise NotPossible("No download is running")
-        self._fetch_stopped = True
-        self._fetch_process.terminate()
-        return self.fetch_status()
-
-    # ── prices kept up to date without anyone asking ──
-
-    def _keep_settings(self) -> dict:
-        settings = _read_json(self._fetch_file("keep.json")) or {}
-        return {"enabled": bool(settings.get("enabled", False)), "days": int(settings.get("days", KEEP_DEFAULT_DAYS))}
-
-    def _keeper(self) -> dict:
-        """What the service remembers of the downloads: when it may ask again, and the days that are settled."""
-        return _read_json(self._fetch_file("keeper.json")) or {}
-
-    def _set_keeper(self, **changes) -> None:
-        os.makedirs(self._fetch_file(""), exist_ok=True)
-        _write_json(self._fetch_file("keeper.json"), {**self._keeper(), **changes})
-
-    def set_keep(self, enabled: bool, days: int = KEEP_DEFAULT_DAYS) -> dict:
-        """Switch on or off the fetching of what is missing of the last ``days`` days."""
-        if not 1 <= days <= KEEP_MAX_DAYS:
-            raise InvalidRequest(f"Between 1 and {KEEP_MAX_DAYS} days can be kept up to date")
-        os.makedirs(self._fetch_file(""), exist_ok=True)
-        _write_json(self._fetch_file("keep.json"), {"enabled": enabled, "days": days})
-        # Asked by the operator: whatever wait was in progress is over.
-        self._set_keeper(next_at=0, failures=0)
-        return self.keep_status()
-
-    def _market_is_open(self, now: float) -> bool:
-        """Whether WATA may be trading: its hours on a weekday. Unknown counts as open."""
-        try:
-            rules = self.live_rules()
-        except NotPossible:
-            return True
-        local = datetime.fromtimestamp(now, LocalClock(rules.timezone).zone)
-        return local.weekday() < 5 and rules.trading_start_hour <= local.hour < rules.trading_end_hour
-
-    def _days_to_keep(self, now: float, days: int) -> list[date]:
-        """The days of the last ``days`` that are not whole yet, oldest first. Today is left to tomorrow."""
-        today = datetime.fromtimestamp(now, timezone.utc).date()
-        return [
-            date.fromisoformat(day["day"])
-            for day in self._day_states(today - timedelta(days=days), today - timedelta(days=1))
-            if day["state"] in ("missing", "incomplete", "partial")
-        ]
-
-    def keep_status(self) -> dict:
-        settings = self._keep_settings()
-        keeper = self._keeper()
-        now = self._clock()
-        missing = self._days_to_keep(now, settings["days"])
-        next_at = keeper.get("next_at") or 0
-        if not settings["enabled"]:
-            state = "off"
-        elif self._fetching():
-            state = "fetching"
-        elif not missing:
-            state = "up_to_date"
-        elif now < next_at:
-            # After the server stopped answering, or between two downloads.
-            state = "backing_off" if keeper.get("failures") else "pausing"
-        elif self._market_is_open(now):
-            state = "waiting_for_close"
-        else:
-            state = "due"
-        return {
-            **settings,
-            "state": state,
-            "missing": len(missing),
-            # Days the source has no more of, which are not asked for again.
-            "settled": len(keeper.get("settled") or {}),
-            "failures": keeper.get("failures") or 0,
-            "next_at": _utc(next_at) if now < next_at else None,
-            "limits": {"days": KEEP_MAX_DAYS},
-        }
-
-    def keep_once(self) -> str:
-        """
-        Start the download of the newest days that are missing, when it is
-        time to. Says what it found: the state ``keep_status`` gives.
-        """
-        status = self.keep_status()
-        if status["state"] != "due":
-            return status["state"]
-        missing = self._days_to_keep(self._clock(), status["days"])
-        newest = missing[-1]
-        first = max(missing[0], newest - timedelta(days=KEEP_CHUNK_DAYS - 1))
-        self.start_fetch(first, newest, automatic=True)
-        return "fetching"
-
-    def _after_fetch(self, state: str, report: dict | None, label: str | None = None) -> None:
-        """
-        What a download that ended says about the next one: when, and which
-        days not to ask for again. The wait follows every download, since the
-        server's patience is the same whatever was asked of it; the days settled
-        are those of the history kept up to date only, or another instrument's
-        missing day would mark the same day of that history unavailable for good.
-        """
-        now = self._clock()
-        keeper = self._keeper()
-        today = datetime.fromtimestamp(now, timezone.utc).date()
-        days = (report or {}).get("days") or []
-        settled = dict(keeper.get("settled") or {})
-        for day in days if (label or self._indice) == self._indice else []:
-            asked = date.fromisoformat(day["day"])
-            # The server answered for every hour it was asked, and said it has no file for some of them:
-            # days after the fact, they are not hours still to be published.
-            if (
-                day["unpublished_hours"] and not day["unanswered_hours"]
-                and (today - asked).days > KEEP_GIVE_UP_AFTER_DAYS
-                and not all(dukascopy.market_is_closed(hour) for hour in dukascopy.day_hours(asked))
-            ):
-                settled[day["day"]] = day["status"]
-        unanswered = any(day["unanswered_hours"] or day["status"] == "not tried" for day in days)
-        failures = keeper.get("failures") or 0
-        if state == STOPPED:
-            wait = KEEP_AFTER_STOP_SECONDS
-        elif unanswered or state == FAILED or report is None:
-            failures += 1
-            wait = min(KEEP_BACKOFF_SECONDS * 2 ** (failures - 1), KEEP_BACKOFF_MAX_SECONDS)
-        else:
-            failures, wait = 0, KEEP_PAUSE_SECONDS
-        self._set_keeper(next_at=now + wait, failures=failures, settled=settled)
-
-    async def keep_prices(self, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
-        """Until cancelled: look once a minute whether a download is due."""
-        while True:
-            await sleep(KEEP_TICK_SECONDS)
-            try:
-                self.keep_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"Could not keep the prices up to date: {e}")
-
-    # ── the turbo measured on real trades ──
-
-    def _calibration_file(self, name: str) -> str:
-        return os.path.join(self._runs_root, CALIBRATION_FOLDER, name)
-
-    def calibration(self) -> dict:
-        """The turbo last measured on WATA's closed trades, and the measure in progress if there is one."""
-        status = _read_json(self._calibration_file("status.json")) or {"state": IDLE}
-        if status.get("state") == RUNNING and (self._calibration_task is None or self._calibration_task.done()):
-            status = {**status, "state": INTERRUPTED}
-        return {
-            "status": status,
-            "result": _read_json(self._calibration_file("result.json")),
-            "turbo": self.default_turbo(),
-            "lines": _tail(self._calibration_file("output.log")) if status.get("state") == FAILED else [],
-        }
-
-    def start_calibration(self, positions: list[dict], journal: list[dict]) -> dict:
-        """
-        Measure the turbo on WATA's closed positions (and its journal, which
-        says which indice each was on). In the background: the index is read
-        from the history for the open and the close of each.
-        """
-        if self._calibration_task is not None and not self._calibration_task.done():
-            raise NotPossible("The turbo is already being measured")
-        trades = [
-            trade for trade in real_trades_of(positions, journal, self._indice)
-            if trade["open_price"] is not None and trade["close_price"] is not None
-        ]
-        if not trades:
-            raise NotPossible("WATA has no closed trade yet to measure the turbo on")
-        os.makedirs(self._calibration_file(""), exist_ok=True)
-        try:
-            os.remove(self._calibration_file("output.log"))
-        except OSError:
-            pass
-        _write_json(self._calibration_file("trades.json"), trades)
-        _write_json(self._calibration_file("status.json"), {
-            "state": RUNNING, "trades": len(trades), "started_at": _utc(self._clock()),
-        })
-        self._calibration_task = asyncio.create_task(self._calibrate())
-        return self.calibration()
-
-    async def _calibrate(self) -> None:
-        # Written beside the last one, which stays what backtests use until this one is done.
-        measured = self._calibration_file("measured.json")
-        arguments = [
-            "src.strategy.calibration",
-            "--trades", self._calibration_file("trades.json"),
-            "--root", self._prices_root, "--indice", self._indice,
-            "--out", measured, "--low-priority",
-        ]
-        state, error = FAILED, None
-        try:
-            self._calibration_process = await self._launcher(arguments, self._calibration_file("output.log"))
-            try:
-                code = await asyncio.wait_for(self._calibration_process.wait(), CALIBRATION_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
-                self._calibration_process.kill()
-                await self._calibration_process.wait()
-                error = f"Stopped after {CALIBRATION_TIMEOUT_SECONDS // 60} minutes"
-            else:
-                result = _read_json(measured) if code == 0 else None
-                if result is not None:
-                    _write_json(self._calibration_file("result.json"), {**result, "measured_at": _utc(self._clock())})
-                    state = DONE
-                else:
-                    error = "\n".join(_tail(self._calibration_file("output.log"), 5)) or f"The command ended with code {code}"
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            error = f"The measure could not be run: {e}"
-        finally:
-            self._calibration_process = None
-        status = _read_json(self._calibration_file("status.json")) or {}
-        _write_json(self._calibration_file("status.json"), {
-            **status, "state": state, "error": error, "finished_at": _utc(self._clock()),
-        })
-        self._announce("calibration_finished", state=state)

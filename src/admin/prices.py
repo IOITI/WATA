@@ -37,7 +37,7 @@ GAPS_MAX_DAYS = 31
 # its prices, when it really began and ended (epoch seconds), whether it reached its
 # range, whether it is the first after a pause in the data, and the index at its end
 # (under a turbo).
-RANGE_COLUMNS = ("t", "open", "high", "low", "close", "began", "ended", "complete", "after_pause", "index")
+RANGE_COLUMNS = ("t", "open", "high", "low", "close", "began", "ended", "complete", "after_pause", "index", "volume")
 SIDES = ("bid", "ask")
 RANGE_MAX_DAYS = 31
 # Ten-second bars read to build them: a month recorded around the clock is 270,000.
@@ -435,7 +435,27 @@ def sample_at(times: Sequence[int], values: Sequence[float], moments: Iterable[i
     return sampled
 
 
-def range_rows(bars: Sequence[RangeBar], decimals: int, index: Sequence[float | None] | None = None) -> list[list]:
+def range_volumes(bars: Sequence[RangeBar], times: Sequence[int], updates: Sequence[int]) -> list[int]:
+    """
+    The quote changes of each range bar, what stands for its volume: each ten
+    seconds counted once, in the first bar running at their start. Several bars
+    can end in the same ten seconds: the first of them takes those quotes.
+    """
+    endeds = [bar.ended for bar in bars]
+    volumes = [0] * len(bars)
+    for moment, count in zip(times, updates):
+        position = bisect_right(endeds, moment)
+        if position < len(bars) and bars[position].began <= moment:
+            volumes[position] += count
+    return volumes
+
+
+def range_rows(
+    bars: Sequence[RangeBar],
+    decimals: int,
+    index: Sequence[float | None] | None = None,
+    volumes: Sequence[int] | None = None,
+) -> list[list]:
     """The bars as rows of RANGE_COLUMNS, prices back in the instrument's own unit."""
     scale = 10 ** decimals
     return [
@@ -445,6 +465,7 @@ def range_rows(bars: Sequence[RangeBar], decimals: int, index: Sequence[float | 
             round(bar.low / scale, decimals), round(bar.close / scale, decimals),
             bar.began, bar.ended, bar.complete, bar.after_pause,
             None if index is None else index[position],
+            None if volumes is None else volumes[position],
         ]
         for position, bar in enumerate(bars)
     ]

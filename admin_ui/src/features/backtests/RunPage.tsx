@@ -1,0 +1,414 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Flag, Pencil, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router'
+
+import { KpiTile } from '@/components/KpiTile'
+import { PageHeader, Panel } from '@/components/Panel'
+import { PnlValue, QueryState } from '@/components/status'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { AnimatedTabs } from '@/components/ui/animated-tabs'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/form'
+import { SettleModal } from '@/components/ui/settle-modal'
+import { useSession } from '@/features/auth/auth-context'
+import { barsLabel } from '@/features/ta/signals/ruleModel'
+import { api } from '@/lib/api'
+import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
+import type { BacktestRun } from '@/lib/types'
+
+import {
+  assetLabel,
+  daysSentence,
+  isActive,
+  progressSentence,
+  sampleWarning,
+  settingChanges,
+  sourceLabel,
+} from './model'
+import { EdgePanel } from './EdgePanel'
+import { BacktestsDisabled, ChangeList, Measure, StateBadge } from './parts'
+import { ReconciliationPanel } from './ReconciliationPanel'
+import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
+import { DaysTable, SignalsTable, TradesTable } from './runTables'
+import { StressPanel } from './StressPanel'
+import { ChoicePanel, SweepPanel } from './SweepPanel'
+import { underlyingLabel } from './turboModel'
+
+function Progress({ run }: { run: BacktestRun }) {
+  const progress = run.progress
+  const share = progress && progress.total > 0 ? Math.min(1, progress.done / progress.total) : 0
+  return (
+    <Panel title={run.status.state === 'queued' ? 'Waiting its turn' : 'Running'}>
+      <div className="flex flex-col gap-3 text-sm">
+        <p>
+          {run.status.state === 'queued'
+            ? `One backtest runs at a time: this one is number ${run.position ?? '?'} in line.`
+            : progressSentence(progress)}
+        </p>
+        {run.status.state === 'running' && (
+          <div className="h-1.5 w-full max-w-md rounded-full bg-foreground/10" role="progressbar" aria-valuenow={Math.round(share * 100)} aria-valuemin={0} aria-valuemax={100}>
+            <div className="h-1.5 rounded-full bg-foreground/60 transition-all" style={{ width: `${Math.max(share * 100, 3)}%` }} />
+          </div>
+        )}
+        {run.lines.length > 0 && (
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">{run.lines.join('\n')}</pre>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
+/** What a run was asked: its signals, its asset, its days, and what it changed of WATA's settings. */
+function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof settingChanges>[2] }) {
+  const request = run.request
+  const source = request.source
+  const engine = run.summary?.made_with.engine
+  const turbos = run.summary?.made_with.turbos
+  const modelled = turbos && turbos.kind === 'modelled' ? turbos : null
+  return (
+    <Panel title="What it ran">
+      <div className="grid gap-8 lg:grid-cols-2">
+        <dl className="flex flex-col gap-1.5">
+          <Measure label="Signals">
+            {source.kind === 'pine'
+              ? `${source.rule.name} v${source.rule.script.version}${source.from_rule ? ` (the rule ${source.from_rule.name})` : ''}`
+              : `The ${source.signals} signal${source.signals === 1 ? '' : 's'} WATA received`}
+          </Measure>
+          <Measure label="Asset">
+            {assetLabel(request.chart.asset)} · {barsLabel(request.chart.bars)} · {request.chart.side}
+          </Measure>
+          <Measure label="Turbos of">{request.indice}</Measure>
+          {modelled && (
+            <Measure label="Model">
+              <span className="text-xs text-warning">
+                Turbos made up from {underlyingLabel(modelled.underlying)}, measured on {modelled.days} recorded day{modelled.days === 1 ? '' : 's'}
+                {modelled.few_days ? ': few, a rough guess' : ''}. Check it against the recorded days.
+              </span>
+            </Measure>
+          )}
+          <Measure label="Period">
+            {formatDay(request.from)} to {formatDay(request.to)}
+          </Measure>
+          {source.kind === 'pine' && source.rule.inputs.length > 0 && (
+            <Measure label="Inputs">{source.rule.inputs.map((entry) => `${entry.title ?? entry.id} ${String(entry.value)}`).join(', ')}</Measure>
+          )}
+          {source.kind === 'pine' && (
+            <Measure label="Alerts">{source.rule.alerts.map((entry) => `“${entry.title}” → ${entry.action}`).join('; ') || 'alert() calls'}</Measure>
+          )}
+          <Measure label="Asked">{formatDateTime(run.status.created_at, 'UTC', false)} UTC</Measure>
+          {run.summary && (
+            <Measure label="Made with">
+              WATA {run.summary.made_with.version}
+              {engine ? `, PineTS ${engine.runner.pinets} (${formatNumber(engine.milliseconds / 1000, 1)} s of script)` : ''}
+              {run.stale && <span className="block text-xs text-warning">Other code than this admin’s: it could come out otherwise today.</span>}
+            </Measure>
+          )}
+        </dl>
+        <div className="flex flex-col gap-2">
+          <h3 className="text-xs font-medium text-muted-foreground">Changed from WATA’s settings</h3>
+          <ChangeList changes={settingChanges(run.settings.changed, run.settings.live_before, labels)} none="Nothing: the live settings of the day it was asked." />
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
+export function RunPage() {
+  const { runId = '' } = useParams()
+  const { timezone, backtests_enabled: enabled } = useSession()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [tab, setTab] = useState('trades')
+  const [removing, setRemoving] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState('')
+  const [tags, setTags] = useState('')
+
+  const runQuery = useQuery({
+    queryKey: ['backtest', runId],
+    queryFn: () => api.backtest(runId),
+    enabled,
+    refetchInterval: (query) => (query.state.data && isActive(query.state.data.status.state) ? 2_000 : false),
+  })
+  const run = runQuery.data
+  const done = run?.status.state === 'done'
+  const single = done && run?.kind === 'run'
+  const optionsQuery = useQuery({ queryKey: ['backtest-options'], queryFn: api.backtestOptions, enabled, staleTime: 60_000 })
+  const fields = optionsQuery.data?.fields ?? []
+  const daysQuery = useQuery({ queryKey: ['backtest-days', runId], queryFn: () => api.backtestDays(runId), enabled: done, staleTime: Infinity })
+  const tradesQuery = useQuery({ queryKey: ['backtest-trades', runId], queryFn: () => api.backtestTrades(runId), enabled: single, staleTime: Infinity })
+  const signalsQuery = useQuery({ queryKey: ['backtest-signals', runId], queryFn: () => api.backtestSignals(runId), enabled: single, staleTime: Infinity })
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtest', runId] })
+  const cancel = useMutation({ mutationFn: () => api.cancelBacktest(runId), onSuccess: refresh })
+  const remove = useMutation({
+    mutationFn: () => api.deleteBacktest(runId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['backtests'] })
+      navigate('/backtests')
+    },
+  })
+  const reference = useMutation({
+    mutationFn: () => api.setBacktestReference(runId),
+    onSuccess: (paper) => queryClient.setQueryData(['backtest-paper'], paper),
+  })
+  const rename = useMutation({
+    mutationFn: () => api.renameBacktest(runId, { name, tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) }),
+    onSuccess: () => {
+      void refresh()
+      setRenaming(false)
+    },
+  })
+
+  const summary = run?.summary
+  const figures = summary?.figures
+  const money = summary?.money
+  const warning = figures ? sampleWarning(figures.sample, figures.trades, figures.days) : null
+
+  return (
+    <>
+      <PageHeader
+        title={run?.name ?? 'Backtest'}
+        description={run ? `${sourceLabel(run)} · ${formatDay(run.from)} to ${formatDay(run.to)}` : undefined}
+        actions={
+          run && (
+            <>
+              {isActive(run.status.state) ? (
+                <Button variant="outline" size="sm" leftIcon={<Square className="size-3.5" />} isLoading={cancel.isPending} onClick={() => cancel.mutate()}>
+                  Stop
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" leftIcon={<Trash2 className="size-3.5" />} onClick={() => setRemoving(true)}>
+                  Remove
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                leftIcon={<Pencil className="size-3.5" />}
+                onClick={() => {
+                  setName(run.name)
+                  setTags(run.tags.join(', '))
+                  setRenaming(true)
+                }}
+              >
+                Rename
+              </Button>
+              {run.kind === 'run' && run.status.state === 'done' && run.source.from_rule && run.source.kind === 'pine' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  leftIcon={<Flag className="size-3.5" />}
+                  isLoading={reference.isPending}
+                  disabled={reference.isSuccess}
+                  title={`The run the paper days of ${run.source.from_rule.name} are set against`}
+                  onClick={() => reference.mutate()}
+                >
+                  {reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference'}
+                </Button>
+              )}
+              <Button size="sm" leftIcon={<RotateCcw className="size-3.5" />} onClick={() => navigate(`/backtests/new?again=${run.id}`)}>
+                Run again with changes
+              </Button>
+            </>
+          )
+        }
+      />
+      {!enabled ? (
+        <BacktestsDisabled />
+      ) : (
+        <QueryState isPending={runQuery.isPending} error={runQuery.error} hasData={!!run}>
+          {run && (
+            <div className="flex flex-col gap-6">
+              <div className="flex flex-wrap items-center gap-2">
+                <StateBadge status={run.status} />
+                {run.kind === 'sweep' && <Badge tone="neutral">{run.stress_of ? 'Stress' : 'Sweep'}</Badge>}
+                {run.turbos === 'modelled' && <Badge tone="warning">Modelled turbos</Badge>}
+                {run.stress_of && (
+                  <Link to={`/backtests/${run.stress_of}`} className="text-sm font-medium underline-offset-4 hover:underline">
+                    The run it stresses
+                  </Link>
+                )}
+                {run.tags.map((tag) => (
+                  <Badge key={tag} tone="neutral">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+
+              {reference.error && (
+                <p role="alert" className="text-sm text-negative">
+                  {reference.error.message}
+                </p>
+              )}
+              {isActive(run.status.state) && <Progress run={run} />}
+              {(run.status.state === 'failed' || run.status.state === 'interrupted') && (
+                <Alert tone="danger" role="alert">
+                  <AlertTitle>{run.status.state === 'failed' ? 'The backtest failed' : 'Interrupted'}</AlertTitle>
+                  <AlertDescription>
+                    <pre className="whitespace-pre-wrap font-mono text-xs">{run.status.error}</pre>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {run.status.state === 'cancelled' && (
+                <Alert tone="neutral">
+                  <AlertDescription>Stopped before it was done: nothing of it was kept.</AlertDescription>
+                </Alert>
+              )}
+
+              {done && summary && run.kind === 'sweep' && (
+                <>
+                  <p className="text-sm text-muted-foreground">{daysSentence(summary.days)}</p>
+                  <SweepPanel runId={run.id} fields={fields} stress={Boolean(run.stress_of)} />
+                  {!run.stress_of && <ChoicePanel runId={run.id} summary={summary} fields={fields} />}
+                </>
+              )}
+
+              {single && summary && figures && money && (
+                <>
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+                    <KpiTile
+                      label="All days"
+                      value={<PnlValue value={figures.total_percent} kind="percent" />}
+                      hint={figures.total_range ? `${formatPercent(figures.total_range.low, true)} to ${formatPercent(figures.total_range.high, true)} with other days` : 'each trade as the whole stake'}
+                    />
+                    <KpiTile
+                      label="In money"
+                      value={<PnlValue value={money.profit_loss} kind="money" />}
+                      hint={`${formatMoney(money.capital, 'EUR')} to ${formatMoney(money.final, 'EUR')} (${formatPercent(money.return_percent, true)})`}
+                    />
+                    <KpiTile
+                      label="Trades"
+                      value={formatNumber(figures.trades)}
+                      hint={`${formatPercent(figures.win_rate, false, 0)} won, on ${figures.days_with_an_entry} of ${figures.days} days`}
+                    />
+                    <KpiTile label="Per trade" value={<PnlValue value={figures.expectancy} kind="percent" />} hint={`won ${formatPercent(figures.average_win, true)}, lost ${formatPercent(figures.average_loss, true)}`} />
+                    <KpiTile label="Worst drawdown" value={<PnlValue value={figures.worst_drawdown} kind="percent" />} hint={`${formatMoney(money.worst_drawdown, 'EUR')} of the account`} />
+                    <KpiTile
+                      label="Beats random"
+                      value={summary.against_random ? formatPercent(summary.against_random.beaten, false, 0) : '-'}
+                      hint={summary.against_random ? `of ${summary.against_random.repetitions} runs at random` : 'not asked'}
+                    />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {daysSentence(summary.days)} Average stake {formatMoney(money.average_stake, 'EUR')}, {formatPercent(money.average_scale_percent, false, 0)} of
+                    what an order may use{money.commissions ? `; ${formatMoney(money.commissions, 'EUR')} of commissions` : ''}
+                    {money.unfunded ? `; ${money.unfunded} entr${money.unfunded === 1 ? 'y' : 'ies'} the account could not buy a turbo for` : ''}.
+                  </p>
+                  {warning && (
+                    <Alert tone="warning">
+                      <AlertDescription>{warning}</AlertDescription>
+                    </Alert>
+                  )}
+                  {summary.warnings.length > 0 && (
+                    <Alert tone="neutral">
+                      <AlertTitle>What the Pine runner said</AlertTitle>
+                      <AlertDescription>{summary.warnings.slice(0, 5).join(' · ')}</AlertDescription>
+                    </Alert>
+                  )}
+                  <TrustPanel runId={run.id} summary={summary} />
+                  {run.request.source.kind === 'journal' && <ReconciliationPanel runId={run.id} />}
+                  <EdgePanel runId={run.id} />
+                  <StressPanel run={run} />
+                  <CurvesPanel summary={summary} />
+                  <WhyPanel summary={summary} />
+                  <BreakdownsPanel runId={run.id} />
+                  <Panel>
+                    <AnimatedTabs
+                      tabs={[
+                        { id: 'trades', label: 'Trades', badge: tradesQuery.data?.items.length },
+                        { id: 'signals', label: 'Signals', badge: signalsQuery.data?.items.length },
+                        { id: 'days', label: 'Days', badge: daysQuery.data?.items.length },
+                      ]}
+                      activeTab={tab}
+                      onChange={setTab}
+                      renderContent={false}
+                    />
+                    <div className="mt-4">
+                      {tab === 'trades' && (
+                        <QueryState isPending={tradesQuery.isPending} error={tradesQuery.error} hasData={!!tradesQuery.data}>
+                          {tradesQuery.data && <TradesTable runId={run.id} trades={tradesQuery.data.items} timezone={timezone} />}
+                        </QueryState>
+                      )}
+                      {tab === 'signals' && (
+                        <QueryState isPending={signalsQuery.isPending} error={signalsQuery.error} hasData={!!signalsQuery.data}>
+                          {signalsQuery.data && <SignalsTable runId={run.id} signals={signalsQuery.data.items} timezone={timezone} />}
+                        </QueryState>
+                      )}
+                      {tab === 'days' && (
+                        <QueryState isPending={daysQuery.isPending} error={daysQuery.error} hasData={!!daysQuery.data}>
+                          {daysQuery.data && <DaysTable runId={run.id} days={daysQuery.data.items} turbos={run.turbos} />}
+                        </QueryState>
+                      )}
+                    </div>
+                  </Panel>
+                </>
+              )}
+
+              <RunFacts run={run} labels={fields} />
+            </div>
+          )}
+        </QueryState>
+      )}
+
+      <SettleModal
+        open={removing}
+        onClose={() => setRemoving(false)}
+        title="Remove this backtest?"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setRemoving(false)}>
+              Keep it
+            </Button>
+            <Button variant="destructive" size="sm" isLoading={remove.isPending} onClick={() => remove.mutate()}>
+              Remove
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-text-secondary">Its signals, trades and days are deleted from the server. The recorded prices are kept.</p>
+        {remove.error && (
+          <p role="alert" className="mt-2 text-sm text-negative">
+            {remove.error.message}
+          </p>
+        )}
+      </SettleModal>
+
+      <SettleModal
+        open={renaming}
+        onClose={() => setRenaming(false)}
+        title="Name and tags"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setRenaming(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" isLoading={rename.isPending} disabled={!name.trim()} onClick={() => rename.mutate()}>
+              Save
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">Name</span>
+            <Input value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">Tags, separated by commas</span>
+            <Input value={tags} onChange={(event) => setTags(event.target.value)} />
+          </label>
+          {rename.error && (
+            <p role="alert" className="text-sm text-negative">
+              {rename.error.message}
+            </p>
+          )}
+        </div>
+      </SettleModal>
+    </>
+  )
+}

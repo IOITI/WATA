@@ -58,10 +58,10 @@ describe('describeEvent', () => {
   })
 
   it('says when a backtest ended, and nothing when the operator stopped it', () => {
-    expect(describeEvent({ type: 'backtest_finished', state: 'done', note: 'higher target' })).toEqual({
+    expect(describeEvent({ type: 'backtest_finished', state: 'done', name: 'higher target' })).toEqual({
       title: 'Backtest finished', body: 'higher target', variant: 'success',
     })
-    expect(describeEvent({ type: 'backtest_finished', state: 'failed', note: '' })).toEqual({
+    expect(describeEvent({ type: 'backtest_finished', state: 'failed', name: '' })).toEqual({
       title: 'Backtest failed', body: undefined, variant: 'error',
     })
     expect(describeEvent({ type: 'backtest_finished', state: 'cancelled' })).toBeNull()
@@ -79,7 +79,7 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'stopped' })).toBeNull()
   })
 
-  it('names the Dukascopy instrument downloaded when it is not the history backtests read', () => {
+  it('names the Dukascopy instrument downloaded when it is not the history kept up to date', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', label: 'de40' })?.title).toBe(
       'Prices of de40 downloaded',
     )
@@ -93,15 +93,6 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', automatic: true })).toBeNull()
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'incomplete', automatic: true })).toBeNull()
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', automatic: false })).not.toBeNull()
-  })
-
-  it('says when the turbo was measured, or that it could not be', () => {
-    expect(describeEvent({ type: 'calibration_finished', state: 'done' })).toEqual({
-      title: 'Turbo measured on the real trades', variant: 'success',
-    })
-    expect(describeEvent({ type: 'calibration_finished', state: 'failed' })).toEqual({
-      title: 'The measure of the turbo failed', variant: 'error',
-    })
   })
 
   it('stays silent for what the dashboard already shows, and for events it does not know', () => {
@@ -121,10 +112,8 @@ describe('staleQueries', () => {
     expect(staleQueries({ type: 'service_status' })).toEqual(['health', 'data-providers', 'data-provider'])
     expect(staleQueries({ type: 'backtest_finished' })).toEqual(['backtests', 'backtest'])
     expect(staleQueries({ type: 'prices_fetch_finished' })).toEqual([
-      'backtest-prices', 'data-assets', 'data-asset', 'data-providers', 'data-provider',
+      'history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider',
     ])
-    // A new backtest is offered the turbo that was measured.
-    expect(staleQueries({ type: 'calibration_finished' })).toEqual(['backtest-calibration', 'backtest-options'])
     expect(staleQueries({ type: 'something_new' })).toEqual([])
   })
 

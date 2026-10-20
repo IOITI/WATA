@@ -27,7 +27,7 @@ from src.admin.data import (
 from src.admin.health import DOWN, OK, WARNING, recorder_running, recorder_state
 from src.price_recorder.bars import Bar
 from src.price_recorder.settings import RecorderSettings
-from src.strategy.history import dukascopy
+from src.price_history import dukascopy
 
 UTC = timezone.utc
 # Monday 12 October 2026: 08:00 in Paris is 06:00 UTC.

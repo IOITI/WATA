@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- lab/sync.sh each morning at 07:15, after the server has written the day before: lab/launchd/install.sh
+     fills in the checkout. A Mac asleep then runs it when it wakes. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.wata.lab.sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd "__CHECKOUT__" &amp;&amp; lab/sync.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>7</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__CHECKOUT__/var/lib/lab/log/sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CHECKOUT__/var/lib/lab/log/sync.log</string>
+</dict>
+</plist>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { CapitalSettings, DataProvider, DataProviders, JsonObject, RecorderSettings } from '@/lib/types'
+import type { CapitalSettings, DataProvider, DataProviders, JsonObject, PriceKeepStatus, RecorderSettings } from '@/lib/types'
 
 import {
   capitalDraft,
@@ -9,6 +9,7 @@ import {
   capitalWarnings,
   catalogItems,
   instrumentProblems,
+  keepSentence,
   listedProviders,
   recorderDraft,
   recorderWarnings,
@@ -178,3 +179,30 @@ describe('the Capital.com feed’s settings', () => {
   })
 })
 
+describe('prices kept up to date by the service', () => {
+  const keep = (changes: Partial<PriceKeepStatus>): PriceKeepStatus => ({
+    enabled: true, days: 120, state: 'due', missing: 12, settled: 0, failures: 0, next_at: null, limits: { days: 730 },
+    ...changes,
+  })
+  const moment = (iso: string) => iso.slice(11, 16)
+
+  it('says what it is doing, or waiting for', () => {
+    expect(keepSentence(keep({ enabled: false, state: 'off' }), moment)).toBe('Prices are fetched only when asked for below.')
+    expect(keepSentence(keep({ state: 'fetching' }), moment)).toBe('Fetching: 12 days still to complete.')
+    expect(keepSentence(keep({ state: 'up_to_date', missing: 0 }), moment)).toMatch(/^Up to date/)
+    expect(keepSentence(keep({ state: 'waiting_for_close', missing: 1 }), moment)).toBe(
+      '1 day to fetch, once the market has closed: nothing is downloaded while WATA may be trading.',
+    )
+    expect(keepSentence(keep({ state: 'pausing', next_at: '2026-10-13T02:05:00Z' }), moment)).toBe(
+      '12 days to fetch. Next download at 02:05: a few days at a time.',
+    )
+    expect(keepSentence(keep({ state: 'due' }), moment)).toBe('12 days to fetch: the next download starts within a minute.')
+  })
+
+  it('says how long the source is left alone after it stopped answering', () => {
+    expect(keepSentence(keep({ state: 'backing_off', failures: 1, next_at: '2026-10-13T02:00:00Z' }), moment)).toBe(
+      '12 days to fetch. The source stopped answering 1 time in a row: left alone until 02:00.',
+    )
+    expect(keepSentence(keep({ state: 'backing_off', failures: 3, next_at: null }), moment)).toContain('3 times in a row: left alone until later.')
+  })
+})

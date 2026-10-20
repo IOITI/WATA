@@ -2,7 +2,7 @@ import { keepPreviousData, skipToken, useQuery } from '@tanstack/react-query'
 
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
-import { Coverage } from '@/features/backtests/PricesPanel'
+import { Coverage } from '@/features/data/HistoryPanel'
 import { availabilityOf, instrumentFacts } from '@/features/prices/availability'
 import { daysBetween } from '@/features/prices/chartData'
 import { GapsPanel } from '@/features/prices/GapsPanel'
@@ -135,8 +135,8 @@ function StreamedQuality({ asset, from, to, limits, timeZone }: Omit<QualityTabP
 /** Which days and hours were fetched from Dukascopy. */
 function HistoryQuality({ asset, from, to, limits, timeZone, downloads }: QualityTabProps) {
   const coverageQuery = useQuery({
-    queryKey: ['backtest-prices', asset.key, from, to],
-    queryFn: downloads ? () => api.priceCoverage({ from, to }, asset.key) : skipToken,
+    queryKey: ['history-coverage', asset.key, from, to],
+    queryFn: downloads ? () => api.historyCoverage({ from, to }, asset.key) : skipToken,
   })
   return (
     <div className="flex flex-col gap-6">
