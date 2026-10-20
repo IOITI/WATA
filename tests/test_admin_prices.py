@@ -192,7 +192,7 @@ def test_ten_second_bars_are_read_as_recorded_oldest_first():
     assert args == (7, START, END, 500)
 
 
-@pytest.mark.parametrize("interval", [interval for interval in INTERVALS if interval != 10])
+@pytest.mark.parametrize("interval", [*(interval for interval in INTERVALS if interval != 10), 20, 45, 90, 86_400])
 def test_longer_bars_merge_the_ten_second_ones_of_each_bucket(interval):
     db = FakeDb(rows=[BAR_ROW])
 
@@ -213,10 +213,9 @@ def test_longer_bars_merge_the_ten_second_ones_of_each_bucket(interval):
 def test_an_interval_that_is_not_offered_never_reaches_the_statement():
     db = FakeDb()
 
-    with pytest.raises(ValueError):
-        asyncio.run(AdminQueries(db, "Europe/Paris").price_bars(7, START, END, 45, 100))
-    with pytest.raises(ValueError):
-        asyncio.run(AdminQueries(db, "Europe/Paris").price_bars(7, START, END, "60; DROP TABLE price_bar_10s", 100))
+    for interval in (5, 86_401, True, 45.5, "60; DROP TABLE price_bar_10s"):
+        with pytest.raises(ValueError):
+            asyncio.run(AdminQueries(db, "Europe/Paris").price_bars(7, START, END, interval, 100))
 
     assert db.calls == []
 

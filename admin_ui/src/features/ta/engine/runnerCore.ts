@@ -8,6 +8,10 @@
 // (updateTail) is not used: in PineTS 0.11.1 it raised none of the alerts of the
 // bars it added to the user's script, and leaves the series of request.security
 // a bar or two behind. The engine bounds the bars a rule holds instead.
+//
+// A study of a script (src/research/study.py, Claude's pine_run) asks a load in
+// detail: every bar's plot values and PineTS's runtime warnings come back too.
+// Without it the answer is what the engine has always had.
 
 import { Indicator, PineTS } from 'pinets'
 import type { Context, IPineInput } from 'pinets'
@@ -48,6 +52,8 @@ export interface LoadRequest {
   ticker: string
   timeframe: string
   bars: BarRow[]
+  /** Every bar's plot values and the runtime warnings as well (a study); never asked by the engine. */
+  detail?: boolean
 }
 
 export type RunnerRequest =
@@ -85,6 +91,22 @@ export interface RunResult {
   plots: PlotValues
 }
 
+/** A runtime warning of PineTS, once per message: the bar it was first raised at, and how often. */
+export interface RuntimeWarning {
+  message: string
+  bar: number | null
+  count: number
+}
+
+/** What a load in detail adds: each plot's value at every bar (null where it has none), by its title. */
+export interface DetailResult {
+  series: { times: number[]; plots: Record<string, (number | string | boolean | null)[]> }
+  runtimeWarnings: RuntimeWarning[]
+}
+
+/** The distinct runtime warnings a load in detail gives at most. */
+export const MAX_RUNTIME_WARNINGS = 50
+
 export type RunnerResponse =
   | { id: number; ok: true; op: 'hello'; pinets: string; node: string }
   | ({
@@ -95,7 +117,7 @@ export type RunnerResponse =
       title: string | null
       inputs: IPineInput[]
       warnings: string[]
-    } & RunResult)
+    } & RunResult & Partial<DetailResult>)
   | ({ id: number; ok: true; op: 'append' } & RunResult)
   | { id: number; ok: true; op: 'unload' }
   | { id: number; ok: false; error: RunnerFailure }
@@ -122,6 +144,38 @@ function plotValue(value: unknown): number | string | boolean | null {
 interface PlotLike {
   title?: string
   data?: { time?: number; value?: unknown }[]
+}
+
+interface WarningLike {
+  message: string
+  bar?: number
+}
+
+/** Each plot at every candle, and the runtime warnings once each: what a load in detail adds. */
+export function detailOf(
+  candles: Candle[],
+  plots: Record<string, PlotLike> | undefined,
+  warnings: WarningLike[] | undefined,
+): DetailResult {
+  const times = candles.map((candle) => candle.openTime)
+  const at = new Map(times.map((time, index) => [time, index]))
+  const series: DetailResult['series']['plots'] = {}
+  for (const [key, plot] of Object.entries(plots ?? {})) {
+    if (key.startsWith('__')) continue
+    const values: (number | string | boolean | null)[] = new Array(times.length).fill(null)
+    for (const point of plot.data ?? []) {
+      const index = typeof point.time === 'number' ? at.get(point.time) : undefined
+      if (index !== undefined) values[index] = plotValue(point.value)
+    }
+    series[plot.title ?? key] = values
+  }
+  const seen = new Map<string, RuntimeWarning>()
+  for (const warning of warnings ?? []) {
+    const known = seen.get(warning.message)
+    if (known) known.count += 1
+    else if (seen.size < MAX_RUNTIME_WARNINGS) seen.set(warning.message, { message: warning.message, bar: warning.bar ?? null, count: 1 })
+  }
+  return { series: { times, plots: series }, runtimeWarnings: [...seen.values()] }
 }
 
 /** Each plot's value at ``times``. PineTS's own drawings (__labels__, ...) are left out. */
@@ -219,7 +273,7 @@ export class Runner {
       timeframe: request.timeframe,
       candles: this.checkedCandles(request.bars, null),
     }
-    const result = await this.run(loaded, Number.NEGATIVE_INFINITY, new Set())
+    const result = await this.run(loaded, Number.NEGATIVE_INFINITY, new Set(), request.detail === true)
     this.rules.set(request.rule, loaded)
     return {
       id: request.id,
@@ -260,14 +314,19 @@ export class Runner {
     return this.run(loaded, candles[0].openTime, new Set(candles.map((candle) => candle.openTime)))
   }
 
-  /** A whole run; the alerts of the bars from ``since``, and the plots at their bars and at ``plotTimes``. */
-  private async run(loaded: Loaded, since: number, plotTimes: Set<number>): Promise<RunResult> {
+  /**
+   * A whole run; the alerts of the bars from ``since``, and the plots at their bars and at ``plotTimes``;
+   * in ``detail``, every bar's plot values and the runtime warnings too.
+   */
+  private async run(loaded: Loaded, since: number, plotTimes: Set<number>, detail = false): Promise<RunResult & Partial<DetailResult>> {
     const started = performance.now()
     const chart = { symbol: loaded.ticker, timeframe: loaded.timeframe, bars: loaded.candles }
     const pine = new PineTS(new SeriesProvider(chart, this.ask), loaded.ticker, loaded.timeframe, loaded.candles.length)
     pine.setAlertMode('all')
     const context = await pine.run(loaded.indicator)
-    return this.result(loaded, context, since, plotTimes, started)
+    const result = this.result(loaded, context, since, plotTimes, started)
+    if (!detail) return result
+    return { ...result, ...detailOf(loaded.candles, context.plots as Record<string, PlotLike>, context.warnings as WarningLike[]) }
   }
 
   private result(loaded: Loaded, context: Context, since: number, plotTimes: Set<number>, started: number): RunResult {

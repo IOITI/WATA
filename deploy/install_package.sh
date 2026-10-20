@@ -154,6 +154,21 @@ docker exec -it admin1 python -m src.admin.cli $OPTIONS
 EOF
 chmod +x /usr/local/bin/wataadmintotp
 
+# Create the watamcptoken command wrapper (tokens of the admin's MCP endpoint for Claude)
+cat << 'EOF' > /usr/local/bin/watamcptoken
+#!/bin/bash
+set -euo pipefail
+# watamcptoken create claude-mac [--days 90]   a new token, printed once
+# watamcptoken list                            the tokens, never their value
+# watamcptoken revoke claude-mac               no longer opens the endpoint
+if [ "$#" -eq 0 ]; then
+    set -- list
+fi
+
+docker exec -it admin1 python -m src.admin.cli --mcp-token "$@"
+EOF
+chmod +x /usr/local/bin/watamcptoken
+
 # Create the wataprices command wrapper (price recorder: export a period, or check an instrument)
 cat << 'EOF' > /usr/local/bin/wataprices
 #!/bin/bash
@@ -348,4 +363,6 @@ echo "To set the password of the admin web interface (when enabled in .env):"
 echo "  - wataadminpasswd"
 echo "To require a one-time code from an authenticator app as well:"
 echo "  - wataadmintotp [--disable]"
+echo "To let Claude Code on your Mac use the admin's MCP endpoint (when admin.mcp_enabled is true):"
+echo "  - watamcptoken create <name> [--days N] | list | revoke <name>"
 echo "---------------------------------------------------------------------"

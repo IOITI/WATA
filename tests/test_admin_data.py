@@ -373,9 +373,20 @@ def test_merging_stops_once_the_limit_of_bars_is_made():
     assert len(aggregate(rows, 60, 3)) == 3
 
 
-def test_an_interval_that_is_not_offered_is_refused():
+def test_bars_of_45_seconds_merge_the_ten_seconds_that_begin_in_each():
+    start = _epoch("2026-10-12T06:00:00Z")
+    rows = [_row(start + 10 * n, 10.0 + n, 10.5 + n) for n in range(9)]
+
+    bars = aggregate(rows, 45, 100)
+
+    # 06:00:00 holds the ten seconds from 0 to 40, 06:00:45 those from 50 to 80.
+    assert [(bar[0] - start, bar[1], bar[4], bar[9]) for bar in bars] == [(0, 10.0, 14.0, 5), (45, 15.0, 18.0, 4)]
+
+
+@pytest.mark.parametrize("interval", [5, 0, 86_401, True, 45.5, "60"])
+def test_an_interval_that_is_not_offered_is_refused(interval):
     with pytest.raises(ValueError):
-        aggregate([], 45, 10)
+        aggregate([], interval, 10)
 
 
 # ── statistics ──

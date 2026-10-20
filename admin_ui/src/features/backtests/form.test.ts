@@ -102,6 +102,16 @@ describe('a new draft', () => {
     expect(draftBars(draft)).toEqual({ type: 'range', ticks: 40 })
   })
 
+  it('asks for bars of a length typed as Pine names it', () => {
+    const draft = newBacktestDraft(OPTIONS, SCRIPT, 'capital/US100', PERIOD)
+    const typed = (timeframe: string) => draftBars({ ...draft, rule: { ...draft.rule, barsType: 'time', timeframe } })
+
+    expect(typed('45S')).toEqual({ type: 'time', timeframe: '45S' })
+    expect(typed('90s')).toEqual({ type: 'time', timeframe: '90S' })
+    expect(typed('2 min')).toEqual({ type: 'time', timeframe: '2' })
+    expect(typed('1h')).toEqual({ type: 'time', timeframe: '60' })
+  })
+
   it('takes back what a run was asked, to be asked again', () => {
     const before = run({ request: { ...run().request, changes: { stoploss_percent: -10 }, tags: ['ema', 'october'] } })
     const draft = draftOfRun(before, OPTIONS)
@@ -221,6 +231,17 @@ describe('what stops a draft', () => {
     expect(backtestProblems({ ...base, rule: { ...base.rule, alerts: {}, alertCalls: 'message' } }, OPTIONS, META)).toEqual([])
     // A replay of the journal has no script.
     expect(backtestProblems({ ...base, sourceKind: 'journal', rule: { ...base.rule, scriptId: '', alerts: {} } }, OPTIONS, META)).toEqual([])
+  })
+
+  it('wants bars of a length WATA makes, from ten seconds to a day', () => {
+    const base = ready()
+    const length = (timeframe: string) => backtestProblems({ ...base, rule: { ...base.rule, barsType: 'time', timeframe } }, OPTIONS, META)
+
+    expect(length('45S')).toEqual([])
+    expect(length('90s')).toEqual([])
+    for (const wrong of ['5s', '2d', 'soon', '']) {
+      expect(length(wrong)).toEqual(['Bars of 10 seconds to a day: write their length as 45s, 90s or 2m.'])
+    }
   })
 
   it('names the setting typed wrong', () => {

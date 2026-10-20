@@ -293,6 +293,8 @@ def test_what_makes_no_sense_is_refused_saying_why_and_leaves_no_folder(tmp_path
     ({"asset": {"provider": "saxo", "key": "../1"}}, "No recorded instrument"),
     ({"asset": {"provider": "elsewhere", "key": "x"}}, "capital/<epic>"),
     ({"bars": {"type": "range", "ticks": 0}}, "Range bars are 1 to"),
+    ({"bars": {"type": "time", "timeframe": "5S"}}, "10 seconds to a day"),
+    ({"bars": {"type": "time", "timeframe": "W"}}, "10 seconds to a day"),
 ])
 def test_a_pine_source_that_cannot_run_is_refused(tmp_path, scripts, config, source, message):
     body = pine(scripts)
@@ -300,6 +302,28 @@ def test_a_pine_source_that_cannot_run_is_refused(tmp_path, scripts, config, sou
 
     with pytest.raises(InvalidRequest, match=message):
         service(tmp_path, scripts, config).create(body)
+
+
+@pytest.mark.parametrize("timeframe, kept", [("10S", "10S"), ("45S", "45S"), ("90s", "90S"), ("120S", "2"), ("240", "240")])
+def test_a_run_reads_bars_of_any_length_from_ten_seconds_to_a_day(tmp_path, scripts, config, timeframe, kept):
+    body = pine(scripts)
+    body["source"] = {**body["source"], "bars": {"type": "time", "timeframe": timeframe}}
+
+    run = service(tmp_path, scripts, config).create(body)
+
+    request = json.loads((folder_of(tmp_path, run["id"]) / "request.json").read_text())
+    assert request["source"]["rule"]["bars"] == {"type": "time", "timeframe": kept}
+    assert request["chart"]["bars"] == {"type": "time", "timeframe": kept}
+
+
+def test_a_replay_of_the_journal_draws_its_days_on_bars_of_seconds(tmp_path, scripts, config):
+    body = {"from": "2026-10-13", "to": "2026-10-13", "indice": "us100", "source": {"kind": "journal"},
+            "chart": {"asset": {"provider": "capital", "key": "US100"}, "bars": {"type": "time", "timeframe": "30S"}}}
+
+    run = service(tmp_path, scripts, config).create(body, journal=JOURNAL)
+
+    request = json.loads((folder_of(tmp_path, run["id"]) / "request.json").read_text())
+    assert request["chart"]["bars"] == {"type": "time", "timeframe": "30S"}
 
 
 def test_a_replay_of_a_period_without_an_entry_has_nothing_to_replay(tmp_path, scripts, config):

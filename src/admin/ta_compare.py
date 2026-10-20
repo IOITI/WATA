@@ -13,14 +13,16 @@ is said to be WATA's only, or TradingView's only.
 
 from datetime import datetime
 
+from src.admin.ta_rules import timeframe_seconds
+
 # A close of TradingView that names its side is the same as WATA's close-position.
 _SAME_ACTION = {"close-long": "close-position", "close-short": "close-position"}
 
 
 def default_tolerance(bars: dict) -> int:
-    """Two bars of a rule's minutes; five minutes for range bars, whose bars are not of the same time."""
+    """Two bars of a rule's length; five minutes for range bars, whose bars are not of the same time."""
     if bars.get("type") == "time":
-        return 2 * 60 * int(bars["timeframe"])
+        return 2 * (timeframe_seconds(bars["timeframe"]) or 60)
     return 300
 
 

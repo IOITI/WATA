@@ -12,7 +12,15 @@ import pytest
 
 from src.admin.health import ta_engine_status
 from src.admin.ta_compare import compare, default_tolerance
-from src.admin.ta_rules import InvalidRule, RuleConflict, RuleNotFound, RuleStore
+from src.admin.ta_rules import (
+    InvalidRule,
+    RuleConflict,
+    RuleNotFound,
+    RuleStore,
+    checked_bars,
+    timeframe_name,
+    timeframe_seconds,
+)
 from src.admin.ta_scripts import ScriptConflict, ScriptStore
 from tests.test_admin_api import (  # noqa: F401 (fixtures)
     PASSWORD,
@@ -152,6 +160,8 @@ def test_a_new_rule_cannot_start_live(rules, cross):
     ({"asset": {"provider": "capital", "key": "../US100"}}, "Capital.com epic"),
     ({"side": "mid"}, "price side must be one of bid, ask"),
     ({"bars": {"type": "time", "timeframe": "240"}}, "timeframe must be one of 1, 5, 15, 60"),
+    # Bars of seconds are for backtests: the engine runs a rule's script over all its bars at each new one.
+    ({"bars": {"type": "time", "timeframe": "45S"}}, "timeframe must be one of 1, 5, 15, 60"),
     ({"bars": {"type": "range", "ticks": 0}}, "Range bars are 1 to"),
     ({"bars": {"type": "range", "ticks": True}}, "Range bars are 1 to"),
     ({"bars": {"type": "renko"}}, "bars must be one of time, range"),
@@ -627,7 +637,27 @@ def test_each_signal_is_paired_once():
 
 def test_the_tolerance_is_two_bars_of_minutes_or_five_minutes_of_range_bars():
     assert default_tolerance({"type": "time", "timeframe": "5"}) == 600
+    assert default_tolerance({"type": "time", "timeframe": "45S"}) == 90
     assert default_tolerance({"type": "range", "ticks": 60}) == 300
+
+
+@pytest.mark.parametrize("timeframe, seconds, name", [
+    ("10S", 10, "10S"), ("45S", 45, "45S"), ("45s", 45, "45S"), ("90S", 90, "90S"), ("120S", 120, "2"),
+    ("1", 60, "1"), ("5", 300, "5"), ("240", 14_400, "240"), ("1440", 86_400, "1440"), ("86400S", 86_400, "1440"),
+])
+def test_a_backtest_runs_on_bars_of_any_length_from_ten_seconds_to_a_day(timeframe, seconds, name):
+    assert timeframe_seconds(timeframe) == seconds and timeframe_name(seconds) == name
+    assert checked_bars({"type": "time", "timeframe": timeframe}, any_length=True) == {"type": "time", "timeframe": name}
+
+
+@pytest.mark.parametrize("timeframe", ["5S", "0", "1441", "86401S", "D", "1W", "4h", "-10S", "10S5", " 10S", 45, None])
+def test_bars_of_a_length_wata_does_not_make_are_refused(timeframe):
+    assert timeframe_seconds(timeframe) is None
+    with pytest.raises(InvalidRule, match="10 seconds to a day"):
+        checked_bars({"type": "time", "timeframe": timeframe}, any_length=True)
+    # A rule's bars, whatever the backtests take.
+    with pytest.raises(InvalidRule, match="must be one of 1, 5, 15, 60"):
+        checked_bars({"type": "time", "timeframe": timeframe})
 
 
 def test_the_comparison_of_a_day_reads_both_sides(api, cross):

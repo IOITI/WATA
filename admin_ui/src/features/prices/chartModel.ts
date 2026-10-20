@@ -101,7 +101,8 @@ export function timeChart({ prices, index }: TimeBars, side: Side): TimeChart {
     indexLine,
     indexName: indexLine && index ? instrumentLabel(index.instrument) : undefined,
     indexDecimals: priceDecimals(indexBars),
-    showSeconds: interval < 60,
+    // A bar of 45 s or 90 s begins within a minute.
+    showSeconds: interval % 60 !== 0,
     locate: timeLocator(interval, timeZone, drawn),
     indexLocate: indexLine ? timeLocator(interval, timeZone, drawnTimes(indexLine)) : undefined,
     lastTime: last ? chartTime(last[0], timeZone) : null,

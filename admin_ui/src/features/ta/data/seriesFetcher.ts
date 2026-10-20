@@ -29,7 +29,7 @@ export function wataSeriesFetcher(bars: WataBars): SeriesFetcher {
     }
     const length = timeframeOf(timeframe)
     if (!length && !ticker.rangeTicks) {
-      throw new Error(`WATA has no ${timeframe} bars: 1, 5, 15 or 60 minutes`)
+      throw new Error(`WATA has no ${timeframe} bars: from 10 seconds (10S) to a day (1440)`)
     }
     const found = await bars.bars(ticker, length?.seconds ?? 60, window)
     return found.map(toCandle)

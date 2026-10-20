@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Columns3, Plus, Trash2 } from 'lucide-react'
+import { Columns3, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
 import { PageHeader } from '@/components/Panel'
-import { PnlValue, QueryState } from '@/components/status'
+import { ClaudeBadge, PnlValue, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
+import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
 import { formatBytes, formatDateTime, formatDay, formatPercent } from '@/lib/format'
 import type { BacktestRunListed } from '@/lib/types'
@@ -37,8 +38,8 @@ function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (ru
     {
       id: 'run',
       header: 'Backtest',
-      // Searched by its name, what it runs and its tags.
-      accessorFn: (row) => [row.name, sourceLabel(row), ...row.tags].join(' '),
+      // Searched by its name, what it runs and its tags, and "Claude" for Claude's.
+      accessorFn: (row) => [row.name, sourceLabel(row), ...row.tags, ...(madeByClaude(row) ? ['Claude'] : [])].join(' '),
       sortable: true,
       cell: ({ row }) => (
         <div className="min-w-0 max-w-96 whitespace-normal">
@@ -50,6 +51,7 @@ function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (ru
               Sweep
             </Badge>
           )}
+          {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
           <p className="text-xs text-muted-foreground">{sourceLabel(row)}</p>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span>
@@ -227,6 +229,14 @@ export function BacktestsPage() {
                 onClick={() => navigate(`/backtests/compare?runs=${compared.map((run) => run.id).join(',')}`)}
               >
                 Compare{canCompare ? ` ${compared.length}` : ''}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                leftIcon={<FlaskConical className="size-3.5" />}
+                onClick={() => navigate('/backtests/experiments')}
+              >
+                Experiments
               </Button>
               <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={() => navigate('/backtests/new')}>
                 New backtest

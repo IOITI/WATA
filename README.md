@@ -716,9 +716,9 @@ Bars are bucketed by the time a quote was received, as the price recorder's are:
 The admin's **Technical Analysis** section works as TradingView does with its Pine Script indicators, on WATA's own data.
 
 - **Indicators**: Pine Script v5 and v6 written in the browser, with the language highlighted and checked as it is typed: TradingView's own rules, then a compile by PineTS, which marks the line of each error. Each save is a new version, kept as a plain `.pine` file (`var/lib/admin/ta/scripts/<id>/v0001.pine`, ...), with its history, a diff between versions, and a version put back by saving it again. Libraries are kept like scripts: `import user/Name/1 as alias` imports the WATA library that declares `library("Name")`, inlined into the script before it runs (PineTS has no imports of its own yet).
-- **A test, beside the editor**: the script run on a day of one of WATA's assets (Capital.com, Dukascopy, Saxo), at 1 to 60 minutes or as range bars, with what it plotted last and every alert it raised that day, with their times.
-- **Charts**: the Vela SuperChart on WATA's assets: Capital.com live, the Dukascopy history, Saxo's recorded prices. The indicators and strategies written above are in its indicator list, with their inputs in its settings. Range bars are a ticker of their own (`CAPITAL_US100.R60`, as TradingView's 60R), and `.ASK` reads the ask. The layout is kept by the admin, so a phone and a computer share it.
-- **Signal rules**: a script run on each bar of an asset of the Capital.com feed as the bar closes, its alerts turned into signals for the trader. A rule says which version of the script it runs (and of each library it imports), on which asset, side and bars, with which inputs, and what each `alertcondition()` becomes: nothing, `long`, `short`, `close-position`, or what its message says (WATA's webhook JSON, as TradingView's alerts send it). A new rule is in **shadow**: its signals are journaled, never sent. Switched to **live** (an operator action, confirmed with a slide, recorded in the audit trail), they go to the web server as any signal does, and the trader applies its usual rules to them. The page lists each rule with how the engine runs it, the journal of signals with what the trader made of each one sent, and a day of a rule's signals beside TradingView's.
+- **A test, beside the editor**: the script run on a day of one of WATA's assets (Capital.com, Dukascopy, Saxo), on bars of 10 seconds to an hour or range bars, with what it plotted last and every alert it raised that day, with their times.
+- **Charts**: the Vela SuperChart on WATA's assets: Capital.com live at each quote, Saxo's recorded prices every ten seconds, the Dukascopy history. The indicators and strategies written above are in its indicator list, with their inputs in its settings, and run in full again as the bars move (a second apart at most), as the editor's test and the TA engine run them. Range bars are a ticker of their own (`CAPITAL_US100.R60`, as TradingView's 60R), and `.ASK` reads the ask. Bars of time are of any length from 10 seconds to a day: Vela's menu offers 10, 20, 30 and 45 seconds, 1, 5 and 15 minutes and an hour, and the **Length** field above the chart takes any other (`90s`, `2m`, `4h`). The layout is kept by the admin, so a phone and a computer share it.
+- **Signal rules**: a script run on each bar of an asset of the Capital.com feed as the bar closes, its alerts turned into signals for the trader. A rule says which version of the script it runs (and of each library it imports), on which asset, side and bars (1, 5, 15 or 60 minutes, or range bars), with which inputs, and what each `alertcondition()` becomes: nothing, `long`, `short`, `close-position`, or what its message says (WATA's webhook JSON, as TradingView's alerts send it). A new rule is in **shadow**: its signals are journaled, never sent. Switched to **live** (an operator action, confirmed with a slide, recorded in the audit trail), they go to the web server as any signal does, and the trader applies its usual rules to them. The page lists each rule with how the engine runs it, the journal of signals with what the trader made of each one sent, and a day of a rule's signals beside TradingView's.
 
 ### The TA engine
 
@@ -734,6 +734,8 @@ The scripts run in a Node process of their own, confined:
 
 It is started again after a pause; the rule that was running waits five minutes.
 
+Live rules and shadow rules run on two such processes. In each tick the live rules go first; the shadow rules then get `shadow_seconds_per_tick` of it, the one given its bars longest ago first, and a rule left for the next tick keeps its bars, none is lost. A shadow rule that fails, hangs or ends its runner reloads the shadow rules alone: a live rule is never reloaded for it (a reload sends nothing, so a live alert would be lost). The shadow runner gives way to the live one (nice 10), is the first process stopped if the container runs short of memory, and is stopped while no shadow rule is on. A rule moved between shadow and live is loaded again on its new runner.
+
 ### Enabling it
 
 1. Add `ta` to the profiles in `/app/wata/.env`: `COMPOSE_PROFILES=admin,capital,ta`. The engine needs the Capital.com feed for its bars.
@@ -748,7 +750,9 @@ It is started again after a pause; the rule that was running waits five minutes.
 | `max_signal_age_seconds` | `60` | The signal of a bar that closed longer ago is journaled, never sent |
 | `stale_feed_seconds` | `90` | Without ten seconds recorded by the Capital.com feed for this long, nothing is sent |
 | `run_timeout_seconds` | `30` | A run that takes longer stops the runner, which starts again |
-| `runner_memory_mb` | `512` | The runner's memory |
+| `runner_memory_mb` | `512` | The live rules' runner's memory |
+| `shadow_runner_memory_mb` | `256` | The shadow rules' runner's memory |
+| `shadow_seconds_per_tick` | `5` | How long of each ten-second tick the shadow rules may take, after the live ones (1 to 8) |
 
 The signals go to `trade.config.signal_polling.service_url`, as the scheduler's close does. In PostgreSQL, created by the engine: `ta_signal` (each signal, with what was sent and the web server's `signal_uuid`, which leads to `signal_journal`), `ta_engine_state` and `ta_rule_state`.
 
@@ -763,7 +767,7 @@ docker exec ta_engine1 python -m src.ta_engine.replay --script <id> --asset duka
     --from 2026-09-15 --messages --inputs '{"in_16": "DUKASCOPY_US100"}'
 ```
 
-`--bars` is `1`, `5`, `15` or `60` minutes, or `R<steps>` for range bars, in steps of the instrument's price (Dukascopy quotes the Nasdaq 100 to 0.001, so 6 points are `R6000`; Capital.com's US100 is quoted to 0.1, so they are `R60`). An input is set by its id in the script (`in_0`, `in_1`, ...), as a rule sets it.
+`--bars` is a length from 10 seconds to a day, as Pine names it (`1`, `5`, `60` minutes; `10S`, `45S`, `90S` seconds), or `R<steps>` for range bars, in steps of the instrument's price (Dukascopy quotes the Nasdaq 100 to 0.001, so 6 points are `R6000`; Capital.com's US100 is quoted to 0.1, so they are `R60`). An input is set by its id in the script (`in_0`, `in_1`, ...), as a rule sets it.
 
 Everything an agent needs is in plain files:
 - the scripts, as `.pine` files under `var/lib/admin/ta/scripts/`;
@@ -782,7 +786,7 @@ npx pinets-cli run Envelope.prepared.pine --data CAPITAL_US100-1-2026-10-19.json
 - **PineTS is not TradingView.** It runs most of Pine v5 and v6, but not all of it, and not always exactly as TradingView does. Things that differ:
   - `request.security` reads WATA's assets only, and live only Capital.com's;
   - a symbol has no exchange time zone, so PineTS's days are UTC days;
-  - range bars are built from ten-second bars;
+  - range bars are built from ten-second bars, and so are bars of seconds: a length that is no multiple of ten seconds holds the ten-second bars that begin in it (a 45-second bar, 40 or 50 seconds of prices by turns) and closes with the last of them, so its `time_close` in the editor's test and in a backtest is that end. On the Charts page, Vela gives `time_close` as the bar's open and its length;
   - a script's history starts where its rule's bars start.
 
   A script's alerts on WATA's bars are WATA's, not a copy of TradingView's.
@@ -801,7 +805,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 
 **New backtest** takes five steps:
 
-1. **Asset and bars**: what the strategy reads (Capital.com's US100, Dukascopy's history, the index Saxo quotes), as time bars or range bars. "Start from a signal rule" fills this step and the next from a rule.
+1. **Asset and bars**: what the strategy reads (Capital.com's US100, Dukascopy's history, the index Saxo quotes), as time bars or range bars. Time bars are of any length from 10 seconds to a day: those of the menu (10, 20, 30 and 45 seconds, 1, 5 and 15 minutes, an hour), or "Other length…" and one typed (`90s`, `2m`). An alert counts once its bar has closed, and a bar of a length that is no multiple of ten seconds closes with the last ten seconds it holds: a backtest never acts on prices after its signal's moment. "Start from a signal rule" fills this step and the next from a rule.
 2. **Strategy**: one of two sources, plus the indice whose turbos are traded:
    - a Pine script: its version, its inputs and what each alert becomes, as on the Signal rules page;
    - "The signals WATA received": the journal of the period.
@@ -853,7 +857,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 
 What it does on the server:
 
-- **One run at a time, at the lowest priority.** A backtest is a separate process started by the admin. Others wait their turn (ten at most), and a run stops after three hours. The admin container is limited to one processor, so the services that trade keep the rest. Its memory is 1 GB, for the run and its Pine runner.
+- **One run at a time, at the lowest priority.** A backtest is a separate process started by the admin. Others wait their turn (ten at most), and a run stops after three hours. The admin container is limited to one processor, so the services that trade keep the rest. Its memory is 1.5 GB, for the run and its Pine runner, and one of Claude's Pine studies beside them.
 - **It only reads the database.** The run reads the recorded turbos itself, one day at a time, through a read-only connection to PostgreSQL. A replay of the journal reads the journal through the admin's own connection.
 - **Its results are files**, one folder per run under `/app/wata/var/lib/backtests/runs/`. "Remove" deletes the folder.
 - **It is on with the admin interface.** `"backtests_enabled": false` in the `admin` section of `config.json` switches it off.
@@ -953,6 +957,87 @@ python -m src.backtest.run --run <folder> --data database --low-priority
 - **A sweep finds the value that did best, which is not the value that will.** That is what the held-out days are for; on a short period they are a handful of days and say little. A sweep has no random entries: make the combination chosen a run of its own before acting on it.
 - **Past results are not future results.**
 - **Not yet run on a server**: the pages were driven in a browser against the admin application on a development machine, over made-up recorded days and a real Pine runner. The database reads were run against a real PostgreSQL 16, not the server's. Before trusting one, set a short run on the server's days beside the Orders page for the same days.
+
+## 🤖 Research by Claude (MCP)
+
+Claude Code on the operator's Mac can do strategy research on the server itself, on its live data, through an MCP endpoint of the admin: it writes and checks Pine scripts, runs them on recorded bars, asks for backtests and reads their results, and keeps an experiment journal, all on its own once allowed. What it may never do is enforced in the code and tested:
+
+- **no trading**: no order, position, pause of entries, risk state, RabbitMQ message or signal to the web server;
+- **no settings or secrets**: no configuration edit, and no Saxo or Capital.com credential, token, chat id, order body or account key in any answer;
+- **no going live**: it never takes a rule live, and never changes a live rule or one the operator made;
+- **no free SQL** on PostgreSQL: named queries only;
+- **only its own work**: what it makes is marked `made_by: "claude"` (a "Claude" badge on the runs, scripts, rules and experiments), and it removes only that.
+
+### What it has
+
+Thirty-seven tools, in groups: `status`; the data (`data_assets`, `data_coverage`, `data_bars`, `data_signals`, `data_trades`, `data_execution`); Pine (`pine_list`, `pine_get`, `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`, `pine_delete`); backtests (`backtest_options`, `backtest_start`, `backtest_derive`, `backtest_wait`, `backtest_list`, `backtest_result`, `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare`, `backtest_remove`, `turbo_model`, `turbo_model_measure`); the journal (`exp_new`, `exp_get`, `exp_conclude`, `lockbox_set`); rules (`rule_list`, `rule_compare`, `rule_shadow_save`, `rule_shadow_remove`, `rule_set_reference`). A prompt, `/wata:research`, gives the research loop of the lab's skill (`.claude/skills/wata-lab/SKILL.md`).
+
+- **Pine studies** run in a child process of the admin (`python -m src.research.study`), one at a time, at nice 10, with their own Node heap and time limit, the first process stopped if memory runs short. A check also reads TradingView's v6 rules (`src/ta_engine/checker/check.mjs`, confined as the runner is).
+- **Backtests** are the admin's own, in the same line: Claude's runs wait behind the operator's and the paper runs.
+- **The experiment journal and the lock box** are kept on the server (`var/lib/backtests/_research/`). Trials are counted per family of ideas and given to sweeps as the trials before. The lock box keeps days out of every study and run until a candidate's final check, which the journal notes; Claude may only widen it.
+- **Large answers** (bars, trades) come as CSV, which Claude Code saves to a file on the Mac to analyse there.
+- **Claude's own shadow rules**, once switched on (below): the TA engine journals their signals, never sends them, and each finished day is traded on paper beside the rule's reference run. Each is first run as the engine would on the last finished day, and refused if it fails, takes more than 2 s an engine day, or has more than 20,000 bars a day.
+
+### Enabling it, on the server
+
+1. `admin.mcp_enabled: true` (Configuration page), then restart the admin (`watastop`, `watastart`). The endpoint is `/mcp` on the admin's address and port, so it is reached over WireGuard only.
+2. A token, printed once: `watamcptoken create claude-mac` (90 days; `--days N` up to 365). `watamcptoken list` shows them, `watamcptoken revoke <name>` revokes one. The file keeps only each token's sha256 (`var/lib/admin/mcp_tokens.json`).
+3. Later, after watching the TA engine for a day with its two runners: `admin.mcp.shadow_rules: true` lets Claude keep shadow rules of its own.
+
+| Setting (`admin.mcp`) | Default | Meaning |
+|---|---|---|
+| `max_waiting_runs` | `3` | Claude's runs waiting at once |
+| `runs_per_day` | `60` | Runs Claude may ask for a day (UTC) |
+| `max_day_simulations` | `10000` | Days a request may simulate: days × combinations, or × 1 + random repetitions |
+| `study_minutes_per_hour` | `20` | Minutes of Pine studies an hour |
+| `study_memory_mb` | `384` | A study's Node heap |
+| `study_timeout_seconds` | `90` | A study's time limit |
+| `max_scripts` | `100` | Claude's scripts |
+| `max_shadow_rules` | `3` | Claude's rules that are not live |
+| `min_free_disk_gb` | `5` | Free disk below which Claude's runs are refused |
+| `shadow_rules` | `false` | Whether Claude may keep shadow rules |
+
+`admin.backtests_signal_cache_mb` (1024) bounds the runner's answers the backtests and studies share; the oldest go first.
+
+### On the Mac
+
+1. The WireGuard tunnel to the server, connected.
+2. The token in the Keychain, typed at the prompt so that it stays out of the shell's history:
+
+   ```bash
+   security add-generic-password -a "$USER" -s wata-mcp -w
+   ```
+
+3. A script that gives it to Claude Code, `~/.claude/wata-mcp-headers.sh` (`chmod 700`):
+
+   ```sh
+   #!/bin/sh
+   token=$(security find-generic-password -a "$USER" -s wata-mcp -w) || exit 1
+   printf '{"Authorization": "Bearer %s"}\n' "$token"
+   ```
+
+4. The server, for every project of this Mac's Claude Code (the user scope keeps the address out of this repository), with your admin's host:
+
+   ```bash
+   claude mcp add-json --scope user wata '{"type":"http","url":"https://<admin host>:8443/mcp","headersHelper":"'"$HOME"'/.claude/wata-mcp-headers.sh"}'
+   ```
+
+5. To let Claude work unattended, its tools allowed in `~/.claude/settings.json`: `"permissions": {"allow": ["mcp__wata"]}`.
+6. In Claude Code, `/mcp` shows `wata` connected; its `status` tool shows the server's recorded days. After a deploy that changes the tools, reconnect it there.
+
+### Watching it, and stopping it
+
+- **System › Claude**: whether the endpoint is open, its tokens (revoked from there), what Claude's work holds against its limits, and its last calls with what each was refused. **Pause Claude** refuses every call until resumed, without a restart; the pause and a revocation are audited.
+- **Backtests › Experiments**: the journal, each experiment with its runs, trials and conclusion; the lock box, which the operator may move or clear.
+- Every call is logged in `var/log/wata-admin/mcp.jsonl` (a Pine source as its sha256 and length). Calls are not audited one by one, since every audit entry also goes to Telegram; a Claude-made shadow rule's trouble is said on Telegram once a day at most.
+
+### What to keep in mind
+
+- **The server's room**: the admin has one processor and 1.5 GB. Studies run one at a time and are refused while a backtest leaves too little memory; heavy analysis goes to the Mac as CSV.
+- **Unattended work** needs the Mac awake with its tunnel up: cloud sessions cannot reach the server.
+- **The data**: recorded turbos only begin on 2026-10-13, so every conclusion rests on few days for a while.
+- **What reaches Claude**: WATA's real trades and balance, never a key, an order body or a token.
+- **The lab on the Mac** keeps its own journal, apart from the server's.
 
 ## 📈 Reporting
 

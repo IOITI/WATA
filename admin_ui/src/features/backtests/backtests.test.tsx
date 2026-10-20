@@ -28,6 +28,7 @@ import { WithTrail } from '@/test/WithTrail'
 
 import { BacktestsPage } from './BacktestsPage'
 import { ComparePage } from './ComparePage'
+import { ExperimentsPage } from './ExperimentsPage'
 import { DayPage } from './DayPage'
 import { NewBacktestPage } from './NewBacktestPage'
 import { RunPage } from './RunPage'
@@ -194,6 +195,7 @@ function serve() {
         return json(turboModel, method === 'POST' ? 202 : 200)
       }
       if (route === '/api/backtests/former' && method === 'DELETE') return json({ removed: 7 })
+      if (route === '/api/research/experiments') return json({ experiments: [], lockbox: null })
       if (route === '/api/backtests/research') {
         if (method === 'PUT') research = { ...research, ...(body as object), state: 'waiting_for_close' }
         return json(research)
@@ -280,6 +282,7 @@ function renderAt(address: string) {
       { path: '/backtests', element: page(<BacktestsPage />) },
       { path: '/backtests/new', element: page(<NewBacktestPage />) },
       { path: '/backtests/compare', element: page(<ComparePage />) },
+      { path: '/backtests/experiments', element: page(<ExperimentsPage />) },
       { path: '/backtests/:runId', element: page(<RunPage />) },
       { path: '/backtests/:runId/days/:day', element: page(<DayPage />) },
     ],
@@ -339,6 +342,25 @@ describe('the list of backtests', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Select: Stop at 10' }))
     await user.click(screen.getByRole('button', { name: 'Compare 2' }))
     expect(address()).toBe(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
+  })
+
+  it("marks Claude's runs, and leads to its experiments", async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, [RUN_ID]: run({ made_by: 'claude', experiment: '1a2b3c' }) }
+    renderAt('/backtests')
+
+    const claudes = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
+    const operators = screen.getByRole('link', { name: 'Stop at 10' }).closest('tr') as HTMLElement
+    expect(within(claudes).getByText('Claude')).toBeInTheDocument()
+    expect(within(operators).queryByText('Claude')).toBeNull()
+    // Claude's runs alone, through the search.
+    await user.type(screen.getByPlaceholderText('Search…'), 'Claude')
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Stop at 10' })).toBeNull())
+    expect(screen.getByRole('link', { name: 'Smoke EMA cross' })).toBeInTheDocument()
+    await user.clear(screen.getByPlaceholderText('Search…'))
+    await user.click(screen.getByRole('button', { name: 'Experiments' }))
+    expect(address()).toBe('/backtests/experiments')
+    expect(await screen.findByText('No experiment yet')).toBeInTheDocument()
   })
 
   it('switches on the files written each night for a research machine', async () => {
@@ -446,6 +468,47 @@ describe('a new backtest', () => {
       changes: { stoploss_percent: -10, signal_delay_seconds: 2.6, order_seconds: 0.4, slippage: 0.005 },
       baseline: { repetitions: 100, seed: 1 },
     })
+  })
+
+  it('runs on bars of seconds, of the menu or of a length typed', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests/new')
+
+    const bars = await screen.findByRole('combobox', { name: 'Bars' })
+    expect(within(bars).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      '10 s', '20 s', '30 s', '45 s', '1 min', '5 min', '15 min', '1 hour', 'Other length…', 'Range bars',
+    ])
+    await user.selectOptions(bars, '45S')
+    expect(screen.getByText(/45 s is no multiple of the ten seconds WATA records/)).toBeInTheDocument()
+
+    await user.selectOptions(bars, 'typed')
+    const length = screen.getByRole('textbox', { name: 'Length of the bars' })
+    await user.clear(length)
+    await user.type(length, '5s')
+    expect(screen.getByText(/WATA records ten-second bars: 10 seconds at least\./)).toBeInTheDocument()
+    expect(length).toHaveAttribute('aria-invalid', 'true')
+    await user.clear(length)
+    // "1" on the way is a length of the menu: the field stays.
+    await user.type(length, '15s')
+    expect(screen.getByText('Bars of 15 s.')).toBeInTheDocument()
+    expect(screen.getByText(/each bar holds the ten-second bars that begin in it, 10 or 20 s of prices/)).toBeInTheDocument()
+    await user.clear(length)
+    await user.type(length, '90s')
+    expect(screen.getByText('Bars of 90 s.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    expect(await screen.findByText('Cross up')).toBeInTheDocument()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'What “Cross up” becomes' }), 'long')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(await screen.findByText('3 days of the 7 can be traded.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByRole('spinbutton', { name: /^Stop-loss/ })
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(await screen.findByRole('button', { name: 'Start the backtest' }))
+
+    await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/backtests')).toBe(true))
+    const asked = sent.find((request) => request.method === 'POST' && request.path === '/api/backtests')?.body as Record<string, unknown>
+    expect(asked).toMatchObject({ source: { kind: 'pine', bars: { type: 'time', timeframe: '90S' } } })
   })
 
   it('trades on turbos made up from the index once they are measured', async () => {

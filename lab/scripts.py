@@ -20,13 +20,6 @@ from pathlib import Path
 
 from lab import paths
 
-# Made-up bars a script is compiled on: what the runner's own check uses.
-CHECK_BARS = [
-    [index * 60_000, 100.0 + index % 7, 101.0 + index % 7, 99.0 + index % 7, 100.0 + (index * 3) % 7, 1, (index + 1) * 60_000]
-    for index in range(300)
-]
-
-
 def store():
     from src.admin.ta_scripts import ScriptStore
 
@@ -120,46 +113,28 @@ def resolve(reference: str) -> tuple[str, int]:
 
 
 async def check(script_id: str, version: int, node: str = "node") -> dict:
-    """The script run once through the Pine runner on made-up bars: what it raises, or where it fails."""
-    from src.admin.ta_rules import RuleStore
-    from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerFailed, find_node, runner_command
+    """The script run once through the Pine runner on made-up bars: what it raises, or where it fails (src/research/study.py)."""
+    from src.research.study import StudyRefused, check as study_check
 
-    scripts = store()
-    pinned, libraries = RuleStore(scripts).pin(script_id, version)
-    found = find_node(node)
-    if found is None:
-        raise RuntimeError(f"No Node ({node!r}) here: Node 24 runs the scripts")
-    if not os.path.isfile(RUNNER_PATH):
-        raise RuntimeError("No Pine runner: npm run build:runner in admin_ui/")
-
-    async def no_series(ask: dict) -> list:
-        raise ValueError("A check has no other series to give")
-
-    runner = NodeRunner(runner_command(found, RUNNER_PATH, 512), no_series, timeout_seconds=60)
     try:
-        await runner.start()
-        answer = await runner.request({
-            "op": "load", "rule": "labcheck0000",
-            "script": {"source": scripts.source(script_id, version), "sha256": pinned["sha256"]},
-            "libraries": [
-                {**{key: entry[key] for key in ("id", "name", "version", "sha256")}, "source": scripts.source(entry["id"], entry["version"])}
-                for entry in libraries
-            ],
-            "inputs": {}, "ticker": "CAPITAL_US100", "timeframe": "1", "bars": CHECK_BARS,
-        })
-    except RunnerFailed as e:
-        return {"ok": False, "error": str(e), "where": e.error}
-    finally:
-        await runner.stop()
-    alerts = answer.get("alerts") or []
+        found = await study_check({"script": {"id": script_id, "version": version}}, store(), node, 512, 60)
+    except StudyRefused as e:
+        raise RuntimeError(str(e)) from None
+    except Exception as e:
+        error = getattr(e, "error", None)
+        if error is None:
+            raise
+        return {"ok": False, "error": str(e), "where": error}
+    alerts = found["alerts_on_made_up_bars"]
     return {
         "ok": True,
         "script": f"{script_id}@{version}",
-        "bars": answer.get("bars"),
-        "alerts": len(alerts),
-        "alert_titles": sorted({str(alert.get("title") or alert.get("key") or "") for alert in alerts}),
-        "warnings": answer.get("warnings") or [],
-        "milliseconds": answer.get("milliseconds"),
+        "bars": 300,
+        "alerts": sum(alerts.values()),
+        "alert_titles": sorted(alerts),
+        "warnings": found["warnings"],
+        "runtime_warnings": found["runtime_warnings"],
+        "milliseconds": found["milliseconds"],
     }
 
 

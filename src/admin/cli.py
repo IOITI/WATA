@@ -4,8 +4,10 @@ import logging
 import os
 import sys
 
+from src.admin.audit import AuditLog
 from src.admin.auth import MIN_PASSWORD_LENGTH, CredentialStore, totp_uri
 from src.admin.context import AdminSettings
+from src.admin.mcp_server.tokens import DEFAULT_DAYS, TokenError, TokenStore
 from src.configuration import ConfigurationManager
 
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +22,13 @@ def parse_arguments():
         help="Require a one-time code from an authenticator app at login (replaces the secret if already enabled)",
     )
     parser.add_argument("--disable-totp", action="store_true", help="Stop requiring a one-time code at login")
+    parser.add_argument(
+        "--mcp-token", nargs="+", metavar="ACTION",
+        help="Tokens of the MCP endpoint for Claude: 'create NAME', 'list' or 'revoke NAME'",
+    )
+    parser.add_argument(
+        "--days", type=int, default=DEFAULT_DAYS, help=f"How long a token made by --mcp-token create lasts (default {DEFAULT_DAYS})",
+    )
     return parser.parse_args()
 
 
@@ -55,6 +64,41 @@ def enable_totp(credentials: CredentialStore):
     print("Open sessions are closed.")
 
 
+def mcp_token(settings: AdminSettings, words: list[str], days: int):
+    """Make, list or revoke a token of the MCP endpoint. A token is shown once, here, and never again."""
+    tokens = TokenStore(settings.mcp_tokens_path)
+    audit = AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl"))
+    action, names = words[0], words[1:]
+    try:
+        if action == "create" and len(names) == 1:
+            token, entry = tokens.create(names[0], days)
+            audit.append("console", "MCP token created", f"{entry['name']} ({entry['id']}), until {entry['expires_at']}")
+            print(f"Token {entry['name']} ({entry['id']}), valid until {entry['expires_at']}:")
+            print(f"  {token}")
+            print("It is shown this once: keep it in the Mac's Keychain (README, 'Claude on the server').")
+            if not settings.mcp_enabled:
+                print("The endpoint is off: it answers once admin.mcp_enabled is true in config.json and the admin restarted.")
+        elif action == "revoke" and len(names) == 1:
+            for entry in tokens.revoke(names[0]):
+                audit.append("console", "MCP token revoked", f"{entry['name']} ({entry['id']})")
+                print(f"Token {entry['name']} ({entry['id']}) revoked: it no longer opens the endpoint.")
+        elif action == "list" and not names:
+            listed = tokens.entries()
+            if not tokens.readable():
+                print(f"{settings.mcp_tokens_path} cannot be read: no token is accepted.")
+            for entry in listed:
+                print(f"{entry['name']:<20} {entry['id']}  {entry['state']:<8} created {entry['created_at']}  expires {entry['expires_at']}")
+            if not listed:
+                print("No token yet: --mcp-token create NAME")
+            print(f"The endpoint is {'on' if settings.mcp_enabled else 'off'} (admin.mcp_enabled).")
+        else:
+            print("Use --mcp-token create NAME [--days N], --mcp-token list or --mcp-token revoke NAME")
+            sys.exit(2)
+    except TokenError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
 def main():
     args = parse_arguments()
 
@@ -66,9 +110,12 @@ def main():
 
     try:
         config_manager = ConfigurationManager(config_path)
-        credentials = CredentialStore(AdminSettings.from_config(config_manager).credentials_path)
+        settings = AdminSettings.from_config(config_manager)
+        credentials = CredentialStore(settings.credentials_path)
 
-        if args.set_password:
+        if args.mcp_token:
+            mcp_token(settings, args.mcp_token, args.days)
+        elif args.set_password:
             set_password(credentials)
         elif args.enable_totp:
             enable_totp(credentials)

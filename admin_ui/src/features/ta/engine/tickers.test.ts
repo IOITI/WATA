@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { baseTicker, parseTicker, refOf, tickerText, velaSymbol } from './tickers'
-import { daysPerRequest, timeframeOf } from './timeframes'
 
 describe('tickers', () => {
   it.each([
@@ -31,29 +30,5 @@ describe('tickers', () => {
     expect(baseTicker(ticker)).toBe('DUKASCOPY_US100')
     expect(refOf(ticker)).toBe('dukascopy/us100')
     expect(velaSymbol(ticker)).toBe('dukascopy:DUKASCOPY_US100.ASK.R60')
-  })
-})
-
-describe('timeframes', () => {
-  it.each([
-    ['1', 60],
-    ['5', 300],
-    ['15', 900],
-    ['60', 3600],
-    ['1h', 3600],
-    ['15m', 900],
-  ])('serves %s as %i seconds', (name, seconds) => {
-    expect(timeframeOf(name)?.seconds).toBe(seconds)
-  })
-
-  it.each(['10S', 'D', '240', '2'])('has no %s', (name) => {
-    expect(timeframeOf(name)).toBeNull()
-  })
-
-  it('asks for as many whole days as stay under the cap', () => {
-    expect(daysPerRequest(60)).toBe(8)
-    expect(daysPerRequest(300)).toBe(41)
-    expect(daysPerRequest(3600, 31)).toBe(31)
-    expect(daysPerRequest(10)).toBe(1)
   })
 })

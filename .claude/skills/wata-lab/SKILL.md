@@ -15,6 +15,29 @@ time and shows them in its Backtests pages.
 Never open SSH to the server, and never run `lab/sync.sh` yourself: pulling
 data is the user's. If the data is stale, say so and give the command.
 
+## Or on the server itself (the `wata` MCP server)
+
+When `/mcp` in Claude Code lists `wata` as connected, the same loop runs on
+the live server, on its freshest data, with no copy: start with its `status`
+tool, and `/wata:research` gives the loop. Its experiment journal and lock box
+are the server's own, apart from this lab's. Its tools, by step of the loop:
+
+| Step | The lab | The server's tool |
+|---|---|---|
+| Look | `lab status` | `status`, `data_assets`, `data_coverage` |
+| Experiment | `lab exp new`, `exp conclude` | `exp_new`, `exp_get`, `exp_conclude`, `lockbox_set` |
+| Strategy | `lab script check` | `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save` |
+| Run | `lab run`, `lab sweep` | `backtest_start`, `backtest_wait` |
+| Read | `lab show`, `edge`, `regimes`, `trades`, `days`, `compare` | `backtest_result` (parts), `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare` |
+| Test | `lab neighbours`, `lab stress` | `backtest_derive` (neighbours, stress, a sweep's cell) |
+| Shadow | the user's steps | `rule_shadow_save`, `rule_set_reference`, `rule_list` (once the user switched them on) |
+
+The server's runs wait behind the user's and are counted (3 waiting, 60 a
+day); its studies run one at a time. Heavy analysis stays here: ask for CSV
+(`data_bars`, `backtest_trades` with `format` csv), which Claude Code saves to
+a file, and read it with pandas or DuckDB in `.venv-lab`. Nothing behind the
+tools trades, edits the configuration or takes a rule live.
+
 ## First, look
 
 ```bash
@@ -92,7 +115,8 @@ data is the user's. If the data is stale, say so and give the command.
 
 - `//@version=6`, `indicator(...)`; inputs with `input.*()` (their ids are `in_0`, `in_1`… in
   declaration order); signals with `alertcondition(condition, "Title", message)`. The spec maps
-  each title to `long`, `short`, `close-position` or `close-long`/`close-short`.
+  each title to `long`, `short`, `close-position`, `message` (the action is read in the alert's
+  message, WATA's webhook JSON) or `ignore`: there is no `close-long` or `close-short`.
 - The engine runs a day at a time from its restart (21:15 UTC) with `history_days` of bars before:
   an indicator that needs a long warm-up needs that setting raised (`--set history_days=3`).
 - Only the alerts count: a `strategy()`'s orders are not signals.

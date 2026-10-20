@@ -4,6 +4,10 @@ Backtests and analyses on this Mac, over a copy of what the server recorded, wit
 code. Nothing here acts on the server: the server writes each finished day as files, this Mac
 pulls them, and everything else happens here.
 
+Claude can also do this research on the server itself, on its live data, through the admin's
+MCP endpoint (README, "Research by Claude"): the same loop, with the server's own experiment
+journal and lock box. The lab stays the place for heavy analysis and long histories.
+
 ## Setting it up, once
 
 1. **On the server**: deploy a version with the research export, then switch it on from the

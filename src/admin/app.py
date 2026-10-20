@@ -1,13 +1,15 @@
 """
-The admin FastAPI application: JSON API under /api and, when it has been built,
-the React interface (admin_ui/, built into src/admin/static/) on every other path.
+The admin FastAPI application: JSON API under /api, the MCP endpoint for Claude
+on /mcp when it is switched on (src/admin/mcp_server/), and, when it has been
+built, the React interface (admin_ui/, built into src/admin/static/) on every
+other path.
 """
 
 import asyncio
 import logging
 import os
 import re
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,7 +20,7 @@ from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
-from src.admin.routers import actions, backtests, config, data, session, system, ta, trading
+from src.admin.routers import actions, backtests, config, data, research, session, system, ta, trading
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ class SecurityHeadersMiddleware:
                 headers["X-Frame-Options"] = "DENY"
                 headers["X-Content-Type-Options"] = "nosniff"
                 headers["Referrer-Policy"] = "no-referrer"
-                if path.startswith("/api/"):
+                if path.startswith("/api/") or path in ("/mcp", "/mcp/"):
                     headers["Cache-Control"] = "no-store"
             await send(message)
 
@@ -92,6 +94,12 @@ class SecurityHeadersMiddleware:
             await not_found(scope, receive, send_with_headers)
             return
         await self.app(scope, receive, send_with_headers)
+
+
+def _not_the_interface(path: str) -> bool:
+    """Paths the single-page application never answers: the API, the MCP endpoint, and the
+    well-known addresses a client reads to find an authorisation server (there is none)."""
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in ("api", "mcp", ".well-known"))
 
 
 def _mount_interface(app: FastAPI, static_dir: str) -> None:
@@ -108,7 +116,7 @@ def _mount_interface(app: FastAPI, static_dir: str) -> None:
 
     @app.get("/{path:path}", include_in_schema=False)
     async def interface(path: str):
-        if path == "api" or path.startswith("api/"):
+        if _not_the_interface(path):
             raise HTTPException(status_code=404, detail="Not found")
         # A file of the build (favicon...) is served as such; any other path is a
         # route of the single-page application.
@@ -119,6 +127,13 @@ def _mount_interface(app: FastAPI, static_dir: str) -> None:
 
 
 def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
+    mcp = None
+    if ctx.settings.mcp_enabled and ctx.mcp_tokens is not None:
+        # The SDK is imported here and only here: with the endpoint off, the admin never loads it.
+        from src.admin.mcp_server.server import build_endpoint
+
+        mcp = build_endpoint(ctx, paused=ctx.mcp_pause.paused if ctx.mcp_pause is not None else (lambda: False))
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         background = [
@@ -143,7 +158,11 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
             # Trades each shadow rule's finished days on paper, the market closed.
             background.append(asyncio.create_task(ctx.paper.keep()))
         try:
-            yield
+            async with AsyncExitStack() as running:
+                if mcp is not None:
+                    # A route's application gets no lifespan of its own: the SDK's runs within the admin's.
+                    await running.enter_async_context(mcp.running())
+                yield
         finally:
             for task in background:
                 task.cancel()
@@ -201,8 +220,14 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, trading, system, actions, config, data, backtests, ta):
+    for module in (session, trading, system, actions, config, data, backtests, ta, research):
         app.include_router(module.router)
+
+    if mcp is not None:
+        # The gate is an ASGI application, so these routes take every method and the gate answers each.
+        # Before the interface, whose catch-all would otherwise answer GET /mcp.
+        app.add_route("/mcp", mcp.gate, include_in_schema=False)
+        app.add_route("/mcp/", mcp.gate, include_in_schema=False)
 
     _mount_interface(app, static_dir)
     return app

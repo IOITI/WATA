@@ -20,9 +20,9 @@ export const MAX_HOLE_SECONDS = 2 * 3600
 export type Side = 'bid' | 'ask'
 
 export function intervalLabel(seconds: number): string {
-  if (seconds < 60) return `${seconds} s`
-  if (seconds < 3600) return `${seconds / 60} min`
-  return `${seconds / 3600} h`
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`
+  if (seconds % 60 === 0) return `${seconds / 60} min`
+  return `${seconds} s`
 }
 
 /** The shortest bar at which a period of `days` days fits in one chart. */

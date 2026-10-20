@@ -27,7 +27,7 @@ from src.admin.data import aggregate  # noqa: E402
 from src.admin.prices import range_bars, range_rows, range_volumes  # noqa: E402
 from src.admin.ta_rules import RuleStore  # noqa: E402
 from src.admin.ta_scripts import ScriptStore  # noqa: E402
-from src.ta_engine.bars import RangeBars, TimeBars  # noqa: E402
+from src.ta_engine.bars import RangeBars, TimeBars, bucket_end  # noqa: E402
 from src.ta_engine.engine import Engine  # noqa: E402
 from src.ta_engine.rules import read_rules  # noqa: E402
 from src.ta_engine.runner import NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command  # noqa: E402
@@ -86,7 +86,7 @@ def test_tickers_are_read_as_the_pages_read_them(text, expected):
 # ── bars, as the admin's charts make them ──
 
 
-@pytest.mark.parametrize("seconds", [60, 300, 900, 3600])
+@pytest.mark.parametrize("seconds", [20, 30, 45, 60, 90, 300, 900, 3600])
 @pytest.mark.parametrize("side", ["bid", "ask"])
 def test_bars_of_minutes_are_the_charts_bars(seconds, side):
     rows = ten_second_rows(T0 - 37 * 60, 2000)
@@ -100,10 +100,26 @@ def test_bars_of_minutes_are_the_charts_bars(seconds, side):
     expected = []
     for bucket in aggregate(rows, seconds, 100_000):
         prices = bucket[1:5] if side == "bid" else bucket[5:9]
-        if None in prices or bucket[0] + seconds > covered:
+        if None in prices or bucket_end(bucket[0], seconds) > covered:
             continue
-        expected.append([bucket[0] * 1000, *prices, bucket[9], (bucket[0] + seconds) * 1000])
+        expected.append([bucket[0] * 1000, *prices, bucket[9], bucket_end(bucket[0], seconds) * 1000])
     assert built == expected and len(built) > 1
+
+
+def test_a_bar_of_45_seconds_is_final_and_ends_with_its_last_ten_seconds():
+    rows = ten_second_rows(T0, 9)
+    builder = TimeBars(45, "bid")
+
+    # The ten seconds from 40 to 50 begin in the bar of T0: it waits for them.
+    assert builder.add(rows[:5], T0 + 40) == []
+    (first,) = builder.add([], T0 + 50)
+    assert (first[0], first[6]) == (T0 * 1000, (T0 + 50) * 1000)
+    assert first[1] == rows[0][1] and first[4] == rows[4][4]
+    # The next holds the ten seconds from 50 to 80, and ends at its own end.
+    (second,) = builder.add(rows[5:], T0 + 90)
+    assert (second[0], second[6]) == ((T0 + 45) * 1000, (T0 + 90) * 1000)
+    assert second[1] == rows[5][1] and second[4] == rows[8][4]
+    assert [bucket_end(start, 45) for start in (0, 45, 90, 135)] == [50, 90, 140, 180]
 
 
 def test_a_bucket_is_final_once_all_its_ten_seconds_are_recorded():
@@ -161,9 +177,13 @@ def test_the_engine_is_off_unless_switched_on():
     }))
     assert (settings.enabled, settings.history_days, settings.restart_minute) == (True, 3, 22 * 60 + 5)
     assert settings.service_url == "http://web_server1:80"
-    for wrong in ({"enabled": "yes"}, {"history_days": 31}, {"restart_time": "9:15"}, {"max_signal_age_seconds": 1}):
+    for wrong in ({"enabled": "yes"}, {"history_days": 31}, {"restart_time": "9:15"}, {"max_signal_age_seconds": 1},
+                  {"shadow_runner_memory_mb": 64}, {"shadow_seconds_per_tick": 9}, {"shadow_seconds_per_tick": 0}):
         with pytest.raises(ValueError, match="trade.config.ta_engine"):
             TaEngineSettings.from_config(Config({"trade.config.ta_engine": wrong}))
+    shadow = TaEngineSettings.from_config(Config({"trade.config.ta_engine": {"shadow_runner_memory_mb": 384, "shadow_seconds_per_tick": 3}}))
+    assert (shadow.shadow_runner_memory_mb, shadow.shadow_seconds_per_tick) == (384, 3)
+    assert (TaEngineSettings().shadow_runner_memory_mb, TaEngineSettings().shadow_seconds_per_tick) == (256, 5)
 
 
 # ── the rules, as the engine reads them ──
@@ -174,7 +194,7 @@ def scripts(tmp_path):
     return ScriptStore(str(tmp_path / "ta"))
 
 
-def make_rule(scripts, *, mode="shadow", name="Cross on US100", **changes):
+def make_rule(scripts, *, mode="shadow", name="Cross on US100", made_by=None, **changes):
     script = next((meta for meta in scripts.scripts() if meta["name"] == "Cross"), None) or scripts.create("Cross", SCRIPT)
     rules = RuleStore(scripts)
     fields = {
@@ -190,7 +210,7 @@ def make_rule(scripts, *, mode="shadow", name="Cross on US100", **changes):
         "indice": "us100",
         **changes,
     }
-    created = rules.create(fields, rules.load()["revision"])["rule"]
+    created = rules.create(fields, rules.load()["revision"], made_by=made_by)["rule"]
     if mode != "shadow":
         rules.set_mode(created["id"], mode, rules.load()["revision"])
     return rules.rule(created["id"])
@@ -384,6 +404,25 @@ def test_a_refusal_a_timeout_and_an_end_are_told_apart(fake_runner):
 
     assert loaded["error_seen"] == "WATA has no live bars of it"
     assert stopped_after_timeout and starts == 2
+
+
+def test_the_shadow_rules_runner_is_the_first_the_kernel_stops(fake_runner, monkeypatch):
+    import src.ta_engine.runner as runner_module
+
+    written = []
+    monkeypatch.setattr(runner_module, "give_up_memory_first", written.append)
+
+    async def scenario(memory_first):
+        runner = NodeRunner(fake_runner, None, timeout_seconds=2, memory_first=memory_first)
+        await runner.start()
+        pid = runner._process.pid
+        await runner.stop()
+        return pid
+
+    shadow_pid = asyncio.run(scenario(True))
+    asyncio.run(scenario(False))
+
+    assert written == [f"/proc/{shadow_pid}/oom_score_adj"]
 
 
 def test_the_runner_is_started_confined():
@@ -732,9 +771,13 @@ def test_a_series_a_script_asks_for_is_made_of_the_same_feed(scripts):
 
     minutes = run(engine.answer_series({"ticker": "CAPITAL_US100", "timeframe": "5", "from": (T0 - 3600) * 1000, "to": None}))
     ranged = run(engine.answer_series({"ticker": "CAPITAL_US100.ASK.R40", "timeframe": "1", "from": None, "to": None}))
+    seconds = run(engine.answer_series({"ticker": "CAPITAL_US100", "timeframe": "10S", "from": (T0 - 600) * 1000, "to": None}))
 
     assert minutes[0][0] == (T0 - 3600) * 1000 and minutes[-1][6] == T0 * 1000
     assert all(bar[6] - bar[0] == 300_000 for bar in minutes) and len(ranged) > 5
+    assert len(seconds) == 60 and all(bar[6] - bar[0] == 10_000 for bar in seconds)
+    with pytest.raises(ValueError, match="No bars of '5S'"):
+        run(engine.answer_series({"ticker": "CAPITAL_US100", "timeframe": "5S"}))
     for wrong, refusal in (("DUKASCOPY_US100", "only Capital.com's"), ("CAPITAL_DE40", "has not recorded DE40")):
         with pytest.raises(ValueError, match=refusal):
             run(engine.answer_series({"ticker": wrong, "timeframe": "1"}))
@@ -790,3 +833,165 @@ def test_the_built_runner_runs_a_rule_in_its_confinement():
     assert appended["bars"] == len(bars)
     assert all(alert["time"] >= bars[-5][0] for alert in appended["alerts"])
     assert set(appended["plots"]["Fast"]) == {str(bar[0]) for bar in bars[-5:]}
+
+
+
+# ── live rules and shadow rules, each on a runner of their own ──
+
+
+class Sequence:
+    """The order requests reach either runner in."""
+
+    def __init__(self):
+        self.seen = []
+
+
+class NamedRunner(Runner):
+    def __init__(self, name, sequence):
+        super().__init__()
+        self.name, self.sequence = name, sequence
+
+    async def request(self, message):
+        self.sequence.seen.append((self.name, message["op"], message.get("rule")))
+        return await super().request(message)
+
+
+def two_runner_engine(scripts, settings=None):
+    live_rule = make_rule(scripts, mode="live", name="Live cross")
+    shadow_rule = make_rule(scripts, mode="shadow", name="Claude · cross", made_by="claude")
+    clock = Clock(T0 + 1.5)
+    source = Source(ten_second_rows(T0 - 11 * 3600, 11 * 360 + 30), covered=T0)
+    sequence = Sequence()
+    live, shadow = NamedRunner("live", sequence), NamedRunner("shadow", sequence)
+    journal, sender, telegram = Journal(), Sender(), Telegram()
+    engine = Engine(
+        settings=settings or TaEngineSettings(enabled=True, history_days=0),
+        rules=lambda: read_rules(scripts.root), source=source, runner=live, shadow_runner=shadow, journal=journal,
+        sender=sender, notify=telegram, clock=clock, version="test",
+    )
+    return engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, sender, telegram
+
+
+def new_bars(source, clock, count=6):
+    source.rows_by_time += ten_second_rows(source.covered, count, seed=len(source.rows_by_time))
+    source.covered += count * 10
+    clock.at = source.covered + 1.5
+
+
+def test_live_rules_run_on_their_runner_first_and_shadow_rules_on_theirs(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, *_ = two_runner_engine(scripts)
+
+    run(engine.tick())
+
+    assert [entry for entry in sequence.seen] == [("live", "load", live_rule["id"]), ("shadow", "load", shadow_rule["id"])]
+
+
+@pytest.mark.parametrize("why", ["The Pine runner ended (exit code 9)", "The Pine runner took longer than 30 s"])
+def test_a_shadow_runner_that_ends_never_reloads_a_live_rule_whose_signal_is_still_sent(scripts, why):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, sender, telegram = two_runner_engine(scripts)
+    run(engine.tick())
+    new_bars(source, clock, 6)
+    live.alerting = {(source.covered - 60) * 1000}
+    shadow.failing = ("append", RunnerDown(why))
+
+    run(engine.tick())
+    states = {state["rule_id"]: state for state in journal.rule_states[-1]}
+
+    assert [op for name, op, _ in sequence.seen if name == "live"] == ["load", "append"]
+    assert len(sender.sent) == 1
+    assert states[live_rule["id"]]["state"] == "running"
+    assert states[shadow_rule["id"]]["state"] == "error" and states[shadow_rule["id"]]["detail"] == why
+    assert journal.states[-1]["state"] == "running"
+
+
+def test_a_live_runner_that_ends_does_not_reload_the_shadow_rules_either(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, *_ = two_runner_engine(scripts)
+    run(engine.tick())
+    new_bars(source, clock, 6)
+    live.failing = ("append", RunnerDown("The Pine runner took longer than 30 s"))
+
+    run(engine.tick())
+
+    assert [op for name, op, _ in sequence.seen if name == "shadow"] == ["load", "append"]
+
+
+def test_shadow_rules_take_turns_in_their_share_of_a_tick_and_lose_no_bar_when_they_wait(scripts):
+    settings = TaEngineSettings(enabled=True, history_days=0, shadow_seconds_per_tick=1)
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, *_ = two_runner_engine(scripts, settings)
+    second = make_rule(scripts, mode="shadow", name="Claude · second", made_by="claude")
+    original = shadow.request
+
+    async def slow(message):
+        # Each request of a shadow rule takes the whole of their share of the tick.
+        clock.at += 2
+        return await original(message)
+
+    shadow.request = slow
+    given = []
+    for _ in range(3):
+        run(engine.tick())
+        given.append([(op, rule) for name, op, rule in sequence.seen if name == "shadow"])
+        sequence.seen.clear()
+        new_bars(source, clock, 6)
+
+    # One shadow rule a tick, the one given its bars longest ago first; the live rule every tick.
+    assert given == [[("load", shadow_rule["id"])], [("load", second["id"])], [("append", shadow_rule["id"])]]
+    assert [request["op"] for request in live.requests] == ["load", "append", "append"]
+    # The rule that waited a tick is given both bars since: none was lost.
+    waited = shadow.requests[-1]["bars"]
+    assert [bar[0] for bar in waited] == [T0 * 1000, (T0 + 60) * 1000]
+    # The rule that waited to be loaded starts from the same history as the other.
+    assert shadow.requests[1]["bars"][0][0] == shadow.requests[0]["bars"][0][0]
+
+
+def test_a_rule_moved_from_shadow_to_live_is_loaded_again_on_the_live_runner(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, *_ = two_runner_engine(scripts)
+    run(engine.tick())
+    store = RuleStore(scripts)
+    store.set_mode(live_rule["id"], "off", store.load()["revision"])
+    store.set_mode(shadow_rule["id"], "live", store.load()["revision"])
+    new_bars(source, clock, 6)
+
+    run(engine.tick())
+
+    assert ("shadow", "unload", shadow_rule["id"]) in sequence.seen
+    assert sequence.seen[-1] == ("live", "load", shadow_rule["id"])
+
+
+def test_a_shadow_rule_an_agent_made_is_said_on_telegram_once_a_day(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, sender, telegram = two_runner_engine(scripts)
+    shadow.failing = ("load", RunnerFailed({"message": "Undeclared identifier", "file": "script", "line": 4}))
+
+    run(engine.tick())
+    clock.at += 3600
+    run(engine.tick())
+
+    assert sum("Claude · cross" in message for message in telegram.messages) == 1
+
+
+def test_the_shadow_runner_stops_once_no_shadow_rule_is_on(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, *_ = two_runner_engine(scripts)
+    run(engine.tick())
+    store = RuleStore(scripts)
+    store.set_mode(shadow_rule["id"], "off", store.load()["revision"])
+
+    run(engine.tick())
+
+    assert ("shadow", "unload", shadow_rule["id"]) in sequence.seen
+    assert not shadow.running and live.running
+
+
+def test_without_a_shadow_rule_no_second_runner_is_started(scripts):
+    rule = make_rule(scripts, mode="live")
+    clock = Clock(T0 + 1.5)
+    sequence = Sequence()
+    live, shadow = NamedRunner("live", sequence), NamedRunner("shadow", sequence)
+    engine = Engine(
+        settings=TaEngineSettings(enabled=True, history_days=0), rules=lambda: read_rules(scripts.root),
+        source=Source(ten_second_rows(T0 - 3600, 360), covered=T0), runner=live, shadow_runner=shadow, journal=Journal(),
+        sender=Sender(), notify=Telegram(), clock=clock, version="test",
+    )
+
+    run(engine.tick())
+
+    assert (live.starts, shadow.starts) == (1, 0)

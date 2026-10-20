@@ -21,6 +21,10 @@ var/lib/backtests of this checkout.
 
 Set FAKE_SAXO_EXPIRED=1 to see the Saxo re-authorisation flow, and
 FAKE_TOTP=1 to require a one-time code at login (the key is printed at start).
+
+Set FAKE_MCP=1 for Claude's MCP endpoint, on http://127.0.0.1:8082/mcp: a
+token is printed at start, its Pine studies are real ones (the real Pine
+runner) on the made-up recorded days, and Claude's shadow rules are on.
 """
 
 import json
@@ -51,13 +55,16 @@ from src.admin.analysis import summarise_exits
 from src.admin.app import SHUTDOWN_GRACE_SECONDS, create_app
 from src.admin.audit import AuditLog
 from src.admin.auth import CredentialStore, LoginThrottle, SessionStore
-from src.admin.backtests import BacktestService
+from src.admin.backtests import SIGNAL_CACHE_FOLDER, BacktestService
 from src.admin.config_editor import ConfigEditor
 from src.admin.context import AdminContext, AdminSettings
 from src.admin.data import PriceHistory
 from src.admin.downloads import HistoryDownloads, config_hours
 from src.admin.events import EventHub
 from src.admin.live_prices import LivePrices
+from src.admin.mcp_server.calls import CallLog
+from src.admin.mcp_server.pause import McpPause
+from src.admin.mcp_server.tokens import TokenStore
 from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.queries import (
     _ORDER_POSITION_COLUMNS,
@@ -66,6 +73,7 @@ from src.admin.queries import (
     json_safe,
     summarise_trades,
 )
+from src.admin.studies import StudyService
 from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
 
@@ -1076,6 +1084,10 @@ def build_dev_context(work_dir: str) -> AdminContext:
     config["trade"]["config"]["price_recorder"]["enabled"] = True
     config["trade"]["config"]["capital_feed"]["enabled"] = True
     config["trade"]["config"]["ta_engine"]["enabled"] = True
+    mcp = os.getenv("FAKE_MCP") == "1"
+    if mcp:
+        config["admin"]["mcp_enabled"] = True
+        config["admin"]["mcp"]["shadow_rules"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))
@@ -1085,6 +1097,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
     config_manager = ConfigurationManager(config_path)
     settings = AdminSettings.from_config(config_manager)
     settings.credentials_path = os.path.join(work_dir, "lib", "admin", "credentials.json")
+    # Where the backtests below keep their runs: Claude's journal and lock box are kept beside them.
+    settings.backtests_path = os.path.join(REPO_ROOT, "var", "lib", "backtests")
     # Plain HTTP on localhost: a Secure cookie would not come back in every browser.
     settings.cookie_secure = False
     write_sample_logs(settings.log_path)
@@ -1106,7 +1120,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
     recorded_root = os.path.join(work_dir, "recorded")
     queries.recorded_days = fake_recorded.write(recorded_root, datetime.now(timezone.utc))
     backtests = BacktestService(
-        root=os.path.join(REPO_ROOT, "var", "lib", "backtests"),
+        root=settings.backtests_path,
         prices_root=prices_root,
         config_path=config_path,
         scripts=ta_scripts,
@@ -1114,6 +1128,20 @@ def build_dev_context(work_dir: str) -> AdminContext:
         data=f"files:{recorded_root}",
     )
     queries.ta_engine = fake_ta.FakeEngine(ta_scripts, datetime.now(timezone.utc) - timedelta(hours=3))
+    closers = [backtests.close, downloads.close]
+    settings.mcp_tokens_path = os.path.join(work_dir, "lib", "admin", "mcp_tokens.json")
+    mcp_tokens = TokenStore(settings.mcp_tokens_path)
+    studies = None
+    if mcp:
+        studies = StudyService(
+            root=os.path.join(settings.backtests_path, "_studies"), ta_root=ta_scripts.root,
+            prices_root=prices_root, signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
+            memory_mb=settings.mcp_limits.study_memory_mb, timeout_seconds=settings.mcp_limits.study_timeout_seconds,
+            minutes_per_hour=settings.mcp_limits.study_minutes_per_hour, data=f"files:{recorded_root}",
+        )
+        closers.append(studies.close)
+        token, _ = mcp_tokens.create("dev")
+        print(f"Claude's MCP endpoint on http://{HOST}:{PORT}/mcp, token: {token}")
     return AdminContext(
         config_manager=config_manager,
         settings=settings,
@@ -1133,10 +1161,14 @@ def build_dev_context(work_dir: str) -> AdminContext:
         live_prices=LivePrices(fake_capital.source),
         # The Pine scripts, on the temporary folder, with a few examples.
         ta_scripts=ta_scripts,
+        mcp_tokens=mcp_tokens,
+        mcp_calls=CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl")),
+        mcp_pause=McpPause(os.path.join(work_dir, "lib", "admin", "mcp_pause.json")),
+        studies=studies,
         events=events,
         notifier=notifier,
         version="dev",
-        closers=[backtests.close, downloads.close],
+        closers=closers,
     )
 
 

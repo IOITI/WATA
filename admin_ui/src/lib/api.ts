@@ -33,6 +33,7 @@ import type {
   DukascopyProviderDetails,
   ExecutionTimings,
   Exits,
+  Experiments,
   Health,
   HistoryInstrument,
   HistoryOffer,
@@ -40,6 +41,8 @@ import type {
   JsonObject,
   LogServices,
   LogTail,
+  McpState,
+  McpToken,
   OrdersPage,
   Overview,
   Page,
@@ -56,6 +59,7 @@ import type {
   RecorderConfig,
   Report,
   ResearchFiles,
+  ResearchLockbox,
   SaxoProviderDetails,
   SaxoStatus,
   Session,
@@ -375,6 +379,18 @@ export const api = {
   taEngine: () => request<TaEngine>('GET', '/api/ta/engine'),
   taComparison: (id: string, day: string, tolerance?: number) =>
     request<TaComparison>('GET', `/api/ta/rules/${encodeURIComponent(id)}/comparison${query({ day, tolerance })}`),
+
+  // ── Claude's research through the MCP endpoint: watched, paused, its tokens revoked ──
+  mcp: () => request<McpState>('GET', '/api/mcp'),
+  /** An operator action, audited: the token opens the endpoint no more. */
+  revokeMcpToken: (id: string) =>
+    request<{ revoked: McpToken[] }>('POST', `/api/mcp/tokens/${encodeURIComponent(id)}/revoke`),
+  /** Paused, every call of Claude's is refused until it is resumed; audited. */
+  pauseMcp: (paused: boolean) => request<McpState['paused']>('PUT', '/api/mcp/paused', { body: { paused } }),
+  experiments: () => request<Experiments>('GET', '/api/research/experiments'),
+  /** The operator moves the lock box or clears it (start null), as Claude cannot. */
+  setLockbox: (period: { start: string | null; end: string | null }) =>
+    request<{ lockbox: ResearchLockbox | null }>('PUT', '/api/research/lockbox', { body: period }),
 
   config: () => request<ConfigDocument>('GET', '/api/config'),
   validateConfig: (config: JsonObject) =>

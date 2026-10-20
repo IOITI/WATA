@@ -11,7 +11,7 @@ import { Link } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { PageHeader, Panel } from '@/components/Panel'
-import { QueryState, ServiceStatusBadge } from '@/components/status'
+import { ClaudeBadge, QueryState, ServiceStatusBadge } from '@/components/status'
 import { useToast } from '@/components/toast-context'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
+import { madeByClaude } from '@/features/system/claude'
 import { api, ApiError } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { TaEngine, TaRule, TaRuleMode, TaRules } from '@/lib/types'
@@ -163,6 +164,7 @@ export function SignalRulesPage() {
           return (
             <div className="min-w-0 max-w-80 whitespace-normal">
               <span className="font-medium">{row.name}</span>
+              {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
               <p className="text-xs text-muted-foreground">
                 <Link className="underline-offset-2 hover:underline" to={`/ta/indicators/${row.script.id}`}>
                   {row.script_name ?? 'deleted script'}

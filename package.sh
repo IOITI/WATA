@@ -31,8 +31,9 @@ build_admin_interface() {
             . "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
             nvm use > /dev/null || exit 1
         fi
-        # The interface, then the TA engine's Pine runner (src/ta_engine/runner/runner.mjs).
-        npm ci && npm run build && npm run build:runner
+        # The interface, the TA engine's Pine runner (src/ta_engine/runner/runner.mjs), and the checker
+        # of TradingView's rules a Pine study uses (src/ta_engine/checker/check.mjs).
+        npm ci && npm run build && npm run build:runner && npm run build:checker
     )
 }
 

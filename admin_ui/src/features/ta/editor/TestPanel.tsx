@@ -23,7 +23,7 @@ import type { PreparedScript } from '../engine/prepare'
 import type { PineWorkerClient, RunResponse } from '../engine/pineWorkerClient'
 import { tickerText } from '../engine/tickers'
 import type { PriceSide, WataTicker } from '../engine/tickers'
-import { TIMEFRAMES, timeframeOf } from '../engine/timeframes'
+import { DEFAULT_TIMEFRAME, TIMEFRAMES, timeframeOf } from '../engine/timeframes'
 import type { Candle } from '../engine/workerProtocol'
 
 interface TestPanelProps {
@@ -89,7 +89,7 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName }: Te
   const [chosenRef, setChosenRef] = useState<string | null>(null)
   const asset = assets.find((candidate) => candidate.ref === chosenRef) ?? assets.find((candidate) => candidate.provider === 'capital') ?? assets[0]
   const [barsKind, setBarsKind] = useState<BarsKind>('time')
-  const [timeframe, setTimeframe] = useState(TIMEFRAMES[0].pine)
+  const [timeframe, setTimeframe] = useState(DEFAULT_TIMEFRAME.pine)
   const [rangeTicks, setRangeTicks] = useState(60)
   const [side, setSide] = useState<PriceSide>('bid')
   const [chosenDay, setChosenDay] = useState<string | null>(null)
@@ -106,7 +106,7 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName }: Te
   const runMutation = useMutation({
     mutationFn: async (): Promise<TestRun> => {
       if (!worker || !prepared || !ticker) throw new Error('The script is not ready to run')
-      const length = timeframeOf(timeframe) ?? TIMEFRAMES[0]
+      const length = timeframeOf(timeframe) ?? DEFAULT_TIMEFRAME
       // The day before warms the indicators up; a day of Paris spans at most 14 hours either side of UTC's.
       const window = {
         from: Date.parse(`${addDays(day, -1)}T00:00:00Z`) - 14 * 3_600_000,

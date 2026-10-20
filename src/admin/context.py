@@ -17,6 +17,7 @@ from fastapi import Request
 
 from src.admin.auth import CredentialStore, LoginThrottle, SessionStore, TrustedProxies, client_ip
 from src.admin.events import EventHub
+from src.admin.mcp_server.limits import McpLimits
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class AdminSettings:
     backtests_workers: int = 1
     backtests_max_queued: int = 10
     backtests_max_period_days: int = 92
+    # The Pine runner's answers kept for the runs asked again (_signal_cache): pruned, oldest first, past this.
+    backtests_signal_cache_mb: int = 1024
     price_history_path: str = "/app/var/lib/price_history"
     # The Pine scripts and chart layouts of the Technical Analysis pages, inside the
     # admin's own folder: the signal engine mounts this subfolder alone, read-only.
@@ -69,10 +72,18 @@ class AdminSettings:
     # Whose X-Forwarded-For header says where a request comes from: host names,
     # addresses or networks. Anything else is known by its own address.
     trusted_proxy_hosts: tuple[str, ...] = DEFAULT_TRUSTED_PROXY_HOSTS
+    # The MCP endpoint for Claude (src/admin/mcp_server/): off unless asked for, and then
+    # opened only with a token of this file (watamcptoken on the server).
+    mcp_enabled: bool = False
+    mcp_tokens_path: str = "/app/var/lib/admin/mcp_tokens.json"
+    mcp_limits: McpLimits = field(default_factory=McpLimits)
 
     @classmethod
     def from_config(cls, config_manager) -> "AdminSettings":
         admin_config = config_manager.get_config_value("admin", {})
+        mcp_enabled = admin_config.get("mcp_enabled", cls.mcp_enabled)
+        if not isinstance(mcp_enabled, bool):
+            raise ValueError("Config field 'admin.mcp_enabled' must be true or false")
         return cls(
             config_path=config_manager.config_path,
             log_path=config_manager.get_logging_config()["persistant"]["log_path"],
@@ -84,6 +95,7 @@ class AdminSettings:
             backtests_workers=int(admin_config.get("backtests_workers", cls.backtests_workers)),
             backtests_max_queued=int(admin_config.get("backtests_max_queued", cls.backtests_max_queued)),
             backtests_max_period_days=int(admin_config.get("backtests_max_period_days", cls.backtests_max_period_days)),
+            backtests_signal_cache_mb=int(admin_config.get("backtests_signal_cache_mb", cls.backtests_signal_cache_mb)),
             backtests_path=admin_config.get("persistant", {}).get("backtests_path", cls.backtests_path),
             price_history_path=admin_config.get("persistant", {}).get("price_history_path", cls.price_history_path),
             ta_path=admin_config.get("persistant", {}).get("ta_path", cls.ta_path),
@@ -93,6 +105,9 @@ class AdminSettings:
             actions_enabled=admin_config.get("actions_enabled", cls.actions_enabled),
             config_edit_enabled=admin_config.get("config_edit_enabled", cls.config_edit_enabled),
             trusted_proxy_hosts=_as_host_list(admin_config.get("trusted_proxy_hosts", cls.trusted_proxy_hosts)),
+            mcp_enabled=mcp_enabled,
+            mcp_tokens_path=admin_config.get("persistant", {}).get("mcp_tokens_path", cls.mcp_tokens_path),
+            mcp_limits=McpLimits.from_config(admin_config.get("mcp")),
         )
 
 
@@ -125,6 +140,13 @@ class AdminContext:
     live_prices: Any = None
     # The Pine scripts of the Technical Analysis pages, kept as files (src/admin/ta_scripts.py).
     ta_scripts: Any = None
+    # The tokens the MCP endpoint is opened with, and what was asked of it (src/admin/mcp_server/).
+    mcp_tokens: Any = None
+    mcp_calls: Any = None
+    # The operator's pause of the endpoint, from the System page (src/admin/mcp_server/pause.py).
+    mcp_pause: Any = None
+    # Claude's Pine studies, child processes one at a time (src/admin/studies.py): with the endpoint on.
+    studies: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -172,6 +194,9 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.data import PriceHistory
     from src.admin.downloads import HistoryDownloads, config_hours
     from src.admin.live_prices import LivePrices, rabbitmq_source
+    from src.admin.mcp_server.calls import CallLog
+    from src.admin.mcp_server.pause import McpPause
+    from src.admin.mcp_server.tokens import TokenStore
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.paper import PaperTrading
     from src.admin.research_export import ResearchExport
@@ -202,6 +227,7 @@ def build_context(config_manager) -> AdminContext:
         workers=settings.backtests_workers,
         max_queued=settings.backtests_max_queued,
         max_period_days=settings.backtests_max_period_days,
+        signal_cache_bytes=settings.backtests_signal_cache_mb * 1024 * 1024,
     )
 
     postgres_config = config_manager.get_config_value("postgresql", {})
@@ -227,6 +253,19 @@ def build_context(config_manager) -> AdminContext:
 
     queries = AdminQueries(database, settings.timezone)
     version = read_version()
+    studies = None
+    if settings.mcp_enabled:
+        from src.admin.backtests import SIGNAL_CACHE_FOLDER
+        from src.admin.studies import StudyService
+
+        studies = StudyService(
+            root=os.path.join(settings.backtests_path, "_studies"), ta_root=settings.ta_path,
+            prices_root=settings.price_history_path,
+            # The runner's answers the backtests keep: a study and a run of the same days share them.
+            signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
+            memory_mb=settings.mcp_limits.study_memory_mb, timeout_seconds=settings.mcp_limits.study_timeout_seconds,
+            minutes_per_hour=settings.mcp_limits.study_minutes_per_hour,
+        )
 
     return AdminContext(
         config_manager=config_manager,
@@ -259,9 +298,14 @@ def build_context(config_manager) -> AdminContext:
         history=PriceHistory(settings.price_history_path),
         live_prices=LivePrices(rabbitmq_source(rabbitmq_url)),
         ta_scripts=ta_scripts,
+        mcp_tokens=TokenStore(settings.mcp_tokens_path),
+        mcp_calls=CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl")),
+        mcp_pause=McpPause(os.path.join(os.path.dirname(settings.mcp_tokens_path), "mcp_pause.json")),
+        studies=studies,
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,
         version=version,
-        closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close],
+        closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
+                 *([studies.close] if studies is not None else [])],
     )

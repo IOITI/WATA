@@ -90,7 +90,7 @@ export function AssetStep({
               options={offered.some((option) => option.value === draft.asset) || !chosen ? offered : [{ value: draft.asset, label: assetLabel(chosen) }, ...offered]}
             />
           </label>
-          <BarsFields draft={draft.rule} update={updateRule} />
+          <BarsFields draft={draft.rule} update={updateRule} anyLength />
         </div>
         {chosen?.provider === 'saxo' && (
           <p className="text-xs text-muted-foreground">Saxo quotes the index only from 15:30 to 22:15: the strategy has no bar before.</p>

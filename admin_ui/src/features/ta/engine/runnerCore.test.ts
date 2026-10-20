@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 
 import type { SeriesAsk } from './provider'
-import { plotValuesAt, Runner } from './runnerCore'
+import { detailOf, MAX_RUNTIME_WARNINGS, plotValuesAt, Runner } from './runnerCore'
 import type { BarRow, PinnedLibrary, RunnerResponse } from './runnerCore'
 
 const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
@@ -159,6 +159,54 @@ describe('the runner of the TA engine', () => {
 
     expect(asked).toEqual(['CAPITAL_DE40 5'])
     expect(loaded.ok).toBe(true)
+  })
+})
+
+describe('a load in detail, for a study of a script', () => {
+  it('gives every bar\'s plot values, and nothing more when it is not asked for', async () => {
+    const rows = bars(120)
+
+    const plain = ok(await load(runner(), 'plain', rows))
+    const detailed = ok(await load(runner(), 'detailed', rows, { detail: true }))
+
+    expect(Object.keys(plain).sort()).toEqual(['alerts', 'bars', 'id', 'inputs', 'kind', 'milliseconds', 'ok', 'op', 'plots', 'title', 'warnings'])
+    if (detailed.op !== 'load' || plain.op !== 'load') return
+    expect(detailed.series?.times).toEqual(rows.map((row) => row[0]))
+    expect(detailed.series?.plots.Mid).toHaveLength(120)
+    // The averages are na over their first bars, then a number at every bar.
+    const mid = detailed.series?.plots.Mid ?? []
+    const first = mid.findIndex((value) => value !== null)
+    expect(first).toBeGreaterThanOrEqual(0)
+    expect(first).toBeLessThan(20)
+    expect(mid.slice(first).every((value) => typeof value === 'number')).toBe(true)
+    expect(detailed.runtimeWarnings).toEqual([])
+    // The rest of the answer is the engine's.
+    expect(detailed.alerts).toEqual(plain.alerts)
+    expect(detailed.plots).toEqual(plain.plots)
+  })
+
+  it('keeps each plot at its bar, null where it has none, PineTS\'s drawings left out', () => {
+    const candles = bars(3).map(([openTime, open, high, low, close, volume, closeTime]) => ({ openTime, open, high, low, close, volume, closeTime }))
+    const times = candles.map((candle) => candle.openTime)
+
+    const found = detailOf(candles, {
+      a: { title: 'Fast', data: [{ time: times[0], value: 1 }, { time: times[2], value: Number.NaN }] },
+      __labels__: { data: [{ time: times[1], value: 'x' }] },
+    }, [])
+
+    expect(found.series.plots).toEqual({ Fast: [1, null, null] })
+  })
+
+  it('says each runtime warning once, with how often it came, and few of them', () => {
+    const warnings = [
+      { message: 'Index out of bounds', bar: 3 }, { message: 'Index out of bounds', bar: 4 },
+      ...Array.from({ length: 80 }, (_, index) => ({ message: `other ${index}`, bar: index })),
+    ]
+
+    const found = detailOf([], {}, warnings)
+
+    expect(found.runtimeWarnings[0]).toEqual({ message: 'Index out of bounds', bar: 3, count: 2 })
+    expect(found.runtimeWarnings).toHaveLength(MAX_RUNTIME_WARNINGS)
   })
 })
 

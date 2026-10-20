@@ -1,5 +1,6 @@
 import type { IPineInput } from 'pinets'
 
+import { timeframeOf } from '@/features/ta/engine/timeframes'
 import { draftOfRule, inputValueOf, MAX_RANGE_TICKS, newDraft, ruleFields } from '@/features/ta/signals/ruleModel'
 import type { RuleDraft } from '@/features/ta/signals/ruleModel'
 import type {
@@ -175,8 +176,10 @@ function barsDraft(bars: TaRuleBars): Pick<RuleDraft, 'barsType' | 'timeframe' |
     : { barsType: 'time', timeframe: bars.timeframe, ticks: '60' }
 }
 
+/** The bars asked for: a length typed (90s, 2m) as Pine names it (90S, 2). */
 export function draftBars(draft: BacktestDraft): TaRuleBars {
-  return draft.rule.barsType === 'range' ? { type: 'range', ticks: Number(draft.rule.ticks) } : { type: 'time', timeframe: draft.rule.timeframe }
+  if (draft.rule.barsType === 'range') return { type: 'range', ticks: Number(draft.rule.ticks) }
+  return { type: 'time', timeframe: timeframeOf(draft.rule.timeframe)?.pine ?? draft.rule.timeframe }
 }
 
 // ── a setting's value, as typed ──
@@ -310,6 +313,8 @@ export function backtestProblems(
   if (draft.rule.barsType === 'range') {
     const ticks = Number(draft.rule.ticks)
     if (!Number.isInteger(ticks) || ticks < 1 || ticks > MAX_RANGE_TICKS) problems.push(`Range bars are 1 to ${MAX_RANGE_TICKS} ticks.`)
+  } else if (!timeframeOf(draft.rule.timeframe)) {
+    problems.push('Bars of 10 seconds to a day: write their length as 45s, 90s or 2m.')
   }
   if (draft.sourceKind === 'pine') {
     if (!draft.rule.scriptId) problems.push('Choose the script.')

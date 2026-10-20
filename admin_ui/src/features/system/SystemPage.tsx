@@ -12,6 +12,7 @@ import { api } from '@/lib/api'
 import { formatDateTime, formatNumber } from '@/lib/format'
 import type { Health } from '@/lib/types'
 
+import { ClaudePanel } from './ClaudePanel'
 import { LicencesPanel } from './LicencesPanel'
 import { SaxoPanel } from './SaxoPanel'
 
@@ -181,6 +182,8 @@ export function SystemPage() {
       </QueryState>
 
       <SaxoPanel />
+
+      <ClaudePanel />
 
       <Panel
         title="Daily report"

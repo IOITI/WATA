@@ -15,7 +15,7 @@ import type { AssetDetails, PriceBarRow, PriceBars, PriceRangeBars, PriceRangeRo
 
 import { refOf, tickerText } from '../engine/tickers'
 import type { WataTicker } from '../engine/tickers'
-import { daysPerRequest, HISTORY_MAX_DAYS, MAX_PERIOD_DAYS, RANGE_MAX_DAYS } from '../engine/timeframes'
+import { barEnd, daysPerRequest, HISTORY_MAX_DAYS, MAX_PERIOD_DAYS, RANGE_MAX_DAYS } from '../engine/timeframes'
 
 /** A bar as Vela and PineTS take it: its open time in epoch milliseconds. */
 export interface OhlcvBar {
@@ -26,8 +26,9 @@ export interface OhlcvBar {
   close: number
   volume: number
   /**
-   * When it ended (epoch ms): a bar of time ends when the next begins, a range bar
-   * when its last ten seconds did. Pine's `time_close` reads it.
+   * When it ended (epoch ms): a bar of time when the next begins, or when its last ten
+   * seconds did for a length that cuts no whole ten seconds (45 s); a range bar when
+   * its last ten seconds did. Pine's `time_close` reads it.
    */
   closeTime: number
 }
@@ -80,7 +81,7 @@ function earlier(a: string, b: string): string {
 /** A bar of time of one side, `seconds` long; null for the ask of a bar that has none. */
 export function timeBar(row: PriceBarRow, side: 'bid' | 'ask', seconds: number): OhlcvBar | null {
   const [t, bidOpen, bidHigh, bidLow, bidClose, askOpen, askHigh, askLow, askClose, updates] = row
-  const times = { time: t * 1000, closeTime: (t + seconds) * 1000, volume: updates }
+  const times = { time: t * 1000, closeTime: barEnd(t, seconds) * 1000, volume: updates }
   if (side === 'bid') return { ...times, open: bidOpen, high: bidHigh, low: bidLow, close: bidClose }
   if (askOpen === null || askHigh === null || askLow === null || askClose === null) return null
   return { ...times, open: askOpen, high: askHigh, low: askLow, close: askClose }
@@ -117,6 +118,8 @@ interface Span {
   first: string
   last: string
   timeZone: string
+  /** Followed by Capital.com's feed or still recorded from Saxo: its last day is today, whatever it was when read. */
+  live: boolean
 }
 
 export class WataBars {
@@ -139,6 +142,7 @@ export class WataBars {
         first: details.first_day,
         last: details.last_day,
         timeZone: details.timezone,
+        live: ticker.provider === 'capital' || (ticker.provider === 'saxo' && details.asset.status === 'recording'),
       }))
       span.catch(() => this.spans.delete(ref))
       this.spans.set(ref, span)
@@ -155,8 +159,8 @@ export class WataBars {
   async bars(ticker: WataTicker, seconds: number, window: BarWindow): Promise<OhlcvBar[]> {
     const span = await this.span(ticker)
     const now = this.now()
-    // Capital.com's feed is live: its last day is today, whatever it was when the asset was read.
-    const lastKnown = ticker.provider === 'capital' ? dayIn(now, span.timeZone) : span.last
+    // A chart opened before the day's first bar, or left open overnight, reads today's bars as they come.
+    const lastKnown = span.live ? dayIn(now, span.timeZone) : span.last
     const lastDay = earlier(dayIn(window.to ?? now, span.timeZone), lastKnown)
     const firstDay = window.from === undefined ? span.first : later(dayIn(window.from, span.timeZone), span.first)
     if (lastDay < firstDay) return []

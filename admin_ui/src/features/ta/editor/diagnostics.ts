@@ -90,18 +90,14 @@ function preparedFailure(error: PrepareError): Diagnostic {
   }
 }
 
-export async function checkScript(source: string, options: CheckOptions): Promise<CheckResult> {
+/**
+ * What TradingView's rules (v6 only) and WATA's tickers find in a script, before
+ * PineTS compiles it: the editor's first checks, and the server's (check.mjs).
+ */
+export function ruleFindings(source: string, version: number, validate?: CheckOptions['validate']): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
-  let version: number
-  try {
-    version = checkedVersion(source)
-  } catch (error) {
-    if (error instanceof PrepareError) return { diagnostics: [preparedFailure(error)], prepared: null, compiled: null }
-    throw error
-  }
-
-  if (version === 6 && options.validate) {
-    for (const finding of options.validate(source)) {
+  if (version === 6 && validate) {
+    for (const finding of validate(source)) {
       if (NOT_FAULTS.some((pattern) => pattern.test(finding.message))) continue
       diagnostics.push({
         line: Math.max(1, finding.line),
@@ -114,6 +110,19 @@ export async function checkScript(source: string, options: CheckOptions): Promis
     }
   }
   diagnostics.push(...tickerChecks(source))
+  return diagnostics
+}
+
+export async function checkScript(source: string, options: CheckOptions): Promise<CheckResult> {
+  let version: number
+  try {
+    version = checkedVersion(source)
+  } catch (error) {
+    if (error instanceof PrepareError) return { diagnostics: [preparedFailure(error)], prepared: null, compiled: null }
+    throw error
+  }
+
+  const diagnostics = ruleFindings(source, version, options.validate)
 
   let prepared: PreparedScript
   try {

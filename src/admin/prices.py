@@ -27,6 +27,9 @@ BAR_COLUMNS = (
 )
 # Bar lengths the page can ask for, in seconds. Above the first one, bars are aggregated.
 INTERVALS = (10, 30, 60, 300, 900, 3600)
+# Any other whole number of seconds from the first one to a day is served too: the charts
+# and backtests of the Technical Analysis pages make bars of any length (45 s, 90 s, 2 min).
+MAX_INTERVAL = 86_400
 # What one chart is given at most: a full day at ten seconds is 8,640.
 MAX_BUCKETS = 12_000
 MAX_PERIOD_DAYS = 366
@@ -76,6 +79,15 @@ _STEP = timedelta(minutes=15)
 
 class TooManyBars(Exception):
     """The period holds more buckets than one chart is given at this interval."""
+
+
+def interval_served(interval) -> bool:
+    """
+    Whether bars of ``interval`` seconds are served: a whole number from ten seconds to
+    a day. A length that is no multiple of ten seconds merges the ten-second bars that
+    begin in each bucket: a 45-second bar holds 50 or 40 seconds of prices by turns.
+    """
+    return isinstance(interval, int) and not isinstance(interval, bool) and INTERVALS[0] <= interval <= MAX_INTERVAL
 
 
 def _merged(intervals: list[tuple[datetime, datetime, str]]) -> list[tuple[datetime, datetime, str]]:
