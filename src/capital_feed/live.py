@@ -214,6 +214,10 @@ class RabbitExchange:
                 expiration=MESSAGE_TTL_SECONDS,
             ),
             routing_key=key,
+            # No queue is bound while no chart follows the prices: such a price is dropped, as
+            # intended. aio-pika's default asks RabbitMQ to send it back, which nothing reads and
+            # aiormq logs as an error, several a second.
+            mandatory=False,
         )
 
     async def close(self) -> None:

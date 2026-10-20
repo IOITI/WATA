@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.21.1 - The Capital.com feed's log no longer floods
+
+**Release date:** 2026-10-20
+
+- **The feed's live prices are no longer sent back by RabbitMQ.** While no chart follows them, no queue is bound to `wata.prices`, and aio-pika asks by default for such a message to come back. Nothing read them: the feed logged `aiormq.channel - Unhandled message ... Basic.Return` as an error several times a second, already so before v0.21.0, and its log rotated every 20 minutes, keeping about ten hours. A price no chart listens to is now dropped by RabbitMQ, as intended (`mandatory=False` in `RabbitExchange.publish`, `src/capital_feed/live.py`, tested).
+
 ## v0.21.0 - A research lab, and backtests that say how far to trust them
 
 **Release date:** 2026-10-20

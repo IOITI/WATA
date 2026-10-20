@@ -1,10 +1,12 @@
 import asyncio
 import json
 import random
+import sys
+import types
 
 import pytest
 
-from src.capital_feed.live import STALE_SECONDS, LiveBar, LivePublisher, bar_row, routing_key
+from src.capital_feed.live import STALE_SECONDS, LiveBar, LivePublisher, RabbitExchange, bar_row, routing_key
 from src.price_recorder.bars import BAR_SECONDS, BarBuilder, Quote, bucket_start
 
 T0 = 1792051200  # Thursday 15 Oct 2026, 08:00:00 UTC: a bucket starts there.
@@ -197,3 +199,30 @@ def test_while_rabbitmq_is_away_nothing_waits_for_it_and_it_is_tried_again_later
     assert publisher.failing is False and exchange.opened == 2
     assert [message["market"] for _, message in exchange.published] == ["closed"]
     assert sum("cannot be sent to RabbitMQ" in record.getMessage() for record in caplog.records) == 1
+
+
+def test_a_price_no_chart_listens_to_is_dropped_by_rabbitmq_not_sent_back(monkeypatch):
+    # aio-pika asks for an unrouted message back unless told otherwise; nothing reads those, and
+    # aiormq logged each as an error, several a second, while no chart followed the prices.
+    published = []
+
+    class Message:
+        def __init__(self, **fields):
+            self.fields = fields
+
+    class Exchange:
+        async def publish(self, message, routing_key, **options):
+            published.append((message.fields, routing_key, options))
+
+    fake = types.ModuleType("aio_pika")
+    fake.Message = Message
+    fake.DeliveryMode = types.SimpleNamespace(NOT_PERSISTENT="not persistent")
+    monkeypatch.setitem(sys.modules, "aio_pika", fake)
+    exchange = RabbitExchange("amqp://guest:guest@localhost/")
+    exchange._exchange = Exchange()
+
+    asyncio.run(exchange.publish(b"{}", "capital.US100.quote"))
+
+    ((fields, key, options),) = published
+    assert key == "capital.US100.quote" and options == {"mandatory": False}
+    assert fields["delivery_mode"] == "not persistent" and fields["body"] == b"{}"
