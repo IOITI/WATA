@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
@@ -107,16 +108,19 @@ afterEach(() => {
 })
 
 describe('the Charts page', () => {
-  it('builds Vela on WATA\'s three providers, its Pine engine on the worker file the admin serves', async () => {
+  it('builds a live Vela on WATA\'s three providers, its Pine engine on the worker file the admin serves, run in full', async () => {
     renderAt('/ta/charts')
 
     await waitFor(() => expect(workspaces).toHaveLength(1))
     const options = workspaces[0].options
     expect(Object.keys(options.providers as object).sort()).toEqual(['capital', 'dukascopy', 'saxo'])
-    expect(options).toMatchObject({ layout: false, symbol: 'capital:CAPITAL_US100', timeframe: '1', persist: 'charts', timezone: 'Europe/Paris' })
-    expect(options.timeframes).toEqual(['1', '5', '15', '60'])
-    ;(options.engines as { pine: () => unknown }).pine()
+    // Without `live`, Vela draws the history and never asks the providers for what moves it.
+    expect(options).toMatchObject({ layout: false, live: true, symbol: 'capital:CAPITAL_US100', timeframe: '1', persist: 'charts', timezone: 'Europe/Paris' })
+    expect(options.timeframes).toEqual(['10S', '20S', '30S', '45S', '1', '5', '15', '60'])
+    const engine = (options.engines as { pine: () => { language: string; capabilities: { streaming: boolean } } }).pine()
     expect(enginesMade[0].workerUrl).toMatch(/^\/assets\/vela-pine-worker-[0-9a-f]{12}\.js$/)
+    // Never PineTS's live mode (chart/pineEngine.ts).
+    expect(engine).toMatchObject({ language: 'pine', capabilities: { streaming: false } })
   })
 
   it('lists WATA\'s scripts in Vela\'s picker, and says which could not be prepared', async () => {
@@ -147,6 +151,40 @@ describe('the Charts page', () => {
 
     await waitFor(() => expect(workspaces[0]?.active.added.map((entry) => entry.name)).toEqual(['EMA cross']))
     await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent(/^\/ta\/charts$/))
+  })
+
+  it('takes a length of bars typed above the chart, and refuses one WATA does not make', async () => {
+    const user = userEvent.setup()
+    renderAt('/ta/charts')
+    await waitFor(() => expect(workspaces).toHaveLength(1))
+    const field = () => screen.getByRole('textbox', { name: 'Length of the bars, as 45s, 2m or 1h' })
+    expect(field()).toHaveValue('1m')
+
+    await user.clear(field())
+    await user.type(field(), '90s{Enter}')
+    expect(workspaces[0].active.timeframe).toBe('90S')
+    // The chart says where it went: the address and the field follow it.
+    workspaces[0].active.emit('market:changed', { symbol: 'capital:CAPITAL_US100', timeframe: '90S' })
+    await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent('/ta/charts?symbol=CAPITAL_US100&tf=90S'))
+    expect(field()).toHaveValue('90s')
+
+    await user.clear(field())
+    await user.type(field(), '5s{Enter}')
+    expect(screen.getByText('WATA records ten-second bars: 10 seconds at least.')).toBeInTheDocument()
+    expect(field()).toHaveAttribute('aria-invalid', 'true')
+    expect(workspaces[0].active.timeframe).toBe('90S')
+  })
+
+  it('opens on bars of seconds the address names, and says what a 45-second bar holds', async () => {
+    renderAt('/ta/charts?tf=45S')
+
+    await waitFor(() => expect(workspaces).toHaveLength(1))
+    expect(workspaces[0].options.timeframe).toBe('45S')
+    expect(screen.getByRole('textbox', { name: 'Length of the bars, as 45s, 2m or 1h' })).toHaveValue('45s')
+    expect(screen.getByText(/45 s is no multiple of the ten seconds WATA records/)).toBeInTheDocument()
+    // Thirty seconds cut whole ten seconds: nothing to say.
+    workspaces[0].active.emit('market:changed', { symbol: 'capital:CAPITAL_US100', timeframe: '30S' })
+    await waitFor(() => expect(screen.queryByText(/is no multiple of the ten seconds/)).not.toBeInTheDocument())
   })
 
   it('keeps the address on the chart\'s symbol and timeframe, Vela\'s own pickers included', async () => {

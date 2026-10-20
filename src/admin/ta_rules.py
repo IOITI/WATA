@@ -33,6 +33,7 @@ import re
 import secrets
 from datetime import datetime, timezone
 
+from src.admin.prices import MAX_INTERVAL
 from src.admin.ta_scripts import (
     ID_PATTERN,
     LIBRARY,
@@ -43,6 +44,7 @@ from src.admin.ta_scripts import (
     pine_facts,
 )
 from src.capital_feed.settings import EPIC_PATTERN, LABEL_PATTERN
+from src.price_recorder.bars import BAR_SECONDS
 
 OFF = "off"
 SHADOW = "shadow"
@@ -61,11 +63,18 @@ ALERT_CALL_ACTIONS = (IGNORE, MESSAGE)
 # The assets a rule may run on: those with live bars in WATA, Capital.com's.
 PROVIDERS = ("capital",)
 SIDES = ("bid", "ask")
-# Bars of whole minutes, as Pine names its timeframes, or range bars of a number of ticks.
+# A rule runs on bars of whole minutes, as Pine names its timeframes, or range bars of a
+# number of ticks. The engine runs a rule's script over all its bars at each new one.
 TIMEFRAMES = ("1", "5", "15", "60")
 TIME_BARS = "time"
 RANGE_BARS = "range"
 MAX_RANGE_TICKS = 100_000
+# A backtest or a replay runs on bars of any length made of the ten-second bars WATA
+# records, from ten seconds to a day, named as Pine names a timeframe: whole minutes
+# as a number ("1", "1440"), any other length in seconds ("10S", "45S", "90S").
+MIN_BAR_SECONDS = BAR_SECONDS
+MAX_BAR_SECONDS = MAX_INTERVAL
+_TIMEFRAME = re.compile(r"([1-9][0-9]{0,5})([Ss]?)")
 
 MAX_RULES = 50
 MAX_NAME_LENGTH = 80
@@ -137,10 +146,36 @@ def checked_asset(asset) -> dict:
     return {"provider": provider, "key": key}
 
 
-def checked_bars(bars) -> dict:
+def timeframe_seconds(timeframe) -> int | None:
+    """The length of a timeframe WATA makes ("45S" is 45 seconds, "5" 300), or None for any other."""
+    match = _TIMEFRAME.fullmatch(timeframe) if isinstance(timeframe, str) else None
+    if match is None:
+        return None
+    seconds = int(match[1]) * (1 if match[2] else 60)
+    return seconds if MIN_BAR_SECONDS <= seconds <= MAX_BAR_SECONDS else None
+
+
+def timeframe_name(seconds: int) -> str:
+    """A length as Pine names it: whole minutes as a number, any other length in seconds."""
+    return str(seconds // 60) if seconds % 60 == 0 else f"{seconds}S"
+
+
+def checked_bars(bars, *, any_length: bool = False) -> dict:
+    """
+    A rule's bars: whole minutes (TIMEFRAMES) or range bars. With ``any_length``, a
+    backtest's: any length from ten seconds to a day, named as Pine names it ("120S" is "2").
+    """
     if not isinstance(bars, dict):
         raise InvalidRule("A rule needs its bars: minutes or range")
     kind = _choice(bars.get("type"), "The bars", (TIME_BARS, RANGE_BARS))
+    if kind == TIME_BARS and any_length:
+        seconds = timeframe_seconds(bars.get("timeframe"))
+        if seconds is None:
+            raise InvalidRule(
+                f"Bars of time are {MIN_BAR_SECONDS} seconds to a day, named as Pine names them: "
+                "10S, 45S, 90S, 1, 5, 60"
+            )
+        return {"type": TIME_BARS, "timeframe": timeframe_name(seconds)}
     if kind == TIME_BARS:
         return {"type": TIME_BARS, "timeframe": _choice(bars.get("timeframe"), "The timeframe", TIMEFRAMES)}
     ticks = bars.get("ticks")
@@ -219,7 +254,7 @@ def rule_users(rules: list[dict], script_id: str) -> list[str]:
 
 
 def bars_label(bars: dict) -> str:
-    """The bars of a rule in one word: 1, 5, 15, 60 (minutes) or R60 (range of 60 ticks)."""
+    """The bars of a rule in one word: 1, 5, 15, 60 (minutes), 45S (seconds) or R60 (range of 60 ticks)."""
     return bars["timeframe"] if bars["type"] == TIME_BARS else f"R{bars['ticks']}"
 
 
@@ -301,6 +336,16 @@ class RuleStore:
         facts = pine_facts(script["source"])
         if facts.kind == LIBRARY:
             raise InvalidRule(f"{script['name']!r} is a library: a rule runs an indicator or a strategy")
+        libraries = self.libraries_of(facts, script["name"])
+        pinned = {"id": script_id, "version": number, "sha256": script["entry"]["sha256"]}
+        return pinned, libraries
+
+    def libraries_of(self, facts, script_name: str) -> list[dict]:
+        """
+        The libraries a source imports, at their current versions, dependencies
+        first, as prepare.ts inlines them: of a saved script, or of a source not
+        saved yet (a study of a draft).
+        """
         libraries: list[dict] = []
 
         def visit(imports, chain: list[str]) -> None:
@@ -313,7 +358,7 @@ class RuleStore:
                 try:
                     library = self._scripts.library(name)
                 except ScriptNotFound:
-                    raise InvalidRule(f'No library "{name}": {script["name"]!r} imports it') from None
+                    raise InvalidRule(f'No library "{name}": {script_name!r} imports it') from None
                 visit(pine_facts(library["source"]).imports, [*chain, name])
                 current = next(entry for entry in library["versions"] if entry["number"] == library["version"])
                 libraries.append({
@@ -324,8 +369,7 @@ class RuleStore:
                 })
 
         visit(facts.imports, [])
-        pinned = {"id": script_id, "version": number, "sha256": script["entry"]["sha256"]}
-        return pinned, libraries
+        return libraries
 
     def verify(self, rule: dict) -> None:
         """Refuse a rule whose pinned versions are no longer on disk as they were saved."""
@@ -388,8 +432,8 @@ class RuleStore:
         }
         return rule
 
-    def create(self, fields: dict, revision: str, mode: str = SHADOW) -> dict:
-        """A new rule, off or in shadow: going live is set_mode's alone."""
+    def create(self, fields: dict, revision: str, mode: str = SHADOW, made_by: str | None = None) -> dict:
+        """A new rule, off or in shadow: going live is set_mode's alone. ``made_by``: who made it through an agent."""
         if mode not in (OFF, SHADOW):
             raise InvalidRule("A new rule is off or in shadow: it goes live once it is saved")
         with self._scripts.lock:
@@ -406,6 +450,8 @@ class RuleStore:
                 "updated_at": now,
                 "mode_changed_at": now,
             }
+            if made_by is not None:
+                rule["made_by"] = made_by
             new_revision = self._write([*rules, rule])
         return {"rule": rule, "revision": new_revision}
 

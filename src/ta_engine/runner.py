@@ -17,6 +17,8 @@ import os
 import shutil
 from collections.abc import Awaitable, Callable
 
+from src.price_history.process import give_up_memory_first
+
 logger = logging.getLogger(__name__)
 
 RUNNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runner", "runner.mjs")
@@ -69,11 +71,14 @@ class NodeRunner:
         *,
         timeout_seconds: float,
         start_timeout_seconds: float = 15.0,
+        memory_first: bool = False,
     ):
         self._command = command
         self._answer = answer
         self._timeout = timeout_seconds
         self._start_timeout = start_timeout_seconds
+        # The first process the kernel stops when the container runs short of memory (the shadow rules' runner).
+        self._memory_first = memory_first
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
@@ -98,6 +103,8 @@ class NodeRunner:
             cwd=os.path.dirname(self._command[-1]),
             limit=LINE_LIMIT,
         )
+        if self._memory_first:
+            give_up_memory_first(f"/proc/{self._process.pid}/oom_score_adj")
         self._stderr_task = asyncio.create_task(self._log_stderr(self._process))
         hello = await self.request({"op": "hello"}, timeout_seconds=self._start_timeout)
         self.versions = {"pinets": hello.get("pinets"), "node": hello.get("node")}

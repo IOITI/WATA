@@ -68,9 +68,10 @@ const EMA: TaScript = { ...summary({}), source: EMA_SOURCE }
 const HELPERS = summary({
   id: 'aaaaaaaaaaaa', name: 'Helpers', kind: 'library', library_name: 'Helpers', description: '', version: 1,
 })
+// A script Claude made through the admin's MCP endpoint.
 const DOUBLED = summary({
   id: 'bbbbbbbbbbbb', name: 'Doubled', description: '', version: 1,
-  imports: [{ user: 'someone', name: 'Helpers', version: 1, alias: 'h' }],
+  imports: [{ user: 'someone', name: 'Helpers', version: 1, alias: 'h' }], made_by: 'claude',
 })
 
 let sent: { method: string; path: string; body: unknown }[] = []
@@ -160,6 +161,9 @@ describe('the Indicators page', () => {
     expect(screen.getByRole('link', { name: 'Open EMA in Charts' })).toHaveAttribute('href', `/ta/charts?script=${EMA.id}`)
     // A library is not opened on a chart by itself.
     expect(screen.queryByRole('link', { name: 'Open Helpers in Charts' })).not.toBeInTheDocument()
+    // Claude's script says so beside its name.
+    expect(within(screen.getByRole('link', { name: 'Doubled' }).closest('tr') as HTMLElement).getByText('Claude')).toBeInTheDocument()
+    expect(within(screen.getByRole('link', { name: 'EMA' }).closest('tr') as HTMLElement).queryByText('Claude')).toBeNull()
   })
 
   it('asks before deleting, and says why a library still imported is kept', async () => {

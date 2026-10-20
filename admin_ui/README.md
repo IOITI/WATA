@@ -218,6 +218,16 @@ which is the source the AGPL asks to offer.
   fail to compile.
 - **Vela is confined to `chart/`**: `wataProvider.ts` serves WATA's three providers as Vela's data
   providers, and `TaChart.tsx` builds the workspace. Tests replace it with `src/test/fakeVela.ts`.
+- **The chart is live** (`live: true`): without it Vela never calls a provider's `subscribe`, and the chart
+  stands still. Its scripts are not run in PineTS's live mode: `pineEngine.ts` gives Vela an engine that cannot
+  stream, so each change of the bars runs a script in full again, a second apart at most while quotes come. A
+  run raises the alerts of the last bar again: each is passed on once.
+- **Bars of seconds** (`engine/timeframes.ts`): a chart, the editor's test and a backtest take any length
+  from 10 seconds to a day, named as Pine names it (`10S`, `45S`, `1`, `60`); a signal rule keeps the minutes
+  (`RULE_TIMEFRAMES`). Vela's menu offers the usual lengths, the Length field above the chart takes any other.
+  Vela's chart itself reads no seconds (`10S` would be an hour, its times stop at the minute):
+  `vite/velaSeconds.ts` patches it when it is built, in the dev server too, and stops the build if a new
+  version of Vela no longer has the code it changes.
 - **What can be wrong without a browser is in plain functions with tests**: `prepare.ts`, `outline.ts` (the
   alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`,
   `signals/ruleModel.ts`. The editor itself (CodeMirror) and the charts are replaced in page tests, and

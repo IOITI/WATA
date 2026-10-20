@@ -29,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from src.admin import data
+from src.admin import asset_bars, data
 from src.admin.auth import require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
 from src.admin.downloads import KEEP_DEFAULT_DAYS
@@ -65,6 +65,7 @@ from src.admin.prices import (
     GAPS_MAX_DAYS,
     INTERVALS,
     MAX_BUCKETS,
+    MAX_INTERVAL,
     MAX_PERIOD_DAYS,
     MAX_RUNS,
     RANGE_COLUMNS,
@@ -74,6 +75,7 @@ from src.admin.prices import (
     TooManyBars,
     auto_range_ticks,
     availability,
+    interval_served,
     price_decimals,
     range_bars,
     range_rows,
@@ -126,14 +128,7 @@ def _today(ctx) -> date:
 
 def _period(ctx, first_day: date | None, last_day: date | None):
     """The days asked for (today by default, both included) and their bounds in the trading timezone."""
-    first_day = first_day or last_day or _today(ctx)
-    last_day = last_day or first_day
-    if last_day < first_day:
-        raise HTTPException(status_code=422, detail="The period ends before it starts")
-    if (last_day - first_day).days >= MAX_PERIOD_DAYS:
-        raise HTTPException(status_code=422, detail=f"The period is longer than {MAX_PERIOD_DAYS} days")
-    start, end = day_bounds(first_day, last_day, ctx.settings.timezone)
-    return first_day, last_day, start, end
+    return asset_bars.period(ctx.settings.timezone, first_day, last_day, _today(ctx))
 
 
 def _at_most(first_day: date, last_day: date, days: int, refusal: str) -> None:
@@ -143,8 +138,7 @@ def _at_most(first_day: date, last_day: date, days: int, refusal: str) -> None:
 
 def _history_period(provider: str, first_day: date, last_day: date) -> None:
     """Dukascopy's days are parsed again for each view: a month at a time."""
-    if provider == DUKASCOPY:
-        _at_most(first_day, last_day, HISTORY_MAX_DAYS, f"The Dukascopy history is read {HISTORY_MAX_DAYS} days at a time at most")
+    asset_bars.check_history_period(provider, first_day, last_day)
 
 
 def _recorder_settings(ctx) -> RecorderSettings | None:
@@ -167,35 +161,15 @@ def _day_of(ctx, epoch: int | None) -> str | None:
     return datetime.fromtimestamp(epoch, timezone.utc).astimezone(pytz.timezone(ctx.settings.timezone)).date().isoformat()
 
 
-async def _saxo_instrument(ctx, key: str) -> dict:
-    instrument = await ctx.queries.price_instrument(saxo_instrument_id(key))
-    if instrument is None:
-        raise AssetNotFound(f"No recorded instrument {key!r}")
-    return saxo_asset(instrument)
-
-
 async def _history_asset(ctx, key: str) -> dict:
-    asset = await run_in_threadpool(_history(ctx).asset, history_label(key))
-    if asset is None:
-        raise AssetNotFound(f"No day of Dukascopy history under {key!r}")
-    return asset
-
-
-async def _capital_instrument(ctx, key: str) -> dict:
-    row = await ctx.queries.capital_instrument(capital_epic(key))
-    if row is None:
-        raise AssetNotFound(f"No Capital.com instrument {key!r} with a bar")
-    return capital_asset(row)
+    return await asset_bars.history_asset(_history(ctx), key)
 
 
 async def _instrument(ctx, provider: str, key: str) -> dict:
     """The asset an address names, as the chart's answers describe it."""
-    provider = checked_provider(provider)
-    if provider == SAXO:
-        return await _saxo_instrument(ctx, key)
-    if provider == CAPITAL:
-        return await _capital_instrument(ctx, key)
-    return await _history_asset(ctx, key)
+    if checked_provider(provider) == DUKASCOPY:
+        _history(ctx)
+    return await asset_bars.instrument(ctx.queries, ctx.history, provider, key)
 
 
 def _capital_settings(ctx) -> CapitalSettings | None:
@@ -897,45 +871,15 @@ async def bars(
     interval: int = Query(INTERVALS[0]),
 ):
     ctx = request.app.state.ctx
-    if interval not in INTERVALS:
+    if not interval_served(interval):
         raise HTTPException(
-            status_code=422, detail=f"The interval must be one of {', '.join(map(str, INTERVALS))} seconds",
+            status_code=422, detail=f"The interval is a whole number of seconds from {INTERVALS[0]} to {MAX_INTERVAL}",
         )
-    provider = checked_provider(provider)
-    first_day, last_day, start, end = _period(ctx, first_day, last_day)
-    _history_period(provider, first_day, last_day)
-    instrument = await _instrument(ctx, provider, key)
-
-    # One more than the limit: enough to know that there is more, without reading it.
-    through = None
-    if provider == SAXO:
-        rows = await ctx.queries.price_bars(instrument["id"], start, end, interval, MAX_BUCKETS + 1)
-    elif provider == CAPITAL:
-        rows, through = await ctx.queries.capital_bars(instrument["id"], start, end, interval, MAX_BUCKETS + 1)
-    else:
-        history = _history(ctx)
-        rows = await run_in_threadpool(
-            lambda: aggregate(history.rows(instrument["key"], start, end), interval, MAX_BUCKETS + 1)
-        )
-    if len(rows) > MAX_BUCKETS:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"More than {MAX_BUCKETS} bars in this period at {interval} seconds: "
-                "choose a longer interval or a shorter period"
-            ),
-        )
-    return {
-        "instrument": instrument,
-        "from": first_day,
-        "to": last_day,
-        "timezone": ctx.settings.timezone,
-        "interval": interval,
-        "columns": list(BAR_COLUMNS),
-        "bars": rows,
-        # The start of the last ten-second bar read (Capital.com): a live chart adds only what follows it.
-        "through": through,
-    }
+    if checked_provider(provider) == DUKASCOPY:
+        _history(ctx)
+    return await asset_bars.bars(
+        ctx.queries, ctx.history, ctx.settings.timezone, provider, key, first_day, last_day, interval, today=_today(ctx),
+    )
 
 
 class _Series:
@@ -1020,7 +964,7 @@ async def range_bars_of(
     _history_period(provider, first_day, last_day)
     instrument = await _instrument(ctx, provider, key)
     if provider == SAXO:
-        index_instrument = await _saxo_instrument(ctx, str(under)) if under is not None else None
+        index_instrument = await asset_bars.saxo_instrument(ctx.queries, str(under)) if under is not None else None
         series = await _db_series(ctx.queries.price_series, instrument["id"], start, end, side)
     elif provider == CAPITAL:
         # An index: nothing goes under it.
@@ -1266,7 +1210,7 @@ async def volume(
     if interval not in INTERVALS or interval < 60:
         raise HTTPException(status_code=422, detail="Capital.com counts its volume by minute: choose bars of a minute or longer")
     first_day, last_day, start, end = _period(ctx, first_day, last_day)
-    instrument = await _capital_instrument(ctx, key)
+    instrument = await asset_bars.capital_instrument(ctx.queries, key)
     rows = await ctx.queries.capital_volume(instrument["id"], start, end, interval, MAX_BUCKETS + 1)
     if len(rows) > MAX_BUCKETS:
         raise HTTPException(status_code=422, detail=f"More than {MAX_BUCKETS} bars in this period at {interval} seconds")

@@ -23,8 +23,9 @@ execution_timing_*.jsonl
 
 # Admin interface: built from admin_ui/ by package.sh
 src/admin/static/
-# The TA engine's Pine runner: built from admin_ui/ by package.sh
+# The TA engine's Pine runner, and the checker of TradingView's rules: built from admin_ui/ by package.sh
 src/ta_engine/runner/
+src/ta_engine/checker/
 
 # The research lab's environment (lab/setup.sh)
 .venv-lab/

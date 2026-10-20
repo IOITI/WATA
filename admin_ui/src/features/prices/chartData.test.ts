@@ -50,6 +50,8 @@ function bar(iso: string, changes: Partial<Record<number, number | null>> = {}):
 describe('intervals', () => {
   it('names a bar length the way it is said', () => {
     expect([10, 30, 60, 300, 900, 3600].map(intervalLabel)).toEqual(['10 s', '30 s', '1 min', '5 min', '15 min', '1 h'])
+    // Lengths the Technical Analysis pages may ask for.
+    expect([45, 90, 5400, 14_400].map(intervalLabel)).toEqual(['45 s', '90 s', '90 min', '4 h'])
   })
 
   it('starts a period on the shortest bars that fit one chart', () => {

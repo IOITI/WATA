@@ -45,10 +45,10 @@ from src.admin.ta_rules import (
     checked_alerts,
     checked_bars,
     checked_inputs,
+    timeframe_seconds,
 )
 from src.admin.ta_scripts import ScriptNotFound, ScriptStore
 from src.ta_engine.bars import RangeBars, TimeBars
-from src.ta_engine.engine import TIMEFRAME_SECONDS
 from src.ta_engine.rules import EngineRule
 from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerFailed, find_node, runner_command
 from src.ta_engine.signals import Candidate, interpret, iso_seconds
@@ -70,7 +70,10 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--version", type=int, help="the script's version (its current one by default)")
     parser.add_argument("--asset", help="capital/<EPIC>, saxo/<id> or dukascopy/<label>")
     parser.add_argument("--side", default="bid", choices=("bid", "ask"))
-    parser.add_argument("--bars", default="1", help="1, 5, 15 or 60 minutes, or R<ticks> for range bars")
+    parser.add_argument(
+        "--bars", default="1",
+        help="minutes (1, 5, 60), seconds (10S, 45S, 90S), from 10 seconds to a day, or R<ticks> for range bars",
+    )
     parser.add_argument("--inputs", default="{}", help='the inputs set, as JSON by their id: {"in_0": 12}')
     parser.add_argument("--map", action="append", default=[], help="TITLE=ACTION for an alertcondition (repeatable)")
     parser.add_argument("--messages", action="store_true", help="read every alert, and every alert() call, as a message")
@@ -96,7 +99,7 @@ def _bars_of(text: str) -> dict:
     text = text.strip()
     if text[:1] in ("R", "r"):
         return checked_bars({"type": "range", "ticks": int(text[1:]) if text[1:].isdigit() else 0})
-    return checked_bars({"type": "time", "timeframe": text})
+    return checked_bars({"type": "time", "timeframe": text}, any_length=True)
 
 
 def _script_rule(args, scripts: ScriptStore) -> dict:
@@ -250,7 +253,7 @@ class AssetRows:
 
 def _builder(bars: dict, side: str, rows: list, decimals: int | None, ticks: int | None = None):
     if bars["type"] == "time" and ticks is None:
-        return TimeBars(TIMEFRAME_SECONDS[bars["timeframe"]], side)
+        return TimeBars(timeframe_seconds(bars["timeframe"]), side)
     if decimals is None:
         decimals = price_decimals([row[4] for row in rows[:2000]])
     return RangeBars(ticks or bars["ticks"], decimals, side)
@@ -292,6 +295,9 @@ class ReplayedWindow:
     alerts: list[ReplayedAlert] = field(default_factory=list)
     # The bars of the strategy of the window, for whoever wants to keep them.
     strategy_bars: list = field(default_factory=list)
+    # A window run in detail (a study): each plot at every bar, and PineTS's runtime warnings.
+    series: dict | None = None
+    runtime_warnings: list = field(default_factory=list)
 
 
 # Raised when what is kept of a run changes: every answer kept before is then not read again.
@@ -299,8 +305,11 @@ CACHE_FORMAT = 1
 
 
 def _runner_digest(command: list[str]) -> str:
-    """What answers: the runner's built file when it is the runner, else the command (a stand-in, in tests)."""
-    digest = hashlib.sha256(json.dumps(command).encode())
+    """
+    What answers: the runner's built file when it is the runner, else the command (a stand-in, in tests).
+    Not the heap it is given: a study (a smaller heap) and a backtest read the same answers.
+    """
+    digest = hashlib.sha256(json.dumps([part for part in command if not part.startswith("--max-old-space-size")]).encode())
     if os.path.isfile(RUNNER_PATH) and RUNNER_PATH in command:
         with open(RUNNER_PATH, "rb") as runner_file:
             digest.update(runner_file.read())
@@ -391,22 +400,25 @@ class ReplaySession:
         if ticker is None:
             raise ValueError(f"No such asset in WATA: {ask.get('ticker')!r}")
         timeframe = str(ask.get("timeframe") or "")
-        if ticker.range_ticks is None and timeframe not in TIMEFRAME_SECONDS:
-            raise ValueError(f"No bars of {timeframe!r}: 1, 5, 15 or 60 minutes")
+        seconds = timeframe_seconds(timeframe)
+        if ticker.range_ticks is None and seconds is None:
+            raise ValueError(f"No bars of {timeframe!r}: from 10 seconds (10S) to a day (1440)")
         found, decimals = await self.rows.rows(ticker.provider, ticker.key, self._current["anchor"], self._current["end"])
         builder = (
             RangeBars(ticker.range_ticks, decimals if decimals is not None else price_decimals([r[4] for r in found[:2000]]), ticker.side)
-            if ticker.range_ticks else TimeBars(TIMEFRAME_SECONDS[timeframe], ticker.side)
+            if ticker.range_ticks else TimeBars(seconds, ticker.side)
         )
         bars = builder.add(found, self._current["end"])
         start, end = ask.get("from"), ask.get("to")
         return [bar for bar in bars if (start is None or bar[0] >= start) and (end is None or bar[0] <= end)]
 
-    async def window(self, begin: int, end: int, *, period: tuple[int, int] | None = None) -> ReplayedWindow:
+    async def window(self, begin: int, end: int, *, period: tuple[int, int] | None = None,
+                     detail: bool = False) -> ReplayedWindow:
         """
         One day of the engine. Its alerts are those whose bar closed in it, and
         began in ``period`` when one is given. Raises RunnerFailed when the
-        script fails on its bars.
+        script fails on its bars. In ``detail`` (a study of the script, never a
+        backtest), each plot at every bar comes back too; such a run is never kept.
         """
         rule, engine_rule = self.rule, self.engine_rule
         anchor = begin - self.history_days * DAY
@@ -416,7 +428,7 @@ class ReplaySession:
         window = ReplayedWindow(begin=begin, end=end, history_from=anchor, bars=len(bars), strategy_bars=bars)
         if not bars:
             return window
-        answer = await self._run({
+        request = {
             "op": "load", "rule": REPLAY_RULE_ID,
             "script": {"source": engine_rule.source, "sha256": rule["script"]["sha256"]},
             "libraries": [
@@ -427,7 +439,14 @@ class ReplaySession:
             "ticker": Ticker(rule["asset"]["provider"], rule["asset"]["key"], rule["side"], rule["bars"].get("ticks")).text(),
             "timeframe": engine_rule.timeframe(),
             "bars": bars,
-        })
+        }
+        if detail:
+            self.run_windows += 1
+            answer = await self.runner.request({**request, "detail": True})
+            window.series = answer.get("series")
+            window.runtime_warnings = list(answer.get("runtimeWarnings") or [])
+        else:
+            answer = await self._run(request)
         window.milliseconds = answer.get("milliseconds")
         window.warnings = list(answer.get("warnings") or [])
         by_time = {bar[0]: bar for bar in bars}
@@ -470,6 +489,26 @@ def restart_minute_of(restart: str) -> int:
     return int(restart[:2]) * 60 + int(restart[3:5])
 
 
+async def asset_rows_for(config, prices_root: str, provider: str, files_root: str | None = None):
+    """
+    The rows of an asset of ``provider``, and the read-only connection they are
+    read through (None for Dukascopy's files, or for the recorded days of
+    ``files_root``): close it once done.
+    """
+    pg = None
+    if files_root is not None:
+        return AssetRows(prices_root, None, files_root=files_root), None
+    if provider in ("capital", "saxo"):
+        from src.database.postgres import PostgresConnectionManager
+
+        dsn = (config.get_config_value("postgresql", {}) or {}).get("dsn") if config is not None else None
+        if not dsn:
+            raise ValueError("No database to read Capital.com's or Saxo's bars from (WATA_CONFIG_PATH)")
+        pg = PostgresConnectionManager(dsn=dsn, min_size=1, max_size=1, server_settings={"default_transaction_read_only": "on"})
+        await pg.connect()
+    return AssetRows(prices_root, pg), pg
+
+
 async def replay(args: argparse.Namespace) -> dict:
     config = _config()
     ta_root, prices_root, history_days, restart = ta_settings(config)
@@ -483,16 +522,7 @@ async def replay(args: argparse.Namespace) -> dict:
     RuleStore(scripts).verify(rule)
     engine_rule = engine_rule_of(rule, scripts)
 
-    pg = None
-    if rule["asset"]["provider"] in ("capital", "saxo"):
-        from src.database.postgres import PostgresConnectionManager
-
-        dsn = (config.get_config_value("postgresql", {}) or {}).get("dsn") if config is not None else None
-        if not dsn:
-            raise ValueError("No database to read Capital.com's or Saxo's bars from (WATA_CONFIG_PATH)")
-        pg = PostgresConnectionManager(dsn=dsn, min_size=1, max_size=1, server_settings={"default_transaction_read_only": "on"})
-        await pg.connect()
-    rows = AssetRows(args.prices or prices_root, pg)
+    rows, pg = await asset_rows_for(config, args.prices or prices_root, rule["asset"]["provider"])
 
     first_day = datetime.combine(args.first, datetime.min.time(), timezone.utc)
     last_day = datetime.combine(args.last or args.first, datetime.min.time(), timezone.utc) + timedelta(days=1)

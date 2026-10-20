@@ -245,7 +245,9 @@
         "max_signal_age_seconds": 60,
         "stale_feed_seconds": 90,
         "run_timeout_seconds": 30,
-        "runner_memory_mb": 512
+        "runner_memory_mb": 512,
+        "shadow_runner_memory_mb": 256,
+        "shadow_seconds_per_tick": 5
       },
       "watchlist_manager": {
         "enabled": true,
@@ -320,9 +322,24 @@
     "actions_enabled": true,
     "config_edit_enabled": true,
     "backtests_enabled": true,
+    "backtests_signal_cache_mb": 1024,
     "trusted_proxy_hosts": ["traefik"],
+    "mcp_enabled": false,
+    "mcp": {
+      "max_waiting_runs": 3,
+      "runs_per_day": 60,
+      "max_day_simulations": 10000,
+      "study_minutes_per_hour": 20,
+      "study_memory_mb": 384,
+      "study_timeout_seconds": 90,
+      "max_scripts": 100,
+      "max_shadow_rules": 3,
+      "min_free_disk_gb": 5,
+      "shadow_rules": false
+    },
     "persistant": {
-      "credentials_path": "/app/var/lib/admin/credentials.json"
+      "credentials_path": "/app/var/lib/admin/credentials.json",
+      "mcp_tokens_path": "/app/var/lib/admin/mcp_tokens.json"
     }
   },
   "telegram": {

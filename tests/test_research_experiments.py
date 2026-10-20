@@ -1,0 +1,151 @@
+import json
+import threading
+from datetime import date
+
+import pytest
+
+from src.price_history.process import OOM_SCORE_ADJ, give_up_memory_first
+from src.research.experiments import ExperimentJournal, UnknownExperiment
+from src.research.requests import neighbour_values, trials_of
+
+
+@pytest.fixture
+def journal(tmp_path):
+    return ExperimentJournal(tmp_path / "_research" / "experiments.jsonl", tmp_path / "_research" / "lockbox.json",
+                             clock=lambda: 1_790_000_000.0)
+
+
+def test_an_experiment_keeps_its_plan_and_who_opened_it(journal):
+    opened = journal.new("EMA 9/21", "Crosses point the way", "ema-cross", plan="Sweep the lengths", made_by="claude")
+
+    found = journal.get(opened["experiment"])
+    assert (found["plan"], found["made_by"], found["trials"]) == ("Sweep the lengths", "claude", 0)
+
+
+def test_the_operators_experiments_say_nothing_of_an_agent(journal):
+    found = journal.get(journal.new("Gap", "Gaps close", "gap")["experiment"])
+
+    assert found["made_by"] is None and found["plan"] is None
+
+
+def test_trials_are_counted_by_family(journal):
+    first = journal.new("A", "a", "ema")["experiment"]
+    second = journal.new("B", "b", "ema")["experiment"]
+    journal.record_run(first, "20261020-100000-aaaaaa", kind="sweep", trials=trials_of(
+        {"sweep": {"axes": [{"values": [1, 2, 3]}, {"values": [4, 5]}]}}))
+    journal.record_run(second, "20261020-100100-bbbbbb", kind="stress", trials=0)
+    journal.record_run(second, "20261020-100200-cccccc", kind="sweep", trials=len(neighbour_values(9)) - 1)
+
+    assert journal.family_trials("ema") == 6 + 0 + 4
+
+
+def test_an_unknown_experiment_is_said_so(journal):
+    with pytest.raises(UnknownExperiment):
+        journal.record_run("nothere", "20261020-100000-aaaaaa", kind="run", trials=1)
+
+
+@pytest.mark.parametrize("texts", [("", "h", "f"), ("t", " ", "f"), ("t", "h", ""), ("t" * 2001, "h", "f")])
+def test_an_experiment_has_a_title_a_hypothesis_and_a_family(journal, texts):
+    with pytest.raises(ValueError):
+        journal.new(*texts)
+
+
+def test_a_verdict_is_one_of_three(journal):
+    found = journal.new("A", "a", "ema")["experiment"]
+
+    with pytest.raises(ValueError):
+        journal.conclude(found, "promising", "")
+    journal.conclude(found, "kept", "Survived the stress")
+    assert journal.get(found)["verdict"] == "kept"
+
+
+def test_writes_from_several_threads_are_whole_lines(journal):
+    found = journal.new("A", "a", "ema")["experiment"]
+
+    def record(number):
+        for step in range(20):
+            journal.record_run(found, f"20261020-1{number:02d}{step:03d}-aaaaaa", kind="run", trials=1)
+
+    threads = [threading.Thread(target=record, args=(number,)) for number in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert journal.get(found)["trials"] == 160
+    lines = open(journal.journal_path).read().splitlines()
+    assert all(json.loads(line) for line in lines)
+
+
+# ── the lock box ──
+
+
+def test_the_lock_box_is_a_range_of_days(journal):
+    journal.set_lockbox(date(2026, 10, 19), date(2026, 10, 23), set_by="claude")
+
+    box = journal.lockbox()
+    assert (box["from"], box["to"], box["set_by"]) == (date(2026, 10, 19), date(2026, 10, 23), "claude")
+    assert journal.in_lockbox(date(2026, 10, 13), date(2026, 10, 19))
+    assert journal.in_lockbox(date(2026, 10, 23), date(2026, 10, 30))
+    assert not journal.in_lockbox(date(2026, 10, 13), date(2026, 10, 18))
+    assert not journal.in_lockbox(date(2026, 10, 24), date(2026, 10, 30))
+
+
+def test_the_labs_lock_box_holds_every_day_after_its_first(journal, tmp_path):
+    (tmp_path / "_research").mkdir(exist_ok=True)
+    (tmp_path / "_research" / "lockbox.json").write_text(json.dumps({"from": "2026-10-19", "set_at": "x"}))
+
+    assert journal.lockbox()["to"] is None
+    assert journal.in_lockbox(date(2026, 11, 1), date(2026, 11, 2))
+
+
+@pytest.mark.parametrize("first,last", [
+    (date(2026, 10, 20), date(2026, 10, 23)),  # starts later
+    (date(2026, 10, 19), date(2026, 10, 22)),  # ends earlier
+])
+def test_an_agent_may_only_make_the_lock_box_larger(journal, first, last):
+    journal.set_lockbox(date(2026, 10, 19), date(2026, 10, 23))
+
+    with pytest.raises(ValueError, match="may only grow"):
+        journal.set_lockbox(first, last, only_wider=True)
+    journal.set_lockbox(date(2026, 10, 18), date(2026, 10, 25), only_wider=True)
+    assert journal.lockbox()["from"] == date(2026, 10, 18)
+
+
+def test_an_open_lock_box_stays_open_for_an_agent(journal):
+    journal.set_lockbox(date(2026, 10, 19))
+
+    with pytest.raises(ValueError, match="may only grow"):
+        journal.set_lockbox(date(2026, 10, 19), date(2026, 12, 31), only_wider=True)
+    journal.set_lockbox(date(2026, 10, 1), only_wider=True)
+
+
+def test_the_operator_may_move_or_open_the_lock_box(journal):
+    journal.set_lockbox(date(2026, 10, 19), date(2026, 10, 23))
+
+    journal.set_lockbox(date(2026, 10, 26), date(2026, 10, 30))
+    assert journal.lockbox()["from"] == date(2026, 10, 26)
+    journal.clear_lockbox()
+    assert journal.lockbox() is None
+    assert not journal.in_lockbox(date(2026, 1, 1), date(2027, 1, 1))
+
+
+def test_a_lock_box_cannot_end_before_it_starts(journal):
+    with pytest.raises(ValueError, match="ends before"):
+        journal.set_lockbox(date(2026, 10, 23), date(2026, 10, 19))
+
+
+# ── a child gives up its memory first ──
+
+
+def test_a_child_asks_to_be_stopped_first_when_memory_runs_out(tmp_path):
+    path = tmp_path / "oom_score_adj"
+    path.write_text("0")
+
+    give_up_memory_first(str(path))
+
+    assert path.read_text() == str(OOM_SCORE_ADJ) == "1000"
+
+
+def test_where_nothing_can_be_asked_nothing_fails(tmp_path):
+    give_up_memory_first(str(tmp_path / "no" / "such" / "file"))

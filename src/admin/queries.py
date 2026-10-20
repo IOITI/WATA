@@ -22,6 +22,7 @@ from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
 from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.admin.prices import Run as PriceRun
+from src.admin.prices import interval_served
 from src.database.postgres import ORDER_REQUEST_COLUMNS, AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
 
@@ -569,11 +570,11 @@ class AdminQueries:
         """
         Bars of one instrument in [start, end), oldest first, as rows of
         PRICE_BAR_COLUMNS, and the start of the last ten-second bar they hold.
-        ``interval`` is ten seconds, as recorded, or a multiple: the bars of
-        each bucket are then merged into one (first open, highest high, lowest
-        low, last close).
+        ``interval`` is ten seconds, as recorded, or longer, up to a day: the
+        bars that begin in each bucket are then merged into one (first open,
+        highest high, lowest low, last close).
         """
-        if interval not in PRICE_INTERVALS:
+        if not interval_served(interval):
             raise ValueError(f"Unsupported interval: {interval}")
         table = self._BAR_TABLES[provider]
         if interval == PRICE_INTERVALS[0]:
@@ -587,8 +588,8 @@ class AdminQueries:
                 LIMIT $4
             """
         else:
-            # The interval is one of a fixed list of whole numbers: written into
-            # the statement, where a parameter would leave its type to be guessed.
+            # The interval is a whole number, checked above: written into the
+            # statement, where a parameter would leave its type to be guessed.
             query = f"""
                 SELECT (floor(extract(epoch FROM ts) / {interval}) * {interval})::bigint AS t,
                        (array_agg(bid_open ORDER BY ts ASC))[1] AS bid_open,

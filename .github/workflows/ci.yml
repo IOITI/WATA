@@ -67,7 +67,7 @@ jobs:
 
     - name: Build the Pine runner
       working-directory: admin_ui
-      run: npm ci && npm run build:runner
+      run: npm ci && npm run build:runner && npm run build:checker
 
     - name: Build the image
       run: docker build -t wata-base:ci --platform=linux/amd64 --build-arg PYTHON_VERSION=${{ matrix.python-version }} .

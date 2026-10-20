@@ -14,7 +14,7 @@ import textwrap
 from datetime import date, datetime, timezone
 
 from src.price_recorder.export import COLUMNS
-from src.ta_engine.replay import REPLAY_RULE_ID, AssetRows, ReplaySession, engine_windows
+from src.ta_engine.replay import REPLAY_RULE_ID, AssetRows, ReplaySession, _runner_digest, engine_windows
 from src.ta_engine.rules import EngineRule
 
 # Raises "Enter Long" at the full hour (UTC) when it is even, "Enter Short" when it is odd, "Exit" at a
@@ -34,7 +34,8 @@ FAKE_RUNNER = textwrap.dedent("""
             bars = message["bars"]
             with open(LOG, "a") as log:
                 log.write(json.dumps({"rule": message["rule"], "bars": len(bars), "first": bars[0][0], "last": bars[-1][0],
-                                      "inputs": message["inputs"], "timeframe": message["timeframe"]}) + "\\n")
+                                      "inputs": message["inputs"], "timeframe": message["timeframe"],
+                                      "detail": message.get("detail", False)}) + "\\n")
             alerts = []
             for bar in bars:
                 minute, hour = (bar[0] // 60000) % 60, (bar[0] // 3600000) % 24
@@ -43,8 +44,12 @@ FAKE_RUNNER = textwrap.dedent("""
                                    "message": "", "time": bar[0]})
                 elif minute == 45:
                     alerts.append({"type": "alertcondition", "title": "Exit", "message": "", "time": bar[0]})
-            print(json.dumps({"id": message["id"], "ok": True, "op": "load", "bars": len(bars), "milliseconds": 2,
-                              "alerts": alerts, "plots": {}, "warnings": ["made up"]}), flush=True)
+            answer = {"id": message["id"], "ok": True, "op": "load", "bars": len(bars), "milliseconds": 2,
+                      "alerts": alerts, "plots": {}, "warnings": ["made up"]}
+            if message.get("detail"):
+                answer["series"] = {"times": [bar[0] for bar in bars], "plots": {"Close": [bar[4] for bar in bars]}}
+                answer["runtimeWarnings"] = [{"message": "Index out of bounds", "bar": 3, "count": 2}]
+            print(json.dumps(answer), flush=True)
 """)
 
 
@@ -151,6 +156,35 @@ def test_each_day_is_run_on_its_bars_from_history_days_before_under_one_rule(tmp
     assert windows[0].warnings == ["made up"] and windows[0].milliseconds == 2
 
 
+def test_a_backtest_on_bars_of_45_seconds_counts_each_alert_once_its_last_ten_seconds_are_over(tmp_path):
+    files = tmp_path / "recorded"
+    write_rows(str(files / "saxo" / "index.csv.gz"), index_rows(date(2026, 10, 14), 6, 8))
+    command, log = fake_runner(tmp_path)
+    rule = {**rule_on(), "bars": {"type": "time", "timeframe": "45S"}}
+    begin = int(datetime(2026, 10, 13, 21, 15, tzinfo=timezone.utc).timestamp())
+
+    async def scenario():
+        session = ReplaySession(rule, EngineRule(rule=rule, source="x"), AssetRows(str(tmp_path), files_root=str(files)),
+                                history_days=0, command=command)
+        await session.start()
+        try:
+            return await session.window(begin, begin + 86_400)
+        finally:
+            await session.stop()
+
+    window = asyncio.run(scenario())
+
+    (loaded,) = loads(log)
+    # Two hours of 45 s: 160 bars, the script told their length as Pine names it.
+    assert (loaded["timeframe"], loaded["bars"], window.bars) == ("45S", 160, 160)
+    first = window.alerts[0]
+    six = int(datetime(2026, 10, 14, 6, tzinfo=timezone.utc).timestamp()) * 1000
+    # The bar of 06:00:00 holds the ten seconds that begin before 06:00:45: the last one ends at 06:00:50.
+    assert (first.bar[0], first.bar[6], first.candidate.action) == (six, six + 50_000, "long")
+    # The one of 06:00:45 holds those from 06:00:50 to 06:01:20, and ends at 06:01:30.
+    assert (window.alerts[1].bar[0], window.alerts[1].bar[6]) == (six + 45_000, six + 90_000)
+
+
 def test_a_day_without_bars_loads_nothing(tmp_path):
     files = tmp_path / "recorded"
     write_rows(str(files / "saxo" / "index.csv.gz"), index_rows(date(2026, 10, 14), 6, 8))
@@ -212,3 +246,35 @@ def test_a_day_run_before_is_read_back_from_the_cache_until_what_decides_it_chan
     assert (ran_other, read_other) == (2, 0)
     # The runner was asked for the first run's days and the other input's, nothing more.
     assert len(loads(log)) == loaded + 2
+
+
+def test_a_study_of_the_script_gets_every_bars_plots_and_is_never_kept(tmp_path):
+    files = tmp_path / "recorded"
+    write_rows(str(files / "saxo" / "index.csv.gz"), index_rows(date(2026, 10, 13), 6, 20) + index_rows(date(2026, 10, 14), 6, 20))
+    command, log = fake_runner(tmp_path)
+    cache = tmp_path / "cache"
+    rule = rule_on()
+    begin = int(datetime(2026, 10, 14, tzinfo=timezone.utc).timestamp())
+
+    async def scenario():
+        session = ReplaySession(rule, EngineRule(rule=rule, source="//@version=6"), AssetRows(str(tmp_path), files_root=str(files)),
+                                history_days=1, command=command, cache=str(cache))
+        await session.start()
+        try:
+            return await session.window(begin, begin + 86_400, detail=True), session
+        finally:
+            await session.stop()
+
+    window, session = asyncio.run(scenario())
+
+    assert loads(log)[0]["detail"] is True
+    assert len(window.series["times"]) == window.bars and isinstance(window.series["plots"]["Close"][0], float)
+    assert window.runtime_warnings == [{"message": "Index out of bounds", "bar": 3, "count": 2}]
+    assert (session.run_windows, session.cached_windows) == (1, 0)
+    assert not cache.exists() or not any(cache.rglob("*.json"))
+
+
+def test_a_study_and_a_backtest_share_the_runners_answers_whatever_heap_they_give_it():
+    assert _runner_digest(["node", "--max-old-space-size=384", "--permission", "runner.mjs"]) == \
+        _runner_digest(["node", "--max-old-space-size=1024", "--permission", "runner.mjs"])
+    assert _runner_digest(["node", "--permission", "runner.mjs"]) != _runner_digest(["node", "--permission", "other.mjs"])

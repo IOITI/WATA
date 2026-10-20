@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ApiError } from '@/lib/api'
-import type { AssetDetails, PriceBarRow, PriceBars, PriceRangeBars, PriceRangeRow } from '@/lib/types'
+import type { AssetDetails, AssetStatus, PriceBarRow, PriceBars, PriceRangeBars, PriceRangeRow } from '@/lib/types'
 
 import { parseTicker } from '../engine/tickers'
 import type { WataTicker } from '../engine/tickers'
@@ -19,7 +19,7 @@ function ticker(text: string): WataTicker {
 }
 
 /** A made-up API: one bar an hour, every day from `first` to `last`, recording each request. */
-function fakeClient(first: string, last: string, options: { capPerRequestDays?: number } = {}) {
+function fakeClient(first: string, last: string, options: { capPerRequestDays?: number; status?: AssetStatus } = {}) {
   const requests: string[] = []
   const hourly = (from: string, to: string): PriceBarRow[] => {
     const rows: PriceBarRow[] = []
@@ -35,7 +35,8 @@ function fakeClient(first: string, last: string, options: { capPerRequestDays?: 
     return rows
   }
   const client: BarsClient = {
-    asset: async (ref) => ({ first_day: first, last_day: last, timezone: PARIS, asset: { ref } }) as unknown as AssetDetails,
+    asset: async (ref) =>
+      ({ first_day: first, last_day: last, timezone: PARIS, asset: { ref, status: options.status } }) as unknown as AssetDetails,
     assetBars: async (ref, period, interval) => {
       requests.push(`bars ${ref} ${period.from}..${period.to} ${interval}`)
       const days = (Date.parse(period.to) - Date.parse(period.from)) / 86_400_000 + 1
@@ -131,7 +132,16 @@ describe('bars of time', () => {
     expect(timeBar([100, 1, 2, 0.5, 1.5, null, null, null, null, 9], 'ask', 60)).toBeNull()
   })
 
-  it('stops at the asset\'s last day, except on the live Capital.com feed', async () => {
+  it('ends a bar of seconds with its last ten seconds: those of a 45-second bar end 50 or 40 seconds on', () => {
+    const at = (t: number): PriceBarRow => [t, 1, 2, 0.5, 1.5, 1.1, 2.1, 0.6, 1.6, 9]
+
+    expect(timeBar(at(90), 'bid', 30)).toMatchObject({ time: 90_000, closeTime: 120_000 })
+    // The ten seconds from 130 to 140 begin in the bar of 90: they are its last.
+    expect(timeBar(at(90), 'bid', 45)).toMatchObject({ time: 90_000, closeTime: 140_000 })
+    expect(timeBar(at(135), 'bid', 45)).toMatchObject({ time: 135_000, closeTime: 180_000 })
+  })
+
+  it('stops at the asset\'s last day, except on the live Capital.com feed and on a Saxo asset still recorded', async () => {
     const dukascopy = fakeClient('2026-09-01', '2026-09-22')
     await new WataBars(dukascopy.client, () => NOW).bars(ticker('DUKASCOPY_US100'), 3600, { limit: 5 })
     expect(dukascopy.requests[0]).toContain('..2026-09-22')
@@ -139,6 +149,15 @@ describe('bars of time', () => {
     const capital = fakeClient('2026-09-01', '2026-10-12')
     await new WataBars(capital.client, () => NOW).bars(ticker('CAPITAL_US100'), 3600, { limit: 5 })
     expect(capital.requests[0]).toContain('..2026-10-15')
+
+    // Read before the day's first bar (a chart opened early): today's bars are asked for as they are recorded.
+    const recorded = fakeClient('2026-09-01', '2026-10-14', { status: 'recording' })
+    await new WataBars(recorded.client, () => NOW).bars(ticker('SAXO_12'), 60, { limit: 2 })
+    expect(recorded.requests[0]).toContain('..2026-10-15')
+
+    const ended = fakeClient('2026-09-01', '2026-10-09', { status: 'ended' })
+    await new WataBars(ended.client, () => NOW).bars(ticker('SAXO_9'), 60, { limit: 2 })
+    expect(ended.requests[0]).toContain('..2026-10-09')
   })
 })
 

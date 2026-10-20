@@ -8,6 +8,7 @@
     "dev:api": "cd .. && PYTHONPATH=./:src/ python3 admin_ui/dev/fake_api.py",
     "build": "tsc -b && vite build",
     "build:runner": "vite build --config vite.runner.config.ts",
+    "build:checker": "vite build --config vite.checker.config.ts",
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "test": "vitest run",

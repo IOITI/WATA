@@ -337,8 +337,9 @@ services:
       resources:
         limits:
           # Backtests run in this container, one at a time and at the lowest priority: the
-          # admin, the backtest's command with a day of recorded turbos, and the Pine runner.
-          memory: 1024M
+          # admin, the backtest's command with a day of recorded turbos, and the Pine runner;
+          # and, with the MCP endpoint on, one of Claude's Pine studies beside them.
+          memory: 1536M
           # One processor at most: the rest stays with the services that trade.
           cpus: '1.0'
     depends_on:
@@ -458,7 +459,9 @@ services:
         window: 120s
       resources:
         limits:
-          # The Pine runner's heap (trade.config.ta_engine.runner_memory_mb) and the engine.
+          # The Pine runners' heaps (trade.config.ta_engine.runner_memory_mb for the live
+          # rules, shadow_runner_memory_mb for the shadow ones) and the engine. The shadow
+          # runner is the first process stopped when it runs short.
           memory: 1024M
     depends_on:
       rabbitmq1:

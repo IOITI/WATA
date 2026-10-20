@@ -14,6 +14,7 @@ gets no file but its own, no environment and no network module.
 import asyncio
 import logging
 import os
+import shutil
 import signal
 import sys
 from datetime import datetime, timezone
@@ -79,6 +80,7 @@ async def main():
     pg = None
     http = None
     runner = None
+    shadow_runner = None
     try:
         postgres_config = config_manager.get_config_value("postgresql", {})
         # Its own small pool: reads of the feed's bars, writes of its journal.
@@ -117,11 +119,21 @@ async def main():
             runner_command(node, RUNNER_PATH, settings.runner_memory_mb), answer,
             timeout_seconds=settings.run_timeout_seconds,
         )
+        # The shadow rules' own runner: a script of theirs that fails or hangs never reloads a live rule.
+        # It gives way to the live one (nice 10, when the image has nice), and is the first process the
+        # kernel stops when memory runs short.
+        nice = shutil.which("nice")
+        shadow_command = runner_command(node, RUNNER_PATH, settings.shadow_runner_memory_mb)
+        shadow_runner = NodeRunner(
+            [nice, "-n", "10", *shadow_command] if nice else shadow_command, answer,
+            timeout_seconds=settings.run_timeout_seconds, memory_first=True,
+        )
         engine = Engine(
             settings=settings,
             rules=rules_file.snapshot,
             source=CapitalTables(pg),
             runner=runner,
+            shadow_runner=shadow_runner,
             journal=journal,
             sender=sender,
             notify=telegram.send,
@@ -149,6 +161,8 @@ async def main():
         logger.info("--- Shutting down WATA TA Engine ---")
         if runner is not None:
             await runner.stop()
+        if shadow_runner is not None:
+            await shadow_runner.stop()
         if http is not None:
             await http.aclose()
         if pg is not None:

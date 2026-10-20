@@ -1476,6 +1476,9 @@ export interface BacktestRunListed {
   /** A stress sweep: the run it made again with later and dearer fills. */
   stress_of?: string | null
   turbos?: BacktestTurbos
+  /** Who asked for it through an agent ("claude"), and for which experiment of its journal; absent for the operator's. */
+  made_by?: string | null
+  experiment?: string | null
 }
 
 export interface BacktestTotalRange {
@@ -1991,6 +1994,8 @@ export interface TaScriptSummary {
   versions: TaVersionEntry[]
   created_at: string
   updated_at: string
+  /** "claude" for a script Claude made through the admin's MCP endpoint. */
+  made_by?: string | null
 }
 
 export interface TaScript extends TaScriptSummary {
@@ -2046,6 +2051,8 @@ export interface TaRule extends Omit<TaRuleFields, 'script'> {
   created_at: string
   updated_at: string
   mode_changed_at: string
+  /** "claude" for a shadow rule Claude made through the admin's MCP endpoint. */
+  made_by?: string | null
   /** Added by the admin: the script's name, and the versions there are now. */
   script_name: string | null
   latest: { script: number | null; libraries: Record<string, number | null> }
@@ -2158,4 +2165,112 @@ export interface TaComparison {
   paired: number
   only_wata: number
   only_tradingview: number
+}
+
+// ── Claude's research through the admin's MCP endpoint (src/admin/routers/research.py) ──
+
+export type McpTokenState = 'active' | 'expired' | 'revoked'
+
+/** A token the endpoint is opened with, never its secret: made on the server (watamcptoken), printed once. */
+export interface McpToken {
+  id: string
+  name: string
+  created_at: string
+  expires_at: string
+  revoked_at: string | null
+  state: McpTokenState
+  /** Since the admin started. */
+  last_used_at: string | null
+}
+
+export type McpCallOutcome = 'ok' | 'refused' | 'failed' | 'cancelled'
+
+/** A call Claude made, its long arguments (a Pine source) as their sha256 and length. */
+export interface McpCall {
+  at: string
+  caller: string | null
+  tool: string
+  arguments: Record<string, unknown>
+  outcome: McpCallOutcome
+  milliseconds: number
+  detail?: string
+}
+
+/** What Claude may take of the server (admin.mcp in config.json). */
+export interface McpLimits {
+  max_waiting_runs: number
+  runs_per_day: number
+  max_day_simulations: number
+  study_minutes_per_hour: number
+  study_memory_mb: number
+  study_timeout_seconds: number
+  max_scripts: number
+  max_shadow_rules: number
+  min_free_disk_gb: number
+  shadow_rules: boolean
+}
+
+/** What Claude's work holds of the server now; null where the admin has no such service. */
+export interface McpShare {
+  waiting_runs: number | null
+  runs_today: number | null
+  scripts: number | null
+  /** Claude's rules that are not live, and those the operator took live. */
+  rules: number | null
+  live_rules: number | null
+  study_seconds_last_hour: number | null
+}
+
+export interface McpState {
+  /** admin.mcp_enabled in config.json: without it there is no endpoint at all. */
+  enabled: boolean
+  paused: { paused: boolean; changed_at: string | null }
+  /** False when the tokens file is damaged: no token opens the endpoint then. */
+  tokens_readable: boolean
+  tokens: McpToken[]
+  limits: McpLimits
+  share: McpShare
+  calls: McpCall[]
+}
+
+export interface ExperimentRun {
+  run: string
+  kind: string
+  /** The configurations it tried: a run 1, a sweep its combinations, a stress 0. */
+  trials: number
+  lockbox: boolean
+  note: string
+  at: string
+}
+
+export type ExperimentVerdict = 'kept' | 'rejected' | 'inconclusive'
+
+/** An experiment of the journal Claude keeps on the server, its runs and its conclusion. */
+export interface Experiment {
+  id: string
+  title: string
+  hypothesis: string
+  family: string
+  plan: string | null
+  made_by: string | null
+  opened_at: string
+  runs: ExperimentRun[]
+  trials: number
+  verdict: ExperimentVerdict | null
+  notes: string | null
+  concluded_at: string | null
+}
+
+/** The days kept out of the research until a candidate's final check; ``to`` null: every day after ``from``. */
+export interface ResearchLockbox {
+  from: string
+  to: string | null
+  set_at: string | null
+  set_by: string | null
+}
+
+export interface Experiments {
+  /** The last opened first. */
+  experiments: Experiment[]
+  lockbox: ResearchLockbox | null
 }

@@ -16,6 +16,10 @@ wrote. Nothing goes to the database. A run id is made here and matched against
 
 None of this acts on the trading services, so it is neither in the audit
 trail nor announced on Telegram.
+
+A run asked for by an agent (Claude, through the MCP endpoint: ``made_by``)
+gives way to the others: the worker takes the operator's runs and the paper
+runs first, whenever they were asked for.
 """
 
 import asyncio
@@ -112,6 +116,10 @@ MAX_LISTED = 200
 MAX_NAME_LENGTH = 120
 MAX_TAGS = 6
 MAX_TAG_LENGTH = 24
+# Who asked for a run through an agent, and for what: set by the caller, never read from the body.
+RESEARCH_KEYS = ("made_by", "made_via", "experiment", "lockbox")
+# The runner's answers kept are pruned at most this often, oldest first.
+CACHE_PRUNE_SECONDS = 600
 # Days of a year of recorded turbos, at the lowest priority on a small machine, with the random repetitions.
 RUN_TIMEOUT_SECONDS = 3 * 3600
 # A run made again with every order filled later and at a worse price (``stress``): seconds
@@ -195,7 +203,7 @@ def checked_chart(chart) -> dict:
     if side not in SIDES:
         raise InvalidRequest("The price side is bid or ask")
     try:
-        bars = checked_bars(chart.get("bars"))
+        bars = checked_bars(chart.get("bars"), any_length=True)
     except InvalidRule as e:
         raise InvalidRequest(str(e)) from None
     return {"asset": checked_asset(chart.get("asset")), "side": side, "bars": bars}
@@ -239,6 +247,17 @@ def _checked_windows(asked) -> dict | None:
     return windows
 
 
+def _research_fields(made_by, made_via, experiment, lockbox) -> dict:
+    """What a run says of who asked for it; nothing for the operator's own runs."""
+    fields = {"made_by": made_by, "made_via": made_via, "experiment": experiment, "lockbox": lockbox}
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _without_research(request: dict) -> dict:
+    """A run made from another (a stress sweep, a sweep's combination) says by itself who asked for it."""
+    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS}
+
+
 def _checked_count(value, what: str) -> int:
     if value is None:
         return 0
@@ -263,6 +282,7 @@ class BacktestService:
         workers: int = 1,
         max_queued: int = MAX_QUEUED,
         max_period_days: int = MAX_PERIOD_DAYS,
+        signal_cache_bytes: int | None = None,
     ):
         self._root = root
         self._runs_root = os.path.join(root, RUNS_FOLDER)
@@ -279,9 +299,14 @@ class BacktestService:
         self._workers = max(1, workers)
         self.max_queued = max_queued
         self.max_period_days = max_period_days
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        # The runs waiting, in the order they were asked for; who asked through an agent, for those that were.
         self._waiting: list[str] = []
+        self._owners: dict[str, str] = {}
+        self._wakeup = asyncio.Event()
         self._cancelled: set[str] = set()
+        # The runner's answers kept for the runs asked again: pruned, oldest first, past this size (None: never).
+        self._signal_cache_bytes = signal_cache_bytes
+        self._cache_pruned_at = 0.0
         # The runs going on, and their command.
         self._running: dict[str, Process] = {}
         # The turbos being measured, when they are.
@@ -427,7 +452,7 @@ class BacktestService:
                 "name": meta["name"],
                 "asset": checked_asset(source.get("asset")),
                 "side": source.get("side", "bid"),
-                "bars": checked_bars(source.get("bars")),
+                "bars": checked_bars(source.get("bars"), any_length=True),
                 "script": pinned,
                 "libraries": libraries,
                 "inputs": checked_inputs(source.get("inputs")),
@@ -597,16 +622,35 @@ class BacktestService:
         moment = datetime.fromtimestamp(self._clock(), timezone.utc)
         return f"{moment:%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
 
+    def _check_room(self) -> None:
+        if len(self._waiting) + len(self._running) >= self.max_queued:
+            raise NotPossible(f"{self.max_queued} backtests are waiting already: let some finish")
+
+    @property
+    def code(self) -> str:
+        """The digest of the code a run made now is made with: a run made with another is stale."""
+        return self._code
+
+    def queue(self) -> dict:
+        """What runs now, and what waits in the order it will start."""
+        return {"running": list(self._running), "waiting": self._in_turn()}
+
+    def waiting_of(self, made_by: str) -> int:
+        """How many runs asked for by ``made_by`` wait their turn."""
+        return sum(1 for run_id in self._waiting if self._owners.get(run_id) == made_by)
+
     def create(self, body: dict, *, journal: list[dict] | None = None, positions: list[dict] | None = None,
-               capital: float | None = None) -> dict:
+               capital: float | None = None, made_by: str | None = None, made_via: str | None = None,
+               experiment: str | None = None, lockbox: dict | None = None) -> dict:
         """
         Ask for a run (or a sweep): checked, written to its folder, and queued.
         A replay of the journal keeps WATA's real positions of the period
-        (``positions``) beside it, to be set against them.
+        (``positions``) beside it, to be set against them. ``made_by`` and the
+        rest say who asked through an agent, and for which experiment.
         """
-        if len(self._waiting) + len(self._running) >= self.max_queued:
-            raise NotPossible(f"{self.max_queued} backtests are waiting already: let some finish")
+        self._check_room()
         request, settings_doc, sources, kept_journal = self._checked(body, journal, capital)
+        request.update(_research_fields(made_by, made_via, experiment, lockbox))
         kept_positions = [{key: _plain(value) for key, value in row.items()} for row in positions] \
             if positions is not None and kept_journal is not None and request["source"]["kind"] == JOURNAL else None
         if request["source"]["kind"] == TA_SIGNALS:
@@ -654,11 +698,15 @@ class BacktestService:
             shutil.rmtree(folder, ignore_errors=True)
             raise
         self._waiting.append(run_id)
-        self._queue.put_nowait(run_id)
+        if request.get("made_by"):
+            self._owners[run_id] = request["made_by"]
+        self._wakeup.set()
         return self.get(run_id)
 
-    def run_cell(self, run_id: str, cell: int) -> dict:
+    def run_cell(self, run_id: str, cell: int, *, made_by: str | None = None, made_via: str | None = None,
+                 experiment: str | None = None, lockbox: dict | None = None) -> dict:
         """A combination of a sweep made a run of its own, with its random repetitions."""
+        self._check_room()
         folder = self._directory(run_id)
         request = read_json(os.path.join(folder, "request.json")) or {}
         sweep = read_json(os.path.join(folder, "sweep.json"))
@@ -687,24 +735,25 @@ class BacktestService:
             raise InvalidRequest(str(e)) from None
         described = ", ".join(f"{axis['name']} {value}" for axis, value in zip(axes, values))
         new_request = {
-            **request, "kind": "run", "sweep": None, "changes": changes, "source": source,
+            **_without_research(request), "kind": "run", "sweep": None, "changes": changes, "source": source,
             "name": f"{request['name']} ({described})"[:MAX_NAME_LENGTH],
             "baseline": {"repetitions": DEFAULT_REPETITIONS, "seed": DEFAULT_SEED},
             "asked_at": utc(self._clock()), "from_sweep": {"id": run_id, "cell": cell},
+            **_research_fields(made_by, made_via, experiment, lockbox),
         }
         new_settings = {**settings_doc, "settings": settings.to_dict(), "changed": changes}
         journal = read_json(os.path.join(folder, "journal.json"))
         return self._queue_run(new_request, new_settings, [], journal, copy_from=folder)
 
-    def stress(self, run_id: str) -> dict:
+    def stress(self, run_id: str, *, made_by: str | None = None, made_via: str | None = None,
+               experiment: str | None = None, lockbox: dict | None = None) -> dict:
         """
         A finished run made again as a sweep, with each order filled later and
         at a worse price than it was: the same signals on the same days, the
         run's own fills first. What it says is how much of the result its
         fills hold.
         """
-        if len(self._waiting) + len(self._running) >= self.max_queued:
-            raise NotPossible(f"{self.max_queued} backtests are waiting already: let some finish")
+        self._check_room()
         folder = self._directory(run_id)
         request = read_json(os.path.join(folder, "request.json")) or {}
         settings_doc = read_json(os.path.join(folder, "settings.json"))
@@ -724,10 +773,11 @@ class BacktestService:
         except (InvalidSweep, InvalidSettings) as e:
             raise NotPossible(f"This run cannot be stressed: {e}") from None
         new_request = {
-            **request, "kind": "sweep", "baseline": None,
+            **_without_research(request), "kind": "sweep", "baseline": None,
             "name": f"Stress: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
             "sweep": {"axes": axes, "held_out": DEFAULT_HELD_OUT, "walk_forward": None, "trials_before": 0},
             "asked_at": utc(self._clock()), "stress_of": run_id,
+            **_research_fields(made_by, made_via, experiment, lockbox),
         }
         journal = read_json(os.path.join(folder, "journal.json"))
         return self._queue_run(new_request, settings_doc, [], journal, copy_from=folder)
@@ -782,6 +832,21 @@ class BacktestService:
             if self._status(run_id).get("state") in (QUEUED, RUNNING) and run_id not in self._waiting:
                 self._set_status(run_id, state=INTERRUPTED, error="The admin stopped before this run was finished")
 
+    def _in_turn(self) -> list[str]:
+        """The waiting runs in the order they will start: those an agent asked for give way to the others."""
+        return [run_id for run_id in self._waiting if run_id not in self._owners] + \
+            [run_id for run_id in self._waiting if run_id in self._owners]
+
+    async def _next(self) -> str:
+        """The run to start now, taken out of the line."""
+        while not self._waiting:
+            self._wakeup.clear()
+            await self._wakeup.wait()
+        run_id = self._in_turn()[0]
+        self._waiting.remove(run_id)
+        self._owners.pop(run_id, None)
+        return run_id
+
     async def run(self) -> None:
         """Take the runs asked for in turn, ``workers`` at a time, until cancelled."""
         self.recover()
@@ -789,9 +854,9 @@ class BacktestService:
         going: set[asyncio.Task] = set()
         try:
             while True:
-                # A run leaves the queue only when it can start: its place in line stays true meanwhile.
+                # A run leaves the line only when it can start: its place in it stays true meanwhile.
                 await slots.acquire()
-                run_id = await self._queue.get()
+                run_id = await self._next()
                 task = asyncio.create_task(self._execute_in(run_id, slots))
                 going.add(task)
                 task.add_done_callback(going.discard)
@@ -867,6 +932,12 @@ class BacktestService:
             error = error or "\n".join(tail(self._file(run_id, "output.log"), 5)) or f"The command ended with code {code}"
         self._set_status(run_id, state=state, error=error, finished_at=utc(self._clock()))
         self._announce("backtest_finished", run_id=run_id, state=state, name=request.get("name") or "")
+        if self._signal_cache_bytes is not None and self._clock() - self._cache_pruned_at >= CACHE_PRUNE_SECONDS:
+            self._cache_pruned_at = self._clock()
+            try:
+                await asyncio.to_thread(self.prune_signal_cache)
+            except OSError as e:
+                logger.warning(f"Could not prune the runner's answers kept: {e}")
 
     def _announce(self, event: str, **data) -> None:
         if self._publish is None:
@@ -880,6 +951,7 @@ class BacktestService:
         state = self._status(run_id).get("state")
         if state == QUEUED and run_id in self._waiting:
             self._waiting.remove(run_id)
+            self._owners.pop(run_id, None)
             self._cancelled.add(run_id)
             self._set_status(run_id, state=CANCELLED, finished_at=utc(self._clock()))
         elif state == RUNNING and run_id in self._running:
@@ -939,12 +1011,46 @@ class BacktestService:
             return []
         return [name for name in names if RUN_ID.fullmatch(name) or name in FORMER_FOLDERS]
 
+    def _cache_files(self) -> list[tuple[float, int, str]]:
+        """The runner's answers kept: (written at, size, path)."""
+        found = []
+        for folder, _, names in os.walk(os.path.join(self._root, SIGNAL_CACHE_FOLDER)):
+            for name in names:
+                path = os.path.join(folder, name)
+                try:
+                    stat = os.stat(path)
+                except OSError:
+                    continue
+                found.append((stat.st_mtime, stat.st_size, path))
+        return found
+
+    def prune_signal_cache(self) -> int:
+        """The oldest answers removed until the cache holds ``signal_cache_bytes`` at most; how many went."""
+        if self._signal_cache_bytes is None:
+            return 0
+        files = sorted(self._cache_files())
+        total = sum(size for _, size, _ in files)
+        removed = 0
+        for _, size, path in files:
+            if total <= self._signal_cache_bytes:
+                break
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            total -= size
+            removed += 1
+        return removed
+
     def storage(self) -> dict:
-        """The disk the runs take, and what the former backtester left."""
+        """The disk the runs take, the runner's answers kept, and what the former backtester left."""
         runs = [folder_bytes(os.path.join(self._runs_root, run_id)) for run_id in self._run_ids()]
         former = self._former()
+        cache = self._cache_files()
         return {
             "runs": {"count": len(runs), "bytes": sum(runs)},
+            "signal_cache": {"count": len(cache), "bytes": sum(size for _, size, _ in cache),
+                             "limit": self._signal_cache_bytes},
             "former": {
                 "count": sum(1 for name in former if RUN_ID.fullmatch(name)),
                 "bytes": sum(folder_bytes(os.path.join(self._root, name)) for name in former),
@@ -1008,9 +1114,12 @@ class BacktestService:
             "stress_of": request.get("stress_of"),
             "turbos": request.get("turbos") or RECORDED,
             "paper": request.get("paper"),
+            # Who asked for it through an agent, and for which experiment of its journal.
+            "made_by": request.get("made_by"),
+            "experiment": request.get("experiment"),
             "status": status,
             "headline": self._headline(summary),
-            "position": self._waiting.index(run_id) + 1 if run_id in self._waiting else None,
+            "position": self._in_turn().index(run_id) + 1 if run_id in self._waiting else None,
         }
         if summary is not None:
             described["stale"] = (summary.get("made_with") or {}).get("code") != self._code
@@ -1028,10 +1137,46 @@ class BacktestService:
     def get(self, run_id: str) -> dict:
         return self._described(run_id, whole=True)
 
-    def list_runs(self) -> list[dict]:
-        """The runs, newest first; the paper runs of the signal rules have their own place."""
+    def state(self, run_id: str) -> dict:
+        """Where a run stands, without its results: its state, place in line, and progress while it runs."""
+        status = self._status(run_id)
+        if status.get("state") == RUNNING and run_id not in self._running:
+            status = {**status, "state": INTERRUPTED}
+        return {
+            "id": run_id, "state": status.get("state"), "error": status.get("error"),
+            "position": self._in_turn().index(run_id) + 1 if run_id in self._waiting else None,
+            "progress": read_json(self._file(run_id, "progress.json")) if status.get("state") == RUNNING else None,
+        }
+
+    def made_by(self, run_id: str) -> str | None:
+        """Who asked for a run through an agent; None for the operator's."""
+        return (read_json(self._file(run_id, "request.json")) or {}).get("made_by")
+
+    def rule_of(self, run_id: str) -> str | None:
+        """The id of the signal rule a run was made from; None for any other run."""
+        request = read_json(self._file(run_id, "request.json")) or {}
+        return ((request.get("source") or {}).get("from_rule") or {}).get("id")
+
+    def run_ids(self, *, made_by: str | None = None, experiment: str | None = None) -> list[str]:
+        """The runs, newest first, without the paper runs; only those of ``made_by`` or ``experiment`` when given."""
         paper = self._paper_ids()
-        return [self._described(run_id, whole=False) for run_id in [run for run in self._run_ids() if run not in paper][:MAX_LISTED]]
+        chosen = []
+        for run_id in self._run_ids():
+            if run_id in paper:
+                continue
+            if made_by is not None or experiment is not None:
+                request = read_json(os.path.join(self._runs_root, run_id, "request.json")) or {}
+                if (made_by is not None and request.get("made_by") != made_by) or \
+                        (experiment is not None and request.get("experiment") != experiment):
+                    continue
+            chosen.append(run_id)
+        return chosen
+
+    def list_runs(self, *, made_by: str | None = None, experiment: str | None = None, offset: int = 0,
+                  limit: int = MAX_LISTED) -> list[dict]:
+        """The runs, newest first; the paper runs of the signal rules have their own place."""
+        chosen = self.run_ids(made_by=made_by, experiment=experiment)[offset:offset + limit]
+        return [self._described(run_id, whole=False) for run_id in chosen]
 
     # ── paper trading of the signal rules ──
 

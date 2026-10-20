@@ -78,6 +78,10 @@ export class FakeWorkspace {
 export const enginesMade: { workerUrl?: string }[] = []
 
 export class FakePineWorkerEngine {
+  // As Vela-pinets' own.
+  readonly language = 'pine'
+  readonly capabilities = { streaming: true, visibleRange: true, inputs: true, props: true }
+
   constructor(options: { workerUrl?: string } = {}) {
     enginesMade.push(options)
   }

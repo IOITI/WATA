@@ -5,22 +5,22 @@ Backtests: asking for one, following it, reading what it found
 They act on nothing that trades, so they are not operator actions: no audit
 entry, and their own switch (``admin.backtests_enabled``).
 
-What a run needs from the database is read here and handed over: the signals
-WATA received, for a run that replays them, and the account's last value,
-which the money of a run starts from. The service never reads the database;
-the command reads the recorded turbos through a read-only connection of its own.
+What a run needs from the database is read before it is asked for, by
+src/admin/backtest_requests.py, which Claude's tools share: the signals WATA
+received, for a run that replays them, and the account's last value, which the
+money of a run starts from. The service never reads the database; the command
+reads the recorded turbos through a read-only connection of its own.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
-import pytz
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from src.admin import backtest_requests
 from src.admin.auth import require_session
-from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
-from src.admin.errors import DatabaseUnavailable, InvalidRequest
+from src.admin.errors import InvalidRequest
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
 
@@ -35,14 +35,6 @@ def backtests(request: Request):
     if ctx.backtests is None:
         raise HTTPException(status_code=503, detail="Backtests are not available")
     return ctx.backtests
-
-
-async def _last_balance(ctx) -> float | None:
-    """The account's value at the last daily report, None when the database cannot say it."""
-    try:
-        return await ctx.queries.last_balance()
-    except DatabaseUnavailable:
-        return None
 
 
 class Renaming(BaseModel):
@@ -76,17 +68,7 @@ def research(request: Request):
 @router.get("/options")
 async def options(request: Request, service=Depends(backtests)):
     """What the form offers: every setting with its live value, the limits of a run, the account to start from."""
-    return await run_in_threadpool(service.options, await _last_balance(request.app.state.ctx))
-
-
-def _local_day(moment, zone) -> str | None:
-    if moment is None:
-        return None
-    if isinstance(moment, str):
-        moment = datetime.fromisoformat(moment.replace("Z", "+00:00"))
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(zone).date().isoformat()
+    return await run_in_threadpool(service.options, await backtest_requests.last_balance(request.app.state.ctx.queries))
 
 
 @router.get("/coverage")
@@ -104,79 +86,11 @@ async def coverage(
     direction and the hours of their bars, how long the recorder listened,
     the bars of the asset a strategy would run on, the signals WATA received.
     """
-    longest = service.max_period_days
-    if last_day < first_day or (last_day - first_day).days >= longest:
-        raise InvalidRequest(f"A period of {longest} days at most")
     ctx = request.app.state.ctx
-    zone = pytz.timezone(ctx.settings.timezone)
-    days = {
-        (first_day + timedelta(days=offset)).isoformat(): {
-            "day": (first_day + timedelta(days=offset)).isoformat(),
-            "turbos": {"long": 0, "short": 0},
-            "first": None, "last": None, "recorded_minutes": 0, "asset_bars": None, "signals": None,
-        }
-        for offset in range((last_day - first_day).days + 1)
-    }
-    database = True
-    try:
-        for row in await ctx.queries.backtest_turbo_days(indice, first_day, last_day):
-            entry = days.get(str(row["day"]))
-            if entry is None or row["direction"] not in ("long", "short"):
-                continue
-            entry["turbos"][row["direction"]] = row["turbos"]
-            for name, key, pick in (("first", "first_ts", min), ("last", "last_ts", max)):
-                value = row[key].astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if row[key] else None
-                entry[name] = value if entry[name] is None else pick(entry[name], value) if value else entry[name]
-        for row in await ctx.queries.backtest_recorder_days(first_day, last_day):
-            entry = days.get(str(row["day"]))
-            if entry is not None:
-                entry["recorded_minutes"] = int(row["listened"] or 0) * 10 // 60
-    except DatabaseUnavailable:
-        database = False
-
-    if asset:
-        provider, _, key = asset.partition("/")
-        try:
-            if provider == "dukascopy":
-                label = history_label(key)
-                fetched = set(await run_in_threadpool(ctx.history.days, label)) if ctx.history is not None else set()
-                for entry in days.values():
-                    entry["asset_bars"] = 1 if date.fromisoformat(entry["day"]) in fetched else 0
-            elif provider in ("saxo", "capital") and database:
-                if provider == "saxo":
-                    instrument_id = saxo_instrument_id(key)
-                else:
-                    found = await ctx.queries.capital_instrument(capital_epic(key))
-                    instrument_id = found["id"] if found else None
-                rows = await ctx.queries.backtest_asset_days(provider, instrument_id, first_day, last_day) if instrument_id else []
-                counted = {str(row["day"]): row["bars"] for row in rows}
-                for entry in days.values():
-                    entry["asset_bars"] = counted.get(entry["day"], 0)
-            elif provider not in ("saxo", "capital"):
-                raise InvalidRequest("The asset is capital/<epic>, dukascopy/<label> or saxo/<id>")
-        except AssetNotFound as e:
-            raise InvalidRequest(str(e)) from None
-        except DatabaseUnavailable:
-            database = False
-
-    if source == "journal" and database:
-        try:
-            rows = await ctx.queries.journal_between(first_day, last_day)
-        except DatabaseUnavailable:
-            rows, database = [], False
-        for entry in days.values():
-            entry["signals"] = 0
-        for row in rows:
-            if row.get("action") not in ("long", "short") or row.get("indice") != indice:
-                continue
-            day = _local_day(row.get("received_timestamp") or row.get("decided_at"), zone)
-            if day in days:
-                days[day]["signals"] += 1
-    return {"days": list(days.values()), "database": database, "timezone": ctx.settings.timezone}
-
-
-# The orders measured by default: the three months before today.
-EXECUTION_DAYS = 92
+    return await backtest_requests.coverage(
+        ctx.queries, ctx.history, ctx.settings.timezone, service.max_period_days, first_day, last_day,
+        indice=indice, asset=asset, source=source,
+    )
 
 
 @router.get("/execution")
@@ -191,18 +105,8 @@ async def execution(
     the delays from a signal to the trader and from an order to Saxo, the price
     paid against the recorded quote, the refusals; and the values a run would take from them.
     """
-    from src.backtest.clock import TradingClock
-    from src.backtest.execution_calibration import measure
-
     ctx = request.app.state.ctx
-    clock = TradingClock(ctx.settings.timezone)
-    last_day = last_day or datetime.now(timezone.utc).astimezone(clock.zone).date()
-    first_day = first_day or last_day - timedelta(days=EXECUTION_DAYS - 1)
-    if last_day < first_day or (last_day - first_day).days >= 366:
-        raise InvalidRequest("A period of a year at most")
-    start, end = clock.day_bounds(first_day)[0], clock.day_bounds(last_day)[1]
-    rows = await ctx.queries.execution_rows(datetime.fromtimestamp(start, timezone.utc), datetime.fromtimestamp(end, timezone.utc))
-    return {"from": first_day.isoformat(), "to": last_day.isoformat(), **measure(rows, clock)}
+    return await backtest_requests.execution(ctx.queries, ctx.settings.timezone, first_day, last_day)
 
 
 @router.get("")
@@ -218,23 +122,7 @@ async def create(request: Request, body: dict = Body(...), service=Depends(backt
     signals WATA received, the journal of the period (and a day either side)
     is read first.
     """
-    ctx = request.app.state.ctx
-    journal = positions = None
-    source = body.get("source") if isinstance(body, dict) else None
-    if isinstance(source, dict) and source.get("kind") == "journal":
-        try:
-            first, last = date.fromisoformat(body.get("from")), date.fromisoformat(body.get("to"))
-        except (TypeError, ValueError):
-            raise InvalidRequest("The period is two days, YYYY-MM-DD") from None
-        journal = await ctx.queries.journal_between(first - timedelta(days=1), last + timedelta(days=1))
-        # What WATA really did with those signals, for the run to be set beside it.
-        try:
-            positions = await ctx.queries.closed_positions(first - timedelta(days=1), last + timedelta(days=1))
-        except DatabaseUnavailable:
-            positions = None
-    capital = await _last_balance(ctx)
-    # On the event loop: the run joins the service's queue, which is not to be touched from another thread.
-    return service.create(body, journal=journal, positions=positions, capital=capital)
+    return await backtest_requests.ask_backtest(request.app.state.ctx.queries, service, body)
 
 
 @router.post("/remove")

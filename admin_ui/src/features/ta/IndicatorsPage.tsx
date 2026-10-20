@@ -8,7 +8,7 @@ import type { ChangeEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { PageHeader } from '@/components/Panel'
-import { QueryState } from '@/components/status'
+import { ClaudeBadge, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
+import { madeByClaude } from '@/features/system/claude'
 import { api, ApiError, taScriptSourceUrl } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { TaScriptKind, TaScriptSummary } from '@/lib/types'
@@ -38,13 +39,14 @@ function scriptColumns(
     {
       id: 'name',
       header: 'Script',
-      accessorFn: (row) => `${row.name} ${row.description} ${row.library_name ?? ''}`,
+      accessorFn: (row) => `${row.name} ${row.description} ${row.library_name ?? ''}${madeByClaude(row) ? ' Claude' : ''}`,
       sortable: true,
       cell: ({ row }) => (
         <div className="min-w-0 max-w-96 whitespace-normal">
           <Link to={`/ta/indicators/${row.id}`} className="font-medium underline-offset-4 hover:underline">
             {row.name}
           </Link>
+          {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
           {row.description && <p className="text-xs text-muted-foreground">{row.description}</p>}
         </div>
       ),

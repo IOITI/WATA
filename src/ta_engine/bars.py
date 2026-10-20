@@ -3,10 +3,13 @@ The bars a rule's script runs on, made from the ten-second bars the Capital.com
 feed records, by the rules of the admin's charts: a script gives in the engine
 what it gives on the Charts page and in the editor's test panel.
 
-- Bars of whole minutes: the ten-second bars of each bucket (aligned on the
+- Bars of time (whole minutes for a rule, any length from ten seconds to a day
+  for a backtest): the ten-second bars that begin in each bucket (aligned on the
   epoch, as ``aggregate`` in src/admin/data.py and the SQL of AdminQueries)
   merged into one: first open, highest high, lowest low, last close, the ask
-  from the ten seconds that have one, quote changes added up.
+  from the ten seconds that have one, quote changes added up. A length that is
+  no multiple of ten seconds holds 50 or 40 seconds of prices by turns (45 s),
+  and its bar ends with its last ten seconds.
 - Range bars: RangeBarBuilder (src/price_recorder/range_bars.py, read and never
   changed) on prices in whole steps of the instrument, each bar placed a second
   after the previous one when several begin in the same ten seconds, and the
@@ -15,7 +18,7 @@ what it gives on the Charts page and in the editor's test panel.
 
 A bar goes to the script once it is final: a bucket once the feed has recorded
 all of its ten seconds, a range bar once the price has left its range (or a
-pause in the data has cut it).
+pause in the data has cut it). A bar's close time is when it became final.
 
 Rows are (epoch seconds, bid open, high, low, close, ask open, high, low, close,
 quote changes), oldest first. A bar for the runner is [open ms, open, high, low,
@@ -24,6 +27,7 @@ close, volume, close ms].
 
 from bisect import bisect_left
 
+from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.range_bars import BuiltBar, RangeBarBuilder
 
 SIDES = ("bid", "ask")
@@ -36,6 +40,11 @@ def side_prices(row, side: str) -> tuple | None:
     """The four prices of one side of a row; None for an ask that is not there."""
     prices = tuple(row[_SIDE_COLUMNS[side]])
     return None if any(price is None for price in prices) else prices
+
+
+def bucket_end(start: int, seconds: int) -> int:
+    """When the bucket of ``seconds`` that begins at ``start`` is over: with the last ten seconds that begin in it."""
+    return -(-(start + seconds) // BAR_SECONDS) * BAR_SECONDS
 
 
 class TimeBars:
@@ -76,14 +85,17 @@ class TimeBars:
             if row[8] is not None:
                 bucket[8] = row[8]
             bucket[9] += row[9]
-        if self._bucket is not None and covered_until is not None and covered_until >= self._bucket[0] + self._seconds:
+        if (
+            self._bucket is not None and covered_until is not None
+            and covered_until >= bucket_end(self._bucket[0], self._seconds)
+        ):
             done.append(self._bucket)
             self._bucket = None
         bars = []
         for bucket in done:
             prices = side_prices(bucket, self._side)
             if prices is not None:
-                bars.append([bucket[0] * 1000, *prices, bucket[9], (bucket[0] + self._seconds) * 1000])
+                bars.append([bucket[0] * 1000, *prices, bucket[9], bucket_end(bucket[0], self._seconds) * 1000])
         return bars
 
 

@@ -3,13 +3,15 @@
 // each alert becomes, the price side and the bars.
 
 import type { IPineInput } from 'pinets'
+import { useId, useState } from 'react'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Checkbox, Input, Select } from '@/components/ui/form'
 import type { TaAlertAction, TaScriptSummary } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 import { messageAction } from '../engine/outline'
-import { TIMEFRAMES } from '../engine/timeframes'
+import { readTimeframe, RULE_TIMEFRAMES, TIMEFRAME_HINT, TIMEFRAMES, unevenNote } from '../engine/timeframes'
 import { ACTION_LABEL, ALERT_ACTIONS, inputValueOf } from './ruleModel'
 import type { InputValue, RuleDraft } from './ruleModel'
 import type { ScriptInputs } from './useScriptInputs'
@@ -123,8 +125,21 @@ export function ScriptChoice({
   )
 }
 
-/** The price side and the bars the script runs on. */
-export function BarsFields({ draft, update }: { draft: RuleDraft; update: Update }) {
+/**
+ * The price side and the bars the script runs on. A signal rule runs on whole minutes
+ * (RULE_TIMEFRAMES); a backtest (`anyLength`) on any length WATA makes, typed when it is
+ * none of the menu's.
+ */
+export function BarsFields({ draft, update, anyLength = false }: { draft: RuleDraft; update: Update; anyLength?: boolean }) {
+  const offered = anyLength ? TIMEFRAMES : RULE_TIMEFRAMES
+  const inMenu = offered.some((timeframe) => timeframe.pine === draft.timeframe)
+  // Typed rather than chosen: kept while it is typed, even when it reads as one of the menu's ("1" on the way to "15s").
+  const [typingChosen, setTyping] = useState(() => anyLength && !inMenu)
+  const typing = anyLength && (typingChosen || (draft.barsType === 'time' && !inMenu))
+  const typed = typing ? readTimeframe(draft.timeframe) : null
+  const length = typing ? (typed && 'timeframe' in typed ? typed.timeframe : null) : offered.find((timeframe) => timeframe.pine === draft.timeframe)
+  const note = draft.barsType === 'time' && length ? unevenNote(length.seconds) : null
+  const helpId = useId()
   return (
     <>
       <label className="flex flex-col gap-1">
@@ -141,12 +156,19 @@ export function BarsFields({ draft, update }: { draft: RuleDraft; update: Update
       <label className="flex flex-col gap-1">
         <span className="text-xs text-text-secondary">Bars</span>
         <Select
-          value={draft.barsType === 'range' ? 'range' : draft.timeframe}
-          onChange={(event) =>
-            event.target.value === 'range' ? update({ barsType: 'range' }) : update({ barsType: 'time', timeframe: event.target.value })
-          }
+          value={draft.barsType === 'range' ? 'range' : typing ? 'typed' : draft.timeframe}
+          onChange={(event) => {
+            const value = event.target.value
+            if (value === 'range') {
+              update({ barsType: 'range' })
+              return
+            }
+            setTyping(value === 'typed')
+            update(value === 'typed' ? { barsType: 'time' } : { barsType: 'time', timeframe: value })
+          }}
           options={[
-            ...TIMEFRAMES.map((timeframe) => ({ value: timeframe.pine, label: timeframe.label })),
+            ...offered.map((timeframe) => ({ value: timeframe.pine, label: timeframe.label })),
+            ...(anyLength ? [{ value: 'typed', label: 'Other length…' }] : []),
             { value: 'range', label: 'Range bars' },
           ]}
         />
@@ -156,6 +178,29 @@ export function BarsFields({ draft, update }: { draft: RuleDraft; update: Update
           <span className="text-xs text-text-secondary">Range, in steps of the price</span>
           <Input type="number" min={1} step={1} value={draft.ticks} onChange={(event) => update({ ticks: event.target.value })} />
         </label>
+      ) : typing ? (
+        <div className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">Length of the bars</span>
+            <Input
+              value={draft.timeframe}
+              placeholder="45s, 90s, 2m"
+              title={TIMEFRAME_HINT}
+              autoComplete="off"
+              spellCheck={false}
+              error={!length}
+              aria-invalid={!length}
+              aria-describedby={helpId}
+              onChange={(event) => update({ timeframe: event.target.value })}
+            />
+          </label>
+          <span id={helpId} className={cn('text-xs', length ? 'text-muted-foreground' : 'text-red-700 dark:text-[#FF7A7A]')}>
+            {length ? `Bars of ${length.label}.` : typed && 'error' in typed ? `${typed.error} ${TIMEFRAME_HINT}` : TIMEFRAME_HINT}
+          </span>
+          {note && <span className="text-xs text-muted-foreground">{note}</span>}
+        </div>
+      ) : note ? (
+        <p className="self-center text-xs text-muted-foreground">{note}</p>
       ) : (
         <div />
       )}

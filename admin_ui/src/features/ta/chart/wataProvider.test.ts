@@ -102,6 +102,14 @@ describe('a WATA provider for Vela', () => {
 
     const bars = await provider.getBars('CAPITAL_US100', '5', { limit: 100 })
     await provider.getBars('CAPITAL_US100.ASK.R60', '1', { from: 0 })
+    // What a live chart missed: Vela counts one bar a minute since then, range bars come faster.
+    await provider.getBars('CAPITAL_US100.R60', '1', { from: 60_000, limit: 3 })
+    await provider.getBars('CAPITAL_US100', '1', { from: 60_000, limit: 3 })
+    // Bars of seconds, of the menu or typed, and four hours.
+    await provider.getBars('CAPITAL_US100', '10S', { limit: 100 })
+    await provider.getBars('CAPITAL_US100', '45S', { limit: 100 })
+    await provider.getBars('CAPITAL_US100', '90S', { limit: 100 })
+    await provider.getBars('CAPITAL_US100', '240', { limit: 100 })
 
     expect(bars).toEqual([
       { time: 1000, open: 25000, high: 25001, low: 24999, close: 25000, volume: 3 },
@@ -110,9 +118,22 @@ describe('a WATA provider for Vela', () => {
     expect(asked.map(({ ticker, seconds }) => [ticker.side, ticker.rangeTicks, seconds])).toEqual([
       ['bid', null, 300],
       ['ask', 60, 60],
+      ['bid', 60, 60],
+      ['bid', null, 60],
+      ['bid', null, 10],
+      ['bid', null, 45],
+      ['bid', null, 90],
+      ['bid', null, 14_400],
+    ])
+    expect(asked.map(({ window }) => window).slice(2, 4)).toEqual([
+      { from: 60_000, to: undefined, limit: undefined },
+      { from: 60_000, to: undefined, limit: 3 },
     ])
     await expect(provider.getBars('DUKASCOPY_US100', '1', {})).rejects.toThrow("not one of WATA's Capital.com assets")
-    await expect(provider.getBars('CAPITAL_US100', '240', {})).rejects.toThrow('WATA has no 240 bars')
+    // Under the ten seconds WATA records, over a day, or of the calendar.
+    await expect(provider.getBars('CAPITAL_US100', '5S', {})).rejects.toThrow('WATA has no 5S bars: from 10 seconds to a day')
+    await expect(provider.getBars('CAPITAL_US100', '2880', {})).rejects.toThrow('WATA has no 2880 bars')
+    await expect(provider.getBars('CAPITAL_US100', 'W', {})).rejects.toThrow('WATA has no W bars')
   })
 
   it('moves the forming bar of a Capital.com chart with each quote, from the bars of the day read when the stream opens', async () => {
@@ -140,6 +161,35 @@ describe('a WATA provider for Vela', () => {
     expect(seen.at(-1)).toMatchObject({ time: MINUTE * 1000, high: 25010, close: 25009 })
     stop?.()
     expect(streams[0].closed).toBe(true)
+  })
+
+  it('folds the stream into bars of 45 s: each ten seconds goes to the bar it begins in', async () => {
+    // A bar of 45 s on the minute and a half: it holds the ten seconds that begin at 0, 10, 20, 30 and 40.
+    const start = Math.floor(NOW / 90_000) * 90
+    const day: PriceBars = {
+      bars: [[start, 25000, 25004, 24999, 25002, 25001, 25005, 25000, 25003, 7] as PriceBarRow],
+      through: start + 30,
+      interval: 45,
+    } as unknown as PriceBars
+    const read: number[] = []
+    const { deps: fake, streams } = deps({
+      readBars: async (_ref, _period, interval) => {
+        read.push(interval)
+        return day
+      },
+    })
+    const seen: { time: number; high: number; close: number }[] = []
+    wataProvider('capital', fake).subscribe?.('CAPITAL_US100', '45S', (bar) => seen.push(bar))
+
+    streams[0].send('snapshot', { server_ms: NOW, live: true, detail: null, quote: null, state: null })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    streams[0].send('bar', { type: 'bar', bar: [start + 40, 25002, 25012, 25001, 25011, 25003, 25013, 25002, 25012, 2] })
+    streams[0].send('bar', { type: 'bar', bar: [start + 50, 25011, 25011, 25006, 25007, 25012, 25012, 25007, 25008, 1] })
+
+    expect(read).toEqual([45])
+    // The ten seconds from 40 to 50 are the first bar's last; those from 50 begin the bar of 45.
+    expect(seen.at(-2)).toMatchObject({ time: start * 1000, high: 25012, close: 25011 })
+    expect(seen.at(-1)).toMatchObject({ time: (start + 45) * 1000, high: 25011, close: 25007 })
   })
 
   it('reads a Saxo chart again every ten seconds, and leaves a Dukascopy one as it is', async () => {

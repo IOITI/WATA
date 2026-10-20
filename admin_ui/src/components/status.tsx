@@ -28,6 +28,15 @@ export function ServiceStatusBadge({ status }: { status: ServiceStatus }) {
   )
 }
 
+/** Beside the name of what Claude made through the admin's MCP endpoint: a run, a script, a rule, an experiment. */
+export function ClaudeBadge({ className }: { className?: string }) {
+  return (
+    <Badge variant="outline" className={className} title="Made by Claude through the admin's MCP endpoint">
+      Claude
+    </Badge>
+  )
+}
+
 /** Trade direction. Neutral on purpose: long and short are identities, not good or bad. */
 export function ActionBadge({ action }: { action: string | null | undefined }) {
   return <Badge variant="outline">{actionLabel(action)}</Badge>

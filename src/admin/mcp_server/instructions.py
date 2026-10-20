@@ -1,0 +1,66 @@
+"""
+What the MCP server tells Claude about itself: its instructions (read at every
+connection; Claude Code keeps 4,096 characters of them) and the ``research``
+prompt (``/wata:research``), the loop of .claude/skills/wata-lab/SKILL.md
+written for the server.
+"""
+
+INSTRUCTIONS = """\
+WATA trades Saxo knock-out turbos on the Nasdaq 100 from signals. This server is its research side, on the live \
+server: Pine scripts (run by PineTS, as WATA's TA engine runs them), the prices WATA recorded, and backtests that \
+trade the recorded turbos under WATA's own rules.
+
+Limits: nothing here trades, edits the configuration or takes a rule live; going live stays the operator's. \
+Claude's runs wait behind the operator's; Pine studies run one at a time; large data comes as CSV, which Claude \
+Code saves to a file on the Mac, to analyse there.
+
+Start with `status`. The loop:
+1. `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as trials of the family.
+2. The strategy: `pine_check`, `pine_run` (plots and alerts on recorded bars), `pine_signals` (what a rule would \
+raise), `pine_compare` (against TradingView's signals), then `pine_save`.
+3. `backtest_start` (the Backtests form's body; `backtest_options` lists the settings), `backtest_wait`, then \
+`backtest_result`: the edge of the entries first, then random entries, risk, regimes, trades.
+4. Sweeps with walk-forward: read the held-out days before the chosen-on ones, then the probability of \
+overfitting and the deflated Sharpe ratio.
+5. Before keeping anything: neighbours and stress (`backtest_derive`).
+6. `exp_conclude`: kept, rejected or inconclusive, with what it rests on.
+7. What survives may become one of Claude's shadow rules, once the operator switched them on: `rule_shadow_save` \
+(the engine journals its signals, never sends them), a run made from it (`source.from_rule`) set as its \
+reference (`rule_set_reference`), then its paper days in `rule_list`.
+
+Do not believe: fewer than 30 trades or 20 days; random entries beaten less than 95 % of the time; no edge \
+(t under 2.6 at the best horizon); a best value whose neighbours do badly, or a held-out result far below the \
+chosen-on one; a probability of overfitting above 0.5 or a deflated Sharpe ratio under 95 %; a result that fails \
+one stress step; results on the lock box's days, except for a candidate's final check. Recorded turbos start on \
+2026-10-13: say on how few days each conclusion rests.
+
+Pine for WATA: //@version=6 and indicator(); inputs are in_0, in_1… in declaration order; signals are \
+alertcondition(condition, "Title", message), each title mapped to long, short, close-position, message or \
+ignore. No barstate.islast, nothing that repaints; request.security reads WATA's assets only. A strategy()'s \
+orders are not signals: only alerts are.
+"""
+
+RESEARCH_PROMPT = """\
+Work on WATA's strategies through the `wata` tools, on the live server's data, as follows.
+
+1. `status`: what data there is (recorded days per source), the queue, the lock box and the open experiments.
+2. `exp_new` before running anything: a title, a hypothesis the data can refute, and a family (the idea it \
+belongs to). Every run counts 1 trial of the family, every sweep its combinations; the overfitting figures are \
+corrected with that count.
+3. The strategy, a Pine v6 indicator: `pine_check` (errors with their lines), `pine_run` on a few recorded days \
+(do the plots and alerts look right?), `pine_signals` (what a signal rule would raise, day by day), \
+`pine_compare` (against the signals TradingView sent), then `pine_save`.
+4. `backtest_start` with the experiment: the asset and bars the script reads, its inputs, what each alert \
+becomes. `backtest_wait`, then `backtest_result` from the summary down: the edge of the entries first (no edge \
+means the result came from WATA's exits and the days), random entries, risk, regimes, then `backtest_trades` \
+and `backtest_days`.
+5. Try values with a sweep (walk-forward on): the held-out column before the chosen-on one, then the \
+walk-forward, the probability of overfitting and the deflated Sharpe ratio.
+6. Before keeping anything: `backtest_derive` neighbours (a plateau, or a peak among worse values?) and stress \
+(each order later, each fill dearer).
+7. `exp_conclude` with the verdict and what it rests on, then tell the operator: what was tried, what survived, \
+on how many days. Recorded turbos only start on 2026-10-13.
+8. A strategy that survives may become a shadow rule (`rule_shadow_save`, when the operator has switched those \
+on): it journals its signals without sending them, and its paper days are set beside the backtest's range. \
+Going live is the operator's alone.
+"""

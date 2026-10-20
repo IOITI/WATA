@@ -13,7 +13,7 @@ import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { rangeChart, timeChart } from '@/features/prices/chartModel'
 import type { ChartModel } from '@/features/prices/chartModel'
 import { PriceChart } from '@/features/prices/PriceChart'
-import { TIMEFRAMES } from '@/features/ta/engine/timeframes'
+import { timeframeOf } from '@/features/ta/engine/timeframes'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
 import { formatDay, formatMoney, formatNumber, formatPercent, formatTime } from '@/lib/format'
@@ -42,7 +42,7 @@ function useDayChart(chart: BacktestChart | undefined, day: string) {
       if (bars.type === 'range') {
         return rangeChart(await api.assetRangeBars(assetRef(chart!), period, { side: chart!.side, size: null, under: null, ticks: bars.ticks }))
       }
-      const interval = TIMEFRAMES.find((timeframe) => timeframe.pine === bars.timeframe)?.seconds ?? 60
+      const interval = timeframeOf(bars.timeframe)?.seconds ?? 60
       return timeChart({ prices: await api.assetBars(assetRef(chart!), period, interval), index: null }, chart!.side)
     },
   })

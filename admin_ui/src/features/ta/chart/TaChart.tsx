@@ -2,6 +2,13 @@
 // WATA's three providers, with WATA's scripts in its own indicator picker and the
 // Pine engine in a worker of our own file (vite/velaPineWorker.ts).
 //
+// Live: Vela draws history alone unless told, and only a live chart asks the
+// providers for what moves its last bar. Its scripts are run in full all the same
+// (pineEngine.ts).
+//
+// Bars of time are of any length WATA makes, from ten seconds to a day: Vela's menu
+// offers the usual ones, the length field above the chart takes any other.
+//
 // The only file that builds Vela, as PriceChart.tsx is the only one that builds
 // Lightweight Charts.
 
@@ -17,7 +24,8 @@ import { WataBars } from '../data/wataBars'
 import type { LibraryResolver } from '../engine/prepare'
 import { parseTicker, PROVIDERS, tickerText } from '../engine/tickers'
 import type { ProviderId, WataTicker } from '../engine/tickers'
-import { DEFAULT_TIMEFRAME, TIMEFRAMES } from '../engine/timeframes'
+import { DEFAULT_TIMEFRAME, readTimeframe, shortName, TIMEFRAME_HINT, TIMEFRAMES, timeframeOf, unevenNote } from '../engine/timeframes'
+import { fullRunEngine } from './pineEngine'
 import { sharedAssets, wataProvider } from './wataProvider'
 import { LAYOUT_KEY, layoutStorage, scriptEntries } from './workspace'
 
@@ -57,6 +65,48 @@ function velaSymbolOf(ticker: WataTicker): string {
   return `${ticker.provider}:${tickerText(ticker)}`
 }
 
+/** The length of the chart's bars as typed (45s, 2m, 1h), applied on Enter or when the field is left. */
+function LengthField({ timeframe, onApply }: { timeframe: string; onApply: (timeframe: string) => void }) {
+  const current = timeframeOf(timeframe)
+  const [error, setError] = useState<string | null>(null)
+  const apply = (text: string) => {
+    const read = readTimeframe(text)
+    if ('error' in read) {
+      setError(read.error)
+      return
+    }
+    setError(null)
+    if (read.timeframe.pine !== current?.pine) onApply(read.timeframe.pine)
+  }
+  return (
+    <label className="flex items-center gap-1.5" title={TIMEFRAME_HINT}>
+      <span className="text-muted-foreground">Length</span>
+      <input
+        type="text"
+        defaultValue={current ? shortName(current.seconds) : timeframe}
+        aria-label="Length of the bars, as 45s, 2m or 1h"
+        aria-invalid={error !== null}
+        autoComplete="off"
+        spellCheck={false}
+        enterKeyHint="done"
+        className={cn(
+          'w-16 rounded-md border bg-surface px-1.5 py-0.5 font-mono',
+          error ? 'border-rose-500/50' : 'border-border',
+        )}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') apply(event.currentTarget.value)
+        }}
+        onBlur={(event) => apply(event.target.value)}
+      />
+      {error && (
+        <span role="alert" className="text-red-700 dark:text-[#FF7A7A]">
+          {error}
+        </span>
+      )}
+    </label>
+  )
+}
+
 export function TaChart(props: TaChartProps) {
   const { layout, symbol, timeframe, fallbackSymbol, timeZone, resolve, addScript, className } = props
   const host = useRef<HTMLDivElement>(null)
@@ -87,11 +137,12 @@ export function TaChart(props: TaChartProps) {
       layout: false,
       symbol: symbol ?? fallbackSymbol,
       timeframe: timeframe ?? DEFAULT_TIMEFRAME.pine,
+      live: true,
       theme,
       timezone: timeZone,
       timeframes: TIMEFRAMES.map((length) => length.pine),
       providers,
-      engines: { pine: () => new PineWorkerEngine({ workerUrl: velaWorkerUrl }) },
+      engines: { pine: () => fullRunEngine(new PineWorkerEngine({ workerUrl: velaWorkerUrl })) },
       indicators: async () => (await entries).entries.map((script) => script.entry),
       persist: LAYOUT_KEY,
       storage: layoutStorage(layout),
@@ -151,9 +202,18 @@ export function TaChart(props: TaChartProps) {
   }, [addScript, resolve])
 
   const ticker = velaTicker(market.symbol)
+  const length = timeframeOf(market.timeframe)
+  const uneven = length ? unevenNote(length.seconds) : null
   const switchTo = (change: Partial<Pick<WataTicker, 'side' | 'rangeTicks'>>) => {
     if (!ticker) return
     workspace.current?.active.setSymbol(velaSymbolOf({ ...ticker, ...change }))
+  }
+  // Once: Enter, then leaving the field, or the field leaving the page, asks the same length again.
+  const lengthTo = (next: string) => {
+    const cell = workspace.current?.active
+    if (!cell || next === shown.current.timeframe) return
+    shown.current = { ...shown.current, timeframe: next }
+    cell.setTimeframe(next)
   }
 
   return (
@@ -192,6 +252,19 @@ export function TaChart(props: TaChartProps) {
               Range
             </button>
           </div>
+          {!ticker.rangeTicks && (
+            <LengthField
+              key={market.timeframe}
+              timeframe={market.timeframe}
+              onApply={lengthTo}
+            />
+          )}
+          {!ticker.rangeTicks && uneven && (
+            <span className="text-muted-foreground">
+              {uneven} On this chart a bar's time_close is its open time and its length; the editor's test and the
+              backtests use the end of its last ten seconds.
+            </span>
+          )}
           {ticker.rangeTicks && (
             <label className="flex items-center gap-1.5">
               <span className="text-muted-foreground">R</span>

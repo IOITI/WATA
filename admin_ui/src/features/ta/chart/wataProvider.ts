@@ -7,6 +7,9 @@
 //   range bars are read again at each closed ten seconds;
 // - Saxo: the recorder writes ten-second bars, read again every ten seconds;
 // - Dukascopy: days downloaded, nothing live.
+//
+// A chart's bars are of any length WATA makes of its ten-second bars (10 seconds to a
+// day, engine/timeframes.ts): those of the timeframe menu, or one typed.
 
 import type { DataProvider, OHLCV, ProviderInfo, SymbolDescriptor, SymbolInfo } from '@luxalgo/vela'
 
@@ -97,7 +100,7 @@ export function wataProvider(provider: ProviderId, deps: ProviderDeps): DataProv
     if (length) return length.seconds
     // Range bars take no length; a chart of them still names one.
     if (ticker.rangeTicks) return 60
-    throw new Error(`WATA has no ${timeframe} bars: 1, 5, 15 or 60 minutes`)
+    throw new Error(`WATA has no ${timeframe} bars: from 10 seconds to a day`)
   }
 
   const assetOf = async (ticker: WataTicker): Promise<DataAsset | undefined> =>
@@ -254,7 +257,9 @@ export function wataProvider(provider: ProviderId, deps: ProviderDeps): DataProv
       const found = await deps.bars.bars(ticker, secondsOf(ticker, timeframe), {
         from: range.from,
         to: range.to,
-        limit: range.limit,
+        // Bars since a time (what a live chart missed) are counted by Vela at one per timeframe: range bars come
+        // faster than that, and the newest alone would leave a hole.
+        limit: ticker.rangeTicks && range.from !== undefined ? undefined : range.limit,
       })
       return found.map(ohlcv)
     },

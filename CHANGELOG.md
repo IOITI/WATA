@@ -1,5 +1,92 @@
 # Changelog
 
+## v0.23.0 - Claude does strategy research on the server
+
+**Release date:** 2026-10-20, with v0.22.0
+
+- **An MCP endpoint for Claude Code, in the admin** (`src/admin/mcp_server/`): `/mcp` on the admin's address, so over WireGuard only, off unless `admin.mcp_enabled` is true. It opens with a bearer token made on the server (`watamcptoken create <name>`, printed once, 90 days; the file keeps its sha256 only). It refuses any request that carries an `Origin`, has its own throttle, answers at most four calls of a token at once, and is paused from the System page without a restart. The official SDK (`mcp` 2.3.0) is loaded only when the endpoint is on, and speaks both the 2025-11-25 protocol and the stateless 2026-07-28 one, in JSON.
+- **37 tools for the research loop**, with a `/wata:research` prompt and server instructions that carry the lab skill's rules (what not to believe, the lock box, the few recorded days):
+  - the data: recorded days, bars of 10 s to a day (or CSV, which Claude Code saves to a file on the Mac), the signals WATA received, its closed trades without account keys, measured execution;
+  - Pine: list, read, **check** (PineTS's compile with file and line, and TradingView's v6 rules through a confined checker, `src/ta_engine/checker/check.mjs`), **run** on recorded bars (every plot summarised and sampled, alerts, PineTS's runtime warnings), **signals** as a rule would raise them, **compare** with TradingView's, save (checked first, Claude's own scripts only) and delete (its own, unused);
+  - backtests: options, start (the Backtests form's body, with an idempotency key), derive (stress, a sweep's cell, neighbours), wait, list, result by part, trades, days, signals, compare, remove (its own), the turbo model;
+  - the experiment journal and the lock box, kept on the server: trials counted per family and given to sweeps, the lock box refused to every study and run but a candidate's final check, widened only;
+  - rules: every rule with its paper days, a rule's signals beside TradingView's, and **Claude's own shadow rules** (make, change, switch off, remove, set a run made from one as its reference), behind `admin.mcp.shadow_rules`, off by default. A rule is first run as the engine would on the last finished day of its epic, and refused if it fails, takes over 2 s an engine day or has over 20,000 bars a day.
+- **What Claude can never do, enforced and tested**: trade, pause entries, publish to RabbitMQ or reach the web server; edit the configuration or read a credential; take a rule live or change one that is live or the operator's; run free SQL. The tools reach the admin through `ResearchServices` alone (named queries, no trading service); a test calls every tool with tripwires in place of everything that trades, another holds the endpoint's imports to an allowlist, and the only change of mode in its code is between shadow and off.
+- **Claude's share of a small server**: its runs wait behind the operator's and the paper runs (at most 3 waiting, 60 a day, 10,000 day-simulations a request, 5 GB of disk kept free); Pine studies are child processes, one at a time, nice 10, 384 MB of Node heap, 90 s, 20 minutes an hour, refused when the container's memory is short; every child process of the admin is the first the kernel stops when memory runs out (`oom_score_adj` 1000). The runner's answers are shared by studies and backtests (`admin.backtests_signal_cache_mb`, oldest pruned). The admin container gets 1536M of memory instead of 1024M (`deploy/docker-compose.yml`), so that a study fits beside a backtest more often.
+- **The TA engine runs live and shadow rules on two runners.** Live rules go first in each tick; shadow rules get `shadow_seconds_per_tick` (5 s) of it, the one given its bars longest ago first, and keep their bars when they wait. A shadow rule that fails, hangs or ends its runner reloads the shadow rules alone, never a live one; the shadow runner (256 MB, nice 10) is the first process stopped when memory runs short, and is stopped while no shadow rule is on. A Claude-made shadow rule's trouble is said on Telegram once a day at most.
+- **Watching it**: System › Claude (the endpoint's state, its tokens, revoked from there, Claude's share against its limits, its last calls and refusals, the pause); Backtests › Experiments (the journal, and the lock box, which the operator moves or clears); a "Claude" badge on its runs, scripts, rules and experiments. Every call is logged in `wata-admin/mcp.jsonl`; only a revocation and the pause are audited (each audit entry goes to Telegram).
+- **Shared code**: the backtest form's request (`backtest_requests.py`) and the bars of an asset (`asset_bars.py`) serve the routes and the tools alike; the lab's journal and studies moved to `src/research/` (the lab's commands are unchanged). The Pine runner can answer every bar's plots and runtime warnings (`detail`), its default answer unchanged. The study child reads recorded day files with `--data files:<folder>`, as backtests do.
+- **The lab skill** says the server path, and no longer lists `close-long`/`close-short`, which are not actions.
+
+**Verification status:**
+- 2,184 tests pass in Python's suite, 16 skipped (live infrastructure and the real-database tests), on Python 3.14 and 3.12, with Node 24 on the PATH (the tests that run the real Pine runner and the rules checker ran); 827 in the interface's suite (815 before); lint, type checks, the build, `build:runner` and `build:checker` are clean.
+- The TA engine: 72 tests (62 before; the 62 unchanged), with stand-in runners that end, time out or fail a load: a shadow runner's end never reloads a live rule, whose signal is still sent; live rules go first; shadow rules take turns and lose no bar; a rule moved to live is loaded on the live runner; the shadow runner stops with the last shadow rule.
+- End to end on the fake admin with the endpoint on (`FAKE_MCP=1 npm run dev:api`, which prints a development token), through the SDK's client, in both protocol revisions (31 calls each):
+  - `status`, the coverage, `pine_save` of the lab's EMA cross, `pine_check` (and a broken draft's line and column), `pine_run`, `pine_signals`, `pine_compare`;
+  - an experiment, a backtest sent twice with one idempotency key (one run), its result and edge, its trades as CSV, its days, a stress run, a day of bars as CSV (107 kB);
+  - a shadow rule, run first as the engine would (2,431 bars, 17 ms a day), its switch to live refused, a run made from it set as its reference;
+  - the conclusion (2 trials counted), the removals.
+- A headless Claude Code session (`claude -p`, the endpoint given in a scratch `--mcp-config` with a headers helper) made five calls through it: `status`, `pine_list`, `exp_new`, `pine_check`, `exp_conclude`. Each was logged in `mcp.jsonl`; nothing was audited or sent to Telegram.
+- In the browser pane, on the same fake admin: System › Claude in dark at 1440 and in light at 390; the Claude badge on the runs and on Signal rules (on the scripts' list in the tests only); Experiments, where a lock box set from the page was then refused to Claude's `pine_run` and to a narrower `lockbox_set`, and cleared; no horizontal scroll at 390, no console error.
+
+**Not seen:** the server's data and the path over WireGuard; Claude Code against the real server (the first check is the operator's, after a deploy: `/mcp` shows `wata` connected, and `status` the server's days). The TA engine's two runners on the server's feed.
+
+## v0.22.0 - Bars of seconds on the Charts page and in backtests
+
+**Release date:** 2026-10-20, with v0.23.0
+
+- **Bars of 10, 20, 30 and 45 seconds, and of any length typed.** WATA records ten-second bars, and now makes bars of any whole number of seconds from 10 to a day of them, named as Pine names a timeframe (`10S`, `45S`, `90S`; `1`, `60` for minutes):
+  - Technical Analysis › Charts: Vela's timeframe menu offers 10, 20, 30 and 45 seconds, 1, 5 and 15 minutes and an hour; the **Length** field above the chart takes any other (`90s`, `2m`, `4h`; a plain number is minutes) and says why it refuses one (under ten seconds, over a day). The address carries the length (`tf=45S`), so a chart of seconds can be shared and reloaded. Capital.com moves live at these lengths, Saxo every ten seconds;
+  - the editor's test offers the same lengths;
+  - a backtest takes the menu's lengths, or "Other length…" and one typed; its review, its run and its days say the length, and a day's chart is drawn at it.
+- **Vela's chart learns seconds.** Vela 0.8.4 lists seconds in its menus, but its chart read `10S` as an hour: the history it loads, the gaps it heals and the bar a quote moves are counted from that. Its time axis, crosshair and data window also stopped at the minute. `admin_ui/vite/velaSeconds.ts` patches the pinned package when the interface is built (and in the dev server). Each change replaces one exact piece of Vela's code, and the build stops if one is no longer there, so a new version of Vela is looked at before it ships (`vite/velaSeconds.test.ts` runs Vela's own functions, patched).
+- **A length that is no multiple of ten seconds.** A bar of 45 seconds holds the ten-second bars that begin in it, 40 or 50 seconds of prices by turns, and closes when the last of them does: in a backtest the alert of the bar of 14:00:00 counts at 14:00:50, never before its prices are known. The Charts page and the backtest form say so when such a length is chosen. Multiples of ten seconds are exact.
+- **What serves them:**
+  - the admin's API serves bars of any whole number of seconds from 10 to a day (it took 10, 30, 60, 300, 900 and 3600 only: `interval_served` in `src/admin/prices.py`), from the recorder's and the feed's tables and from Dukascopy's days alike;
+  - backtests and the TA replay (`--bars 45S`) take any length (`checked_bars(..., any_length=True)` in `src/admin/ta_rules.py`; `bucket_end` in `src/ta_engine/bars.py`);
+  - a script's `request.security` of seconds is read as WATA makes it, on WATA's grid, rather than built by PineTS from shorter bars (`engine/provider.ts`).
+- **Signal rules keep whole minutes** (1, 5, 15 or 60, or range bars). The TA engine runs a rule's script over all its bars at each new one, which bars of seconds would make several times a minute on the server. Nothing changes for the engine in production.
+
+**Verification status:**
+- 812 tests pass in the interface's suite (776 before), 1,921 in Python's with 16 skipped (live infrastructure and the two real-database tests); lint, type checks and both builds are clean. The tests that pinned the old lengths (45 seconds refused) were changed to the new ones.
+- Through the real Pine runner, a script on bars of 45 seconds: `timeframe.in_seconds()` 45, `timeframe.isseconds` true, `time_close` 45 or 50 seconds after `time`, and `request.security(..., "90S", close)` asked of WATA as 90-second bars.
+- In a browser, on the admin application over made-up data (`npm run dev:api`):
+  - Capital.com's US100 opened at `tf=45S`: 45-second bars, the note, the crosshair at 14:07:30, an axis of 14:42:30, 14:43, 14:43:45; live, a new bar began at 14:44:15, 45 seconds after the one before;
+  - `90s` typed in the Length field: the chart and the address moved to 90 seconds; `5s` refused with its reason, the chart left as it was;
+  - 10 seconds, with the EMA cross script on it: its lines, its crosses and an alert of the 10-second chart;
+  - a Saxo turbo at 20 seconds;
+  - a backtest on 45-second bars typed in the form, run to its end: its request kept `45S`, each of its 338 signals of the script came from a bar closed 45 or 50 seconds after it opened, on a whole ten seconds, and reached the trader 3 seconds later; the chart of a day drawn at 45 seconds, its crosshair at 13:06:45;
+  - the Charts page in dark at a phone's width.
+
+**Not seen:** Capital.com's real stream and the server's recorded prices at these lengths; a Dukascopy chart (no history in the checkout tried). A length chosen in Vela's own menu: the browser used passes no click to Vela's menus (seen before, in v0.21.2's checks), so the menu was seen listing the lengths and the Length field was used instead.
+
+## v0.21.2 - The Charts page moves live
+
+**Release date:** 2026-10-20
+
+- **The Vela chart of Technical Analysis › Charts stood still.** It drew the bars read when it opened, then nothing more, whatever the asset: Capital.com's US100 was frozen there while its chart on the Assets View moved. Vela draws a chart as history alone unless it is told the chart is live (`live`, off by default), and only a live chart asks its data provider for what moves its last bar. The workspace was built without it, and the tests' stand-in for Vela never looked. It is now built live (`TaChart.tsx`, tested):
+  - a Capital.com chart moves at each quote of the feed's stream, as the Assets View does, and its range bars at each ten seconds closed;
+  - a Saxo chart, of an index or a turbo, moves every ten seconds with the recorder's bars;
+  - Dukascopy stays history.
+- **The scripts on a chart are run in full again when its bars change.** On a live chart Vela would run them in PineTS's live mode, which in PineTS 0.11.1 raises none of the alerts of the bars it adds and leaves `request.security` behind; the TA engine does not use it either. The chart draws what the editor's test and the engine compute from the same bars (`chart/pineEngine.ts`, tested):
+  - while quotes come, a script runs again a second apart at most, the last quote included;
+  - an alert of the bar in progress, raised again by each run, is shown once;
+  - an error that every run repeats is shown once, and again after a run that works or new inputs.
+- **A Saxo chart opened before the day's first bar, or left open overnight, now reads today's bars as they are recorded.** It asked for bars up to the asset's last day as it was when the chart opened, and stayed on the day before. An asset the recorder still records is now read up to today, as Capital.com's already was (`data/wataBars.ts`, tested).
+- **The range bars a live chart missed are all read back.** When a chart comes back (its tab shown again, its stream connected again), Vela asks for the bars since its last one, as many as its timeframe would hold. Range bars can come faster: only the newest that many were served, which left a hole. Since a time, a range ticker's bars are now all served (`chart/wataProvider.ts`, tested).
+
+**Verification status:**
+- 776 tests pass in the interface's suite; lint, type checks and build are clean. The new tests fail without the fix.
+- In a browser, on the admin application over made-up data (`npm run dev:api`):
+  - Capital.com's US100 at one minute, before the fix: no stream opened, the last price unchanged for half a minute;
+  - after it: the last bar moves at each quote, and a new one begins on the minute;
+  - with the EMA cross script on it: one whole run a second (501 bars each), its lines moving with the close;
+  - the chart moved to five minutes in place: the stream of the one-minute chart closed, another opened;
+  - its range bars (R60): the last one moves at each ten seconds closed, one read of range bars each time;
+  - a Saxo turbo and the Saxo index, their charts opened at 07:31 and 07:46 before the made-up recorder's 08:00 open: each read today's bars every ten seconds, drew the 08:00 bar once recorded, then the 08:01 one, as the API served them.
+
+**Not seen:** Capital.com's real stream, the server's recorded Saxo prices, a Dukascopy chart (no history in the checkout tried).
+
 ## v0.21.1 - The Capital.com feed's log no longer floods
 
 **Release date:** 2026-10-20

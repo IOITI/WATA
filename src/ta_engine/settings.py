@@ -57,6 +57,10 @@ class TaEngineSettings:
     # A run that takes longer stops the runner, which starts again for the next bar.
     run_timeout_seconds: int = 30
     runner_memory_mb: int = 512
+    # The shadow rules run on a runner of their own (they never reload a live rule), with this heap...
+    shadow_runner_memory_mb: int = 256
+    # ...and at most this long of each tick, after the live rules: the rest wait for the next tick.
+    shadow_seconds_per_tick: int = 5
     rules_path: str = RULES_PATH
     node_path: str = NODE
     # The web server that takes the signals, as the scheduler reaches it (a protected setting of the admin).
@@ -81,6 +85,8 @@ class TaEngineSettings:
             stale_feed_seconds=_whole(section, "stale_feed_seconds", cls.stale_feed_seconds, minimum=20, maximum=3600),
             run_timeout_seconds=_whole(section, "run_timeout_seconds", cls.run_timeout_seconds, minimum=5, maximum=600),
             runner_memory_mb=_whole(section, "runner_memory_mb", cls.runner_memory_mb, minimum=128, maximum=4096),
+            shadow_runner_memory_mb=_whole(section, "shadow_runner_memory_mb", cls.shadow_runner_memory_mb, minimum=128, maximum=4096),
+            shadow_seconds_per_tick=_whole(section, "shadow_seconds_per_tick", cls.shadow_seconds_per_tick, minimum=1, maximum=8),
             service_url=str(service_url).rstrip("/"),
             request_timeout_seconds=_whole(section, "request_timeout_seconds", cls.request_timeout_seconds, minimum=1, maximum=30),
         )

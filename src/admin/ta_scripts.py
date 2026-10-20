@@ -276,10 +276,13 @@ class ScriptStore:
         raise ScriptNotFound(f"No library named {name!r}")
 
     def _described(self, meta: dict) -> dict:
-        return {key: meta[key] for key in (
+        described = {key: meta[key] for key in (
             "id", "name", "kind", "description", "pine_version", "library_name", "imports",
             "version", "versions", "created_at", "updated_at",
         )}
+        # Who made it through an agent (Claude, by the MCP endpoint); absent for the operator's.
+        described["made_by"] = meta.get("made_by")
+        return described
 
     # ── writing ──
 
@@ -292,16 +295,22 @@ class ScriptStore:
             if library_name and meta["kind"] == LIBRARY and meta["library_name"] == library_name:
                 raise ScriptConflict(f"A library named {library_name!r} already exists: {meta['name']!r}")
 
-    def _version_entry(self, number: int, source: str) -> dict:
+    def _version_entry(self, number: int, source: str, made_by: str | None = None) -> dict:
         data = source.encode("utf-8")
-        return {
+        entry = {
             "number": number,
             "saved_at": _now(),
             "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
         }
+        if made_by is not None:
+            entry["made_by"] = made_by
+        return entry
 
-    def create(self, name: str, source: str, description: str = "") -> dict:
+    def count_made_by(self, made_by: str) -> int:
+        return sum(1 for meta in self.scripts() if meta.get("made_by") == made_by)
+
+    def create(self, name: str, source: str, description: str = "", made_by: str | None = None) -> dict:
         name = _checked_name(name)
         description = _checked_description(description)
         facts = pine_facts(source)
@@ -313,7 +322,7 @@ class ScriptStore:
             directory = self._script_dir(script_id)
             os.makedirs(directory)
             now = _now()
-            entry = self._version_entry(1, source)
+            entry = self._version_entry(1, source, made_by)
             meta = {
                 "id": script_id,
                 "name": name,
@@ -324,6 +333,8 @@ class ScriptStore:
                 "created_at": now,
                 "updated_at": now,
             }
+            if made_by is not None:
+                meta["made_by"] = made_by
             _write_text(self._version_path(script_id, 1), source)
             _write_json(os.path.join(directory, "script.json"), meta)
         return self.script(script_id)
@@ -344,10 +355,12 @@ class ScriptStore:
         source: str | None = None,
         name: str | None = None,
         description: str | None = None,
+        made_by: str | None = None,
     ) -> dict:
         """
         A new version when the source changed; the name and description change in
-        place. ``base_version`` is the version the change was made on.
+        place. ``base_version`` is the version the change was made on; ``made_by``
+        who saved it through an agent.
         """
         with self._lock:
             meta = self._meta(script_id)
@@ -372,7 +385,7 @@ class ScriptStore:
                 number = meta["version"] + 1
                 _write_text(self._version_path(script_id, number), source)
                 updated["version"] = number
-                updated["versions"] = [*meta["versions"], self._version_entry(number, source)]
+                updated["versions"] = [*meta["versions"], self._version_entry(number, source, made_by)]
             if updated != meta:
                 updated["updated_at"] = _now()
                 _write_json(os.path.join(self._script_dir(script_id), "script.json"), updated)

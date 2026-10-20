@@ -30,7 +30,7 @@ from typing import Callable, Iterable, Iterator, Sequence
 
 import pytz
 
-from src.admin.prices import INTERVALS
+from src.admin.prices import interval_served
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_history import dukascopy
 from src.price_history.files import FileBars, files_of_period
@@ -547,7 +547,7 @@ def aggregate(rows: Iterable[Sequence], interval: int, limit: int) -> list[list]
     high, lowest low, last close, each side of the ask from the bars that have
     one, quote changes added up. Stops once ``limit`` bars are made.
     """
-    if interval not in INTERVALS:
+    if not interval_served(interval):
         raise ValueError(f"Unsupported interval: {interval}")
     bars: list[list] = []
     current: list | None = None

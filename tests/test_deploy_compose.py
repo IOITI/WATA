@@ -186,6 +186,23 @@ def test_the_install_script_makes_the_folders_of_the_ta_engine():
     assert "# COMPOSE_PROFILES=ta" in open("deploy/.env.example", encoding="utf-8").read()
 
 
+def test_the_install_script_gives_the_operator_the_command_that_makes_mcp_tokens():
+    script = open("deploy/install_package.sh").read()
+
+    assert "cat << 'EOF' > /usr/local/bin/watamcptoken" in script
+    assert 'docker exec -it admin1 python -m src.admin.cli --mcp-token "$@"' in script
+    assert "chmod +x /usr/local/bin/watamcptoken" in script
+    assert "watamcptoken create <name>" in script
+
+
+def test_the_mcp_tokens_stay_in_the_admins_folder_out_of_the_ta_engines_reach(compose_services):
+    from src.admin.context import AdminSettings
+
+    assert AdminSettings.mcp_tokens_path.startswith("/app/var/lib/admin/")
+    assert _mount_modes(compose_services["admin1"])["/app/var/lib/admin"] == "rw"
+    assert "/app/var/lib/admin" not in _mount_modes(compose_services["ta_engine1"])
+
+
 def test_the_start_script_knows_every_role_of_the_compose_file(compose_services):
     script = open("src/start_python_script.sh").read()
     roles = {
@@ -302,8 +319,9 @@ def test_backtests_cannot_take_more_than_one_processor_from_the_services_that_tr
     limits = compose_services["admin1"]["deploy"]["resources"]["limits"]
 
     assert float(limits["cpus"]) <= 1.0
-    # The admin, a backtest's command with a day of recorded turbos, and the Pine runner it starts.
-    assert limits["memory"] == "1024M"
+    # The admin, a backtest's command with a day of recorded turbos, the Pine runner it starts,
+    # and one of Claude's Pine studies beside them.
+    assert limits["memory"] == "1536M"
     # No other service is capped: the trader and the position monitor keep what the machine has.
     for name, service in compose_services.items():
         if name != "admin1":
@@ -344,6 +362,15 @@ def test_the_image_has_the_node_the_interface_is_built_with_before_the_code(dock
     assert dockerfile[node] == f"COPY --from=node:{version}-bookworm-slim /usr/local/bin/node /usr/local/bin/node"
     assert node < code
     assert "npm run build:runner" in open("package.sh").read()
+
+
+def test_the_checker_of_tradingviews_rules_is_built_beside_the_runner_never_inside_it(ci_jobs):
+    assert "npm run build:runner && npm run build:checker" in open("package.sh").read()
+    built = next(step["run"] for step in ci_jobs["image"]["steps"] if step.get("name") == "Build the Pine runner")
+    assert "npm run build:checker" in built
+    config = open("admin_ui/vite.checker.config.ts").read()
+    assert "outDir: '../src/ta_engine/checker'" in config and "entryFileNames: 'check.mjs'" in config
+    assert "src/ta_engine/checker/" in open(".gitignore").read()
 
 
 def test_ci_builds_the_pine_runner_into_the_image_and_runs_it_there(ci_jobs):

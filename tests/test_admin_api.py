@@ -125,6 +125,11 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/paper"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
     ("POST", "/api/backtests/turbo-model"),
+    ("GET", "/api/mcp"),
+    ("POST", "/api/mcp/tokens/0123abcd/revoke"),
+    ("PUT", "/api/mcp/paused"),
+    ("GET", "/api/research/experiments"),
+    ("PUT", "/api/research/lockbox"),
     ("GET", "/api/ta/scripts"),
     ("POST", "/api/ta/scripts"),
     ("GET", "/api/ta/scripts/0123456789ab"),
@@ -631,6 +636,7 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{label}", "de40")
             .replace("{script_id}", "0123456789ab")
             .replace("{rule_id}", "0123456789ab")
+            .replace("{token_id}", "0123abcd")
             .replace("{number}", "1"),
         )
         for route in app.routes
@@ -1806,8 +1812,17 @@ def test_bars_are_ten_seconds_long_unless_asked_otherwise(client, ctx):
     assert ctx.queries.calls[-1][4] == 10
 
 
+@pytest.mark.parametrize("interval", [20, 45, 90, 14_400, 86_400])
+def test_bars_of_any_length_from_ten_seconds_to_a_day_are_served(client, ctx, interval):
+    response = client.get(f"/api/data/assets/saxo/2/bars?from=2026-10-12&interval={interval}")
+
+    assert response.status_code == 200 and response.json()["interval"] == interval
+    assert ctx.queries.calls[-1][4] == interval
+
+
 @pytest.mark.parametrize("query, reason", [
-    ("interval=45", "The interval must be one of 10, 30, 60, 300, 900, 3600 seconds"),
+    ("interval=5", "The interval is a whole number of seconds from 10 to 86400"),
+    ("interval=86401", "The interval is a whole number of seconds from 10 to 86400"),
     ("from=2026-10-12&to=2026-10-11", "The period ends before it starts"),
     ("from=2025-01-01&to=2026-10-11", "The period is longer than 366 days"),
 ])
@@ -2863,7 +2878,9 @@ class FakeBacktests:
     def options(self, capital=None):
         return self._answer("options", capital, answer={"fields": []})
 
-    def create(self, body, *, journal=None, positions=None, capital=None):
+    def create(self, body, *, journal=None, positions=None, capital=None, **research):
+        # Who asked through an agent (made_by, experiment...): never anything from the operator's form.
+        assert all(value is None for value in research.values()), research
         return self._answer("create", body, journal, capital, positions, answer={"id": RUN, "status": {"state": "queued"}})
 
     def list_runs(self):

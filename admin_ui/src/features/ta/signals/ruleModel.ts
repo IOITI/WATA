@@ -6,7 +6,7 @@ import type { IPineInput } from 'pinets'
 import type { ChartMarker } from '@/features/prices/chartData'
 import type { TaAlertAction, TaComparisonRow, TaRule, TaRuleBars, TaRuleFields, TaRuleMode, TaScriptSummary } from '@/lib/types'
 
-import { TIMEFRAMES } from '../engine/timeframes'
+import { timeframeOf } from '../engine/timeframes'
 
 export const MODE_LABEL: Record<TaRuleMode, string> = { off: 'Off', shadow: 'Shadow', live: 'Live' }
 
@@ -33,7 +33,7 @@ const INDICE = /^[a-z0-9][a-z0-9_-]{0,31}$/
 
 export function barsLabel(bars: TaRuleBars): string {
   if (bars.type === 'range') return `Range ${bars.ticks}`
-  return TIMEFRAMES.find((timeframe) => timeframe.pine === bars.timeframe)?.label ?? `${bars.timeframe} min`
+  return timeframeOf(bars.timeframe)?.label ?? bars.timeframe
 }
 
 /** The newer versions a rule could run: of its script, and of each library it pinned. */

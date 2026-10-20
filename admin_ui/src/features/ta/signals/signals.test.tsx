@@ -256,6 +256,11 @@ describe('the Signal rules page', () => {
 
     await user.click(await screen.findByRole('button', { name: 'New rule' }))
     const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    // The engine runs a rule's script over all its bars at each new one: whole minutes, or range bars.
+    const bars = within(dialog).getByRole('combobox', { name: 'Bars' })
+    expect(within(bars).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      '1 min', '5 min', '15 min', '1 hour', 'Range bars',
+    ])
     const fast = await within(dialog).findByRole('spinbutton', { name: 'Fast' })
     await user.clear(fast)
     await user.type(fast, '12')

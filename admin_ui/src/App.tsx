@@ -56,6 +56,9 @@ const BacktestDayPage = lazy(() => import('@/features/backtests/DayPage').then((
 const BacktestComparePage = lazy(() =>
   import('@/features/backtests/ComparePage').then((module) => ({ default: module.ComparePage })),
 )
+const ExperimentsPage = lazy(() =>
+  import('@/features/backtests/ExperimentsPage').then((module) => ({ default: module.ExperimentsPage })),
+)
 
 /** An address of the former Prices page: to the Assets View, or to the asset it showed. */
 function PricesRedirect() {
@@ -199,6 +202,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <BacktestComparePage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="backtests/experiments"
+          element={
+            <ChartPage>
+              <ExperimentsPage />
             </ChartPage>
           }
         />
