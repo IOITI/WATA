@@ -1,29 +1,30 @@
 """
-Backtests: asking for one, following it, reading what it found, and the
-prices it runs on (src/admin/backtests.py does the work).
+Backtests: asking for one, following it, reading what it found
+(src/admin/backtests.py does the work, src/backtest the trading).
 
 They act on nothing that trades, so they are not operator actions: no audit
 entry, and their own switch (``admin.backtests_enabled``).
 
-Two of them start from what WATA really did, read here from the database and
-handed to the service: the replay of the signals it received, and the measure
-of the turbo on its closed trades.
+What a run needs from the database is read here and handed over: the signals
+WATA received, for a run that replays them, and the account's last value,
+which the money of a run starts from. The service never reads the database;
+the command reads the recorded turbos through a read-only connection of its own.
 """
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+import pytz
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import require_session
-from src.admin.backtests import DAYS, KEEP_DEFAULT_DAYS, REFUSALS, TRADES
-
-# What the prices panel shows when it is not told a period.
-DEFAULT_COVERAGE_DAYS = 120
+from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
+from src.admin.errors import DatabaseUnavailable, InvalidRequest
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
+
+FATES = ("executed", "refused", "failed", "unpriced", "closed", "ignored", "not_a_signal")
 
 
 def backtests(request: Request):
@@ -36,65 +37,16 @@ def backtests(request: Request):
     return ctx.backtests
 
 
-class Period(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    first_day: date = Field(alias="from")
-    last_day: date = Field(alias="to")
-
-
-# The prices a run is made on: downloaded from Dukascopy, or recorded from Capital.com.
-Prices = Literal["dukascopy", "capital"]
-
-
-class SignalsRequest(Period):
-    prices: Prices = "dukascopy"
-    # Only what differs from the live rules.
-    rules: dict[str, bool | int | float] = Field(default_factory=dict)
-    entry_price: float | None = Field(None, gt=0)
-    spread: float | None = Field(None, ge=0)
-    leverages: list[float] | None = None
-    note: str = ""
-    # The account the result is also counted in money on, and how unkind the fills are taken to be.
-    capital: float | None = Field(None, ge=0)
-    fill_delay: int | None = Field(None, ge=0)
-    slippage: float | None = Field(None, ge=0)
-
-
-class RunRequest(SignalsRequest):
-    strategy: str = "kernel_vwap"
-    # Only what differs from the strategy's defaults.
-    parameters: dict[str, bool | int | float | str] = Field(default_factory=dict)
-
-
-class Axis(BaseModel):
-    kind: Literal["parameter", "rule"]
-    name: str
-    values: list[bool | int | float | str]
-
-
-class SweepRequest(Period):
-    """The same backtest for every combination of the values of one or two settings."""
-
-    replay: Literal["strategy", "signals"] = "strategy"
-    prices: Prices = "dukascopy"
-    axes: list[Axis]
-    # The share of the days, the last ones, that have no say in the choice.
-    held_out: float = Field(0.3, gt=0, lt=1)
-    strategy: str = "kernel_vwap"
-    parameters: dict[str, bool | int | float | str] = Field(default_factory=dict)
-    rules: dict[str, bool | int | float] = Field(default_factory=dict)
-    entry_price: float | None = Field(None, gt=0)
-    spread: float | None = Field(None, ge=0)
-    # One turbo: a sweep already multiplies the runs.
-    leverage: float | None = Field(None, gt=0)
-    note: str = ""
-    fill_delay: int | None = Field(None, ge=0)
-    slippage: float | None = Field(None, ge=0)
+async def _last_balance(ctx) -> float | None:
+    """The account's value at the last daily report, None when the database cannot say it."""
+    try:
+        return await ctx.queries.last_balance()
+    except DatabaseUnavailable:
+        return None
 
 
 class Renaming(BaseModel):
-    note: str | None = None
+    name: str | None = None
     tags: list[str] | None = None
 
 
@@ -102,184 +54,240 @@ class Removal(BaseModel):
     ids: list[str] = Field(max_length=200)
 
 
-class KeepRequest(BaseModel):
-    enabled: bool
-    days: int = Field(KEEP_DEFAULT_DAYS, ge=1)
+class ResearchSwitch(BaseModel):
+    enabled: bool | None = None
+    keep_days: int | None = None
 
 
-class FetchRequest(Period):
-    # The Dukascopy instrument (src/admin/data.py); the history backtests read when absent.
-    label: str | None = None
+class TurboMeasure(BaseModel):
+    first: date = Field(alias="from")
+    last: date = Field(alias="to")
+
+
+def research(request: Request):
+    """The writing of each finished day for a research machine, with the backtests' switch."""
+    backtests(request)
+    ctx = request.app.state.ctx
+    if ctx.research is None:
+        raise HTTPException(status_code=503, detail="The research files are not available")
+    return ctx.research
 
 
 @router.get("/options")
-async def options(service=Depends(backtests)):
-    """What the form offers: the strategies and their parameters, the turbo assumed, the rules in force."""
-    return service.options()
+async def options(request: Request, service=Depends(backtests)):
+    """What the form offers: every setting with its live value, the limits of a run, the account to start from."""
+    return await run_in_threadpool(service.options, await _last_balance(request.app.state.ctx))
 
 
-@router.get("/prices")
-async def prices(
-    first_day: date | None = Query(None, alias="from"),
-    last_day: date | None = Query(None, alias="to"),
-    label: str | None = Query(None),
-    prices: Prices = Query("dukascopy"),
+def _local_day(moment, zone) -> str | None:
+    if moment is None:
+        return None
+    if isinstance(moment, str):
+        moment = datetime.fromisoformat(moment.replace("Z", "+00:00"))
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone).date().isoformat()
+
+
+@router.get("/coverage")
+async def coverage(
+    request: Request,
+    first_day: date = Query(..., alias="from"),
+    last_day: date = Query(..., alias="to"),
+    indice: str = Query("us100", max_length=32),
+    asset: str | None = Query(None, max_length=80),
+    source: str = Query("pine"),
     service=Depends(backtests),
 ):
     """
-    Which days have prices to backtest on, and the download in progress if
-    there is one. Of another Dukascopy instrument than the one backtests read
-    when ``label`` says so; of the days recorded from Capital.com when
-    ``prices`` says so. Off the event loop: each day's hours are looked for on
-    the disk.
+    What was recorded on each day of a period: the turbos of the indice by
+    direction and the hours of their bars, how long the recorder listened,
+    the bars of the asset a strategy would run on, the signals WATA received.
     """
-    last_day = last_day or datetime.now(timezone.utc).date()
-    first_day = first_day or last_day - timedelta(days=DEFAULT_COVERAGE_DAYS - 1)
-    if prices == "capital":
-        return await run_in_threadpool(service.recorded_coverage, first_day, last_day)
-    return await run_in_threadpool(service.coverage, first_day, last_day, label)
+    longest = service.max_period_days
+    if last_day < first_day or (last_day - first_day).days >= longest:
+        raise InvalidRequest(f"A period of {longest} days at most")
+    ctx = request.app.state.ctx
+    zone = pytz.timezone(ctx.settings.timezone)
+    days = {
+        (first_day + timedelta(days=offset)).isoformat(): {
+            "day": (first_day + timedelta(days=offset)).isoformat(),
+            "turbos": {"long": 0, "short": 0},
+            "first": None, "last": None, "recorded_minutes": 0, "asset_bars": None, "signals": None,
+        }
+        for offset in range((last_day - first_day).days + 1)
+    }
+    database = True
+    try:
+        for row in await ctx.queries.backtest_turbo_days(indice, first_day, last_day):
+            entry = days.get(str(row["day"]))
+            if entry is None or row["direction"] not in ("long", "short"):
+                continue
+            entry["turbos"][row["direction"]] = row["turbos"]
+            for name, key, pick in (("first", "first_ts", min), ("last", "last_ts", max)):
+                value = row[key].astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if row[key] else None
+                entry[name] = value if entry[name] is None else pick(entry[name], value) if value else entry[name]
+        for row in await ctx.queries.backtest_recorder_days(first_day, last_day):
+            entry = days.get(str(row["day"]))
+            if entry is not None:
+                entry["recorded_minutes"] = int(row["listened"] or 0) * 10 // 60
+    except DatabaseUnavailable:
+        database = False
+
+    if asset:
+        provider, _, key = asset.partition("/")
+        try:
+            if provider == "dukascopy":
+                label = history_label(key)
+                fetched = set(await run_in_threadpool(ctx.history.days, label)) if ctx.history is not None else set()
+                for entry in days.values():
+                    entry["asset_bars"] = 1 if date.fromisoformat(entry["day"]) in fetched else 0
+            elif provider in ("saxo", "capital") and database:
+                if provider == "saxo":
+                    instrument_id = saxo_instrument_id(key)
+                else:
+                    found = await ctx.queries.capital_instrument(capital_epic(key))
+                    instrument_id = found["id"] if found else None
+                rows = await ctx.queries.backtest_asset_days(provider, instrument_id, first_day, last_day) if instrument_id else []
+                counted = {str(row["day"]): row["bars"] for row in rows}
+                for entry in days.values():
+                    entry["asset_bars"] = counted.get(entry["day"], 0)
+            elif provider not in ("saxo", "capital"):
+                raise InvalidRequest("The asset is capital/<epic>, dukascopy/<label> or saxo/<id>")
+        except AssetNotFound as e:
+            raise InvalidRequest(str(e)) from None
+        except DatabaseUnavailable:
+            database = False
+
+    if source == "journal" and database:
+        try:
+            rows = await ctx.queries.journal_between(first_day, last_day)
+        except DatabaseUnavailable:
+            rows, database = [], False
+        for entry in days.values():
+            entry["signals"] = 0
+        for row in rows:
+            if row.get("action") not in ("long", "short") or row.get("indice") != indice:
+                continue
+            day = _local_day(row.get("received_timestamp") or row.get("decided_at"), zone)
+            if day in days:
+                days[day]["signals"] += 1
+    return {"days": list(days.values()), "database": database, "timezone": ctx.settings.timezone}
 
 
-@router.post("/prices/fetch", status_code=202)
-async def fetch_prices(body: FetchRequest, service=Depends(backtests)):
-    """Download the prices of a period in the background. One download at a time."""
-    return service.start_fetch(body.first_day, body.last_day, label=body.label)
+# The orders measured by default: the three months before today.
+EXECUTION_DAYS = 92
 
 
-@router.post("/prices/fetch/stop")
-async def stop_fetching_prices(service=Depends(backtests)):
-    return service.stop_fetch()
+@router.get("/execution")
+async def execution(
+    request: Request,
+    first_day: date | None = Query(None, alias="from"),
+    last_day: date | None = Query(None, alias="to"),
+    service=Depends(backtests),
+):
+    """
+    What WATA's own orders took and cost (src/backtest/execution_calibration.py):
+    the delays from a signal to the trader and from an order to Saxo, the price
+    paid against the recorded quote, the refusals; and the values a run would take from them.
+    """
+    from src.backtest.clock import TradingClock
+    from src.backtest.execution_calibration import measure
+
+    ctx = request.app.state.ctx
+    clock = TradingClock(ctx.settings.timezone)
+    last_day = last_day or datetime.now(timezone.utc).astimezone(clock.zone).date()
+    first_day = first_day or last_day - timedelta(days=EXECUTION_DAYS - 1)
+    if last_day < first_day or (last_day - first_day).days >= 366:
+        raise InvalidRequest("A period of a year at most")
+    start, end = clock.day_bounds(first_day)[0], clock.day_bounds(last_day)[1]
+    rows = await ctx.queries.execution_rows(datetime.fromtimestamp(start, timezone.utc), datetime.fromtimestamp(end, timezone.utc))
+    return {"from": first_day.isoformat(), "to": last_day.isoformat(), **measure(rows, clock)}
 
 
-@router.put("/prices/keep")
-async def keep_prices(body: KeepRequest, service=Depends(backtests)):
-    """Have the service fetch by itself what is missing of the last days, or stop doing so."""
-    return service.set_keep(body.enabled, body.days)
+@router.get("")
+async def runs(service=Depends(backtests)):
+    items = await run_in_threadpool(service.list_runs)
+    return {"items": items, "storage": await run_in_threadpool(service.storage)}
 
 
-@router.get("/calibration")
-async def calibration(service=Depends(backtests)):
-    """The turbo last measured on WATA's closed trades, and the measure in progress."""
-    return service.calibration()
-
-
-@router.post("/calibration", status_code=202)
-async def calibrate(request: Request, service=Depends(backtests)):
-    """Measure the turbo of the backtests on every closed trade of WATA. In the background."""
-    queries = request.app.state.ctx.queries
-    return service.start_calibration(await queries.closed_positions(), await queries.journal_between())
-
-
-@router.post("/signals", status_code=202)
-async def replay_signals(body: SignalsRequest, request: Request, service=Depends(backtests)):
-    """Ask for a backtest of the signals WATA received in the period, to be compared with what it did."""
-    queries = request.app.state.ctx.queries
-    return service.create_from_signals(
-        first_day=body.first_day, last_day=body.last_day,
-        journal=await queries.journal_between(body.first_day, body.last_day),
-        positions=await queries.closed_positions(body.first_day, body.last_day),
-        rules=body.rules, entry_price=body.entry_price, spread=body.spread, leverages=body.leverages,
-        note=body.note.strip(), capital=body.capital, fill_delay=body.fill_delay, slippage=body.slippage,
-        prices=body.prices,
-    )
-
-
-@router.post("/sweeps", status_code=202)
-async def sweep(body: SweepRequest, request: Request, service=Depends(backtests)):
-    """Ask for a sweep. Of the signals WATA received, its journal and its positions of the period are read first."""
+@router.post("", status_code=202)
+async def create(request: Request, body: dict = Body(...), service=Depends(backtests)):
+    """
+    Ask for a run, or a sweep. It waits its turn: one runs at a time. Of the
+    signals WATA received, the journal of the period (and a day either side)
+    is read first.
+    """
+    ctx = request.app.state.ctx
     journal = positions = None
-    if body.replay == "signals":
-        queries = request.app.state.ctx.queries
-        journal = await queries.journal_between(body.first_day, body.last_day)
-        positions = await queries.closed_positions(body.first_day, body.last_day)
-    return service.create_sweep(
-        first_day=body.first_day, last_day=body.last_day, axes=[axis.model_dump() for axis in body.axes],
-        held_out=body.held_out, strategy=body.strategy, parameters=body.parameters, rules=body.rules,
-        entry_price=body.entry_price, spread=body.spread, leverage=body.leverage, note=body.note.strip(),
-        fill_delay=body.fill_delay, slippage=body.slippage, journal=journal, positions=positions,
-        prices=body.prices,
-    )
+    source = body.get("source") if isinstance(body, dict) else None
+    if isinstance(source, dict) and source.get("kind") == "journal":
+        try:
+            first, last = date.fromisoformat(body.get("from")), date.fromisoformat(body.get("to"))
+        except (TypeError, ValueError):
+            raise InvalidRequest("The period is two days, YYYY-MM-DD") from None
+        journal = await ctx.queries.journal_between(first - timedelta(days=1), last + timedelta(days=1))
+        # What WATA really did with those signals, for the run to be set beside it.
+        try:
+            positions = await ctx.queries.closed_positions(first - timedelta(days=1), last + timedelta(days=1))
+        except DatabaseUnavailable:
+            positions = None
+    capital = await _last_balance(ctx)
+    # On the event loop: the run joins the service's queue, which is not to be touched from another thread.
+    return service.create(body, journal=journal, positions=positions, capital=capital)
 
 
 @router.post("/remove")
 async def remove_several(body: Removal, service=Depends(backtests)):
     """Remove several runs at once: those that wait or run are left, and named."""
-    return service.delete_many(body.ids)
+    return await run_in_threadpool(service.delete_many, body.ids)
 
 
-@router.get("/storage")
-async def storage(service=Depends(backtests)):
-    """The disk the runs and the prices take. Walks their folders: off the event loop."""
-    return await run_in_threadpool(service.storage)
+@router.delete("/former")
+async def remove_former(service=Depends(backtests)):
+    """Remove what the former backtester left on the disk."""
+    return await run_in_threadpool(service.delete_former)
 
 
-@router.get("")
-async def runs(service=Depends(backtests)):
-    return {"items": service.list_runs()}
+@router.get("/research")
+async def research_status(export=Depends(research)):
+    """Whether each finished day is written for a research machine, and what is there."""
+    return await run_in_threadpool(export.status)
 
 
-@router.post("", status_code=202)
-async def create(body: RunRequest, service=Depends(backtests)):
-    """Ask for a backtest. It waits its turn: one runs at a time."""
-    return service.create(
-        first_day=body.first_day, last_day=body.last_day, strategy=body.strategy,
-        parameters=body.parameters, rules=body.rules,
-        entry_price=body.entry_price, spread=body.spread, leverages=body.leverages, note=body.note.strip(),
-        capital=body.capital, fill_delay=body.fill_delay, slippage=body.slippage, prices=body.prices,
-    )
+@router.put("/research")
+async def research_switch(body: ResearchSwitch, export=Depends(research)):
+    """Switch the research files on or off, or change how many days the server keeps."""
+    return await run_in_threadpool(export.update, enabled=body.enabled, keep_days=body.keep_days)
+
+
+@router.get("/paper")
+async def paper(service=Depends(backtests)):
+    """Each shadow rule's days traded on paper, beside the daily range of its reference run."""
+    return await run_in_threadpool(service.paper)
+
+
+@router.get("/turbo-model")
+async def turbo_model(service=Depends(backtests)):
+    """The measure of the turbos made up from the index, and whether one is being made."""
+    return await run_in_threadpool(service.turbo_model)
+
+
+@router.post("/turbo-model", status_code=202)
+async def measure_turbos(body: TurboMeasure, service=Depends(backtests)):
+    """Measure the recorded turbos of a period against the index, for the runs on made-up turbos."""
+    return service.measure_turbos(body.first, body.last)
 
 
 @router.get("/{run_id}")
 async def run(run_id: str, service=Depends(backtests)):
-    return service.get(run_id)
+    return await run_in_threadpool(service.get, run_id)
 
 
 @router.patch("/{run_id}")
 async def rename(run_id: str, body: Renaming, service=Depends(backtests)):
     """Name a run again, or tag it."""
-    return service.update(run_id, note=None if body.note is None else body.note.strip(), tags=body.tags)
-
-
-@router.post("/{run_id}/cells/{cell}/run", status_code=202)
-async def run_cell(run_id: str, cell: int, service=Depends(backtests)):
-    """Make a backtest of its own of one combination of a sweep."""
-    return service.run_cell(run_id, cell)
-
-
-def _rows(kind: str):
-    async def rows(run_id: str, leverage: float = Query(...), service=Depends(backtests)):
-        return {"items": service.rows(run_id, kind, leverage)}
-
-    return rows
-
-
-router.add_api_route("/{run_id}/trades", _rows(TRADES), methods=["GET"])
-router.add_api_route("/{run_id}/days", _rows(DAYS), methods=["GET"])
-router.add_api_route("/{run_id}/refusals", _rows(REFUSALS), methods=["GET"])
-
-
-@router.get("/{run_id}/breakdowns")
-async def breakdowns(run_id: str, leverage: float = Query(...), service=Depends(backtests)):
-    """The trades of a run by hour, weekday, direction, reason, confidence and holding time."""
-    return service.breakdowns(run_id, leverage)
-
-
-@router.get("/{run_id}/trades/path")
-async def trade_path(run_id: str, leverage: float = Query(...), entry: str = Query(...), service=Depends(backtests)):
-    """One trade as the position monitor lived it. Replayed for the request, off the event loop."""
-    return await run_in_threadpool(service.trade_path, run_id, leverage, entry)
-
-
-@router.get("/{run_id}/days/{day}/chart")
-async def day_chart(run_id: str, day: date, leverage: float = Query(...), service=Depends(backtests)):
-    """One day as the strategy saw it. Replayed for the request, off the event loop."""
-    return await run_in_threadpool(service.day_chart, run_id, day, leverage)
-
-
-@router.get("/{run_id}/comparison")
-async def comparison(run_id: str, leverage: float = Query(...), service=Depends(backtests)):
-    """A run of real signals beside what WATA really did with them."""
-    return service.comparison(run_id, leverage)
+    return await run_in_threadpool(lambda: service.update(run_id, name=body.name, tags=body.tags))
 
 
 @router.post("/{run_id}/cancel")
@@ -289,5 +297,71 @@ async def cancel(run_id: str, service=Depends(backtests)):
 
 @router.delete("/{run_id}", status_code=204)
 async def delete(run_id: str, service=Depends(backtests)):
-    service.delete(run_id)
+    await run_in_threadpool(service.delete, run_id)
     return Response(status_code=204)
+
+
+@router.get("/{run_id}/days")
+async def days(run_id: str, service=Depends(backtests)):
+    return {"items": await run_in_threadpool(service.days, run_id)}
+
+
+@router.get("/{run_id}/signals")
+async def signals(
+    run_id: str, day: date | None = Query(None), fate: str | None = Query(None), service=Depends(backtests),
+):
+    if fate is not None and fate not in FATES:
+        raise InvalidRequest(f"A signal's fate is one of {', '.join(FATES)}")
+    return {"items": await run_in_threadpool(service.signals, run_id, day, fate)}
+
+
+@router.get("/{run_id}/trades")
+async def trades(run_id: str, day: date | None = Query(None), service=Depends(backtests)):
+    return {"items": await run_in_threadpool(service.trades, run_id, day)}
+
+
+@router.get("/{run_id}/breakdowns")
+async def breakdowns(run_id: str, service=Depends(backtests)):
+    """The trades of a run by hour, weekday, direction, exit, confidence, holding time, turbo price and issuer."""
+    return await run_in_threadpool(service.breakdowns, run_id)
+
+
+@router.get("/{run_id}/edge")
+async def edge(run_id: str, service=Depends(backtests)):
+    """How the asset moved after the run's entry signals, against random moments of the same hours."""
+    return await run_in_threadpool(service.edge, run_id) or {}
+
+
+@router.get("/{run_id}/reconciliation")
+async def reconciliation(run_id: str, service=Depends(backtests)):
+    """A replay of the journal set beside WATA's real positions of the same signals."""
+    return await run_in_threadpool(service.reconciliation, run_id) or {}
+
+
+@router.get("/{run_id}/baseline")
+async def baseline(run_id: str, service=Depends(backtests)):
+    """The totals of the run's repetitions with entries at random."""
+    return await run_in_threadpool(service.baseline, run_id) or {}
+
+
+@router.get("/{run_id}/sweep")
+async def sweep(run_id: str, service=Depends(backtests)):
+    return await run_in_threadpool(service.sweep, run_id)
+
+
+@router.post("/{run_id}/reference")
+async def reference(run_id: str, service=Depends(backtests)):
+    """The run becomes the reference its rule's paper days are set against."""
+    return service.set_reference(run_id)
+
+
+@router.post("/{run_id}/stress", status_code=202)
+async def stress(run_id: str, service=Depends(backtests)):
+    """The run made again with each order filled later and at a worse price."""
+    return service.stress(run_id)
+
+
+@router.post("/{run_id}/cells/{cell}/run", status_code=202)
+async def run_cell(run_id: str, cell: int, service=Depends(backtests)):
+    """Make a run of its own of one combination of a sweep."""
+    return service.run_cell(run_id, cell)

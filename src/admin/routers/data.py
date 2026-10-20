@@ -26,12 +26,13 @@ import pytz
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin import data
 from src.admin.auth import require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
+from src.admin.downloads import KEEP_DEFAULT_DAYS
 from src.admin.data import (
     CAPITAL,
     CATALOG,
@@ -76,6 +77,7 @@ from src.admin.prices import (
     price_decimals,
     range_bars,
     range_rows,
+    range_volumes,
     recording_gaps,
     sample_at,
 )
@@ -86,7 +88,7 @@ from src.capital_feed.hours import parse_opening_hours
 from src.capital_feed.settings import CREDENTIAL_VARIABLES, REST_URLS, CapitalSettings
 from src.price_recorder.export import day_bounds
 from src.price_recorder.settings import RecorderSettings
-from src.strategy.history import dukascopy
+from src.price_history import dukascopy
 
 router = APIRouter(prefix="/api/data", dependencies=[Depends(require_session)])
 
@@ -110,6 +112,8 @@ LIVE_POLL_SECONDS = 1.0
 LIVE_KEEP_ALIVE_SECONDS = 15.0
 # Ten-second bars read at a time from the database, to build range bars or statistics.
 SERIES_PAGE = 20_000
+# What the history panel shows when it is not told a period.
+DEFAULT_COVERAGE_DAYS = 120
 
 
 def _now() -> datetime:
@@ -277,14 +281,28 @@ def _history_assets(history) -> list[dict]:
     return [asset for asset in (history.asset(label) for label in history.labels()) if asset is not None]
 
 
+def _downloads_enabled(ctx) -> bool:
+    return bool(ctx.settings.backtests_enabled and ctx.downloads is not None)
+
+
+def _download_service(request: Request):
+    """The downloads of Dukascopy's history (src/admin/downloads.py), when they are switched on (with the backtests)."""
+    ctx = request.app.state.ctx
+    if not ctx.settings.backtests_enabled:
+        raise HTTPException(status_code=403, detail="Downloads are disabled in the configuration (admin.backtests_enabled)")
+    if ctx.downloads is None:
+        raise HTTPException(status_code=503, detail="Downloads are not available")
+    return ctx.downloads
+
+
 async def _dukascopy_provider(ctx) -> dict:
-    enabled = bool(ctx.settings.backtests_enabled and ctx.backtests is not None)
+    enabled = _downloads_enabled(ctx)
     assets = await run_in_threadpool(_history_assets, ctx.history) if ctx.history is not None else []
     fetch = keep = None
     if enabled:
-        fetch = ctx.backtests.fetch_status()
+        fetch = ctx.downloads.fetch_status()
         # Looks for every hour of the days it keeps on the disk.
-        keep = await run_in_threadpool(ctx.backtests.keep_status)
+        keep = await run_in_threadpool(ctx.downloads.keep_status)
     status, detail = data.history_provider_state(enabled, fetch, keep)
     first_t, last_t = _span(assets)
     # The days of its files, as for each of its assets.
@@ -408,7 +426,7 @@ async def _dukascopy_details(ctx) -> dict:
         **provider,
         "instruments": await run_in_threadpool(_history_instruments, history),
         "offered": history.offered(),
-        "storage": await run_in_threadpool(ctx.backtests.storage) if provider["enabled"] else None,
+        "storage": await run_in_threadpool(ctx.downloads.storage) if provider["enabled"] else None,
         "source": dukascopy.BASE_URL,
     }
 
@@ -659,6 +677,57 @@ async def remove_history_instrument(label: str, history=Depends(_downloads)):
     await run_in_threadpool(history.remove_instrument, history_label(label))
 
 
+class Period(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_day: date = Field(alias="from")
+    last_day: date = Field(alias="to")
+
+
+class FetchRequest(Period):
+    # The Dukascopy instrument; the history kept up to date when absent.
+    label: str | None = None
+
+
+class KeepRequest(BaseModel):
+    enabled: bool
+    days: int = Field(KEEP_DEFAULT_DAYS, ge=1)
+
+
+@router.get("/providers/dukascopy/coverage")
+async def history_coverage(
+    first_day: date | None = Query(None, alias="from"),
+    last_day: date | None = Query(None, alias="to"),
+    label: str | None = Query(None),
+    service=Depends(_download_service),
+):
+    """
+    Which days of an instrument (the history kept up to date by default) are
+    there, and the download in progress if there is one. Off the event loop:
+    each day's hours are looked for on the disk.
+    """
+    last_day = last_day or _now().date()
+    first_day = first_day or last_day - timedelta(days=DEFAULT_COVERAGE_DAYS - 1)
+    return await run_in_threadpool(service.coverage, first_day, last_day, label)
+
+
+@router.post("/providers/dukascopy/fetch", status_code=202)
+async def fetch_history(body: FetchRequest, service=Depends(_download_service)):
+    """Download the days of a period in the background. One download at a time."""
+    return service.start_fetch(body.first_day, body.last_day, label=body.label)
+
+
+@router.post("/providers/dukascopy/fetch/stop")
+async def stop_fetching_history(service=Depends(_download_service)):
+    return service.stop_fetch()
+
+
+@router.put("/providers/dukascopy/keep")
+async def keep_history(body: KeepRequest, service=Depends(_download_service)):
+    """Have the service fetch by itself what is missing of the last days, or stop doing so."""
+    return service.set_keep(body.enabled, body.days)
+
+
 # ── assets ──
 
 
@@ -875,14 +944,18 @@ class _Series:
     def __init__(self):
         self.times = array("q")
         self.opens, self.highs, self.lows, self.closes = array("d"), array("d"), array("d"), array("d")
+        # The quote changes of each ten seconds: what stands for volume (0 when a reader has none).
+        self.updates = array("q")
 
     def add(self, rows) -> None:
-        for moment, opened, high, low, closed in rows:
+        for row in rows:
+            moment, opened, high, low, closed = row[:5]
             self.times.append(moment)
             self.opens.append(opened)
             self.highs.append(high)
             self.lows.append(low)
             self.closes.append(closed)
+            self.updates.append(int(row[5] or 0) if len(row) > 5 else 0)
 
 
 def _too_many_rows() -> HTTPException:
@@ -906,9 +979,11 @@ async def _db_series(read, instrument_id: int, start: datetime, end: datetime, s
 def _history_series(history, label: str, start: datetime, end: datetime, side: str) -> _Series:
     """One side of the ten-second bars of a Dukascopy history; the ask of a bar that has none is left out."""
     first = 1 if side == SIDES[0] else 5
+    updates = BAR_COLUMNS.index("updates")
     series = _Series()
     series.add(
-        (row[0], *row[first:first + 4]) for row in history.rows(label, start, end) if row[first] is not None
+        (row[0], *row[first:first + 4], row[updates])
+        for row in history.rows(label, start, end) if row[first] is not None
     )
     if len(series.times) > RANGE_MAX_ROWS:
         raise _too_many_rows()
@@ -924,13 +999,17 @@ async def range_bars_of(
     last_day: date | None = Query(None, alias="to"),
     side: str = Query(SIDES[0]),
     size: float | None = Query(None, gt=0),
+    ticks: int | None = Query(None, ge=1),
     under: int | None = Query(None, ge=1),
 ):
     """
     The prices of one side as range bars: a bar ends when the price has left a
-    range of ``size``, however long that took. Without ``size``, a range that
-    suits the period is chosen. ``under`` names the recorded index shown under
-    a turbo: its bid at the end of each bar comes with the bar.
+    range of ``size``, however long that took. Or of ``ticks`` steps of the
+    instrument's own price, as TradingView's "R" counts them (Capital.com says
+    its step; elsewhere it is the step of the prices read). Without either, a
+    range that suits the period is chosen. ``under`` names the recorded index
+    shown under a turbo: its bid at the end of each bar comes with the bar.
+    Each bar comes with its quote changes, what stands for its volume.
     """
     ctx = request.app.state.ctx
     if side not in SIDES:
@@ -954,6 +1033,12 @@ async def range_bars_of(
 
     decimals = price_decimals(series.opens, series.highs, series.lows, series.closes)
     tick = round(10 ** -decimals, decimals)
+    if size is not None and ticks is not None:
+        raise HTTPException(status_code=422, detail="Give the range as a size or as ticks, not both")
+    if ticks is not None:
+        step_decimals = instrument.get("decimals") if provider == CAPITAL else None
+        step_decimals = decimals if step_decimals is None else min(int(step_decimals), decimals)
+        size = ticks * 10 ** -step_decimals
     if size is None:
         ticks = auto_range_ticks(
             round(min(series.lows, default=0) * 10 ** decimals), round(max(series.highs, default=0) * 10 ** decimals),
@@ -995,7 +1080,7 @@ async def range_bars_of(
         "size": round(ticks * tick, decimals),
         "auto": size is None,
         "columns": list(RANGE_COLUMNS),
-        "bars": range_rows(built, decimals, index),
+        "bars": range_rows(built, decimals, index, range_volumes(built, series.times, series.updates)),
     }
 
 

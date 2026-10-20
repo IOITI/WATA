@@ -1,9 +1,10 @@
+import type { ReactNode } from 'react'
+
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import type { BacktestStatus } from '@/lib/types'
+import type { BacktestFate, BacktestStatus } from '@/lib/types'
 
-import { STATE_LABEL, STATE_TONE } from './model'
+import { FATE_LABEL, FATE_TONE, STATE_LABEL, STATE_TONE } from './model'
 import type { Change } from './model'
 
 /** What the pages of this section share. */
@@ -16,7 +17,11 @@ export function StateBadge({ status }: { status: BacktestStatus }) {
   )
 }
 
-/** Each thing a run changed, with what it was before. */
+export function FateBadge({ fate }: { fate: BacktestFate }) {
+  return <Badge tone={FATE_TONE[fate]}>{FATE_LABEL[fate]}</Badge>
+}
+
+/** Each setting a run changed, with what it was live. */
 export function ChangeList({ changes, none }: { changes: readonly Change[]; none: string }) {
   if (changes.length === 0) return <p className="text-sm text-muted-foreground">{none}</p>
   return (
@@ -38,33 +43,11 @@ export function ChangeList({ changes, none }: { changes: readonly Change[]; none
   )
 }
 
-interface LeveragePickerProps {
-  leverages: readonly number[]
-  value: number
-  onChange: (leverage: number) => void
-}
-
-/**
- * Which assumption about the turbo the figures are shown for. The leverage is
- * not known, so a run is made with several: a result that holds for one only
- * is not a result.
- */
-export function LeveragePicker({ leverages, value, onChange }: LeveragePickerProps) {
+export function Measure({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Leverage assumed for the turbo">
-      <span className="text-xs text-muted-foreground">Index points for 1.00 of turbo</span>
-      {leverages.map((leverage) => (
-        <Button
-          key={leverage}
-          // Filled: the one cue that says which assumption the page shows.
-          variant={leverage === value ? 'primary' : 'outline'}
-          size="sm"
-          aria-pressed={leverage === value}
-          onClick={() => onChange(leverage)}
-        >
-          {leverage}
-        </Button>
-      ))}
+    <div className="flex items-baseline justify-between gap-4 text-sm">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="text-right tabular-nums">{children}</dd>
     </div>
   )
 }
@@ -80,4 +63,3 @@ export function BacktestsDisabled() {
     </Alert>
   )
 }
-

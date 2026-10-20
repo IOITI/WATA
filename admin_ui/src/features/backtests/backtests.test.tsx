@@ -2,40 +2,54 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { ThemeProvider } from '@/components/ThemeProvider'
+import { ToastProvider } from '@/components/ToastProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
   BacktestBreakdowns,
-  BacktestCalibration,
-  BacktestComparison,
-  BacktestDayChart,
-  BacktestFigures,
-  BacktestGroup,
+  BacktestEdge,
   BacktestOptions,
+  BacktestReconciliation,
   BacktestRun,
-  BacktestRunListed,
   BacktestSweep,
-  BacktestTradePath,
-  PriceCoverage,
-  PriceFetchStatus,
-  PriceKeepStatus,
+  BacktestTurboMeasure,
+  BacktestTurboModel,
+  DataAsset,
+  PriceBarRow,
   Session,
+  TaRule,
+  TaScriptSummary,
 } from '@/lib/types'
-import { resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
+import { day, OPTIONS, run, RUN_ID, SETTINGS, signal, trade } from '@/test/backtests'
+import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
+import { WithTrail } from '@/test/WithTrail'
 
-import { BacktestDayPage } from './BacktestDayPage'
-import { BacktestFormPage } from './BacktestFormPage'
-import { BacktestRunPage } from './BacktestRunPage'
 import { BacktestsPage } from './BacktestsPage'
 import { ComparePage } from './ComparePage'
+import { DayPage } from './DayPage'
+import { NewBacktestPage } from './NewBacktestPage'
+import { RunPage } from './RunPage'
 
 vi.mock('lightweight-charts', async () => (await import('@/test/fakeCharts')).fakeLightweightCharts)
+// The script's inputs, as PineTS reads them in the page's worker.
+vi.mock('@/features/ta/engine/pineWorkerClient', () => ({
+  PineWorkerClient: class {
+    compile = async () => ({
+      id: 1,
+      ok: true,
+      op: 'compile',
+      declaration: 'indicator',
+      inputs: [{ id: 'in_0', name: 'Fast length', title: 'Fast length', varId: 'fastLength', type: 'int', defval: 9, minval: 1 }],
+    })
+    terminate() {}
+  },
+}))
 
 const SESSION: Session = {
   authenticated: true,
-  version: '0.12.0',
+  version: '0.20.0',
   timezone: 'Europe/Paris',
   actions_enabled: true,
   config_edit_enabled: true,
@@ -44,261 +58,112 @@ const SESSION: Session = {
   restart_required: false,
 }
 
-const FIRST = '20261012-221947-d838d0'
-const SECOND = '20261012-221950-751439'
+const SOURCE = `//@version=6
+indicator("EMA cross")
+fastLength = input.int(9, "Fast length", minval = 1)
+fast = ta.ema(close, fastLength)
+alertcondition(ta.crossover(close, fast), title = "Cross up", message = '{"action": "long"}')
+alertcondition(ta.crossunder(close, fast), title = "Cross down", message = '{"action": "short"}')
+`
 
-const OPTIONS: BacktestOptions = {
-  strategies: [
-    {
-      name: 'kernel_vwap',
-      parameters: [
-        { name: 'kernel_bandwidth', kind: 'integer', default: 15, help: 'Range bars the kernel looks back on.', least: 2, most: 500, choices: [], advanced: false },
-        { name: 'session_start', kind: 'text', default: '08:00', help: 'Start of the session.', least: null, most: null, choices: [], advanced: false },
-        { name: 'tick', kind: 'number', default: 0.1, help: 'Smallest step of the prices.', least: 0.01, most: 10, choices: [], advanced: true },
-      ],
-    },
-  ],
-  turbo: { entry_price: 4.4, spread: 0.03, leverages: [80, 110, 140], measured: false },
-  rules: {
-    live: { stoploss_percent: -15, day_profit_target: 1.7, trailing_enabled: true, timezone: 'Europe/Paris' },
-    editable: [
-      { name: 'stoploss_percent', kind: 'number', label: 'Stop-loss, in percent of the turbo', least: -100, most: -0.1 },
-      { name: 'day_profit_target', kind: 'number', label: 'Daily target, in percent', least: 0.01, most: 10000 },
-      { name: 'trailing_enabled', kind: 'boolean', label: 'Trailing stop', least: null, most: null },
-    ],
-  },
-  execution: { capital: 10000, fill_delay: 0, slippage: 0 },
-  limits: {
-    period_days: 366, leverages: 5, queued: 10, fetch_days: 92, note_length: 200,
-    fill_delay: 600, slippage: 100, sweep_cells: 64, sweep_values: 12, tags: 6, tag_length: 24,
-  },
-  held_out: { share: 0.3, least: 0.1, most: 0.5 },
-  timezone: 'Europe/Paris',
+const SCRIPT: TaScriptSummary = {
+  id: '8c2df05570d5',
+  name: 'EMA cross',
+  kind: 'indicator',
+  description: '',
+  pine_version: 6,
+  library_name: null,
+  imports: [],
+  version: 1,
+  versions: [{ number: 1, saved_at: '2026-10-19T10:00:00+00:00', size: 300, sha256: 'x' }],
+  created_at: '2026-10-19T10:00:00+00:00',
+  updated_at: '2026-10-19T10:00:00+00:00',
 }
 
-const fetchStatus = (changes: Partial<PriceFetchStatus> = {}): PriceFetchStatus => ({ state: 'idle', lines: [], ...changes })
-
-const keeping = (changes: Partial<PriceKeepStatus> = {}): PriceKeepStatus => ({
-  enabled: false, days: 120, state: 'off', missing: 84, settled: 0, failures: 0, next_at: null, limits: { days: 730 },
-  ...changes,
-})
-
-const coverage = (changes: Partial<PriceCoverage> = {}): PriceCoverage => ({
-  from: '2026-09-14',
-  to: '2026-09-18',
-  label: 'us100',
-  symbol: 'USATECHIDXUSD',
-  days: [
-    { day: '2026-09-14', state: 'incomplete', hours: 20, hours_expected: 24 },
-    { day: '2026-09-15', state: 'ready', hours: 24, hours_expected: 24 },
-    { day: '2026-09-16', state: 'missing', hours: 0, hours_expected: 24 },
-    { day: '2026-09-17', state: 'ready', hours: 24, hours_expected: 24 },
-    { day: '2026-09-19', state: 'closed', hours: 0, hours_expected: 0 },
-  ],
-  ready: { count: 2, first: '2026-09-15', last: '2026-09-17' },
-  fetch: fetchStatus(),
-  keep: keeping(),
-  ...changes,
-})
-
-/** The figures of a run made before it was set against random entries. */
-const figures = (trades: number, total: number): BacktestFigures => ({
-  days: 3, days_with_an_entry: 2, trades, win_rate: 100, average_win: 1.7, average_loss: null,
-  total_percent: total, best_day: 1.7, worst_day: 0, worst_drawdown: 0, index_points: 23.1,
-  exits: { 'Daily profit target': trades }, entries: { cross: trades }, refusals: { 'Day profit reached': 11 },
-})
-
-/** What a run says of how far it can be trusted. */
-const TRUST: Partial<BacktestFigures> = {
-  sample: 'too_few', expectancy: 1.7, profit_factor: null, longest_losing_streak: 0,
-  total_range: null, median_day: 1.7, day_spread: 0.8, winning_days: 2, losing_days: 0,
-  winners_lowest: { median: -0.68, tenth: -4.2 }, losers_highest: null,
-  against_random: {
-    repetitions: 200, seed: 1, entries: 13, beaten: 64, median: 3.4, low: -13.6, high: 3.43, level: 90,
-    worst: -27.75, best: 3.43, trades: 3, win_rate: 66.7,
-    totals: [-27.75, -13.56, -13.56, 1.7, 3.4, 3.43, 3.43, 3.43],
-  },
+const RULE: TaRule = {
+  id: 'r00000000001',
+  name: 'EMA cross on US100',
+  asset: { provider: 'capital', key: 'US100' },
+  side: 'bid',
+  bars: { type: 'range', ticks: 40 },
+  script: { id: SCRIPT.id, version: 1, sha256: 'x' },
+  libraries: [],
+  inputs: [{ id: 'in_0', var: 'fastLength', title: 'Fast length', value: 12 }],
+  alerts: [{ title: 'Cross up', action: 'long' }],
+  alert_calls: 'ignore',
+  confidence_plot: null,
+  indice: 'us100',
+  mode: 'shadow',
+  created_at: '2026-10-19T10:00:00+00:00',
+  updated_at: '2026-10-19T10:00:00+00:00',
+  mode_changed_at: '2026-10-19T10:00:00+00:00',
+  script_name: 'EMA cross',
+  latest: { script: 1, libraries: {} },
 }
 
-const MEASURED = {
-  trades: 42, used: 38, without_prices: 3, unreadable: 0, set_aside: 1, fitted: true, reason: null, sample: 'few' as const,
-  entry_price: 5.1, entry_price_low: 4.2, entry_price_high: 7.9, points_per_unit: 104.2, points_per_unit_low: 96.5,
-  points_per_unit_high: 113.3, level: 90, spread: 0.04, median_error: 0.3, ninth_error: 1.1, measured_at: '2026-10-13T06:00:00Z',
+function asset(changes: Partial<DataAsset>): DataAsset {
+  return {
+    provider: 'capital', key: 'US100', ref: 'capital/US100', id: null, uic: null, asset_type: 'INDICES', symbol: 'US100',
+    description: 'US Tech 100', currency: 'USD', role: 'underlying', indice: 'us100', underlying_uic: null, direction: null,
+    barrier: null, issuer: null, first_t: null, last_t: null, last_bid: null, last_ask: null, status: 'recording', ...changes,
+  }
 }
 
-const calibration = (changes: Partial<BacktestCalibration> = {}): BacktestCalibration => ({
-  status: { state: 'idle' }, result: null, turbo: OPTIONS.turbo, lines: [], ...changes,
-})
-
-const leg = (reference: string, performance: number, exit: string, entered = Date.parse('2026-09-15T07:52:46Z') / 1000) => ({
-  direction: 'short', entered_at: entered, left_at: entered + 480, performance, exit, reference,
-})
-
-const COMPARISON: BacktestComparison = {
-  id: FIRST, leverage: 110, timezone: 'Europe/Paris',
-  journal: { executed: 2, refused: 11, ignored: 1 },
-  summary: {
-    real_trades: 2, model_trades: 2, paired: 1, average_gap: -0.12, median_gap: 0.12, ninth_gap: 0.12, same_exit: 1,
-    real_total: -13.45, model_total: 3.43, days: 2, median_day_gap: 8.5,
-  },
-  pairs: [{
-    real: leg('p1', 1.82, 'Daily profit target'), model: leg('', 1.7, 'Daily profit target'),
-    gap: -0.12, same_exit: true, left_later: -75,
-  }],
-  only_real: [leg('p0', -15, 'Stop-loss', Date.parse('2026-09-17T09:00:00Z') / 1000)],
-  only_model: [],
-  days: [
-    { day: '2026-09-15', real_percent: 1.82, model_percent: 1.7, gap: -0.12, real_trades: 1, model_trades: 1 },
-    { day: '2026-09-17', real_percent: -15, model_percent: 1.7, gap: 16.7, real_trades: 1, model_trades: 1 },
-  ],
-}
-
-const listed = (changes: Partial<BacktestRunListed> = {}): BacktestRunListed => ({
-  id: FIRST,
-  from: '2026-09-15',
-  to: '2026-09-22',
-  strategy: 'kernel_vwap',
-  parameters: {},
-  rules: {},
-  turbo: { entry_price: 4.4, spread: 0.03, leverages: [80, 110, 140] },
-  note: '',
-  status: { state: 'done', created_at: '2026-10-12T22:19:47Z', finished_at: '2026-10-12T22:19:48Z' },
-  headline: { leverage: 110, days: 3, days_with_an_entry: 2, trades: 2, win_rate: 100, total_percent: 3.43, worst_drawdown: 0 },
-  ...changes,
-})
-
-const whole = (changes: Partial<BacktestRun> = {}): BacktestRun => ({
-  ...listed(),
-  summary: {
-    parameters: {},
-    bars: 23310,
-    decisions: 15,
-    seconds: 0.3,
-    days_without_prices: ['2026-09-16'],
-    days_incomplete: [],
-    runs: [80, 110, 140].map((leverage) => ({
-      turbo: { entry_price: 4.4, points_per_unit: leverage, spread: 0.03 },
-      summary: figures(2, leverage === 110 ? 3.43 : 3.4),
-    })),
-  },
-  progress: null,
-  run_rules: {},
-  output: [],
-  waiting_before: 0,
-  ...changes,
-})
-
-const CHANGED = whole({
-  id: SECOND,
-  note: 'catch-up, target 3 %',
-  parameters: { entry_mode: 'cross_catchup', kernel_bandwidth: 8 },
-  rules: { day_profit_target: 3 },
-  rules_before: { day_profit_target: 1.7 },
-  headline: { leverage: 110, days: 3, days_with_an_entry: 3, trades: 3, win_rate: 100, total_percent: 9.27, worst_drawdown: 0 },
-})
-
-const TRADE = {
-  entry_time: '2026-09-15T07:52:40Z', exit_time: '2026-09-15T08:00:20Z', direction: 'short', entry_reason: 'catch-up',
-  confidence: 1.86, entry_index: 28994.4, exit_index: 28982.9, index_points: 11.5, performance_percent: 1.7,
-  max_performance_percent: 1.7, exit_reason: 'Daily profit target',
-}
-const DAYS = [
-  { day: '2026-09-15', entries: 1, closed: 1, day_percent: 1.7 },
-  { day: '2026-09-17', entries: 1, closed: 1, day_percent: 1.7 },
+const ASSETS: DataAsset[] = [
+  asset({}),
+  asset({ provider: 'dukascopy', key: 'us100', ref: 'dukascopy/us100', description: 'US Tech 100 (Dukascopy)', status: 'downloaded' }),
+  asset({ provider: 'saxo', key: '1', ref: 'saxo/1', id: 1, description: 'NASDAQ 100' }),
+  // A turbo: not something a strategy reads.
+  asset({ provider: 'saxo', key: '5', ref: 'saxo/5', id: 5, role: 'turbo', description: 'NASDAQ 100 Turbo Short 25900 SG' }),
 ]
-const REFUSAL = { time: '2026-09-15T10:00:00Z', direction: 'long', reason: 'Day profit reached' }
-
-const T0 = Date.parse('2026-09-15T08:00:00Z') / 1000
-const DAY_CHART: BacktestDayChart = {
-  id: FIRST, day: '2026-09-15', timezone: 'Europe/Paris', leverage: 110, tick: 0.1, decimals: 1, size: 6,
-  session: { start: T0 - 7200, end: T0 + 40000 },
-  bars: [
-    [T0, 29000, 29006, 29000, 29006, T0, T0 + 60, true, false, null],
-    [T0 + 60, 29006, 29006, 29000, 29000, T0 + 60, T0 + 120, true, false, null],
-  ],
-  kernel: [29003, 29001],
-  vwap: [29010, 29009],
-  upper: [29030, 29031],
-  lower: [28990, 28987],
-  entries_allowed: [false, true],
-  decisions: [],
-  trades: [{ ...TRADE, entry_time: '2026-09-15T08:01:00Z', exit_time: '2026-09-15T08:01:30Z' }],
-  refusals: [],
-}
-
-const group = (name: string | number, trades: number, total: number): BacktestGroup => ({
-  group: name, trade_count: trades, win_count: trades - 1, loss_count: 1, win_rate: 50, profit_loss: total * 100,
-  average_percent: total / trades, average_best_percent: 2.5, total_percent: total,
-})
 
 const BREAKDOWNS: BacktestBreakdowns = {
-  id: FIRST, leverage: 110, timezone: 'Europe/Paris',
-  summary: {
-    trade_count: 6, win_count: 4, loss_count: 2, win_rate: 66.67, profit_loss: -120, average_percent: -1.2,
-    average_best_percent: 2.5, total_percent: -7.2, average_given_back: 3.7, turned_negative_count: 2, turned_negative_percent: 33.33,
+  trades: 3,
+  groups: { hour: [], weekday: [], direction: [], exit: [], confidence: [], holding: [], turbo_price: [], issuer: [] },
+  given_back: { average_given_back: null, turned_negative_count: 0, turned_negative_percent: null },
+}
+
+const utc = (iso: string) => Date.parse(iso) / 1000
+
+/** Bars of an instrument on 14 October from 08:40 to 09:20 in Paris, `interval` seconds apart. */
+function bars(first: number, interval: number): PriceBarRow[] {
+  const rows: PriceBarRow[] = []
+  for (let t = utc('2026-10-14T06:40:00Z'); t < utc('2026-10-14T07:20:00Z'); t += interval) {
+    const bid = first + ((t / interval) % 7) * 0.01
+    rows.push([t, bid, bid + 0.02, bid - 0.02, bid + 0.01, bid + 0.05, bid + 0.07, bid + 0.03, bid + 0.06, 3])
+  }
+  return rows
+}
+
+let runs: Record<string, BacktestRun> = {}
+let research = {
+  enabled: false, keep_days: 30, state: 'off', exporting: null, days: 0, first: null, last: null, bytes: 0, error: null,
+  location: 'research/days', limits: { keep_days: 365 },
+}
+let sent: { method: string; path: string; body: unknown }[] = []
+let sweeps: Record<string, BacktestSweep> = {}
+let edges: Record<string, BacktestEdge> = {}
+let reconciliations: Record<string, BacktestReconciliation> = {}
+let options: BacktestOptions = OPTIONS
+const MEASURE: BacktestTurboMeasure = {
+  made_at: '2026-10-20T01:00:00Z',
+  underlying: { provider: 'dukascopy', key: 'us100', side: 'bid' },
+  indice: 'us100',
+  days: 6,
+  first: '2026-10-13',
+  last: '2026-10-20',
+  few_days: false,
+  directions: {
+    long: { factor: 0.0086, offset: -2, spacing: 50, turbos: 40, bars: 9000, r2: 0.998, error_eur: 0.02, error_percent: 1.2 },
+    short: { factor: 0.0085, offset: 2, spacing: 50, turbos: 38, bars: 8800, r2: 0.997, error_eur: 0.03, error_percent: 1.4 },
   },
-  groups: {
-    hour: [group(9, 4, 5.1), group(15, 2, -12.3)],
-    weekday: [group('Monday', 3, 1.7), group('Tuesday', 3, -8.9)],
-    direction: [group('long', 4, 3.4), group('short', 2, -10.6)],
-    entry_reason: [group('cross', 6, -7.2)],
-    confidence: [group('1.5 and above', 6, -7.2)],
-    holding_time: [group('Under 5 min', 6, -7.2)],
-    exit: [group('Daily profit target', 4, 6.8), group('Stoploss', 2, -14)],
-  },
+  quoting: { first_minute: 480, last_minute: 1320 },
+  issuer: 'SG',
 }
+let turboModel: BacktestTurboModel = { state: 'idle', error: null, asked: null, finished_at: null, measure: null, underlying: 'dukascopy/us100', max_days: 92 }
+const STRESS_ID = '20261020-010000-dddddd'
 
-const PATH_START = Date.parse('2026-09-15T08:01:00Z') / 1000
-const TRADE_PATH: BacktestTradePath = {
-  id: FIRST, leverage: 110, timezone: 'Europe/Paris',
-  trade: { ...TRADE, entry_time: '2026-09-15T08:01:00Z', exit_time: '2026-09-15T08:01:30Z' },
-  day_before_percent: -5,
-  points: [[PATH_START, 0.4, -0.7, 0.6, null], [PATH_START + 10, 5.2, 0.4, 5.6, -2.4], [PATH_START + 20, 7.05, 4.9, 7.05, -0.95]],
-  levels: { stop: -15, take_profit: 60, day_target: 7.05, trailing_activation: 5, trailing_drawdown: 8 },
-}
-
-const swept = (total: number, trades = 12) => ({ ...figures(trades, total), expectancy: total / trades })
-const SWEEP: BacktestSweep = {
-  axes: [
-    { kind: 'rule', name: 'day_profit_target', values: [1.7, 3] },
-    { kind: 'parameter', name: 'kernel_bandwidth', values: [8, 15] },
-  ],
-  held_out: { share: 0.3, from: '2026-09-20', days: 6, tuning_days: 14 },
-  cells: [
-    { values: [1.7, 8], tuning: swept(4.1), held_out: swept(2.2, 5), whole: swept(6.4, 17) },
-    { values: [1.7, 15], tuning: swept(5.0), held_out: swept(3.1, 5), whole: swept(8.3, 17) },
-    { values: [3, 8], tuning: swept(9.6), held_out: swept(-4.2, 5), whole: swept(5.0, 17) },
-    { values: [3, 15], tuning: swept(-2.0), held_out: swept(1.5, 5), whole: swept(-0.5, 17) },
-  ],
-  days_without_prices: [],
-  bars: 150000,
-  seconds: 4.2,
-}
-
-interface Server {
-  runs?: BacktestRunListed[]
-  run?: Record<string, BacktestRun>
-  prices?: PriceCoverage
-  /** The days recorded from Capital.com. */
-  recorded?: PriceCoverage
-  /** What the server answers to a request for a new run, when it refuses it. */
-  refused?: { status: number; detail: string }
-  options?: BacktestOptions
-  calibration?: BacktestCalibration
-}
-
-interface Sent {
-  method: string
-  path: string
-  body: unknown
-}
-
-let sent: Sent[] = []
-
-function serve({
-  runs = [], run = {}, prices = coverage(), recorded = coverage({ prices: 'capital', symbol: null, days: [], ready: { count: 0, first: null, last: null } }),
-  refused, options = OPTIONS, calibration: measured = calibration(),
-}: Server = {}) {
+function serve() {
   sent = []
   const json = (body: unknown, status = 200) =>
     new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -307,47 +172,92 @@ function serve({
     vi.fn(async (path: string, init: RequestInit = {}) => {
       const method = init.method ?? 'GET'
       const url = new URL(path, 'http://admin.test')
-      sent.push({ method, path, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
-      const [, , , runId, what, day] = url.pathname.split('/')
-
-      if (url.pathname === '/api/backtests/options') return json(options)
-      if (url.pathname === '/api/backtests/prices') {
-        // The days recorded from Capital.com: none unless a test says so.
-        if (url.searchParams.get('prices') === 'capital') return json(recorded)
-        return json(prices)
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+      sent.push({ method, path: `${url.pathname}${url.search}`, body })
+      const route = url.pathname
+      if (route === '/api/backtests' && method === 'GET') {
+        return json({ items: Object.values(runs).map(({ request: _r, settings: _s, summary: _m, progress: _p, lines: _l, ...listed }) => listed), storage: { runs: { count: 2, bytes: 52_000 }, former: { count: 7, bytes: 3_400_000 } } })
       }
-      if (url.pathname === '/api/backtests/prices/keep') return json(keeping({ enabled: true, state: 'due' }))
-      if (url.pathname === '/api/backtests/calibration') {
-        return method === 'GET' ? json(measured) : json(calibration({ status: { state: 'running', trades: 42 } }), 202)
+      if (route === '/api/backtests' && method === 'POST') return json(run({ id: '20261019-230000-cccccc', status: { state: 'queued' } }), 202)
+      if (route === '/api/backtests/options') return json(options)
+      if (route === '/api/backtests/execution') {
+        const spread = (median: number, count: number) => ({ median, p90: median * 1.5, count })
+        return json({
+          from: '2026-07-21', to: '2026-10-20', signals: 30, orders: 60, requests: 62,
+          signal_delay_seconds: { from_signal: spread(2.6, 30), from_receipt: spread(0.6, 30) }, order_seconds: spread(0.4, 60),
+          slippage: { buy: { ...spread(0.01, 30), median_ticks: 1 }, sell: { ...spread(0, 30), median_ticks: 0 }, all: { ...spread(0.005, 60), median_ticks: 0.5 } },
+          refusals: { share_percent: 3.2, by_hour: [], codes: {} }, suggested: { signal_delay_seconds: 2.6, order_seconds: 0.4, slippage: 0.005 }, least: 10,
+        })
       }
-      if (url.pathname === '/api/backtests/signals') return json(whole({ id: SECOND, kind: 'signals' }), 202)
-      if (url.pathname === '/api/backtests/sweeps') return json(whole({ id: SECOND, kind: 'sweep' }), 202)
-      if (url.pathname === '/api/backtests/storage') {
-        return json({ runs: { count: 2, bytes: 48_200 }, prices: { days: 3, bars_bytes: 600_000, fetched_bytes: 13_400_000 } })
+      if (route === '/api/backtests/turbo-model') {
+        if (method === 'POST') turboModel = { ...turboModel, state: 'running', asked: body as { from: string; to: string } }
+        return json(turboModel, method === 'POST' ? 202 : 200)
       }
-      if (url.pathname === '/api/backtests/remove') {
-        const { ids } = JSON.parse(String(init.body)) as { ids: string[] }
-        return json({ removed: ids, kept: [] })
+      if (route === '/api/backtests/former' && method === 'DELETE') return json({ removed: 7 })
+      if (route === '/api/backtests/research') {
+        if (method === 'PUT') research = { ...research, ...(body as object), state: 'waiting_for_close' }
+        return json(research)
       }
-      if (method === 'PATCH') return json({ ...run[runId], ...(JSON.parse(String(init.body)) as object) })
-      if (what === 'cells') return json(whole({ id: SECOND }), 202)
-      if (what === 'breakdowns') return json(BREAKDOWNS)
-      if (what === 'trades' && day === 'path') return json(TRADE_PATH)
-      if (url.pathname === '/api/backtests/prices/fetch') return json(fetchStatus({ state: 'running' }), 202)
-      if (url.pathname === '/api/backtests/prices/fetch/stop') return json(fetchStatus({ state: 'running' }))
-      if (url.pathname === '/api/backtests' && method === 'GET') return json({ items: runs })
-      if (url.pathname === '/api/backtests' && method === 'POST') {
-        return refused ? json({ detail: refused.detail }, refused.status) : json(whole({ id: SECOND }), 202)
+      if (route === '/api/backtests/coverage') {
+        return json({
+          database: true,
+          timezone: 'Europe/Paris',
+          days: ['2026-10-14', '2026-10-15', '2026-10-16'].map((entry) => ({
+            day: entry, turbos: { long: 3, short: 3 }, first: null, last: null, recorded_minutes: 831, asset_bars: 5000, signals: null,
+          })),
+        })
       }
-      if (method === 'DELETE') return json(null, 204)
-      if (what === 'cancel') return json(run[runId])
-      if (what === 'comparison') return json(COMPARISON)
-      if (what === 'trades') return json({ items: [TRADE] })
-      if (what === 'refusals') return json({ items: [REFUSAL] })
-      if (what === 'days' && day) return json(DAY_CHART)
-      if (what === 'days') return json({ items: DAYS })
-      if (run[runId]) return json(run[runId])
-      return json({ detail: 'No such backtest' }, 404)
+      const match = /^\/api\/backtests\/([^/]+)(?:\/(.+))?$/.exec(route)
+      if (match) {
+        const found = runs[match[1]]
+        if (!found) return json({ detail: 'No such backtest' }, 404)
+        const day14 = url.searchParams.get('day')
+        switch (match[2]) {
+          case undefined:
+            return json(found)
+          case 'days':
+            return json({ items: [day(), day({ day: '2026-10-15', day_percent: 1.7 }), day({ day: '2026-10-16', status: 'no_recorded_turbos', trades: 0, recorded: null })] })
+          case 'trades':
+            return json({ items: day14 === null || day14 === '2026-10-14' ? [trade()] : [] })
+          case 'signals':
+            return json({
+              items: [
+                signal(),
+                signal({ id: 13, action: 'long', fate: 'refused', rule: 'day_profit', reason: 'Day profit above 1.25%', trade_id: null, candidates: null, bar_time: '2026-10-14T07:10:00Z' }),
+              ],
+            })
+          case 'baseline':
+            return json({ repetitions: 20, seed: 1, entries: 113, hours: [0, 1439], totals: [1, 2, 6], trades: [3, 4, 3], histogram: [] })
+          case 'breakdowns':
+            return json(BREAKDOWNS)
+          case 'sweep':
+            return sweeps[match[1]] ? json(sweeps[match[1]]) : json({ detail: 'Not a finished sweep' }, 409)
+          case 'edge':
+            return json(edges[match[1]] ?? {})
+          case 'reconciliation':
+            return json(reconciliations[match[1]] ?? {})
+          case 'stress':
+            return json(run({ id: STRESS_ID, kind: 'sweep', name: `Stress: ${found.name}`, stress_of: found.id, status: { state: 'queued' } }), 202)
+          default:
+            return json({ detail: `Not served: ${route}` }, 404)
+        }
+      }
+      if (route === '/api/ta/scripts') return json({ items: [SCRIPT] })
+      if (route === `/api/ta/scripts/${SCRIPT.id}/versions/1`) return json({ ...SCRIPT.versions[0], source: SOURCE })
+      if (route === '/api/ta/rules') return json({ revision: 'r1', rules: [RULE], indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }] })
+      if (route === '/api/data/assets') {
+        return json({ timezone: 'Europe/Paris', seen: 'all', items: ASSETS, truncated: false, max: 3000, saxo_error: null })
+      }
+      const bar = /^\/api\/data\/assets\/(capital|saxo|dukascopy)\/([^/]+)\/bars$/.exec(route)
+      if (bar) {
+        const interval = Number(url.searchParams.get('interval'))
+        const instrument = ASSETS.find((entry) => entry.ref === `${bar[1]}/${bar[2]}`)
+        return json({
+          instrument, from: url.searchParams.get('from'), to: url.searchParams.get('to'), timezone: 'Europe/Paris', interval, columns: [],
+          bars: bars(bar[1] === 'saxo' ? 10.4 : 24850, interval),
+        })
+      }
+      return json({ detail: `Not served in this test: ${method} ${route}` }, 404)
     }),
   )
 }
@@ -357,1115 +267,462 @@ function Address() {
   return <output aria-label="address">{location.pathname + location.search}</output>
 }
 
-function renderAt(address: string, session: Session = SESSION) {
+function renderAt(address: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const page = (element: React.ReactNode) => (
-    <>
+    <WithTrail>
       {element}
       <Address />
-    </>
+    </WithTrail>
+  )
+  const router = createMemoryRouter(
+    [
+      { path: '/backtests', element: page(<BacktestsPage />) },
+      { path: '/backtests/new', element: page(<NewBacktestPage />) },
+      { path: '/backtests/compare', element: page(<ComparePage />) },
+      { path: '/backtests/:runId', element: page(<RunPage />) },
+      { path: '/backtests/:runId/days/:day', element: page(<DayPage />) },
+    ],
+    { initialEntries: [address] },
   )
   render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <AuthContext.Provider value={{ session, error: null, login: async () => {}, logout: async () => {} }}>
-          <MemoryRouter initialEntries={[address]}>
-            <Routes>
-              <Route path="backtests" element={page(<BacktestsPage />)} />
-              <Route path="backtests/new" element={page(<BacktestFormPage />)} />
-              <Route path="backtests/compare" element={page(<ComparePage />)} />
-              <Route path="backtests/:runId" element={page(<BacktestRunPage />)} />
-              <Route path="backtests/:runId/days/:day" element={page(<BacktestDayPage />)} />
-            </Routes>
-          </MemoryRouter>
-        </AuthContext.Provider>
+        <ToastProvider>
+          <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
+            <RouterProvider router={router} />
+          </AuthContext.Provider>
+        </ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>,
   )
 }
 
-const address = () => screen.getByLabelText('address').textContent
-const requests = (method: string) => sent.filter((request) => request.method === method)
+const address = () => screen.getByRole('status', { name: 'address' }).textContent
 
 beforeEach(() => {
   resetCharts()
-  window.localStorage.clear()
+  sweeps = {}
+  edges = {}
+  reconciliations = {}
+  options = OPTIONS
+  turboModel = { ...turboModel, state: 'idle', asked: null, measure: null }
+  research = { ...research, enabled: false, keep_days: 30, state: 'off' }
+  runs = {
+    [RUN_ID]: run(),
+    '20261019-210000-bbbbbb': run({
+      id: '20261019-210000-bbbbbb',
+      name: 'Stop at 10',
+      changes: { stoploss_percent: -10 },
+      settings: { settings: { ...SETTINGS, stoploss_percent: -10 }, changed: { stoploss_percent: -10 }, live_before: { stoploss_percent: -15 } },
+    }),
+  }
+  serve()
 })
-
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
 describe('the list of backtests', () => {
-  it('shows each run with its state and the figures of its middle leverage', async () => {
-    serve({ runs: [CHANGED, listed()] })
-    renderAt('/backtests')
-
-    const row = (await screen.findByRole('link', { name: 'catch-up, target 3 %' })).closest('tr') as HTMLElement
-    expect(within(row).getByText('Done')).toBeInTheDocument()
-    expect(within(row).getByText('+9.27%')).toBeInTheDocument()
-    expect(within(row).getByText('15 Sept 2026 to 22 Sept 2026')).toBeInTheDocument()
-    // A run that changed nothing is named for that.
-    expect(screen.getByRole('link', { name: 'Defaults and live rules' })).toHaveAttribute('href', `/backtests/${FIRST}`)
-  })
-
-  it('opens the comparison of the runs that were ticked', async () => {
+  it('lists each run with what it ran and what it made, and compares two of them', async () => {
     const user = userEvent.setup()
-    serve({ runs: [CHANGED, listed()] })
     renderAt('/backtests')
-    expect(await screen.findByRole('button', { name: 'Compare' })).toBeDisabled()
 
-    await user.click(await screen.findByRole('checkbox', { name: 'Select: catch-up, target 3 %' }))
-    await user.click(screen.getByRole('checkbox', { name: 'Select: Defaults and live rules' }))
+    expect(await screen.findByRole('link', { name: 'Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    expect(screen.getAllByText('EMA cross v1 · Capital.com US100 · 1 min')).toHaveLength(2)
+    expect(screen.getAllByText('too few to conclude')).toHaveLength(2)
+    expect(screen.getByText('2 runs take 52.0 kB on disk.')).toBeInTheDocument()
+
+    const compare = screen.getByRole('button', { name: 'Compare' })
+    expect(compare).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: 'Select: Smoke EMA cross' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Select: Stop at 10' }))
     await user.click(screen.getByRole('button', { name: 'Compare 2' }))
-
-    expect(address()).toBe(`/backtests/compare?runs=${SECOND},${FIRST}`)
+    expect(address()).toBe(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
   })
 
-  it('offers no comparison for a run that has no result yet', async () => {
-    serve({ runs: [listed({ status: { state: 'running' }, headline: null })] })
-    renderAt('/backtests')
-
-    expect(await screen.findByText('Running')).toBeInTheDocument()
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-  })
-
-  it('says what a total is worth: the random runs it beat, and when it rests on too little', async () => {
-    const weighed = listed({ headline: { ...listed().headline!, sample: 'too_few', beaten: 64 } })
-    serve({ runs: [weighed] })
-    renderAt('/backtests')
-
-    const row = (await screen.findByRole('link', { name: 'Defaults and live rules' })).closest('tr') as HTMLElement
-    expect(within(row).getByText('64%')).toBeInTheDocument()
-    expect(within(row).getByText('too few to conclude')).toBeInTheDocument()
-    expect(screen.getByText(/near 50%, the entries have shown nothing/)).toBeInTheDocument()
-  })
-
-  it('names a replay of real signals for what it is', async () => {
-    serve({ runs: [listed({ kind: 'signals', strategy: 'signals', rules: { day_profit_target: 3 } })] })
-    renderAt('/backtests')
-
-    expect(await screen.findByRole('link', { name: 'Real signals · day profit target 3' })).toBeInTheDocument()
-  })
-
-  it('shows the tags of a run, that it is stale, and what a sweep tried', async () => {
-    const tagged = listed({ tags: ['keep', 'september'], stale: { code: true, prices: false, version: '0.12.0' } })
-    const sweep = listed({
-      id: SECOND, kind: 'sweep', headline: null,
-      axes: [{ kind: 'rule', name: 'day_profit_target', values: [1.7, 3] }, { kind: 'parameter', name: 'kernel_bandwidth', values: [8, 15] }],
-    })
-    serve({ runs: [sweep, tagged] })
-    renderAt('/backtests')
-
-    const row = (await screen.findByRole('link', { name: 'Defaults and live rules' })).closest('tr') as HTMLElement
-    expect(within(row).getByText('keep')).toBeInTheDocument()
-    expect(within(row).getByText('september')).toBeInTheDocument()
-    expect(within(row).getByText('stale')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Sweep of day profit target × kernel bandwidth' })).toHaveAttribute('href', `/backtests/${SECOND}`)
-  })
-
-  it('compares finished backtests only: a sweep that is selected is not one', async () => {
+  it('switches on the files written each night for a research machine', async () => {
     const user = userEvent.setup()
-    serve({ runs: [listed({ id: SECOND, kind: 'sweep', headline: null, axes: [] }), listed()] })
     renderAt('/backtests')
 
-    await user.click(await screen.findByRole('checkbox', { name: 'Select: Defaults and live rules' }))
-    await user.click(screen.getByRole('checkbox', { name: /Select: Sweep of/ }))
+    expect(await screen.findByText(/Each finished day can be written as files for a research machine/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Write them' }))
 
-    expect(screen.getByRole('button', { name: 'Compare' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Remove 2' })).toBeEnabled()
+    expect(await screen.findByText(/Research files on: No day written yet; the last 30 are kept\. Days not written yet wait/)).toBeInTheDocument()
+    expect(sent.find((request) => request.method === 'PUT' && request.path === '/api/backtests/research')?.body).toEqual({ enabled: true })
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Days of research files kept on the server' }), '90')
+    await waitFor(() => expect(sent.filter((request) => request.method === 'PUT').at(-1)?.body).toEqual({ keep_days: 90 }))
   })
 
-  it('removes the runs selected once that was confirmed', async () => {
+  it('measures the turbos made up from the index on the recorded days', async () => {
     const user = userEvent.setup()
-    serve({ runs: [CHANGED, listed()] })
     renderAt('/backtests')
-    expect(await screen.findByRole('button', { name: 'Remove' })).toBeDisabled()
 
-    await user.click(await screen.findByRole('checkbox', { name: 'Select: catch-up, target 3 %' }))
-    await user.click(screen.getByRole('button', { name: 'Remove 1' }))
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText('catch-up, target 3 %')).toBeInTheDocument()
-    expect(requests('POST')).toEqual([])
+    expect(await screen.findByText(/^Not measured yet/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Measure them' }))
+
+    const asked = sent.find((request) => request.method === 'POST' && request.path === '/api/backtests/turbo-model')?.body as { from: string; to: string }
+    // The last thirty days.
+    expect((Date.parse(asked.to) - Date.parse(asked.from)) / 86_400_000).toBe(29)
+    expect(await screen.findByText(/^Measuring the turbos of/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Measure them' })).toBeDisabled()
+  })
+
+  it('shows what the turbos were measured on and how well the model prices them', async () => {
+    turboModel = { ...turboModel, state: 'done', measure: MEASURE }
+    renderAt('/backtests')
+
+    const table = await screen.findByRole('table', { name: 'The measure of each direction' })
+    expect(within(table).getByText('0.00860')).toBeInTheDocument()
+    expect(within(table).getByText('0.020 € (1.2 %)')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Measure them again' })).toBeEnabled()
+  })
+
+  it('removes what the former backtester left, once asked', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    expect(await screen.findByText(/The former backtester left 7 runs \(3.4 MB\)/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove them' }))
+    const dialog = await screen.findByRole('dialog', { name: "Remove the former backtester's runs?" })
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
-
-    await waitFor(() => expect(requests('POST')).toEqual([
-      { method: 'POST', path: '/api/backtests/remove', body: { ids: [SECOND] } },
-    ]))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-  })
-
-  it('selects the runs that failed or were stopped in one go, and says what the disk holds', async () => {
-    const user = userEvent.setup()
-    const failed = listed({ id: SECOND, status: { state: 'failed', created_at: '2026-10-12T22:19:50Z' }, headline: null, note: 'broken' })
-    serve({ runs: [failed, listed()] })
-    renderAt('/backtests')
-
-    expect(await screen.findByText(/2 runs take 48.2 kB on disk; 3 days of prices, 14.0 MB\./)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Select the 1 failed or stopped' }))
-
-    expect(screen.getByRole('checkbox', { name: 'Select: broken' })).toBeChecked()
-    expect(screen.getByRole('checkbox', { name: 'Select: Defaults and live rules' })).not.toBeChecked()
-    await user.click(screen.getByRole('button', { name: 'Select none' }))
-    expect(screen.getByRole('checkbox', { name: 'Select: broken' })).not.toBeChecked()
-  })
-
-  it('says how to get a first run when there is none', async () => {
-    serve()
-    renderAt('/backtests')
-
-    expect(await screen.findByText('No backtest yet')).toBeInTheDocument()
-  })
-
-  it('asks the server for nothing when backtests are switched off, and says where to switch them on', async () => {
-    serve()
-    renderAt('/backtests', { ...SESSION, backtests_enabled: false })
-
-    expect(screen.getByText('Backtests are switched off')).toBeInTheDocument()
-    expect(screen.getByText('admin.backtests_enabled')).toBeInTheDocument()
-    expect(sent).toEqual([])
+    await waitFor(() => expect(sent.some((request) => request.method === 'DELETE' && request.path === '/api/backtests/former')).toBe(true))
   })
 })
 
-describe('the prices panel', () => {
-  it('says which days are ready, and shows each weekday with its state', async () => {
-    serve()
-    renderAt('/backtests')
-
-    expect(await screen.findByText(/2 days of the index ready to backtest on, from 15 Sept 2026 to 17 Sept 2026/)).toBeInTheDocument()
-    const month = screen.getByRole('list', { name: 'Prices of Sept 2026' })
-    // The Saturday is not a day anything is fetched for.
-    expect(within(month).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-      '14 Sept 2026: some hours fetched',
-      '15 Sept 2026: ready',
-      '16 Sept 2026: not fetched',
-      '17 Sept 2026: ready',
-    ])
-  })
-
-  it('starts a download of the period chosen', async () => {
+describe('a new backtest', () => {
+  it('goes through the steps and asks for the run the form describes', async () => {
     const user = userEvent.setup()
-    serve()
-    renderAt('/backtests')
-
-    await user.click(await screen.findByRole('button', { name: 'Fetch these days' }))
-
-    await waitFor(() => expect(requests('POST')).toHaveLength(1))
-    const [{ path, body }] = requests('POST')
-    expect(path).toBe('/api/backtests/prices/fetch')
-    expect(body).toEqual({ from: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), to: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) })
-  })
-
-  it('shows what a running download says, and stops it when asked', async () => {
-    const user = userEvent.setup()
-    const running = fetchStatus({ state: 'running', from: '2026-10-05', to: '2026-10-09', lines: ['2026-10-05: 8010 bars'] })
-    serve({ prices: coverage({ fetch: running }) })
-    renderAt('/backtests')
-
-    expect(await screen.findByText('2026-10-05: 8010 bars')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Fetch these days' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Stop the download' }))
-
-    await waitFor(() => expect(requests('POST').map((request) => request.path)).toEqual(['/api/backtests/prices/fetch/stop']))
-  })
-
-  it('says that a download usually ends with days missing, and what to do', async () => {
-    serve({ prices: coverage({ fetch: fetchStatus({ state: 'incomplete', from: '2026-10-05', to: '2026-10-09' }) }) })
-    renderAt('/backtests')
-
-    expect(await screen.findByText(/Ended with days still missing.*Run the same period again/)).toBeInTheDocument()
-  })
-
-  it('says so when no day has been fetched yet', async () => {
-    serve({ prices: coverage({ days: [], ready: { count: 0, first: null, last: null } }) })
-    renderAt('/backtests')
-
-    expect(await screen.findByText(/No day of prices yet/)).toBeInTheDocument()
-  })
-
-  it('has the service told to keep the prices up to date', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests')
-
-    const keep = await screen.findByRole('switch', { name: 'Keep the prices up to date' })
-    expect(keep).toHaveAttribute('aria-checked', 'false')
-    expect(keep).toHaveAccessibleDescription('Prices are fetched only when asked for below.')
-    await user.click(keep)
-
-    await waitFor(() => expect(requests('PUT')).toEqual([
-      { method: 'PUT', path: '/api/backtests/prices/keep', body: { enabled: true, days: 120 } },
-    ]))
-  })
-
-  it('says what the service is waiting for when it fetches by itself', async () => {
-    const waiting = keeping({ enabled: true, state: 'backing_off', missing: 12, failures: 2, next_at: '2026-10-13T02:00:00Z' })
-    serve({ prices: coverage({ keep: waiting, fetch: fetchStatus({ state: 'incomplete', automatic: true }) }) })
-    renderAt('/backtests')
-
-    expect(await screen.findByRole('switch', { name: 'Keep the prices up to date' })).toHaveAccessibleDescription(
-      /12 days to fetch\. The source stopped answering 2 times in a row: left alone until .*04:00/,
-    )
-    // Its own downloads are not the operator's to run again.
-    expect(screen.getByText(/The service will ask again later/)).toBeInTheDocument()
-  })
-
-  it('tells apart a day whose last hours are not there yet and one the source does not have', async () => {
-    serve({ prices: coverage({ days: [
-      { day: '2026-09-14', state: 'partial', hours: 22, hours_expected: 24 },
-      { day: '2026-09-15', state: 'unavailable', hours: 0, hours_expected: 24 },
-    ] }) })
-    renderAt('/backtests')
-
-    const month = await screen.findByRole('list', { name: 'Prices of Sept 2026' })
-    expect(within(month).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-      '14 Sept 2026: ready, its last hours not published yet',
-      '15 Sept 2026: nothing at the source',
-    ])
-  })
-})
-
-describe('the turbo of the backtests', () => {
-  it('is a guess until it is measured, which is asked for from here', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests')
-
-    expect(await screen.findByText(/Backtests assume a turbo paid 4.4 that moves by 1.00 for 80, 110, 140 index points/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Measure on real trades' }))
-
-    await waitFor(() => expect(requests('POST').map((request) => request.path)).toEqual(['/api/backtests/calibration']))
-  })
-
-  it('says what was measured, on how many trades, and how far it is from them', async () => {
-    const turbo = { entry_price: 5.1, spread: 0.04, leverages: [96.5, 104.2, 113.3], measured: true }
-    serve({ calibration: calibration({ status: { state: 'done' }, result: MEASURED, turbo }) })
-    renderAt('/backtests')
-
-    expect(await screen.findByText(/made with the turbo measured on WATA's closed trades: paid 5.1, 1.00 for 96.5, 104.2, 113.3/)).toBeInTheDocument()
-    expect(screen.getByText('42 closed trades: 38 used, 3 without index prices for their day, 1 set aside as unlike the others.')).toBeInTheDocument()
-    expect(screen.getByText('1.00 of turbo for 104.2 index points (90 in 100: 96.5 to 113.3), spread 0.04.')).toBeInTheDocument()
-    expect(screen.getByText(/Half of the real trades are within 0.3 points of percent/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Measure again' })).toBeEnabled()
-  })
-
-  it('shows a measure in progress, and one that failed', async () => {
-    serve({ calibration: calibration({ status: { state: 'running', trades: 42 } }) })
-    renderAt('/backtests')
-    expect(await screen.findByRole('button', { name: /Measuring on 42 trades/ })).toBeDisabled()
-  })
-
-  it('says why a measure failed', async () => {
-    serve({ calibration: calibration({ status: { state: 'failed', error: 'code 2' }, lines: ['The trades cannot be read'] }) })
-    renderAt('/backtests')
-
-    expect(await screen.findByText('The measure failed')).toBeInTheDocument()
-    expect(screen.getByText('The trades cannot be read')).toBeInTheDocument()
-  })
-})
-
-describe('asking for a backtest', () => {
-  it('sends the period, the turbo assumed and only what was changed', async () => {
-    const user = userEvent.setup()
-    serve()
     renderAt('/backtests/new')
 
-    const bandwidth = await screen.findByLabelText('Kernel bandwidth')
-    await user.clear(bandwidth)
-    await user.type(bandwidth, '8')
-    const stop = screen.getByLabelText('Stop-loss, in percent of the turbo')
+    // 1. The asset: Capital.com's first; a turbo is not offered.
+    const assetSelect = await screen.findByRole('combobox', { name: 'Asset' })
+    expect(assetSelect).toHaveValue('capital/US100')
+    expect(within(assetSelect).queryByText(/Turbo Short/)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    // 2. The strategy: the script's alerts made signals.
+    expect(await screen.findByText('Cross up')).toBeInTheDocument()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'What “Cross up” becomes' }), 'long')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'What “Cross down” becomes' }), 'short')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    // 3. The period, and what was recorded of it.
+    // The last seven days by default, of which the server says three were recorded.
+    expect(await screen.findByText('3 days of the 7 can be traded.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    // 4. A setting changed from the live one, and the fills WATA's own orders had.
+    // Each step comes in once the one before has gone.
+    const stop = await screen.findByRole('spinbutton', { name: /^Stop-loss/ })
     await user.clear(stop)
     await user.type(stop, '-10')
-    await user.click(screen.getByRole('switch', { name: 'Trailing stop' }))
-    await user.type(screen.getByLabelText('What this run is for (optional)'), 'tighter stop')
-    expect(screen.getByText('Default: 15')).toBeInTheDocument()
-    expect(screen.getByText('Live: -15')).toBeInTheDocument()
-    expect(screen.getByText(/1 parameter and 2 rules changed/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Run the backtest' }))
+    expect(screen.getByText(/Live: -15 %/)).toBeInTheDocument()
+    expect(await screen.findByText(/a signal reached the trader 2\.6 s after its time/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Use the measured values' }))
+    expect(screen.getByRole('button', { name: 'Measured values in use' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
-    await waitFor(() => expect(address()).toBe(`/backtests/${SECOND}`))
-    expect(requests('POST')).toEqual([{
-      method: 'POST',
-      path: '/api/backtests',
-      body: {
-        // The days that have prices, by default, of Dukascopy's history.
-        from: '2026-09-15', to: '2026-09-17', prices: 'dukascopy', strategy: 'kernel_vwap',
-        parameters: { kernel_bandwidth: 8 },
-        rules: { stoploss_percent: -10, trailing_enabled: false },
-        entry_price: 4.4, spread: 0.03, leverages: [80, 110, 140],
-        note: 'tighter stop',
-        // Fills as kind as the bars, and 10,000 to count the money on.
-        capital: 10000, fill_delay: 0, slippage: 0,
-      },
-    }])
-  })
+    // 5. The review, and the request.
+    expect(await screen.findByText('-10 %')).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'Name (optional)' }), 'EMA, stop at 10')
+    await user.click(screen.getByRole('button', { name: 'Start the backtest' }))
 
-  it('runs on the days recorded from Capital.com when they are chosen, and says what they are', async () => {
-    const user = userEvent.setup()
-    serve({
-      recorded: coverage({
-        prices: 'capital', symbol: null,
-        days: [{ day: '2026-10-12', state: 'ready', hours: 0, hours_expected: 0 }],
-        ready: { count: 3, first: '2026-10-08', last: '2026-10-12' },
-      }),
-    })
-    renderAt('/backtests/new')
-    await screen.findByLabelText('Kernel bandwidth')
-
-    await user.click(screen.getByRole('button', { name: 'Capital.com, recorded' }))
-
-    expect(screen.getByRole('button', { name: 'Capital.com, recorded' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByText(/the prices of the chart the signals come from/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Run the backtest' }))
-
-    await waitFor(() => expect(requests('POST')).toHaveLength(1))
-    expect(requests('POST')[0].body).toMatchObject({ prices: 'capital' })
-    expect(sent.some((request) => request.path.includes('/api/backtests/prices?prices=capital'))).toBe(true)
-  })
-
-  it('says when nothing was recorded from Capital.com yet', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-    await screen.findByLabelText('Kernel bandwidth')
-
-    await user.click(screen.getByRole('button', { name: 'Capital.com, recorded' }))
-
-    expect(screen.getByText(/No day has been recorded from Capital.com yet/)).toBeInTheDocument()
-  })
-
-  it('sends nothing as changed when nothing was', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    await user.click(await screen.findByRole('button', { name: 'Run the backtest' }))
-
-    await waitFor(() => expect(requests('POST')).toHaveLength(1))
-    expect(requests('POST')[0].body).toMatchObject({ parameters: {}, rules: {} })
-  })
-
-  it('does not ask while a value cannot be used, and says which', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    const bandwidth = await screen.findByLabelText('Kernel bandwidth')
-    await user.clear(bandwidth)
-    await user.type(bandwidth, '1000')
-
-    expect(screen.getByText('Between 2 and 500.')).toBeInTheDocument()
-    expect(bandwidth).toHaveAttribute('aria-invalid', 'true')
-    expect(screen.getByRole('button', { name: 'Run the backtest' })).toBeDisabled()
-
-    const leverages = screen.getByLabelText('Index points for 1.00 of turbo')
-    await user.clear(bandwidth)
-    await user.type(bandwidth, '15')
-    await user.clear(leverages)
-    await user.type(leverages, '80, 80')
-    expect(screen.getByText('Numbers above zero separated by commas, each once.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Run the backtest' })).toBeDisabled()
-  })
-
-  it('keeps the parameters seldom touched folded until they are asked for', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    await screen.findByLabelText('Kernel bandwidth')
-    expect(screen.queryByLabelText('Tick')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'More parameters' }))
-
-    expect(screen.getByLabelText('Tick')).toHaveValue('0.1')
-  })
-
-  it('replays the signals WATA received instead of a strategy, when asked to', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    await screen.findByLabelText('Kernel bandwidth')
-    await user.click(screen.getByRole('button', { name: 'The signals WATA received' }))
-
-    // No strategy, so none of its parameters: the rules and the turbo stay.
-    expect(screen.queryByLabelText('Kernel bandwidth')).not.toBeInTheDocument()
-    expect(screen.getByText(/it is how the model itself is checked/)).toBeInTheDocument()
-    const target = screen.getByLabelText('Daily target, in percent')
-    await user.clear(target)
-    await user.type(target, '3')
-    expect(screen.getByText(/1 rule changed/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Replay the signals' }))
-
-    await waitFor(() => expect(address()).toBe(`/backtests/${SECOND}`))
-    expect(requests('POST')).toEqual([{
-      method: 'POST',
-      path: '/api/backtests/signals',
-      body: {
-        from: '2026-09-15', to: '2026-09-17', prices: 'dukascopy', rules: { day_profit_target: 3 },
-        entry_price: 4.4, spread: 0.03, leverages: [80, 110, 140], note: '',
-        capital: 10000, fill_delay: 0, slippage: 0,
-      },
-    }])
-  })
-
-  it('does not hold a replay back for a parameter of the strategy that could not be used', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    const bandwidth = await screen.findByLabelText('Kernel bandwidth')
-    await user.clear(bandwidth)
-    await user.type(bandwidth, '1000')
-    await user.click(screen.getByRole('button', { name: 'The signals WATA received' }))
-
-    expect(screen.getByRole('button', { name: 'Replay the signals' })).toBeEnabled()
-  })
-
-  it('asks for less kind fills and another account', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    const delay = await screen.findByLabelText('Wait before a fill, in seconds')
-    await user.clear(delay)
-    await user.type(delay, '30')
-    const slippage = screen.getByLabelText('Index points lost on each fill')
-    await user.clear(slippage)
-    await user.type(slippage, '1.5')
-    const capital = screen.getByLabelText('Starting capital')
-    await user.clear(capital)
-    await user.type(capital, '2500')
-    await user.click(screen.getByRole('button', { name: 'Run the backtest' }))
-
-    await waitFor(() => expect(requests('POST')).toHaveLength(1))
-    expect(requests('POST')[0].body).toMatchObject({ capital: 2500, fill_delay: 30, slippage: 1.5 })
-  })
-
-  it('does not ask while a fill could not be taken that way', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    const delay = await screen.findByLabelText('Wait before a fill, in seconds')
-    await user.clear(delay)
-    await user.type(delay, '7.5')
-
-    expect(screen.getByText('Whole seconds, from 0 to 600.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Run the backtest' })).toBeDisabled()
-  })
-
-  it('asks for a sweep when a setting is given several values', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    await screen.findByLabelText('Kernel bandwidth')
-    // No sweep until a setting is chosen: the form asks for one backtest.
-    expect(screen.queryByLabelText(/Values of:/)).not.toBeInTheDocument()
-    await user.click(screen.getByLabelText('Setting'))
-    await user.click(await screen.findByRole('option', { name: 'Daily target, in percent' }))
-    await user.type(screen.getByLabelText('Values of: Daily target, in percent'), '1, 1.7, 3')
-    await user.click(screen.getByLabelText('Second setting'))
-    await user.click(await screen.findByRole('option', { name: 'Kernel bandwidth' }))
-    await user.type(screen.getByLabelText('Values of: Kernel bandwidth'), '8, 15')
-    // The daily target typed above as one value is not sent beside its several values.
-    const target = screen.getByLabelText('Daily target, in percent')
-    await user.clear(target)
-    await user.type(target, '2')
-    await user.click(screen.getByRole('button', { name: 'Run the sweep of 6 combinations' }))
-
-    await waitFor(() => expect(address()).toBe(`/backtests/${SECOND}`))
-    expect(requests('POST')).toEqual([{
-      method: 'POST',
-      path: '/api/backtests/sweeps',
-      body: {
-        from: '2026-09-15', to: '2026-09-17', replay: 'strategy', prices: 'dukascopy',
-        axes: [
-          { kind: 'rule', name: 'day_profit_target', values: [1, 1.7, 3] },
-          { kind: 'parameter', name: 'kernel_bandwidth', values: [8, 15] },
+    await waitFor(() => expect(address()).toBe('/backtests/20261019-230000-cccccc'))
+    const asked = sent.find((request) => request.method === 'POST' && request.path === '/api/backtests')?.body as Record<string, unknown>
+    expect(asked).toMatchObject({
+      name: 'EMA, stop at 10',
+      indice: 'us100',
+      source: {
+        kind: 'pine',
+        script: { id: SCRIPT.id, version: 1 },
+        asset: { provider: 'capital', key: 'US100' },
+        bars: { type: 'time', timeframe: '1' },
+        alerts: [
+          { title: 'Cross up', action: 'long' },
+          { title: 'Cross down', action: 'short' },
         ],
-        held_out: 0.3, strategy: 'kernel_vwap', parameters: {}, rules: {},
-        entry_price: 4.4, spread: 0.03,
-        // One turbo: the middle one of those typed.
-        leverage: 110, note: '', fill_delay: 0, slippage: 0,
       },
-    }])
-  })
-
-  it('does not ask for a sweep whose values cannot be used, and says why', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    await screen.findByLabelText('Kernel bandwidth')
-    await user.click(screen.getByLabelText('Setting'))
-    await user.click(await screen.findByRole('option', { name: 'Kernel bandwidth' }))
-    const values = screen.getByLabelText('Values of: Kernel bandwidth')
-    await user.type(values, '8')
-    expect(screen.getByText('Two values at least, separated by commas.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Run the sweep' })).toBeDisabled()
-
-    await user.type(values, ', 1000')
-    expect(screen.getByText('1000: Between 2 and 500.')).toBeInTheDocument()
-
-    await user.clear(values)
-    await user.type(values, '8, 15')
-    await user.click(screen.getByLabelText('Second setting'))
-    await user.click((await screen.findAllByRole('option', { name: 'Kernel bandwidth' })).at(-1) as HTMLElement)
-    await user.type(screen.getAllByLabelText('Values of: Kernel bandwidth')[1], '20, 30')
-    expect(screen.getByText('The two settings are the same one.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Run the sweep' })).toBeDisabled()
-  })
-
-  it('sweeps rules only over the signals WATA received', async () => {
-    const user = userEvent.setup()
-    serve()
-    renderAt('/backtests/new')
-
-    await screen.findByLabelText('Kernel bandwidth')
-    await user.click(screen.getByRole('button', { name: 'The signals WATA received' }))
-    await user.click(screen.getByLabelText('Setting'))
-
-    expect(await screen.findByRole('option', { name: 'Daily target, in percent' })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: 'Kernel bandwidth' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('option', { name: 'Trailing stop' }))
-    await user.type(screen.getByLabelText('Values of: Trailing stop'), 'on, off')
-    await user.click(screen.getByRole('button', { name: 'Run the sweep of 2 combinations' }))
-
-    await waitFor(() => expect(requests('POST')).toHaveLength(1))
-    expect(requests('POST')[0].body).toMatchObject({
-      replay: 'signals', axes: [{ kind: 'rule', name: 'trailing_enabled', values: [true, false] }],
+      changes: { stoploss_percent: -10, signal_delay_seconds: 2.6, order_seconds: 0.4, slippage: 0.005 },
+      baseline: { repetitions: 100, seed: 1 },
     })
   })
 
-  it('starts again from a replay as a replay', async () => {
-    serve({ run: { [SECOND]: whole({ id: SECOND, kind: 'signals', strategy: 'signals' }) } })
-    renderAt(`/backtests/new?from=${SECOND}`)
-
-    expect(await screen.findByRole('button', { name: 'The signals WATA received' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Replay the signals' })).toBeInTheDocument()
-  })
-
-  it('says where the turbo offered comes from once it was measured', async () => {
-    const measured = { ...OPTIONS, turbo: { entry_price: 5.1, spread: 0.04, leverages: [96.5, 104.2, 113.3], measured: true } }
-    serve({ options: measured })
-    renderAt('/backtests/new')
-
-    expect(await screen.findByText('Turbo measured on real trades')).toBeInTheDocument()
-    expect(screen.getByLabelText('Price paid')).toHaveValue('5.1')
-    expect(screen.getByLabelText('Index points for 1.00 of turbo')).toHaveValue('96.5, 104.2, 113.3')
-  })
-
-  it('starts from another run when told to, with what that one changed', async () => {
-    serve({ run: { [SECOND]: CHANGED } })
-    renderAt(`/backtests/new?from=${SECOND}`)
-
-    expect(await screen.findByLabelText('Kernel bandwidth')).toHaveValue('8')
-    expect(screen.getByLabelText('Daily target, in percent')).toHaveValue('3')
-    expect(screen.getByLabelText('What this run is for (optional)')).toHaveValue('catch-up, target 3 %')
-    expect(screen.getByText('Live: 1.7')).toBeInTheDocument()
-  })
-
-  it('shows what the server refused', async () => {
+  it('trades on turbos made up from the index once they are measured', async () => {
+    options = { ...OPTIONS, limits: { ...OPTIONS.limits, modelled_period_days: 731 }, turbo_model: MEASURE }
     const user = userEvent.setup()
-    serve({ refused: { status: 409, detail: '10 backtests are already waiting: let some finish first' } })
     renderAt('/backtests/new')
 
-    await user.click(await screen.findByRole('button', { name: 'Run the backtest' }))
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    expect(await screen.findByText('Cross up')).toBeInTheDocument()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'What “Cross up” becomes' }), 'long')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
-    expect(await screen.findByText('10 backtests are already waiting: let some finish first')).toBeInTheDocument()
-    expect(address()).toBe('/backtests/new')
+    await user.click(await screen.findByRole('button', { name: 'Made up from the index' }))
+    expect(screen.getByText(/731 at most\. Every day the index has prices for is traded\./)).toBeInTheDocument()
+    expect(screen.queryByText(/can be traded\./)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+
+    expect(await screen.findByText('us100, made up from Dukascopy us100')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Start the backtest' }))
+    await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/backtests')).toBe(true))
+    expect(sent.find((request) => request.method === 'POST' && request.path === '/api/backtests')?.body).toMatchObject({ turbos: 'modelled' })
   })
 
-  it('warns that the period has days without prices, and that there are none at all', async () => {
-    serve({ prices: coverage({ ready: { count: 3, first: '2026-09-14', last: '2026-09-17' } }) })
+  it('cannot make turbos up before they are measured', async () => {
+    const user = userEvent.setup()
     renderAt('/backtests/new')
-    expect(await screen.findByText(/2 weekdays of this period have no complete prices/)).toBeInTheDocument()
+
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    expect(await screen.findByText('Cross up')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(await screen.findByRole('button', { name: 'Made up from the index' })).toBeDisabled()
   })
 
-  it('says a backtest would find nothing when no prices were fetched', async () => {
-    serve({ prices: coverage({ days: [], ready: { count: 0, first: null, last: null } }) })
-    renderAt('/backtests/new')
+  it('starts from a signal rule', async () => {
+    renderAt(`/backtests/new?rule=${RULE.id}`)
 
-    expect(await screen.findByText(/No day of prices has been fetched yet/)).toBeInTheDocument()
+    expect(await screen.findByRole('combobox', { name: 'Signal rule to start from' })).toHaveValue(RULE.id)
+    expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveValue('capital/US100')
   })
 })
 
 describe('a run', () => {
-  it('shows what was asked, what it found, and the days it could not test', async () => {
-    serve({ run: { [SECOND]: CHANGED } })
-    renderAt(`/backtests/${SECOND}`)
+  it('shows what it made, how far to trust it, and its trades linked to their day', async () => {
+    renderAt(`/backtests/${RUN_ID}`)
 
-    expect(await screen.findByRole('heading', { name: 'catch-up, target 3 %' })).toBeInTheDocument()
-    // What it changed, against the default and against the live rule.
-    expect(await screen.findByText('Kernel bandwidth')).toBeInTheDocument()
-    expect(screen.getByText('Kernel bandwidth').nextElementSibling).toHaveTextContent('15→ changed to 8')
-    expect(screen.getByText('Daily target, in percent').nextElementSibling).toHaveTextContent('1.7→ changed to 3')
-    expect(screen.getByText(/No prices for 1 weekday.*16 Sept/)).toBeInTheDocument()
-    // The figures of the middle leverage first.
-    expect(screen.getByRole('button', { name: '110' })).toHaveAttribute('aria-pressed', 'true')
-    const tile = screen.getByText('All days, one applied on the other').parentElement as HTMLElement
-    expect(within(tile).getByText('+3.43%')).toBeInTheDocument()
-    expect(screen.getByText('On 2 of 3 days tested')).toBeInTheDocument()
-    // Why entries were refused: counted in the summary, and each one listed in its table.
-    const why = screen.getByText('Entries refused by').parentElement as HTMLElement
-    expect(within(why).getByText('Day profit reached').parentElement).toHaveTextContent('Day profit reached11')
-    expect((await screen.findAllByText('Day profit reached')).length).toBe(2)
+    expect(await screen.findByRole('heading', { name: 'Smoke EMA cross' })).toBeInTheDocument()
+    expect(screen.getByText('+5.21%')).toBeInTheDocument()
+    expect(screen.getByText(/too few to conclude/)).toBeInTheDocument()
+    expect(screen.getByText('of the random runs did worse than this one')).toBeInTheDocument()
+    expect(screen.getAllByText('85%').length).toBeGreaterThan(0)
+    expect(await screen.findByRole('link', { name: '#1' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
   })
 
-  it('says how far its figures can be trusted: against random entries, per trade, and for a stop', async () => {
-    const trusted = whole({
-      summary: {
-        ...whole().summary!,
-        runs: [80, 110, 140].map((leverage) => ({
-          turbo: { entry_price: 4.4, points_per_unit: leverage, spread: 0.03 },
-          summary: { ...figures(2, 3.43), ...TRUST },
-        })),
-      },
+  it('says the risk the days show, and what they give without the best of them', async () => {
+    renderAt(`/backtests/${RUN_ID}`)
+
+    const risk = await screen.findByRole('region', { name: 'Risk, day by day' })
+    expect(within(risk).getByText('A winner kept of its best').nextSibling).toHaveTextContent('61%')
+    expect(within(risk).getByText('3 days traded: under 20, nothing is brought to a year.')).toBeInTheDocument()
+    expect(screen.getByText('Without its best day: +3.45%; best two: +1.70%.')).toBeInTheDocument()
+  })
+
+  it('says whether its entries move the asset their way more than random moments do', async () => {
+    const row = (minutes: number, mean: number, beaten: number) => ({
+      minutes, signals: 48, mean_bp: mean, median_bp: mean, hit_rate: 56, best_bp: 8, worst_bp: -6, independent: 30, t: 2.6,
+      random: { mean_bp: 0.2, hit_rate: 50, beaten, draws: 20 },
     })
-    serve({ run: { [FIRST]: trusted } })
-    renderAt(`/backtests/${FIRST}`)
+    const group = (key: string, value: unknown) => ({ [key]: value, '1': { signals: 24, mean_bp: 1, hit_rate: 50 }, '15': { signals: 24, mean_bp: 4, hit_rate: 60 } })
+    edges[RUN_ID] = {
+      horizons: [row(1, 0.4, 70), row(15, 3.5, 99)], by_hour: [group('hour', 15)], by_direction: [group('direction', 'long')],
+      by_fate: [group('fate', 'executed'), group('fate', 'not_taken')], unpriced: 2, draws: 20, seed: 1,
+    } as BacktestEdge
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
 
-    expect(await screen.findByText(/2 trades over 3 days: too few to conclude/)).toBeInTheDocument()
-    const random = screen.getByRole('region', { name: 'Against random entries' })
-    expect(within(random).getByText('64%')).toBeInTheDocument()
-    expect(within(random).getByText(/the entries have shown nothing the exit rules do not explain/)).toBeInTheDocument()
-    expect(within(random).getByText(/traded 200 times with 13 entries at random moments.*half of them ended above \+3.40%, 90 in 100 between −13.60% and \+3.43%/)).toBeInTheDocument()
-    const perTrade = screen.getByRole('region', { name: 'Per trade' })
-    expect(within(perTrade).getByText('Won for 1 lost').nextElementSibling).toHaveTextContent('no loss')
-    expect(within(screen.getByRole('region', { name: 'The total with other days' })).getByText('Too few days to draw a range from.')).toBeInTheDocument()
-    expect(within(screen.getByRole('region', { name: 'Room for a stop and a target' })).getByText(/never fell below −0.68%, nine in ten never below −4.20%/)).toBeInTheDocument()
-    // Every leverage with what it is worth.
-    expect(screen.getAllByRole('columnheader', { name: 'Random runs beaten' }).length).toBeGreaterThan(0)
+    expect(await screen.findByText(/After 15 min the asset had moved \+3\.50 bp/)).toBeInTheDocument()
+    expect(screen.getByText('2 signals came when the asset had no price: left out.')).toBeInTheDocument()
+    expect(within(screen.getByRole('table', { name: 'Moves split' })).getByText('Not taken')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Hour' }))
+    expect(within(screen.getByRole('table', { name: 'Moves split' })).getByText('15:00')).toBeInTheDocument()
   })
 
-  it('gives the range of its total when there are days enough to draw one', async () => {
-    const ranged = { ...TRUST, sample: 'fair' as const, total_range: { low: -8.2, high: 14.6, level: 90, resamples: 2000, losing_share: 31 } }
-    const trusted = whole({
+  it('replaying the journal, is set beside the positions WATA really had', async () => {
+    runs[RUN_ID] = run({ request: { ...run().request, source: { kind: 'journal', signals: 12, entries: 9 } } })
+    reconciliations[RUN_ID] = {
       summary: {
-        ...whole().summary!,
-        runs: [{ turbo: { entry_price: 4.4, points_per_unit: 110, spread: 0.03 }, summary: { ...figures(120, 3.43), ...ranged, days: 80 } }],
+        paired: 1, backtest_only: 0, live_only: 1, backtest_only_live_outcomes: {}, live_only_backtest_fates: { refused: 1 },
+        mean_result_difference: 0.4, median_result_difference: 0.4, correlation: null, same_exit_percent: 0, same_turbo_percent: 0,
+        median_entry_seconds: 1.2, backtest_total_percent: 2.4, real_total_percent: 2.0,
       },
-      turbo: { entry_price: 4.4, spread: 0.03, leverages: [110] },
-    })
-    serve({ run: { [FIRST]: trusted } })
-    renderAt(`/backtests/${FIRST}`)
-
-    const range = await screen.findByRole('region', { name: 'The total with other days' })
-    expect(range).toHaveTextContent('Drawing 80 days again from the ones tested, 90 totals in 100 fall between −8.20% and +14.60%. 31% of the draws end in a loss.')
-    expect(screen.queryByText(/too few to conclude/)).not.toBeInTheDocument()
-  })
-
-  it('says of a run made before all this that it has to be made again', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByText(/made before a backtest was set against random entries/)).toBeInTheDocument()
-  })
-
-  it('sets a replay of real signals beside what WATA really did', async () => {
-    const replay = whole({ kind: 'signals', strategy: 'signals', signals: 14, real_trades: 2 })
-    replay.summary = { ...replay.summary!, signals: { replayed: 13, without_prices: ['2026-09-15T19:55:00Z'] } }
-    serve({ run: { [FIRST]: replay } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByRole('heading', { name: 'Real signals' })).toBeInTheDocument()
-    expect(screen.getByText(/14 signals of WATA's journal.*2 real trades of the period are kept/)).toBeInTheDocument()
-    expect(screen.queryByText('Strategy parameters changed')).not.toBeInTheDocument()
-
-    const paired = (await screen.findByText('Real trades the model made too')).parentElement as HTMLElement
-    expect(within(paired).getByText('1 of 2')).toBeInTheDocument()
-    expect(screen.getByText("Of the 14 signals replayed, WATA's journal has 2 executed, 11 refused, 1 ignored.")).toBeInTheDocument()
-    expect(screen.getByText(/1 signal came at a moment the prices do not cover/)).toBeInTheDocument()
-    // The pair: the real result, the model's, and how they ended.
-    const pair = (await screen.findByText('75 s shorter')).closest('tr') as HTMLElement
-    expect(within(pair).getByText('+1.82%')).toBeInTheDocument()
-    expect(within(pair).getByText('−0.12 pts')).toBeInTheDocument()
-    expect(within(pair).getByText('the same')).toBeInTheDocument()
-    // The trade WATA made that the model did not.
-    const alone = screen.getByText('Entered by WATA, not by the model').parentElement as HTMLElement
-    expect(within(alone).getByText('Stop-loss')).toBeInTheDocument()
-    expect(sent.map((request) => request.path)).toContain(`/api/backtests/${FIRST}/comparison?leverage=110`)
-  })
-
-  it('gives the result in money too, at the size WATA gives each trade', async () => {
-    const money = {
-      capital: 10000, final: 10342.66, profit_loss: 342.66, return_percent: 3.43, worst_drawdown: -120.5,
-      worst_drawdown_percent: -1.2, average_scale_percent: 75, unfunded: 1,
+      pairs: [{
+        signal_uuid: 'a', trade_id: 1, position_id: 'p-a', day: '2026-10-14', direction: 'long', entry_seconds: 1.2, exit_seconds: 0.5,
+        same_turbo: false, entry_price: { backtest: 5.04, real: 5.02 }, exit_price: { backtest: 5.16, real: 5.12 },
+        result: { backtest: 2.4, real: 2.0 }, exit: { backtest: 'Explicit Close (All)', real: 'Performance (Takeprofit (60%) hit at 61%)' },
+        same_exit: false,
+      }],
+      backtest_only: [],
+      live_only: [{ signal_uuid: 'b', position_id: 'p-b', backtest_fate: 'refused' }],
     }
-    const paid = whole({
-      execution: { capital: 10000, fill_delay: 30, slippage: 1.5 },
-      summary: {
-        ...whole().summary!,
-        runs: [80, 110, 140].map((leverage) => ({
-          turbo: { entry_price: 4.4, points_per_unit: leverage, spread: 0.03 }, summary: { ...figures(2, 3.43), ...TRUST, money },
-        })),
-      },
-    })
-    serve({ run: { [FIRST]: paid } })
-    renderAt(`/backtests/${FIRST}`)
+    renderAt(`/backtests/${RUN_ID}`)
 
-    const tile = (await screen.findByText('In money, on €10,000.00')).parentElement as HTMLElement
-    expect(within(tile).getByText('+€342.66')).toBeInTheDocument()
-    expect(tile).toHaveTextContent('+3.43% at the size WATA gives each trade (75% on average)')
-    expect(tile).toHaveTextContent('1 entry it could not buy')
-    // How the fills were taken is part of what was asked.
-    expect(screen.getByText('Each decision is filled 30 s after the next ten seconds, and each fill loses 1.5 index points.')).toBeInTheDocument()
-    expect((await screen.findAllByRole('columnheader', { name: /In money/ })).length).toBeGreaterThan(0)
+    expect(await screen.findByText(/^1 trade set beside WATA’s positions of the same signals/)).toBeInTheDocument()
+    expect(screen.getByText('Only WATA traded 1: 1 refused by the backtest’s rules.')).toBeInTheDocument()
+    const table = screen.getByRole('table', { name: "Trades beside WATA's positions" })
+    expect(within(table).getByText('another turbo')).toBeInTheDocument()
+    expect(within(table).getByText('5.04 / 5.02')).toBeInTheDocument()
   })
 
-  it('says when it would come out otherwise today', async () => {
-    serve({ run: { [FIRST]: whole({ stale: { code: true, prices: true, version: '0.12.0' } }) } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByText(/would come out otherwise today: the code that replays has changed since \(it was made with WATA 0.12.0\), and the prices of its period are not the ones it read/)).toBeInTheDocument()
+  it('says when its edge was not measured', async () => {
+    renderAt(`/backtests/${RUN_ID}`)
+    expect(await screen.findByText('Not measured: this run was made before the edge of its entries was.')).toBeInTheDocument()
   })
 
-  it('breaks its trades down by what could explain them', async () => {
+  it('is stressed with later and dearer fills, and shows what they leave of it', async () => {
     const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}`)
+    renderAt(`/backtests/${RUN_ID}`)
 
-    const panel = (await screen.findByRole('heading', { name: 'Where the result comes from' })).closest('section') as HTMLElement
-    // By hour of entry first.
-    const nine = (await within(panel).findByRole('rowheader', { name: '09:00' })).closest('tr') as HTMLElement
-    expect(within(nine).getByText('+5.10%')).toBeInTheDocument()
-    expect(within(panel).getByText(/closed 3.70 points of percent under the best level it had reached. 2 of the 6 had been in profit/)).toBeInTheDocument()
+    expect(await screen.findByText('Not stressed yet: sixteen combinations, one replay of the script.')).toBeInTheDocument()
+    runs[STRESS_ID] = run({ id: STRESS_ID, kind: 'sweep', name: 'Stress: Smoke EMA cross', stress_of: RUN_ID, status: { state: 'queued' }, summary: null })
+    await user.click(screen.getByRole('button', { name: 'Stress this run' }))
 
-    await user.click(within(panel).getByRole('button', { name: 'Left on' }))
-
-    const stopped = within(panel).getByRole('rowheader', { name: 'Stoploss' }).closest('tr') as HTMLElement
-    expect(within(stopped).getByText('−14.00%')).toBeInTheDocument()
-    expect(within(panel).queryByRole('rowheader', { name: '09:00' })).not.toBeInTheDocument()
-    expect(sent.map((request) => request.path)).toContain(`/api/backtests/${FIRST}/breakdowns?leverage=110`)
+    expect(sent.some((request) => request.method === 'POST' && request.path === `/api/backtests/${RUN_ID}/stress`)).toBe(true)
+    expect(await screen.findByRole('link', { name: 'Stress: Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${STRESS_ID}`)
+    expect(screen.getByRole('button', { name: 'Stress it again' })).toBeDisabled()
   })
 
-  it('is named again and tagged from its page', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole({ note: 'first', tags: ['keep'], bytes: 48_200 }) } })
-    renderAt(`/backtests/${FIRST}`)
+  it('follows a run while it waits its turn', async () => {
+    runs[RUN_ID] = run({ status: { state: 'queued', created_at: '2026-10-19T20:33:49Z' }, position: 2, summary: null, headline: null })
+    renderAt(`/backtests/${RUN_ID}`)
 
-    expect(await screen.findByText(/48.2 kB on disk/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Name and tags' }))
-    const dialog = await screen.findByRole('dialog')
-    const note = within(dialog).getByLabelText('What this run is for')
-    expect(note).toHaveValue('first')
-    await user.clear(note)
-    await user.type(note, 'September, catch-up')
-    await user.type(within(dialog).getByLabelText('Tags'), ', september')
-    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => expect(requests('PATCH')).toEqual([
-      { method: 'PATCH', path: `/api/backtests/${FIRST}`, body: { note: 'September, catch-up', tags: ['keep', 'september'] } },
-    ]))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-  })
-
-  it('lists its trades and its days, each day leading to its chart', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}`)
-
-    const day = await screen.findByRole('link', { name: '15 Sept 2026' })
-    expect(day).toHaveAttribute('href', `/backtests/${FIRST}/days/2026-09-15?leverage=110`)
-    const trade = (await screen.findAllByText('catch-up')).map((cell) => cell.closest('tr')).find(Boolean) as HTMLElement
-    expect(within(trade).getByText('Short')).toBeInTheDocument()
-    expect(within(trade).getAllByText('+1.70%').length).toBeGreaterThan(0)
-    // The trade itself leads to its day with itself followed on it.
-    expect(within(trade).getByRole('link')).toHaveAttribute(
-      'href', `/backtests/${FIRST}/days/2026-09-15?leverage=110&trade=${encodeURIComponent(TRADE.entry_time)}`,
-    )
-  })
-
-  it('reads the figures again for another leverage', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}`)
-
-    await user.click(await screen.findByRole('button', { name: '140' }))
-
-    await waitFor(() => expect(sent.map((request) => request.path)).toContain(`/api/backtests/${FIRST}/trades?leverage=140`))
-    expect(screen.getByRole('button', { name: '140' })).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  it('says which day it is replaying while it runs, and can be stopped', async () => {
-    const user = userEvent.setup()
-    const running = whole({
-      status: { state: 'running', created_at: '2026-10-12T22:19:47Z' }, summary: null, headline: null,
-      progress: { day: '2026-09-17', days_begun: 2, bars: 9000 },
-    })
-    serve({ run: { [FIRST]: running } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByText(/Replaying 17 Sept 2026/)).toBeInTheDocument()
-    expect(screen.queryByText('Winning trades')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Stop' }))
-
-    await waitFor(() => expect(requests('POST').map((request) => request.path)).toEqual([`/api/backtests/${FIRST}/cancel`]))
-  })
-
-  it('says how many are before it while it waits', async () => {
-    const waiting = whole({ status: { state: 'queued' }, summary: null, headline: null, waiting_before: 2 })
-    serve({ run: { [FIRST]: waiting } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByText(/2 backtests will be made before it/)).toBeInTheDocument()
-  })
-
-  it('shows what the command said when it failed', async () => {
-    const failed = whole({
-      status: { state: 'failed', error: 'No bar of us100' }, summary: null, headline: null,
-      output: ['No bar of us100 between 2026-10-14 and 2026-10-14 in var/lib/price_history.'],
-    })
-    serve({ run: { [FIRST]: failed } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByText('The backtest failed')).toBeInTheDocument()
-    expect(screen.getByText(/No bar of us100 between 2026-10-14/)).toBeInTheDocument()
-  })
-
-  it('is removed only once that was confirmed', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}`)
-
-    await user.click(await screen.findByRole('button', { name: 'Remove' }))
-    const dialog = await screen.findByRole('dialog')
-    expect(requests('DELETE')).toEqual([])
-    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
-
-    await waitFor(() => expect(address()).toBe('/backtests'))
-    expect(requests('DELETE').map((request) => request.path)).toEqual([`/api/backtests/${FIRST}`])
-  })
-
-  it('offers to run it again with changes', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}`)
-
-    await user.click(await screen.findByRole('button', { name: 'Run again with changes' }))
-
-    expect(address()).toBe(`/backtests/new?from=${FIRST}`)
-  })
-
-  it('says so when there is no such run', async () => {
-    serve()
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByText('No such backtest')).toBeInTheDocument()
+    expect(await screen.findByText('One backtest runs at a time: this one is number 2 in line.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
   })
 })
 
+function figures(total: number) {
+  return { total_percent: total, trades: 3, days: 3, expectancy: total / 3, win_rate: 50, worst_drawdown: -1 } as NonNullable<BacktestSweep['cells'][number]['whole']>
+}
+
 describe('a sweep', () => {
-  const sweep = whole({
-    kind: 'sweep', replays: 'strategy', headline: null, summary: null, note: '',
-    axes: SWEEP.axes, held_out: 0.3, turbo: { entry_price: 4.4, spread: 0.03, leverages: [110] }, sweep: SWEEP,
+  const later = [3, 5, 8, 18]
+  const dearer = [0, 0.01, 0.02, 0.05]
+
+  it('made of a run with later and dearer fills says what is left of the run, beside it', async () => {
+    runs[STRESS_ID] = run({
+      id: STRESS_ID, kind: 'sweep', name: 'Stress: Smoke EMA cross', stress_of: RUN_ID,
+      summary: { made_with: run().summary!.made_with, days: { asked: 3, tested: 3, by_status: { tested: 3 } }, cells: 16, warnings: [] },
+    })
+    sweeps[STRESS_ID] = {
+      axes: [{ kind: 'setting', name: 'order_seconds', values: later }, { kind: 'setting', name: 'slippage', values: dearer }],
+      held_out: 0.3,
+      held_out_from: '2026-10-16',
+      cells: later.flatMap((seconds, row) =>
+        dearer.map((price) => {
+          const total = Math.round((5.21 - row - 40 * price) * 100) / 100
+          return { values: [seconds, price], tuning: figures(total), held_out: figures(total), whole: figures(total), money: run().summary!.money!, signals: run().summary!.signals! }
+        }),
+      ),
+    }
+    renderAt(`/backtests/${STRESS_ID}`)
+
+    expect(await screen.findByText(/As it was run: \+5\.21%\. Each order 2 s later and 0\.01 € dearer a turbo: \+3\.81%\./)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'The run it stresses' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    expect(screen.getByText('Order to fill (s) ↓ · Worse price a turbo (€) →')).toBeInTheDocument()
+    // Nothing is chosen among worse fills.
+    expect(screen.queryByText('Would choosing have worked')).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Days shown' })).not.toBeInTheDocument()
+
+    // And the run it stresses shows the same.
+    renderAt(`/backtests/${RUN_ID}`)
+    expect(await screen.findByRole('link', { name: 'Stress: Smoke EMA cross' })).toBeInTheDocument()
+    expect(await screen.findAllByText(/As it was run: \+5\.21%/)).toHaveLength(2)
   })
 
-  it('says what became of the best value on the days held out', async () => {
-    serve({ run: { [FIRST]: sweep } })
-    renderAt(`/backtests/${FIRST}`)
-
-    expect(await screen.findByRole('heading', { name: 'Sweep of day profit target × kernel bandwidth' })).toBeInTheDocument()
-    expect(screen.getByText('Tried for day profit target:').parentElement).toHaveTextContent('1.7, 3')
-    // The best of the first fourteen days lost on the six held out.
-    expect(screen.getByText('The best value did not hold up')).toBeInTheDocument()
-    expect(screen.getByText(/the best was day profit target 3, kernel bandwidth 8: \+9.60%\. On the 6 days held out it made −4.20%: number 4 of 4\. It did not hold up/)).toBeInTheDocument()
-  })
-
-  it('shows every combination on each part of the period, for the figure chosen', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: sweep } })
-    renderAt(`/backtests/${FIRST}`)
-
-    const chosenOn = await screen.findByRole('table', { name: 'Days a value may be chosen on (14)' })
-    const heldOut = screen.getByRole('table', { name: 'Days held out (6)' })
-    expect(within(chosenOn).getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
-      'Day profit target', 'Kernel bandwidth 8', 'Kernel bandwidth 15',
-    ])
-    expect(within(chosenOn).getAllByRole('button').map((cell) => cell.textContent)).toEqual(['+4.10%', '+5.00%', '+9.60%', '−2.00%'])
-    expect(within(heldOut).getAllByRole('button').map((cell) => cell.textContent)).toEqual(['+2.20%', '+3.10%', '−4.20%', '+1.50%'])
-
-    await user.click(screen.getByRole('button', { name: 'Trades' }))
-
-    expect(within(chosenOn).getAllByRole('button').map((cell) => cell.textContent)).toEqual(['12', '12', '12', '12'])
-    expect(within(heldOut).getAllByRole('button').map((cell) => cell.textContent)).toEqual(['5', '5', '5', '5'])
-  })
-
-  it('makes a backtest of its own of the combination selected', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: sweep } })
-    renderAt(`/backtests/${FIRST}`)
-
-    // The best of the first part is the one selected at first.
-    expect(await screen.findByRole('heading', { name: 'Day profit target 3, kernel bandwidth 8' })).toBeInTheDocument()
-    await user.click(within(screen.getByRole('table', { name: 'Days held out (6)' })).getByRole('button', { name: 'day profit target 1.7, kernel bandwidth 15: +3.10%' }))
-
-    const detail = (await screen.findByRole('heading', { name: 'Day profit target 1.7, kernel bandwidth 15' })).closest('section') as HTMLElement
-    const total = within(detail).getByRole('rowheader', { name: 'All days, one on the other' }).closest('tr') as HTMLElement
-    expect(within(total).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['+5.00%', '+3.10%', '+8.30%'])
-    await user.click(within(detail).getByRole('button', { name: 'Make it a backtest of its own' }))
-
-    await waitFor(() => expect(address()).toBe(`/backtests/${SECOND}`))
-    expect(requests('POST').map((request) => request.path)).toEqual([`/api/backtests/${FIRST}/cells/1/run`])
-  })
-
-  it('says so when the period had too few days to hold any out', async () => {
-    const short = whole({
-      ...sweep,
-      sweep: {
-        ...SWEEP, held_out: { share: 0.3, from: null, days: 0, tuning_days: 1 },
-        cells: SWEEP.cells.map((cell) => ({ ...cell, held_out: null })),
+  it('says whether choosing would have worked: walk-forward and overfitting', async () => {
+    const days = ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15']
+    runs[STRESS_ID] = run({
+      id: STRESS_ID, kind: 'sweep', name: 'EMA lengths',
+      summary: {
+        made_with: run().summary!.made_with, days: { asked: 4, tested: 4, by_status: { tested: 4 } }, cells: 2, warnings: [],
+        walk_forward: {
+          train_days: 2, test_days: 1, days: 2, total_percent: -0.5, worst_day: -1.5, worst_drawdown: -1.5, changes: 1,
+          best_in_hindsight_percent: 3.03, curve: [['2026-10-14', 1], ['2026-10-15', -0.52]],
+          windows: [
+            { train: ['2026-10-12', '2026-10-13'], test: ['2026-10-14', '2026-10-14'], cell: 0, values: [8], train_percent: 4.04, test_percent: 1, test_rank: 2, cells: 2 },
+            { train: ['2026-10-13', '2026-10-14'], test: ['2026-10-15', '2026-10-15'], cell: 1, values: [12], train_percent: 2.5, test_percent: -1.5, test_rank: 2, cells: 2 },
+          ],
+        },
+        pbo: { probability: 0.71, splits: 8, combinations: 70, sentence: 'Choosing the best was fitting 71 % of the time: the choice is mostly fitting.' },
+        deflated_sharpe: null,
       },
     })
-    serve({ run: { [FIRST]: short } })
-    renderAt(`/backtests/${FIRST}`)
+    sweeps[STRESS_ID] = {
+      axes: [{ kind: 'input', name: 'in_0', values: [8, 12] }],
+      held_out: 0.3,
+      held_out_from: '2026-10-15',
+      cells: [8, 12].map((length, index) => ({
+        values: [length], tuning: figures(2), held_out: figures(-1), whole: figures(1), money: run().summary!.money!, signals: run().summary!.signals!,
+        curve: days.map((entry, number) => [entry, index === 0 ? [2, 2, 1, -2][number] : [1, 1.5, 2, 1][number], 1] as [string, number, number]),
+      })),
+    }
+    renderAt(`/backtests/${STRESS_ID}`)
 
-    expect(await screen.findByText(/too few days to hold any out: nothing here says that value would do best again/)).toBeInTheDocument()
-    expect(screen.getByText(/No day was held out/)).toBeInTheDocument()
-    expect(screen.queryByRole('table', { name: /Days held out/ })).not.toBeInTheDocument()
+    expect(await screen.findByText('Would choosing have worked')).toBeInTheDocument()
+    expect(screen.getByText(/the choice is mostly fitting/)).toBeInTheDocument()
+    const walk = await screen.findByRole('region', { name: 'Walk-forward' })
+    expect(within(walk).getByText(/again every 1 day, made −0\.50% over the 2 days after each choice/)).toBeInTheDocument()
+    expect(within(walk).getByText('12 Oct to 13 Oct')).toBeInTheDocument()
+    expect(within(walk).getAllByText('2 of 2')).toHaveLength(2)
+    expect(within(walk).getByText('The best, known afterwards')).toBeInTheDocument()
   })
 })
 
 describe('a day of a run', () => {
-  it('draws the range bars with the kernel, the VWAP and its band, and marks the trade', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15`)
+  it('draws the asset of the day with its signals and trades, under the run in the trail', async () => {
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
 
-    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.data).toHaveLength(2))
-    const chart = theChart()
-    expect(sent.map((request) => request.path)).toContain(`/api/backtests/${FIRST}/days/2026-09-15/chart?leverage=110`)
-    // Four lines over the prices, in their panel: the two limits of the band, the VWAP, the kernel.
-    expect(chart.series.filter((series) => series.type === 'Line').map((series) => series.pane)).toEqual([0, 0, 0, 0])
-    expect(seriesOf(chart, 'Candlestick')?.markers.map((marker) => marker.text)).toEqual(['short · catch-up', '+1.70%'])
-    expect(screen.getByRole('heading', { name: '15 Sept 2026' })).toBeInTheDocument()
-  })
+    expect(await screen.findByRole('heading', { name: '14 Oct 2026' })).toBeInTheDocument()
+    const trail = within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
+    expect(await trail.findByRole('link', { name: 'Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
 
-  it('carries the notice and the link the charting library asks for', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15`)
-    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.data).toHaveLength(2))
-
-    expect(screen.getByText(/TradingView Lightweight Charts™ Copyright \(c\) 2025 TradingView, Inc\./)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'https://www.tradingview.com/' })).toHaveAttribute('href', 'https://www.tradingview.com/')
-    expect(theChart().options.layout.attributionLogo).toBe(true)
-  })
-
-  it('reads the last bar until one is pointed at', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15`)
-    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.data).toHaveLength(2))
-
-    expect(screen.getByText('Last bar')).toBeInTheDocument()
-    expect(screen.getByText('29,001.0')).toBeInTheDocument()
-    expect(screen.getByText('allowed')).toBeInTheDocument()
-  })
-
-  it('goes to the day after, and has none before the first', async () => {
-    const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15`)
-    await waitFor(() => expect(seriesOf(theChart(), 'Candlestick')?.data).toHaveLength(2))
-
+    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
+    const candles = seriesOf(charts[0], 'Candlestick')!
+    await waitFor(() => expect(candles.markers.length).toBeGreaterThan(0))
+    expect(candles.markers.map((marker) => marker.text)).toEqual(['Short', '#1 short', '+1.72 %', 'Long ✕'])
+    // Minute bars of the asset, as the strategy read them.
+    expect(sent.some((request) => request.path.startsWith('/api/data/assets/capital/US100/bars?from=2026-10-14&to=2026-10-14&interval=60'))).toBe(true)
     expect(screen.getByRole('button', { name: 'Day before' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: 'Day after' }))
-
-    expect(address()).toBe(`/backtests/${FIRST}/days/2026-09-17?leverage=110`)
+    expect(screen.getByRole('button', { name: 'Day after' })).toBeEnabled()
   })
 
-  it('brings a trade into view and follows it on the turbo when asked to', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15?leverage=110&trade=${encodeURIComponent('2026-09-15T08:01:00Z')}`)
-
-    const panel = (await screen.findByRole('heading', { name: 'This trade, on the turbo' })).closest('section') as HTMLElement
-    expect(await within(panel).findByText('Daily profit target')).toBeInTheDocument()
-    // The day had lost 5 % before it, and the stop and the take-profit are too far to be drawn with it.
-    expect(within(panel).getByText(/The day was at −5.00% before it: the day's target asked \+7.05% of this trade/)).toBeInTheDocument()
-    expect(within(panel).getByText(/Too far from what the trade did to be drawn with it: stop at −15.00%, take-profit at \+60.00%/)).toBeInTheDocument()
-    expect(within(panel).getByText(/The trailing stop arms at \+5.00% and sells 8 points under the best level seen/)).toBeInTheDocument()
-    expect(sent.map((request) => request.path)).toContain(
-      `/api/backtests/${FIRST}/trades/path?leverage=110&entry=${encodeURIComponent('2026-09-15T08:01:00Z')}`,
-    )
-    // The chart shows the trade and the minutes around it, not the whole day.
-    await waitFor(() => expect(theChart().range).not.toBeNull())
-    const { from, to } = theChart().range as { from: number; to: number }
-    expect(to - from).toBeGreaterThanOrEqual(1200)
-    expect(to - from).toBeLessThan(3600)
-  })
-
-  it('follows a trade of the day from the list under the chart, and goes back to the whole day', async () => {
+  it('opens a trade on the chart of its turbo, with the turbos the trader looked at', async () => {
     const user = userEvent.setup()
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15?leverage=110`)
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
 
-    expect(screen.queryByText('This trade, on the turbo')).not.toBeInTheDocument()
-    await user.click(await screen.findByRole('button', { name: 'Follow it' }))
+    await user.click(await screen.findByRole('button', { name: '#1' }))
+    expect(address()).toBe(`/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
+    expect(await screen.findByText('Trade #1: short on SG-NDX-S5')).toBeInTheDocument()
+    expect(screen.getByText('the position monitor')).toBeInTheDocument()
+    expect(screen.getByText('BNP-NDX-S6 BNP')).toBeInTheDocument()
 
-    expect(await screen.findByRole('heading', { name: 'This trade, on the turbo' })).toBeInTheDocument()
-    expect(address()).toBe(`/backtests/${FIRST}/days/2026-09-15?leverage=110&trade=${encodeURIComponent('2026-09-15T08:01:00Z').replace(/%3A/g, '%3A')}`)
-    await user.click(screen.getByRole('button', { name: 'Show the whole day' }))
+    // The turbo's ten-second bid, its levels drawn over it, the strategy's asset under it.
+    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(2))
+    const turbo = charts.filter((chart) => !chart.removed)[1]
+    await waitFor(() => expect(seriesOf(turbo, 'Candlestick')?.markers.map((marker) => marker.text)).toEqual(['Bought 10.48', 'Sold 10.66 (+1.72 %)']))
+    expect(turbo.series.filter((series) => series.type === 'Line' && !series.removed).length).toBeGreaterThanOrEqual(4)
+    expect(sent.some((request) => request.path.startsWith('/api/data/assets/saxo/5/bars?from=2026-10-14&to=2026-10-14&interval=10'))).toBe(true)
 
-    await waitFor(() => expect(screen.queryByText('This trade, on the turbo')).not.toBeInTheDocument())
-  })
-
-  it('lists what became of the decisions under the chart', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/${FIRST}/days/2026-09-15`)
-
-    expect(await screen.findByText('on catch-up')).toBeInTheDocument()
-    expect(screen.getByText('Daily profit target')).toBeInTheDocument()
-    expect(screen.getByText('None.')).toBeInTheDocument()
+    // The same trade again closes it.
+    await user.click(screen.getByRole('button', { name: '#1' }))
+    expect(address()).toBe(`/backtests/${RUN_ID}/days/2026-10-14`)
+    expect(screen.queryByText('Trade #1: short on SG-NDX-S5')).not.toBeInTheDocument()
   })
 })
 
-describe('runs side by side', () => {
-  it('sets the measures of each beside the other, with what each changed', async () => {
-    serve({ run: { [FIRST]: whole(), [SECOND]: CHANGED } })
-    renderAt(`/backtests/compare?runs=${FIRST},${SECOND}`)
+describe('runs compared', () => {
+  it('sets their figures side by side with the settings they did not share', async () => {
+    renderAt(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
 
-    const table = (await screen.findByText('Days with an entry')).closest('table') as HTMLElement
-    const row = (label: string) => within(within(table).getByText(label).closest('tr') as HTMLElement).getAllByRole('cell').map((cell) => cell.textContent)
-    expect(within(table).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['', 'Defaults and live rules', 'catch-up, target 3 %'])
-    expect(row('Entry mode')).toEqual(['default', 'cross_catchup'])
-    expect(row('Kernel bandwidth')).toEqual(['default', '8'])
-    expect(row('Rule: day profit target')).toEqual(['live', '3'])
-    expect(row('Trades')).toEqual(['2', '2'])
-    expect(row('All days, one on the other')).toEqual(['+3.43%', '+3.43%'])
+    const table = await screen.findByRole('table')
+    expect(within(table).getByRole('link', { name: 'Stop at 10' })).toHaveAttribute('href', '/backtests/20261019-210000-bbbbbb')
+    const stopRow = await within(table).findByRole('row', { name: /Stop-loss/ })
+    expect(within(stopRow).getByText('-15 %')).toBeInTheDocument()
+    expect(within(stopRow).getByText('-10 %')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Legend' })).getByText('Stop at 10')).toBeInTheDocument()
   })
 
-  it('names each line of the chart, with where it ended', async () => {
-    serve({ run: { [FIRST]: whole(), [SECOND]: CHANGED } })
-    renderAt(`/backtests/compare?runs=${FIRST},${SECOND}`)
-
-    const legend = await screen.findByRole('list', { name: 'Legend' })
-    await waitFor(() => expect(within(legend).getAllByText('+3.43%')).toHaveLength(2))
-    expect(within(legend).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-      'Defaults and live rules+3.43%', 'catch-up, target 3 %+3.43%',
-    ])
+  it('asks for two runs at least', async () => {
+    renderAt(`/backtests/compare?runs=${RUN_ID}`)
+    expect(await screen.findByText(/Tick two runs or more/)).toBeInTheDocument()
   })
 
-  it('asks for two runs when it is given fewer', async () => {
-    serve({ run: { [FIRST]: whole() } })
-    renderAt(`/backtests/compare?runs=${FIRST}`)
-
-    expect(screen.getByText(/Tick two runs or more/)).toBeInTheDocument()
-    expect(sent).toEqual([])
-  })
-
-  it('leaves out a run that has no result, and says so', async () => {
-    const unfinished = whole({ id: SECOND, status: { state: 'failed' }, summary: null, headline: null })
-    serve({ run: { [FIRST]: whole(), [SECOND]: unfinished } })
-    renderAt(`/backtests/compare?runs=${FIRST},${SECOND}`)
-
-    expect(await screen.findByText(/1 of the runs chosen has no result/)).toBeInTheDocument()
-    expect(await screen.findByText('Days with an entry')).toBeInTheDocument()
-  })
-
-  it('compares four runs at most, and says which were left out', async () => {
-    const ids = ['a', 'b', 'c', 'd', 'e'].map((letter) => `20261012-22194${letter.charCodeAt(0) % 10}-00000${letter}`)
-    serve({ run: Object.fromEntries(ids.map((id) => [id, whole({ id, note: id.slice(-1) })])) })
-    renderAt(`/backtests/compare?runs=${ids.join(',')}`)
-
-    expect(await screen.findByText(/4 runs at most are compared at once: the first 4 of the 5 chosen/)).toBeInTheDocument()
-    expect(sent.filter((request) => /\/api\/backtests\/[^/]+$/.test(request.path))).toHaveLength(4)
+  it('leaves out a run with no result', async () => {
+    runs['20261019-210000-bbbbbb'] = { ...runs['20261019-210000-bbbbbb'], status: { state: 'failed' }, summary: null }
+    runs['20261019-220000-dddddd'] = run({ id: '20261019-220000-dddddd', name: 'Third' })
+    renderAt(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb,20261019-220000-dddddd`)
+    expect(await screen.findByText(/1 of the runs chosen has no result to compare/)).toBeInTheDocument()
   })
 })

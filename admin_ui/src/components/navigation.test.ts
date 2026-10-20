@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { MENU, MENU_SECTIONS, menuEntry, PAGE_NOT_FOUND, trailFor, UNNAMED } from './navigation'
+import { isWidePage, MENU, MENU_SECTIONS, menuEntry, PAGE_NOT_FOUND, trailFor, UNNAMED } from './navigation'
 
 describe('the menu', () => {
   it('names each page once, under one of its sections', () => {
@@ -16,6 +16,16 @@ describe('the menu', () => {
     // A page whose address only begins like another's is not under it.
     expect(menuEntry('/data/assetsandmore')).toBeUndefined()
     expect(menuEntry('/nothing')).toBeUndefined()
+  })
+
+  it('gives the whole width to the script editor and the charts, and to them only', () => {
+    expect(isWidePage('/ta/indicators/0123456789ab')).toBe(true)
+    expect(isWidePage('/ta/indicators/new')).toBe(true)
+    expect(isWidePage('/ta/charts')).toBe(true)
+    expect(isWidePage('/ta/indicators')).toBe(false)
+    expect(isWidePage('/positions')).toBe(false)
+    expect(menuEntry('/ta/indicators/0123456789ab')?.id).toBe('ta-indicators')
+    expect(trailFor('/ta/charts')).toEqual([{ label: 'Technical Analysis' }, { label: 'Charts' }])
   })
 })
 

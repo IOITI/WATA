@@ -1,0 +1,10 @@
+{
+  "name": "The signals WATA received",
+  "from": "2026-10-13",
+  "to": "2026-10-16",
+  "indice": "us100",
+  "source": {"kind": "journal"},
+  "chart": {"asset": {"provider": "capital", "key": "US100"}, "side": "bid", "bars": {"type": "time", "timeframe": "1"}},
+  "changes": {},
+  "baseline": {"repetitions": 100, "seed": 1}
+}

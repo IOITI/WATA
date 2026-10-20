@@ -6,6 +6,7 @@ the React interface (admin_ui/, built into src/admin/static/) on every other pat
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -13,12 +14,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 
-from src.admin.backtests import InvalidRequest, NotPossible, UnknownRun
 from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
-from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
+from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
-from src.admin.routers import actions, backtests, config, data, session, system, trading
+from src.admin.routers import actions, backtests, config, data, session, system, ta, trading
+from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,17 @@ CONTENT_SECURITY_POLICY = "; ".join([
     "form-action 'self'",
 ])
 
+# Pine scripts run as the JavaScript PineTS generates from them, which needs
+# 'unsafe-eval'. Only the two worker files of the Technical Analysis pages get it,
+# and they can open no connection (connect-src falls back to 'none'): a script that
+# compiles can neither call the API with the session cookie nor send anything out.
+# A worker loaded from its own address follows the policy of its own response.
+WORKER_CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'none'",
+    "script-src 'self' 'unsafe-eval'",
+])
+WORKER_PATH = re.compile(r"^/assets/(?:vela-)?pine-worker-[A-Za-z0-9_-]+\.js$")
+
 
 class SecurityHeadersMiddleware:
     """
@@ -62,11 +74,12 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope["path"]
+        policy = WORKER_CONTENT_SECURITY_POLICY if WORKER_PATH.match(path) else CONTENT_SECURITY_POLICY
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+                headers["Content-Security-Policy"] = policy
                 headers["X-Frame-Options"] = "DENY"
                 headers["X-Content-Type-Options"] = "nosniff"
                 headers["Referrer-Policy"] = "no-referrer"
@@ -120,8 +133,15 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.backtests is not None and ctx.settings.backtests_enabled:
             # Runs the backtests asked for, one at a time.
             background.append(asyncio.create_task(ctx.backtests.run()))
+        if ctx.downloads is not None and ctx.settings.backtests_enabled:
             # Fetches the prices that are missing, when it was told to and the market is closed.
-            background.append(asyncio.create_task(ctx.backtests.keep_prices()))
+            background.append(asyncio.create_task(ctx.downloads.keep_prices()))
+        if ctx.research is not None and ctx.settings.backtests_enabled:
+            # Writes each finished day for a research machine, when switched on and the market is closed.
+            background.append(asyncio.create_task(ctx.research.keep()))
+        if ctx.paper is not None and ctx.settings.backtests_enabled:
+            # Trades each shadow rule's finished days on paper, the market closed.
+            background.append(asyncio.create_task(ctx.paper.keep()))
         try:
             yield
         finally:
@@ -163,13 +183,25 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
     async def invalid_asset(_: Request, exc: InvalidAsset):
         return JSONResponse(content={"detail": str(exc)}, status_code=422)
 
+    @app.exception_handler(ScriptNotFound)
+    async def script_not_found(_: Request, exc: ScriptNotFound):
+        return JSONResponse(content={"detail": str(exc)}, status_code=404)
+
+    @app.exception_handler(InvalidScript)
+    async def invalid_script(_: Request, exc: InvalidScript):
+        return JSONResponse(content={"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(ScriptConflict)
+    async def script_conflict(_: Request, exc: ScriptConflict):
+        return JSONResponse(content={"detail": str(exc)}, status_code=409)
+
     @app.get("/api/healthz", include_in_schema=False)
     async def healthz():
         # "totp" lets the login page ask for a one-time code without a failed attempt first.
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, trading, system, actions, config, data, backtests):
+    for module in (session, trading, system, actions, config, data, backtests, ta):
         app.include_router(module.router)
 
     _mount_interface(app, static_dir)

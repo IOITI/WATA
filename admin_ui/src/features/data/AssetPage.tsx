@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import type { DateRange } from '@/components/ui/calendar'
 import { DateRangePicker } from '@/components/ui/date-picker'
 import { useSession } from '@/features/auth/auth-context'
-import { Coverage } from '@/features/backtests/PricesPanel'
+import { Coverage } from '@/features/data/HistoryPanel'
 import { availabilityOf } from '@/features/prices/availability'
 import { daysBetween, instrumentLabel, todayIn } from '@/features/prices/chartData'
 import { parseView, periodPresets, viewParams, withPeriod } from '@/features/prices/view'
@@ -17,6 +17,9 @@ import type { ChartView } from '@/features/prices/view'
 import { api, ApiError } from '@/lib/api'
 import { formatDay, toIsoDay } from '@/lib/format'
 import type { AssetDetails } from '@/lib/types'
+
+import { assetTicker, chartsPath } from '@/features/ta/chartLinks'
+import { tickerText } from '@/features/ta/engine/tickers'
 
 import { AssetChart } from './AssetChart'
 import { ASSETS_PATH, PROVIDER_LABELS } from './assets'
@@ -181,11 +184,13 @@ function AssetView({ details }: { details: AssetDetails }) {
   })
   // A Dukascopy history has no recorder behind it: what was fetched of each day stands in for its gaps.
   const coverageQuery = useQuery({
-    queryKey: ['backtest-prices', asset.key, view.from, view.to],
+    queryKey: ['history-coverage', asset.key, view.from, view.to],
     queryFn:
-      downloaded && downloads && tab === 'chart' ? () => api.priceCoverage({ from: view.from, to: view.to }, asset.key) : skipToken,
+      downloaded && downloads && tab === 'chart' ? () => api.historyCoverage({ from: view.from, to: view.to }, asset.key) : skipToken,
   })
   const tooLong = downloaded && daysBetween(view.from, view.to) > details.max_days.chart
+  // The Technical Analysis charts serve the indices and histories, not the turbos that ended.
+  const chartTicker = asset.role === 'turbo' && asset.status === 'ended' ? null : assetTicker(asset)
 
   return (
     <>
@@ -207,6 +212,18 @@ function AssetView({ details }: { details: AssetDetails }) {
         {anchor === today
           ? `Times are in ${timezone}.`
           : `Its last day with data is ${formatDay(anchor)}. Times are in ${timezone}.`}
+        {chartTicker && (
+          <>
+            {' '}
+            <Link
+              to={chartsPath({ symbol: tickerText(chartTicker) })}
+              className="text-foreground underline underline-offset-2"
+            >
+              Open in Charts
+            </Link>{' '}
+            to run Pine scripts on it.
+          </>
+        )}
       </p>
 
       <AnimatedTabs tabs={TABS} activeTab={tab} onChange={(next) => show(view, parseTab(next))} renderContent={false} />

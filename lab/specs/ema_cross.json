@@ -1,0 +1,19 @@
+{
+  "name": "EMA cross on Capital.com's US100",
+  "script_file": "../strategies/ema_cross.pine",
+  "from": "2026-10-13",
+  "to": "2026-10-16",
+  "indice": "us100",
+  "source": {
+    "kind": "pine",
+    "asset": {"provider": "capital", "key": "US100"},
+    "side": "bid",
+    "bars": {"type": "time", "timeframe": "1"},
+    "inputs": [{"id": "in_0", "value": 9}, {"id": "in_1", "value": 21}],
+    "alerts": [{"title": "Cross up", "action": "long"}, {"title": "Cross down", "action": "short"}],
+    "alert_calls": "ignore",
+    "confidence_plot": null
+  },
+  "changes": {},
+  "baseline": {"repetitions": 100, "seed": 1}
+}

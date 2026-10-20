@@ -319,6 +319,17 @@ def test_range_bars_are_built_from_the_feeds_ten_second_bars(feed):
     assert next(call for call in ctx.queries.calls if call[0] == "capital_series")[4] == "bid"
 
 
+def test_a_range_in_ticks_counts_capital_coms_own_price_step(feed):
+    ctx, client = feed
+    day_start = int(datetime(2026, 10, 14, 22, tzinfo=UTC).timestamp())
+    ctx.queries.capital_series_rows = [(day_start + 10 * n, 25000.0 + n, 25000.5 + n, 24999.5 + n, 25000.0 + n) for n in range(40)]
+
+    body = client.get("/api/data/assets/capital/US100/range-bars?from=2026-10-15&ticks=60").json()
+
+    # US100 is quoted to one decimal: 60 steps are 6 points, as TradingView's 60R.
+    assert body["size"] == 6.0 and body["auto"] is False
+
+
 def test_the_chart_is_given_watas_trades_of_its_indice_the_gaps_in_its_hours_and_capital_coms_volume(feed):
     ctx, client = feed
     ctx.queries.capital_volume_by_day = {"2026-10-15": 1234.0}

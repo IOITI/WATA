@@ -12,6 +12,7 @@ import { api } from '@/lib/api'
 import { formatDateTime, formatNumber } from '@/lib/format'
 import type { Health } from '@/lib/types'
 
+import { LicencesPanel } from './LicencesPanel'
 import { SaxoPanel } from './SaxoPanel'
 
 function ServicesTable({ health }: { health: Health }) {
@@ -195,6 +196,8 @@ export function SystemPage() {
           </Alert>
         )}
       </Panel>
+
+      <LicencesPanel />
     </>
   )
 }

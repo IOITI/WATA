@@ -422,10 +422,11 @@ An optional web interface for the operator, served on its own domain or on a por
 - **Report and exits**: the figures of the daily Telegram report with the account balance over time, and an analysis of how trades ended (by exit, hour of entry, holding time, and how much of the best level was given back).
 - **Signals, watchlist and execution timing**: what the Trader did with each signal and why, the turbo that would be bought now, and how long each step of a trade took.
 - **Data: Providers and Assets View**: where the prices WATA keeps come from, and every asset they hold.
-  - **Providers** lists the price sources switched on: the [Price Recorder](#️-price-recorder) (Saxo's stream, live) and the [Dukascopy history](#-strategy-backtester) (downloaded for backtests), with what each is doing, its assets and the span of its data. Each opens to a page of its own; "Edit configuration" changes the recorder's settings (reviewed, then saved like the Configuration page saves: validated, the previous file kept, audited) or Dukascopy's downloads; "Add provider" switches on one not active yet, Capital.com being shown as to come. Another instrument can be added to either: an index Saxo quotes for the account, recorded beside the turbos, or another index of Dukascopy (the S&P 500, for one), fetched when asked.
+  - **Providers** lists the price sources switched on: the [Price Recorder](#️-price-recorder) (Saxo's stream, live) and the [Dukascopy history](#dukascopys-history) (downloaded for backtests), with what each is doing, its assets and the span of its data. Each opens to a page of its own; "Edit configuration" changes the recorder's settings (reviewed, then saved like the Configuration page saves: validated, the previous file kept, audited) or Dukascopy's downloads; "Add provider" switches on one not active yet, Capital.com being shown as to come. Another instrument can be added to either: an index Saxo quotes for the account, recorded beside the turbos, or another index of Dukascopy (the S&P 500, for one), fetched when asked.
   - **Assets View** lists every asset stored, all time or the last days: the turbos and their index from Saxo, the Dukascopy history. It filters by type, provider and status, and marks the turbos Saxo left without a quote today. A click on a row opens it to its last price, its volume, what was recorded of it and the chart of its last day; its name opens its page.
   - **An asset's page** draws its prices as candles from ten seconds to one hour or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under a turbo, the times that were not recorded, and the bars exported to CSV. Its other tabs give each day summed up (open, high, low, close, range, quote changes, share of the trading time covered, volume) and the spread through the day, what is missing from its data, WATA's positions on it, and everything stored about it. Addresses of the former Prices page lead there.
 - **Backtests**: a strategy replayed on prices of the past with WATA's own rules, asked for and read from the browser: see the [Strategy Backtester](#-strategy-backtester).
+- **Technical Analysis**: Pine Script indicators written, checked and tested in the browser, drawn on WATA's own assets in the Vela charts, and signal rules that let WATA make its own signals from them: see [Technical Analysis](#-technical-analysis).
 - **Operator actions**: pause and resume new entries, close one position, hand over the Saxo authorization code from the browser (instead of `watasaxoauth` over SSH), send a manual `long` / `short` / close signal, request the daily report. Each one asks for an explicit confirmation, is kept in an audit trail and announced on Telegram.
 - **Configuration**: view `config.json` with secrets masked and edit the trading parameters (`trade.rules`, `trade.config`, `reporting`, `logging.level`). A change is checked with the same validator the services use, the previous file is kept as `config.json.bak-<date>` and its trading parameters can be restored, and it takes effect the next time each service starts (run `watastop` then `watastart`).
 - **Logs**: the end of each service's log file, filtered by level and text.
@@ -643,7 +644,7 @@ Saxo quotes the Nasdaq 100 index only from 15:30 to 22:15 in Paris. Capital.com 
 - **Live**: each quote is sent at once to the admin's charts, which move with it. An asset page says how late the last quote is ("Live · 85 ms"): from Capital.com's time of the quote to now.
 - **Recorded**: every ten seconds, bid and ask, into PostgreSQL, in the columns and by the rules of the price recorder. `updates`, the quote changes of each ten seconds, is the volume the feed counts itself.
 - **Capital.com's own volume**: Capital.com's candle of each minute, with the volume it gives it, is fetched each minute and kept beside the bars.
-- **For backtests**: each day of UTC, once over, is written as a file in the format of the Dukascopy days, under `var/lib/price_history/capital/bars/us100/`. The backtest form can run on them in place of Dukascopy's history.
+- **As files**: each day of UTC, once over, is also written as a file in the format of the Dukascopy days, under `var/lib/price_history/capital/bars/us100/`, for tools outside WATA and for a backtest run on files. The admin's backtests read the feed's tables.
 
 It is a separate service: no trading service uses it, and it cannot slow one down. It never places an order: it can only ask Capital.com for a session, the state of markets and past prices, which a test holds it to.
 
@@ -710,123 +711,248 @@ Bars are bucketed by the time a quote was received, as the price recorder's are:
 - **Size**: about 8,640 rows a day per instrument quoted around the clock, some 300 MB a year in the database. A day file is a few hundred kilobytes.
 - **What is not recorded cannot be fetched afterwards** at ten seconds. Capital.com's minutes are kept apart and are not used to fill holes.
 
-## 🧪 Strategy Backtester
+## 📐 Technical Analysis
 
-WATA can replay a strategy on prices of the past and say what it would have done with it: which entries the Trader would have taken or refused, and where the Position Monitor would have sold.
+The admin's **Technical Analysis** section works as TradingView does with its Pine Script indicators, on WATA's own data.
 
-This is the first part of computing the signals inside WATA instead of TradingView. **Nothing live uses it yet**: TradingView still sends the signals, and no service runs the strategy.
+- **Indicators**: Pine Script v5 and v6 written in the browser, with the language highlighted and checked as it is typed: TradingView's own rules, then a compile by PineTS, which marks the line of each error. Each save is a new version, kept as a plain `.pine` file (`var/lib/admin/ta/scripts/<id>/v0001.pine`, ...), with its history, a diff between versions, and a version put back by saving it again. Libraries are kept like scripts: `import user/Name/1 as alias` imports the WATA library that declares `library("Name")`, inlined into the script before it runs (PineTS has no imports of its own yet).
+- **A test, beside the editor**: the script run on a day of one of WATA's assets (Capital.com, Dukascopy, Saxo), at 1 to 60 minutes or as range bars, with what it plotted last and every alert it raised that day, with their times.
+- **Charts**: the Vela SuperChart on WATA's assets: Capital.com live, the Dukascopy history, Saxo's recorded prices. The indicators and strategies written above are in its indicator list, with their inputs in its settings. Range bars are a ticker of their own (`CAPITAL_US100.R60`, as TradingView's 60R), and `.ASK` reads the ask. The layout is kept by the admin, so a phone and a computer share it.
+- **Signal rules**: a script run on each bar of an asset of the Capital.com feed as the bar closes, its alerts turned into signals for the trader. A rule says which version of the script it runs (and of each library it imports), on which asset, side and bars, with which inputs, and what each `alertcondition()` becomes: nothing, `long`, `short`, `close-position`, or what its message says (WATA's webhook JSON, as TradingView's alerts send it). A new rule is in **shadow**: its signals are journaled, never sent. Switched to **live** (an operator action, confirmed with a slide, recorded in the audit trail), they go to the web server as any signal does, and the trader applies its usual rules to them. The page lists each rule with how the engine runs it, the journal of signals with what the trader made of each one sent, and a day of a rule's signals beside TradingView's.
 
-### In the admin interface
+### The TA engine
 
-With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page (under Analysis) does it all from the browser:
+The service that runs the rules, `ta_engine1`. On each bar of a rule as it closes, its script is run by PineTS over all of the rule's bars, and the alerts of that bar are what counts: the same as a replay of those bars gives. The bars come from the Capital.com feed's tables, built by the rules of the admin's charts.
 
-- **Prices**: which days have prices, by month, and "Fetch these days" for more. The download runs in the background, one at a time, and can be stopped. It is slow: see below. **"Keep the prices up to date"** has the service fetch what is missing by itself, as far back as chosen: the newest days first, a few at a time, **only while the market is closed**, waiting longer each time the source stops answering (half an hour, then twice as long, up to twelve hours). Off until switched on.
-- **Turbo**: "Measure on real trades" reads WATA's closed positions and the index at the open and the close of each, and finds the turbo they describe: what was paid, how many index points move it by 1.00, its spread, with the range the leverage could be in and how far the result is from the real trades. Backtests are then made with it instead of the assumed one. It needs the prices of the days WATA traded.
-- **New backtest**: the period, the strategy's parameters, the turbo and, **for that run only, other values of WATA's rules** (stop, take-profit, trailing stop, daily target, entry cap, cooldown, trade limit, minimum confidence). The live configuration is not touched. Instead of a strategy, **"The signals WATA received"** replays the signals of WATA's own journal for the period. **Prices**: Dukascopy's downloaded history, or the days the [Capital.com feed](#-capitalcom-feed) recorded, which are the prices of the chart the signals come from but only from the day the feed began; the run says which, and runs compared on different prices are said to be. The turbo is still measured on Dukascopy's history, which goes back to the first trades.
-- **A run**: what was asked, the days that could not be tested, then for each leverage its figures, the curve of all days, the result of each day, why trades were entered and left and which rules refused entries, and the trades, days and refusals as tables with CSV export. "Run again with changes" starts a new one from it.
-- **How far to trust a run**, on its page: where its total stands among **the same days traded with entries at random** (see below), what a trade brings on average, what was won for 1 lost, the longest losing streak, the range the total falls in when the days are drawn again, and how far winning trades fell before they won. A run of fewer than 30 trades or 20 days says so in words.
-- **A replay of real signals** is also set **against what WATA really did**: each real trade beside the model's, how far apart their results are, whether they ended the same way, the trades only one of the two made, and the days of both. It is the model that is tested there, not a strategy.
-- **Try several values (a sweep)**, from "New backtest": give one setting or two (a parameter of the strategy, a rule) several values, and every combination is replayed in one run. **The last days of the period are held out** (30 % unless said otherwise): the page shows every combination on the days a value may be chosen on, the same combinations on the days held out, and says in words what became of the best one there. A combination is then made a backtest of its own with one button.
-- **Where the result comes from**, on a run: its trades by hour of entry, weekday, direction, what they were entered and left on, confidence and holding time, with what each group weighs, and how much of the best level was given back.
-- **A trade followed**: a trade in the list leads to the chart of its day, brought into view around it, with **the turbo's result every ten seconds from the entry to the exit** against the stop, the day's target and the trailing stop: why the monitor sold where it did.
-- **Fills, and the account**: a wait between a decision and its fill, index points lost on each fill, and a starting capital. With a capital, a run also gives its result **in money, at the size WATA would have given each trade** (its sizing by time of day and by confidence, in whole turbos).
-- **Housekeeping**: a run can be named again and tagged, several can be removed at once (the failed ones, or those older than 30 days, in one go), and the list says what the runs and the prices take on disk. A run made with code or prices that have changed since is marked **stale**.
-- **A day**: the range bars the strategy saw, with the kernel (green while it rises, red while it falls), the VWAP of the session and its band, and a mark where a trade was entered, left, or refused. The day's trades and refusals are listed under the chart.
-- **Compare**: tick up to four finished runs in the list to set their figures side by side, with what each one changed and their curves on one chart.
+Nothing is sent unless the rule is live in `rules.json` as it is at that moment, and alone on its indice (the web server keeps one signal per indice, whoever sends it). The action must be `long`, `short` or `close-position`. The bar must have closed less than `max_signal_age_seconds` ago, and the feed must not be stale. A history replayed after a restart is never sent. Each signal is journaled before it is sent, keyed by its rule, bar and alert, so a bar evaluated again sends nothing twice. WATA stamps its signals itself: `signal_timestamp` is when the bar closed, `alert_timestamp` when the engine sent it.
 
-What it does on the server:
+The scripts run in a Node process of their own, confined:
+- Node's permissions allow it no file but its own, no process, no worker;
+- it gets no environment, so no secret;
+- it refuses every import once started, and has no network functions;
+- its memory is capped, and a run that takes too long stops it.
 
-- A backtest is a separate process started by the admin, **at the lowest priority and one at a time**; others wait their turn (ten at most). The admin container is limited to one processor, so the services that trade keep the rest.
-- Runs are files under `/app/wata/var/lib/backtests/`, one folder each; prices are under `/app/wata/var/lib/price_history/`. Nothing is written to the database. "Remove" on a run deletes its folder.
-- It is on with the admin interface. `"backtests_enabled": false` in the `admin` section of `config.json` switches it off.
-- A backtest is not an operator action: it changes nothing that trades, and is neither in the audit trail nor announced on Telegram.
-- The measure of the turbo and the replay of real signals **read** the closed positions and the signal journal, through the admin's read-only connection. They write files, like any run.
-- Prices take about 5 MB of disk a day (the hourly files as they were fetched, and the ten-second bars): some 400 MB for the 120 days "Keep the prices up to date" goes back by default.
+It is started again after a pause; the rule that was running waits five minutes.
 
-### From the command line
+### Enabling it
 
-From a checkout of the repository:
+1. Add `ta` to the profiles in `/app/wata/.env`: `COMPOSE_PROFILES=admin,capital,ta`. The engine needs the Capital.com feed for its bars.
+2. Switch it on: `trade.config.ta_engine.enabled` (Configuration page).
+3. `watastop`, then `watastart`. `docker exec ta_engine1 python -m src.ta_engine.runner` checks the runner in the image.
+
+| Setting (`trade.config.ta_engine`) | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Switches the engine on |
+| `history_days` | `1` | Days of bars before the daily restart a rule's run begins with. Each bar runs the script over all of a rule's bars: between this many days and one more |
+| `restart_time` | `21:15` | When (UTC) every rule starts again from `history_days`: best while the market is closed |
+| `max_signal_age_seconds` | `60` | The signal of a bar that closed longer ago is journaled, never sent |
+| `stale_feed_seconds` | `90` | Without ten seconds recorded by the Capital.com feed for this long, nothing is sent |
+| `run_timeout_seconds` | `30` | A run that takes longer stops the runner, which starts again |
+| `runner_memory_mb` | `512` | The runner's memory |
+
+The signals go to `trade.config.signal_polling.service_url`, as the scheduler's close does. In PostgreSQL, created by the engine: `ta_signal` (each signal, with what was sent and the web server's `signal_uuid`, which leads to `signal_journal`), `ta_engine_state` and `ta_rule_state`.
+
+### Replays, and AI agents
+
+What a rule, or a script, would have raised on recorded days, through the same runner with the engine's daily restart. Nothing is sent or written; it prints JSON:
 
 ```bash
-# 1. Fetch the index (US Tech 100, from Dukascopy) for the days wanted
-PYTHONPATH=./:src/ python3 -m src.strategy.history.dukascopy --from 2026-09-14 --to 2026-10-12
-
-# 2. Replay the strategy on them
-PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12
-
-# The same with a parameter changed, and the trades written to files
-PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 \
-    --set entry_mode=cross_catchup --out var/lib/backtests/catchup
-
-# On the days the Capital.com feed recorded instead of Dukascopy's
-PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-10-12 --to 2026-10-16 \
-    --source var/lib/price_history/capital/bars/us100
-
-# Signals WATA received (a JSON list: at, action, confidence) instead of a strategy
-PYTHONPATH=./:src/ python3 -m src.strategy.backtest --from 2026-09-14 --to 2026-10-12 --signals signals.json
-
-# The turbo measured on closed trades (a JSON list: direction, opened_at, closed_at, open_price, close_price)
-PYTHONPATH=./:src/ python3 -m src.strategy.calibration --trades trades.json
-
-# Several values of a rule and of a parameter in one pass, the last 30 % of the days held out
-PYTHONPATH=./:src/ python3 -m src.strategy.sweep --from 2026-06-01 --to 2026-10-09 \
-    --axis rule:day_profit_target=1,1.7,2.5,4 --axis parameter:kernel_bandwidth=8,15,25
+docker exec ta_engine1 python -m src.ta_engine.replay --rule <id> --from 2026-09-15 --to 2026-09-17
+# A script on the Dukascopy history, its alerts read as WATA's webhook JSON
+docker exec ta_engine1 python -m src.ta_engine.replay --script <id> --asset dukascopy/us100 --bars R6000 \
+    --from 2026-09-15 --messages --inputs '{"in_16": "DUKASCOPY_US100"}'
 ```
 
-- **Fetching is slow and has to be repeated.** Dukascopy's server refuses many requests, and stops answering altogether for a while when it is asked too much (two downloads at the same time are enough). Each run keeps what it got under `var/lib/price_history/`, says which days are incomplete, and stops by itself when nothing is answered any more; the next run only asks for what is missing. A day with a missing hour is never written. Count hours, not minutes, for a month of prices.
-- **The rules are those of a configuration**: `--config`, else `WATA_CONFIG_PATH`, else `etc/config_example.json`. Give it your own `config.json` to test with your own stop, targets and hours.
-- **`--source`** takes a file or a directory made by `wataprices` instead, to replay prices the [Price Recorder](#️-price-recorder) recorded.
-- **`--trace file.csv`** writes one line per range bar (close, kernel, VWAP, band, whether entries were allowed), to compare with a chart.
-- **`--baseline 200`** (the default) is how many times the same days are traded with entries at random, to compare; `--baseline 0` leaves that out, `--baseline-seed` draws others.
-- **`--fill-delay 30`** fills each decision thirty seconds after the next ten seconds, **`--slippage 1.5`** loses that many index points against the trade on each fill, and **`--capital 10000`** (the default) is the account the result is also given in money for; `--capital 0` gives none.
+`--bars` is `1`, `5`, `15` or `60` minutes, or `R<steps>` for range bars, in steps of the instrument's price (Dukascopy quotes the Nasdaq 100 to 0.001, so 6 points are `R6000`; Capital.com's US100 is quoted to 0.1, so they are `R60`). An input is set by its id in the script (`in_0`, `in_1`, ...), as a rule sets it.
 
-### What is replayed
+Everything an agent needs is in plain files:
+- the scripts, as `.pine` files under `var/lib/admin/ta/scripts/`;
+- the rules, in `var/lib/admin/ta/rules.json`;
+- the prices, as the day files of `var/lib/price_history/`.
 
-- **The strategy** (`kernel_vwap`) is the one of the TradingView script, on one feed: on range bars of the index, a kernel regression of the closes crossing the VWAP of the session is an entry; the reverse cross or the end of the session ends it. Entries wait until the session's prices have spread enough around the VWAP, and are not taken while the market is racing or gapping.
-- **WATA's rules**, read from the configuration: market hours and closed dates, the trade limit, the cooldown after a loss, the day's profit cap and loss limit, then the stop, the take-profit, the trailing stop, the daily target and the end-of-day close.
-- **A turbo**, because those rules are about a turbo's price, not the index. It is a model: its value is the distance from the index to its knock-out level, bought at the ask and valued at the bid.
+The editor's test can download its bars as PineTS candles, and the script as it ran, libraries inlined. [pinets-cli](https://github.com/LuxAlgo/pinets-cli) then runs the same script on the same bars with no WATA at all. It is made to be driven by an agent (a `SKILL.md` describes it), and prints JSON:
 
-| Parameter (`--set name=value`) | Default | Meaning |
-|---|---|---|
-| `range_points` | `6.0` | Size of the range bars, in index points (60R on a chart with ticks of 0.1) |
-| `kernel_bandwidth` | `15` | Range bars the kernel regression looks back on |
-| `session_start`, `session_end` | `08:00`, `21:55` | The session, in the trading timezone; the VWAP restarts at its start |
-| `min_band_width` | `20.0` | Entries wait until the VWAP's band has been this wide once in the session, in points. `0`: no wait |
-| `entry_mode` | `cross` | `cross_catchup` also enters when entries become allowed with the kernel already on one side of the VWAP, once its slope agrees |
-| `catchup_max_distance` | `0.0` | A catch-up entry waits while the kernel is further than this from the VWAP. `0`: no limit |
-| `vwap_weight` | `updates` | What stands for volume: the number of quote changes in each ten seconds, or `time` (every ten seconds the same) |
-| `cooldown_bars` | `0` | Range bars to let pass after an exit before a new entry |
-| `fast_bars`, `fast_seconds` | `10`, `10` | A racing market: that many range bars within that many seconds |
-
-### Reading the result
-
-One column per leverage assumed for the turbo (`--points-per-unit`: the index points that move its price by 1.00), then, for each, the trades by reason of entry and of exit and the entries refused by rule. With `--out`, `trades_<leverage>.csv` holds every trade and `days_<leverage>.csv` every day.
-
-Percentages are counted as WATA counts a day: each trade as the whole stake, one result applied on the one before. Position sizing by time of day and by confidence is not applied.
-
-**"Random entries beaten"** is what the total is worth. WATA's exits decide most of a trade: the monitor sells at its stop, or as soon as the day has reached its target, whatever the trade was entered on. So the same days are traded again with a coin and a clock: on each day as many entries as the strategy asked for, each at a moment drawn in the hours it may enter in, long or short by a coin, and only WATA's rules to end them. Two hundred times over, with the same draws from one run to the next. The figure is the share of those that did worse than the strategy. **Near 50 %, the entries have shown nothing the exit rules do not explain**; it takes 95 % or more to say they count for something.
-
-**"90 % of redrawn days"** is where the total falls when the same number of days is drawn again from the days tested: how much it owes to which days there were. It is not given for fewer than five days, and knows nothing of days unlike any of them.
-
-With `--out`, each trade is written with the worst level it went through (`min_performance_percent`) beside its best: what a stop has to leave room for.
-
-**"In money, as WATA sizes"** is the same trades at the size WATA would have given each, on an account that starts with the capital: the share of the account the configuration lets an order use, scaled by the time of day and by the confidence of the entry, in whole turbos with one left unbought. The percentages above it count every trade as the whole stake. Neither fees nor taxes are counted.
-
-**A sweep** prints one line per combination, with its total and its trades on the days a value may be chosen on, then on the days held out. Read the second column before believing the first: the value that did best on a period was chosen because it did best there.
+```bash
+npx pinets-cli run Envelope.prepared.pine --data CAPITAL_US100-1-2026-10-19.json --plots Basis,Upper --clean
+```
 
 ### What to keep in mind
 
-- **The turbo's leverage and spread are assumptions** until they are measured on real trades (the Turbo panel, or `python -m src.strategy.calibration`). That is why the backtest runs with three leverages by default: a conclusion that holds for one only is not a conclusion. Once measured, a run is made for the leverage found and for each end of the range it could be in. The measure itself is rough: the index of the history is another broker's and in dollars, the turbo is quoted in euros, and a line through fewer than thirty trades is a first idea.
+- **Shadow first.** Run a rule in shadow beside TradingView for some days and read the comparison on its page before switching it to live, then switch TradingView's alerts for that indice off.
+- **PineTS is not TradingView.** It runs most of Pine v5 and v6, but not all of it, and not always exactly as TradingView does. Things that differ:
+  - `request.security` reads WATA's assets only, and live only Capital.com's;
+  - a symbol has no exchange time zone, so PineTS's days are UTC days;
+  - range bars are built from ten-second bars;
+  - a script's history starts where its rule's bars start.
+
+  A script's alerts on WATA's bars are WATA's, not a copy of TradingView's.
+- **Cost**: each new bar runs the script over all the rule's bars. The Kernel multi-VWAP script took 0.5 s per thousand one-minute bars on the computer it was tried on, and 1.2 s with its two other providers read through `request.security`. `history_days` bounds it, and the Signal rules page says each rule's last run time.
+- **Licences**: PineTS and Vela-pinets are under the AGPL-3.0: the admin built with them, and the engine's runner, are offered with their whole source, this repository (System page, "Licences and source"). WATA's own files stay under the MIT licence. Vela is under the Apache License 2.0. Pine Script® is a trademark of TradingView, Inc.
+
+## 🧪 Strategy Backtester
+
+WATA can trade a strategy on days that have passed as it would have traded it live, and show what came of it. You see every signal and what the Trader made of it, and every trade: the turbo it bought, at what price, and why the Position Monitor sold it.
+
+The strategy is either a Pine script of the [Technical Analysis](#-technical-analysis) section, its alerts turned into signals as a signal rule turns them, or the signals WATA really received from TradingView. The trades are made on **the turbos the [Price Recorder](#️-price-recorder) kept**, at their recorded ask and bid. So a backtest can only cover days the recorder ran: an entry at a moment when no turbo was recorded is shown as such, not traded. Nothing here trades.
+
+### In the admin interface
+
+With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page is under Analysis.
+
+**New backtest** takes five steps:
+
+1. **Asset and bars**: what the strategy reads (Capital.com's US100, Dukascopy's history, the index Saxo quotes), as time bars or range bars. "Start from a signal rule" fills this step and the next from a rule.
+2. **Strategy**: one of two sources, plus the indice whose turbos are traded:
+   - a Pine script: its version, its inputs and what each alert becomes, as on the Signal rules page;
+   - "The signals WATA received": the journal of the period.
+3. **Period**: up to 92 days, with what was recorded each day (turbos, bars of the asset); or up to two years on [turbos made up from the index](#turbos-made-up-from-the-index).
+4. **Settings**, for this run only; the live configuration is not touched:
+   - **WATA's settings**, each beside its live value: which signals are taken, the day's target and limits, the stop, take-profit and trailing stop, the price range of the turbo bought, how much is bought;
+   - **what a backtest assumes**: see [What is replayed](#what-is-replayed). What WATA's own orders took and cost (the delay from a signal to the trader, from an order to Saxo, the price paid against the quote recorded) is shown there, measured on the last three months, with "Use the measured values";
+   - **random entries or a sweep**: how many times the same days are traded with entries at random, or a sweep instead.
+5. **Review**: what differs from live, a name and tags.
+
+**A run** shows:
+- its figures: total, in money, trades, per trade, worst drawdown, random runs beaten;
+- how far to trust them, with its risk figures and what the same days give in another order and without the best of them;
+- the edge of its entries: how the index moved after each entry signal against random moments of the same hours;
+- "Later and dearer fills": "Stress this run" makes it again with each order later and at a worse price;
+- for a replay of the journal, its trades beside WATA's real positions of the same signals;
+- its curve, in percent or in money;
+- why signals were refused and why trades were sold;
+- where its result comes from, by hour, weekday, direction, exit, confidence, holding time, turbo price and issuer, its place against the US open, and the kind of day (volatility, gap, trend, US open, macro news);
+- its days, trades and signals, as tables with CSV export.
+
+"Run again with changes" opens the form already filled in.
+
+**A day** shows the strategy's asset as the strategy read it:
+- every signal is marked where it was raised, crossed out when nothing was bought;
+- every sale is marked with its result;
+- the day's trades and signals are listed below.
+
+**A trade, clicked**, opens on the chart of the turbo it bought:
+- its bid every ten seconds, with the price paid, the stop, the day's target, the take-profit when it is near, and the trailing stop as it moved;
+- the strategy's asset under it;
+- the turbos the trader looked at and the one it bought;
+- its size, what it cost and what it made;
+- the signals that bought it and sold it.
+
+**A sweep** tries one or two settings or script inputs, with several values each:
+- every combination is traded on the same days and signals, with its own account;
+- the last days (30 % unless said otherwise) are held out. The grid shows every combination on the days a value may be chosen on, and on the days held out, and says in words what became of the best one there;
+- "Would choosing have worked": a walk-forward when asked for (the best combination chosen again every few days on the days before, kept on the days after), the probability that choosing the best was fitting, and the deflated Sharpe ratio, every combination tried counted;
+- a click makes a combination a run of its own.
+
+**Compare** sets up to four finished runs side by side: their figures, the settings and inputs they did not share, and their curves on one chart.
+
+**Housekeeping**:
+- a run can be renamed and tagged, and several can be removed at once;
+- the list says how much disk the runs take;
+- a run made by other code than the admin's is marked so;
+- the runs of the backtester this one replaced (on a model of the turbo) are of no use any more: "Remove them" deletes them. Dukascopy's prices stay.
+
+What it does on the server:
+
+- **One run at a time, at the lowest priority.** A backtest is a separate process started by the admin. Others wait their turn (ten at most), and a run stops after three hours. The admin container is limited to one processor, so the services that trade keep the rest. Its memory is 1 GB, for the run and its Pine runner.
+- **It only reads the database.** The run reads the recorded turbos itself, one day at a time, through a read-only connection to PostgreSQL. A replay of the journal reads the journal through the admin's own connection.
+- **Its results are files**, one folder per run under `/app/wata/var/lib/backtests/runs/`. "Remove" deletes the folder.
+- **It is on with the admin interface.** `"backtests_enabled": false` in the `admin` section of `config.json` switches it off.
+- **It is not an operator action**: it changes nothing that trades, and is neither in the audit trail nor announced on Telegram.
+
+### What is replayed
+
+- **The Trader's checks on an entry**, in its order:
+  1. the signal's age;
+  2. closed dates, trading hours and the risky minutes, at the moment it is decided;
+  3. the indice;
+  4. a position already open in that direction;
+  5. the day's profit cap and loss limit;
+  6. the cooldown after a loss;
+  7. the trade limit;
+  8. the minimum confidence.
+
+  A refused entry closes nothing. The trader takes one signal at a time: a signal is decided once the orders of the one before are filled.
+- **The turbo bought** is chosen by the trader's own code among the turbos recorded and quoted at that moment: the twenty closest to their knock-out level, then the lowest bid in the price range. Its size is the trader's: the share of the account an order may use, scaled by the time of day and by the confidence, in whole turbos with one left unbought.
+- **The Position Monitor's exits**, checked on the turbo's bid at every ten seconds: stop-loss, take-profit, trailing stop, then the day's target. Then come the closing signals and the close of the day. A turbo whose quotes stopped for good while the recorder listened, its bid fallen under a quarter of the day's high, is taken for knocked out, at nothing.
+- **A price at a moment** is the first ten-second bar recorded at or after it: at most ten seconds late, never early. Inside ten seconds the bid is taken to go from the open to the low, then the high, then the close (the high first when it closed lower).
+
+| Assumption (step 4) | Default | Meaning |
+|---|---|---|
+| Account at the start | the last daily report's balance (10,000 € without one) | What the run's money starts from; results compound over the run |
+| From a signal to the trader | 3 s (a script), 0.5 s (the journal) | After the bar closed, or after WATA received the signal |
+| From an order to its fill | 1 s | The fill is the quote of the next ten seconds after that |
+| From a sale to the next purchase | 0.5 s | When the trader sells before it buys |
+| A stop crossed inside ten seconds sells at | the worst bid | `worst`: the bid that crossed it; `level`: the stop's own price, or the first tick under it |
+| Slippage, commissions | 0 | Taken from each fill; Saxo's commissions are not known here |
+
+### Reading the result
+
+**Percentages are counted as WATA counts a day**: each trade as the whole stake, one result applied on the one before. **The money** is the same trades at the size WATA would have given each, on an account that starts with the capital.
+
+**"Random runs beaten"** is what the total is worth. WATA's exits decide most of a trade: the monitor sells at its stop, or as soon as the day has reached its target, whatever the trade was entered on. So the same days are traded again with a coin and a clock: each day gets as many entry signals as the strategy had, each at a moment drawn in the hours its signals came at, long or short by a coin, on the same turbos and under the same rules. This is done 100 times by default, with the same draws from one run to the next. The figure is the share of those that did worse than the strategy. **Near 50 %, the entries have shown nothing the exit rules do not explain**; it takes 95 % or more to say they count for something.
+
+**The range of the total** is where it falls when the same number of days is drawn again from the days traded: how much it owes to which days there were. It is not given for fewer than five days, and knows nothing of days unlike any of them.
+
+**A sweep** shows each combination on the days a value may be chosen on, then on the days held out. Read the second before believing the first: the value that did best on a period was chosen because it did best there. The walk-forward does the same again and again: its total is what choosing would have made, every day chosen without knowing it. The probability of overfitting above one half, or a deflated Sharpe ratio under 95 %, says the best combination is best by chance.
+
+**The risk figures** are brought to a year only from 20 days: under that, a ratio says nothing. **The edge of the entries** is what the signals are worth before any exit: the index's move after each entry signal, in basis points in its direction, against random moments of the same hours. A strategy whose signals move the index no further than random moments made its result from the exits and the days. **Later and dearer fills** say how much of a result its fills hold: one that only lives at its own fills will not live with real ones.
+
+### Turbos made up from the index
+
+The recorder has kept turbos since mid-October 2026; Dukascopy has the Nasdaq since 2013. On the Backtests page, **"Measure them"** measures the recorded turbos against Dukascopy's Nasdaq, by direction: the euros of turbo per index point, the level a turbo's price would be nothing at against its knock-out level, the spacing of the levels, and the spread by hour. A run can then trade turbos made up from the index on any day it has: each day a ladder of knock-out levels around the open, priced as the recorded turbos were for the same distance, knocked out where the index crosses them. The trader's choice, sizing and exits are the same.
+
+Every page says when a run's turbos were made up, and with what measure. **It is a model**: the euro's rate against the dollar is held at what it was measured at, new issues during the day are not made up, and the Nasdaq Dukascopy quotes is not the index the issuers price on. Check it on the recorded days before believing a long history: the lab's `python -m lab model validate` trades the same signals on both and says how far apart they are.
+
+### Shadow rules on paper
+
+Each finished day, once the market is closed, every signal rule in shadow is traded on the signals it raised that day, as WATA would have traded them. The Signal rules page shows each rule's days on paper. On a run made from a rule, **"Set as the rule's reference"** makes it the run those days are set against: a day outside the range of 90 % of the reference's days is marked. A rule that does live what its backtest said can go live; one that does not, stays in shadow.
+
+### The research lab
+
+Backtests by the hundred, and the analyses that tell a found edge from luck, run on a Mac over a copy of the server's data: [lab/README.md](lab/README.md). The server only writes each finished day as files, once switched on ("Write them", under the list of runs); the Mac pulls them each night.
+
+### Dukascopy's history
+
+The Nasdaq 100 (and other indices) from Dukascopy's public tick files, since 2013, kept as the ten-second bars the Price Recorder writes, under `var/lib/price_history/`. It is on Dukascopy's provider page, under Data:
+- the days there are, and "Fetch these days" for more: one download at a time, in the background, and it can be stopped;
+- **"Keep the prices up to date"**: the admin fetches what is missing by itself, as far back as chosen. It takes the newest days first, a few at a time, **only while the market is closed**, and waits longer each time the source stops answering (half an hour, then twice as long, up to twelve hours). Off until switched on.
+
+A strategy can read it (step 1); the turbos traded are always the recorded ones. From a checkout:
+
+```bash
+PYTHONPATH=./:src/ python3 -m src.price_history.dukascopy --from 2026-09-14 --to 2026-10-12
+```
+
+- **Fetching is slow and has to be repeated.** Dukascopy's server refuses many requests, and stops answering altogether for a while when it is asked too much (two downloads at the same time are enough). Each run keeps what it got, says which days are incomplete, and stops by itself when nothing is answered any more; the next run only asks for what is missing. A day with a missing hour is never written. Count hours, not minutes, for a month of prices.
+- **Disk**: about 5 MB a day (the hourly files as they were fetched, and the ten-second bars), some 400 MB for the 120 days "Keep the prices up to date" goes back by default.
+
+### From the command line
+
+A run's folder holds everything it was asked: `request.json`, `settings.json`, the script under `sources/`, and `journal.json` for a replay. The admin runs it with:
+
+```bash
+python -m src.backtest.run --run <folder> --data database --low-priority
+```
+
+`--data files:<folder>` reads the recorded turbos from files instead (what the tests and the development server do); `--data model:<calibration.json>` makes them up from the index (`--files <folder>` to read the index from files). The command writes its results beside the request, `summary.json` last.
+
+### What to keep in mind
+
+- **Only the recorded days, or a model.** The recorder has run on the server since mid-October 2026: runs will say for a while that they rest on too few trades and days. Retention may drop old days later. Longer histories are on made-up turbos, which are a model.
+- **The macro calendar must be kept ahead.** The news a day is known by come from `src/backtest/data/macro_calendar.csv`, read from the Fed's, BLS's and BEA's calendars; a run past its end warns. `python -m lab calendar check` says when to add the next dates.
 - **A total proves nothing by itself.** Read it with the random entries it beat, and with the number of trades and days it rests on.
-- **A sweep finds the value that did best, which is not the value that will.** That is what the held-out days are for; on a short period they are a handful of days and say little. A sweep runs on one turbo and without the random entries: make the combination chosen a backtest of its own before acting on it.
-- **The money leaves out fees.** Saxo's commission on each order is not counted, nor is a turbo priced other than the one assumed.
-- **The model can be wrong, and a replay of real signals says by how much.** Until one has been made on the server, with the journal and the positions of real days, the gap between a backtest and what WATA would really have done is not known.
-- **Index points say little.** With the example configuration a position is sold at −15 %, or as soon as the day reaches +1.7 %: a move of 300 points and a move of 20 can end as the same trade.
-- **It is a close relative of the TradingView script, not a copy.** One feed instead of the average of three, range bars built from ten-second bars, and a session that ends on the clock.
-- **Dukascopy's prices are another broker's**, fetched from an address it does not document. They are for research. A strategy that only works on one broker's prices is fragile.
-- **Ten seconds is the resolution.** A decision is acted on at the open of the next ten seconds. A stop crossed inside ten seconds is sold at their worst price, a target at the target and no better.
-- **Past results are not future results**, and a parameter chosen because it did best on the period tested will do worse on the next one.
-- **Not yet run on a server**: the pages were driven in a browser against the admin application on a development machine, with real backtests on three days of prices. The container's new folders and its processor limit are only checked by tests of the compose file. Open the page for the first time with the market closed. The measure of the turbo, the comparison with real trades and a sweep have only seen made-up trades and three days of prices; their two database reads were run once against the real PostgreSQL, when v0.13.0 was deployed. The unattended download has not run against Dukascopy.
+- **Ten seconds is the resolution**, against a monitor that looks about every second. The order of prices inside ten seconds is assumed, and how a stop is filled there is a setting.
+- **The turbos the trader looked at are worked out again**: those recorded and quoted, the twenty closest to their knock-out level. That approximates Saxo's search. A new issue is seen up to five minutes late, and turbos beyond the recorder's limit are missing.
+- **Not modelled**:
+  - what a knocked-out turbo is still worth (nothing is assumed);
+  - Saxo's commissions (settings, 0 by default);
+  - the web server keeping only the newest signal of each indice;
+  - the protective stop.
+- **A script is run as the TA engine runs it**, one run per engine day from its daily restart. A script that repaints, or reads `barstate.islast`, can give other signals than it did live.
+- **The asset the strategy reads is another feed than the turbos' index.** Capital.com's US100 is the one signal rules use; Saxo quotes its index from 15:30 to 22:15 only.
+- **A sweep finds the value that did best, which is not the value that will.** That is what the held-out days are for; on a short period they are a handful of days and say little. A sweep has no random entries: make the combination chosen a run of its own before acting on it.
+- **Past results are not future results.**
+- **Not yet run on a server**: the pages were driven in a browser against the admin application on a development machine, over made-up recorded days and a real Pine runner. The database reads were run against a real PostgreSQL 16, not the server's. Before trusting one, set a short run on the server's days beside the Orders page for the same days.
 
 ## 📈 Reporting
 

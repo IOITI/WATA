@@ -1,0 +1,254 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
+
+import { ThemeProvider } from '@/components/ThemeProvider'
+import { AuthContext } from '@/features/auth/auth-context'
+import type { Session, TaScript, TaScriptSummary } from '@/lib/types'
+import { WithTrail } from '@/test/WithTrail'
+
+import { IndicatorsPage } from './IndicatorsPage'
+import { ScriptEditorPage } from './ScriptEditorPage'
+
+// CodeMirror needs a laid-out page: the editor is a plain text box here (the browser checks see the real one).
+vi.mock('./editor/PineEditor', () => ({
+  PineEditor: ({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) => (
+    <textarea aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} />
+  ),
+}))
+
+// The worker compiles; a source containing "BROKEN" fails on its fourth line, as PineTS would say it.
+vi.mock('./engine/pineWorkerClient', () => ({
+  PineWorkerClient: class {
+    compile = async (source: string) =>
+      source.includes('BROKEN')
+        ? { id: 1, ok: false, error: { message: 'Unexpected token at 4:3', line: 4, column: 3 } }
+        : { id: 1, ok: true, op: 'compile', declaration: 'indicator', inputs: [] }
+    run = async () => ({ id: 2, ok: true, op: 'run', milliseconds: 3, bars: 10, plots: [], alerts: [], warnings: [] })
+    terminate() {}
+  },
+}))
+
+const SESSION: Session = {
+  authenticated: true,
+  version: '0.20.0',
+  timezone: 'Europe/Paris',
+  actions_enabled: true,
+  config_edit_enabled: true,
+  backtests_enabled: true,
+  totp_enabled: false,
+  restart_required: false,
+}
+
+const EMA_SOURCE = '//@version=6\nindicator("EMA")\nplot(ta.ema(close, 20))\n'
+
+function summary(changes: Partial<TaScriptSummary>): TaScriptSummary {
+  return {
+    id: '0123456789ab',
+    name: 'EMA',
+    kind: 'indicator',
+    description: 'An average',
+    pine_version: 6,
+    library_name: null,
+    imports: [],
+    version: 2,
+    versions: [
+      { number: 1, saved_at: '2026-10-18T10:00:00+00:00', size: 40, sha256: 'a' },
+      { number: 2, saved_at: '2026-10-19T10:00:00+00:00', size: 44, sha256: 'b' },
+    ],
+    created_at: '2026-10-18T10:00:00+00:00',
+    updated_at: '2026-10-19T10:00:00+00:00',
+    ...changes,
+  }
+}
+
+const EMA: TaScript = { ...summary({}), source: EMA_SOURCE }
+const HELPERS = summary({
+  id: 'aaaaaaaaaaaa', name: 'Helpers', kind: 'library', library_name: 'Helpers', description: '', version: 1,
+})
+const DOUBLED = summary({
+  id: 'bbbbbbbbbbbb', name: 'Doubled', description: '', version: 1,
+  imports: [{ user: 'someone', name: 'Helpers', version: 1, alias: 'h' }],
+})
+
+let sent: { method: string; path: string; body: unknown }[] = []
+
+function serve({ saveConflict = false, deleteConflict = false } = {}) {
+  sent = []
+  const json = (body: unknown, status = 200) =>
+    new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init: RequestInit = {}) => {
+      const method = init.method ?? 'GET'
+      const url = new URL(path, 'http://admin.test')
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+      sent.push({ method, path: url.pathname, body })
+      if (url.pathname === '/api/ta/scripts' && method === 'GET') return json({ items: [EMA, HELPERS, DOUBLED] })
+      if (url.pathname === '/api/ta/scripts' && method === 'POST') {
+        return json({ ...EMA, id: 'cccccccccccc', name: (body as { name: string }).name, version: 1 }, 201)
+      }
+      if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'GET') return json(EMA)
+      if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'PUT') {
+        if (saveConflict) {
+          return json({ detail: 'The script was saved meanwhile (version 3, not 2): reload it, or save yours as a copy' }, 409)
+        }
+        const update = body as { source: string; name: string }
+        return json({ ...EMA, ...update, version: 3 })
+      }
+      if (url.pathname === `/api/ta/scripts/${HELPERS.id}` && method === 'DELETE') {
+        return deleteConflict ? json({ detail: "'Helpers' is used by the script 'Doubled'" }, 409) : json(null, 204)
+      }
+      if (url.pathname.endsWith('/duplicate')) return json({ ...EMA, id: 'dddddddddddd', name: (body as { name: string }).name }, 201)
+      if (url.pathname.startsWith('/api/ta/libraries/')) return json({ detail: 'No library' }, 404)
+      if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', seen: 'all', items: [], truncated: false, max: 5000, saxo_error: null })
+      return json({ detail: `Not served in this test: ${method} ${url.pathname}` }, 404)
+    }),
+  )
+}
+
+function Address() {
+  const location = useLocation()
+  return <output data-testid="address">{location.pathname}</output>
+}
+
+function renderAt(address: string) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const page = (element: React.ReactNode) => (
+    <WithTrail>
+      {element}
+      <Address />
+    </WithTrail>
+  )
+  const router = createMemoryRouter(
+    [
+      { path: '/ta/indicators', element: page(<IndicatorsPage />) },
+      { path: '/ta/indicators/new', element: page(<ScriptEditorPage />) },
+      { path: '/ta/indicators/:id', element: page(<ScriptEditorPage />) },
+    ],
+    { initialEntries: [address] },
+  )
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
+          <RouterProvider router={router} />
+        </AuthContext.Provider>
+      </ThemeProvider>
+    </QueryClientProvider>,
+  )
+  return router
+}
+
+beforeEach(() => serve())
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('the Indicators page', () => {
+  it('lists the scripts, their kind, and which scripts use a library', async () => {
+    renderAt('/ta/indicators')
+
+    expect(await screen.findByRole('link', { name: 'EMA' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}`)
+    expect(screen.getByText('library("Helpers"), used by Doubled')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Download EMA as a .pine file' })).toHaveAttribute(
+      'href',
+      `/api/ta/scripts/${EMA.id}/source.pine`,
+    )
+    expect(screen.getByRole('link', { name: 'Open EMA in Charts' })).toHaveAttribute('href', `/ta/charts?script=${EMA.id}`)
+    // A library is not opened on a chart by itself.
+    expect(screen.queryByRole('link', { name: 'Open Helpers in Charts' })).not.toBeInTheDocument()
+  })
+
+  it('asks before deleting, and says why a library still imported is kept', async () => {
+    serve({ deleteConflict: true })
+    const user = userEvent.setup()
+    renderAt('/ta/indicators')
+
+    await user.click(await screen.findByRole('button', { name: 'Delete Helpers' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Helpers?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await within(dialog).findByText("It cannot be deleted: 'Helpers' is used by the script 'Doubled'.")).toBeInTheDocument()
+    expect(sent.some((request) => request.method === 'DELETE' && request.path === `/api/ta/scripts/${HELPERS.id}`)).toBe(true)
+  })
+
+  it('duplicates a script under the name given, and opens the copy', async () => {
+    const user = userEvent.setup()
+    renderAt('/ta/indicators')
+
+    await user.click(await screen.findByRole('button', { name: 'Duplicate EMA' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Duplicate EMA' })
+    const name = within(dialog).getByRole('textbox')
+    await user.clear(name)
+    await user.type(name, 'EMA fifty')
+    await user.click(within(dialog).getByRole('button', { name: 'Duplicate' }))
+
+    await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent('/ta/indicators/dddddddddddd'))
+    expect(sent.find((request) => request.path.endsWith('/duplicate'))?.body).toEqual({ name: 'EMA fifty' })
+  })
+})
+
+describe('the script editor', () => {
+  it('saves a changed source as a new version, naming the version it started from', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    const editor = await screen.findByRole('textbox', { name: 'Pine source of EMA' })
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled()
+    await user.type(editor, '// tuned')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(sent.some((request) => request.method === 'PUT')).toBe(true))
+    expect(sent.find((request) => request.method === 'PUT')?.body).toMatchObject({
+      base_version: 2,
+      source: `${EMA_SOURCE}// tuned`,
+      name: 'EMA',
+    })
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeDisabled()
+  })
+
+  it('offers to reload or to save as a copy when another save came first', async () => {
+    serve({ saveConflict: true })
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    await user.type(await screen.findByRole('textbox', { name: 'Pine source of EMA' }), '// mine')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Changed elsewhere')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save these changes as a copy' }))
+
+    await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent('/ta/indicators/cccccccccccc'))
+    expect(sent.find((request) => request.method === 'POST')?.body).toMatchObject({
+      name: 'EMA (copy)',
+      source: `${EMA_SOURCE}// mine`,
+    })
+  })
+
+  it('shows where PineTS found a mistake', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    await user.type(await screen.findByRole('textbox', { name: 'Pine source of EMA' }), 'BROKEN')
+
+    const problems = screen.getByRole('region', { name: 'Problems' })
+    expect(await within(problems).findByText('Unexpected token at 4:3', {}, { timeout: 3000 })).toBeInTheDocument()
+    expect(within(problems).getByText('4:3')).toBeInTheDocument()
+  })
+
+  it('starts a new script from its kind\'s template, and opens it once created', async () => {
+    const user = userEvent.setup()
+    renderAt('/ta/indicators/new?kind=library')
+
+    const editor = await screen.findByRole('textbox', { name: /Pine source of/ })
+    expect((editor as HTMLTextAreaElement).value).toContain('library("MyLibrary")')
+    await user.type(editor, '\n')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent('/ta/indicators/cccccccccccc'))
+    // No name typed: the one the library declares.
+    expect(sent.find((request) => request.method === 'POST')?.body).toMatchObject({ name: 'MyLibrary' })
+  })
+})

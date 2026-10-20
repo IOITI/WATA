@@ -3,6 +3,7 @@ import {
   Activity,
   ChartCandlestick,
   ChartLine,
+  ChartSpline,
   CirclePause,
   ClipboardList,
   Database,
@@ -12,20 +13,22 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Radar,
   Radio,
   Receipt,
   RotateCw,
   ScrollText,
   SlidersHorizontal,
+  SquareFunction,
   Timer,
   TrendingUp,
   Undo2,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
 
-import { MENU, MENU_SECTIONS, menuEntry } from '@/components/navigation'
+import { isWidePage, MENU, MENU_SECTIONS, menuEntry } from '@/components/navigation'
 import { PageTrailProvider, TopBarTrail } from '@/components/PageTrail'
 import { ServiceStatusBadge } from '@/components/status'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -52,6 +55,9 @@ const ICONS: Record<string, SidebarSection['items'][number]['icon']> = {
   backtests: <FlaskConical />,
   providers: <Database />,
   assets: <ChartLine />,
+  'ta-indicators': <SquareFunction />,
+  'ta-charts': <ChartSpline />,
+  'ta-signals': <Radar />,
   system: <Activity />,
   logs: <ScrollText />,
   audit: <ClipboardList />,
@@ -145,7 +151,14 @@ function Shell() {
   const { logout } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const wide = isWidePage(location.pathname)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const main = useRef<HTMLElement>(null)
+  // Another page opens at its top: where the one left was scrolled to means nothing there. A change
+  // of the query alone (a trade opened on a day of a backtest) leaves the page where it is.
+  useEffect(() => {
+    if (main.current) main.current.scrollTop = 0
+  }, [location.pathname])
 
   const current = menuEntry(location.pathname)
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15_000 })
@@ -232,8 +245,8 @@ function Shell() {
 
         {/* Positioned, so that what it scrolls stays in it: text for screen readers placed
             against the page would otherwise make the window itself scroll, onto nothing. */}
-        <main className="relative flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6">
+        <main ref={main} className="relative flex-1 overflow-y-auto">
+          <div className={cn('mx-auto flex w-full flex-col gap-6 p-4 sm:p-6', wide ? 'max-w-none' : 'max-w-7xl')}>
             <Outlet />
           </div>
         </main>

@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import pytz
@@ -78,6 +78,10 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/data/providers/dukascopy/instruments"),
     ("POST", "/api/data/providers/dukascopy/instruments"),
     ("DELETE", "/api/data/providers/dukascopy/instruments/de40"),
+    ("GET", "/api/data/providers/dukascopy/coverage"),
+    ("POST", "/api/data/providers/dukascopy/fetch"),
+    ("POST", "/api/data/providers/dukascopy/fetch/stop"),
+    ("PUT", "/api/data/providers/dukascopy/keep"),
     ("GET", "/api/data/assets"),
     ("GET", "/api/data/assets/saxo/2"),
     ("GET", "/api/data/assets/saxo/2/bars"),
@@ -95,30 +99,52 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/config/backups/config.json.bak-20260101-000000"),
     ("POST", "/api/config/backups/config.json.bak-20260101-000000/restore"),
     ("GET", "/api/backtests/options"),
-    ("GET", "/api/backtests/prices"),
-    ("POST", "/api/backtests/prices/fetch"),
-    ("POST", "/api/backtests/prices/fetch/stop"),
-    ("PUT", "/api/backtests/prices/keep"),
-    ("GET", "/api/backtests/calibration"),
-    ("POST", "/api/backtests/calibration"),
-    ("POST", "/api/backtests/signals"),
-    ("POST", "/api/backtests/sweeps"),
-    ("POST", "/api/backtests/remove"),
-    ("GET", "/api/backtests/storage"),
+    ("GET", "/api/backtests/coverage"),
     ("GET", "/api/backtests"),
     ("POST", "/api/backtests"),
+    ("POST", "/api/backtests/remove"),
+    ("DELETE", "/api/backtests/former"),
+    ("GET", "/api/backtests/research"),
+    ("PUT", "/api/backtests/research"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3"),
     ("PATCH", "/api/backtests/20261012-213045-a1b2c3"),
-    ("POST", "/api/backtests/20261012-213045-a1b2c3/cells/2/run"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/breakdowns"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/trades/path"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/trades"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/days"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/refusals"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/days/2026-10-12/chart"),
-    ("GET", "/api/backtests/20261012-213045-a1b2c3/comparison"),
-    ("POST", "/api/backtests/20261012-213045-a1b2c3/cancel"),
     ("DELETE", "/api/backtests/20261012-213045-a1b2c3"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/cancel"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/days"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/signals"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/trades"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/breakdowns"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/baseline"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/sweep"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/edge"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/reconciliation"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/cells/2/run"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/stress"),
+    ("GET", "/api/backtests/turbo-model"),
+    ("GET", "/api/backtests/execution"),
+    ("GET", "/api/backtests/paper"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
+    ("POST", "/api/backtests/turbo-model"),
+    ("GET", "/api/ta/scripts"),
+    ("POST", "/api/ta/scripts"),
+    ("GET", "/api/ta/scripts/0123456789ab"),
+    ("PUT", "/api/ta/scripts/0123456789ab"),
+    ("DELETE", "/api/ta/scripts/0123456789ab"),
+    ("POST", "/api/ta/scripts/0123456789ab/duplicate"),
+    ("GET", "/api/ta/scripts/0123456789ab/versions/1"),
+    ("GET", "/api/ta/scripts/0123456789ab/source.pine"),
+    ("GET", "/api/ta/libraries/config.json.bak-20260101-000000"),
+    ("GET", "/api/ta/workspaces/2"),
+    ("PUT", "/api/ta/workspaces/2"),
+    ("GET", "/api/ta/rules"),
+    ("POST", "/api/ta/rules"),
+    ("GET", "/api/ta/rules/0123456789ab"),
+    ("PUT", "/api/ta/rules/0123456789ab"),
+    ("DELETE", "/api/ta/rules/0123456789ab"),
+    ("POST", "/api/ta/rules/0123456789ab/mode"),
+    ("GET", "/api/ta/rules/0123456789ab/comparison"),
+    ("GET", "/api/ta/signals"),
+    ("GET", "/api/ta/engine"),
 ]
 
 
@@ -174,6 +200,16 @@ class FakeQueries:
         self.capital_volume_rows = []
         self.capital_volume_by_day = {}
         self.capital_hours = None
+        # The TA engine: the signals it journaled, and what it wrote of itself.
+        self.ta_signal_rows = []
+        self.ta_engine = None
+        self.ta_rules = {}
+        self.ta_other_rows = []
+        # What backtests read: the turbos and the recorder by day, an asset's bars by day, the account's value.
+        self.backtest_turbo_rows = []
+        self.backtest_recorder_rows = []
+        self.backtest_asset_rows = []
+        self.balance = None
 
     def _check(self):
         if self.failing:
@@ -230,6 +266,35 @@ class FakeQueries:
         self._check()
         self.calls.append(("closed_positions", start, end))
         return [CLOSED_POSITION]
+
+    async def execution_rows(self, start, end):
+        self._check()
+        self.calls.append(("execution_rows", start, end))
+        return {"signals": [], "orders": [], "quotes": [], "requests": [
+            {"requested_at": datetime(2026, 10, 13, 13, 30, tzinfo=timezone.utc), "purpose": "open", "outcome": "refused",
+             "error_code": "TooFar"},
+        ]}
+
+    # ── what a backtest can be run on ──
+
+    async def backtest_turbo_days(self, indice, first_day, last_day):
+        self._check()
+        self.calls.append(("backtest_turbo_days", indice, first_day, last_day))
+        return self.backtest_turbo_rows
+
+    async def backtest_recorder_days(self, first_day, last_day):
+        self._check()
+        self.calls.append(("backtest_recorder_days", first_day, last_day))
+        return self.backtest_recorder_rows
+
+    async def backtest_asset_days(self, provider, instrument_id, first_day, last_day):
+        self._check()
+        self.calls.append(("backtest_asset_days", provider, instrument_id, first_day, last_day))
+        return self.backtest_asset_rows
+
+    async def last_balance(self):
+        self._check()
+        return self.balance
 
     # ── recorded prices ──
 
@@ -304,6 +369,24 @@ class FakeQueries:
     async def capital_feed_state(self):
         self._check()
         return self.capital_state
+
+    async def ta_signals(self, start=None, end=None, rule_id=None, limit=500):
+        self._check()
+        self.calls.append(("ta_signals", start, end, rule_id, limit))
+        return self.ta_signal_rows
+
+    async def ta_engine_state(self):
+        self._check()
+        return self.ta_engine
+
+    async def ta_other_signals(self, indice, day):
+        self._check()
+        self.calls.append(("ta_other_signals", indice, day))
+        return self.ta_other_rows
+
+    async def ta_rule_states(self):
+        self._check()
+        return self.ta_rules
 
     async def capital_assets(self, epic=None):
         self._check()
@@ -545,7 +628,10 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{day}", "2026-10-12")
             .replace("{provider}", "saxo" if "/assets/" in route.path else "saxo")
             .replace("{key}", "2")
-            .replace("{label}", "de40"),
+            .replace("{label}", "de40")
+            .replace("{script_id}", "0123456789ab")
+            .replace("{rule_id}", "0123456789ab")
+            .replace("{number}", "1"),
         )
         for route in app.routes
         if route.path.startswith("/api")
@@ -1781,10 +1867,12 @@ def test_range_bars_end_when_the_price_has_left_the_range_asked_for(client, ctx)
     assert body["instrument"]["id"] == 2
     assert (body["tick"], body["decimals"], body["ticks"], body["size"], body["auto"]) == (0.01, 2, 10, 0.1, False)
     assert (body["from"], body["to"], body["timezone"], body["side"]) == ("2026-10-12", "2026-10-12", "Europe/Paris", "bid")
-    assert body["columns"] == ["t", "open", "high", "low", "close", "began", "ended", "complete", "after_pause", "index"]
+    assert body["columns"] == [
+        "t", "open", "high", "low", "close", "began", "ended", "complete", "after_pause", "index", "volume",
+    ]
     assert body["bars"] == [
-        [RANGE_T0, 8.4, 8.5, 8.4, 8.5, RANGE_T0, RANGE_T0 + 30, True, False, None],
-        [RANGE_T0 + 20, 8.5, 8.52, 8.49, 8.49, RANGE_T0 + 20, RANGE_T0 + 40, False, False, None],
+        [RANGE_T0, 8.4, 8.5, 8.4, 8.5, RANGE_T0, RANGE_T0 + 30, True, False, None, 0],
+        [RANGE_T0 + 20, 8.5, 8.52, 8.49, 8.49, RANGE_T0 + 20, RANGE_T0 + 40, False, False, None, 0],
     ]
     assert body["under"] is None
 
@@ -1857,7 +1945,7 @@ def test_the_ten_second_bars_are_read_a_page_at_a_time(client, ctx, monkeypatch)
 
     body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=1").json()
 
-    assert body["bars"] == [[RANGE_T0, 8.4, 8.44, 8.4, 8.44, RANGE_T0, RANGE_T0 + 50, False, False, None]]
+    assert body["bars"] == [[RANGE_T0, 8.4, 8.44, 8.4, 8.44, RANGE_T0, RANGE_T0 + 50, False, False, None, 0]]
     starts = [call[2].timestamp() for call in ctx.queries.calls if call[0] == "price_series"]
     # Each page starts just after the last bar of the one before; a short page ends the reading.
     assert starts[1:] == [RANGE_T0 + 11, RANGE_T0 + 31]
@@ -1878,9 +1966,30 @@ def test_a_request_for_range_bars_that_makes_no_sense_is_refused_saying_why(clie
     assert response.json()["detail"] == reason
 
 
-@pytest.mark.parametrize("query", ["size=0", "size=-1", "size=abc", "under=0"])
+@pytest.mark.parametrize("query", ["size=0", "size=-1", "size=abc", "under=0", "ticks=0", "ticks=1.5"])
 def test_malformed_range_parameters_are_refused(client, query):
     assert client.get(f"/api/data/assets/saxo/2/range-bars?{query}").status_code == 422
+
+
+def test_range_bars_carry_the_quote_changes_of_their_ten_seconds_as_volume(client, ctx):
+    ctx.queries.price_series_rows = {2: [
+        (RANGE_T0 + index * 10, price, price, price, price, updates)
+        for index, (price, updates) in enumerate([(8.40, 3), (8.44, 4), (8.52, 6), (8.49, 1)])
+    ]}
+
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10").json()
+
+    assert [bar[10] for bar in body["bars"]] == [3 + 4 + 6, 1]
+
+
+def test_a_range_given_in_ticks_counts_steps_of_the_prices_read(client, ctx):
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44, 8.52, 8.49)}
+
+    body = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&ticks=10").json()
+
+    assert (body["ticks"], body["size"], body["auto"]) == (10, 0.1, False)
+    both = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&ticks=10&size=0.1")
+    assert both.status_code == 422 and both.json()["detail"] == "Give the range as a size or as ticks, not both"
 
 
 def test_range_bars_of_an_instrument_or_an_index_that_was_never_recorded_are_not_found(client):
@@ -2029,7 +2138,7 @@ def test_a_period_with_too_many_interruptions_is_refused_rather_than_half_read(c
 def _history_day(prices_root, label, day, count=6, price=25000.0, symbol="USATECHIDXUSD", first_hour=6):
     """A day of a Dukascopy history, written as the downloader writes it."""
     from src.price_recorder.bars import Bar
-    from src.strategy.history import dukascopy
+    from src.price_history import dukascopy
 
     start = int(datetime(day.year, day.month, day.day, first_hour, tzinfo=timezone.utc).timestamp())
     bars = [
@@ -2068,7 +2177,7 @@ def test_the_providers_are_saxo_dukascopy_and_capital_com(client, ctx):
     )
     assert (saxo["assets"], saxo["first_t"], saxo["last_t"]) == (2, 1791784800, 1791842390)
     assert (saxo["first_day"], saxo["last_day"]) == ("2026-10-12", "2026-10-12")
-    # No backtest service and nothing fetched: offered to be added.
+    # No download service and nothing fetched: offered to be added.
     assert (dukascopy["status"], dukascopy["enabled"], dukascopy["active"], dukascopy["assets"]) == ("disabled", False, False, 0)
     # Switched off and never run: offered to be added.
     assert (capital["id"], capital["kind"], capital["status"], capital["active"], capital["assets"]) == (
@@ -2109,7 +2218,7 @@ def test_the_providers_are_listed_while_the_database_is_down(client, ctx):
     assert (saxo["status"], saxo["detail"], saxo["assets"]) == ("unknown", "The database is unavailable", None)
 
 
-def test_the_dukascopy_provider_says_what_was_fetched_and_what_can_be_added(client, ctx, history, backtests):
+def test_the_dukascopy_provider_says_what_was_fetched_and_what_can_be_added(client, ctx, history, downloads):
     body = client.get("/api/data/providers/dukascopy").json()
 
     assert (body["status"], body["detail"], body["enabled"], body["active"], body["assets"]) == (
@@ -2206,7 +2315,7 @@ def test_the_recorder_section_is_not_saved_when_editing_is_switched_off(config_p
 # ── the Dukascopy instruments ──
 
 
-def test_a_dukascopy_instrument_is_added_and_removed(client, ctx, history, backtests):
+def test_a_dukascopy_instrument_is_added_and_removed(client, ctx, history, downloads):
     added = client.post(
         "/api/data/providers/dukascopy/instruments", json={"symbol": "DEUIDXEUR", "label": "de40"}, headers=SAME_ORIGIN,
     )
@@ -2228,7 +2337,7 @@ def test_a_dukascopy_instrument_is_added_and_removed(client, ctx, history, backt
     ("DELETE", "/api/data/providers/dukascopy/instruments/de40", None, 404),
     ("DELETE", "/api/data/providers/dukascopy/instruments/..%2Fus100", None, 404),
 ])
-def test_a_dukascopy_instrument_that_cannot_be_fetched_rightly_is_refused(client, ctx, history, backtests, method, path, body, status):
+def test_a_dukascopy_instrument_that_cannot_be_fetched_rightly_is_refused(client, ctx, history, downloads, method, path, body, status):
     response = client.request(method, path, json=body, headers=SAME_ORIGIN)
 
     assert response.status_code == status
@@ -2594,13 +2703,11 @@ def test_streamed_and_plain_responses_all_carry_the_security_headers(plain_http_
         assert refused.headers["cache-control"] == "no-store"
 
 
-# ── backtests ──
-
-RUN = "20261012-213045-a1b2c3"
+# ── downloads of history ──
 
 
-class FakeBacktests:
-    """Stands for the backtest service: remembers what it was asked, and fails when told to."""
+class FakeDownloads:
+    """Stands for the downloads of Dukascopy's history: remembers what it was asked, and fails when told to."""
 
     def __init__(self):
         self.asked = []
@@ -2612,14 +2719,8 @@ class FakeBacktests:
             raise self.failure
         return answer
 
-    def options(self):
-        return self._answer("options", answer={"strategies": []})
-
     def coverage(self, first_day, last_day, label=None):
         return self._answer("coverage", first_day, last_day, label, answer={"days": []})
-
-    def recorded_coverage(self, first_day, last_day):
-        return self._answer("recorded_coverage", first_day, last_day, answer={"days": [], "prices": "capital"})
 
     def fetch_status(self):
         return {"state": "idle", "lines": []}
@@ -2637,62 +2738,8 @@ class FakeBacktests:
     def set_keep(self, enabled, days):
         return self._answer("set_keep", enabled, days, answer={"enabled": enabled, "days": days})
 
-    def calibration(self):
-        return self._answer("calibration", answer={"status": {"state": "idle"}})
-
-    def start_calibration(self, positions, journal):
-        return self._answer("start_calibration", positions, journal, answer={"status": {"state": "running"}})
-
-    def create_from_signals(self, **asked):
-        return self._answer("create_from_signals", asked, answer={"id": RUN, "kind": "signals"})
-
-    def create_sweep(self, **asked):
-        return self._answer("create_sweep", asked, answer={"id": RUN, "kind": "sweep"})
-
-    def run_cell(self, run_id, cell):
-        return self._answer("run_cell", run_id, cell, answer={"id": RUN, "kind": "strategy"})
-
-    def update(self, run_id, note=None, tags=None):
-        return self._answer("update", run_id, note, tags, answer={"id": run_id, "note": note, "tags": tags})
-
-    def delete_many(self, run_ids):
-        return self._answer("delete_many", run_ids, answer={"removed": run_ids, "kept": []})
-
     def storage(self):
-        return self._answer("storage", answer={"runs": {"count": 2, "bytes": 4096}})
-
-    def breakdowns(self, run_id, leverage):
-        return self._answer("breakdowns", run_id, leverage, answer={"groups": {}})
-
-    def trade_path(self, run_id, leverage, entry_time):
-        return self._answer("trade_path", run_id, leverage, entry_time, answer={"points": []})
-
-    def comparison(self, run_id, leverage):
-        return self._answer("comparison", run_id, leverage, answer={"pairs": []})
-
-    def list_runs(self):
-        return self._answer("list_runs", answer=[{"id": RUN}])
-
-    def create(self, **asked):
-        return self._answer("create", asked, answer={"id": RUN, "status": {"state": "queued"}})
-
-    def get(self, run_id):
-        return self._answer("get", run_id, answer={"id": run_id})
-
-    def rows(self, run_id, kind, leverage):
-        return self._answer("rows", run_id, kind, leverage, answer=[{"day": "2026-10-12"}])
-
-    def day_chart(self, run_id, day, leverage):
-        return self._answer("day_chart", run_id, day, leverage, answer={"bars": []})
-
-    def cancel(self, run_id):
-        return self._answer("cancel", run_id, answer={"id": run_id})
-
-    def delete(self, run_id):
-        return self._answer("delete", run_id)
-
-    async def run(self):
-        await asyncio.Event().wait()
+        return {"days": 2, "bars_bytes": 1024, "fetched_bytes": 4096}
 
     async def keep_prices(self):
         await asyncio.Event().wait()
@@ -2709,132 +2756,39 @@ def signed_in(ctx, tmp_path):
 
 
 @pytest.fixture
-def backtests(ctx):
-    ctx.backtests = FakeBacktests()
-    return ctx.backtests
+def downloads(ctx):
+    ctx.downloads = FakeDownloads()
+    return ctx.downloads
 
 
-def test_the_session_says_whether_backtests_can_be_asked_for(client, ctx):
+def test_the_session_says_whether_downloads_and_backtests_can_be_asked_for(client, ctx):
     assert client.get("/api/session").json()["backtests_enabled"] is False
 
-    ctx.backtests = FakeBacktests()
+    ctx.downloads = FakeDownloads()
     assert client.get("/api/session").json()["backtests_enabled"] is True
     ctx.settings.backtests_enabled = False
     assert client.get("/api/session").json()["backtests_enabled"] is False
 
 
-def test_backtests_switched_off_or_not_wired_answer_as_such(client, ctx):
-    assert client.get("/api/backtests").status_code == 503
+def test_downloads_switched_off_or_not_wired_answer_as_such(client, ctx):
+    assert client.get("/api/data/providers/dukascopy/coverage").status_code == 503
 
-    ctx.backtests = FakeBacktests()
+    ctx.downloads = FakeDownloads()
     ctx.settings.backtests_enabled = False
-    response = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    response = client.post("/api/data/providers/dukascopy/fetch", json={"from": "2026-10-05", "to": "2026-10-09"}, headers=SAME_ORIGIN)
 
-    assert (response.status_code, response.json()["detail"]) == (403, "Backtests are disabled in the configuration")
-    assert ctx.backtests.asked == []
-
-
-def test_a_backtest_is_asked_for_with_its_period_and_what_differs(client, backtests):
-    response = client.post(
-        "/api/backtests",
-        json={
-            "from": "2026-09-14", "to": "2026-10-09",
-            "parameters": {"entry_mode": "cross_catchup", "kernel_bandwidth": 8},
-            "rules": {"day_profit_target": 3.0, "trailing_enabled": False},
-            "leverages": [80, 110], "note": "  higher target  ",
-        },
-        headers=SAME_ORIGIN,
-    )
-
-    assert (response.status_code, response.json()["id"]) == (202, RUN)
-    assert backtests.asked == [("create", {
-        "first_day": datetime(2026, 9, 14).date(), "last_day": datetime(2026, 10, 9).date(), "strategy": "kernel_vwap",
-        "parameters": {"entry_mode": "cross_catchup", "kernel_bandwidth": 8},
-        "rules": {"day_profit_target": 3.0, "trailing_enabled": False},
-        "entry_price": None, "spread": None, "leverages": [80.0, 110.0], "note": "higher target",
-        "capital": None, "fill_delay": None, "slippage": None,
-        # Dukascopy's history unless Capital.com's recorded days are asked for.
-        "prices": "dukascopy",
-    })]
+    assert response.status_code == 403
+    assert ctx.downloads.asked == []
 
 
-def test_a_backtest_is_asked_with_less_kind_fills_and_another_account(client, backtests):
-    response = client.post(
-        "/api/backtests",
-        json={"from": "2026-09-14", "to": "2026-10-09", "capital": 2500, "fill_delay": 30, "slippage": 1.5},
-        headers=SAME_ORIGIN,
-    )
-
-    assert response.status_code == 202
-    assert {name: backtests.asked[0][1][name] for name in ("capital", "fill_delay", "slippage")} == {
-        "capital": 2500.0, "fill_delay": 30, "slippage": 1.5,
-    }
-    for body in ({"slippage": -1}, {"fill_delay": -10}, {"capital": -5}):
-        refused = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", **body}, headers=SAME_ORIGIN)
-        assert refused.status_code == 422
-
-
-@pytest.mark.parametrize("body", [
-    {"to": "2026-10-09"},
-    {"from": "next week", "to": "2026-10-09"},
-    {"from": "2026-09-14", "to": "2026-10-09", "entry_price": 0},
-    {"from": "2026-09-14", "to": "2026-10-09", "rules": {"stoploss_percent": "low"}},
-])
-def test_a_request_for_a_backtest_that_cannot_be_read_goes_no_further(client, backtests, body):
-    assert client.post("/api/backtests", json=body, headers=SAME_ORIGIN).status_code == 422
-    assert backtests.asked == []
-
-
-def test_what_the_service_refuses_is_answered_with_its_reason(client, backtests):
-    from src.admin.backtests import InvalidRequest, NotPossible, UnknownRun
-
-    backtests.failure = UnknownRun(RUN)
-    for method, path in (("GET", f"/api/backtests/{RUN}"), ("DELETE", f"/api/backtests/{RUN}"), ("POST", f"/api/backtests/{RUN}/cancel")):
-        response = client.request(method, path, headers=SAME_ORIGIN)
-        assert (response.status_code, response.json()["detail"]) == (404, "No such backtest")
-
-    backtests.failure = InvalidRequest("The period is longer than 366 days")
-    response = client.post("/api/backtests", json={"from": "2020-01-01", "to": "2026-10-09"}, headers=SAME_ORIGIN)
-    assert (response.status_code, response.json()["detail"]) == (422, "The period is longer than 366 days")
-
-    backtests.failure = NotPossible("Stop this backtest before removing it")
-    response = client.delete(f"/api/backtests/{RUN}", headers=SAME_ORIGIN)
-    assert (response.status_code, response.json()["detail"]) == (409, "Stop this backtest before removing it")
-
-
-def test_runs_are_listed_read_stopped_and_removed(client, backtests):
-    assert client.get("/api/backtests").json() == {"items": [{"id": RUN}]}
-    assert client.get("/api/backtests/options").json() == {"strategies": []}
-    assert client.get(f"/api/backtests/{RUN}").json() == {"id": RUN}
-    assert client.post(f"/api/backtests/{RUN}/cancel", headers=SAME_ORIGIN).json() == {"id": RUN}
-    assert client.delete(f"/api/backtests/{RUN}", headers=SAME_ORIGIN).status_code == 204
-
-    assert backtests.asked == [("list_runs",), ("options",), ("get", RUN), ("cancel", RUN), ("delete", RUN)]
-
-
-def test_the_rows_of_a_run_are_asked_for_one_leverage(client, backtests):
-    for kind in ("trades", "days", "refusals"):
-        assert client.get(f"/api/backtests/{RUN}/{kind}?leverage=110").json() == {"items": [{"day": "2026-10-12"}]}
-    assert client.get(f"/api/backtests/{RUN}/trades").status_code == 422
-
-    assert backtests.asked == [("rows", RUN, kind, 110.0) for kind in ("trades", "days", "refusals")]
-
-
-def test_the_chart_of_a_day_is_asked_for_a_real_day(client, backtests):
-    assert client.get(f"/api/backtests/{RUN}/days/2026-10-12/chart?leverage=110").json() == {"bars": []}
-    assert client.get(f"/api/backtests/{RUN}/days/monday/chart?leverage=110").status_code == 422
-
-    assert backtests.asked == [("day_chart", RUN, datetime(2026, 10, 12).date(), 110.0)]
-
-
-def test_the_prices_panel_reads_the_last_months_unless_told_a_period(client, backtests):
+def test_the_history_panel_reads_the_last_months_unless_told_a_period(client, downloads):
     today = datetime.now(timezone.utc).date()
 
-    assert client.get("/api/backtests/prices").json() == {"days": []}
-    client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30")
-    client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30&label=de40")
+    assert client.get("/api/data/providers/dukascopy/coverage").json() == {"days": []}
+    client.get("/api/data/providers/dukascopy/coverage?from=2026-09-01&to=2026-09-30")
+    client.get("/api/data/providers/dukascopy/coverage?from=2026-09-01&to=2026-09-30&label=de40")
 
-    assert backtests.asked == [
+    assert downloads.asked == [
         ("coverage", today - timedelta(days=119), today, None),
         ("coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date(), None),
         # Another Dukascopy instrument: the service checks the label before anything is made of it.
@@ -2842,254 +2796,375 @@ def test_the_prices_panel_reads_the_last_months_unless_told_a_period(client, bac
     ]
 
 
-def test_the_days_recorded_from_capital_com_are_read_when_its_prices_are_asked_for(client, backtests):
-    assert client.get("/api/backtests/prices?from=2026-09-01&to=2026-09-30&prices=capital").json() == {
-        "days": [], "prices": "capital",
-    }
-    assert backtests.asked == [("recorded_coverage", datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date())]
-    assert client.get("/api/backtests/prices?prices=saxo").status_code == 422
-
-
-def test_a_run_on_capital_coms_recorded_days_is_asked_for_as_such(client, backtests):
-    response = client.post(
-        "/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", "prices": "capital"}, headers=SAME_ORIGIN,
-    )
-
-    assert response.status_code == 202
-    assert backtests.asked[0][1]["prices"] == "capital"
-    refused = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", "prices": "saxo"}, headers=SAME_ORIGIN)
-    assert refused.status_code == 422
-
-
-def test_a_download_of_prices_is_started_and_stopped(client, backtests):
-    started = client.post("/api/backtests/prices/fetch", json={"from": "2026-10-05", "to": "2026-10-09"}, headers=SAME_ORIGIN)
-    stopped = client.post("/api/backtests/prices/fetch/stop", headers=SAME_ORIGIN)
+def test_a_download_of_prices_is_started_and_stopped(client, downloads):
+    started = client.post("/api/data/providers/dukascopy/fetch", json={"from": "2026-10-05", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    stopped = client.post("/api/data/providers/dukascopy/fetch/stop", headers=SAME_ORIGIN)
     other = client.post(
-        "/api/backtests/prices/fetch", json={"from": "2026-10-05", "to": "2026-10-09", "label": "de40"}, headers=SAME_ORIGIN,
+        "/api/data/providers/dukascopy/fetch", json={"from": "2026-10-05", "to": "2026-10-09", "label": "de40"}, headers=SAME_ORIGIN,
     )
 
     assert (started.status_code, stopped.status_code, other.status_code) == (202, 200, 202)
-    assert backtests.asked == [
+    assert downloads.asked == [
         ("start_fetch", datetime(2026, 10, 5).date(), datetime(2026, 10, 9).date(), None), ("stop_fetch",),
         ("start_fetch", datetime(2026, 10, 5).date(), datetime(2026, 10, 9).date(), "de40"),
     ]
 
 
-def test_the_service_is_told_to_keep_the_prices_up_to_date_or_to_stop(client, backtests):
-    kept = client.put("/api/backtests/prices/keep", json={"enabled": True, "days": 250}, headers=SAME_ORIGIN)
-    by_default = client.put("/api/backtests/prices/keep", json={"enabled": False}, headers=SAME_ORIGIN)
+def test_the_service_is_told_to_keep_the_prices_up_to_date_or_to_stop(client, downloads):
+    kept = client.put("/api/data/providers/dukascopy/keep", json={"enabled": True, "days": 250}, headers=SAME_ORIGIN)
+    by_default = client.put("/api/data/providers/dukascopy/keep", json={"enabled": False}, headers=SAME_ORIGIN)
 
     assert (kept.status_code, kept.json()) == (200, {"enabled": True, "days": 250})
     assert by_default.json() == {"enabled": False, "days": 120}
-    assert client.put("/api/backtests/prices/keep", json={"days": 30}, headers=SAME_ORIGIN).status_code == 422
-    assert client.put("/api/backtests/prices/keep", json={"enabled": True, "days": 0}, headers=SAME_ORIGIN).status_code == 422
-    assert backtests.asked == [("set_keep", True, 250), ("set_keep", False, 120)]
+    assert client.put("/api/data/providers/dukascopy/keep", json={"days": 30}, headers=SAME_ORIGIN).status_code == 422
+    assert client.put("/api/data/providers/dukascopy/keep", json={"enabled": True, "days": 0}, headers=SAME_ORIGIN).status_code == 422
+    assert downloads.asked == [("set_keep", True, 250), ("set_keep", False, 120)]
 
 
-def test_the_turbo_is_measured_on_every_closed_trade_read_from_the_database(client, ctx, backtests):
-    assert client.get("/api/backtests/calibration").json() == {"status": {"state": "idle"}}
+def test_what_the_download_service_refuses_is_answered_with_its_reason(client, downloads):
+    from src.admin.errors import InvalidRequest, NotPossible
 
-    started = client.post("/api/backtests/calibration", headers=SAME_ORIGIN)
+    downloads.failure = InvalidRequest("92 days at most are fetched at a time")
+    response = client.post("/api/data/providers/dukascopy/fetch", json={"from": "2026-01-01", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    assert (response.status_code, response.json()["detail"]) == (422, "92 days at most are fetched at a time")
 
-    assert (started.status_code, started.json()) == (202, {"status": {"state": "running"}})
-    # The whole history of both: the service sorts out which trades are of the indice.
-    assert ctx.queries.calls[-2:] == [("closed_positions", None, None), ("journal_between", None, None)]
-    assert backtests.asked == [("calibration",), ("start_calibration", [CLOSED_POSITION], [JOURNAL_ENTRY])]
-
-
-def test_the_signals_wata_received_are_replayed_with_its_journal_and_its_positions_of_the_period(client, ctx, backtests):
-    response = client.post(
-        "/api/backtests/signals",
-        json={"from": "2026-09-14", "to": "2026-10-09", "rules": {"day_profit_target": 3}, "leverages": [104], "note": "  real  "},
-        headers=SAME_ORIGIN,
-    )
-
-    first_day, last_day = datetime(2026, 9, 14).date(), datetime(2026, 10, 9).date()
-    assert (response.status_code, response.json()) == (202, {"id": RUN, "kind": "signals"})
-    assert ctx.queries.calls[-2:] == [("journal_between", first_day, last_day), ("closed_positions", first_day, last_day)]
-    assert backtests.asked == [("create_from_signals", {
-        "first_day": first_day, "last_day": last_day, "journal": [JOURNAL_ENTRY], "positions": [CLOSED_POSITION],
-        "rules": {"day_profit_target": 3}, "entry_price": None, "spread": None, "leverages": [104.0], "note": "real",
-        "capital": None, "fill_delay": None, "slippage": None, "prices": "dukascopy",
-    })]
-    # A replay has no strategy to give a parameter to.
-    assert client.post("/api/backtests/signals", json={"from": "2026-09-14"}, headers=SAME_ORIGIN).status_code == 422
+    downloads.failure = NotPossible("No download is running")
+    response = client.post("/api/data/providers/dukascopy/fetch/stop", headers=SAME_ORIGIN)
+    assert (response.status_code, response.json()["detail"]) == (409, "No download is running")
 
 
-def test_a_database_that_cannot_be_reached_starts_neither_a_replay_nor_a_measure(client, ctx, backtests):
+def test_the_dukascopy_provider_says_how_much_disk_its_prices_take(client, ctx, history, downloads):
+    body = client.get("/api/data/providers/dukascopy").json()
+
+    assert body["storage"] == {"days": 2, "bars_bytes": 1024, "fetched_bytes": 4096}
+    assert (body["fetch"]["state"], body["keep"]["state"]) == ("idle", "up_to_date")
+
+
+# ── backtests ──
+
+RUN = "20261012-213045-a1b2c3"
+
+
+class FakeBacktests:
+    """Stands for the backtest service: remembers what it was asked, and fails when told to."""
+
+    max_period_days = 92
+
+    def __init__(self):
+        self.asked = []
+        self.failure = None
+
+    def _answer(self, what, *arguments, answer=None):
+        self.asked.append((what, *arguments))
+        if self.failure is not None:
+            raise self.failure
+        return answer
+
+    def options(self, capital=None):
+        return self._answer("options", capital, answer={"fields": []})
+
+    def create(self, body, *, journal=None, positions=None, capital=None):
+        return self._answer("create", body, journal, capital, positions, answer={"id": RUN, "status": {"state": "queued"}})
+
+    def list_runs(self):
+        return self._answer("list_runs", answer=[{"id": RUN}])
+
+    def storage(self):
+        return {"runs": {"count": 1, "bytes": 2048}, "former": {"count": 0, "bytes": 0}}
+
+    def get(self, run_id):
+        return self._answer("get", run_id, answer={"id": run_id})
+
+    def update(self, run_id, name=None, tags=None):
+        return self._answer("update", run_id, name, tags, answer={"id": run_id, "name": name, "tags": tags})
+
+    def cancel(self, run_id):
+        return self._answer("cancel", run_id, answer={"id": run_id})
+
+    def delete(self, run_id):
+        return self._answer("delete", run_id)
+
+    def delete_many(self, run_ids):
+        return self._answer("delete_many", run_ids, answer={"removed": run_ids, "kept": []})
+
+    def delete_former(self):
+        return self._answer("delete_former", answer={"removed": 3})
+
+    def days(self, run_id):
+        return self._answer("days", run_id, answer=[{"day": "2026-10-12"}])
+
+    def signals(self, run_id, day=None, fate=None):
+        return self._answer("signals", run_id, day, fate, answer=[{"id": 1}])
+
+    def trades(self, run_id, day=None):
+        return self._answer("trades", run_id, day, answer=[{"id": 1}])
+
+    def breakdowns(self, run_id):
+        return self._answer("breakdowns", run_id, answer={"groups": {}})
+
+    def baseline(self, run_id):
+        return self._answer("baseline", run_id, answer=None)
+
+    def sweep(self, run_id):
+        return self._answer("sweep", run_id, answer={"cells": []})
+
+    def run_cell(self, run_id, cell):
+        return self._answer("run_cell", run_id, cell, answer={"id": RUN})
+
+    def edge(self, run_id):
+        return self._answer("edge", run_id, answer={"horizons": []})
+
+    def reconciliation(self, run_id):
+        return self._answer("reconciliation", run_id, answer={"summary": {"paired": 0}})
+
+    def paper(self):
+        return self._answer("paper", answer={"rules": {}})
+
+    def set_reference(self, run_id):
+        return self._answer("set_reference", run_id, answer={"rules": {"r1": {"days": [], "reference": {"run_id": run_id}}}})
+
+    def turbo_model(self):
+        return self._answer("turbo_model", answer={"state": "idle", "measure": None})
+
+    def measure_turbos(self, first, last):
+        return self._answer("measure_turbos", first, last, answer={"state": "running"})
+
+    def stress(self, run_id):
+        return self._answer("stress", run_id, answer={"id": RUN, "stress_of": run_id})
+
+    async def run(self):
+        await asyncio.Event().wait()
+
+    async def close(self):
+        pass
+
+
+@pytest.fixture
+def backtests(ctx):
+    ctx.backtests = FakeBacktests()
+    return ctx.backtests
+
+
+def test_backtests_switched_off_or_not_wired_answer_as_such(client, ctx):
+    assert client.get("/api/backtests").status_code == 503
+
+    ctx.backtests = FakeBacktests()
+    ctx.settings.backtests_enabled = False
+    response = client.post("/api/backtests", json={"from": "2026-10-13", "to": "2026-10-16"}, headers=SAME_ORIGIN)
+
+    assert (response.status_code, response.json()["detail"]) == (403, "Backtests are disabled in the configuration")
+    assert ctx.backtests.asked == []
+
+
+class FakeResearch:
+    def __init__(self):
+        self.asked = []
+        self.state = {"enabled": False, "keep_days": 30, "state": "off", "days": 0}
+
+    def status(self):
+        self.asked.append(("status",))
+        return self.state
+
+    def update(self, *, enabled=None, keep_days=None):
+        from src.admin.errors import InvalidRequest
+
+        self.asked.append(("update", enabled, keep_days))
+        if keep_days is not None and not 1 <= keep_days <= 365:
+            raise InvalidRequest("The days kept are 1 to 365")
+        if enabled is not None:
+            self.state = {**self.state, "enabled": enabled}
+        return self.state
+
+
+def test_the_research_files_are_switched_on_and_read_beside_the_runs(client, ctx, backtests):
+    ctx.research = FakeResearch()
+
+    assert client.get("/api/backtests/research").json()["enabled"] is False
+    switched = client.put("/api/backtests/research", json={"enabled": True, "keep_days": 14}, headers=SAME_ORIGIN)
+    refused = client.put("/api/backtests/research", json={"keep_days": 0}, headers=SAME_ORIGIN)
+
+    assert switched.json()["enabled"] is True
+    assert (refused.status_code, refused.json()["detail"]) == (422, "The days kept are 1 to 365")
+    assert ctx.research.asked == [("status",), ("update", True, 14), ("update", None, 0)]
+
+
+def test_the_research_files_follow_the_backtests_switch(client, ctx, backtests):
+    ctx.research = FakeResearch()
+    ctx.settings.backtests_enabled = False
+    assert client.get("/api/backtests/research").status_code == 403
+    ctx.settings.backtests_enabled = True
+    ctx.research = None
+    assert client.get("/api/backtests/research").status_code == 503
+
+
+def test_a_run_is_asked_for_with_the_accounts_last_value(client, ctx, backtests):
+    ctx.queries.balance = 12_345.6
+    body = {"from": "2026-10-13", "to": "2026-10-16", "source": {"kind": "pine"}}
+
+    response = client.post("/api/backtests", json=body, headers=SAME_ORIGIN)
+    options = client.get("/api/backtests/options").json()
+
+    assert response.status_code == 202
+    assert backtests.asked == [("create", body, None, 12_345.6, None), ("options", 12_345.6)]
+    assert options == {"fields": []}
+
+
+def test_a_replay_of_the_journal_is_given_its_signals_with_a_day_either_side(client, ctx, backtests):
+    body = {"from": "2026-10-13", "to": "2026-10-16", "source": {"kind": "journal"}}
+
+    client.post("/api/backtests", json=body, headers=SAME_ORIGIN)
+
+    assert ("journal_between", date(2026, 10, 12), date(2026, 10, 17)) in ctx.queries.calls
+    assert backtests.asked[0][2] == [JOURNAL_ENTRY]
+    # And what WATA did with them, to be set beside the replay.
+    assert ("closed_positions", date(2026, 10, 12), date(2026, 10, 17)) in ctx.queries.calls
+    assert backtests.asked[0][4] == [CLOSED_POSITION]
+    refused = client.post("/api/backtests", json={"from": "monday", "source": {"kind": "journal"}}, headers=SAME_ORIGIN)
+    assert refused.status_code == 422
+
+
+def test_without_the_database_a_run_starts_from_the_default_account_and_a_replay_cannot_be_asked(client, ctx, backtests):
     ctx.queries.failing = True
 
-    replay = client.post("/api/backtests/signals", json={"from": "2026-09-14", "to": "2026-10-09"}, headers=SAME_ORIGIN)
-    measure = client.post("/api/backtests/calibration", headers=SAME_ORIGIN)
+    pine = client.post("/api/backtests", json={"from": "2026-10-13", "to": "2026-10-16", "source": {"kind": "pine"}}, headers=SAME_ORIGIN)
+    journal = client.post("/api/backtests", json={"from": "2026-10-13", "to": "2026-10-16", "source": {"kind": "journal"}},
+                          headers=SAME_ORIGIN)
 
-    assert (replay.status_code, measure.status_code) == (503, 503)
-    assert backtests.asked == []
-
-
-def test_a_replay_is_compared_with_what_wata_did_for_one_leverage(client, backtests):
-    assert client.get(f"/api/backtests/{RUN}/comparison?leverage=110").json() == {"pairs": []}
-    assert client.get(f"/api/backtests/{RUN}/comparison").status_code == 422
-
-    assert backtests.asked == [("comparison", RUN, 110.0)]
+    assert pine.status_code == 202 and backtests.asked[0][3] is None
+    assert journal.status_code == 503
 
 
-def test_a_sweep_is_asked_for_with_the_values_to_try(client, ctx, backtests):
-    response = client.post(
-        "/api/backtests/sweeps",
-        json={
-            "from": "2026-09-14", "to": "2026-10-09", "held_out": 0.4, "leverage": 104, "note": " targets ",
-            "parameters": {"entry_mode": "cross_catchup"}, "rules": {"stoploss_percent": -10}, "slippage": 1,
-            "axes": [
-                {"kind": "rule", "name": "day_profit_target", "values": [1, 1.7, 3]},
-                {"kind": "parameter", "name": "kernel_bandwidth", "values": [8, "15"]},
-            ],
-        },
-        headers=SAME_ORIGIN,
-    )
+def test_what_the_service_refuses_is_answered_with_its_reason(client, backtests):
+    from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
 
-    assert (response.status_code, response.json()) == (202, {"id": RUN, "kind": "sweep"})
-    assert backtests.asked == [("create_sweep", {
-        "first_day": datetime(2026, 9, 14).date(), "last_day": datetime(2026, 10, 9).date(),
-        "axes": [
-            {"kind": "rule", "name": "day_profit_target", "values": [1, 1.7, 3]},
-            {"kind": "parameter", "name": "kernel_bandwidth", "values": [8, "15"]},
-        ],
-        "held_out": 0.4, "strategy": "kernel_vwap", "parameters": {"entry_mode": "cross_catchup"},
-        "rules": {"stoploss_percent": -10}, "entry_price": None, "spread": None, "leverage": 104.0, "note": "targets",
-        "fill_delay": None, "slippage": 1.0,
-        # A strategy's sweep reads nothing from the database.
-        "journal": None, "positions": None, "prices": "dukascopy",
-    })]
-    assert not [call for call in ctx.queries.calls if call[0] in ("journal_between", "closed_positions")]
+    backtests.failure = UnknownRun(RUN)
+    for method, path in (("GET", f"/api/backtests/{RUN}"), ("DELETE", f"/api/backtests/{RUN}"), ("POST", f"/api/backtests/{RUN}/cancel")):
+        response = client.request(method, path, headers=SAME_ORIGIN)
+        assert (response.status_code, response.json()["detail"]) == (404, "No such backtest")
+    backtests.failure = InvalidRequest("A period of 92 days at most")
+    response = client.post("/api/backtests", json={"from": "2026-01-01", "to": "2026-10-09"}, headers=SAME_ORIGIN)
+    assert (response.status_code, response.json()["detail"]) == (422, "A period of 92 days at most")
+    backtests.failure = NotPossible("Stop this backtest before removing it")
+    response = client.delete(f"/api/backtests/{RUN}", headers=SAME_ORIGIN)
+    assert (response.status_code, response.json()["detail"]) == (409, "Stop this backtest before removing it")
 
 
-def test_a_sweep_of_the_signals_wata_received_is_given_its_journal_and_its_positions(client, ctx, backtests):
-    response = client.post(
-        "/api/backtests/sweeps",
-        json={
-            "from": "2026-09-14", "to": "2026-10-09", "replay": "signals",
-            "axes": [{"kind": "rule", "name": "day_profit_target", "values": [1, 3]}],
-        },
-        headers=SAME_ORIGIN,
-    )
-
-    first_day, last_day = datetime(2026, 9, 14).date(), datetime(2026, 10, 9).date()
-    assert response.status_code == 202
-    assert ctx.queries.calls[-2:] == [("journal_between", first_day, last_day), ("closed_positions", first_day, last_day)]
-    asked = backtests.asked[0][1]
-    assert (asked["journal"], asked["positions"], asked["held_out"]) == ([JOURNAL_ENTRY], [CLOSED_POSITION], 0.3)
-
-
-@pytest.mark.parametrize("body", [
-    {"axes": []},
-    {"axes": [{"kind": "turbo", "name": "spread", "values": [0.01, 0.05]}]},
-    {"axes": [{"kind": "rule", "name": "day_profit_target"}]},
-    {"axes": [{"kind": "rule", "name": "day_profit_target", "values": [1, 3]}], "held_out": 1},
-    {"axes": [{"kind": "rule", "name": "day_profit_target", "values": [1, 3]}], "replay": "prices"},
-])
-def test_a_sweep_that_cannot_be_read_goes_no_further(client, backtests, body):
-    response = client.post("/api/backtests/sweeps", json={"from": "2026-09-14", "to": "2026-10-09", **body}, headers=SAME_ORIGIN)
-
-    # An empty list of axes can be read: it is the service that says a sweep needs one.
-    assert response.status_code == (202 if body == {"axes": []} else 422)
-    assert backtests.asked == ([] if response.status_code == 422 else backtests.asked)
-
-
-def test_a_combination_of_a_sweep_is_made_a_backtest_of_its_own(client, backtests):
-    response = client.post(f"/api/backtests/{RUN}/cells/2/run", headers=SAME_ORIGIN)
-
-    assert (response.status_code, response.json()) == (202, {"id": RUN, "kind": "strategy"})
-    assert client.post(f"/api/backtests/{RUN}/cells/second/run", headers=SAME_ORIGIN).status_code == 422
-    assert backtests.asked == [("run_cell", RUN, 2)]
-
-
-def test_a_run_is_named_again_tagged_and_several_are_removed_at_once(client, backtests):
-    renamed = client.patch(f"/api/backtests/{RUN}", json={"note": "  September  ", "tags": ["keep"]}, headers=SAME_ORIGIN)
-    tagged = client.patch(f"/api/backtests/{RUN}", json={"tags": []}, headers=SAME_ORIGIN)
-    removed = client.post("/api/backtests/remove", json={"ids": [RUN, "20261012-213045-ffffff"]}, headers=SAME_ORIGIN)
-
-    assert renamed.json() == {"id": RUN, "note": "September", "tags": ["keep"]}
-    assert (tagged.status_code, removed.json()) == (200, {"removed": [RUN, "20261012-213045-ffffff"], "kept": []})
+def test_runs_are_listed_read_renamed_stopped_and_removed(client, backtests):
+    assert client.get("/api/backtests").json() == {"items": [{"id": RUN}], "storage": {
+        "runs": {"count": 1, "bytes": 2048}, "former": {"count": 0, "bytes": 0},
+    }}
+    assert client.get(f"/api/backtests/{RUN}").json() == {"id": RUN}
+    assert client.patch(f"/api/backtests/{RUN}", json={"name": "Kernel", "tags": ["a"]}, headers=SAME_ORIGIN).json()["name"] == "Kernel"
+    assert client.post(f"/api/backtests/{RUN}/cancel", headers=SAME_ORIGIN).json() == {"id": RUN}
+    assert client.delete(f"/api/backtests/{RUN}", headers=SAME_ORIGIN).status_code == 204
+    assert client.post("/api/backtests/remove", json={"ids": [RUN]}, headers=SAME_ORIGIN).json()["removed"] == [RUN]
     assert client.post("/api/backtests/remove", json={"ids": ["x"] * 201}, headers=SAME_ORIGIN).status_code == 422
-    assert backtests.asked == [
-        ("update", RUN, "September", ["keep"]), ("update", RUN, None, []),
-        ("delete_many", [RUN, "20261012-213045-ffffff"]),
+    assert client.delete("/api/backtests/former", headers=SAME_ORIGIN).json() == {"removed": 3}
+
+    assert [entry[0] for entry in backtests.asked] == [
+        "list_runs", "get", "update", "cancel", "delete", "delete_many", "delete_former",
     ]
 
 
-def test_the_disk_used_the_breakdowns_of_a_run_and_the_path_of_a_trade_are_read(client, backtests):
-    assert client.get("/api/backtests/storage").json() == {"runs": {"count": 2, "bytes": 4096}}
-    assert client.get(f"/api/backtests/{RUN}/breakdowns?leverage=110").json() == {"groups": {}}
-    assert client.get(f"/api/backtests/{RUN}/trades/path?leverage=110&entry=2026-10-12T06:25:50Z").json() == {"points": []}
-    assert client.get(f"/api/backtests/{RUN}/trades/path?leverage=110").status_code == 422
-    assert client.get(f"/api/backtests/{RUN}/breakdowns").status_code == 422
+def test_what_a_run_found_is_read_by_day_and_fate(client, backtests):
+    assert client.get(f"/api/backtests/{RUN}/days").json() == {"items": [{"day": "2026-10-12"}]}
+    assert client.get(f"/api/backtests/{RUN}/signals?day=2026-10-13&fate=refused").json() == {"items": [{"id": 1}]}
+    assert client.get(f"/api/backtests/{RUN}/signals?fate=lost").status_code == 422
+    assert client.get(f"/api/backtests/{RUN}/trades?day=2026-10-13").json() == {"items": [{"id": 1}]}
+    assert client.get(f"/api/backtests/{RUN}/breakdowns").json() == {"groups": {}}
+    assert client.get(f"/api/backtests/{RUN}/baseline").json() == {}
+    assert client.get(f"/api/backtests/{RUN}/sweep").json() == {"cells": []}
+    assert client.get(f"/api/backtests/{RUN}/edge").json() == {"horizons": []}
+    assert client.get(f"/api/backtests/{RUN}/reconciliation").json() == {"summary": {"paired": 0}}
+    assert client.get("/api/backtests/paper").json() == {"rules": {}}
+    assert client.post(f"/api/backtests/{RUN}/reference", headers=SAME_ORIGIN).json()["rules"]["r1"]["reference"] == {"run_id": RUN}
+    assert client.post(f"/api/backtests/{RUN}/cells/2/run", headers=SAME_ORIGIN).status_code == 202
+    assert client.post(f"/api/backtests/{RUN}/cells/second/run", headers=SAME_ORIGIN).status_code == 422
+    assert backtests.asked[-1] == ("run_cell", RUN, 2)
+    assert client.post(f"/api/backtests/{RUN}/stress", headers=SAME_ORIGIN).json() == {"id": RUN, "stress_of": RUN}
 
-    assert backtests.asked == [
-        ("storage",), ("breakdowns", RUN, 110.0), ("trade_path", RUN, 110.0, "2026-10-12T06:25:50Z"),
+    assert backtests.asked[1] == ("signals", RUN, date(2026, 10, 13), "refused")
+    assert backtests.asked[-1] == ("stress", RUN)
+
+
+def test_the_turbos_are_measured_for_the_runs_on_made_up_turbos(client, backtests):
+    assert client.get("/api/backtests/turbo-model").json() == {"state": "idle", "measure": None}
+    answer = client.post("/api/backtests/turbo-model", json={"from": "2026-10-13", "to": "2026-10-19"}, headers=SAME_ORIGIN)
+    assert (answer.status_code, answer.json()) == (202, {"state": "running"})
+    assert backtests.asked[-1] == ("measure_turbos", date(2026, 10, 13), date(2026, 10, 19))
+    assert client.post("/api/backtests/turbo-model", json={"from": "monday"}, headers=SAME_ORIGIN).status_code == 422
+
+
+def test_the_execution_of_wata_s_orders_is_measured_over_local_days(client, ctx, backtests):
+    found = client.get("/api/backtests/execution?from=2026-10-13&to=2026-10-14").json()
+
+    assert (found["from"], found["to"], found["requests"]) == ("2026-10-13", "2026-10-14", 1)
+    assert found["refusals"]["by_hour"] == [{"hour": 15, "requests": 1, "refused": 1}] and found["suggested"] == {}
+    # From midnight of the first day in Paris to midnight after the last.
+    assert ctx.queries.calls[-1] == ("execution_rows", datetime(2026, 10, 12, 22, 0, tzinfo=timezone.utc),
+                                     datetime(2026, 10, 14, 22, 0, tzinfo=timezone.utc))
+    assert client.get("/api/backtests/execution?from=2026-10-14&to=2026-10-13").status_code == 422
+    assert client.get("/api/backtests/execution").json()["requests"] == 1
+
+
+def test_the_form_reads_what_was_recorded_each_day(client, ctx, backtests, history):
+    ctx.queries.backtest_turbo_rows = [
+        {"day": date(2026, 10, 12), "direction": "long", "turbos": 18,
+         "first_ts": datetime(2026, 10, 12, 6, 0, tzinfo=timezone.utc), "last_ts": datetime(2026, 10, 12, 20, 0, tzinfo=timezone.utc)},
+        {"day": date(2026, 10, 12), "direction": "short", "turbos": 20,
+         "first_ts": datetime(2026, 10, 12, 5, 59, 50, tzinfo=timezone.utc), "last_ts": datetime(2026, 10, 12, 19, 0, tzinfo=timezone.utc)},
     ]
+    ctx.queries.backtest_recorder_rows = [{"day": date(2026, 10, 12), "listened": 5040}]
+    ctx.queries.backtest_asset_rows = [{"day": date(2026, 10, 13), "bars": 4200}]
 
+    saxo = client.get("/api/backtests/coverage?from=2026-10-12&to=2026-10-13&asset=saxo/2&source=journal").json()
+    dukascopy = client.get("/api/backtests/coverage?from=2026-10-12&to=2026-10-13&asset=dukascopy/us100").json()
 
-def _real_backtests(tmp_path, launcher, publish=None):
-    from src.admin.backtests import BacktestService
-    from src.strategy.execution import WataRules
-
-    with open("etc/config_example.json") as config_file:
-        rules = WataRules.from_config(json.load(config_file))
-    (tmp_path / "runs").mkdir()
-    return BacktestService(
-        runs_root=str(tmp_path / "runs"), prices_root=str(tmp_path / "prices"), rules=lambda: rules, launcher=launcher,
-        publish=publish,
+    monday, tuesday = saxo["days"]
+    assert (monday["turbos"], monday["first"], monday["last"]) == (
+        {"long": 18, "short": 20}, "2026-10-12T05:59:50Z", "2026-10-12T20:00:00Z",
     )
+    assert (monday["recorded_minutes"], monday["asset_bars"], tuesday["asset_bars"]) == (840, 0, 4200)
+    assert ("backtest_asset_days", "saxo", 2, date(2026, 10, 12), date(2026, 10, 13)) in ctx.queries.calls
+    # The journal's entries of the indice, by the day they were received.
+    assert [day["signals"] for day in saxo["days"]] == [0, 0]
+    assert [day["asset_bars"] for day in dukascopy["days"]] == [1, 1]
+    assert client.get("/api/backtests/coverage?from=2026-10-12&to=2026-10-13&asset=saxo/..").status_code == 422
+    assert client.get("/api/backtests/coverage?from=2026-06-01&to=2026-10-13").status_code == 422
 
 
-def test_a_path_that_tries_to_leave_the_runs_folder_finds_no_run(ctx, tmp_path):
+def test_the_form_reads_the_days_fetched_while_the_database_is_down(client, ctx, backtests, history):
+    ctx.queries.failing = True
+
+    answer = client.get("/api/backtests/coverage?from=2026-10-12&to=2026-10-13&asset=dukascopy/us100").json()
+
+    assert answer["database"] is False
+    assert [(day["turbos"], day["asset_bars"]) for day in answer["days"]] == [({"long": 0, "short": 0}, 1)] * 2
+
+
+def test_a_path_that_tries_to_leave_the_runs_folder_finds_no_run(ctx, tmp_path, config_path):
+    from src.admin.backtests import BacktestService
+    from src.admin.ta_scripts import ScriptStore
+
     async def never(arguments, log_path):
         raise AssertionError("nothing is to be run")
 
-    ctx.backtests = _real_backtests(tmp_path, never)
-    (tmp_path / "status.json").write_text("{}")
+    ctx.backtests = BacktestService(root=str(tmp_path / "backtests"), prices_root=str(tmp_path / "prices"),
+                                    config_path=config_path, scripts=ScriptStore(str(tmp_path / "ta")), launcher=never)
+    (tmp_path / "backtests").mkdir()
+    (tmp_path / "backtests" / "status.json").write_text("{}")
 
     with signed_in(ctx, tmp_path) as client:
-        for run_id in ("..", "%2E%2E", "..%2F..%2Fetc", "_fetch", "_calibration", RUN):
-            assert client.get(f"/api/backtests/{run_id}/trades?leverage=110").status_code == 404
-            assert client.get(f"/api/backtests/{run_id}/comparison?leverage=110").status_code == 404
-            assert client.get(f"/api/backtests/{run_id}/breakdowns?leverage=110").status_code == 404
-            assert client.get(f"/api/backtests/{run_id}/trades/path?leverage=110&entry=x").status_code == 404
-            assert client.patch(f"/api/backtests/{run_id}", json={"note": "x"}, headers=SAME_ORIGIN).status_code in (404, 405)
+        for run_id in ("..", "%2E%2E", "..%2F..%2Fetc", "_fetch", "_calibration", RUN, "runs"):
+            assert client.get(f"/api/backtests/{run_id}/trades").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/days").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/breakdowns").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/edge").status_code == 404
+            assert client.patch(f"/api/backtests/{run_id}", json={"name": "x"}, headers=SAME_ORIGIN).status_code in (404, 405)
             assert client.post(f"/api/backtests/{run_id}/cells/0/run", headers=SAME_ORIGIN).status_code in (404, 405)
+            assert client.post(f"/api/backtests/{run_id}/stress", headers=SAME_ORIGIN).status_code in (404, 405)
             assert client.delete(f"/api/backtests/{run_id}", headers=SAME_ORIGIN).status_code in (404, 405)
-        # Asked to remove what is not a run of its own: nothing is, and each is said not to be one.
         outcome = client.post("/api/backtests/remove", json={"ids": ["..", "_fetch", "../prices"]}, headers=SAME_ORIGIN).json()
         assert (outcome["removed"], [entry["reason"] for entry in outcome["kept"]]) == ([], ["No such backtest"] * 3)
-    assert (tmp_path / "status.json").exists()
+    assert (tmp_path / "backtests" / "status.json").exists()
 
-
-def test_the_admin_runs_the_backtests_it_is_asked_for(ctx, tmp_path):
-    class Ended:
-        returncode = 0
-
-        async def wait(self):
-            return 0
-
-    async def launcher(arguments, log_path):
-        out = arguments[arguments.index("--out") + 1]
-        with open(os.path.join(out, "summary.json"), "w") as out_file:
-            json.dump({"runs": [{"turbo": {"points_per_unit": 110.0}, "summary": {"trades": 3}}]}, out_file)
-        return Ended()
-
-    ctx.backtests = _real_backtests(tmp_path, launcher, publish=ctx.events.publish)
-    events = ctx.events.subscribe()
-
-    with signed_in(ctx, tmp_path) as client:
-        asked = client.post("/api/backtests", json={"from": "2026-09-14", "to": "2026-10-09", "leverages": [110]}, headers=SAME_ORIGIN)
-        run_id = asked.json()["id"]
-        for _ in range(200):
-            run = client.get(f"/api/backtests/{run_id}").json()
-            if run["status"]["state"] == "done":
-                break
-
-    assert asked.status_code == 202
-    assert (run["status"]["state"], run["headline"]["trades"]) == ("done", 3)
-    # Open pages are told: no need to keep asking.
-    announced = events.get_nowait()
-    assert (announced["type"], announced["run_id"], announced["state"]) == ("backtest_finished", run_id, "done")

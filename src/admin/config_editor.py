@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from src.configuration import ConfigurationManager
 from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.settings import RecorderSettings
+from src.ta_engine.settings import TaEngineSettings
 
 logger = logging.getLogger(__name__)
 
@@ -297,12 +298,13 @@ class ConfigEditor:
         current, revision = self._read()
         candidate_path = self._write_candidate(merge_editable(current, submitted, keep_protected=keep_protected))
         try:
-            # The price recorder and the Capital.com feed check their own
-            # sections, which the shared validator leaves alone: said here,
-            # rather than found idle later.
+            # The price recorder, the Capital.com feed and the TA engine check
+            # their own sections, which the shared validator leaves alone:
+            # said here, rather than found idle later.
             candidate = ConfigurationManager(candidate_path)
             RecorderSettings.from_config(candidate)
             CapitalSettings.from_config(candidate)
+            TaEngineSettings.from_config(candidate)
         except Exception as e:
             os.remove(candidate_path)
             # The validator raises ValueError for the cases it checks, and

@@ -15,7 +15,6 @@ export const LIVE_EVENT_TYPES = [
   'saxo_authorised',
   'backtest_finished',
   'prices_fetch_finished',
-  'calibration_finished',
 ] as const
 
 export interface EventNotice {
@@ -113,7 +112,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       if (state === 'cancelled') return null
       return {
         title: state === 'done' ? 'Backtest finished' : 'Backtest failed',
-        body: text(event.note),
+        body: text(event.name),
         variant: state === 'done' ? 'success' : 'error',
       }
     }
@@ -121,7 +120,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       const state = text(event.state) ?? ''
       // Stopped by the operator, or one of the downloads the service makes by itself: no news.
       if (state === 'stopped' || event.automatic === true) return null
-      // Another Dukascopy instrument than the history backtests read is named.
+      // Another Dukascopy instrument than the history kept up to date is named.
       const label = text(event.label)
       const what = label && label !== 'us100' ? `Prices of ${label}` : 'Prices'
       return {
@@ -135,10 +134,6 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         variant: state === 'done' ? 'success' : 'warning',
       }
     }
-    case 'calibration_finished':
-      return text(event.state) === 'done'
-        ? { title: 'Turbo measured on the real trades', variant: 'success' }
-        : { title: 'The measure of the turbo failed', variant: 'error' }
     default:
       // Pauses are shown by the dashboard itself, to whoever caused them and to everyone else.
       return null
@@ -170,10 +165,7 @@ export function staleQueries(event: LiveEvent): string[] {
       return ['backtests', 'backtest']
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
-      return ['backtest-prices', 'data-assets', 'data-asset', 'data-providers', 'data-provider']
-    case 'calibration_finished':
-      // The turbo a new backtest is offered comes from it.
-      return ['backtest-calibration', 'backtest-options']
+      return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']
     default:
       return []
   }

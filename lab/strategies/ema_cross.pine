@@ -1,0 +1,18 @@
+//@version=6
+// An example to start from: two exponential averages of the close, an entry when they cross.
+// Its alerts are what a backtest reads: map "Cross up" to long and "Cross down" to short.
+indicator("EMA cross", overlay = true)
+
+fastLength = input.int(9, "Fast length", minval = 1)
+slowLength = input.int(21, "Slow length", minval = 1)
+
+fast = ta.ema(close, fastLength)
+slow = ta.ema(close, slowLength)
+crossUp = ta.crossover(fast, slow)
+crossDown = ta.crossunder(fast, slow)
+
+plot(fast, "Fast EMA", color.teal, 2)
+plot(slow, "Slow EMA", color.orange, 2)
+
+alertcondition(crossUp, "Cross up", '{"action": "long", "indice": "us100"}')
+alertcondition(crossDown, "Cross down", '{"action": "short", "indice": "us100"}')

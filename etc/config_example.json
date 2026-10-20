@@ -238,6 +238,15 @@
         "retention_months": 0,
         "alert_after_seconds": 300
       },
+      "ta_engine": {
+        "enabled": false,
+        "history_days": 1,
+        "restart_time": "21:15",
+        "max_signal_age_seconds": 60,
+        "stale_feed_seconds": 90,
+        "run_timeout_seconds": 30,
+        "runner_memory_mb": 512
+      },
       "watchlist_manager": {
         "enabled": true,
         "api_host": "0.0.0.0",

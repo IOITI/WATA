@@ -17,6 +17,7 @@ LOG_SERVICES = {
     "wata-watchlist-manager": "Watchlist manager",
     "wata-admin": "Admin",
     "wata-capital-feed": "Capital.com feed",
+    "wata-ta-engine": "TA engine",
 }
 
 LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")

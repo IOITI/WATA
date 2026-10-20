@@ -72,6 +72,7 @@ function renderShell({ saxo = 'ok', pausedSince = null, restartRequired = false,
                     <>
                       <PageHeader title="Long 24,150 · SG" />
                       <Link to="/positions">To the positions</Link>
+                      <Link to="?side=ask">The ask</Link>
                     </>
                   }
                 />
@@ -200,5 +201,22 @@ describe('where the page is, in the top bar', () => {
 
     expect(isCurrent(await wholeTrail().findByText('Page not found'))).toBe(true)
     expect(wholeTrail().getByRole('link', { name: 'Positions' })).toHaveAttribute('href', '/positions')
+  })
+})
+
+describe('scrolling', () => {
+  it('opens another page at its top, and leaves a page where it is when only its query changes', async () => {
+    const user = userEvent.setup()
+    renderShell({ path: '/data/assets/saxo/2' })
+    await screen.findByRole('heading', { name: 'Long 24,150 · SG' })
+    const main = screen.getByRole('main')
+
+    main.scrollTop = 600
+    await user.click(screen.getByRole('link', { name: 'The ask' }))
+    expect(main.scrollTop).toBe(600)
+
+    await user.click(screen.getByRole('link', { name: 'To the positions' }))
+    await screen.findByRole('heading', { name: 'Positions' })
+    expect(main.scrollTop).toBe(0)
   })
 })

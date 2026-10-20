@@ -10,14 +10,14 @@ It listens on 127.0.0.1:8082 only and is not part of the deployed package
 (package.sh ships ./src). Nothing here touches a real account: signals and
 config saves land in memory and in a temporary directory.
 
-Backtests are the exception to "fake": they are real ones, on the prices kept
-under var/lib/price_history of this checkout, and their results stay under
-var/lib/backtests. Fetching prices from the page really asks Dukascopy.
+Downloads of history are the exception to "fake": the prices are kept under
+var/lib/price_history of this checkout, and fetching them from the page really
+asks Dukascopy.
 
-What a backtest sets against "what WATA really did" is made up here from those
-same prices (``real_history``): a few signals on each day that has prices, and
-the trades a turbo of a known leverage would have given, a little off. So a
-replay of real signals finds its pairs, and measuring the turbo finds it.
+Backtests are real ones too: the real command, with the real Pine runner when
+it is built (npm run build:runner), on the made-up recorded days of
+fake_recorded.py, written as files at start. Their results stay under
+var/lib/backtests of this checkout.
 
 Set FAKE_SAXO_EXPIRED=1 to see the Saxo re-authorisation flow, and
 FAKE_TOTP=1 to require a one-time code at login (the key is printed at start).
@@ -55,6 +55,7 @@ from src.admin.backtests import BacktestService
 from src.admin.config_editor import ConfigEditor
 from src.admin.context import AdminContext, AdminSettings
 from src.admin.data import PriceHistory
+from src.admin.downloads import HistoryDownloads, config_hours
 from src.admin.events import EventHub
 from src.admin.live_prices import LivePrices
 from src.admin.order_requests import refusal_runs, requests_by_order
@@ -67,14 +68,11 @@ from src.admin.queries import (
 )
 from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
-from src.strategy.engine import LocalClock
-from src.strategy.execution import Simulator, TurboModel, WataRules
-from src.strategy.history import dukascopy
-from src.strategy.signals import decisions_of
-from src.strategy.sources import FileBars
 
 import fake_capital
 import fake_prices
+import fake_recorded
+import fake_ta
 
 DEV_PASSWORD = "wata-admin-dev"
 HOST = "127.0.0.1"
@@ -446,80 +444,6 @@ def build_requests(positions: list[dict], orders: list[dict]) -> tuple[list[dict
     return requests, refused_buy
 
 
-# The turbo the made-up real trades were "bought": what measuring it should find.
-REAL_TURBO = TurboModel(entry_price=5.2, points_per_unit=104.0, spread=0.04)
-# When TradingView "sent" a signal on each day, in the trading timezone.
-REAL_SIGNALS = (("09:30", "long"), ("11:15", "short"), ("15:45", "long"), ("17:10", "short"), ("21:55", "close-position"))
-
-
-def real_history(prices_root: str, rules: WataRules) -> tuple[list[dict], list[dict]]:
-    """
-    A journal and closed positions for the days that have prices under
-    ``prices_root``: what WATA "did" with a few signals a day, on a turbo
-    that follows the index of those prices a little loosely.
-    """
-    rng = random.Random(11)
-    clock = LocalClock(rules.timezone)
-    location = dukascopy.bars_directory(prices_root, "us100")
-    journal, positions = [], []
-    try:
-        names = sorted(os.listdir(location))
-    except OSError:
-        return journal, positions
-    for name in names:
-        try:
-            day = date.fromisoformat(name.removesuffix(".csv.gz"))
-        except ValueError:
-            continue
-        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
-        bars = list(FileBars(os.path.join(location, name), "us100").bars(start, start + timedelta(days=1)))
-        sent = [
-            {"at": clock.epoch(day, clock_time) + rng.randint(1, 8), "action": action, "confidence": round(rng.uniform(0.5, 1.9), 2)}
-            for clock_time, action in REAL_SIGNALS
-        ]
-        simulator = Simulator(rules, REAL_TURBO, clock, entries_are_orders=True)
-        waiting = decisions_of(sent)
-        for bar in bars:
-            simulator.on_bar(bar)
-            while waiting and waiting[0].at < bar.start + 10:
-                simulator.decide(waiting.pop(0))
-        simulator.finish()
-
-        opened = {}
-        for trade in simulator.trades:
-            position_id = str(6_000_000 + len(positions))
-            # Filled a few seconds after the model, at a price a little off, on a turbo not always bought at the same price.
-            bought = round(REAL_TURBO.entry_price * rng.uniform(0.85, 1.35), 2)
-            performance = round(trade.performance + rng.gauss(0, 0.25), 2)
-            sold = round(bought * (1 + performance / 100), 3)
-            opened[trade.entry_at] = position_id
-            positions.append({
-                "position_id": position_id, "action": trade.direction,
-                "execution_time_open": datetime.fromtimestamp(trade.entry_at + rng.randint(1, 6), timezone.utc),
-                "execution_time_close": datetime.fromtimestamp(trade.exit_at + rng.randint(1, 9), timezone.utc),
-                "position_open_price": bought, "position_close_price": sold,
-                "position_total_performance_percent": round(sold * 100 / bought - 100, 2),
-                "position_max_performance_percent": trade.max_performance,
-                "position_close_reason": f"Performance ({trade.exit_reason})",
-                "instrument_name": "TURBO NASDAQ-100 (made up)",
-            })
-        refused = {refusal.at: refusal.reason for refusal in simulator.refusals}
-        for signal in sent:
-            # Acted on at the first ten seconds after the signal.
-            acted_at = signal["at"] - signal["at"] % 10 + 10
-            entry = signal["action"] in ("long", "short")
-            journal.append({
-                "signal_uuid": str(uuid.UUID(int=rng.getrandbits(128))), "action": signal["action"],
-                "indice": "us100" if entry else "n/a", "confidence": signal["confidence"] if entry else None,
-                "signal_timestamp": datetime.fromtimestamp(signal["at"] - 2, timezone.utc),
-                "received_timestamp": datetime.fromtimestamp(signal["at"] - 1, timezone.utc),
-                "decided_at": datetime.fromtimestamp(signal["at"], timezone.utc),
-                "outcome": "executed" if acted_at in opened else "refused" if acted_at in refused else "ignored" if not entry else "failed",
-                "reason": refused.get(acted_at), "position_id": opened.get(acted_at),
-            })
-    return journal, positions
-
-
 def activity_time(position: dict) -> datetime:
     return position["execution_time_close"] or position["execution_time_open"]
 
@@ -530,9 +454,7 @@ def in_range(when: datetime, start: date | None, end: date | None) -> bool:
 
 
 class FakeQueries:
-    def __init__(self, real: tuple[list[dict], list[dict]] = ([], [])):
-        # What backtests are set against: see ``real_history``.
-        self.real_journal, self.real_positions = real
+    def __init__(self):
         self.today = datetime.now(timezone.utc).date()
         self.positions, self.orders = build_history(self.today)
         self.requests, refused_buy = build_requests(self.positions, self.orders)
@@ -677,10 +599,26 @@ class FakeQueries:
     async def price_series(self, instrument_id, start, end, side, limit):
         first = 1 if side == "bid" else 5
         rows = fake_prices.bars(instrument_id, start, end, 10, limit, datetime.now(timezone.utc))
-        return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3]) for row in rows]
+        return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3], row[9]) for row in rows]
 
     async def price_coverage(self, start, end):
         return fake_prices.coverage(start, end, datetime.now(timezone.utc))
+
+    # ── what backtests read: the days written as files at start, see fake_recorded.py ──
+
+    recorded_days: list = []
+
+    async def backtest_turbo_days(self, indice, first_day, last_day):
+        return fake_recorded.turbo_days(self.recorded_days, indice, first_day, last_day, datetime.now(timezone.utc))
+
+    async def backtest_recorder_days(self, first_day, last_day):
+        return fake_recorded.recorder_days(self.recorded_days, first_day, last_day, datetime.now(timezone.utc))
+
+    async def backtest_asset_days(self, provider, instrument_id, first_day, last_day):
+        return fake_recorded.asset_days(provider, instrument_id, first_day, last_day, datetime.now(timezone.utc))
+
+    async def last_balance(self):
+        return 10_250.0
 
     async def price_trades(self, instrument, start, end, limit=500):
         return fake_prices.trades(instrument, start, end, datetime.now(timezone.utc))
@@ -689,6 +627,22 @@ class FakeQueries:
 
     async def capital_feed_state(self):
         return fake_capital.feed_state(datetime.now(timezone.utc))
+
+    # ── the TA engine: made up from the signal rules of the store, see fake_ta.py ──
+
+    ta_engine: "fake_ta.FakeEngine | None" = None
+
+    async def ta_signals(self, start=None, end=None, rule_id=None, limit=500):
+        return self.ta_engine.signals(start, end, rule_id, limit) if self.ta_engine else []
+
+    async def ta_other_signals(self, indice, day):
+        return self.ta_engine.others(indice, day) if self.ta_engine else []
+
+    async def ta_engine_state(self):
+        return self.ta_engine.state() if self.ta_engine else None
+
+    async def ta_rule_states(self):
+        return self.ta_engine.rule_states() if self.ta_engine else {}
 
     async def capital_assets(self, epic=None):
         if epic not in (None, fake_capital.EPIC):
@@ -711,7 +665,7 @@ class FakeQueries:
     async def capital_series(self, instrument_id, start, end, side, limit):
         first = 1 if side == "bid" else 5
         rows = fake_capital.ten_second_bars(start, end, datetime.now(timezone.utc))[:limit]
-        return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3]) for row in rows]
+        return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3], row[9]) for row in rows]
 
     async def capital_volume(self, instrument_id, start, end, interval, limit):
         return fake_capital.volume(start, end, interval, limit, datetime.now(timezone.utc))
@@ -744,10 +698,16 @@ class FakeQueries:
         return entries[:limit]
 
     async def journal_between(self, start=None, end=None):
-        return [entry for entry in self.real_journal if in_range(entry["decided_at"], start, end)]
+        return sorted(
+            (entry for entry in self.journal if in_range(entry["decided_at"], start, end)),
+            key=lambda entry: entry["decided_at"],
+        )
 
     async def closed_positions(self, start=None, end=None):
-        return [position for position in self.real_positions if in_range(position["execution_time_open"], start, end)]
+        return [
+            position for position in self.positions
+            if position["position_status"] == "Closed" and in_range(position["execution_time_open"], start, end)
+        ]
 
     async def exits(self, start=None, end=None):
         closed = [p for p in self.positions if p["position_status"] == "Closed"]
@@ -1115,6 +1075,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
     # Shown in the service list, as on a server where the price recorder and the Capital.com feed run.
     config["trade"]["config"]["price_recorder"]["enabled"] = True
     config["trade"]["config"]["capital_feed"]["enabled"] = True
+    config["trade"]["config"]["ta_engine"]["enabled"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))
@@ -1136,22 +1097,23 @@ def build_dev_context(work_dir: str) -> AdminContext:
     async def notifier(message: str) -> None:
         print(f"[fake] Telegram: {message!r}")
 
-    def live_rules() -> WataRules:
-        with open(config_path) as config_file:
-            return WataRules.from_config(json.load(config_file))
-
     events = EventHub()
-    backtests_root = os.path.join(REPO_ROOT, "var", "lib", "backtests")
     prices_root = os.path.join(REPO_ROOT, "var", "lib", "price_history")
-    os.makedirs(backtests_root, exist_ok=True)
-    backtests = BacktestService(
-        runs_root=backtests_root,
-        prices_root=prices_root,
-        rules=live_rules,
-        publish=events.publish,
-    )
+    downloads = HistoryDownloads(prices_root=prices_root, hours=config_hours(config_path), publish=events.publish)
 
-    queries = FakeQueries(real_history(prices_root, live_rules()))
+    queries = FakeQueries()
+    ta_scripts = fake_ta.seeded_store(os.path.join(work_dir, "lib", "admin", "ta"))
+    recorded_root = os.path.join(work_dir, "recorded")
+    queries.recorded_days = fake_recorded.write(recorded_root, datetime.now(timezone.utc))
+    backtests = BacktestService(
+        root=os.path.join(REPO_ROOT, "var", "lib", "backtests"),
+        prices_root=prices_root,
+        config_path=config_path,
+        scripts=ta_scripts,
+        publish=events.publish,
+        data=f"files:{recorded_root}",
+    )
+    queries.ta_engine = fake_ta.FakeEngine(ta_scripts, datetime.now(timezone.utc) - timedelta(hours=3))
     return AdminContext(
         config_manager=config_manager,
         settings=settings,
@@ -1165,13 +1127,16 @@ def build_dev_context(work_dir: str) -> AdminContext:
         risk_state=FakeRiskState(queries),
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
         backtests=backtests,
+        downloads=downloads,
         history=PriceHistory(prices_root),
         # The made-up Capital.com stream, in place of RabbitMQ.
         live_prices=LivePrices(fake_capital.source),
+        # The Pine scripts, on the temporary folder, with a few examples.
+        ta_scripts=ta_scripts,
         events=events,
         notifier=notifier,
         version="dev",
-        closers=[backtests.close],
+        closers=[backtests.close, downloads.close],
     )
 
 

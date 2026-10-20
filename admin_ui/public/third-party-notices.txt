@@ -1,0 +1,99 @@
+WATA ADMIN - THIRD-PARTY NOTICES
+================================
+
+WATA's own files are under the MIT licence (LICENSE at the root of the
+repository). The admin's interface is built with the libraries below, which
+keep their own licences. The complete source of this admin, including the
+code that uses them, is the public repository:
+https://github.com/IOITI/WATA
+
+This file ships with the built admin, as the licences below ask.
+
+
+PineTS and Vela-pinets (GNU Affero General Public License v3.0 only)
+--------------------------------------------------------------------
+pinets 0.11.1 - https://github.com/LuxAlgo/PineTS
+@luxalgo/vela-pinets 0.2.16 - https://github.com/LuxAlgo/Vela-pinets
+Copyright (c) LuxAlgo
+
+They run the Pine scripts of the Technical Analysis pages, in the browser
+(in the admin's worker files). PineTS also runs them on the server, in the TA
+engine's runner (src/ta_engine/runner/runner.mjs, built from the repository's
+admin_ui/src/features/ta/engine/runner.ts). Their licence text:
+https://www.gnu.org/licenses/agpl-3.0.txt
+Their source is published at the addresses above and on npm. Anyone who uses
+this admin over a network is offered its whole source: the repository above.
+
+Pine Script(R) and TradingView(R) are trademarks of TradingView, Inc. Neither
+LuxAlgo nor WATA is affiliated with, sponsored by or endorsed by TradingView.
+
+
+Vela (Apache License 2.0)
+-------------------------
+@luxalgo/vela 0.8.4 - https://github.com/LuxAlgo/Vela
+Licence: https://www.apache.org/licenses/LICENSE-2.0
+Its NOTICE file, reproduced as section 4(d) of the licence asks:
+
+Vela
+Copyright (c) 2026 LuxAlgo
+https://velacharts.dev
+
+This product includes the Vela charting library, developed by LuxAlgo.
+
+ATTRIBUTION REQUIREMENT
+
+Any product, website, or application that displays charts rendered by this
+software must show a visible attribution to the Vela project on every page or
+screen where such a chart is displayed.
+
+The library satisfies this requirement automatically: it renders an attribution
+mark (the project logomark linking to the Vela project page) on the chart
+itself, enabled by default. You may restyle or reposition this mark to fit your
+design.
+
+You may disable the built-in mark (renderer feature `attribution`) ONLY if you
+display an equivalent visible attribution — the name "Vela" together with a
+link to the project page above — elsewhere on the same page or screen, in a
+place available to your users.
+
+Removing, hiding, or obscuring the attribution without providing the
+equivalent notice described above is not permitted.
+
+This file constitutes the NOTICE file described in Section 4(d) of the Apache
+License, Version 2.0: redistributions of this software, in source or binary
+form, must include a readable copy of these attribution notices.
+
+The attribution mark is kept on every chart of the Charts page.
+
+
+Other libraries of the Technical Analysis pages (MIT licence)
+-------------------------------------------------------------
+CodeMirror 6 (@codemirror/*, @lezer/highlight, crelt, style-mod, w3c-keyname,
+@marijn/find-cluster-break)
+  Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
+pinescript-v6-validator 0.4.3
+  Copyright (c) 2024 Jaroslav Pantsjoha and Contributors
+Zag.js (@zag-js/*), used by Vela
+  Copyright (c) 2021 Chakra UI
+acorn, acorn-walk (used by PineTS, and to build the admin)
+  Copyright (C) 2012-2022 by various contributors
+astring (used by PineTS)
+  Copyright (c) 2015, David Bonnet <david@bonnet.cc>
+
+The MIT licence: https://opensource.org/license/mit
+
+
+Node.js (MIT licence, with the licences of what it bundles)
+-----------------------------------------------------------
+The image the services run in carries the node binary of Node.js 24, from
+Node's official image, to run the TA engine's runner:
+https://github.com/nodejs/node/blob/main/LICENSE
+
+
+The rest of the admin
+---------------------
+TradingView Lightweight Charts(TM) (Apache License 2.0)
+  Copyright (c) 2025 TradingView, Inc. https://www.tradingview.com/
+React, React Router, TanStack Query, Recharts, Tailwind CSS, Framer Motion,
+Lucide and the EasyUI components are under the MIT licence (ISC for Lucide):
+see admin_ui/package.json and admin_ui/README.md in the repository.

@@ -86,7 +86,8 @@ async def session_info(request: Request):
         "timezone": ctx.settings.timezone,
         "actions_enabled": ctx.settings.actions_enabled,
         "config_edit_enabled": ctx.settings.config_edit_enabled,
-        "backtests_enabled": ctx.settings.backtests_enabled and ctx.backtests is not None,
+        # The switch of the backtests and of the downloads of history alike.
+        "backtests_enabled": ctx.settings.backtests_enabled and (ctx.backtests is not None or ctx.downloads is not None),
         "totp_enabled": ctx.credentials.totp_enabled(),
         "restart_required": restart_required(ctx),
     }

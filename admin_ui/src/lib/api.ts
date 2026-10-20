@@ -1,24 +1,26 @@
 import type {
   AssetDetails,
+  BacktestBaseline,
+  BacktestBreakdowns,
+  BacktestCoverage,
+  BacktestDay,
+  BacktestEdge,
+  BacktestExecution,
+  BacktestFate,
+  BacktestOptions,
+  BacktestPaper,
+  BacktestReconciliation,
+  BacktestRequestBody,
+  BacktestRun,
+  BacktestRunListed,
+  BacktestSignal,
+  BacktestStorage,
+  BacktestSweep,
+  BacktestTrade,
+  BacktestTurboModel,
   AssetSeen,
   AssetStatistics,
   AuditEntry,
-  BacktestBreakdowns,
-  BacktestCalibration,
-  BacktestComparison,
-  BacktestDay,
-  BacktestDayChart,
-  BacktestOptions,
-  BacktestPrices,
-  BacktestRefusal,
-  BacktestRequest,
-  BacktestRun,
-  BacktestRunListed,
-  BacktestSignalsRequest,
-  BacktestStorage,
-  BacktestSweepRequest,
-  BacktestTrade,
-  BacktestTradePath,
   CapitalConfig,
   CapitalProviderDetails,
   CapitalVolume,
@@ -53,11 +55,22 @@ import type {
   PriceRangeBars,
   RecorderConfig,
   Report,
+  ResearchFiles,
   SaxoProviderDetails,
   SaxoStatus,
   Session,
   Signal,
   SignalSent,
+  TaComparison,
+  TaEngine,
+  TaRuleFields,
+  TaRuleMode,
+  TaRules,
+  TaRuleSaved,
+  TaScript,
+  TaScriptSummary,
+  TaSignal,
+  TaVersion,
   Watchlist,
 } from './types'
 
@@ -156,6 +169,11 @@ export function assetLiveUrl(ref: string): string {
   return `/api/data/assets/${assetPath(ref)}/live`
 }
 
+/** Where a script's current source is downloaded as a .pine file: a link, not fetch. */
+export function taScriptSourceUrl(id: string): string {
+  return `/api/ta/scripts/${encodeURIComponent(id)}/source.pine`
+}
+
 export interface DateRangeParams {
   from?: string | null
   to?: string | null
@@ -219,15 +237,25 @@ export const api = {
     request<AssetDetails>('GET', `/api/data/assets/${assetPath(ref)}${query({ ...period })}`),
   assetBars: (ref: string, period: PricePeriod, interval: number) =>
     request<PriceBars>('GET', `/api/data/assets/${assetPath(ref)}/bars${query({ ...period, interval })}`),
-  /** Range bars of one side. Without a size the server chooses one; `under` is the recorded index shown under a turbo. */
+  /**
+   * Range bars of one side: of `size` (a price), or of `ticks` steps of the instrument's
+   * price (TradingView's R); without either the server chooses. `under` is the recorded
+   * index shown under a turbo.
+   */
   assetRangeBars: (
     ref: string,
     period: PricePeriod,
-    options: { side: 'bid' | 'ask'; size: number | null; under: number | null },
+    options: { side: 'bid' | 'ask'; size: number | null; under: number | null; ticks?: number | null },
   ) =>
     request<PriceRangeBars>(
       'GET',
-      `/api/data/assets/${assetPath(ref)}/range-bars${query({ ...period, side: options.side, size: options.size, under: options.under })}`,
+      `/api/data/assets/${assetPath(ref)}/range-bars${query({
+        ...period,
+        side: options.side,
+        size: options.size,
+        ticks: options.ticks,
+        under: options.under,
+      })}`,
     ),
   assetContext: (ref: string, period: PricePeriod) =>
     request<PriceContext>('GET', `/api/data/assets/${assetPath(ref)}/context${query({ ...period })}`),
@@ -257,56 +285,96 @@ export const api = {
   submitSaxoAuthCode: (code: string) =>
     request<void>('POST', '/api/system/saxo/auth-code', { body: { code } }),
 
+  // ── backtests on the recorded turbos ──
   backtestOptions: () => request<BacktestOptions>('GET', '/api/backtests/options'),
-  backtests: () => request<{ items: BacktestRunListed[] }>('GET', '/api/backtests'),
+  backtestCoverage: (params: { from: string; to: string; indice: string; asset?: string; source?: 'pine' | 'journal' }) =>
+    request<BacktestCoverage>('GET', `/api/backtests/coverage${query(params)}`),
+  backtests: () => request<{ items: BacktestRunListed[]; storage: BacktestStorage }>('GET', '/api/backtests'),
   backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
-  createBacktest: (body: BacktestRequest) => request<BacktestRun>('POST', '/api/backtests', { body }),
-  cancelBacktest: (runId: string) =>
-    request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cancel`),
-  deleteBacktest: (runId: string) => request<void>('DELETE', `/api/backtests/${encodeURIComponent(runId)}`),
-  backtestTrades: (runId: string, leverage: number) =>
-    request<{ items: BacktestTrade[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/trades${query({ leverage })}`),
-  backtestDays: (runId: string, leverage: number) =>
-    request<{ items: BacktestDay[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/days${query({ leverage })}`),
-  backtestRefusals: (runId: string, leverage: number) =>
-    request<{ items: BacktestRefusal[] }>(
-      'GET',
-      `/api/backtests/${encodeURIComponent(runId)}/refusals${query({ leverage })}`,
-    ),
-  backtestDayChart: (runId: string, day: string, leverage: number) =>
-    request<BacktestDayChart>(
-      'GET',
-      `/api/backtests/${encodeURIComponent(runId)}/days/${encodeURIComponent(day)}/chart${query({ leverage })}`,
-    ),
-  // `label`: another Dukascopy instrument than the history backtests read, which is meant when it is left out.
-  // `prices`: the days recorded from Capital.com in place of Dukascopy's.
-  priceCoverage: (period: Partial<PricePeriod> = {}, label?: string, prices?: BacktestPrices) =>
-    request<PriceCoverage>('GET', `/api/backtests/prices${query({ ...period, label, prices })}`),
-  fetchPrices: (period: PricePeriod, label?: string) =>
-    request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch', { body: label ? { ...period, label } : period }),
-  stopFetchingPrices: () => request<PriceFetchStatus>('POST', '/api/backtests/prices/fetch/stop'),
-  keepPrices: (body: { enabled: boolean; days: number }) =>
-    request<PriceKeepStatus>('PUT', '/api/backtests/prices/keep', { body }),
-  backtestCalibration: () => request<BacktestCalibration>('GET', '/api/backtests/calibration'),
-  measureTurbo: () => request<BacktestCalibration>('POST', '/api/backtests/calibration'),
-  replaySignals: (body: BacktestSignalsRequest) => request<BacktestRun>('POST', '/api/backtests/signals', { body }),
-  createSweep: (body: BacktestSweepRequest) => request<BacktestRun>('POST', '/api/backtests/sweeps', { body }),
-  runSweepCell: (runId: string, cell: number) =>
-    request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cells/${cell}/run`),
-  renameBacktest: (runId: string, body: { note?: string; tags?: string[] }) =>
+  createBacktest: (body: BacktestRequestBody) => request<BacktestRun>('POST', '/api/backtests', { body }),
+  renameBacktest: (runId: string, body: { name?: string; tags?: string[] }) =>
     request<BacktestRun>('PATCH', `/api/backtests/${encodeURIComponent(runId)}`, { body }),
+  cancelBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cancel`),
+  deleteBacktest: (runId: string) => request<void>('DELETE', `/api/backtests/${encodeURIComponent(runId)}`),
   removeBacktests: (ids: string[]) =>
     request<{ removed: string[]; kept: { id: string; reason: string }[] }>('POST', '/api/backtests/remove', { body: { ids } }),
-  backtestStorage: () => request<BacktestStorage>('GET', '/api/backtests/storage'),
-  backtestBreakdowns: (runId: string, leverage: number) =>
-    request<BacktestBreakdowns>('GET', `/api/backtests/${encodeURIComponent(runId)}/breakdowns${query({ leverage })}`),
-  backtestTradePath: (runId: string, leverage: number, entry: string) =>
-    request<BacktestTradePath>(
-      'GET',
-      `/api/backtests/${encodeURIComponent(runId)}/trades/path${query({ leverage, entry })}`,
-    ),
-  backtestComparison: (runId: string, leverage: number) =>
-    request<BacktestComparison>('GET', `/api/backtests/${encodeURIComponent(runId)}/comparison${query({ leverage })}`),
+  removeFormerBacktests: () => request<{ removed: number }>('DELETE', '/api/backtests/former'),
+  researchFiles: () => request<ResearchFiles>('GET', '/api/backtests/research'),
+  setResearchFiles: (body: { enabled?: boolean; keep_days?: number }) =>
+    request<ResearchFiles>('PUT', '/api/backtests/research', { body }),
+  backtestDays: (runId: string) => request<{ items: BacktestDay[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/days`),
+  backtestSignals: (runId: string, params: { day?: string; fate?: BacktestFate } = {}) =>
+    request<{ items: BacktestSignal[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/signals${query(params)}`),
+  backtestTrades: (runId: string, params: { day?: string } = {}) =>
+    request<{ items: BacktestTrade[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/trades${query(params)}`),
+  backtestBreakdowns: (runId: string) =>
+    request<BacktestBreakdowns>('GET', `/api/backtests/${encodeURIComponent(runId)}/breakdowns`),
+  backtestBaseline: (runId: string) =>
+    request<BacktestBaseline | Record<string, never>>('GET', `/api/backtests/${encodeURIComponent(runId)}/baseline`),
+  backtestSweep: (runId: string) => request<BacktestSweep>('GET', `/api/backtests/${encodeURIComponent(runId)}/sweep`),
+  runSweepCell: (runId: string, cell: number) =>
+    request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cells/${cell}/run`),
+  /** How the asset moved after the run's entry signals; empty for a run made before it was measured. */
+  backtestEdge: (runId: string) => request<BacktestEdge | Record<string, never>>('GET', `/api/backtests/${encodeURIComponent(runId)}/edge`),
+  /** What WATA's own orders took and cost, the three months before today by default. */
+  backtestExecution: () => request<BacktestExecution>('GET', '/api/backtests/execution'),
+  /** A replay of the journal beside WATA's real positions; empty for any other run. */
+  backtestReconciliation: (runId: string) =>
+    request<BacktestReconciliation | Record<string, never>>('GET', `/api/backtests/${encodeURIComponent(runId)}/reconciliation`),
+  /** Each shadow rule's days traded on paper, beside its reference run. */
+  backtestPaper: () => request<BacktestPaper>('GET', '/api/backtests/paper'),
+  /** A run made from a rule becomes the one its paper days are set against. */
+  setBacktestReference: (runId: string) => request<BacktestPaper>('POST', `/api/backtests/${encodeURIComponent(runId)}/reference`),
+  /** The measure of the turbos made up from the index, and whether one is being made. */
+  turboModel: () => request<BacktestTurboModel>('GET', '/api/backtests/turbo-model'),
+  measureTurbos: (period: { from: string; to: string }) => request<BacktestTurboModel>('POST', '/api/backtests/turbo-model', { body: period }),
+  /** The run made again as a sweep, with each order filled later and at a worse price. */
+  stressBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/stress`),
+
+  // ── Dukascopy's history: what is there, its downloads, keeping it up to date ──
+  // `label`: another Dukascopy instrument than the history kept up to date, which is meant when it is left out.
+  historyCoverage: (period: Partial<PricePeriod> = {}, label?: string) =>
+    request<PriceCoverage>('GET', `/api/data/providers/dukascopy/coverage${query({ ...period, label })}`),
+  fetchHistory: (period: PricePeriod, label?: string) =>
+    request<PriceFetchStatus>('POST', '/api/data/providers/dukascopy/fetch', { body: label ? { ...period, label } : period }),
+  stopFetchingHistory: () => request<PriceFetchStatus>('POST', '/api/data/providers/dukascopy/fetch/stop'),
+  keepHistory: (body: { enabled: boolean; days: number }) =>
+    request<PriceKeepStatus>('PUT', '/api/data/providers/dukascopy/keep', { body }),
+
+  // ── Technical Analysis: Pine scripts and the layouts of the charts ──
+  taScripts: () => request<{ items: TaScriptSummary[] }>('GET', '/api/ta/scripts'),
+  taScript: (id: string) => request<TaScript>('GET', `/api/ta/scripts/${encodeURIComponent(id)}`),
+  createTaScript: (body: { name: string; source: string; description?: string }) =>
+    request<TaScript>('POST', '/api/ta/scripts', { body }),
+  /** A changed source makes a new version; `base_version` is the one the change was made on (409 if another came first). */
+  saveTaScript: (id: string, body: { base_version: number; source?: string; name?: string; description?: string }) =>
+    request<TaScript>('PUT', `/api/ta/scripts/${encodeURIComponent(id)}`, { body }),
+  deleteTaScript: (id: string) => request<void>('DELETE', `/api/ta/scripts/${encodeURIComponent(id)}`),
+  duplicateTaScript: (id: string, name: string) =>
+    request<TaScript>('POST', `/api/ta/scripts/${encodeURIComponent(id)}/duplicate`, { body: { name } }),
+  taScriptVersion: (id: string, number: number) =>
+    request<TaVersion>('GET', `/api/ta/scripts/${encodeURIComponent(id)}/versions/${number}`),
+  /** The library that declares library("<name>"), with its current source. */
+  taLibrary: (name: string) => request<TaScript>('GET', `/api/ta/libraries/${encodeURIComponent(name)}`),
+  taWorkspace: (key: string) => request<{ value: string | null }>('GET', `/api/ta/workspaces/${encodeURIComponent(key)}`),
+  saveTaWorkspace: (key: string, value: string) =>
+    request<void>('PUT', `/api/ta/workspaces/${encodeURIComponent(key)}`, { body: { value } }),
+  // Signal rules: each change names the revision it was made on (409 if the rules changed meanwhile).
+  taRules: () => request<TaRules>('GET', '/api/ta/rules'),
+  createTaRule: (body: TaRuleFields & { revision: string; mode?: 'off' | 'shadow' }) =>
+    request<TaRuleSaved>('POST', '/api/ta/rules', { body }),
+  saveTaRule: (id: string, body: TaRuleFields & { revision: string; refresh_libraries?: boolean }) =>
+    request<TaRuleSaved>('PUT', `/api/ta/rules/${encodeURIComponent(id)}`, { body }),
+  /** Live is an operator action: refused (403) while actions are disabled. */
+  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string) =>
+    request<TaRuleSaved>('POST', `/api/ta/rules/${encodeURIComponent(id)}/mode`, { body: { mode, revision } }),
+  deleteTaRule: (id: string, revision: string) =>
+    request<void>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}${query({ revision })}`),
+  taSignals: (params: DateRangeParams & { rule?: string } = {}) =>
+    request<{ items: TaSignal[] }>('GET', `/api/ta/signals${query({ ...params, limit: 500 })}`),
+  taEngine: () => request<TaEngine>('GET', '/api/ta/engine'),
+  taComparison: (id: string, day: string, tolerance?: number) =>
+    request<TaComparison>('GET', `/api/ta/rules/${encodeURIComponent(id)}/comparison${query({ day, tolerance })}`),
 
   config: () => request<ConfigDocument>('GET', '/api/config'),
   validateConfig: (config: JsonObject) =>

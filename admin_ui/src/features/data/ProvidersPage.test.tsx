@@ -71,7 +71,7 @@ function dukascopy(changes: Partial<DukascopyProviderDetails> = {}): DukascopyPr
       { symbol: 'DEUIDXEUR', label: 'de40', name: 'Germany 40', currency: 'EUR', built_in: false, days: 0, first_day: null, last_day: null, bytes: 0 },
     ],
     offered: [{ symbol: 'USA500IDXUSD', label: 'us500', name: 'US 500', currency: 'USD' }],
-    storage: { runs: { count: 0, bytes: 0 }, prices: { days: 5, bars_bytes: 1500000, fetched_bytes: 3000000 } },
+    storage: { days: 5, bars_bytes: 1500000, fetched_bytes: 3000000 },
     source: 'https://datafeed.dukascopy.com/datafeed',
     ...changes,
   }
@@ -151,7 +151,7 @@ function serve({ providers, saxoDetails = saxo(), capitalDetails = capital(), co
         return json({ ...(init.body ? JSON.parse(String(init.body)) : {}), name: 'US 500', currency: 'USD', built_in: false }, 201)
       }
       if (url.pathname.startsWith('/api/data/providers/dukascopy/instruments/') && method === 'DELETE') return json(null, 204)
-      if (url.pathname === '/api/backtests/prices') {
+      if (url.pathname === '/api/data/providers/dukascopy/coverage') {
         return json({
           from: '2026-06-15', to: '2026-10-12', label: url.searchParams.get('label') ?? 'us100', symbol: 'USATECHIDXUSD',
           days: [], ready: { count: 0, first: null, last: null }, fetch: { state: 'idle', lines: [] },
@@ -439,9 +439,9 @@ describe('the Dukascopy provider’s page', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Dukascopy' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'View asset' })).toHaveAttribute('href', '/data/assets/dukascopy/us100')
     expect(screen.getByText('Nothing fetched yet')).toBeInTheDocument()
-    await waitFor(() => expect(requests.map((request) => request.path)).toContain('/api/backtests/prices?label=de40'))
-    // The history backtests read is asked for as the backtest pages ask for it.
-    expect(requests.map((request) => request.path)).toContain('/api/backtests/prices')
+    await waitFor(() => expect(requests.map((request) => request.path)).toContain('/api/data/providers/dukascopy/coverage?label=de40'))
+    // The history kept up to date is asked for without a label, as every page asks for it.
+    expect(requests.map((request) => request.path)).toContain('/api/data/providers/dukascopy/coverage')
   })
 
   it('adds an instrument and stops fetching another from its settings', async () => {

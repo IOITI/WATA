@@ -6,6 +6,7 @@ built on the server.
 
 React 19, Vite, TypeScript, Tailwind CSS 4, [EasyUI](https://easyui.site) components, TanStack Query,
 React Router, Recharts, and TradingView's Lightweight Charts for the charts of the stored prices (the Data section).
+The Technical Analysis pages add PineTS, Vela and Vela-pinets, and CodeMirror 6 (see below).
 
 ## Working on it
 
@@ -23,7 +24,10 @@ Its recorded prices (`dev/fake_prices.py`) are made up from the time asked for: 
 follow it, two recording gaps a day, and a couple of trades and signals on them. Three of the turbos are not
 quoted all day, each in its own way (holes, a stop, a knock-out), and three have a volume. Its Dukascopy
 provider is the real one, on the days kept under `var/lib/price_history` of the checkout: an instrument added
-from the Providers page goes to `var/lib/price_history/dukascopy/instruments.json` there.
+from the Providers page goes to `var/lib/price_history/dukascopy/instruments.json` there. Its backtests are
+real runs of `python -m src.backtest.run` (Pine scripts through the real runner, which `npm run build:runner`
+builds) on the last eight weekdays of those made-up prices, written at start as the files the command reads
+(`dev/fake_recorded.py`); the runs are kept under `var/lib/backtests` of the checkout.
 
 The proxy of `vite.config.ts` passes the `Host` header on as the browser sent it. The admin refuses a change
 whose `Origin` is not its own `Host`; with the header rewritten to the API's address, signing in from the dev
@@ -48,7 +52,7 @@ npm run build       # writes ../src/admin/static (ignored by git; ./package.sh r
 | `src/lib/` | API client and types (`api.ts`, `types.ts` mirror `src/admin/routers/`), formatting |
 | `src/test/` | Test setup, and the stand-ins for the charting library and for the system's theme |
 | `src/styles/` | `tokens.css` (EasyUI, unchanged), `theme.css` (WATA additions), `index.css` (Tailwind mapping) |
-| `dev/fake_api.py`, `dev/fake_prices.py` | The fake-data server and its made-up recorded prices. Its backtests are real ones, on the prices kept under `var/lib/price_history` of the checkout; the "real trades" they are set against are made up from those same prices |
+| `dev/fake_api.py`, `dev/fake_prices.py`, `dev/fake_recorded.py` | The fake-data server, its made-up recorded prices, and those prices written as the days its real backtests trade on |
 
 ## Themes
 
@@ -157,12 +161,13 @@ through the day included. It is loaded with the pages that draw candles only.
 - **`features/prices/PriceChart.tsx` is the only file that imports it.** It is given data that is ready to
   draw and draws it. Everything that can be wrong without a canvas (times, holes, markers, intervals) is in
   `chartData.ts`, which is plain functions with tests.
-- **Three places show it**: an asset's page and an opened row of the Assets View (`features/data/AssetChart.tsx`,
-  full and compact), and a day of a backtest (`features/backtests/BacktestDayPage.tsx`),
-  which gives it `overlays`: lines over the prices, on their scale (the kernel, the VWAP of the session, its
-  band). A line is told by more than its colour: the kernel takes the colour of its direction at each
-  point, the VWAP is thick, its band thin and dashed. `features/prices/ChartAttribution.tsx` is the licence
-  notice: it goes on every page where `PriceChart` goes.
+- **Four places show it**: an asset's page and an opened row of the Assets View (`features/data/AssetChart.tsx`,
+  full and compact), a rule's day beside TradingView (`features/ta/signals/ComparisonPanel.tsx`), and a day of a
+  backtest with a trade's turbo (`features/backtests/DayPage.tsx`), which gives it `overlays`: lines over the
+  prices, on their scale (the price paid, the stop and the day's target, the trailing stop as it moved). A
+  line is told by more than its colour: the price paid is thick, a limit thin and dashed, the trailing stop
+  climbs in steps. `features/prices/ChartAttribution.tsx` is the licence notice: it goes on every page where
+  `PriceChart` goes.
 - **The library only knows UTC.** To show the trading timezone, `chartData.ts` shifts every time by that
   zone's offset before the chart sees it; what comes back from the chart (the time under the pointer) is in
   the same shifted time.
@@ -180,3 +185,44 @@ through the day included. It is loaded with the pages that draw candles only.
   server gives each its own second, since the library refuses two points at the same time.
 - **Tests replace the library** with `src/test/fakeCharts.ts` (jsdom has no canvas), which records what was
   asked of it. What the chart looks like can only be checked in a browser, against `npm run dev:api`.
+
+## Technical Analysis
+
+The pages of `features/ta/`: Indicators (the Pine scripts, `IndicatorsPage.tsx`), the editor with its test
+(`ScriptEditorPage.tsx`, `editor/`), Charts (`ChartsPage.tsx`, `chart/`) and Signal rules (`signals/`). They
+are loaded with these pages only (lazy routes), and the TradingView reference of the editor
+(`pinescript-v6-validator`) with the editor only.
+
+| Library | Version | Licence |
+|---|---|---|
+| `pinets` | 0.11.1 | AGPL-3.0-only |
+| `@luxalgo/vela-pinets` | 0.2.16 | AGPL-3.0-only |
+| `@luxalgo/vela` | 0.8.4 | Apache-2.0, with a NOTICE to keep |
+| `@codemirror/*`, `pinescript-v6-validator` | | MIT |
+
+The three LuxAlgo packages are pinned exactly: Vela's interface is young and changes. `public/third-party-notices.txt`
+carries their notices and ships with the admin, and the System page links to it and to the public repository,
+which is the source the AGPL asks to offer.
+
+- **`engine/` is shared with the server.** `prepare.ts` (every script goes through it: native Pine v5 or v6
+  only, libraries inlined), `tickers.ts`, `timeframes.ts`, `provider.ts` and `runnerCore.ts` are plain
+  TypeScript. The pages run them in the Pine worker; `npm run build:runner` (`vite.runner.config.ts`) builds
+  `runner.ts` into `../src/ta_engine/runner/runner.mjs`, PineTS inside, for the TA engine. `package.sh`
+  builds both.
+- **PineTS compiles scripts with `new Function`**, which the pages' Content-Security-Policy forbids. Only the
+  two worker files may: `pine-worker-<hash>.js` (ours, named by `worker.rolldownOptions` in `vite.config.ts`)
+  and `vela-pine-worker-<hash>.js` (Vela-pinets' worker, which it inlines as a string, taken out into a file
+  by `vite/velaPineWorker.ts`). The admin serves both with a policy of their own that allows `eval` and no
+  connection at all (`src/admin/app.py`): a series a script reads through `request.security` is asked of the
+  page, which reads it from the admin's API. A worker started any other way would get the pages' policy and
+  fail to compile.
+- **Vela is confined to `chart/`**: `wataProvider.ts` serves WATA's three providers as Vela's data
+  providers, and `TaChart.tsx` builds the workspace. Tests replace it with `src/test/fakeVela.ts`.
+- **What can be wrong without a browser is in plain functions with tests**: `prepare.ts`, `outline.ts` (the
+  alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`,
+  `signals/ruleModel.ts`. The editor itself (CodeMirror) and the charts are replaced in page tests, and
+  checked in a browser against `npm run dev:api`.
+- **The fake server** keeps the scripts and the rules in the real store, on its temporary directory, seeded
+  with examples and a rule in shadow (`dev/fake_ta.py`), and makes up what a TA engine would have done with
+  the rules: its state, a week of signals, and TradingView's near them.
+

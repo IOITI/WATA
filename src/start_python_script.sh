@@ -35,6 +35,9 @@ case $WATA_APP_ROLE in
     "capital_feed")
         python -u /app/src/capital_feed/__init__.py
         ;;
+    "ta_engine")
+        python -u /app/src/ta_engine/__init__.py
+        ;;
     *)
         echo "Unknown environment variable value for WATA_APP_ROLE: $WATA_APP_ROLE"
         exit 1

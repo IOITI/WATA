@@ -11,13 +11,13 @@ import { SettleModal } from '@/components/ui/settle-modal'
 import { SpringSelect } from '@/components/ui/spring-select'
 import { StretchSwitch } from '@/components/ui/stretch-switch'
 import { useSession } from '@/features/auth/auth-context'
-import { KEEP_DAYS, keepSentence } from '@/features/backtests/model'
+import { KEEP_DAYS, keepSentence } from '@/features/data/providers'
 import { api } from '@/lib/api'
 import { formatDateTime, formatNumber } from '@/lib/format'
 import type { DukascopyProviderDetails, HistoryOffer } from '@/lib/types'
 
 /** What a change here makes out of date: the provider, the list of assets, the days fetched. */
-const CHANGED = ['data-provider', 'data-providers', 'data-assets', 'backtest-prices']
+const CHANGED = ['data-provider', 'data-providers', 'data-assets', 'history-coverage']
 /**
  * An instrument no longer fetched changes no day: its days are not read again, or the page
  * behind would ask once more for the days of a label that is gone, and be refused.
@@ -71,7 +71,7 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
   const queryClient = useQueryClient()
   const refresh = (keys: string[] = CHANGED) =>
     Promise.all(keys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
-  const keepMutation = useMutation({ mutationFn: api.keepPrices, onSuccess: () => refresh() })
+  const keepMutation = useMutation({ mutationFn: api.keepHistory, onSuccess: () => refresh() })
   const removeMutation = useMutation({ mutationFn: api.removeHistoryInstrument, onSuccess: () => refresh(REMOVED) })
   const keep = provider.keep
   const keepDays = keep ? [...new Set([...KEEP_DAYS, keep.days])].sort((a, b) => a - b) : KEEP_DAYS
@@ -128,7 +128,7 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
                 </p>
               </div>
               {instrument.built_in ? (
-                <Badge>What backtests run on</Badge>
+                <Badge>Kept up to date</Badge>
               ) : (
                 <Button
                   variant="ghost"

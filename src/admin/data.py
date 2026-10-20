@@ -5,16 +5,14 @@ pages of the admin (src/admin/routers/data.py).
 - ``saxo``: what the price recorder keeps in PostgreSQL (src/price_recorder),
   one asset per recorded instrument, read through AdminQueries.
 - ``dukascopy``: the days of ten-second bars fetched from Dukascopy
-  (src/strategy/history/dukascopy.py), one asset per folder of bars, read
+  (src/price_history/dukascopy.py), one asset per folder of bars, read
   here as files.
 - ``capital``: what the Capital.com feed keeps in PostgreSQL
   (src/capital_feed), one asset per instrument of Capital.com, read through
   AdminQueries as the price recorder's are, and live through LivePrices.
 
-The downloader and the code that reads its files are only imported, never
-changed from here: src/strategy/fingerprint.py hashes them, and a change
-would mark every backtest stale. That is also why only the symbols whose
-prices the downloader decodes as they are (in thousandths) can be added.
+The downloader decodes every symbol in thousandths: that is why only the
+symbols checked against a fetched day can be added (``HISTORY_SYMBOLS``).
 """
 
 import csv
@@ -34,8 +32,8 @@ import pytz
 
 from src.admin.prices import INTERVALS
 from src.price_recorder.bars import BAR_SECONDS
-from src.strategy.history import dukascopy
-from src.strategy.sources import FileBars, files_of_period
+from src.price_history import dukascopy
+from src.price_history.files import FileBars, files_of_period
 
 SAXO = "saxo"
 DUKASCOPY = dukascopy.SOURCE

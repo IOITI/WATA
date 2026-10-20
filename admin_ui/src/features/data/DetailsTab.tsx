@@ -2,9 +2,8 @@ import { Link } from 'react-router'
 import type { ReactNode } from 'react'
 
 import { Panel } from '@/components/Panel'
-import { formatBytes } from '@/features/backtests/model'
 import { instrumentLabel } from '@/features/prices/chartData'
-import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
+import { formatBytes, formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import type { AssetDetails, CapitalRecording, HistoryRecording, SaxoRecording } from '@/lib/types'
 
