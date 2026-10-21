@@ -8,6 +8,7 @@ import {
   comparisonMarkers,
   draftOfRule,
   draftProblems,
+  historyLabel,
   inputValueOf,
   mappedAlerts,
   newDraft,
@@ -134,8 +135,26 @@ describe('a signal rule', () => {
       { label: 'Signals', before: '“Enter Long” → long; “Exit” → close positions', after: '“Enter Long” → long' },
     ])
     expect(ruleChanges(null, ruleFields(draft, null), () => 'Cross').map((change) => change.label)).toEqual([
-      'Name', 'Script', 'Asset', 'Bars', 'Indice', 'Inputs', 'Signals', 'Confidence',
+      'Name', 'Script', 'Asset', 'Bars', 'Indice', 'Inputs', 'Signals', 'Confidence', 'History',
     ])
+  })
+
+  it('keeps its own days of history, or the engine\'s when it is left empty', () => {
+    const own = draftOfRule(rule({ history_days: 0 }))
+    const engines = { ...own, historyDays: ' ' }
+
+    expect(own.historyDays).toBe('0')
+    expect(draftOfRule(rule()).historyDays).toBe('')
+    // No day before the restart is a history of its own.
+    expect(ruleFields(own, null).history_days).toBe(0)
+    expect(ruleFields(engines, null).history_days).toBeNull()
+    expect(ruleChanges(rule({ history_days: 0 }), ruleFields(engines, null), () => 'Cross')).toEqual([
+      { label: 'History', before: 'None: from the restart', after: 'The engine’s' },
+    ])
+    expect([historyLabel(1), historyLabel(3), historyLabel(undefined)]).toEqual(['1 day', '3 days', 'The engine’s'])
+    for (const typed of ['31', '1.5', '-1', 'two']) {
+      expect(draftProblems({ ...own, historyDays: typed }, [])).toEqual(['Its history is 0 to 30 days, or left empty for the engine’s.'])
+    }
   })
 })
 

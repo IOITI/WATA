@@ -179,6 +179,10 @@ def test_a_new_rule_cannot_start_live(rules, cross):
     ({"name": "  "}, "name is missing"),
     ({"script": {"id": "../../etc", "version": 1}}, "by its id"),
     ({"script": {"id": "0123456789ab", "version": 1}}, "No script"),
+    ({"history_days": 31}, "history is 0 to 30 days"),
+    ({"history_days": -1}, "history is 0 to 30 days"),
+    ({"history_days": True}, "history is 0 to 30 days"),
+    ({"history_days": 1.5}, "history is 0 to 30 days"),
 ])
 def test_a_rule_that_cannot_run_is_refused(rules, cross, changes, refusal):
     with pytest.raises(InvalidRule, match=refusal):
@@ -250,6 +254,23 @@ def test_a_save_that_changes_nothing_keeps_the_revision(rules, cross):
     result = rules.update(rule["id"], fields(cross), revision)
 
     assert result["revision"] == revision and result["rule"] == rule
+
+
+def test_a_rule_keeps_its_own_history_only_when_it_has_one(rules, cross):
+    # A rule saved before rules had a history of their own has none: the engine's.
+    rule = created(rules, cross)["rule"]
+    assert "history_days" not in rule
+
+    own = rules.update(rule["id"], fields(cross, history_days=0), rules.load()["revision"])
+    revision = rules.load()["revision"]
+    again = rules.update(rule["id"], fields(cross, history_days=0), revision)
+    engines = rules.update(rule["id"], fields(cross), rules.load()["revision"])["rule"]
+
+    # No day before is a history of its own too; saved again the same, nothing changes.
+    assert own["rule"]["history_days"] == 0
+    assert again["rule"] == own["rule"] and again["revision"] == revision
+    # Left out, it is the engine's again.
+    assert "history_days" not in engines and rules.rule(rule["id"]) == engines
 
 
 def test_one_rule_is_live_per_indice(rules, cross):
@@ -395,6 +416,20 @@ def test_rules_are_created_listed_read_changed_and_deleted(api, cross):
     assert client.delete(f"/api/ta/rules/{rule['id']}?revision={revision}", headers=SAME_ORIGIN).status_code == 204
     assert client.get("/api/ta/rules").json()["rules"] == []
     assert client.get(f"/api/ta/rules/{rule['id']}").status_code == 404
+
+
+def test_a_rules_own_history_goes_through_the_route_beside_the_engines(api, cross):
+    client, _ = api
+    listed = client.get("/api/ta/rules").json()
+
+    made = client.post("/api/ta/rules", json=body(cross, listed["revision"], history_days=0), headers=SAME_ORIGIN)
+    too_long = client.post("/api/ta/rules", json=body(cross, made.json()["revision"], name="Long", history_days=31),
+                           headers=SAME_ORIGIN)
+
+    # The test configuration has no history_days of its own: the engine's default.
+    assert listed["engine_history_days"] == 1
+    assert made.status_code == 201 and made.json()["rule"]["history_days"] == 0
+    assert too_long.status_code == 422
 
 
 def test_a_rule_changed_on_an_old_revision_is_refused_by_the_route(api, cross):

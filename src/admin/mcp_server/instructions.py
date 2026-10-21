@@ -37,7 +37,10 @@ one stress step; results on the lock box's days, except for a candidate's final 
 Pine for WATA: //@version=6 and indicator(); inputs are in_0, in_1… in declaration order; signals are \
 alertcondition(condition, "Title", message), each title mapped to long, short, close-position, message or \
 ignore. No barstate.islast, nothing that repaints; request.security reads WATA's assets only. A strategy()'s \
-orders are not signals: only alerts are.
+orders are not signals: only alerts are. A bar that raises an entry and a close-position sends the entry alone \
+(it sells the other side first). R<ticks> counts the asset's own tick (data_assets): R60 is 6 points on \
+capital/US100, 0.06 on dukascopy/us100, where 6 points are R6000. An engine day starts history_days before the \
+daily restart: a rule may have its own (0 to 30), fewer for a script that needs little warm-up.
 """
 
 RESEARCH_PROMPT = """\

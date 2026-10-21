@@ -43,6 +43,29 @@ def test_ignored_older_signal_does_not_advance_seq():
     assert signals[0]["seq"] == 1
 
 
+def test_a_close_of_the_moment_of_the_entry_kept_does_not_replace_it():
+    async def scenario():
+        store = SignalStore()
+        stored = [
+            await store.upsert(_signal("us100", "2026-07-16T08:00:00Z", action="long")),
+            # The same bar's close: the entry wins.
+            await store.upsert(_signal("us100", "2026-07-16T08:00:00Z", action="close-position")),
+            await store.upsert(_signal("dax", "2026-07-16T08:00:00Z", action="close-position")),
+            # Close first, then the entry of the same moment: the entry replaces it.
+            await store.upsert(_signal("dax", "2026-07-16T08:00:00Z", action="short")),
+        ]
+        kept = {signal["indice"]: (signal["action"], signal["seq"]) for signal in await store.get_all()}
+        later = await store.upsert(_signal("us100", "2026-07-16T08:01:00Z", action="close-position"))
+        return stored, kept, later, (await store.get_all())[0]["action"]
+
+    stored, kept, later, after = asyncio.run(scenario())
+
+    assert stored == [True, False, True, True]
+    assert kept == {"us100": ("long", 1), "dax": ("short", 3)}
+    # A close of a later moment is stored as any signal.
+    assert later is True and after == "close-position"
+
+
 def test_get_newer_returns_only_signals_after_cursor():
     async def scenario():
         store = SignalStore()

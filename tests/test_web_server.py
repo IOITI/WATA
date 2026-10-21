@@ -107,6 +107,16 @@ def test_latest_signals_with_cursor_returns_only_newer_signals(client):
     assert nothing_new.json() == []
 
 
+def test_a_close_sent_for_the_moment_of_an_entry_is_never_delivered(client):
+    with patch("src.web_server.SIGNAL_STORE", new=SignalStore()):
+        entry = _post_signal(client, "us100", "2023-07-01T12:00:00Z", action="long")
+        _post_signal(client, "us100", "2023-07-01T12:00:00Z", action="close-position")
+
+        response = client.get("/latest-signals", headers=BEARER_HEADERS)
+
+    assert [(signal["signal_uuid"], signal["action"]) for signal in response.json()] == [(entry, "long")]
+
+
 def test_latest_signals_long_poll_returns_empty_once_wait_elapses(client):
     with patch("src.web_server.SIGNAL_STORE", new=SignalStore()):
         _post_signal(client, "us100", "2023-07-01T12:00:00Z")

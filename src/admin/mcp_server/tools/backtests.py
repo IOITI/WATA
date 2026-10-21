@@ -52,6 +52,16 @@ def _source_line(source: dict) -> dict:
     }
 
 
+def _with_rule_history(research, body: dict) -> dict:
+    """A run made from a rule replays it as the engine runs it: on the rule's own history_days, unless the request says."""
+    from_rule = (body.get("source") or {}).get("from_rule")
+    changes = body.get("changes") or {}
+    if not isinstance(from_rule, dict) or not isinstance(changes, dict) or "history_days" in changes:
+        return body
+    days = research.rules.rule(from_rule.get("id")).get("history_days")
+    return body if days is None else {**body, "changes": {**changes, "history_days": days}}
+
+
 def _run_line(run: dict) -> dict:
     """A run in a list: what it was asked, its state, and its headline."""
     status = run.get("status") or {}
@@ -338,7 +348,8 @@ START_DESCRIPTION = (
     '"walk_forward":{"train_days":5,"test_days":2}} (two axes and 64 combinations at most; kind "input" for a '
     "script input in_N); its trials before are the family's, counted here. source.kind \"journal\" replays the "
     'signals WATA received (with "chart":{"asset":..,"side":..,"bars":..}); "turbos":"modelled" runs long periods on '
-    "turbos made up from the index. Days of the lock box only with lockbox_final. Claude's runs wait behind the "
+    "turbos made up from the index. A run made from a rule (source.from_rule) takes the rule's own history_days "
+    "unless changes sets it. Days of the lock box only with lockbox_final. Claude's runs wait behind the "
     "operator's, a few at most at once. Then backtest_wait."
 )
 DERIVED = ("stress", "cell", "neighbours")
@@ -375,6 +386,7 @@ def register_writing(server, research) -> None:
             return compacted(_run_line(await run_in_threadpool(research.service().get, asked[idempotency_key])))
         body = dict(request)
         guards.check_source(research, body)
+        body = _with_rule_history(research, body)
         first, last = guards.period_of(body)
         guards.check_room(research, guards.cost_of(body, (last - first).days + 1))
         lockbox = guards.lockbox_of(journal, first, last, lockbox_final)

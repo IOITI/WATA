@@ -76,6 +76,10 @@ MIN_BAR_SECONDS = BAR_SECONDS
 MAX_BAR_SECONDS = MAX_INTERVAL
 _TIMEFRAME = re.compile(r"([1-9][0-9]{0,5})([Ss]?)")
 
+# The days of bars a rule's script is given before each engine day, when the rule says
+# (the engine's history_days otherwise): as the engine's own setting allows.
+MAX_HISTORY_DAYS = 30
+
 MAX_RULES = 50
 MAX_NAME_LENGTH = 80
 MAX_TITLE_LENGTH = 120
@@ -182,6 +186,19 @@ def checked_bars(bars, *, any_length: bool = False) -> dict:
     if not _whole(ticks) or not 1 <= ticks <= MAX_RANGE_TICKS:
         raise InvalidRule(f"Range bars are 1 to {MAX_RANGE_TICKS} ticks")
     return {"type": RANGE_BARS, "ticks": ticks}
+
+
+def checked_history_days(value) -> int | None:
+    """
+    A rule's own history: 0 to MAX_HISTORY_DAYS days of bars before each engine
+    day, for a script that needs less warm-up than the engine's history_days (or
+    more). None: the engine's.
+    """
+    if value is None:
+        return None
+    if not _whole(value) or not 0 <= value <= MAX_HISTORY_DAYS:
+        raise InvalidRule(f"A rule's history is 0 to {MAX_HISTORY_DAYS} days of bars before each day, or the engine's")
+    return value
 
 
 def checked_inputs(inputs) -> list[dict]:
@@ -430,6 +447,10 @@ class RuleStore:
             "confidence_plot": _title(fields.get("confidence_plot"), "The confidence plot", required=False),
             "indice": indice,
         }
+        # Kept only when the rule has its own: a rule saved before keeps the engine's.
+        history_days = checked_history_days(fields.get("history_days"))
+        if history_days is not None:
+            rule["history_days"] = history_days
         return rule
 
     def create(self, fields: dict, revision: str, mode: str = SHADOW, made_by: str | None = None) -> dict:
@@ -466,6 +487,9 @@ class RuleStore:
             before = self.find(rules, rule_id)
             changed = self._checked(fields, rules, before, refresh_libraries)
             rule = {**before, **changed}
+            if "history_days" not in changed:
+                # Back to the engine's.
+                rule.pop("history_days", None)
             if rule == before:
                 return {"rule": rule, "before": before, "revision": current}
             if rule["mode"] == LIVE:

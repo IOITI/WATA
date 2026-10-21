@@ -15,6 +15,7 @@ import {
   newBacktestDraft,
   parseAsset,
   periodDays,
+  rangeHint,
   requestOf,
   sweepCells,
   tagsOf,
@@ -80,6 +81,17 @@ describe('the asset', () => {
     expect(parseAsset('yahoo/NDX')).toBeNull()
     expect(parseAsset('capital/')).toBeNull()
   })
+
+  it('says what a range is in the points of the asset, whose tick is its own', () => {
+    expect(rangeHint('60', 0.1)).toBe('R60 is 6 points on this asset, whose tick is 0.1 (a point is R10).')
+    expect(rangeHint('600', 0.001)).toBe('R600 is 0.6 points on this asset, whose tick is 0.001 (a point is R1000).')
+    expect(rangeHint('100', 0.01)).toBe('R100 is 1 point on this asset, whose tick is 0.01 (a point is R100).')
+    expect(rangeHint('100000', 0.1)).toBe('R100000 is 10,000 points on this asset, whose tick is 0.1 (a point is R10).')
+    expect(rangeHint('60', null)).toBeNull()
+    expect(rangeHint('60', undefined)).toBeNull()
+    expect(rangeHint('', 0.1)).toBeNull()
+    expect(rangeHint('1.5', 0.1)).toBeNull()
+  })
 })
 
 describe('a new draft', () => {
@@ -100,6 +112,13 @@ describe('a new draft', () => {
     expect(draft.rule).toMatchObject({ scriptId: SCRIPT.id, side: 'ask', barsType: 'range', ticks: '40', inputs: { in_0: 12 } })
     expect(draft.rule.alerts).toEqual({ 'Cross up': 'long', 'Cross down': 'short' })
     expect(draftBars(draft)).toEqual({ type: 'range', ticks: 40 })
+  })
+
+  it('replays a rule on its own days of history, or on the engine\'s', () => {
+    const typed = { ...newBacktestDraft(OPTIONS, undefined, 'capital/US100', PERIOD), changes: { history_days: '3', stoploss_percent: '-8' } }
+
+    expect(withRule(typed, { ...RULE, history_days: 0 }).changes).toEqual({ history_days: '0', stoploss_percent: '-8' })
+    expect(withRule(typed, RULE).changes).toEqual({ stoploss_percent: '-8' })
   })
 
   it('asks for bars of a length typed as Pine names it', () => {

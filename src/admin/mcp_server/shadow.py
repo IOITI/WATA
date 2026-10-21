@@ -17,11 +17,12 @@ Claude may, each time checked under the rules' lock together with the write:
 - delete one of its own rules that is not live;
 - make a finished run, made from one of its rules, that rule's reference.
 
-Before a rule runs (made in shadow, switched to shadow, or its script, bars or
-inputs changed), it is run as the engine would run it on the last finished day
-of its epic, a study's signals (src/research/study.py). It is saved only if it
-ran without failing, each engine day in at most 2 s and on at most 20,000 bars,
-on an epic the Capital.com feed records now. What comes back of that run is
+Before a rule runs (made in shadow, switched to shadow, or its script, bars,
+inputs or history changed), it is run as the engine would run it on the last
+finished day of its epic, a study's signals (src/research/study.py). It is
+saved only if it ran without failing, each engine day in at most
+``admin.mcp.shadow_day_ms`` (2 s by default) and on at most 20,000 bars, on an
+epic the Capital.com feed records now. What comes back of that run is
 its bars and its time, never a signal or a price: it may be a day of the lock
 box. The engine runs the shadow rules on a runner of their own, after the live
 rules (src/ta_engine/engine.py): even a rule that turns slow later never holds
@@ -43,16 +44,17 @@ from src.admin.ta_rules import (
     checked_alerts,
     checked_asset,
     checked_bars,
+    checked_history_days,
     checked_inputs,
 )
 from src.backtest.clock import TradingClock
 
 PREFIX = "Claude · "
 MODES = (SHADOW, OFF)
-# What a day of the engine may cost a shadow rule: the engine runs its script over all of
-# its bars at each new one, so a day's run is about what each bar costs at the end of it.
-MAX_DAY_MILLISECONDS = 2000
+# The bars of a day of the engine a shadow rule may run on (its time is admin.mcp.shadow_day_ms).
 MAX_DAY_BARS = 20_000
+# A rule's history_days given as this: back to the engine's.
+ENGINE_HISTORY = -1
 # The feed records an epic now when its last bar is this recent (a weekend, a holiday).
 RECORDED_WITHIN_DAYS = 4
 SWITCHED_OFF = (
@@ -97,7 +99,7 @@ def previous_weekday(day: date) -> date:
 def _what_runs(rule: dict) -> tuple:
     return (
         rule["asset"], rule["side"], rule["bars"], (rule["script"]["id"], rule["script"]["version"]),
-        sorted((entry["id"], repr(entry["value"])) for entry in rule["inputs"]),
+        sorted((entry["id"], repr(entry["value"])) for entry in rule["inputs"]), rule.get("history_days"),
     )
 
 
@@ -169,11 +171,17 @@ class ShadowRules:
             "confidence_plot": base.get("confidence_plot"),
             "indice": indice,
         }
+        # Its own history when it says, or had one; -1 gives it the engine's again.
+        history_days = given.get("history_days", base.get("history_days"))
+        if history_days is not None and history_days != ENGINE_HISTORY:
+            fields["history_days"] = history_days
         # RuleStore's own checks, before a study is spent on a rule it would refuse.
         fields.update(
             asset=checked_asset(fields["asset"]), bars=checked_bars(fields["bars"]),
             inputs=checked_inputs(fields["inputs"]), alerts=checked_alerts(fields["alerts"]),
         )
+        if "history_days" in fields:
+            fields["history_days"] = checked_history_days(fields["history_days"])
         research.rules.pin(script_id, version)
         return fields
 
@@ -193,13 +201,17 @@ class ShadowRules:
         if (today - last).days > RECORDED_WITHIN_DAYS:
             raise Refused(f"The Capital.com feed last recorded {epic} on {last.isoformat()}: a rule runs on an epic it records now")
         day = last if last < today else previous_weekday(today)
-        found = await research.studies.study("signals", {
+        asked = {
             "script": dict(fields["script"]), "asset": f"capital/{epic}", "bars": bars_label(fields["bars"]),
             "side": fields["side"], "inputs": {entry["id"]: entry["value"] for entry in fields["inputs"]},
             "alerts": {entry["title"]: entry["action"] for entry in fields["alerts"]},
             "alert_calls": fields["alert_calls"], "indice": fields["indice"],
             "from": day.isoformat(), "to": day.isoformat(), "timezone": research.timezone,
-        })
+        }
+        if fields.get("history_days") is not None:
+            # As the engine will run it: on its own days of history.
+            asked["history_days"] = fields["history_days"]
+        found = await research.studies.study("signals", asked)
         days = found.get("days") or []
         measured = {
             "day": day.isoformat(), "ran": bool(found.get("ok")),
@@ -213,10 +225,11 @@ class ShadowRules:
             return measured, f"It does not run as the engine would run it: {error.get('message') or 'the runner failed'}"
         if measured["most_bars"] == 0:
             return measured, f"{epic} has no bar on {day.isoformat()} to run it on: try again after a trading day"
-        if measured["most_milliseconds"] > MAX_DAY_MILLISECONDS:
+        most = research.limits.shadow_day_ms
+        if measured["most_milliseconds"] > most:
             return measured, (
-                f"A day of the engine takes it {measured['most_milliseconds']} ms, over {MAX_DAY_MILLISECONDS}: the engine "
-                "runs it again at each new bar. A lighter script, or longer bars"
+                f"A day of the engine takes it {measured['most_milliseconds']} ms, over {most} (admin.mcp.shadow_day_ms): "
+                "the engine runs it again at each new bar. A lighter script, longer bars, or fewer days of history"
             )
         if measured["most_bars"] > MAX_DAY_BARS:
             return measured, f"A day of the engine is {measured['most_bars']} of its bars, over {MAX_DAY_BARS}: longer bars"
@@ -233,13 +246,15 @@ class ShadowRules:
         if before is not None and not given:
             # A change of mode alone: the rule as it is, nothing checked again.
             fields = {key: before[key] for key in FIELDS}
+            if "history_days" in before:
+                fields["history_days"] = before["history_days"]
         else:
             fields = await run_in_threadpool(self.fields, given, before)
         if before is None:
             # Before a study is spent on it; again with the write, under the lock.
             self._check_room((await run_in_threadpool(research.rules.load))["rules"])
         measured = None
-        if mode == SHADOW and (before is None or before["mode"] == OFF or _what_runs(before) != _what_runs({**before, **fields})):
+        if mode == SHADOW and (before is None or before["mode"] == OFF or _what_runs(before) != _what_runs(fields)):
             measured, why = await self.measure(fields)
             if why is not None:
                 return {"saved": False, "why": why, "measured": measured}

@@ -29,7 +29,14 @@ export const ACTION_LABEL: Record<TaAlertAction, string> = Object.fromEntries(
 ) as Record<TaAlertAction, string>
 
 export const MAX_RANGE_TICKS = 100_000
+export const MAX_HISTORY_DAYS = 30
 const INDICE = /^[a-z0-9][a-z0-9_-]{0,31}$/
+
+/** A rule's days of bars before each engine day, in words: its own, or the engine's. */
+export function historyLabel(days: number | null | undefined): string {
+  if (days === null || days === undefined) return 'The engine’s'
+  return days === 0 ? 'None: from the restart' : `${days} day${days === 1 ? '' : 's'}`
+}
 
 export function barsLabel(bars: TaRuleBars): string {
   if (bars.type === 'range') return `Range ${bars.ticks}`
@@ -75,6 +82,8 @@ export interface RuleDraft {
   alerts: Record<string, TaAlertAction>
   alertCalls: 'ignore' | 'message'
   confidencePlot: string
+  /** Its own days of bars before each engine day, as typed; empty: the engine's. */
+  historyDays: string
 }
 
 export function draftOfRule(rule: TaRule): RuleDraft {
@@ -93,6 +102,7 @@ export function draftOfRule(rule: TaRule): RuleDraft {
     alerts: Object.fromEntries(rule.alerts.map((entry) => [entry.title, entry.action])),
     alertCalls: rule.alert_calls,
     confidencePlot: rule.confidence_plot ?? '',
+    historyDays: rule.history_days === null || rule.history_days === undefined ? '' : String(rule.history_days),
   }
 }
 
@@ -113,6 +123,7 @@ export function newDraft(script: TaScriptSummary | undefined, instrument: { epic
     alerts: {},
     alertCalls: 'ignore',
     confidencePlot: '',
+    historyDays: '',
   }
 }
 
@@ -167,6 +178,7 @@ export function ruleFields(draft: RuleDraft, meta: IPineInput[] | null): TaRuleF
     alert_calls: draft.alertCalls,
     confidence_plot: draft.confidencePlot || null,
     indice: draft.indice,
+    history_days: draft.historyDays.trim() === '' ? null : Number(draft.historyDays),
   }
 }
 
@@ -185,6 +197,12 @@ export function draftProblems(draft: RuleDraft, otherNames: string[]): string[] 
     if (!Number.isInteger(ticks) || ticks < 1 || ticks > MAX_RANGE_TICKS) problems.push(`Range bars are 1 to ${MAX_RANGE_TICKS} ticks.`)
   }
   if (!INDICE.test(draft.indice)) problems.push('Choose the indice its signals are for.')
+  if (draft.historyDays.trim() !== '') {
+    const days = Number(draft.historyDays)
+    if (!Number.isInteger(days) || days < 0 || days > MAX_HISTORY_DAYS) {
+      problems.push(`Its history is 0 to ${MAX_HISTORY_DAYS} days, or left empty for the engine’s.`)
+    }
+  }
   return problems
 }
 
@@ -222,6 +240,7 @@ export function ruleChanges(before: TaRule | null, after: TaRuleFields, scriptNa
   const alertsOf = (rule: Pick<TaRule, 'alerts' | 'alert_calls'>) => mappedAlerts(rule).join('; ') || 'none'
   add('Signals', before ? alertsOf(before) : null, alertsOf(after))
   add('Confidence', before?.confidence_plot ?? null, after.confidence_plot)
+  add('History', before ? historyLabel(before.history_days) : null, historyLabel(after.history_days))
   return changes
 }
 

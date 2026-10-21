@@ -117,8 +117,15 @@ tools trades, edits the configuration or takes a rule live.
   declaration order); signals with `alertcondition(condition, "Title", message)`. The spec maps
   each title to `long`, `short`, `close-position`, `message` (the action is read in the alert's
   message, WATA's webhook JSON) or `ignore`: there is no `close-long` or `close-short`.
+- One bar, one trade: a bar that raises an entry and a `close-position` sends the entry alone (it
+  sells the other side first; after it, the close would sell the new position). The close is
+  listed as `not_a_signal`, with why.
 - The engine runs a day at a time from its restart (21:15 UTC) with `history_days` of bars before:
-  an indicator that needs a long warm-up needs that setting raised (`--set history_days=3`).
+  an indicator that needs a long warm-up needs that setting raised (`--set history_days=3`), one
+  that needs none runs faster with 0. A signal rule may have its own (0 to 30), which a run made
+  from it takes.
+- `R<ticks>` counts the asset's own tick: R60 is 6 points on Capital.com's US100 (0.1), 0.06 on
+  Dukascopy's (0.001), where 6 points are R6000. A day of more than 40,000 bars is refused.
 - Only the alerts count: a `strategy()`'s orders are not signals.
 - No `barstate.islast`, nothing that repaints; `request.security` reads WATA's assets only.
 - `lab script check` is PineTS, which is lenient: open the script in the lab admin's editor

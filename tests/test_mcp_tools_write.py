@@ -133,6 +133,23 @@ def test_a_run_from_a_rule_is_made_from_one_of_claudes_only(research, scripts, e
     assert answer(research, "backtest_start", {"experiment_id": experiment, "request": asked})["state"] == QUEUED
 
 
+def test_a_run_from_a_rule_replays_it_on_the_rules_own_history_unless_asked_otherwise(tmp_path, research, scripts, experiment):
+    cross = next(meta for meta in scripts.scripts() if meta["name"] == "Cross")
+    rule = research.rules.create(fields(cross, name="Claude · cross", history_days=0), research.rules.load()["revision"],
+                                 made_by=CLAUDE)["rule"]
+    asked = request_of(scripts)
+    asked["source"]["from_rule"] = {"id": rule["id"], "name": rule["name"]}
+    told = {**asked, "changes": {"history_days": 2}}
+
+    own = answer(research, "backtest_start", {"experiment_id": experiment, "request": asked})
+    other = answer(research, "backtest_start", {"experiment_id": experiment, "request": told})
+
+    def changes(run_id):
+        return json.loads((folder_of(tmp_path, run_id) / "request.json").read_text())["changes"]
+
+    assert changes(own["id"])["history_days"] == 0 and changes(other["id"])["history_days"] == 2
+
+
 def test_claudes_share_of_the_line_and_of_the_day_are_kept(research, scripts, experiment):
     research.limits = type(research.limits)(max_waiting_runs=2, runs_per_day=3)
     for _ in range(2):

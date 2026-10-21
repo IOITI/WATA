@@ -129,6 +129,9 @@ def test_a_recorded_instrument_is_an_asset_named_by_its_provider_and_id():
 
     assert (asset["provider"], asset["key"], asset["ref"]) == ("saxo", "12", "saxo/12")
     assert asset["uic"] == 40000012
+    # No quote yet: no tick to say.
+    assert asset["tick"] is None
+    assert saxo_asset({"id": 12, "role": "turbo", "last_bid": 8.45, "last_ask": 8.455})["tick"] == 0.001
 
 
 def test_an_instrument_is_recording_while_the_recorder_still_names_it():
@@ -282,11 +285,20 @@ def test_each_label_with_days_of_bars_is_an_asset(tmp_path):
         "first_t": _epoch("2026-10-12T06:00:00Z"), "last_t": _epoch("2026-10-13T06:00:20Z"),
         "last_bid": 25102.0, "last_ask": 25103.5, "days": 2, "first_day": "2026-10-12", "last_day": "2026-10-13",
         "provider": "dukascopy", "key": "us100", "ref": "dukascopy/us100", "status": DOWNLOADED,
+        "decimals": 2, "tick": 0.01,
     }
     assert history.asset("de40") is None
     assert history.size("us100") == sum(
         os.path.getsize(dukascopy.day_path(str(tmp_path), "us100", day)) for day in history.days("us100")
     )
+
+
+def test_the_tick_of_a_fetched_history_is_read_from_its_last_day(tmp_path):
+    # Dukascopy's prices come in thousandths: R60 is 0.06 points there, and 6 points are R6000.
+    start = int(datetime(2026, 10, 12, 6, tzinfo=UTC).timestamp())
+    write_day(tmp_path, "us100", MONDAY, [_bar(start + 10 * n, 29143.543 + n, 29144.041 + n) for n in range(3)])
+
+    assert {key: PriceHistory(str(tmp_path)).asset("us100")[key] for key in ("decimals", "tick")} == {"decimals": 3, "tick": 0.001}
 
 
 def test_the_bars_of_a_period_are_read_from_the_days_it_covers(tmp_path):

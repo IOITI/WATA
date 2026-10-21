@@ -28,10 +28,12 @@ from src.admin.prices import (
     availability,
     price_decimals,
     range_bars,
+    range_points,
     range_rows,
     range_volumes,
     recording_gaps,
     sample_at,
+    tick_of,
 )
 from src.admin.queries import PRICE_BAR_COLUMNS, AdminQueries
 from src.price_recorder.settings import RecorderSettings
@@ -878,6 +880,13 @@ def test_the_tick_is_read_from_the_decimals_of_the_prices(prices, decimals):
 
 def test_the_decimals_of_every_series_count():
     assert price_decimals([8.45], [8.455], [8.4]) == 3
+
+
+def test_a_range_is_counted_in_the_assets_own_tick():
+    # Capital.com's US100 has one decimal, Dukascopy's three: R60 is 6 points on one, 0.06 on the other.
+    assert (tick_of(1), range_points(60, 1)) == (0.1, 6.0)
+    assert (tick_of(3), range_points(60, 3), range_points(6000, 3)) == (0.001, 0.06, 6.0)
+    assert tick_of(None) is None
 
 
 @pytest.mark.parametrize("low, high, ticks", [

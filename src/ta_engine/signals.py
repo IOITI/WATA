@@ -13,12 +13,16 @@ when the bar closed, alert_timestamp when the engine sends it, both in whole
 seconds as the trader reads them. The web server keeps the latest signal of
 each indice by signal_timestamp: the close of the bar is never older than a
 signal that came before it.
+
+One bar, one trade: when a bar raises an entry and a close-position, the close
+is not sent (``settled``). The engine and the replays of backtests and studies
+settle each bar alike.
 """
 
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import jsonschema
@@ -28,6 +32,13 @@ from src.schema import SchemaLoader
 
 # The confidence the webhook schema accepts.
 CONFIDENCE_RANGE = (0.0, 2.0)
+ENTRY_ACTIONS = ("long", "short")
+CLOSE_ACTION = "close-position"
+# Why a close-position raised on the bar of an entry is not sent.
+CLOSE_WITH_ENTRY = (
+    "close-position not sent: the same bar raised an entry, which sells the other side first "
+    "(sent after it, the close would sell the position just opened)"
+)
 _PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 _PLOT_BY_TITLE = re.compile(r'^plot\(\s*"([^"]*)"\s*\)$')
 _PLOT_BY_INDEX = re.compile(r"^plot_(\d+)$")
@@ -43,6 +54,24 @@ class Candidate:
     action: str | None
     confidence: float | None
     detail: str | None = None
+
+
+def settled(candidates: list[Candidate]) -> list[Candidate]:
+    """
+    The candidates of one bar's alerts, in their order, as they are sent: when the
+    bar raises an entry (long or short) and a close-position, the entry wins and the
+    close is no signal, with CLOSE_WITH_ENTRY as its detail. The trader takes one
+    signal after the other, and an entry sells the positions open before it buys:
+    the close adds nothing before the entry, and sells the new position after it.
+    An entry the trader refuses (one already open in its direction) leaves the
+    position as it was.
+    """
+    if not any(candidate.action in ENTRY_ACTIONS for candidate in candidates):
+        return list(candidates)
+    return [
+        replace(candidate, action=None, detail=CLOSE_WITH_ENTRY) if candidate.action == CLOSE_ACTION else candidate
+        for candidate in candidates
+    ]
 
 
 def iso_seconds(moment: float) -> str:

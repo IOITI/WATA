@@ -7,18 +7,20 @@ the trader when the rule is live.
 Every ten seconds, shortly after the feed has written its bars (``tick``):
 
 1. rules.json is read again if it changed. A rule switched on is loaded: its
-   history (the days before, history_days) runs once, and its alerts are never
-   sent. A rule switched off or deleted is unloaded; one whose script, inputs or
-   bars changed is loaded again.
+   history (the days before, history_days, the rule's own when it has one) runs
+   once, and its alerts are never sent. A rule switched off or deleted is
+   unloaded; one whose script, inputs, bars or history changed is loaded again.
 2. The ten-second bars written since are read, up to the last ten seconds the
    feed says it has written.
 3. Each rule makes its bars of them. Those that became final go to the runner,
    and the alerts they raise become signals.
 
 Each day at restart_time every rule starts again, its bars beginning
-history_days before that moment: each new bar runs the script over all of a
-rule's bars, which this bounds to between history_days and one day more. Best
-at a time the market is closed, as 21:15 UTC for the Nasdaq 100's daily break.
+history_days before that moment (its own, or the engine's): each new bar runs
+the script over all of a rule's bars, which this bounds to between history_days
+and one day more. The ten-second bars of an epic are kept from the earliest any
+of its rules needs. Best at a time the market is closed, as 21:15 UTC for the
+Nasdaq 100's daily break.
 
 Before anything is sent: the rule is live in rules.json as it is now, alone on
 its indice; the action is long, short or close-position; the bar closed less
@@ -39,6 +41,7 @@ only, the engine runs every rule on it, as it always did.
 """
 
 import asyncio
+import bisect
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -51,7 +54,7 @@ from src.admin.ta_rules import LIVE, OFF, SHADOW, bars_label, timeframe_seconds
 from src.ta_engine.bars import RangeBars, TimeBars
 from src.ta_engine.rules import EngineRule, RulesSnapshot
 from src.ta_engine.runner import RunnerDown, RunnerFailed
-from src.ta_engine.signals import Candidate, interpret, payload
+from src.ta_engine.signals import Candidate, interpret, payload, settled
 from src.ta_engine.tickers import parse_ticker
 
 logger = logging.getLogger(__name__)
@@ -120,6 +123,8 @@ class EpicRows:
     decimals: int | None
     rows: list = field(default_factory=list)
     read_until: int = 0
+    # Where its rows begin: read further back when a rule wants more history than those before it.
+    read_from: int = 0
 
 
 class Engine:
@@ -154,7 +159,8 @@ class Engine:
         self._file_errors: dict[str, str] = {}
         self._contested: frozenset = frozenset()
         self._epics: dict[str, EpicRows] = {}
-        self._anchor: int | None = None
+        # The rule the runner is running now: a series it asks for begins at its anchor.
+        self._asking: RuleRun | None = None
         self._covered: int | None = None
         self._restarted_at: int | None = None
         self._notified: dict[str, float] = {}
@@ -277,10 +283,10 @@ class Engine:
         return self.last_restart(now) != self._restarted_at
 
     async def _restart(self, now: float) -> None:
-        """Every rule starts again, from history_days before now."""
-        logger.info("TA engine: each rule starts again from %d day(s) before now.", self._settings.history_days)
+        """Every rule starts again, from its history_days before now."""
+        logger.info("TA engine: each rule starts again from its history before now (%d day(s) unless it says).",
+                    self._settings.history_days)
         self._restarted_at = self.last_restart(now)
-        self._anchor = None
         self._epics.clear()
         # A new process gives the memory of the old one back.
         for slot in self._slots():
@@ -337,21 +343,37 @@ class Engine:
 
     # ── bars ──
 
+    def history_days(self, rule: EngineRule) -> int:
+        """The days of bars a rule is given before each engine day: its own, or the engine's history_days."""
+        return self._settings.history_days if rule.history_days is None else rule.history_days
+
+    def rule_anchor(self, rule: EngineRule, now: float) -> int:
+        """Where a rule's bars begin: its history_days before the last restart_time."""
+        return self.last_restart(now) - self.history_days(rule) * 86_400
+
     def anchor(self, now: float) -> int:
-        """Where the bars the rules run on begin: history_days before the last restart_time."""
-        if self._anchor is None:
-            self._anchor = self.last_restart(now) - self._settings.history_days * 86_400
-        return self._anchor
+        """Where the ten-second bars the rules run on begin: the earliest of their anchors (the engine's history_days with no rule)."""
+        days = [self.history_days(run.rule) for run in self._runs.values() if run.rule.mode != OFF]
+        return self.last_restart(now) - max(days, default=self._settings.history_days) * 86_400
 
     async def _epic(self, epic: str, now: float) -> EpicRows | None:
         found = self._epics.get(epic)
-        if found is not None:
-            return found
-        instrument = await self._source.instrument(epic)
-        if instrument is None:
-            return None
-        found = EpicRows(instrument_id=instrument["id"], decimals=instrument["decimals"], read_until=self.anchor(now))
-        self._epics[epic] = found
+        anchor = self.anchor(now)
+        if found is None:
+            instrument = await self._source.instrument(epic)
+            if instrument is None:
+                return None
+            found = EpicRows(instrument_id=instrument["id"], decimals=instrument["decimals"], read_until=anchor, read_from=anchor)
+            self._epics[epic] = found
+        elif anchor < found.read_from:
+            # A rule wants more history than those before it: the rows before are read, and each
+            # rule that reads them keeps its place.
+            older = await self._source.rows(found.instrument_id, anchor, found.read_from)
+            found.rows[:0] = older
+            found.read_from = anchor
+            for run in self._runs.values():
+                if run.builder is not None and run.rule.epic == epic:
+                    run.cursor += len(older)
         return found
 
     async def _read_rows(self, epic: str, now: float) -> None:
@@ -379,7 +401,9 @@ class Engine:
             run.state, run.detail = WAITING, f"The Capital.com feed has not recorded {run.rule.epic}"
             return
         if run.builder is None:
-            run.builder, run.cursor, run.pending = self._builder(run, epic), 0, []
+            run.builder, run.pending = self._builder(run, epic), []
+            # From its own anchor: the rows before are another rule's history.
+            run.cursor = bisect.bisect_left(epic.rows, self.rule_anchor(run.rule, now), key=lambda row: row[0])
             run.run_key = run.rule.run_key
         new_rows = epic.rows[run.cursor:]
         run.cursor = len(epic.rows)
@@ -414,22 +438,28 @@ class Engine:
     async def _load(self, run: RuleRun, bars: list, now: float) -> None:
         run.state, run.detail = LOADING, None
         run.slot = self._slot_of(run)
+        self._asking = run
         try:
             answer = await run.slot.runner.request(self._load_request(run, bars))
         except RunnerFailed as e:
             await self._failed(run, f"The script does not run: {e}", now)
             return
+        finally:
+            self._asking = None
         run.loaded, run.state = True, RUNNING
         run.detail = "; ".join(answer.get("warnings") or []) or None
         self._ran(run, answer, bars)
         logger.info("Rule %s (%s) loaded on %d bars in %d ms.", run.rule.id, run.rule.name, answer.get("bars", 0), answer.get("milliseconds", 0))
 
     async def _append(self, run: RuleRun, bars: list, now: float) -> None:
+        self._asking = run
         try:
             answer = await (run.slot or self._slot_of(run)).runner.request({"op": "append", "rule": run.rule.id, "bars": bars})
         except RunnerFailed as e:
             await self._failed(run, f"The script failed on a new bar: {e}", now)
             return
+        finally:
+            self._asking = None
         run.state, run.detail = RUNNING, run.detail if run.state == RUNNING else None
         self._ran(run, answer, bars)
         await self._signals(run, answer, bars, now)
@@ -489,6 +519,7 @@ class Engine:
         by_time = {bar[0]: bar for bar in bars}
         plots = answer.get("plots") or {}
         rule = run.rule.rule
+        raised: dict[int, list[Candidate]] = {}
         for alert in answer.get("alerts") or []:
             if not isinstance(alert, dict):
                 continue
@@ -499,18 +530,22 @@ class Engine:
             candidate = interpret(
                 rule, alert, bar=bar, ticker=run.rule.ticker().text(), timeframe=run.rule.timeframe(), plots=plots, now=now,
             )
-            if candidate is None:
-                continue
-            run.last_alert_at = _moment(now)
-            mode = LIVE if run.rule.mode == LIVE else SHADOW
-            if candidate.action is None:
-                outcome = "refused"
-            else:
-                outcome = "sending" if mode == LIVE else "shadow"
-            signal_id = await self._journal.journal_signal(self._journal_row(run, candidate, bar, mode, outcome, now))
-            if signal_id is None or outcome != "sending":
-                continue
-            await self._send(run, candidate, bar, signal_id, now)
+            if candidate is not None:
+                raised.setdefault(bar[0], []).append(candidate)
+        for time_ms, candidates in raised.items():
+            bar = by_time[time_ms]
+            # One trade a bar: an entry wins over a close of the same bar, which is journaled as not sent.
+            for candidate in settled(candidates):
+                run.last_alert_at = _moment(now)
+                mode = LIVE if run.rule.mode == LIVE else SHADOW
+                if candidate.action is None:
+                    outcome = "refused"
+                else:
+                    outcome = "sending" if mode == LIVE else "shadow"
+                signal_id = await self._journal.journal_signal(self._journal_row(run, candidate, bar, mode, outcome, now))
+                if signal_id is None or outcome != "sending":
+                    continue
+                await self._send(run, candidate, bar, signal_id, now)
 
     async def _send(self, run: RuleRun, candidate: Candidate, bar: list, signal_id: int, now: float) -> None:
         rule = run.rule.rule
@@ -650,7 +685,11 @@ class Engine:
             builder = RangeBars(ticker.range_ticks, decimals, ticker.side)
         else:
             builder = TimeBars(seconds, ticker.side)
-        bars = builder.add(epic.rows, self._covered)
+        rows = epic.rows
+        if self._asking is not None:
+            # From the asking rule's own anchor, as a replay builds the series it asks for.
+            rows = rows[bisect.bisect_left(rows, self.rule_anchor(self._asking.rule, now), key=lambda row: row[0]):]
+        bars = builder.add(rows, self._covered)
         start, end = ask.get("from"), ask.get("to")
         return [
             bar for bar in bars

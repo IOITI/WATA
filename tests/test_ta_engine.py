@@ -33,7 +33,7 @@ from src.ta_engine.rules import read_rules  # noqa: E402
 from src.ta_engine.runner import NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command  # noqa: E402
 from src.ta_engine.sender import Sent  # noqa: E402
 from src.ta_engine.settings import TaEngineSettings  # noqa: E402
-from src.ta_engine.signals import interpret, iso_seconds, payload  # noqa: E402
+from src.ta_engine.signals import CLOSE_WITH_ENTRY, Candidate, interpret, iso_seconds, payload, settled  # noqa: E402
 from src.ta_engine.tickers import Ticker, parse_ticker  # noqa: E402
 
 # Thursday 15 Oct 2026, 08:00:00 UTC.
@@ -463,12 +463,13 @@ class Source:
 
 
 class Runner:
-    """The runner as the engine sees it: an alert "Up" on each bar a test names."""
+    """The runner as the engine sees it: an alert "Up" on each bar a test names, and "Down" after it on others."""
 
     def __init__(self):
         self.running = False
         self.requests = []
         self.alerting = set()
+        self.closing = set()
         self.failing = None
         self.versions = {"pinets": "0.11.1", "node": "v24"}
         self.starts = 0
@@ -487,10 +488,12 @@ class Runner:
         if message["op"] == "unload":
             return {"ok": True}
         bars = message["bars"]
-        alerts = [
-            {"type": "alertcondition", "id": "alertcondition_0", "title": "Up", "message": "", "time": bar[0]}
-            for bar in bars if bar[0] in self.alerting
-        ]
+        alerts = []
+        for bar in bars:
+            if bar[0] in self.alerting:
+                alerts.append({"type": "alertcondition", "id": "alertcondition_0", "title": "Up", "message": "", "time": bar[0]})
+            if bar[0] in self.closing:
+                alerts.append({"type": "alertcondition", "id": "alertcondition_1", "title": "Down", "message": "", "time": bar[0]})
         return {"ok": True, "bars": len(bars), "milliseconds": 3, "alerts": alerts, "plots": {}, "warnings": []}
 
 
@@ -572,6 +575,46 @@ def test_a_rule_is_loaded_on_its_history_whose_alerts_are_never_signals(scripts)
     assert journal.rule_states[-1][0]["state"] == "running"
 
 
+def test_each_rule_starts_at_its_own_history_and_rows_are_read_back_for_the_longest(scripts):
+    # The engine's history_days is 0; a rule made later wants a day of bars before the restart.
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    source.rows_by_time = ten_second_rows(T0 - 36 * 3600, 36 * 360)
+    restart = T0 - 10 * 3600 - 45 * 60
+    run(engine.tick())
+    longer = make_rule(scripts, name="Longer", history_days=1)
+
+    run(engine.tick())
+
+    first, second = [request for request in runner.requests if request["op"] == "load"]
+    assert (first["rule"], first["bars"][0][0]) == (rule["id"], restart * 1000)
+    assert (second["rule"], second["bars"][0][0], second["bars"][-1][6]) == (longer["id"], (restart - 86_400) * 1000, T0 * 1000)
+    # The day before was read once, and the first rule kept its place among the rows: a new minute is one bar to each.
+    assert source.reads[-1] == (restart - 86_400, restart)
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 61.5
+    run(engine.tick())
+    appended = {request["rule"]: request["bars"] for request in runner.requests if request["op"] == "append"}
+    assert {rule_id: [bar[0] for bar in bars] for rule_id, bars in appended.items()} == {
+        rule["id"]: [T0 * 1000], longer["id"]: [T0 * 1000],
+    }
+
+
+def test_a_rule_whose_history_changed_is_loaded_again_from_its_new_start(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, history_days=2)
+    source.rows_by_time = ten_second_rows(T0 - 60 * 3600, 60 * 360)
+    restart = T0 - 10 * 3600 - 45 * 60
+    run(engine.tick())
+    store = RuleStore(scripts)
+    store.update(rule["id"], {**rule, "history_days": None}, store.load()["revision"])
+
+    run(engine.tick())
+
+    loads = [request for request in runner.requests if request["op"] in ("load", "unload")]
+    assert [request["op"] for request in loads] == ["load", "unload", "load"]
+    # Two days of its own, then the engine's: none.
+    assert (loads[0]["bars"][0][0], loads[2]["bars"][0][0]) == ((restart - 2 * 86_400) * 1000, restart * 1000)
+
+
 def test_a_shadow_rules_signals_are_journaled_and_never_sent(scripts):
     engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
     run(engine.tick())
@@ -606,6 +649,38 @@ def test_a_live_rules_signal_is_sent_stamped_with_its_bars_close(scripts):
     [(signal_id, outcome, details)] = journal.completed
     assert (outcome, details["http_status"], details["signal_uuid"]) == ("sent", 200, "5e1f2a3b-0000-4000-8000-000000000001")
     assert journal.signals[0]["outcome"] == "sending"
+
+
+def test_a_bar_that_raises_an_entry_and_a_close_sends_the_entry_alone(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(
+        scripts, mode="live", alerts=[{"title": "Up", "action": "long"}, {"title": "Down", "action": "close-position"}],
+    )
+    run(engine.tick())
+    runner.alerting, runner.closing = {T0 * 1000}, {T0 * 1000, (T0 + 60) * 1000}
+    source.rows_by_time += ten_second_rows(T0, 12, seed=3)
+
+    for minute in (1, 2):
+        source.covered, clock.at = T0 + 60 * minute, T0 + 60 * minute + 1.5
+        run(engine.tick())
+
+    # The entry is sent; the close of its bar is journaled as not sent, the next bar's close is sent.
+    assert [body["action"] for body in sender.sent] == ["long", "close-position"]
+    first, second, third = journal.signals
+    assert (first["action"], first["outcome"]) == ("long", "sending")
+    assert (second["action"], second["outcome"], second["alert_title"]) == (None, "refused", "Down")
+    assert "same bar raised an entry" in second["detail"]
+    assert (third["action"], third["bar_time"]) == ("close-position", datetime.fromtimestamp(T0 + 60, timezone.utc))
+
+
+def test_one_bar_makes_one_trade_an_entry_winning_over_a_close():
+    long = Candidate("alertcondition:Up", "Up", "", "long", None)
+    close = Candidate("alertcondition:Exit", "Exit", "", "close-position", None)
+    note = Candidate("alertcondition:Note", "Note", "x", None, None, "not JSON")
+
+    assert settled([long, close]) == [long, Candidate("alertcondition:Exit", "Exit", "", None, None, CLOSE_WITH_ENTRY)]
+    assert [candidate.action for candidate in settled([close, long])] == [None, "long"]
+    # A close alone, or beside an alert that is no signal, is sent as it was.
+    assert settled([close]) == [close] and settled([note, close]) == [note, close]
 
 
 def test_a_bar_evaluated_again_is_sent_once(scripts):
@@ -783,6 +858,28 @@ def test_a_series_a_script_asks_for_is_made_of_the_same_feed(scripts):
             run(engine.answer_series({"ticker": wrong, "timeframe": "1"}))
 
 
+def test_a_series_a_script_asks_for_begins_where_its_own_rules_bars_do(scripts):
+    # The engine's history_days is 0; another rule on the same epic wants a day before.
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    longer = make_rule(scripts, name="Longer", history_days=1)
+    source.rows_by_time = ten_second_rows(T0 - 36 * 3600, 36 * 360)
+    asked, answer = [], runner.request
+
+    async def request(message):
+        # As the runner asks for a series a script reads (request.security) while it loads a rule.
+        if message["op"] == "load":
+            series = await engine.answer_series({"ticker": "CAPITAL_US100", "timeframe": "1", "from": None, "to": None})
+            asked.append((message["rule"], series[0][0]))
+        return await answer(message)
+
+    runner.request = request
+    run(engine.tick())
+
+    # As a replay builds it for each rule: from its own anchor, whatever the others keep.
+    restart = T0 - 10 * 3600 - 45 * 60
+    assert dict(asked) == {rule["id"]: restart * 1000, longer["id"]: (restart - 86_400) * 1000}
+
+
 # ── the real runner, when it is built and Node is here ──
 
 RUNNER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "ta_engine", "runner", "runner.mjs")
@@ -833,6 +930,53 @@ def test_the_built_runner_runs_a_rule_in_its_confinement():
     assert appended["bars"] == len(bars)
     assert all(alert["time"] >= bars[-5][0] for alert in appended["alerts"])
     assert set(appended["plots"]["Fast"]) == {str(bar[0]) for bar in bars[-5:]}
+
+
+ZONE_SCRIPT = """//@version=6
+indicator("Paris time")
+plot(hour(time, "Europe/Paris"), "Hour")
+plot(minute(time, "Europe/Paris"), "Minute")
+plot(timestamp("Europe/Paris", year, month, dayofmonth, 8, 0, 0), "Eight")
+"""
+
+
+@pytest.mark.skipif(not os.path.isfile(RUNNER) or _node_major() < 22, reason="the runner is not built, or no Node 22+ is here")
+def test_the_built_runner_reads_times_in_a_time_zone_and_says_how_its_pinets_was_built():
+    # Half-hour bars from noon on 24 October 2026 to noon the next day (UTC): Paris leaves summer time at 01:00 UTC.
+    start = int(datetime(2026, 10, 24, 12, tzinfo=timezone.utc).timestamp())
+    bars = TimeBars(1800, "bid").add(ten_second_rows(start, 24 * 360), start + 24 * 3600)
+    sha = hashlib.sha256(ZONE_SCRIPT.encode()).hexdigest()
+
+    async def answer(ask):
+        return []
+
+    async def scenario():
+        runner = NodeRunner(runner_command(find_node("node"), RUNNER, 256), answer, timeout_seconds=30)
+        versions = await runner.start()
+        try:
+            loaded = await runner.request({
+                "op": "load", "rule": "0123456789ab", "script": {"source": ZONE_SCRIPT, "sha256": sha}, "libraries": [],
+                "inputs": {}, "ticker": "CAPITAL_US100", "timeframe": "30", "bars": bars, "detail": True,
+            })
+            return versions, loaded
+        finally:
+            await runner.stop()
+
+    versions, loaded = run(scenario())
+
+    # PineTS keeps a formatter per time zone (admin_ui/vite/pinetsZoneFormat.ts): what a run's made_with records.
+    assert versions["pinets"].endswith("+zone-format")
+    plots = loaded["series"]["plots"]
+    at = dict(zip(loaded["series"]["times"], zip(plots["Hour"], plots["Minute"], plots["Eight"])))
+
+    def utc(day: int, hour: int, minute: int = 0) -> int:
+        return int(datetime(2026, 10, day, hour, minute, tzinfo=timezone.utc).timestamp()) * 1000
+
+    # 00:30 UTC is 02:30 in summer time, and 01:30 UTC is 02:30 again, in winter time.
+    assert (at[utc(25, 0, 30)][:2], at[utc(25, 1, 30)][:2]) == ((2, 30), (2, 30))
+    assert at[utc(24, 12)][:2] == (14, 0) and at[utc(25, 6)][:2] == (7, 0)
+    # 08:00 in Paris: 06:00 UTC on the 24th, in summer time, and 07:00 UTC on the 25th.
+    assert (at[utc(24, 12)][2], at[utc(25, 6)][2]) == (utc(24, 6), utc(25, 7))
 
 
 

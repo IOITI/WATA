@@ -338,12 +338,14 @@ def availability(
 # ── range bars ──
 
 
-def price_decimals(*series: Iterable[float]) -> int:
+def price_decimals(*series: Iterable[float], minimum: int = MIN_DECIMALS) -> int:
     """
     Decimals the prices are quoted with. One unit of the last of them is the
     tick: the smallest step the price takes, and what "1R" is in TradingView.
+    Never fewer than ``minimum``: two for Saxo's prices in cents, whose 9.0 is
+    9.00; none for a feed whose prices carry all their decimals.
     """
-    decimals = MIN_DECIMALS
+    decimals = minimum
     for values in series:
         for value in values:
             text = repr(float(value))
@@ -353,6 +355,21 @@ def price_decimals(*series: Iterable[float]) -> int:
             if decimals >= MAX_DECIMALS:
                 return MAX_DECIMALS
     return decimals
+
+
+def tick_of(decimals: int | None) -> float | None:
+    """
+    One step of a price quoted with ``decimals``: what a range of R<ticks> is
+    counted in. It is the asset's own, so one R differs from feed to feed:
+    Capital.com's US100 has a tick of 0.1 (R60 is 6 points), Dukascopy's of 0.001
+    (R60 is 0.06 points, and 6 points are R6000).
+    """
+    return None if decimals is None else round(10.0 ** -decimals, decimals)
+
+
+def range_points(ticks: int, decimals: int) -> float:
+    """The size, in the asset's own points, of range bars of ``ticks`` steps of its price."""
+    return round(ticks * 10.0 ** -decimals, decimals)
 
 
 def auto_range_ticks(low: int, high: int) -> int:

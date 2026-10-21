@@ -246,7 +246,9 @@ function serve() {
       }
       if (route === '/api/ta/scripts') return json({ items: [SCRIPT] })
       if (route === `/api/ta/scripts/${SCRIPT.id}/versions/1`) return json({ ...SCRIPT.versions[0], source: SOURCE })
-      if (route === '/api/ta/rules') return json({ revision: 'r1', rules: [RULE], indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }] })
+      if (route === '/api/ta/rules') {
+        return json({ revision: 'r1', rules: [RULE], indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1 })
+      }
       if (route === '/api/data/assets') {
         return json({ timezone: 'Europe/Paris', seen: 'all', items: ASSETS, truncated: false, max: 3000, saxo_error: null })
       }

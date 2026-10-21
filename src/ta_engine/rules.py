@@ -19,6 +19,7 @@ from src.admin.ta_rules import (
     checked_alerts,
     checked_asset,
     checked_bars,
+    checked_history_days,
     checked_inputs,
 )
 from src.admin.ta_scripts import ID_PATTERN, ScriptStore
@@ -28,7 +29,7 @@ from src.ta_engine.tickers import Ticker
 logger = logging.getLogger(__name__)
 
 # The fields that change what a rule runs: another value means loading it again.
-RUN_FIELDS = ("asset", "side", "bars", "script", "libraries", "inputs")
+RUN_FIELDS = ("asset", "side", "bars", "script", "libraries", "inputs", "history_days")
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,12 @@ class EngineRule:
     @property
     def run_key(self) -> tuple:
         """What the runner was given: a rule whose key changed is loaded again."""
-        return tuple(repr(self.rule[name]) for name in RUN_FIELDS)
+        return tuple(repr(self.rule.get(name)) for name in RUN_FIELDS)
+
+    @property
+    def history_days(self) -> int | None:
+        """Its own days of bars before each engine day; None: the engine's history_days."""
+        return self.rule.get("history_days")
 
     def ticker(self) -> Ticker:
         bars = self.rule["bars"]
@@ -95,6 +101,7 @@ def _checked(rule: dict) -> dict:
     checked_bars(rule.get("bars"))
     checked_inputs(rule.get("inputs"))
     checked_alerts(rule.get("alerts"))
+    checked_history_days(rule.get("history_days"))
     if rule.get("side") not in ("bid", "ask") or rule.get("alert_calls") not in ("ignore", "message"):
         raise InvalidRule("No valid side or alert() calls")
     for pin in (rule.get("script"), *(rule.get("libraries") or [])):

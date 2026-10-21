@@ -30,7 +30,7 @@ from typing import Callable, Iterable, Iterator, Sequence
 
 import pytz
 
-from src.admin.prices import interval_served
+from src.admin.prices import interval_served, price_decimals, tick_of
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_history import dukascopy
 from src.price_history.files import FileBars, files_of_period
@@ -145,12 +145,18 @@ def checked_provider(provider: str) -> str:
 
 
 def saxo_asset(instrument: dict) -> dict:
-    """A recorded instrument as an asset: its row, and the name the Data pages give it."""
+    """
+    A recorded instrument as an asset: its row, and the name the Data pages give
+    it. The recorder keeps no decimals of an instrument: its tick is read from its
+    last quotes, as the replay reads it from its bars.
+    """
+    quotes = [instrument[name] for name in ("last_bid", "last_ask") if instrument.get(name) is not None]
     return {
         **instrument,
         "provider": SAXO,
         "key": str(instrument["id"]),
         "ref": ref_of(SAXO, instrument["id"]),
+        "tick": tick_of(price_decimals(quotes)) if quotes else None,
     }
 
 
@@ -177,6 +183,7 @@ def capital_asset(row: dict) -> dict:
         "currency": row.get("currency"), "role": "underlying", "indice": row.get("label"),
         "underlying_uic": None, "direction": None, "barrier": None, "issuer": None,
         "epic": row["epic"], "instrument_type": row.get("instrument_type"), "decimals": row.get("decimals"),
+        "tick": tick_of(row.get("decimals")),
         "provider": CAPITAL, "key": row["epic"], "ref": ref_of(CAPITAL, row["epic"]),
     }
     for name in ("first_t", "last_t", "last_bid", "last_ask", "first_seen_at", "last_seen_at"):
@@ -516,6 +523,8 @@ class PriceHistory:
             return None
         described = _file_description(dukascopy.day_path(self._root, label, days[-1]))
         known = _BY_SYMBOL.get(described["symbol"])
+        # Read from its prices as the replay reads them: Dukascopy quotes thousandths, a tick of 0.001.
+        decimals = price_decimals(last_day.bid_close[:2000])
         return {
             "id": None, "uic": None, "asset_type": dukascopy.ASSET_TYPE,
             "symbol": described["symbol"],
@@ -527,6 +536,8 @@ class PriceHistory:
             "last_t": last_day.times[-1],
             "last_bid": last_day.bid_close[-1],
             "last_ask": last_day.ask_close[-1],
+            "decimals": decimals,
+            "tick": tick_of(decimals),
             "days": len(days),
             "first_day": days[0].isoformat(),
             "last_day": days[-1].isoformat(),

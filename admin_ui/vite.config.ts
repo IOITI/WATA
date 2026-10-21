@@ -4,15 +4,17 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
+import { pinetsZoneFormat, pinetsZoneFormatDeps } from './vite/pinetsZoneFormat.ts'
 import { velaPineWorker } from './vite/velaPineWorker.ts'
 import { velaSeconds, velaSecondsDeps } from './vite/velaSeconds.ts'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss(), velaPineWorker(), velaSeconds()],
-  // Vela's chart learns bars of seconds in the dev server too, whose dependencies Vite prepares itself.
+  // Vela's chart learns bars of seconds, and PineTS keeps a formatter per time zone, in the dev server
+  // too, whose dependencies Vite prepares itself.
   optimizeDeps: {
-    rolldownOptions: { plugins: [velaSecondsDeps()] },
+    rolldownOptions: { plugins: [velaSecondsDeps(), pinetsZoneFormatDeps()] },
   },
   // The Pine worker of the Technical Analysis pages: one classic file whose name the
   // admin recognises, so that it gets the only policy allowing PineTS to compile
@@ -20,6 +22,8 @@ export default defineConfig({
   // with it the pages' policy.
   worker: {
     format: 'iife',
+    // The worker holds PineTS, which keeps a formatter per time zone there (vite/pinetsZoneFormat.ts).
+    plugins: () => [pinetsZoneFormat()],
     rolldownOptions: {
       output: {
         entryFileNames: (chunk) =>

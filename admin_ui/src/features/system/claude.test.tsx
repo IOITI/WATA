@@ -34,7 +34,8 @@ function mcpState(changes: Partial<McpState> = {}): McpState {
     ],
     limits: {
       max_waiting_runs: 3, runs_per_day: 60, max_day_simulations: 10_000, study_minutes_per_hour: 20, study_memory_mb: 384,
-      study_timeout_seconds: 90, max_scripts: 100, max_shadow_rules: 3, min_free_disk_gb: 5, shadow_rules: false,
+      study_timeout_seconds: 90, max_scripts: 100, max_shadow_rules: 3, shadow_day_ms: 2000, min_free_disk_gb: 5,
+      shadow_rules: false,
     },
     share: { waiting_runs: 3, runs_today: 12, scripts: 4, rules: 0, live_rules: 0, study_seconds_last_hour: 330 },
     calls: [

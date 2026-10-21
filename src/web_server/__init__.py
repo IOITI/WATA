@@ -120,8 +120,8 @@ async def _ingest_and_store_signal(data: dict, received_timestamp: str) -> str:
     if data.get("confidence") is not None:
         record["confidence"] = data["confidence"]
 
-    await SIGNAL_STORE.upsert(record)
-    logging.info(f"Stored signal for indice={data['indice']}: {record}")
+    if await SIGNAL_STORE.upsert(record):
+        logging.info(f"Stored signal for indice={data['indice']}: {record}")
     return signal_uuid
 
 

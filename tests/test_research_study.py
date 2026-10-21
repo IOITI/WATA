@@ -102,6 +102,38 @@ def test_signals_are_raised_as_a_rule_would_and_read_back_the_second_time(tmp_pa
     assert first["windows_run"] >= 1 and again["windows_run"] == 0 and again["signals"] == first["signals"]
 
 
+def test_a_rules_own_history_is_the_days_of_bars_given_before_each_engine_day(tmp_path, scripts, prices):
+    request = {"script": {"id": cross(scripts)["id"]}, "asset": "dukascopy/us100", "bars": "1", "from": "2026-10-14",
+               "alerts": {"Enter Long": "long", "Exit": "close-position"}, "timezone": "UTC"}
+
+    engines = study(tmp_path, scripts, prices, "signals", request)
+    none = study(tmp_path, scripts, prices, "signals", {**request, "history_days": 0})
+    too_long = study(tmp_path, scripts, prices, "signals", {**request, "history_days": 31})
+
+    # The engine's days from 13 October 21:15 UTC: 840 minutes recorded on each of the 13th and the 14th.
+    assert engines["engine"]["history_days"] == 1 and [day["bars"] for day in engines["days"]] == [1680, 840]
+    assert none["engine"]["history_days"] == 0 and [day["bars"] for day in none["days"]] == [840, 0]
+    assert not too_long["ok"] and "history is 0 to 30 days" in too_long["error"]["message"]
+
+
+def test_range_bars_far_below_the_assets_tick_are_refused_saying_what_one_point_is(tmp_path, scripts):
+    # Prices in thousandths, as Dukascopy's: R100 is a tenth of a point, some forty bars each ten seconds here.
+    root = tmp_path / "thousandths"
+    for day in DAYS:
+        start = int(datetime(day.year, day.month, day.day, 6, tzinfo=timezone.utc).timestamp())
+        price = [round(25000.0 + 40 * math.sin(n / 90), 3) for n in range(5040)]
+        write_day(str(root), "us100", day, [_bar(start + 10 * n, price[n], price[n] + 1.0, high=1.0, low=1.0) for n in range(5040)])
+    request = {"script": {"id": cross(scripts)["id"]}, "asset": "dukascopy/us100", "bars": "R100", "from": "2026-10-14",
+               "alerts": {"Enter Long": "long"}, "timezone": "UTC"}
+
+    found = study(tmp_path, scripts, str(root), "signals", request)
+
+    assert not found["ok"] and found["error"]["message"] == (
+        "This engine day has more than 40,000 bars of R100 on dukascopy/us100: a tick of this asset is 0.001, "
+        "so R100 is 0.1 points; one point is R1000 here"
+    )
+
+
 def test_capital_coms_bars_are_read_from_recorded_day_files_as_a_backtest_reads_them(tmp_path, scripts, prices):
     from src.capital_feed.day_files import day_path, write_day_file
 

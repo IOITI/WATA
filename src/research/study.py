@@ -46,6 +46,7 @@ from src.admin.ta_rules import (
     RuleStore,
     checked_alerts,
     checked_bars,
+    checked_history_days,
     checked_inputs,
     timeframe_seconds,
 )
@@ -366,7 +367,9 @@ async def signals(request: dict, scripts: ScriptStore, config, prices_root: str,
     rule, engine_rule = study_rule(request, scripts)
     first, last = _days(request)
     _, _, history_days, restart = ta_settings(config)
-    history_days = request.get("history_days", history_days)
+    # A rule's own history, when it has one (a shadow rule measured before it is saved).
+    own = checked_history_days(request.get("history_days"))
+    history_days = history_days if own is None else own
     restart = request.get("restart_time") or restart
     clock = TradingClock(request.get("timezone") or "Europe/Paris")
     period = (clock.day_bounds(first)[0], clock.day_bounds(last)[1])

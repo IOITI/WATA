@@ -123,7 +123,9 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
       const url = new URL(path, 'http://admin.test')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
       sent.push({ method, path: `${url.pathname}${url.search}`, body })
-      const listed = { revision: 'r1', rules, indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }] }
+      const listed = {
+        revision: 'r1', rules, indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1,
+      }
       if (url.pathname === '/api/ta/rules' && method === 'GET') return json(listed)
       if (url.pathname === '/api/ta/rules' && method === 'POST') {
         const made = rule({ ...(body as Partial<TaRule>), id: 'bbbbbbbbbbbb', mode: 'shadow' })
@@ -286,6 +288,8 @@ describe('the Signal rules page', () => {
       alert_calls: 'ignore',
       confidence_plot: null,
       indice: 'us100',
+      // Left empty: the engine's.
+      history_days: null,
       revision: 'r1',
       mode: 'shadow',
     })

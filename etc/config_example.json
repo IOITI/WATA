@@ -334,6 +334,7 @@
       "study_timeout_seconds": 90,
       "max_scripts": 100,
       "max_shadow_rules": 3,
+      "shadow_day_ms": 2000,
       "min_free_disk_gb": 5,
       "shadow_rules": false
     },

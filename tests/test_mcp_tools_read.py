@@ -18,6 +18,7 @@ from src.admin.mcp_server import budget
 from src.admin.mcp_server.facade import ConfigFacts, ReadQueries, ResearchServices
 from src.admin.mcp_server.limits import McpLimits
 from src.admin.mcp_server.server import build_server
+from src.admin.mcp_server.shape import compacted
 from src.admin.processes import DONE
 from src.admin.ta_rules import RuleStore
 from src.research.experiments import ExperimentJournal
@@ -214,6 +215,8 @@ def test_the_assets_are_named_by_their_ref_and_turbos_are_counted_until_asked_fo
 
     assert [asset["ref"] for asset in listed["items"]] == ["capital/US100", "saxo/1"]
     assert listed["saxo_turbos"] == 1
+    # What R<ticks> is counted in on each: Capital.com's decimals, nothing for an index never quoted.
+    assert [asset["tick"] for asset in listed["items"]] == [0.1, None]
     turbos = answer(research, "data_assets", {"provider": "saxo"})
     assert turbos["items"][1] == {**turbos["items"][1], "ref": "saxo/2", "direction": "long", "barrier": 21000.0}
 
@@ -233,6 +236,14 @@ def test_bars_come_as_compact_json_or_as_a_table_for_a_file(research):
     assert found["asset"]["ref"] == "capital/US100"
     rows = list(csv.reader(io.StringIO(table)))
     assert rows[0][:2] == ["t", "bid_open"] and len(rows) == 4
+
+
+def test_numbers_keep_six_digits_and_a_price_its_thousandths():
+    # Six digits of Dukascopy's 29143.543 were 29143.5, which hid the decimal its range bars count in.
+    assert compacted({"price": 29143.543, "share": 12.3456789, "small": 0.123456789, "large": 1234567.891234,
+                      "none": float("nan"), "whole": 3, "flag": True}) == {
+        "price": 29143.543, "share": 12.3457, "small": 0.123457, "large": 1234567.891, "none": None, "whole": 3, "flag": True,
+    }
 
 
 def test_a_bar_length_the_charts_do_not_make_is_refused(research):

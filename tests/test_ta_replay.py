@@ -16,14 +16,17 @@ from datetime import date, datetime, timezone
 from src.price_recorder.export import COLUMNS
 from src.ta_engine.replay import REPLAY_RULE_ID, AssetRows, ReplaySession, _runner_digest, engine_windows
 from src.ta_engine.rules import EngineRule
+from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
 # Raises "Enter Long" at the full hour (UTC) when it is even, "Enter Short" when it is odd, "Exit" at a
-# quarter to; notes each load (rule, bars, first and last bar, inputs) in the file named by its first argument.
+# quarter to; notes each load (rule, bars, first and last bar, inputs) in the file named by its last argument.
+# Given "reversal" before it, it raises "Exit" on the bar of each entry too, after it.
 FAKE_RUNNER = textwrap.dedent("""
     import json
     import sys
 
-    LOG = sys.argv[1]
+    LOG = sys.argv[-1]
+    REVERSAL = "reversal" in sys.argv[1:-1]
 
     for line in sys.stdin:
         message = json.loads(line)
@@ -42,6 +45,8 @@ FAKE_RUNNER = textwrap.dedent("""
                 if minute == 0:
                     alerts.append({"type": "alertcondition", "title": "Enter Long" if hour % 2 == 0 else "Enter Short",
                                    "message": "", "time": bar[0]})
+                    if REVERSAL:
+                        alerts.append({"type": "alertcondition", "title": "Exit", "message": "", "time": bar[0]})
                 elif minute == 45:
                     alerts.append({"type": "alertcondition", "title": "Exit", "message": "", "time": bar[0]})
             answer = {"id": message["id"], "ok": True, "op": "load", "bars": len(bars), "milliseconds": 2,
@@ -53,13 +58,13 @@ FAKE_RUNNER = textwrap.dedent("""
 """)
 
 
-def fake_runner(folder) -> tuple[list[str], str]:
-    """The command of a stand-in runner, and the file it notes its loads in."""
+def fake_runner(folder, *arguments: str) -> tuple[list[str], str]:
+    """The command of a stand-in runner, and the file it notes its loads in (last: the runner starts in its folder)."""
     script = os.path.join(str(folder), "fake_runner.py")
     log = os.path.join(str(folder), "loads.jsonl")
     with open(script, "w", encoding="utf-8") as out_file:
         out_file.write(FAKE_RUNNER)
-    return [sys.executable, script, log], log
+    return [sys.executable, script, *arguments, log], log
 
 
 def loads(log: str) -> list[dict]:
@@ -278,3 +283,87 @@ def test_a_study_and_a_backtest_share_the_runners_answers_whatever_heap_they_giv
     assert _runner_digest(["node", "--max-old-space-size=384", "--permission", "runner.mjs"]) == \
         _runner_digest(["node", "--max-old-space-size=1024", "--permission", "runner.mjs"])
     assert _runner_digest(["node", "--permission", "runner.mjs"]) != _runner_digest(["node", "--permission", "other.mjs"])
+
+
+def test_a_day_of_more_bars_than_the_runner_is_given_is_refused_with_what_the_range_is_on_the_asset(tmp_path, monkeypatch):
+    from src.ta_engine import replay
+
+    files = tmp_path / "recorded"
+    write_rows(str(files / "saxo" / "index.csv.gz"), index_rows(date(2026, 10, 14), 6, 8))
+    command, log = fake_runner(tmp_path)
+    begin = int(datetime(2026, 10, 13, 21, 15, tzinfo=timezone.utc).timestamp())
+    # Two hours of minutes: 120 bars.
+    monkeypatch.setattr(replay, "MAX_WINDOW_BARS", 100)
+
+    def refusal(bars: dict) -> str:
+        rule = {**rule_on(), "bars": bars}
+
+        async def scenario():
+            session = ReplaySession(rule, EngineRule(rule=rule, source="x"), AssetRows(str(tmp_path), files_root=str(files)),
+                                    history_days=0, command=command)
+            await session.start()
+            try:
+                await session.window(begin, begin + 86_400)
+            except replay.DayTooLarge as e:
+                return str(e)
+            finally:
+                await session.stop()
+
+        return asyncio.run(scenario())
+
+    # These prices have two decimals at least: a tick of 0.01, so a point is a hundred of them.
+    assert refusal({"type": "range", "ticks": 100}) == (
+        "This engine day has more than 100 bars of R100 on saxo/1: a tick of this asset is 0.01, so R100 is 1 point; "
+        "one point is R100 here"
+    )
+    assert "so R60 is 0.6 points" in refusal({"type": "range", "ticks": 60})
+    assert refusal({"type": "time", "timeframe": "1"}) == (
+        "This engine day has more than 100 bars of 1 min on saxo/1: longer bars, or fewer days of history"
+    )
+    # Refused before the runner was given anything.
+    assert not os.path.exists(log)
+
+
+def test_an_entry_wins_over_a_close_of_its_bar_which_is_then_no_signal(tmp_path):
+    files = tmp_path / "recorded"
+    write_rows(str(files / "saxo" / "index.csv.gz"), index_rows(date(2026, 10, 14), 6, 8))
+    command, _ = fake_runner(tmp_path, "reversal")
+    rule = rule_on()
+    begin = int(datetime(2026, 10, 13, 21, 15, tzinfo=timezone.utc).timestamp())
+
+    async def scenario():
+        session = ReplaySession(rule, EngineRule(rule=rule, source="x"), AssetRows(str(tmp_path), files_root=str(files)),
+                                history_days=0, command=command)
+        await session.start()
+        try:
+            return await session.window(begin, begin + 86_400)
+        finally:
+            await session.stop()
+
+    window = asyncio.run(scenario())
+
+    six = int(datetime(2026, 10, 14, 6, tzinfo=timezone.utc).timestamp()) * 1000
+    raised = [(alert.bar[0], alert.alert["title"], alert.candidate.action, alert.candidate.detail) for alert in window.alerts]
+    assert raised[:4] == [
+        (six, "Enter Long", "long", None),
+        (six, "Exit", None, CLOSE_WITH_ENTRY),
+        # A close on a bar of its own is a signal as before.
+        (six + 45 * 60_000, "Exit", "close-position", None),
+        (six + 60 * 60_000, "Enter Short", "short", None),
+    ]
+
+
+def test_capital_coms_day_files_give_the_decimals_its_prices_carry(tmp_path):
+    from src.capital_feed.day_files import day_path, write_day_file
+
+    files = tmp_path / "recorded"
+    start = datetime(2026, 10, 14, 6, tzinfo=timezone.utc)
+    rows = [(datetime.fromtimestamp(start.timestamp() + 10 * n, timezone.utc), *([25000.5 + n] * 4), *([25001.5 + n] * 4), 3)
+            for n in range(30)]
+    write_day_file(day_path(str(files), "us100", date(2026, 10, 14)), rows, epic="US100", label="us100", name="US Tech 100")
+    moment = int(start.timestamp())
+
+    found, decimals = asyncio.run(AssetRows(str(tmp_path), files_root=str(files)).rows("capital", "US100", moment, moment + 300))
+
+    # One decimal, as the feed's table says it: R60 is 6 points, as the TA engine counts it.
+    assert len(found) == 30 and decimals == 1

@@ -18,7 +18,19 @@ import type { BacktestCoverage, BacktestCoverageDay, BacktestField, BacktestOpti
 import { cn } from '@/lib/utils'
 
 import { executionChanges, executionSentence } from './execution'
-import { axisValues, changesOf, draftBars, fieldError, parseAsset, periodDays, periodLimit, strategyAssets, sweepCells, walkForwardChoices } from './form'
+import {
+  axisValues,
+  changesOf,
+  draftBars,
+  fieldError,
+  parseAsset,
+  periodDays,
+  periodLimit,
+  rangeHint,
+  strategyAssets,
+  sweepCells,
+  walkForwardChoices,
+} from './form'
 import type { AxisDraft, BacktestDraft } from './form'
 import { assetLabel, settingChanges, showValue } from './model'
 import { ChangeList } from './parts'
@@ -57,6 +69,7 @@ export function AssetStep({
 }) {
   const offered = strategyAssets(assets)
   const chosen = parseAsset(draft.asset)
+  const tick = assets.find((asset) => asset.ref === draft.asset)?.tick
   return (
     <div className="space-y-5 text-sm">
       {rules.length > 0 && (
@@ -90,7 +103,7 @@ export function AssetStep({
               options={offered.some((option) => option.value === draft.asset) || !chosen ? offered : [{ value: draft.asset, label: assetLabel(chosen) }, ...offered]}
             />
           </label>
-          <BarsFields draft={draft.rule} update={updateRule} anyLength />
+          <BarsFields draft={draft.rule} update={updateRule} anyLength rangeNote={rangeHint(draft.rule.ticks, tick)} />
         </div>
         {chosen?.provider === 'saxo' && (
           <p className="text-xs text-muted-foreground">Saxo quotes the index only from 15:30 to 22:15: the strategy has no bar before.</p>

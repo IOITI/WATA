@@ -16,7 +16,7 @@ import type { TaRule, TaRules, TaScriptSummary } from '@/lib/types'
 
 import { BarsFields, ScriptChoice, ScriptSettings } from './RuleFields'
 import { useScriptInputs } from './useScriptInputs'
-import { draftOfRule, draftProblems, newDraft, ruleChanges, ruleFields } from './ruleModel'
+import { draftOfRule, draftProblems, MAX_HISTORY_DAYS, newDraft, ruleChanges, ruleFields } from './ruleModel'
 import type { RuleDraft } from './ruleModel'
 
 /** How the dialog opens on a rule: as it is, or on the newer versions of its script or libraries. */
@@ -218,6 +218,19 @@ function RuleForm({
             value={draft.indice}
             onChange={(event) => update({ indice: event.target.value })}
             options={rules.indices.map((indice) => ({ value: indice, label: indice }))}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-text-secondary">Days of bars before each day</span>
+          <Input
+            type="number"
+            min={0}
+            max={MAX_HISTORY_DAYS}
+            step={1}
+            value={draft.historyDays}
+            placeholder={`The engine’s: ${rules.engine_history_days}`}
+            title="The script runs each day from the engine's restart on the bars of so many days before: fewer for a script that needs little warm-up (it runs faster at each bar), more for one that needs a long one. Empty: the engine's history_days."
+            onChange={(event) => update({ historyDays: event.target.value })}
           />
         </label>
       </div>

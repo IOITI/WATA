@@ -75,8 +75,8 @@ def prepare(tmp_path, request: dict, settings_changes: dict | None = None, journ
     return str(folder)
 
 
-def run_command(tmp_path, folder: str, recorded: str) -> int:
-    command, _ = fake_runner(tmp_path)
+def run_command(tmp_path, folder: str, recorded: str, *runner_arguments: str) -> int:
+    command, _ = fake_runner(tmp_path, *runner_arguments)
     return backtest_run.main([
         "--run", folder, "--data", f"files:{recorded}", "--prices", str(tmp_path / "prices"),
         "--runner", "\x1f".join(command),
@@ -147,6 +147,20 @@ def test_a_pine_script_is_traded_on_the_recorded_turbos_day_by_day(tmp_path, rec
     baseline = read(folder, "baseline.json")
     assert len(baseline["totals"]) == 5 and baseline["seed"] == 3
     assert read(folder, "progress.json")["phase"] == "done"
+
+
+def test_the_close_raised_on_the_bar_of_an_entry_does_not_sell_the_position_just_opened(tmp_path, recorded):
+    folder = prepare(tmp_path, {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 0, "seed": 3}})
+
+    assert run_command(tmp_path, folder, recorded, "reversal") == 0
+
+    signals = [signal for signal in read(folder, "signals.json") if signal["day"] == "2026-10-13" and signal["source"] == "pine"]
+    trades = {trade["id"]: trade for trade in read(folder, "trades.json")}
+    entry = next(signal for signal in signals if signal["bar_time"] == "2026-10-13T06:00:00Z" and signal["action"] == "long")
+    close = next(signal for signal in signals if signal["bar_time"] == "2026-10-13T06:00:00Z" and signal["action"] is None)
+    # The Exit of the entry's bar is no signal; the long lasts until the Exit of 06:45.
+    assert (close["fate"], close["alert"]["title"]) == ("not_a_signal", "Exit") and "same bar raised an entry" in close["reason"]
+    assert entry["fate"] == "executed" and trades[entry["trade_id"]]["exit"]["filled_at"] > "2026-10-13T06:45"
 
 
 def test_the_same_run_gives_the_same_files(tmp_path, recorded):

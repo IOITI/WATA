@@ -87,6 +87,19 @@ export function strategyAssets(assets: readonly DataAsset[]): { value: string; l
     }))
 }
 
+/**
+ * What a range of `ticks` steps of the price is on an asset whose tick is `tick`: R60 is 6 points
+ * on Capital.com's US100 (0.1) and 0.06 on Dukascopy's (0.001), where 6 points are R6000.
+ */
+export function rangeHint(ticks: string, tick: number | null | undefined): string | null {
+  const count = Number(ticks)
+  if (!tick || !Number.isInteger(count) || count < 1) return null
+  const decimals = Math.max(0, Math.round(-Math.log10(tick)))
+  const points = Number((count * tick).toFixed(decimals))
+  const shown = points.toLocaleString('en-GB', { maximumFractionDigits: decimals })
+  return `R${count} is ${shown} point${points === 1 ? '' : 's'} on this asset, whose tick is ${tick} (a point is R${10 ** decimals}).`
+}
+
 export function newBacktestDraft(
   options: BacktestOptions,
   script: TaScriptSummary | undefined,
@@ -117,6 +130,8 @@ export function newBacktestDraft(
 
 /** A draft filled from a signal rule: its script, asset, bars, inputs and alerts. */
 export function withRule(draft: BacktestDraft, rule: TaRule): BacktestDraft {
+  // Replayed as the engine runs it: on the rule's own days of history, or the engine's.
+  const { history_days: _, ...changes } = draft.changes
   return {
     ...draft,
     sourceKind: 'pine',
@@ -124,6 +139,7 @@ export function withRule(draft: BacktestDraft, rule: TaRule): BacktestDraft {
     indice: rule.indice,
     rule: draftOfRule(rule),
     fromRule: { id: rule.id, name: rule.name },
+    changes: rule.history_days === null || rule.history_days === undefined ? changes : { ...changes, history_days: String(rule.history_days) },
   }
 }
 

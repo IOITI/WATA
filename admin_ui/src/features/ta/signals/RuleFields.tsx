@@ -130,7 +130,18 @@ export function ScriptChoice({
  * (RULE_TIMEFRAMES); a backtest (`anyLength`) on any length WATA makes, typed when it is
  * none of the menu's.
  */
-export function BarsFields({ draft, update, anyLength = false }: { draft: RuleDraft; update: Update; anyLength?: boolean }) {
+export function BarsFields({
+  draft,
+  update,
+  anyLength = false,
+  rangeNote = null,
+}: {
+  draft: RuleDraft
+  update: Update
+  anyLength?: boolean
+  /** What the range is in the asset's points, said under its field. */
+  rangeNote?: string | null
+}) {
   const offered = anyLength ? TIMEFRAMES : RULE_TIMEFRAMES
   const inMenu = offered.some((timeframe) => timeframe.pine === draft.timeframe)
   // Typed rather than chosen: kept while it is typed, even when it reads as one of the menu's ("1" on the way to "15s").
@@ -174,10 +185,24 @@ export function BarsFields({ draft, update, anyLength = false }: { draft: RuleDr
         />
       </label>
       {draft.barsType === 'range' ? (
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-text-secondary">Range, in steps of the price</span>
-          <Input type="number" min={1} step={1} value={draft.ticks} onChange={(event) => update({ ticks: event.target.value })} />
-        </label>
+        <div className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">Range, in steps of the price</span>
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              value={draft.ticks}
+              aria-describedby={rangeNote ? helpId : undefined}
+              onChange={(event) => update({ ticks: event.target.value })}
+            />
+          </label>
+          {rangeNote && (
+            <span id={helpId} className="text-xs text-muted-foreground">
+              {rangeNote}
+            </span>
+          )}
+        </div>
       ) : typing ? (
         <div className="flex flex-col gap-1">
           <label className="flex flex-col gap-1">
@@ -309,6 +334,10 @@ export function ScriptSettings({
         <p className="text-xs text-muted-foreground">
           A message is read as WATA’s webhook JSON, as TradingView sends it: its action (long, short or close-position), its
           indice (which must be the rule’s) and its confidence. WATA stamps each signal with the close of its bar.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          One bar, one trade: when a bar raises an entry and a close of positions, only the entry is sent. It sells the other
+          side before it buys, and a close after it would sell the position it just opened.
         </p>
       </section>
 

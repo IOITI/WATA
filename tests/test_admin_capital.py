@@ -101,6 +101,8 @@ def test_an_instrument_of_capital_com_is_an_index_named_by_its_epic():
     )
     assert (asset["symbol"], asset["description"], asset["asset_type"], asset["uic"]) == ("US100", "US Tech 100", "Capital.com", None)
     assert (asset["first_t"], asset["last_bid"]) == (US100["first_t"], 25000.5)
+    # What a range of R<ticks> is counted in: R60 is 6 points here.
+    assert (asset["decimals"], asset["tick"]) == (1, 0.1)
 
 
 def test_an_instrument_is_recording_while_the_feed_runs_and_follows_it():

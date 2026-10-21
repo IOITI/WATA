@@ -24,6 +24,7 @@ from src.admin.ta_compare import compare, default_tolerance
 from src.admin.ta_rules import (
     LIVE,
     MAX_ALERTS,
+    MAX_HISTORY_DAYS,
     MAX_INPUTS,
     MAX_TITLE_LENGTH,
     SHADOW,
@@ -114,6 +115,8 @@ class RuleFields(BaseModel):
     alert_calls: str = Field("ignore", max_length=16)
     confidence_plot: str | None = Field(None, max_length=MAX_TITLE_LENGTH)
     indice: str = Field(max_length=32)
+    # Its own days of bars before each engine day; None: the engine's history_days.
+    history_days: int | None = Field(None, ge=0, le=MAX_HISTORY_DAYS)
 
     def fields(self) -> dict:
         return self.model_dump(exclude={"revision", "mode", "refresh_libraries"})
@@ -136,7 +139,7 @@ class RuleMode(BaseModel):
 # What the audit trail says changed in a live rule.
 _RULE_FIELDS = (
     "name", "asset", "side", "bars", "script", "libraries", "inputs", "alerts", "alert_calls",
-    "confidence_plot", "indice",
+    "confidence_plot", "indice", "history_days",
 )
 
 
@@ -248,11 +251,19 @@ def _feed_instruments(config_manager) -> list[dict]:
     return [{"epic": instrument.epic, "label": instrument.label} for instrument in feed.instruments]
 
 
+def _engine_history_days(config_manager) -> int:
+    """The engine's history_days: the days of bars before each day a rule without its own is given."""
+    try:
+        return TaEngineSettings.from_config(config_manager).history_days
+    except ValueError:
+        return TaEngineSettings.history_days
+
+
 @router.get("/rules")
 async def list_rules(request: Request, store=Depends(scripts), rule_store: RuleStore = Depends(rules)):
     """
-    The rules, with what a rule can be made of: the indices the trader accepts
-    and the instruments the Capital.com feed records.
+    The rules, with what a rule can be made of: the indices the trader accepts,
+    the instruments the Capital.com feed records, and the engine's history_days.
     """
     loaded = await run_in_threadpool(rule_store.load)
     scripts_by_id = {meta["id"]: meta for meta in await run_in_threadpool(store.scripts)}
@@ -262,6 +273,7 @@ async def list_rules(request: Request, store=Depends(scripts), rule_store: RuleS
         "rules": [_described(rule, scripts_by_id) for rule in loaded["rules"]],
         "indices": sorted(_allowed_indices(config_manager)),
         "instruments": _feed_instruments(config_manager),
+        "engine_history_days": _engine_history_days(config_manager),
     }
 
 
@@ -295,7 +307,7 @@ async def update_rule(
     rule, before = result["rule"], result["before"]
     answer = await _answer(result, store)
     if rule["mode"] == LIVE and rule != before:
-        changed = ",".join(name for name in _RULE_FIELDS if rule[name] != before[name])
+        changed = ",".join(name for name in _RULE_FIELDS if rule.get(name) != before.get(name))
         line = _rule_line(rule, answer["rule"]["script_name"])
         request.app.state.ctx.audit(request, "live signal rule changed", f"{line} changed={changed}")
     return answer

@@ -782,6 +782,12 @@ export interface DataAsset extends PriceInstrument {
   epic?: string
   instrument_type?: string | null
   decimals?: number | null
+  /**
+   * One step of its price, what a range of R<ticks> is counted in: it is the
+   * asset's own (0.1 on Capital.com's US100, 0.001 on Dukascopy's). Null
+   * while nothing says it (a Saxo instrument not yet quoted).
+   */
+  tick?: number | null
 }
 
 export interface DataAssets {
@@ -2041,6 +2047,8 @@ export interface TaRuleFields {
   alert_calls: 'ignore' | 'message'
   confidence_plot: string | null
   indice: string
+  /** Its own days of bars before each engine day; absent or null: the engine's history_days. */
+  history_days?: number | null
 }
 
 export interface TaRule extends Omit<TaRuleFields, 'script'> {
@@ -2065,6 +2073,8 @@ export interface TaRules {
   indices: string[]
   /** The instruments the Capital.com feed records: what a rule can run on. */
   instruments: { epic: string; label: string }[]
+  /** The engine's history_days: what a rule without its own is given. */
+  engine_history_days: number
 }
 
 export interface TaRuleSaved {
@@ -2206,6 +2216,8 @@ export interface McpLimits {
   study_timeout_seconds: number
   max_scripts: number
   max_shadow_rules: number
+  /** What a day of the engine may cost one of Claude's shadow rules, in ms. */
+  shadow_day_ms: number
   min_free_disk_gb: number
   shadow_rules: boolean
 }

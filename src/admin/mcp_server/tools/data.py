@@ -27,6 +27,8 @@ def _asset_line(asset: dict) -> dict:
     line = {
         "ref": asset["ref"], "name": asset.get("description") or asset.get("symbol"), "role": asset.get("role"),
         "indice": asset.get("indice"), "first": iso_moment(asset.get("first_t")), "last": iso_moment(asset.get("last_t")),
+        # What R<ticks> is counted in: 0.1 on Capital.com's US100 (R60 is 6 points), 0.001 on Dukascopy's.
+        "tick": asset.get("tick"),
     }
     if asset.get("role") == "turbo":
         line.update(direction=asset.get("direction"), barrier=asset.get("barrier"), issuer=asset.get("issuer"))

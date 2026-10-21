@@ -14,6 +14,8 @@ def test_every_limit_has_a_default():
     assert limits == McpLimits()
     assert limits.shadow_rules is False
     assert limits.max_waiting_runs == 3
+    # A day of the engine a shadow rule may take, in ms: the operator raises it for a heavier script.
+    assert limits.shadow_day_ms == 2000 and McpLimits.from_config({"shadow_day_ms": 5000}).shadow_day_ms == 5000
 
 
 def test_the_example_configuration_states_the_defaults():
@@ -30,6 +32,8 @@ def test_the_example_configuration_states_the_defaults():
     ({"max_waiting_runs": 2.5}, "max_waiting_runs"),
     ({"runs_per_day": True}, "runs_per_day"),
     ({"study_memory_mb": 4096}, "study_memory_mb"),
+    ({"shadow_day_ms": 100}, "shadow_day_ms"),
+    ({"shadow_day_ms": 20_000}, "shadow_day_ms"),
     ({"shadow_rules": "yes"}, "shadow_rules"),
     ({"go_live": True}, "Unknown field"),
     ([], "must be an object"),

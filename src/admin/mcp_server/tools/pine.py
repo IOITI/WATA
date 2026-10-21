@@ -146,15 +146,17 @@ def register_studies(server, research) -> None:
                    seconds=seconds)
     async def pine_signals(asset: str, start_day: date, alerts: dict, end_day: date | None = None, bars: str = "1",
                            side: str = "bid", script_id: str = "", version: int = 0, source: str = "", name: str = "",
-                           inputs: dict | None = None, alert_calls: str = "ignore") -> dict:
+                           inputs: dict | None = None, alert_calls: str = "ignore", history_days: int | None = None) -> dict:
         """The signals a signal rule of this script would have raised, day by day of the TA engine (from its daily
-        restart, with its history_days of bars before), each alert mapped by its title as ``alerts`` says:
-        {"Long": "long", "Short": "short", "Exit": "close-position"} (or ignore, message). Per day: bars, alerts,
-        signals; the signals themselves (bar time, close, action). The runner's answers are shared with the
-        backtests: the same days run again cost nothing."""
+        restart, with its history_days of bars before: the engine's, or 0 to 30 as a rule's own), each alert mapped
+        by its title as ``alerts`` says: {"Long": "long", "Short": "short", "Exit": "close-position"} (or ignore,
+        message). Per day: bars, alerts, signals, the runner's time; the signals themselves (bar time, close,
+        action). The runner's answers are shared with the backtests: the same days run again cost nothing."""
         request = _study_request(research, script_id=script_id, version=version, source=source, name=name, asset=asset,
                                  bars=bars, side=side, inputs=inputs or {}, start_day=start_day, end_day=end_day,
                                  alerts=alerts, alert_calls=alert_calls)
+        if history_days is not None:
+            request["history_days"] = history_days
         return compacted(await _studies(research).study("signals", request))
 
     @research_tool(server, calls, name="pine_compare", title="A script's signals beside TradingView's", read_only=True,

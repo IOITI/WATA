@@ -129,6 +129,31 @@ def test_a_rule_that_fails_is_slow_or_too_long_is_not_saved(shadow, scripts, stu
     assert stored(shadow) == []
 
 
+def test_the_time_a_day_may_take_is_the_operators_to_raise(shadow, scripts):
+    shadow.studies = Studies(milliseconds=3500)
+
+    refused = new_rule(shadow, scripts)
+    shadow.limits = McpLimits(shadow_rules=True, shadow_day_ms=4000)
+    saved = new_rule(shadow, scripts)
+
+    assert refused["saved"] is False and "over 2000 (admin.mcp.shadow_day_ms)" in refused["why"]
+    assert saved["saved"] and saved["measured"]["most_milliseconds"] == 3500
+
+
+def test_a_rule_with_its_own_history_is_run_first_on_it(shadow, scripts):
+    made = new_rule(shadow, scripts, history_days=0)
+    renamed = answer(shadow, "rule_shadow_save", {"rule_id": made["id"], "name": "cross from the restart"})
+    kept = stored(shadow)[0]
+    engines = answer(shadow, "rule_shadow_save", {"rule_id": made["id"], "history_days": -1})
+
+    (_, first), (_, again) = shadow.studies.asked
+    # No day before, as the engine will run it; a new name runs nothing; the engine's history again runs it first.
+    assert first["history_days"] == 0 and kept["history_days"] == 0 and renamed["measured"] is None
+    assert "history_days" not in again and engines["measured"]["ran"]
+    assert "history_days" not in stored(shadow)[0]
+    assert "history is 0 to 30 days" in refusal(shadow, "rule_shadow_save", {"rule_id": made["id"], "history_days": 31})
+
+
 @pytest.mark.parametrize("last_t, said", [(None, "has not recorded US100"), (NOW - 6 * 86400, "last recorded US100 on 2026-10-13")])
 def test_a_rule_runs_only_on_an_epic_the_feed_records_now(shadow, scripts, last_t, said):
     shadow.queries = ReadQueries(Feed(last_t))

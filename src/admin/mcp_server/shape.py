@@ -1,6 +1,7 @@
 """
 How the tools' answers are made small enough to read: numbers to six
-significant digits, long lists a page at a time, tables as CSV when they are
+significant digits but never fewer than three decimals (an index's price keeps
+its thousandths), long lists a page at a time, tables as CSV when they are
 meant for a file, and the lock box's days refused.
 """
 
@@ -16,13 +17,17 @@ MAX_PAGE = 500
 
 
 def compacted(value):
-    """The same data with every float to six significant digits (a figure, a price, a percentage)."""
+    """
+    The same data with every float to six significant digits (a figure, a price, a
+    percentage), but never fewer than three decimals: six digits of Dukascopy's
+    29143.543 were 29143.5, which hid the third decimal its range bars count in.
+    """
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
             return None
-        return float(f"{value:.6g}")
+        return float(f"{value:.6g}") if abs(value) < 1000 else round(value, 3)
     if isinstance(value, dict):
         return {key: compacted(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

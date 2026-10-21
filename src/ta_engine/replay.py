@@ -34,7 +34,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-from src.admin.prices import price_decimals
+from src.admin.prices import price_decimals, range_points, tick_of
 from src.admin.ta_rules import (
     ALERT_ACTIONS,
     IGNORE,
@@ -51,12 +51,20 @@ from src.admin.ta_scripts import ScriptNotFound, ScriptStore
 from src.ta_engine.bars import RangeBars, TimeBars
 from src.ta_engine.rules import EngineRule
 from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerFailed, find_node, runner_command
-from src.ta_engine.signals import Candidate, interpret, iso_seconds
+from src.ta_engine.signals import Candidate, interpret, iso_seconds, settled
 from src.ta_engine.tickers import Ticker, parse_ticker
 
 DAY = 86_400
 # The one rule the runner holds during a replay: each day is loaded again under it.
 REPLAY_RULE_ID = "replay00000a"
+# The bars of an engine day the runner is given at most. It held 590 MB at 49,107 bars of a
+# timezone-heavy script (measured 2026-10-21), in an admin of 1.5 GB shared with the backtest's
+# child: ten-second bars with two days of history (25,920) pass, a range far below the asset's
+# tick (R600 on Dukascopy: 0.6 points, about 100,000 bars with a day of history) does not.
+MAX_WINDOW_BARS = 40_000
+# The ten-second rows given to a builder at a time, so that a day of too many bars is refused
+# before they are all built: R1 on Dukascopy's thousandths makes thousands of bars of each row.
+_BUILD_ROWS = 64
 _ROW_COLUMNS = ("bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close", "updates")
 
 
@@ -78,7 +86,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--map", action="append", default=[], help="TITLE=ACTION for an alertcondition (repeatable)")
     parser.add_argument("--messages", action="store_true", help="read every alert, and every alert() call, as a message")
     parser.add_argument("--indice", default="us100")
-    parser.add_argument("--history-days", type=int, help="the engine's history_days (its configuration by default)")
+    parser.add_argument("--history-days", type=int,
+                        help="the days of bars before each day (the rule's own, else the engine's configuration)")
     parser.add_argument("--restart-time", help="the engine's restart_time, HH:MM UTC (its configuration by default)")
     parser.add_argument("--root", help="the Technical Analysis folder")
     parser.add_argument("--prices", help="the price history folder (day files)")
@@ -204,7 +213,7 @@ class AssetRows:
                     raise ValueError(f"The Capital.com feed has not recorded {key}")
                 return await self._capital.rows(instrument["id"], start, end), instrument["decimals"]
             if self._files_root is not None:
-                return self._capital_files(key, start, end), None
+                return self._capital_files(key, start, end), self._capital_decimals(key)
             raise ValueError("No database to read Capital.com's bars from (WATA_CONFIG_PATH)")
         if provider == "saxo":
             if not key.isdigit():
@@ -242,6 +251,15 @@ class AssetRows:
         rows = self._from_files(f"capital:{epic}", pattern, lambda row: row.get("symbol") == epic)
         return [row for row in rows if start <= row[0] < end]
 
+    def _capital_decimals(self, epic: str) -> int | None:
+        """
+        The epic's decimals, read from its day files, which name no instrument: those its
+        prices carry (US100's one), as the feed's table says them. Saxo's floor of two
+        would make R60 0.6 points of US100 instead of the 6 the TA engine counts.
+        """
+        found = self._file_rows.get(f"capital:{epic}") or []
+        return price_decimals([row[4] for row in found[:2000]], minimum=0) if found else None
+
     def _saxo_files(self, instrument_id: int, start: int, end: int) -> list[tuple]:
         pattern = os.path.join(self._files_root, "saxo", "*.csv.gz")
         rows = self._from_files(
@@ -251,12 +269,58 @@ class AssetRows:
         return [row for row in rows if start <= row[0] < end]
 
 
-def _builder(bars: dict, side: str, rows: list, decimals: int | None, ticks: int | None = None):
-    if bars["type"] == "time" and ticks is None:
+class DayTooLarge(ValueError):
+    """An engine day of more bars than the runner is given: a range small for the asset's tick, or a long history."""
+
+
+def _decimals(rows: list, decimals: int | None) -> int:
+    """The decimals of an asset's prices: its own when its feed says them (Capital.com), else read from its bids."""
+    return decimals if decimals is not None else price_decimals([row[4] for row in rows[:2000]])
+
+
+def _builder(bars: dict, side: str, rows: list, decimals: int | None):
+    if bars["type"] == "time":
         return TimeBars(timeframe_seconds(bars["timeframe"]), side)
-    if decimals is None:
-        decimals = price_decimals([row[4] for row in rows[:2000]])
-    return RangeBars(ticks or bars["ticks"], decimals, side)
+    return RangeBars(bars["ticks"], _decimals(rows, decimals), side)
+
+
+def _decimal(value: float, decimals: int) -> str:
+    return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+
+
+def too_large(asset: str, bars: dict, decimals: int | None) -> DayTooLarge:
+    """
+    Why an engine day of more than MAX_WINDOW_BARS bars is not given to the
+    runner, saying what the range is on this asset: a tick is the asset's own,
+    so R60 is 6 points on Capital.com's US100 and 0.06 on Dukascopy's.
+    """
+    label = bars_label(bars)
+    if bars["type"] == "range":
+        named = label
+    else:
+        seconds = timeframe_seconds(bars["timeframe"])
+        named = f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds} s"
+    said = f"This engine day has more than {MAX_WINDOW_BARS:,} bars of {named} on {asset}"
+    if bars["type"] == "range" and decimals is not None:
+        size = range_points(bars["ticks"], decimals)
+        return DayTooLarge(
+            f"{said}: a tick of this asset is {_decimal(tick_of(decimals), decimals)}, so {label} is "
+            f"{_decimal(size, decimals)} point{'' if size == 1 else 's'}; one point is R{10 ** decimals} here"
+        )
+    return DayTooLarge(f"{said}: longer bars, or fewer days of history")
+
+
+def built_bars(builder, rows: list, end: int, refusal: DayTooLarge) -> list:
+    """The bars of an engine day's rows, built a few rows at a time: ``refusal`` is raised once they are too many."""
+    bars: list = []
+    for start in range(0, len(rows), _BUILD_ROWS):
+        bars += builder.add(rows[start:start + _BUILD_ROWS])
+        if len(bars) > MAX_WINDOW_BARS:
+            raise refusal
+    bars += builder.add([], end)
+    if len(bars) > MAX_WINDOW_BARS:
+        raise refusal
+    return bars
 
 
 def engine_windows(start: int, end: int, restart_minute: int) -> list[tuple[int, int]]:
@@ -404,11 +468,14 @@ class ReplaySession:
         if ticker.range_ticks is None and seconds is None:
             raise ValueError(f"No bars of {timeframe!r}: from 10 seconds (10S) to a day (1440)")
         found, decimals = await self.rows.rows(ticker.provider, ticker.key, self._current["anchor"], self._current["end"])
-        builder = (
-            RangeBars(ticker.range_ticks, decimals if decimals is not None else price_decimals([r[4] for r in found[:2000]]), ticker.side)
-            if ticker.range_ticks else TimeBars(seconds, ticker.side)
-        )
-        bars = builder.add(found, self._current["end"])
+        if ticker.range_ticks:
+            decimals = _decimals(found, decimals)
+            asked = {"type": "range", "ticks": ticker.range_ticks}
+            builder = RangeBars(ticker.range_ticks, decimals, ticker.side)
+        else:
+            asked = {"type": "time", "timeframe": timeframe}
+            builder = TimeBars(seconds, ticker.side)
+        bars = built_bars(builder, found, self._current["end"], too_large(f"{ticker.provider}/{ticker.key}", asked, decimals))
         start, end = ask.get("from"), ask.get("to")
         return [bar for bar in bars if (start is None or bar[0] >= start) and (end is None or bar[0] <= end)]
 
@@ -424,7 +491,10 @@ class ReplaySession:
         anchor = begin - self.history_days * DAY
         self._current.update(anchor=anchor, end=end)
         found, decimals = await self.rows.rows(rule["asset"]["provider"], rule["asset"]["key"], anchor, end)
-        bars = _builder(rule["bars"], rule["side"], found, decimals).add(found, end)
+        if rule["bars"]["type"] == "range":
+            decimals = _decimals(found, decimals)
+        refusal = too_large(f"{rule['asset']['provider']}/{rule['asset']['key']}", rule["bars"], decimals)
+        bars = built_bars(_builder(rule["bars"], rule["side"], found, decimals), found, end, refusal)
         window = ReplayedWindow(begin=begin, end=end, history_from=anchor, bars=len(bars), strategy_bars=bars)
         if not bars:
             return window
@@ -468,6 +538,14 @@ class ReplaySession:
                 plots=answer.get("plots") or {}, now=bar[6] / 1000,
             )
             window.alerts.append(ReplayedAlert(alert=alert, bar=bar, candidate=candidate))
+        # One trade a bar, as the engine sends them: an entry wins over a close of the same bar.
+        by_bar: dict[int, list[ReplayedAlert]] = {}
+        for replayed in window.alerts:
+            if replayed.candidate is not None:
+                by_bar.setdefault(replayed.bar[0], []).append(replayed)
+        for of_bar in by_bar.values():
+            for replayed, candidate in zip(of_bar, settled([entry.candidate for entry in of_bar])):
+                replayed.candidate = candidate
         return window
 
 
@@ -512,7 +590,6 @@ async def asset_rows_for(config, prices_root: str, provider: str, files_root: st
 async def replay(args: argparse.Namespace) -> dict:
     config = _config()
     ta_root, prices_root, history_days, restart = ta_settings(config)
-    history_days = history_days if args.history_days is None else args.history_days
     restart = restart if args.restart_time is None else args.restart_time
     scripts = ScriptStore(args.root or ta_root)
     if args.rule:
@@ -520,6 +597,8 @@ async def replay(args: argparse.Namespace) -> dict:
     else:
         rule = _script_rule(args, scripts)
     RuleStore(scripts).verify(rule)
+    # As the engine runs it: the rule's own history when it has one.
+    history_days = rule.get("history_days", history_days) if args.history_days is None else args.history_days
     engine_rule = engine_rule_of(rule, scripts)
 
     rows, pg = await asset_rows_for(config, args.prices or prices_root, rule["asset"]["provider"])

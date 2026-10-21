@@ -24,6 +24,9 @@ _BOUNDS = {
     "max_scripts": (100, 1, 500),
     # Shadow rules Claude keeps at once.
     "max_shadow_rules": (3, 0, 10),
+    # What a day of the engine may cost one of them, in ms: the engine runs its script over
+    # all of its bars at each new one, so a day's run is about what each bar costs at its end.
+    "shadow_day_ms": (2000, 500, 10_000),
     # Nothing is started when the disk has less than this free.
     "min_free_disk_gb": (5, 1, 1000),
 }
@@ -39,6 +42,7 @@ class McpLimits:
     study_timeout_seconds: int = 90
     max_scripts: int = 100
     max_shadow_rules: int = 3
+    shadow_day_ms: int = 2000
     min_free_disk_gb: int = 5
     # Claude's shadow rules: off until the operator has watched the isolated TA engine at work.
     shadow_rules: bool = False

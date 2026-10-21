@@ -23,6 +23,8 @@ def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict |
         "id": rule["id"], "name": rule["name"], "mode": rule["mode"], "made_by": rule.get("made_by"),
         "indice": rule["indice"], "asset": f"{rule['asset']['provider']}/{rule['asset']['key']}", "side": rule["side"],
         "bars": bars_label(rule["bars"]),
+        # Its own days of bars before each engine day; None: the engine's.
+        "history_days": rule.get("history_days"),
         "script": {"id": rule["script"]["id"], "version": rule["script"]["version"], "name": script.get("name"),
                    "latest_version": script.get("version")},
         "inputs": {entry["id"]: entry.get("value") for entry in rule.get("inputs") or []},
@@ -81,12 +83,13 @@ the Capital.com feed records and journals its signals, never sends them; each fi
 (rule_list shows those days beside its reference run). A new rule needs name (Claude · is put first), script_id (an
 indicator or strategy; version: its current one by default), asset (capital/<EPIC>), indice (us100...) and alerts by
 title ({"Long": "long", "Short": "short", "Exit": "close-position"}, or ignore, message); bars 1, 5, 15, 60 (minutes)
-or R<ticks>, side bid or ask, inputs by id ({"in_0": 9}), alert_calls ignore or message. A change sets only what is
-given: inputs and alerts given are set by id and title, the others kept (all dropped for another script). mode shadow
-or off. Before it runs, it is run as the engine would on the last finished day of its epic: it is saved only if it ran
-without failing, each engine day in at most 2 s and on at most 20,000 bars (what comes back is its bars and time,
-no signal). Going live is the operator's alone, on the Signal rules page. Only once the operator switched Claude's
-shadow rules on."""
+or R<ticks>, side bid or ask, inputs by id ({"in_0": 9}), alert_calls ignore or message, history_days (0 to 30 days
+of bars before each engine day, for a script that needs less warm-up than the engine's or more; -1 gives it the
+engine's again). A change sets only what is given: inputs and alerts given are set by id and title, the others kept
+(all dropped for another script). mode shadow or off. Before it runs, it is run as the engine would on the last
+finished day of its epic: it is saved only if it ran without failing, each engine day within admin.mcp.shadow_day_ms
+(status's limits, 2 s by default) and on at most 20,000 bars (what comes back is its bars and time, no signal). Going
+live is the operator's alone, on the Signal rules page. Only once the operator switched Claude's shadow rules on."""
 
 
 def register_shadow(server, research) -> None:
@@ -99,10 +102,14 @@ def register_shadow(server, research) -> None:
     async def rule_shadow_save(rule_id: str = "", name: str = "", script_id: str = "", version: int = 0,
                                asset: str = "", indice: str = "", alerts: dict | None = None, bars: str = "",
                                side: str = "", inputs: dict | None = None, alert_calls: str = "",
-                               mode: str = "shadow") -> dict:
+                               history_days: int | None = None, mode: str = "shadow") -> dict:
         given = {"name": name, "script_id": script_id, "version": version, "asset": asset, "indice": indice,
                  "alerts": alerts, "bars": bars, "side": side, "inputs": inputs, "alert_calls": alert_calls}
-        return compacted(await shadow.save({key: value for key, value in given.items() if value}, rule_id, mode))
+        given = {key: value for key, value in given.items() if value}
+        if history_days is not None:
+            # 0 is a history too: no day before.
+            given["history_days"] = history_days
+        return compacted(await shadow.save(given, rule_id, mode))
 
     @research_tool(server, calls, name="rule_shadow_remove", title="Delete one of Claude's shadow rules", read_only=False,
                    destructive=True)
