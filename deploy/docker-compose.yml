@@ -55,6 +55,19 @@ services:
     image: postgres:16-alpine
     hostname: postgres1
     container_name: 'postgres'
+    # Memory for the price tables that backtests and the Data pages read a day at a time: a third of
+    # the container for PostgreSQL's own buffers, the planner told of the file cache beside them, and
+    # more for each sort or hash of a query before it spills to disk.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+    # Parallel queries share memory through /dev/shm, 64 MB in a container unless it is said.
+    shm_size: 256m
     environment:
       - POSTGRES_USER=wata
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}
@@ -77,7 +90,7 @@ services:
         window: 120s
       resources:
         limits:
-          memory: 512M
+          memory: 1536M
 
   rabbitmq1:
     image: rabbitmq:3-management
@@ -338,8 +351,9 @@ services:
         limits:
           # Backtests run in this container, one at a time and at the lowest priority: the
           # admin, the backtest's command with a day of recorded turbos, and the Pine runner;
-          # and, with the MCP endpoint on, one of Claude's Pine studies beside them.
-          memory: 1536M
+          # and, with the MCP endpoint on, one of Claude's Pine studies beside them (a heap of
+          # admin.mcp.study_memory_mb). Sized for a server of 8 GB.
+          memory: 3072M
           # One processor at most: the rest stays with the services that trade.
           cpus: '1.0'
     depends_on:

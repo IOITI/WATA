@@ -172,8 +172,15 @@ def test_a_study_whose_call_is_given_up_is_stopped(tmp_path):
     assert launcher.processes[0].killed
 
 
+MEMORY_STAT = "anon 314572800\nfile 268435456\nactive_file 67108864\ninactive_file 201326592\nshmem 0\n"
+
+
 @pytest.mark.parametrize("files,expected", [
     ({"memory.max": "1073741824\n", "memory.current": "536870912\n"}, (536870912, 1073741824)),
+    # The file cache the kernel takes back when asked (inactive_file) is not used memory; the active one is.
+    ({"memory.max": "1073741824\n", "memory.current": "536870912\n", "memory.stat": MEMORY_STAT}, (335544320, 1073741824)),
+    ({"memory.max": "1073741824\n", "memory.current": "1048576\n", "memory.stat": MEMORY_STAT}, (0, 1073741824)),
+    ({"memory.max": "1073741824\n", "memory.current": "536870912\n", "memory.stat": "inactive_file many\n"}, (536870912, 1073741824)),
     ({"memory.max": "max\n", "memory.current": "1"}, None),
     ({}, None),
 ])

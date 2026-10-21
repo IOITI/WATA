@@ -320,12 +320,25 @@ def test_backtests_cannot_take_more_than_one_processor_from_the_services_that_tr
 
     assert float(limits["cpus"]) <= 1.0
     # The admin, a backtest's command with a day of recorded turbos, the Pine runner it starts,
-    # and one of Claude's Pine studies beside them.
-    assert limits["memory"] == "1536M"
+    # and one of Claude's Pine studies beside them, on a server of 8 GB.
+    assert limits["memory"] == "3072M"
     # No other service is capped: the trader and the position monitor keep what the machine has.
     for name, service in compose_services.items():
         if name != "admin1":
             assert "cpus" not in ((service.get("deploy") or {}).get("resources") or {}).get("limits", {}), name
+
+
+def test_the_database_keeps_the_price_tables_in_memory(compose_services):
+    postgres = compose_services["postgres1"]
+    command = postgres["command"]
+    settings = dict(value.split("=", 1) for flag, value in zip(command[1::2], command[2::2]) if flag == "-c")
+
+    assert command[0] == "postgres" and len(command) == 1 + 2 * len(settings)
+    assert postgres["deploy"]["resources"]["limits"]["memory"] == "1536M"
+    # A third of the container for its own buffers, the file cache the planner counts on beside them.
+    assert settings == {"shared_buffers": "512MB", "effective_cache_size": "1GB", "work_mem": "16MB"}
+    # Parallel queries share memory through /dev/shm, 64 MB in a container unless it is said.
+    assert postgres["shm_size"] == "256m"
 
 
 # ── The image and what CI does with it ──

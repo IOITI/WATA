@@ -330,7 +330,7 @@
       "runs_per_day": 60,
       "max_day_simulations": 10000,
       "study_minutes_per_hour": 20,
-      "study_memory_mb": 384,
+      "study_memory_mb": 768,
       "study_timeout_seconds": 90,
       "max_scripts": 100,
       "max_shadow_rules": 3,

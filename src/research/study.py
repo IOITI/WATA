@@ -71,7 +71,7 @@ STUDY_NICE = 10
 MODES = ("check", "run", "signals")
 # A script not saved yet runs under this id: it pins nothing that is on disk.
 DRAFT_ID = "draft0000000"
-DEFAULT_MEMORY_MB = 384
+DEFAULT_MEMORY_MB = 768
 DEFAULT_TIMEOUT_SECONDS = 90
 # What one run holds at most: about six days of ten-second bars, ten weeks of minutes.
 MAX_RUN_BARS = 50_000

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.26.2 - Long Pine backtests no longer run out of memory, and research gets more of the server
+
+**Release date:** not released yet
+
+### The Pine runner
+
+- **The Pine runner compiles a rule's script once while its source and inputs stay the same** (`load` in `admin_ui/src/features/ta/engine/runnerCore.ts`), where it compiled it at every load. Each PineTS compile leaves native memory behind that the process never gets back, about 60 MB for the Kernel VWAP script. That memory lies outside V8's heap, so `--max-old-space-size` does not bound it: with a heap of 512 MB instead of 1,024 the runner grew the same way, to 1.3 GB. A backtest loads its script again for each engine day. On the server the runner of the 90-day Kernel VWAP run was killed by the kernel every 10 to 20 engine days in the admin's 1,536 MB, and the run finished only on its tenth attempt, each one reading the days already done from the day cache. Each day also ran slower than the one before, 2.8 s on the first and 9.7 s on the thirtieth of the same size.
+- Now, over 90 engine days of that script, the runner holds 405 to 450 MB and runs a day in about 1 s.
+- **The TA engine's runner gains too**: the engine loads each rule again at its daily restart, with the same script and inputs.
+
+### Memory limits for a server of 8 GB
+
+WATA used about 1.25 GB of the server's 8 GB at rest, and the two limits that were reached were the admin's and PostgreSQL's (`deploy/docker-compose.yml`):
+
+- **The admin container gets 3 GB** (1.5 GB before). A backtest, its Pine runner and one of Claude's Pine studies fit side by side. It keeps its one processor, so the services that trade keep the rest.
+- **PostgreSQL gets 1.5 GB** (512 MB before) and settings of its own, where it ran on the image's defaults: `shared_buffers` 512 MB (128 MB), `effective_cache_size` 1 GB, `work_mem` 16 MB (4 MB), and a `/dev/shm` of 256 MB (64 MB) for the memory parallel queries share. More of the price tables that backtests and the Data pages read stays in memory.
+- **A Pine study gets a heap of 768 MB** (`admin.mcp.study_memory_mb`, 384 before, still 128 to 1,024).
+- **The free memory a study waits for leaves out the file cache the kernel takes back** (`inactive_file` of the container's `memory.stat`, `cgroup_memory` in `src/admin/studies.py`). The price files and the runner's day cache the admin reads filled its memory with cache, and a study could be refused with nothing really short. A run that dies says the admin's memory then on the same measure.
+- The other containers keep their limits; the trader has none.
+
+**On the live path**: the TA engine's runner keeps a rule's compiled script when the rule is loaded again unchanged; a rule with another version or other inputs is compiled again. The deploy recreates the PostgreSQL container with its new settings, so the database restarts: deploy while the market is closed. The trader, the web server and the position monitor are untouched. Backtests give the same signals and are not marked stale (the code digest covers the Python code), but the runner's day cache starts empty after the deploy: its keys hold the runner's build.
+
+**Verification status:**
+- A test of the runner core (`runnerCore.test.ts`): a rule loaded twice with the same script and inputs makes one indicator and answers what a fresh compile answers (alerts, plots, inputs); other inputs, or another rule, are compiled for themselves. It fails without the change. 843 tests pass in the interface's suite; lint, type checks, the build, `build:runner` and `build:checker` are clean.
+- Measured on this Mac with the built runner and the Kernel VWAP scripts (the lean copy and the full one with `request.security`) on 30 to 90 made-up Capital.com days of 5,300 R60 bars: the same alerts on every day before and after the change, memory flat, a day in 0.9 to 1.7 s. Before it: 1.2 GB and 9.7 s by the thirtieth day.
+- `tests/test_deploy_compose.py` holds both containers' limits and PostgreSQL's settings; a test reads the container's memory with and without its inactive file cache.
+
+**Not seen:** the server. After the deploy:
+- the limits: 3 GiB for `admin1` and 1.5 GiB for `postgres` (`docker stats`), `SHOW shared_buffers` 512MB in the database;
+- a Pine backtest of more than three weeks finishing at its first attempt, the runner's peak (`runner_peak_mb` in its progress) under about 500 MB;
+- `admin.mcp.study_memory_mb` in the server's `config.json`: where it says 384 (the example's value when the deploy of v0.23.0 added `admin.mcp`), it stays 384 until it is changed to 768 or removed. The MCP `status` tool shows the value in use (`limits`).
+
 ## v0.26.1 - certifi no longer trusts the compromised emSign root
 
 **Release date:** 2026-10-21, not deployed yet

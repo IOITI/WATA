@@ -124,6 +124,8 @@ export type RunnerResponse =
 
 interface Loaded {
   indicator: Indicator
+  /** The source and inputs the indicator was compiled from. */
+  compiled: string
   prepared: PreparedScript
   ticker: string
   timeframe: string
@@ -225,9 +227,10 @@ export class Runner {
         case 'hello':
           return { id: request.id, ok: true, op: 'hello', ...this.versions }
         case 'load': {
+          const previous = this.rules.get(request.rule)
           this.rules.delete(request.rule)
           prepared = await this.prepare(request)
-          return await this.load(request, prepared)
+          return await this.load(request, prepared, previous)
         }
         case 'append':
           prepared = this.rules.get(request.rule)?.prepared ?? null
@@ -262,12 +265,21 @@ export class Runner {
     return prepared
   }
 
-  private async load(request: LoadRequest, prepared: PreparedScript): Promise<RunnerResponse> {
-    const indicator = new Indicator(prepared.source, request.inputs ?? {})
-    // Compiled once: each run of the rule uses the same.
-    indicator.prepare()
+  private async load(request: LoadRequest, prepared: PreparedScript, previous?: Loaded): Promise<RunnerResponse> {
+    const inputs = request.inputs ?? {}
+    const compiled = JSON.stringify([prepared.source, inputs])
+    // Compiled once: each run of the rule uses the same, and so does the rule loaded again with the same
+    // script and inputs (each day of a replay, the engine's daily restart). Each compile leaves native
+    // memory behind that the process never gets back, about 60 MB for the Kernel VWAP script: a backtest
+    // that compiled it every engine day was killed for memory after 10 to 20 days, each day slower.
+    let indicator = previous?.compiled === compiled ? previous.indicator : null
+    if (indicator === null) {
+      indicator = new Indicator(prepared.source, inputs)
+      indicator.prepare()
+    }
     const loaded: Loaded = {
       indicator,
+      compiled,
       prepared,
       ticker: request.ticker,
       timeframe: request.timeframe,

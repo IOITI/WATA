@@ -1,11 +1,24 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { SeriesAsk } from './provider'
 import { detailOf, MAX_RUNTIME_WARNINGS, plotValuesAt, Runner } from './runnerCore'
 import type { BarRow, PinnedLibrary, RunnerResponse } from './runnerCore'
+
+// PineTS as it is, counting the indicators made: each one is a compile of a script.
+const made = vi.hoisted(() => ({ indicators: 0 }))
+vi.mock('pinets', async (importOriginal) => {
+  const pinets = await importOriginal<typeof import('pinets')>()
+  class Counted extends pinets.Indicator {
+    constructor(...args: ConstructorParameters<typeof pinets.Indicator>) {
+      super(...args)
+      made.indicators += 1
+    }
+  }
+  return { ...pinets, Indicator: Counted }
+})
 
 const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
 const MINUTE = 60_000
@@ -102,6 +115,28 @@ describe('the runner of the TA engine', () => {
     const expected = whole.op === 'load' ? whole.alerts.filter((alert) => alert.time >= from) : []
     expect(added).toEqual(expected)
     expect(added.length).toBeGreaterThan(0)
+  })
+
+  it('compiles a rule once while its script and inputs stay the same', async () => {
+    const target = runner()
+    const before = made.indicators
+    ok(await load(target, 'r1', bars(200)))
+    // Another day of the rule, as a replay loads it: other bars, the same script and inputs.
+    const again = ok(await load(target, 'r1', bars(200, 120)))
+    expect(made.indicators - before).toBe(1)
+
+    // What a runner that compiles the script afresh answers on the same bars.
+    const fresh = ok(await load(runner(), 'r1', bars(200, 120)))
+    if (again.op !== 'load' || fresh.op !== 'load') return
+    expect(again.alerts.length).toBeGreaterThan(0)
+    expect(again.alerts).toEqual(fresh.alerts)
+    expect(again.plots).toEqual(fresh.plots)
+    expect(again.inputs).toEqual(fresh.inputs)
+
+    // Other inputs, or another rule, are compiled for themselves.
+    ok(await load(target, 'r1', bars(200, 120), { inputs: { in_0: 6 } }))
+    ok(await load(target, 'r2', bars(200, 120)))
+    expect(made.indicators - before).toBe(4)
   })
 
   it('answers only the alerts and plots of the bars added', async () => {

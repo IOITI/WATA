@@ -301,6 +301,8 @@ The current stack is defined in `deploy/docker-compose.yml`; it does not use the
 
 The Compose file uses health checks and service dependencies for PostgreSQL, RabbitMQ, and Traefik. Traefik is the public HTTPS ingress; the other application services communicate over the internal Compose network.
 
+The memory limits are sized for a server of 8 GB, of which WATA uses about 1.25 GB at rest. The two that are reached are the admin's 3 GB (backtests, their Pine runner and Claude's Pine studies, see below) and PostgreSQL's 1.5 GB, with `shared_buffers` 512 MB, `effective_cache_size` 1 GB, `work_mem` 16 MB and a `/dev/shm` of 256 MB, so that the price tables backtests read stay in memory. On a smaller server, lower both in `deploy/docker-compose.yml`. A change to PostgreSQL's restarts the database: make it while the market is closed.
+
 ### Configuration
 
 After deployment, you need to set up your configuration:
@@ -864,7 +866,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 
 What it does on the server:
 
-- **One run at a time, at the lowest priority.** A backtest is a separate process started by the admin. Others wait their turn (ten at most), and a run stops after three hours. The admin container is limited to one processor, so the services that trade keep the rest. Its memory is 1.5 GB, for the run and its Pine runner, and one of Claude's Pine studies beside them.
+- **One run at a time, at the lowest priority.** A backtest is a separate process started by the admin. Others wait their turn (ten at most), and a run stops after three hours. The admin container is limited to one processor, so the services that trade keep the rest. Its memory is 3 GB, for the run and its Pine runner, and one of Claude's Pine studies beside them.
 - **It only reads the database.** The run reads the recorded turbos itself, one day at a time, through a read-only connection to PostgreSQL. A replay of the journal reads the journal through the admin's own connection.
 - **Its results are files**, one folder per run under `/app/wata/var/lib/backtests/runs/`. "Remove" deletes the folder.
 - **It is on with the admin interface.** `"backtests_enabled": false` in the `admin` section of `config.json` switches it off.
@@ -1001,7 +1003,7 @@ Thirty-nine tools, in groups: `status`; the data (`data_assets`, `data_coverage`
 | `runs_per_day` | `60` | Runs Claude may ask for a day (UTC) |
 | `max_day_simulations` | `10000` | Days a request may simulate: its trading days (weekdays outside the closed dates) × combinations, or × 1 + random repetitions |
 | `study_minutes_per_hour` | `20` | Minutes of Pine studies an hour |
-| `study_memory_mb` | `384` | A study's Node heap |
+| `study_memory_mb` | `768` | A study's Node heap (128 to 1,024). A study starts only with that much and 128 MB more free in the admin, the file cache the kernel takes back not counted as used |
 | `study_timeout_seconds` | `90` | A study's time limit |
 | `max_scripts` | `100` | Claude's scripts |
 | `max_shadow_rules` | `3` | Claude's rules that are not live |
@@ -1045,7 +1047,7 @@ Thirty-nine tools, in groups: `status`; the data (`data_assets`, `data_coverage`
 
 ### What to keep in mind
 
-- **The server's room**: the admin has one processor and 1.5 GB. Studies run one at a time and are refused while a backtest leaves too little memory; heavy analysis goes to the Mac as CSV.
+- **The server's room**: the admin has one processor and 3 GB. Studies run one at a time and are refused while a backtest leaves too little memory; heavy analysis goes to the Mac as CSV.
 - **Unattended work** needs the Mac awake with its tunnel up: cloud sessions cannot reach the server.
 - **The data**: recorded turbos only begin on 2026-10-13, so every conclusion rests on few days for a while.
 - **What reaches Claude**: WATA's real trades and balance, never a key, an order body or a token.

@@ -17,8 +17,8 @@ _BOUNDS = {
     "max_day_simulations": (10_000, 100, 1_000_000),
     # Minutes of Pine studies (check, run, signals) in any hour.
     "study_minutes_per_hour": (20, 1, 60),
-    # The study's Node heap and time limit.
-    "study_memory_mb": (384, 128, 1024),
+    # The study's Node heap and time limit. The heap fits beside a backtest in the admin's 3 GB.
+    "study_memory_mb": (768, 128, 1024),
     "study_timeout_seconds": (90, 10, 300),
     # Scripts Claude keeps at once.
     "max_scripts": (100, 1, 500),
@@ -38,7 +38,7 @@ class McpLimits:
     runs_per_day: int = 60
     max_day_simulations: int = 10_000
     study_minutes_per_hour: int = 20
-    study_memory_mb: int = 384
+    study_memory_mb: int = 768
     study_timeout_seconds: int = 90
     max_scripts: int = 100
     max_shadow_rules: int = 3

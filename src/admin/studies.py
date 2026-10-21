@@ -33,7 +33,11 @@ CGROUP_ROOT = "/sys/fs/cgroup"
 
 
 def cgroup_memory(root: str = CGROUP_ROOT) -> tuple[int, int] | None:
-    """(used, limit) of the container's memory in bytes, or None where there is no limit to read."""
+    """
+    (used, limit) of the container's memory in bytes, or None where there is no limit to read. The
+    file cache the kernel takes back when memory is asked for (``inactive_file``) is not counted as
+    used: the price files and the runner's day cache the admin reads fill the container with it.
+    """
     try:
         with open(os.path.join(root, "memory.max"), encoding="utf-8") as limit_file:
             limit = limit_file.read().strip()
@@ -43,7 +47,20 @@ def cgroup_memory(root: str = CGROUP_ROOT) -> tuple[int, int] | None:
         return None
     if limit == "max":
         return None
-    return current, int(limit)
+    return max(0, current - _inactive_file(root)), int(limit)
+
+
+def _inactive_file(root: str) -> int:
+    """The container's inactive file cache in bytes (``memory.stat``), 0 where it cannot be read."""
+    try:
+        with open(os.path.join(root, "memory.stat"), encoding="utf-8") as stat_file:
+            for line in stat_file:
+                name, _, value = line.strip().partition(" ")
+                if name == "inactive_file":
+                    return int(value)
+    except (OSError, ValueError):
+        return 0
+    return 0
 
 
 class StudyService:
