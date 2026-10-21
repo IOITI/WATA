@@ -2,7 +2,7 @@
 
 ## v0.26.0 - Signal rules on seconds bars, model checks, and trials made elsewhere
 
-**Release date:** not released yet
+**Release date:** 2026-10-21, with v0.24.0 and v0.25.0
 
 The gaps marked "later" after the first research session through the MCP endpoint (2026-10-21).
 
@@ -38,7 +38,7 @@ The gaps marked "later" after the first research session through the MCP endpoin
 
 ## v0.25.0 - No entry around US releases, backtests on WATA's own fills, and MCP calls that end in time
 
-**Release date:** not released yet
+**Release date:** 2026-10-21, with v0.26.0
 
 The gaps marked "soon" after the first research session through the MCP endpoint (2026-10-21).
 
@@ -79,7 +79,7 @@ The gaps marked "soon" after the first research session through the MCP endpoint
 
 ## v0.24.0 - Range bars that say their size, faster time zones, and one trade a bar
 
-**Release date:** not released yet
+**Release date:** 2026-10-21, with v0.26.0
 
 The gaps marked "fix" after the first research session through the MCP endpoint (2026-10-21, the Kernel + Avg multi VWAP indicator).
 
