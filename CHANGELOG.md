@@ -2,7 +2,7 @@
 
 ## v0.26.3 - PineTS 0.12.0, Vela 0.8.5 and Vela-pinets 0.2.17
 
-**Release date:** not released yet
+**Release date:** 2026-10-21, with v0.26.1 and v0.26.2
 
 The three LuxAlgo packages of the Technical Analysis pages and the TA engine, released on 2026-10-19, pinned exactly as before (`admin_ui/package.json`). Nothing else changes in the lock file; their licences and Vela's NOTICE are the same.
 
@@ -22,7 +22,7 @@ The three LuxAlgo packages of the Technical Analysis pages and the TA engine, re
 
 ## v0.26.2 - Long Pine backtests no longer run out of memory, and research gets more of the server
 
-**Release date:** not released yet
+**Release date:** 2026-10-21, with v0.26.3
 
 ### The Pine runner
 
@@ -54,7 +54,7 @@ WATA used about 1.25 GB of the server's 8 GB at rest, and the two limits that we
 
 ## v0.26.1 - certifi no longer trusts the compromised emSign root
 
-**Release date:** 2026-10-21, not deployed yet
+**Release date:** 2026-10-21, deployed with v0.26.3
 
 - **certifi 2026.10.19** (from 2024.7.4), for GitHub's critical advisory GHSA-6q48-6c7w-9gw2 (Dependabot alert 46 on `main`). The bundle `requests` and `httpx` verify every HTTPS connection with trusted "emSign ECC Root CA - G3", eight of whose intermediate certificates had their private keys compromised: whoever holds one, and sits on the network path, could pass for any site. WATA's connections that go through it are Saxo's REST API and login (the trader's balances and orders), Capital.com's API, Telegram and Dukascopy. The new bundle drops that root and keeps the three emSign roots not affected (120 certificates where there were 147).
 - Nothing else changes: certifi needs no other package, and `requirements.txt` stays the whole environment (`tests/requirements_lock.py`).
