@@ -52,9 +52,10 @@ US100 = {
 }
 
 
-def _state(state="streaming", seconds_ago=5, detail="Streaming US100", **figures):
+def _state(state="streaming", seconds_ago=5, detail="Streaming US100", *, now=None, **figures):
+    """What the feed last wrote of itself, ``seconds_ago`` before ``now`` (the clock it is read against)."""
     return {
-        "updated_at": datetime.now(UTC) - timedelta(seconds=seconds_ago), "started_at": NOW - timedelta(hours=1),
+        "updated_at": (now or datetime.now(UTC)) - timedelta(seconds=seconds_ago), "started_at": NOW - timedelta(hours=1),
         "version": "0.20.0", "environment": "demo", "state": state, "detail": detail,
         "figures": {
             "instruments": [{"epic": "US100", "label": "us100", "market": "open", "status": "TRADEABLE",
@@ -68,29 +69,35 @@ def _state(state="streaming", seconds_ago=5, detail="Streaming US100", **figures
 # ── the feed's state and its assets, as plain functions ──
 
 
-@pytest.mark.parametrize("enabled, state, expected", [
+# Each state is the fields given to _state, made when the test runs: one made at collection would
+# look silent to a test run a minute later, as on a slow runner.
+@pytest.mark.parametrize("enabled, fields, expected", [
     (False, None, (DISABLED, "Switched off in the configuration")),
     (True, None, (DOWN, 'Never started: add "capital" to COMPOSE_PROFILES in .env and start it')),
-    (True, _state(seconds_ago=6 * 60), (DOWN, "No sign of it for 6 min")),
-    (True, _state(), (OK, "Streaming US100 · 4.1 quotes/s · delay 38 ms")),
-    (True, _state("connecting", detail="Connecting to Capital.com's stream"), (WARNING, "Connecting to Capital.com's stream")),
-    (True, _state("refused", detail="Capital.com refused the login (error.invalid.details): check ..."),
+    (True, {"seconds_ago": 6 * 60}, (DOWN, "No sign of it for 6 min")),
+    (True, {}, (OK, "Streaming US100 · 4.1 quotes/s · delay 38 ms")),
+    (True, {"state": "connecting", "detail": "Connecting to Capital.com's stream"}, (WARNING, "Connecting to Capital.com's stream")),
+    (True, {"state": "refused", "detail": "Capital.com refused the login (error.invalid.details): check ..."},
      (DOWN, "Capital.com refused the login (error.invalid.details): check ...")),
-    (True, _state("no_credentials", detail="No Capital.com login: CAPITAL_API_KEY missing in .env."),
+    (True, {"state": "no_credentials", "detail": "No Capital.com login: CAPITAL_API_KEY missing in .env."},
      (DOWN, "No Capital.com login: CAPITAL_API_KEY missing in .env.")),
-    (False, _state(), (WARNING, "Switched off in the configuration: it records until it is restarted")),
-    (True, _state("disabled", detail="switched off"), (WARNING, "Switched on in the configuration: it starts at its next start")),
-    (False, _state("disabled", detail="switched off"), (DISABLED, "Switched off in the configuration")),
+    (False, {}, (WARNING, "Switched off in the configuration: it records until it is restarted")),
+    (True, {"state": "disabled", "detail": "switched off"}, (WARNING, "Switched on in the configuration: it starts at its next start")),
+    (False, {"state": "disabled", "detail": "switched off"}, (DISABLED, "Switched off in the configuration")),
 ])
-def test_the_feed_is_described_by_what_it_last_wrote_of_itself(enabled, state, expected):
-    assert capital_provider_state(enabled, state, datetime.now(UTC)) == expected
+def test_the_feed_is_described_by_what_it_last_wrote_of_itself(enabled, fields, expected):
+    now = datetime.now(UTC)
+    state = None if fields is None else _state(now=now, **fields)
+
+    assert capital_provider_state(enabled, state, now) == expected
 
 
 def test_closed_markets_say_when_the_first_one_opens_again():
-    state = _state("market_closed", detail="Every market followed is closed")
+    now = datetime.now(UTC)
+    state = _state("market_closed", detail="Every market followed is closed", now=now)
     state["figures"]["instruments"][0].update(market="closed", next_opening="2026-10-15T23:05:00Z")
 
-    assert capital_provider_state(True, state, datetime.now(UTC)) == (OK, "Markets closed: the first opens at 2026-10-15T23:05:00Z")
+    assert capital_provider_state(True, state, now) == (OK, "Markets closed: the first opens at 2026-10-15T23:05:00Z")
 
 
 def test_an_instrument_of_capital_com_is_an_index_named_by_its_epic():
@@ -109,10 +116,10 @@ def test_an_instrument_is_recording_while_the_feed_runs_and_follows_it():
     now = datetime.now(UTC)
     asset = capital_asset(US100)
 
-    assert capital_status(asset, _state(), now) == RECORDING
-    assert capital_status(asset, _state(seconds_ago=600), now) == ENDED
-    assert capital_status(asset, _state("no_credentials"), now) == ENDED
-    assert capital_status({**asset, "epic": "US500"}, _state(), now) == ENDED
+    assert capital_status(asset, _state(now=now), now) == RECORDING
+    assert capital_status(asset, _state(seconds_ago=600, now=now), now) == ENDED
+    assert capital_status(asset, _state("no_credentials", now=now), now) == ENDED
+    assert capital_status({**asset, "epic": "US500"}, _state(now=now), now) == ENDED
     assert capital_status(asset, None, now) == ENDED
 
 
