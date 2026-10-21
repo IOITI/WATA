@@ -69,7 +69,9 @@ def _run_line(run: dict) -> dict:
     return {
         "id": run["id"], "kind": run.get("kind"), "name": run.get("name"), "from": run.get("from"), "to": run.get("to"),
         "source": {"kind": source.get("kind"), "script": source.get("script")},
-        "turbos": run.get("turbos"), "state": status.get("state"), "error": (status.get("error") or "")[:300] or None,
+        "turbos": run.get("turbos"), "state": status.get("state"), "error": (status.get("error") or "")[:600] or None,
+        # A run that ended badly: how, where it was (the engine day, its bars), the memory then.
+        "failure": status.get("failure"),
         "position": run.get("position"), "headline": run.get("headline"), "stale": run.get("stale"),
         "made_by": run.get("made_by"), "experiment": run.get("experiment"), "stress_of": run.get("stress_of"),
         "tags": run.get("tags") or [],
@@ -127,14 +129,16 @@ def _quantiles(values: list[float]) -> dict | None:
             "p95": pick(0.95), "max": ordered[-1], "count": len(ordered)}
 
 
-def _trade_line(trade: dict) -> dict:
+def _trade_line(trade: dict, candidates: bool = False) -> dict:
     entry, exit_ = trade.get("entry") or {}, trade.get("exit") or {}
     turbo = trade.get("turbo") or {}
     return {
         "id": trade.get("id"), "day": trade.get("day"), "direction": trade.get("direction"),
         "turbo": {key: turbo.get(key) for key in ("description", "issuer", "barrier", "uic") if turbo.get(key) is not None},
         "decided_at": entry.get("decided_at"), "filled_at": entry.get("filled_at"), "entry_price": entry.get("price"),
-        "entry_asset_price": entry.get("asset_price"), "candidates": entry.get("candidates"),
+        "entry_asset_price": entry.get("asset_price"),
+        # The turbos it could have bought, 20 of them: only when asked.
+        **({"candidates": entry.get("candidates")} if candidates else {}),
         "exit_at": exit_.get("filled_at"), "exit_bid": exit_.get("bid"), "exit_reason": exit_.get("reason"),
         "exit_group": exit_.get("group"), "exit_asset_price": exit_.get("asset_price"),
         "performance": trade.get("performance_percent"), "max_performance": trade.get("max_performance_percent"),
@@ -261,14 +265,15 @@ def register(server, research) -> None:
     @research_tool(server, calls, name="backtest_trades", title="A backtest's trades", read_only=True, export=True)
     async def backtest_trades(run_id: str, day: str = "", order: str = "time", direction: str = "",
                               exit_group: str = "", offset: int = 0, limit: int = DEFAULT_PAGE,
-                              format: str = "json") -> dict | str:
+                              format: str = "json", candidates: bool = False) -> dict | str:
         """A run's trades: the turbo, when it was decided and filled at what price, how it ended (exit reason and
         group), its result and the best and worst it reached, how long it was held, where in the session.
-        order="worst" or "best" sorts by result; day, direction and exit_group narrow it."""
+        order="worst" or "best" sorts by result; day, direction and exit_group narrow it. candidates=true adds the
+        turbos each entry could have bought (20 of them: ask for few trades)."""
         _format(format)
         if order not in TRADE_ORDERS:
             raise Refused(f"order is one of {', '.join(TRADE_ORDERS)}")
-        rows = [_trade_line(trade) for trade in await run_in_threadpool(research.service().trades, run_id)]
+        rows = [_trade_line(trade, candidates) for trade in await run_in_threadpool(research.service().trades, run_id)]
         rows = [row for row in rows if (not day or row["day"] == day) and (not direction or row["direction"] == direction)
                 and (not exit_group or row["exit_group"] == exit_group)]
         if order != "time":
@@ -353,7 +358,8 @@ START_DESCRIPTION = (
     "operator's, a few at most at once. Then backtest_wait."
 )
 DERIVED = ("stress", "cell", "neighbours")
-WAIT_MOST_SECONDS = 100
+# Under the 60 s after which Claude Code ends a call: wait again for longer.
+WAIT_MOST_SECONDS = 45
 WAIT_MOST_RUNS = 10
 UNFINISHED = ("queued", "running")
 
@@ -445,8 +451,8 @@ def register_writing(server, research) -> None:
         return await started(made, experiment_id, len(chosen) - 1, lockbox, note=f"neighbours of {parameter} in {run_id}")
 
     @research_tool(server, calls, name="backtest_wait", title="Wait for backtests", read_only=True)
-    async def backtest_wait(run_ids: list[str], seconds: int = 60) -> dict:
-        """Wait, up to ``seconds`` (100 at most), until none of the runs is queued or running; then each one's state,
+    async def backtest_wait(run_ids: list[str], seconds: int = 40) -> dict:
+        """Wait, up to ``seconds`` (45 at most), until none of the runs is queued or running; then each one's state,
         place in line and progress. Call it again while some are unfinished: a run of a few days takes a minute or
         two, a sweep longer, and Claude's wait behind the operator's."""
         if not 1 <= len(run_ids) <= WAIT_MOST_RUNS:

@@ -57,6 +57,7 @@ async def pine_signals(
     first_id: int = 1,
     progress=None,
     cache: str | None = None,
+    on_window=None,
 ) -> PineResult:
     """
     The signals the rule raises on the days of [start, end), local days of
@@ -65,7 +66,7 @@ async def pine_signals(
     """
     session = ReplaySession(
         rule, engine_rule, rows, node=node, history_days=settings.history_days,
-        restart_minute=restart_minute_of(settings.restart_time), command=command, cache=cache,
+        restart_minute=restart_minute_of(settings.restart_time), command=command, cache=cache, on_window=on_window,
     )
     result = PineResult()
     number = first_id

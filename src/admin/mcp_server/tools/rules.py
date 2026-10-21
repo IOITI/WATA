@@ -95,10 +95,9 @@ live is the operator's alone, on the Signal rules page. Only once the operator s
 def register_shadow(server, research) -> None:
     calls = research.calls
     shadow = ShadowRules(research)
-    seconds = research.limits.study_timeout_seconds + 25
 
     @research_tool(server, calls, name="rule_shadow_save", title="Make or change one of Claude's shadow rules",
-                   read_only=False, seconds=seconds, description=SAVE_DESCRIPTION)
+                   read_only=False, description=SAVE_DESCRIPTION, jobs=research.jobs)
     async def rule_shadow_save(rule_id: str = "", name: str = "", script_id: str = "", version: int = 0,
                                asset: str = "", indice: str = "", alerts: dict | None = None, bars: str = "",
                                side: str = "", inputs: dict | None = None, alert_calls: str = "",

@@ -91,6 +91,16 @@ def test_a_run_gives_each_plot_summarised_and_the_alerts_of_the_days_asked(tmp_p
     assert all(alert["bar_time"].startswith("2026-10-14") for alert in found["alerts"])
 
 
+def test_a_run_lists_only_the_alerts_asked_for_and_counts_them_all(tmp_path, scripts, prices):
+    found = study(tmp_path, scripts, prices, "run", {
+        "script": {"id": cross(scripts)["id"]}, "asset": "dukascopy/us100", "bars": "1", "from": "2026-10-14",
+        "warmup_days": 1, "points": 2, "timezone": "UTC", "alert_titles": ["Exit"], "max_alerts": 2,
+    })
+
+    assert found["ok"] and len(found["alerts"]) == 2 and {alert["title"] for alert in found["alerts"]} == {"Exit"}
+    assert found["alerts_listed_of"] == found["alerts_by_title"]["Exit"] < found["alerts_total"]
+
+
 def test_signals_are_raised_as_a_rule_would_and_read_back_the_second_time(tmp_path, scripts, prices):
     request = {"script": {"id": cross(scripts)["id"]}, "asset": "dukascopy/us100", "bars": "1", "from": "2026-10-14",
                "alerts": {"Enter Long": "long", "Exit": "close-position"}, "timezone": "UTC"}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Overview, Position } from '@/lib/types'
 
-import { entryBlockers, openDirections } from './entryState'
+import { entryBlockers, openDirections, upcomingNews } from './entryState'
 
 // 12 Oct 2026, 15:20 in Paris (UTC+2).
 const NOW = Date.parse('2026-10-12T13:20:00Z')
@@ -14,6 +14,7 @@ function overview(changes: {
   paused?: string | null
   closedToday?: boolean
   open?: string[]
+  news?: Overview['news']
 } = {}): Overview {
   return {
     date: '2026-10-12',
@@ -44,6 +45,7 @@ function overview(changes: {
     market_closed_today: changes.closedToday ?? false,
     cooldown: { last_loss_at: null, ends_at: null, active: false, ...changes.cooldown },
     entries_paused_since: changes.paused ?? null,
+    news: changes.news ?? null,
     open_positions: (changes.open ?? []).map((action, index) => ({ action, position_id: String(index) }) as Position),
     recent_days: [],
   }
@@ -118,6 +120,26 @@ describe('what holds a new entry back', () => {
       limits: { cooldown_after_loss_minutes: 0 },
     })
     expect(codes(switchedOff)).toEqual([])
+  })
+
+  it('is the window around a US release while it runs, as the server reads it from the calendar', () => {
+    // CPI at 08:30 in New York, 14:30 in Paris: from 14:25 to 14:45.
+    const news = {
+      window: { event: 'CPI', released_at: '2026-10-12T12:30:00Z', start: '2026-10-12T12:25:00Z', end: '2026-10-12T12:45:00Z' },
+      known_until: '2026-12-23',
+      readable: true,
+    }
+    const state = overview({ news })
+
+    expect(entryBlockers(state, Date.parse('2026-10-12T12:25:00Z'))).toEqual([
+      { code: 'macro_news', reason: 'CPI at 14:30: no entry until 14:45' },
+    ])
+    expect(codes(state, Date.parse('2026-10-12T12:24:59Z'))).toEqual([])
+    expect(codes(state, Date.parse('2026-10-12T12:45:00Z'))).toEqual([])
+    // Before it starts, the tile says what is coming.
+    expect(upcomingNews(state, Date.parse('2026-10-12T09:00:00Z'))).toBe('No entry around CPI (14:30) from 14:25 to 14:45')
+    expect(upcomingNews(state, Date.parse('2026-10-12T12:30:00Z'))).toBeNull()
+    expect(upcomingNews(overview(), NOW)).toBeNull()
   })
 
   it('leaves out the rules that are not configured', () => {

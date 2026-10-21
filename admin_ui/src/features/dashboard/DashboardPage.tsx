@@ -14,7 +14,7 @@ import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent, fo
 import { actionLabel } from '@/lib/labels'
 import type { Overview, Position } from '@/lib/types'
 
-import { entryBlockers, openDirections } from './entryState'
+import { entryBlockers, openDirections, upcomingNews } from './entryState'
 import { PauseControl } from './PauseControl'
 
 /** Re-render on a timer, for the countdowns that depend on the current time. */
@@ -106,17 +106,12 @@ function NextEntryTile({ overview, now }: { overview: Overview; now: number }) {
   }
 
   const duplicates = openDirections(overview).map((direction) => actionLabel(direction).toLowerCase())
-  return (
-    <KpiTile
-      label="Next entry"
-      value={<span className="text-positive">Open</span>}
-      hint={
-        duplicates.length > 0
-          ? `Except another ${duplicates.join(' or ')} signal: that position is already open`
-          : 'Not paused, in trading hours, within the daily limits, no cooldown'
-      }
-    />
-  )
+  const news = upcomingNews(overview, now)
+  const hint =
+    duplicates.length > 0
+      ? `Except another ${duplicates.join(' or ')} signal: that position is already open`
+      : 'Not paused, in trading hours, within the daily limits, no cooldown'
+  return <KpiTile label="Next entry" value={<span className="text-positive">Open</span>} hint={news ? `${hint}. ${news}` : hint} />
 }
 
 interface OpenPositionsProps {

@@ -16,12 +16,14 @@ from dataclasses import dataclass
 
 from src.backtest.clock import TradingClock
 from src.backtest.settings import BacktestSettings
+from src.trade.macro_calendar import Calendar, refusal_text, window_at
 
 # Stable names of what refused an entry, for tallies; the text beside each is the live one.
 SIGNAL_AGE = "signal_age"
 CLOSED_DATE = "closed_date"
 MARKET_HOURS = "market_hours"
 RISKY_HOURS = "risky_hours"
+MACRO_NEWS = "macro_news"
 INDICE = "indice"
 DUPLICATE = "duplicate"
 DAY_PROFIT = "day_profit"
@@ -73,10 +75,12 @@ def entry_refusal(
     last_loss_at: float | None,
     entries_today: int,
     confidence: float | None,
+    calendar: Calendar | None = None,
 ) -> Refusal | None:
     """
     What refuses an entry, in the trader's order, or None. Nothing is closed
     when an entry is refused. The operator's pause is not part of a backtest.
+    The window around US releases needs the ``calendar`` they are read from.
     """
     # 1. The signal's age, by the clock of the decision (``check_signal_timestamp``).
     if decided_at - int(alert_at) > settings.max_signal_age_seconds:
@@ -93,6 +97,13 @@ def entry_refusal(
         and local.minute >= settings.risky_start_minute
     ):
         return Refusal(RISKY_HOURS, "Signal is refused due to risky market hours.")
+
+    # 2b. The window around a US release (``check_macro_news``), by the clock of the decision.
+    news = settings.news_rule()
+    if news is not None and calendar is not None:
+        window = window_at(calendar, news, decided_at)
+        if window is not None:
+            return Refusal(MACRO_NEWS, refusal_text(window, settings.timezone))
 
     # 3. The indice (``get_allowed_indice_id``).
     if indice not in settings.allowed_indices:

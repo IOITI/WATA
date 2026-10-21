@@ -17,6 +17,7 @@ import random
 
 from src.backtest.clock import BAR_SECONDS, TradingClock
 from src.backtest.data import DayData
+from src.backtest.execution import fills_for
 from src.backtest.rules import compounded
 from src.backtest.settings import BacktestSettings
 from src.backtest.simulator import ENTRY_ACTIONS, SignalEvent, Simulator
@@ -66,12 +67,16 @@ class Baseline:
     """The repetitions of a run, traded a day at a time beside it."""
 
     def __init__(self, settings: BacktestSettings, clock: TradingClock, repetitions: int, seed: int,
-                 hours: tuple[int, int] | None):
+                 hours: tuple[int, int] | None, samples: dict | None = None):
         self.settings = settings
         self.clock = clock
         self.seed = seed
         self.hours = hours
-        self.simulators = [Simulator(settings, clock) for _ in range(repetitions if hours is not None else 0)]
+        # Each repetition draws its own fills when the run's are measured.
+        self.simulators = [
+            Simulator(settings, clock, fills=fills_for(settings, samples, f"{seed}:random:{repetition}"))
+            for repetition in range(repetitions if hours is not None else 0)
+        ]
         self.entries = 0
 
     def run_day(self, day: DayData, entries: int, closing: list[SignalEvent]) -> None:

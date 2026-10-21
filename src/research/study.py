@@ -349,13 +349,18 @@ async def run(request: dict, scripts: ScriptStore, config, prices_root: str, nod
     by_title: dict[str, int] = {}
     for alert in alerts:
         by_title[alert["title"] or alert["type"]] = by_title.get(alert["title"] or alert["type"], 0) + 1
+    # Every one counted by its title; listed, only those asked for, and as many as asked.
+    titles = request.get("alert_titles") or []
+    listed = [alert for alert in alerts if not titles or alert["title"] in titles]
+    most = request.get("max_alerts", MAX_ALERTS)
+    most = MAX_ALERTS if isinstance(most, bool) or not isinstance(most, int) else max(0, min(most, MAX_ALERTS))
     return {
         "ok": True, "rule": {"name": rule["name"], "asset": f"{rule['asset']['provider']}/{rule['asset']['key']}",
                              "side": rule["side"], "bars": request.get("bars", "1")},
         "from": first.isoformat(), "to": last.isoformat(), "bars": len(studied_times),
         "warmup_bars": len(times) - len(studied_times), "milliseconds": window.milliseconds,
-        "plots": plots, "alerts_by_title": by_title, "alerts": alerts[:MAX_ALERTS], "alerts_total": len(alerts),
-        "warnings": window.warnings, "runtime_warnings": window.runtime_warnings,
+        "plots": plots, "alerts_by_title": by_title, "alerts": listed[:most], "alerts_listed_of": len(listed),
+        "alerts_total": len(alerts), "warnings": window.warnings, "runtime_warnings": window.runtime_warnings,
     }
 
 

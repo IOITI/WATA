@@ -39,6 +39,7 @@ import pytz
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
 from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
+from src.admin.studies import cgroup_memory
 from src.admin.processes import (
     CANCELLED,
     DONE,
@@ -66,7 +67,9 @@ from src.admin.ta_rules import (
     checked_inputs,
 )
 from src.admin.ta_scripts import ScriptNotFound, ScriptStore
+from src.price_history.process import exit_said, oom_kills
 from src.backtest.baseline import DEFAULT_REPETITIONS, DEFAULT_SEED, MAX_REPETITIONS
+from src.backtest.execution import EXECUTION_FILE, MEASURED, missing
 from src.backtest.figures import code_digest
 from src.backtest.regimes import DAY_TYPES, GAP_LABELS, MACRO_LABELS, OPEN_LABELS, SESSION_PARTS, VOLATILITY_LABELS
 from src.backtest.settings import (
@@ -194,6 +197,56 @@ def checked_asset(asset) -> dict:
     except AssetNotFound as e:
         raise InvalidRequest(str(e)) from None
     return {"provider": provider, "key": key}
+
+
+# What a run was doing, by the phase its progress says.
+_PHASES = {"signals": "running its script", "days": "trading its days", "report": "writing its report"}
+
+
+def failure_of(code: int | None, progress: dict | None, memory: tuple[int, int] | None,
+               kills_before: int | None, kills_after: int | None) -> dict:
+    """What is known of a run that ended badly: how it ended, where it was, the container's memory then."""
+    progress = progress or {}
+    found = {"exit": code, "said": exit_said(code)}
+    for name in ("phase", "day", "done", "total", "engine_day", "bars", "runner_peak_mb"):
+        if progress.get(name) is not None:
+            found[name] = progress[name]
+    if memory is not None:
+        found["memory_mb"] = {"used": round(memory[0] / 1024 ** 2), "limit": round(memory[1] / 1024 ** 2)}
+    if kills_before is not None and kills_after is not None:
+        found["oom_kills"] = max(0, kills_after - kills_before)
+    return found
+
+
+def failure_sentence(failure: dict) -> str:
+    """A run's failure in a sentence, for its error."""
+    said = [f"The backtest was {failure['said']}" if failure.get("exit", 0) < 0 else f"The backtest {failure['said']}"]
+    if failure.get("phase"):
+        where = f"while {_PHASES.get(failure['phase'], failure['phase'])}"
+        if failure.get("total"):
+            where += f" ({failure.get('done', 0)} of {failure['total']}"
+            where += f", {failure['day']})" if failure.get("day") else ")"
+        said.append(where)
+    if failure.get("engine_day") and failure.get("phase") == "signals":
+        engine = f"on the engine day from {failure['engine_day']}"
+        if failure.get("bars") is not None:
+            engine += f", {failure['bars']:,} bars"
+        if failure.get("runner_peak_mb") is not None:
+            engine += f", the runner having held {failure['runner_peak_mb']:,.0f} MB at most"
+        said.append(engine)
+    if failure.get("memory_mb"):
+        said.append(f"the admin used {failure['memory_mb']['used']:,} of its {failure['memory_mb']['limit']:,} MB then")
+    if failure.get("oom_kills"):
+        said.append(f"the kernel's OOM killer stopped {failure['oom_kills']} process(es) during the run")
+    return ", ".join(said) + "."
+
+
+def wants_measured(request: dict, settings) -> bool:
+    """Whether a run, or one cell of its sweep, fills its orders by drawing from WATA's own."""
+    if settings.execution == MEASURED:
+        return True
+    axes = (request.get("sweep") or {}).get("axes") or []
+    return any(axis.get("name") == "execution" and MEASURED in axis.get("values", []) for axis in axes)
 
 
 def checked_chart(chart) -> dict:
@@ -479,7 +532,8 @@ class BacktestService:
             raise InvalidRequest("No alert of the script is made a signal: map one to an action")
         return rule, sources, meta["name"]
 
-    def _checked(self, body: dict, journal: list[dict] | None, capital: float | None) -> tuple[dict, dict, list, list | None]:
+    def _checked(self, body: dict, journal: list[dict] | None, capital: float | None,
+                 execution: dict | None = None) -> tuple[dict, dict, list, list | None]:
         if not isinstance(body, dict):
             raise InvalidRequest("A backtest is asked for with its source, period and settings")
         first_day, last_day = _date(body.get("from"), "The first day"), _date(body.get("to"), "The last day")
@@ -616,6 +670,15 @@ class BacktestService:
         if model is not None:
             # The measure the run is made with goes with it: a later one does not change what it found.
             settings_doc["turbo_model"] = model
+        if wants_measured(request, settings):
+            # So do WATA's orders it draws its fills from.
+            short = missing((execution or {}).get("samples"))
+            if short:
+                raise NotPossible(
+                    f"A run on measured fills draws each order from WATA's own, and too few were measured "
+                    f"in the last months ({', '.join(short)}; 10 of each at least): use fixed fills"
+                )
+            settings_doc["execution"] = execution
         return request, settings_doc, sources, kept_journal
 
     def _new_run_id(self) -> str:
@@ -641,15 +704,16 @@ class BacktestService:
 
     def create(self, body: dict, *, journal: list[dict] | None = None, positions: list[dict] | None = None,
                capital: float | None = None, made_by: str | None = None, made_via: str | None = None,
-               experiment: str | None = None, lockbox: dict | None = None) -> dict:
+               experiment: str | None = None, lockbox: dict | None = None, execution: dict | None = None) -> dict:
         """
         Ask for a run (or a sweep): checked, written to its folder, and queued.
         A replay of the journal keeps WATA's real positions of the period
         (``positions``) beside it, to be set against them. ``made_by`` and the
         rest say who asked through an agent, and for which experiment.
+        ``execution``: WATA's orders measured, which a run on measured fills draws from.
         """
         self._check_room()
-        request, settings_doc, sources, kept_journal = self._checked(body, journal, capital)
+        request, settings_doc, sources, kept_journal = self._checked(body, journal, capital, execution)
         request.update(_research_fields(made_by, made_via, experiment, lockbox))
         kept_positions = [{key: _plain(value) for key, value in row.items()} for row in positions] \
             if positions is not None and kept_journal is not None and request["source"]["kind"] == JOURNAL else None
@@ -671,6 +735,9 @@ class BacktestService:
         model = settings_doc.pop("turbo_model", None)
         if model is None and copy_from is not None:
             model = read_json(os.path.join(copy_from, MODEL_FILE))
+        execution = settings_doc.pop("execution", None)
+        if execution is None and copy_from is not None:
+            execution = read_json(os.path.join(copy_from, EXECUTION_FILE))
         if positions is None and copy_from is not None:
             positions = read_json(os.path.join(copy_from, POSITIONS_FILE))
         if raised is None and copy_from is not None:
@@ -678,6 +745,8 @@ class BacktestService:
         try:
             if model is not None:
                 write_json(os.path.join(folder, MODEL_FILE), model)
+            if execution is not None:
+                write_json(os.path.join(folder, EXECUTION_FILE), execution)
             for pin, text in sources:
                 with open(os.path.join(folder, "sources", f"{pin['id']}-v{pin['version']}.pine"), "w", encoding="utf-8") as out_file:
                     out_file.write(text)
@@ -907,7 +976,8 @@ class BacktestService:
             self._set_status(run_id, state=FAILED, error="What was asked cannot be read")
             return
         self._set_status(run_id, state=RUNNING, started_at=utc(self._clock()))
-        error, code = None, None
+        error, code, failure = None, None, None
+        kills_before = oom_kills()
         try:
             process = await self._launcher(self._command(run_id), self._file(run_id, "output.log"))
         except Exception as e:
@@ -929,8 +999,16 @@ class BacktestService:
             state = DONE
         else:
             state = FAILED
-            error = error or "\n".join(tail(self._file(run_id, "output.log"), 5)) or f"The command ended with code {code}"
-        self._set_status(run_id, state=state, error=error, finished_at=utc(self._clock()))
+            if error is None:
+                # It ended badly by itself: what is known of where it was and of the memory then.
+                failure = failure_of(code, read_json(self._file(run_id, "progress.json")), cgroup_memory(), kills_before, oom_kills())
+                lines = "\n".join(tail(self._file(run_id, "output.log"), 5))
+                if code is not None and code < 0:
+                    error = failure_sentence(failure) + (f"\n{lines}" if lines else "")
+                else:
+                    error = lines or failure_sentence(failure)
+        self._set_status(run_id, state=state, error=error, finished_at=utc(self._clock()),
+                         **({"failure": failure} if failure is not None else {}))
         self._announce("backtest_finished", run_id=run_id, state=state, name=request.get("name") or "")
         if self._signal_cache_bytes is not None and self._clock() - self._cache_pruned_at >= CACHE_PRUNE_SECONDS:
             self._cache_pruned_at = self._clock()

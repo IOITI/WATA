@@ -7,7 +7,7 @@ import json
 import os
 import sys
 import types
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -161,6 +161,54 @@ def test_the_close_raised_on_the_bar_of_an_entry_does_not_sell_the_position_just
     # The Exit of the entry's bar is no signal; the long lasts until the Exit of 06:45.
     assert (close["fate"], close["alert"]["title"]) == ("not_a_signal", "Exit") and "same bar raised an entry" in close["reason"]
     assert entry["fate"] == "executed" and trades[entry["trade_id"]]["exit"]["filled_at"] > "2026-10-13T06:45"
+
+
+def test_an_entry_around_a_us_release_is_refused_with_the_traders_words(tmp_path, recorded):
+    # Wednesday 14 October 2026: CPI at 08:30 in New York, 14:30 in Paris (12:30 UTC).
+    folder = prepare(tmp_path, {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 0, "seed": 3}},
+                     settings_changes={"news_window": True})
+
+    assert run_command(tmp_path, folder, recorded, "half-hours") == 0
+
+    signals = {(signal["bar_time"], signal["action"]): signal for signal in read(folder, "signals.json") if signal["source"] == "pine"}
+    inside = signals[("2026-10-14T12:30:00Z", "long")]
+    assert (inside["fate"], inside["rule"]) == ("refused", "macro_news")
+    assert inside["reason"] == "Breaking trading rule: no entry around CPI (14:30) from 14:25 to 14:45."
+    # Half an hour before, and the day before at the same hour, nothing is released.
+    assert signals[("2026-10-14T12:00:00Z", "long")]["fate"] == "executed"
+    assert signals[("2026-10-13T12:30:00Z", "long")]["rule"] != "macro_news"
+
+
+def test_a_run_on_measured_fills_draws_each_order_from_wata_s_own(tmp_path, recorded):
+    folder = prepare(tmp_path, {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 2, "seed": 3}},
+                     settings_changes={"execution": "measured"})
+    samples = {"order_seconds": [0.8] * 9 + [61.0], "slippage_buy": [0.02] * 10, "slippage_sell": [0.03] * 10,
+               "signal_delay_seconds": [3.0] * 10}
+    with open(os.path.join(folder, "execution.json"), "w", encoding="utf-8") as out_file:
+        json.dump({"from": "2026-07-14", "to": "2026-10-13", "samples": samples}, out_file)
+
+    assert run_command(tmp_path, folder, recorded) == 0
+
+    trades = [trade for trade in read(folder, "trades.json") if trade["day"] != "2026-10-12"]
+    waits = [
+        (datetime.fromisoformat(trade["entry"]["filled_at"].replace("Z", "+00:00"))
+         - datetime.fromisoformat(trade["entry"]["selected_at"].replace("Z", "+00:00"))).total_seconds()
+        for trade in trades
+    ]
+    # A purchase is priced at the quote when its order left, two cents worse; about one order in ten takes a minute.
+    assert all(round(trade["entry"]["price"] - trade["entry"]["selected_ask"], 4) == 0.02 for trade in trades)
+    assert any(wait > 60 for wait in waits) and any(wait < 1 for wait in waits)
+    assert read(folder, "summary.json")["made_with"]["execution"] == {
+        "kind": "measured", "from": "2026-07-14", "to": "2026-10-13", "orders": 10, "fills": {"slippage_buy": 10, "slippage_sell": 10},
+    }
+
+
+def test_a_run_on_measured_fills_without_the_orders_to_draw_from_says_so(tmp_path, recorded, capsys):
+    folder = prepare(tmp_path, {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 0, "seed": 3}},
+                     settings_changes={"execution": "measured"})
+
+    assert run_command(tmp_path, folder, recorded) != 0
+    assert "Too few of WATA's orders measured to draw from: 0 order times, 0 purchase prices, 0 sale prices" in capsys.readouterr().err
 
 
 def test_the_same_run_gives_the_same_files(tmp_path, recorded):

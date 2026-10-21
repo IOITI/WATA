@@ -331,7 +331,7 @@ def test_wata_stamps_its_signals_with_the_bars_close_in_whole_seconds():
 # ── the runner's protocol, with a stand-in for Node ──
 
 FAKE_RUNNER = textwrap.dedent("""
-    import json, sys, time
+    import json, os, sys, time
     for line in sys.stdin:
         message = json.loads(line)
         if "answer" in message:
@@ -350,6 +350,11 @@ FAKE_RUNNER = textwrap.dedent("""
             time.sleep(5)
         elif op == "die":
             sys.exit(3)
+        elif op == "heap":
+            # As Node ends when its heap is full.
+            sys.stderr.write("<--- Last few GCs --->\\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\\n")
+            sys.stderr.flush()
+            os.abort()
 """)
 
 
@@ -404,6 +409,24 @@ def test_a_refusal_a_timeout_and_an_end_are_told_apart(fake_runner):
 
     assert loaded["error_seen"] == "WATA has no live bars of it"
     assert stopped_after_timeout and starts == 2
+
+
+def test_a_runner_that_dies_says_how_and_its_last_words(fake_runner):
+    async def answer(ask):
+        return []
+
+    async def scenario():
+        runner = NodeRunner(fake_runner, answer, timeout_seconds=5)
+        await runner.start()
+        try:
+            await runner.request({"op": "heap"})
+        except RunnerDown as e:
+            return str(e)
+
+    said = asyncio.run(scenario())
+
+    assert said.startswith("The Pine runner ended (exit code -6): aborted (SIGABRT): Node does so when its heap is full.")
+    assert said.endswith("It said: <--- Last few GCs ---> | FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory")
 
 
 def test_the_shadow_rules_runner_is_the_first_the_kernel_stops(fake_runner, monkeypatch):

@@ -11,6 +11,9 @@ import {
   restoreChanges,
   ruleConfigPath,
   setAt,
+  toggled,
+  withoutRule,
+  withRule,
 } from './configModel'
 
 const EDITABLE = ['trade.rules', 'trade.config', 'reporting', 'logging.level']
@@ -64,6 +67,25 @@ describe('ruleConfigPath', () => {
   it('is null for a rule that is not configured', () => {
     expect(ruleConfigPath(sampleConfig(), 'day_trading')).toBeNull()
     expect(ruleConfigPath({}, 'day_trading')).toBeNull()
+  })
+})
+
+describe('a rule switched on and off', () => {
+  const news = { rule_name: 'No entry around US releases', rule_type: 'macro_news', rule_config: { minutes_before: 5 } }
+
+  it('is added once, and taken away whole', () => {
+    const added = withRule(sampleConfig(), news)
+    expect(added.map((rule) => (rule as JsonObject).rule_type)).toEqual(['allowed_indices', 'risk_management', 'macro_news'])
+    const twice = setAt(sampleConfig(), ['trade', 'rules'], added) as JsonObject
+    expect(withRule(twice, news)).toHaveLength(3)
+    expect(withoutRule(twice, 'macro_news')).toEqual(sampleConfig().trade && (sampleConfig().trade as JsonObject).rules)
+  })
+
+  it('keeps its list in the order of every choice', () => {
+    const all = ['FOMC', 'CPI', 'NFP', 'PCE']
+    expect(toggled(all, ['PCE', 'FOMC'], 'CPI', true)).toEqual(['FOMC', 'CPI', 'PCE'])
+    expect(toggled(all, ['FOMC', 'CPI'], 'FOMC', false)).toEqual(['CPI'])
+    expect(toggled(all, undefined, 'NFP', true)).toEqual(['NFP'])
   })
 })
 

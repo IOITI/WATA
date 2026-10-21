@@ -2,6 +2,8 @@ import json
 import os
 import logging
 
+from src.trade.macro_calendar import NewsRule
+
 logger = logging.getLogger(__name__)
 
 
@@ -249,6 +251,15 @@ class ConfigurationManager:
                     error_msg = f"Rule {rule_name}: risky_trading_start_hour must be between trading_start_hour and trading_end_hour"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
+
+            elif rule_type == "macro_news":
+                # Optional: no entry around the US releases it names (src/trade/macro_calendar.py).
+                try:
+                    NewsRule.from_config(rule_config)
+                except ValueError as e:
+                    error_msg = f"Rule {rule_name}: {e}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg) from None
 
         # Validate trade.config structure
         trade_config = self.get_config_value("trade.config")

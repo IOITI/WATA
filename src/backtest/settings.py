@@ -15,7 +15,9 @@ import json
 import re
 from dataclasses import asdict, dataclass, fields, replace
 
+from src.backtest.execution import EXECUTIONS, FIXED
 from src.ta_engine.settings import TaEngineSettings
+from src.trade.macro_calendar import NewsRule
 
 _TIME_OF_DAY = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
@@ -65,6 +67,18 @@ FIELDS = (
           source="trade.rules.risk_management.max_trades_per_day"),
     Field("min_confidence", "entries", "number", "Entries under this confidence are refused", 0, 100,
           source="trade.config.position_sizing.confidence_scaling.min_confidence_threshold"),
+    # No entry around US releases: the macro_news rule, off unless it is in the configuration.
+    Field("news_window", "entries", "boolean", "No entry around US releases", source="trade.rules.macro_news"),
+    Field("news_minutes_before", "entries", "integer", "From this long before a release", 0, 120, unit="min",
+          source="trade.rules.macro_news.minutes_before"),
+    Field("news_minutes_after", "entries", "integer", "Until this long after it", 0, 120, unit="min",
+          source="trade.rules.macro_news.minutes_after"),
+    Field("news_minutes_after_fomc", "entries", "integer", "Until this long after an FOMC statement", 0, 180, unit="min",
+          source="trade.rules.macro_news.minutes_after_fomc"),
+    Field("news_fomc", "entries", "boolean", "Around FOMC statements", source="trade.rules.macro_news.events"),
+    Field("news_cpi", "entries", "boolean", "Around CPI", source="trade.rules.macro_news.events"),
+    Field("news_nfp", "entries", "boolean", "Around the jobs report (NFP)", source="trade.rules.macro_news.events"),
+    Field("news_pce", "entries", "boolean", "Around PCE", source="trade.rules.macro_news.events"),
     # ── the day ──
     Field("no_entry_above_day_profit", "day", "number", "No new entry once the day is above", 0.01, 10_000, unit="%",
           source="trade.rules.day_trading.dont_enter_trade_if_day_profit_is_more_than"),
@@ -103,6 +117,8 @@ FIELDS = (
           source="trade.config.position_sizing.confidence_scaling.enabled"),
     # ── the backtest's own: how its orders are filled ──
     Field("capital", "execution", "number", "Account at the start", 1, 1e9, unit="€"),
+    Field("execution", "execution", "choice", "Order times and prices: fixed, or drawn from WATA's own orders",
+          choices=EXECUTIONS),
     Field("signal_delay_seconds", "execution", "number", "From a signal to the trader", 0, 600, unit="s"),
     Field("order_seconds", "execution", "number", "From an order to its fill", 0, 600, unit="s"),
     Field("close_wait_seconds", "execution", "number", "From a sale to the next purchase", 0, 600, unit="s"),
@@ -150,6 +166,15 @@ class BacktestSettings:
     cooldown_after_loss_minutes: int = 0
     max_trades_per_day: int = 0
     min_confidence: float = 0.0
+    # No entry around US releases (the macro_news rule): off unless the configuration has it.
+    news_window: bool = False
+    news_minutes_before: int = NewsRule.minutes_before
+    news_minutes_after: int = NewsRule.minutes_after
+    news_minutes_after_fomc: int = NewsRule.minutes_after_fomc
+    news_fomc: bool = True
+    news_cpi: bool = True
+    news_nfp: bool = True
+    news_pce: bool = True
     # The day.
     no_entry_above_day_profit: float = 1.25
     max_day_loss: float = -25.0
@@ -175,6 +200,8 @@ class BacktestSettings:
     confidence_bands: tuple[ConfidenceBand, ...] = ()
     # The backtest's own.
     capital: float = DEFAULT_CAPITAL
+    # fixed: order_seconds and slippage for every order; measured: drawn from WATA's own (src/backtest/execution.py).
+    execution: str = FIXED
     signal_delay_seconds: float = DEFAULT_SIGNAL_DELAY["pine"]
     order_seconds: float = 1.0
     close_wait_seconds: float = 0.5
@@ -188,6 +215,14 @@ class BacktestSettings:
 
     def to_dict(self) -> dict:
         return json.loads(json.dumps(asdict(self)))
+
+    def news_rule(self) -> NewsRule | None:
+        """The window around US releases, as the trader keeps it; None while it is off."""
+        if not self.news_window:
+            return None
+        events = tuple(event for event, on in (("FOMC", self.news_fomc), ("CPI", self.news_cpi), ("NFP", self.news_nfp),
+                                               ("PCE", self.news_pce)) if on)
+        return NewsRule(events, self.news_minutes_before, self.news_minutes_after, self.news_minutes_after_fomc) if events else None
 
     @classmethod
     def from_dict(cls, values: dict) -> "BacktestSettings":
@@ -255,6 +290,11 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         engine = TaEngineSettings.from_config(DictConfig(config))
     except ValueError:
         engine = TaEngineSettings()
+    news_config = _rule(config, "macro_news")
+    try:
+        news = NewsRule.from_config(news_config) if news_config is not None else None
+    except ValueError:
+        news = None
     defaults = BacktestSettings()
     return BacktestSettings(
         timezone=general.get("timezone", defaults.timezone),
@@ -268,6 +308,14 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         cooldown_after_loss_minutes=risk.get("cooldown_after_loss_minutes", 0),
         max_trades_per_day=risk.get("max_trades_per_day", 0),
         min_confidence=confidence.get("min_confidence_threshold", 0.0),
+        news_window=news is not None,
+        news_minutes_before=(news or NewsRule()).minutes_before,
+        news_minutes_after=(news or NewsRule()).minutes_after,
+        news_minutes_after_fomc=(news or NewsRule()).minutes_after_fomc,
+        news_fomc="FOMC" in (news or NewsRule()).events,
+        news_cpi="CPI" in (news or NewsRule()).events,
+        news_nfp="NFP" in (news or NewsRule()).events,
+        news_pce="PCE" in (news or NewsRule()).events,
         no_entry_above_day_profit=day_trading.get(
             "dont_enter_trade_if_day_profit_is_more_than", defaults.no_entry_above_day_profit,
         ),

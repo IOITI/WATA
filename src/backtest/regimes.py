@@ -3,30 +3,30 @@ What kind of day each day was, read from the asset a run's chart is of, in
 the rules' trading hours: the gap from the day before, the range, the
 realised volatility, whether the day trended or went back and forth, how the
 half hour after the US open moved, its weekday, and the US macro news it had
-(``data/macro_calendar.csv``). Then where a moment stands against the US
-open. Pure, but for reading the calendar.
+(the trader's calendar, ``src/trade/macro_calendar.py``). Then where a moment
+stands against the US open. Pure, but for reading the calendar.
 
 A day is put in a group by these figures (``label_days``) so that trades and
 signals can be split by the kind of day they were made on: an edge that lives
 on agitated days only, or only after the open, is a different strategy.
 """
 
-import csv
-import hashlib
 import math
-import os
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass
 from datetime import date, datetime, time
 from statistics import quantiles
 
-import pytz
-
 from src.backtest.clock import TradingClock
 from src.backtest.data import BAR_SECONDS, AssetSeries
+from src.trade.macro_calendar import (  # noqa: F401 (the backtests' names for them)
+    CALENDAR_PATH,
+    MACRO_EVENTS,
+    NEW_YORK,
+    Calendar,
+    MacroEvent,
+    read_calendar,
+)
 
-CALENDAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "macro_calendar.csv")
-NEW_YORK = pytz.timezone("America/New_York")
 US_OPEN = time(9, 30)
 # From the US open to its close: six hours and a half.
 US_SESSION_MINUTES = 390
@@ -49,49 +49,11 @@ VOLATILITY_LABELS = ("Calm", "Ordinary", "Agitated")
 GAP_LABELS = ("Gap down", "No gap", "Gap up")
 DAY_TYPES = ("Trend up", "Trend down", "Back and forth", "Mixed")
 OPEN_LABELS = ("Open fell", "Open flat", "Open rose")
-# The news a day is known by, the strongest first.
-MACRO_EVENTS = ("FOMC", "CPI", "NFP", "PCE")
 NO_NEWS = "No news"
 MACRO_LABELS = (*MACRO_EVENTS, NO_NEWS)
 SESSION_PARTS = (
     "Before the US open", "Hour before the US open", "US open, first hour", "US midday", "US afternoon", "After the US close",
 )
-
-
-@dataclass(frozen=True)
-class MacroEvent:
-    day: date
-    time_new_york: str
-    event: str
-    covers: str
-
-
-@dataclass(frozen=True)
-class Calendar:
-    by_day: dict
-    digest: str
-    # The last day each kind of news is known to: past it, a day is not known to have none.
-    until: dict
-
-    def on(self, day: date) -> list[MacroEvent]:
-        return self.by_day.get(day, [])
-
-    def known_until(self) -> date | None:
-        return min(self.until.values()) if self.until else None
-
-
-def read_calendar(path: str = CALENDAR_PATH) -> Calendar:
-    """The macro calendar: lines starting with # are comments."""
-    with open(path, "rb") as in_file:
-        content = in_file.read()
-    rows = csv.DictReader(line for line in content.decode("utf-8").splitlines() if line and not line.startswith("#"))
-    by_day: dict = {}
-    until: dict = {}
-    for row in rows:
-        event = MacroEvent(date.fromisoformat(row["date"]), row["time_new_york"], row["event"], row["covers"])
-        by_day.setdefault(event.day, []).append(event)
-        until[event.event] = max(until.get(event.event, event.day), event.day)
-    return Calendar(by_day, hashlib.sha256(content).hexdigest()[:16], until)
 
 
 def us_open(day: date) -> float:

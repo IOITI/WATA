@@ -50,7 +50,7 @@ from src.admin.ta_rules import (
 from src.admin.ta_scripts import ScriptNotFound, ScriptStore
 from src.ta_engine.bars import RangeBars, TimeBars
 from src.ta_engine.rules import EngineRule
-from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerFailed, find_node, runner_command
+from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command
 from src.ta_engine.signals import Candidate, interpret, iso_seconds, settled
 from src.ta_engine.tickers import Ticker, parse_ticker
 
@@ -397,8 +397,11 @@ class ReplaySession:
     def __init__(self, rule: dict, engine_rule: EngineRule, rows: AssetRows, *, node: str = "node",
                  history_days: int = 1, restart_minute: int = 21 * 60 + 15, messages: bool = False,
                  memory_mb: int = 1024, timeout_seconds: int = 600, command: list[str] | None = None,
-                 cache: str | None = None):
+                 cache: str | None = None, on_window=None):
         self.rule = rule
+        # Told each engine day's start, its bars and the runner's peak memory so far, before the runner gets them:
+        # what a run that dies is said to have died on.
+        self.on_window = on_window
         self.engine_rule = engine_rule
         self.rows = rows
         self.history_days = history_days
@@ -510,13 +513,20 @@ class ReplaySession:
             "timeframe": engine_rule.timeframe(),
             "bars": bars,
         }
-        if detail:
-            self.run_windows += 1
-            answer = await self.runner.request({**request, "detail": True})
-            window.series = answer.get("series")
-            window.runtime_warnings = list(answer.get("runtimeWarnings") or [])
-        else:
-            answer = await self._run(request)
+        if self.on_window is not None:
+            self.on_window(begin, len(bars), self.runner.peak_mb())
+        try:
+            if detail:
+                self.run_windows += 1
+                answer = await self.runner.request({**request, "detail": True})
+                window.series = answer.get("series")
+                window.runtime_warnings = list(answer.get("runtimeWarnings") or [])
+            else:
+                answer = await self._run(request)
+        except RunnerDown as e:
+            raise RunnerDown(
+                f"{e} (on the engine day from {iso_seconds(begin)}: {len(bars):,} bars of {bars_label(rule['bars'])})"
+            ) from None
         window.milliseconds = answer.get("milliseconds")
         window.warnings = list(answer.get("warnings") or [])
         by_time = {bar[0]: bar for bar in bars}

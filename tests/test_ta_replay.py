@@ -20,13 +20,15 @@ from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
 # Raises "Enter Long" at the full hour (UTC) when it is even, "Enter Short" when it is odd, "Exit" at a
 # quarter to; notes each load (rule, bars, first and last bar, inputs) in the file named by its last argument.
-# Given "reversal" before it, it raises "Exit" on the bar of each entry too, after it.
+# Given "reversal" before it, it raises "Exit" on the bar of each entry too, after it; given "half-hours", an
+# "Enter Long" at half past each hour as well.
 FAKE_RUNNER = textwrap.dedent("""
     import json
     import sys
 
     LOG = sys.argv[-1]
     REVERSAL = "reversal" in sys.argv[1:-1]
+    HALF_HOURS = "half-hours" in sys.argv[1:-1]
 
     for line in sys.stdin:
         message = json.loads(line)
@@ -49,6 +51,8 @@ FAKE_RUNNER = textwrap.dedent("""
                         alerts.append({"type": "alertcondition", "title": "Exit", "message": "", "time": bar[0]})
                 elif minute == 45:
                     alerts.append({"type": "alertcondition", "title": "Exit", "message": "", "time": bar[0]})
+                elif minute == 30 and HALF_HOURS:
+                    alerts.append({"type": "alertcondition", "title": "Enter Long", "message": "", "time": bar[0]})
             answer = {"id": message["id"], "ok": True, "op": "load", "bars": len(bars), "milliseconds": 2,
                       "alerts": alerts, "plots": {}, "warnings": ["made up"]}
             if message.get("detail"):

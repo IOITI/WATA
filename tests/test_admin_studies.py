@@ -182,3 +182,25 @@ def test_the_containers_memory_is_read_where_it_has_a_limit(tmp_path, files, exp
         (tmp_path / name).write_text(content)
 
     assert cgroup_memory(str(tmp_path)) == expected
+
+
+def test_a_study_that_dies_says_how_and_the_memory_then(tmp_path):
+    class Killed(Launcher):
+        async def __call__(self, arguments, log_path):
+            await super().__call__(arguments, log_path)
+            process = Process(ends=False)
+            process.end(-9)
+            return process
+
+    megabytes = 1024 ** 2
+    memory = iter([(500 * megabytes, 1536 * megabytes), (1450 * megabytes, 1536 * megabytes)])
+    kills = iter([3, 4])
+    studies = service(tmp_path, Killed(answer=False), memory=lambda: next(memory), kills=lambda: next(kills))
+
+    with pytest.raises(NotPossible) as refused:
+        asyncio.run(studies.study("signals", {"asset": "capital/US100"}))
+
+    said = str(refused.value)
+    assert said.startswith("The study gave no answer: it was stopped by the kernel (SIGKILL), most likely for memory")
+    assert "the admin used 1,450 of its 1,536 MB then" in said and "the kernel's OOM killer stopped 1 process(es)" in said
+    assert said.endswith("(studying)")

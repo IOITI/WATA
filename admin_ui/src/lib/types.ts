@@ -314,8 +314,18 @@ export interface Overview {
   }
   /** Set while the operator has paused new entries. */
   entries_paused_since: string | null
+  /** No entry around US releases (the macro_news rule); null or absent while the rule is off. */
+  news?: OverviewNews | null
   open_positions: Position[]
   recent_days: DailyPerformance[]
+}
+
+export interface OverviewNews {
+  /** The window in force, or the next one to start within a day. */
+  window: { event: string; released_at: string; start: string; end: string } | null
+  /** The calendar's last known day: past it, no window is kept. */
+  known_until: string | null
+  readable: boolean
 }
 
 export interface Signal {
@@ -1677,6 +1687,10 @@ export interface BacktestSummary {
     code: string
     engine: { runner: { pinets: string; node: string }; milliseconds: number; history_days: number; restart_time: string } | null
     calendar?: { digest: string; until: string | null }
+    /** How its orders were filled: the settings' values, or drawn from WATA's own orders of a period. */
+    execution?:
+      | { kind: 'fixed' }
+      | { kind: 'measured'; from: string; to: string; orders: number; fills: { slippage_buy: number; slippage_sell: number } }
     turbos?:
       | { kind: 'recorded' }
       | {

@@ -11,6 +11,8 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
+import pytz
+
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.data import DISABLED as PROVIDER_DISABLED
@@ -22,6 +24,7 @@ from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
 from src.ta_engine.settings import TaEngineSettings
+from src.trade.macro_calendar import read_calendar, upkeep
 
 OK = "ok"
 WARNING = "warning"
@@ -235,6 +238,35 @@ async def _ta_engine(ctx) -> list[dict]:
     return [_entry("ta_engine", name, DOWN if status == DISABLED else status, detail)]
 
 
+def macro_calendar_entry(rule_on: bool, calendar, today) -> list[dict]:
+    """
+    The calendar of US releases, while the trader keeps entries out of a window
+    around them (the macro_news rule): a warning from WARN_DAYS before it runs
+    out. Past it, the trader trades on without a window.
+    """
+    if not rule_on:
+        return []
+    name = "US releases calendar"
+    if calendar is None:
+        return [_entry("macro_calendar", name, WARNING, "Cannot be read: no window is kept around the releases")]
+    said = upkeep(calendar, today)
+    if said is not None:
+        return [_entry("macro_calendar", name, WARNING, said)]
+    return [_entry("macro_calendar", name, OK, f"Known until {calendar.known_until().isoformat()}")]
+
+
+def _macro_calendar(ctx) -> list[dict]:
+    rules = ctx.config_manager.get_config_value("trade.rules", []) or []
+    if not any(isinstance(rule, dict) and rule.get("rule_type") == "macro_news" for rule in rules):
+        return []
+    try:
+        calendar = read_calendar()
+    except (OSError, ValueError, KeyError):
+        calendar = None
+    today = datetime.now(pytz.timezone(ctx.settings.timezone)).date()
+    return macro_calendar_entry(True, calendar, today)
+
+
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:
     if queue["consumers"] > 0:
         return _entry(service_id, name, OK, f"Consuming {queue['name']}")
@@ -285,7 +317,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed, ta_engine,
+        capital_feed, ta_engine, macro_calendar,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -296,10 +328,11 @@ async def collect_health(ctx) -> dict:
         _price_recorder(ctx),
         _capital_feed(ctx),
         _ta_engine(ctx),
+        run_in_threadpool(_macro_calendar, ctx),
     )
     services = [
         *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
-        *postgres, rabbitmq[0],
+        *macro_calendar, *postgres, rabbitmq[0],
     ]
     return {
         "version": ctx.version,

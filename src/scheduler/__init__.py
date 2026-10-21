@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import pytz
 import os
 from src.logging_helper import setup_logging
+from src.mq_telegram.tools import send_message_to_mq_for_telegram
+from src.trade.macro_calendar import upkeep
 from src.trade.rules import TradingRule
 
 
@@ -49,6 +51,20 @@ def job_daily_stats():
         "mqsend_timestamp": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     send_message_to_trading(message)
+
+
+@repeat(every().day.at(time_str="09:00", tz=timezone))
+def job_macro_calendar_upkeep():
+    """While no entry is made around US releases (the macro_news rule), say once a day when their calendar runs out."""
+    if trading_rule.news_rule is None:
+        return
+    today = datetime.now(pytz.timezone(timezone)).date()
+    if trading_rule.news_calendar is None:
+        said = "The calendar of US releases cannot be read: no window is kept around them"
+    else:
+        said = upkeep(trading_rule.news_calendar, today)
+    if said:
+        send_message_to_telegram(f"⚠️ WATA: {said}.")
 
 
 # @repeat(every().day.at(time_str="08:10", tz="Europe/Paris"))
@@ -135,24 +151,40 @@ def send_signal_to_web_server(message):
         logging.error(f"Failed to send internal signal to web_server: {e}")
 
 
+def rabbit_connection():
+    """A connection to RabbitMQ with the configuration's credentials."""
+    rabbitmq_config = config_manager.get_rabbitmq_config()
+    return pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=rabbitmq_config["hostname"],
+            credentials=pika.PlainCredentials(
+                rabbitmq_config["authentication"]["username"], rabbitmq_config["authentication"]["password"],
+            ),
+        )
+    )
+
+
+def send_message_to_telegram(text):
+    """A line on Telegram, through the queue the telegram service reads."""
+    try:
+        connection = rabbit_connection()
+    except Exception as e:
+        logging.error(f"Failed to connect to RabbitMQ: {e}")
+        return
+    try:
+        send_message_to_mq_for_telegram(connection, text)
+    finally:
+        if connection.is_open:
+            connection.close()
+
+
 def send_message_to_trading(message):
     """Send an operational message (daily_stats, check_positions_on_saxo_api) to the trading-ops queue."""
     queue_name = "trading-ops"
 
     try:
-        # Retrieve RabbitMQ credentials from the configuration
-        rabbitmq_config = config_manager.get_rabbitmq_config()
-        rabbitmq_hostname = rabbitmq_config["hostname"]
-        rabbitmq_username = rabbitmq_config["authentication"]["username"]
-        rabbitmq_password = rabbitmq_config["authentication"]["password"]
-
-        # Establish a connection to RabbitMQ with the provided credentials
-        connection = pika.BlockingConnection(
-            pika.ConnectionParameters(
-                host=rabbitmq_hostname,
-                credentials=pika.PlainCredentials(rabbitmq_username, rabbitmq_password),
-            )
-        )
+        # Establish a connection to RabbitMQ with the configuration's credentials
+        connection = rabbit_connection()
         channel = connection.channel()
         channel.queue_declare(queue=queue_name, durable=True)
 

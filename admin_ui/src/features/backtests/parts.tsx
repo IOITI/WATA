@@ -25,7 +25,7 @@ export function FateBadge({ fate }: { fate: BacktestFate }) {
 export function ChangeList({ changes, none }: { changes: readonly Change[]; none: string }) {
   if (changes.length === 0) return <p className="text-sm text-muted-foreground">{none}</p>
   return (
-    <dl className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-[max-content_1fr]">
+    <dl className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-[fit-content(60%)_1fr]">
       {changes.map((change) => (
         <div key={change.name} className="contents">
           <dt className="text-muted-foreground">{change.label}</dt>

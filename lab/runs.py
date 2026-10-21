@@ -350,10 +350,10 @@ def regimes_summary(run: dict, days: list[dict], breakdowns: dict) -> str:
 
 def calendar_check(today: date, *, ahead_days: int = 30) -> tuple[bool, str]:
     """Whether the macro calendar knows each kind of news far enough ahead, and what it holds."""
-    from src.backtest.regimes import read_calendar
+    from src.trade.macro_calendar import read_calendar
 
     calendar = read_calendar()
-    lines = [f"macro calendar {calendar.digest}: src/backtest/data/macro_calendar.csv"]
+    lines = [f"macro calendar {calendar.digest}: src/trade/data/macro_calendar.csv"]
     ok = True
     for event, until in sorted(calendar.until.items()):
         short = (until - today).days < ahead_days

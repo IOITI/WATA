@@ -21,6 +21,7 @@ from typing import Any, Callable
 import pytz
 
 from src.admin.downloads import trading_hours
+from src.admin.mcp_server.jobs import Jobs
 from src.admin.mcp_server.limits import McpLimits
 from src.admin.ta_rules import RuleStore
 from src.backtest.clock import TradingClock
@@ -120,6 +121,8 @@ class ResearchServices:
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
+    # The studies that outlasted their call, until job_wait gives their answers.
+    jobs: Jobs = field(default_factory=Jobs)
 
     @classmethod
     def from_context(cls, ctx) -> "ResearchServices":

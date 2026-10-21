@@ -20,6 +20,7 @@ import time
 
 from src.admin.errors import NotPossible
 from src.admin.processes import launch, tail
+from src.price_history.process import exit_said, oom_kills
 
 MODES = ("check", "run", "signals")
 # How long a study waits for the one before it.
@@ -49,7 +50,7 @@ class StudyService:
     def __init__(self, *, root: str, ta_root: str, prices_root: str, signal_cache: str, memory_mb: int,
                  timeout_seconds: int, minutes_per_hour: int, node: str = "node", launcher=launch,
                  memory=cgroup_memory, clock=time.monotonic, wait_seconds: float = WAIT_SECONDS,
-                 data: str = "database"):
+                 data: str = "database", kills=oom_kills):
         self._root = root
         # Where Capital.com's and Saxo's bars are read: the database of the configuration, or files:<folder>.
         self._data = data
@@ -62,12 +63,25 @@ class StudyService:
         self._node = node
         self._launcher = launcher
         self._memory = memory
+        self._kills = kills
         self._clock = clock
         self._wait_seconds = wait_seconds
         self._one = asyncio.Lock()
         # When each study of the last hour ended, and how long it took.
         self._spent: collections.deque = collections.deque()
         self._process = None
+
+    def _ending(self, kills_before: int | None) -> str:
+        """How the study's child ended, and the memory then: why a study gave no answer."""
+        code = self._process.returncode if self._process is not None else None
+        said = [f"it was {exit_said(code)}" if code is not None and code < 0 else f"it {exit_said(code)}"]
+        found = self._memory()
+        if found is not None:
+            said.append(f"the admin used {found[0] / 1024 ** 2:,.0f} of its {found[1] / 1024 ** 2:,.0f} MB then")
+        kills_after = self._kills()
+        if kills_before is not None and kills_after is not None and kills_after > kills_before:
+            said.append(f"the kernel's OOM killer stopped {kills_after - kills_before} process(es) meanwhile")
+        return ", ".join(said)
 
     def spent_seconds(self) -> float:
         hour_ago = self._clock() - 3600
@@ -112,6 +126,7 @@ class StudyService:
         with open(request_path, "w", encoding="utf-8") as request_file:
             json.dump(request, request_file)
         started = self._clock()
+        kills_before = self._kills()
         try:
             self._process = await self._launcher([
                 "src.research.study", mode, "--request", request_path, "--out", out_path,
@@ -133,7 +148,7 @@ class StudyService:
                     return json.load(out_file)
             except (OSError, ValueError):
                 said = " | ".join(tail(log_path, 3)) or "nothing"
-                raise NotPossible(f"The study gave no answer ({said})") from None
+                raise NotPossible(f"The study gave no answer: {self._ending(kills_before)} ({said})") from None
         finally:
             self._process = None
             self._spent.append((self._clock(), self._clock() - started))

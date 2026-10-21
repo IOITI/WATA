@@ -162,6 +162,7 @@ async def handle_trading_signal(
         # 1. Rule checks (sync — pure computation + quick DB reads via asyncio.to_thread)
         trading_rule.check_signal_timestamp(action, data.get("alert_timestamp"))
         trading_rule.check_market_hours(data.get("signal_timestamp"))
+        trading_rule.check_macro_news()
         indice_id = trading_rule.get_allowed_indice_id(indice)
 
         # Paused by the operator: refused before anything is closed or opened

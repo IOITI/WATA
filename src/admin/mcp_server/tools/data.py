@@ -16,6 +16,11 @@ from src.admin.prices import MAX_BUCKETS
 
 # The days a question on the signals or the trades may cover.
 MAX_DATA_DAYS = 92
+# Bars as CSV, for a file on the Mac: a week of ten-second bars (about 60,000 rows, 6 MB) at a call,
+# under the 16 MiB Claude Code reads of an answer.
+MAX_CSV_DAYS = 7
+MAX_CSV_BARS = 70_000
+BARS_EXPORT_CHARS = 8_000_000
 # The Saxo instruments looked at at most to list them (indexes and turbos).
 MAX_SAXO_ASSETS = 5000
 SIGNAL_KINDS = ("received", "engine")
@@ -87,20 +92,21 @@ def register(server, research) -> None:
         )
         return compacted(found)
 
-    @research_tool(server, calls, name="data_bars", title="Bars of an asset", read_only=True, export=True)
+    @research_tool(server, calls, name="data_bars", title="Bars of an asset", read_only=True, export=True,
+                   export_chars=BARS_EXPORT_CHARS)
     async def data_bars(asset: str, start_day: date, end_day: date | None = None, interval_seconds: int = 60,
                         format: str = "json") -> dict | str:
         """Bars of ``asset`` (a ref of data_assets) over whole days of the trading timezone, of any length from 10 s
         to a day (interval_seconds): t (bucket start, epoch s), bid and ask open/high/low/close, updates (quote
-        changes, what stands for volume). At most 12,000 bars. format="csv" gives a table Claude Code saves to a file
-        on the Mac, for analysis there; a large JSON answer is saved there too."""
+        changes, what stands for volume). As JSON, 12,000 bars at most. format="csv" gives a table Claude Code saves
+        to a file on the Mac, for analysis there: up to 7 days a call, a week of ten-second bars (70,000 at most)."""
         _format(format)
-        first, last = period(start_day, end_day, MAX_DATA_DAYS)
+        first, last = period(start_day, end_day, MAX_CSV_DAYS if format == "csv" else MAX_DATA_DAYS)
         refuse_lockbox(research.journal, first, last)
         provider, _, key = asset.partition("/")
         found = await asset_bars.bars(
             research.queries, research.history, research.timezone, provider, key, first, last,
-            interval_seconds, today=research.today(), limit=MAX_BUCKETS,
+            interval_seconds, today=research.today(), limit=MAX_CSV_BARS if format == "csv" else MAX_BUCKETS,
         )
         if format == "csv":
             return csv_text(found["columns"], found["bars"])

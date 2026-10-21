@@ -4,6 +4,7 @@ import pytz
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.admin.auth import require_session
+from src.trade.macro_calendar import NewsRule, next_window, read_calendar
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 
@@ -42,6 +43,36 @@ def _market_closed_on(config_manager, day: date) -> bool:
     return day.strftime("%d/%m/%Y") in closed_dates
 
 
+def _iso(moment: float) -> str:
+    return datetime.fromtimestamp(moment, pytz.utc).isoformat()
+
+
+def _news(config_manager, now: datetime) -> dict | None:
+    """
+    While the trader keeps entries out of a window around US releases (the
+    macro_news rule): the window in force, or the next to start within a day,
+    and the calendar's last known day.
+    """
+    rule = next((rule for rule in config_manager.get_config_value("trade.rules", []) or []
+                 if isinstance(rule, dict) and rule.get("rule_type") == "macro_news"), None)
+    if rule is None:
+        return None
+    try:
+        news_rule = NewsRule.from_config(rule.get("rule_config"))
+        calendar = read_calendar()
+    except (OSError, ValueError, KeyError):
+        return {"window": None, "known_until": None, "readable": False}
+    window = next_window(calendar, news_rule, now.timestamp())
+    return {
+        "window": None if window is None else {
+            "event": window.event.event, "released_at": _iso(window.event.moment()),
+            "start": _iso(window.start), "end": _iso(window.end),
+        },
+        "known_until": calendar.known_until(),
+        "readable": True,
+    }
+
+
 def _cooldown(last_loss_at: datetime | None, cooldown_minutes: int) -> dict:
     if last_loss_at is None or cooldown_minutes <= 0:
         return {"last_loss_at": last_loss_at, "ends_at": None, "active": False}
@@ -63,6 +94,8 @@ async def overview(request: Request):
         "limits": limits,
         "market_closed_today": _market_closed_on(ctx.config_manager, today),
         "cooldown": _cooldown(await ctx.queries.last_loss_timestamp(), limits["cooldown_after_loss_minutes"]),
+        # No entry around US releases (the macro_news rule); None while the rule is off.
+        "news": _news(ctx.config_manager, datetime.now(pytz.utc)),
         "entries_paused_since": await ctx.queries.entries_paused_since(),
         "open_positions": await ctx.queries.open_positions(),
         "recent_days": recent["daily"],

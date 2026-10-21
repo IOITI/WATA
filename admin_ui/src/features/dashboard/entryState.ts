@@ -6,6 +6,7 @@ export type EntryBlockerCode =
   | 'closed_date'
   | 'hours'
   | 'risky_hours'
+  | 'macro_news'
   | 'day_target'
   | 'day_stop'
   | 'trade_limit'
@@ -15,6 +16,10 @@ export interface EntryBlocker {
   code: EntryBlockerCode
   /** Why a signal that would open a position is refused right now. */
   reason: string
+}
+
+function clock(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso))
 }
 
 function hourAndMinute(now: number, timeZone: string): [number, number] {
@@ -36,6 +41,8 @@ function hourAndMinute(now: number, timeZone: string): [number, number] {
  *
  * Not looked at here, because they depend on the signal itself: its age, its
  * confidence, its indice, and whether a position is already open in its direction.
+ * The window around a US release comes from the server (``news``), which reads
+ * the calendar the trader reads.
  */
 export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
   const { limits, day, cooldown } = overview
@@ -64,6 +71,14 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
     }
   }
 
+  const news = overview.news?.window
+  if (news && Date.parse(news.start) <= now && now < Date.parse(news.end)) {
+    blockers.push({
+      code: 'macro_news',
+      reason: `${news.event} at ${clock(news.released_at, overview.timezone)}: no entry until ${clock(news.end, overview.timezone)}`,
+    })
+  }
+
   if (limits.stop_entries_above_percent !== null && day.performance_percent >= limits.stop_entries_above_percent) {
     blockers.push({
       code: 'day_target',
@@ -89,6 +104,14 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
   }
 
   return blockers
+}
+
+/** The window around a US release still to come today, said before it starts; null when there is none. */
+export function upcomingNews(overview: Overview, now: number): string | null {
+  const news = overview.news?.window
+  if (!news || Date.parse(news.start) <= now) return null
+  const zone = overview.timezone
+  return `No entry around ${news.event} (${clock(news.released_at, zone)}) from ${clock(news.start, zone)} to ${clock(news.end, zone)}`
 }
 
 /** The directions in which a position is open: a signal in one of them is refused as a duplicate. */

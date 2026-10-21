@@ -96,13 +96,20 @@ def _spread(values: list[float], digits: int = 2) -> dict:
     }
 
 
-def measure(rows: dict, clock: TradingClock) -> dict:
-    """What WATA's orders took and cost, and the values a backtest would be given from them."""
+def _finite(values) -> list[float]:
+    return [float(value) for value in values if value is not None and math.isfinite(value)]
+
+
+def samples(rows: dict) -> dict:
+    """
+    Each measure one by one: what a run on measured fills draws from
+    (``execution.json``, src/backtest/execution.py). Order seconds from an order
+    leaving to Saxo's acceptance; euros a turbo worse than the quote recorded
+    when the order left, for purchases and sales; seconds from a signal to the
+    trader's decision.
+    """
     signals = rows.get("signals") or []
-    from_bar = _spread([_seconds(row["decided_at"], row["signal_timestamp"]) for row in signals])
-    from_receipt = _spread([_seconds(row["decided_at"], row["received_timestamp"]) for row in signals])
     orders = rows.get("orders") or []
-    order_seconds = _spread([_seconds(row["accepted_at"], row["sent_at"]) for row in orders], 3)
     quotes = {str(row["order_id"]): row for row in rows.get("quotes") or []}
     paid: dict[str, list[float]] = {"open": [], "close": []}
     for row in orders:
@@ -113,6 +120,23 @@ def measure(rows: dict, clock: TradingClock) -> dict:
             paid["open"].append(row["position_open_price"] - quote["ask_close"])
         elif row["purpose"] == "close" and row["position_close_price"] is not None and quote["bid_close"] is not None:
             paid["close"].append(quote["bid_close"] - row["position_close_price"])
+    return {
+        "order_seconds": _finite(_seconds(row["accepted_at"], row["sent_at"]) for row in orders),
+        "slippage_buy": _finite(paid["open"]),
+        "slippage_sell": _finite(paid["close"]),
+        "signal_delay_seconds": _finite(_seconds(row["decided_at"], row["signal_timestamp"]) for row in signals),
+    }
+
+
+def measure(rows: dict, clock: TradingClock) -> dict:
+    """What WATA's orders took and cost, and the values a backtest would be given from them."""
+    signals = rows.get("signals") or []
+    from_bar = _spread([_seconds(row["decided_at"], row["signal_timestamp"]) for row in signals])
+    from_receipt = _spread([_seconds(row["decided_at"], row["received_timestamp"]) for row in signals])
+    orders = rows.get("orders") or []
+    order_seconds = _spread([_seconds(row["accepted_at"], row["sent_at"]) for row in orders], 3)
+    measured = samples(rows)
+    paid = {"open": measured["slippage_buy"], "close": measured["slippage_sell"]}
     every = paid["open"] + paid["close"]
     slippage = {
         purpose: {**_spread(values, 4), "median_ticks": round(median(values) / TICK, 2) if values else None}

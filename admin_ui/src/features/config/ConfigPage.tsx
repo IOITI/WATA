@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/form'
 import { SmoothAccordion } from '@/components/ui/smooth-accordion'
 import { SpringSelect } from '@/components/ui/spring-select'
+import { StretchSwitch } from '@/components/ui/stretch-switch'
 import { useSession } from '@/features/auth/auth-context'
 import { api, ApiError } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
@@ -18,9 +19,21 @@ import type { ConfigDocument, JsonObject, JsonValue } from '@/lib/types'
 
 import { BackupsPanel } from './BackupsPanel'
 import { ChangeList } from './ChangeList'
-import { applyEditable, diffConfigs, getAt, parseJsonObject, pickEditable, ruleConfigPath, setAt } from './configModel'
+import {
+  applyEditable,
+  diffConfigs,
+  getAt,
+  parseJsonObject,
+  pickEditable,
+  ruleConfigPath,
+  setAt,
+  toggled,
+  withoutRule,
+  withRule,
+} from './configModel'
 import type { ConfigPath } from './configModel'
 import { DraftProvider, FieldGrid, MissingRule, NumberField, SwitchField, TextField } from './fields'
+import { useDraft } from './draft-context'
 import { LeaveGuard } from './LeaveGuard'
 import { DateListField, MapField, RowsField } from './listFields'
 
@@ -54,6 +67,19 @@ const CONFIDENCE_COLUMNS = [
   { key: 'scale_percent', label: 'Size (%)', kind: 'number' as const },
 ]
 
+// No entry around US releases: the trader's macro_news rule (src/trade/macro_calendar.py), with its defaults.
+const NEWS_EVENTS = [
+  { event: 'FOMC', label: 'FOMC statements' },
+  { event: 'CPI', label: 'CPI' },
+  { event: 'NFP', label: 'The jobs report (NFP)' },
+  { event: 'PCE', label: 'PCE' },
+]
+const NEWS_RULE = {
+  rule_name: 'No entry around US releases',
+  rule_type: 'macro_news',
+  rule_config: { events: NEWS_EVENTS.map((entry) => entry.event), minutes_before: 5, minutes_after: 15, minutes_after_fomc: 45 },
+}
+
 function prettyJson(value: JsonValue): string {
   return JSON.stringify(value, null, 2)
 }
@@ -69,6 +95,46 @@ function RuleSection({
 }) {
   const path = ruleConfigPath(config, ruleType)
   return path ? <FieldGrid>{children(path)}</FieldGrid> : <MissingRule ruleType={ruleType} />
+}
+
+/** The window around US releases: the rule added with its defaults when switched on, taken away when off. */
+function NewsSection({ draft }: { draft: JsonObject }) {
+  const { update, disabled } = useDraft()
+  const path = ruleConfigPath(draft, 'macro_news')
+  const events = path ? getAt(draft, [...path, 'events']) : undefined
+  const all = NEWS_EVENTS.map((entry) => entry.event)
+  return (
+    <div className="space-y-5">
+      <StretchSwitch
+        label="No entry around US releases"
+        description="The trader refuses new entries from shortly before to shortly after each release of the calendar kept with WATA (New York's hours, whatever the clocks). Positions already open are left alone."
+        checked={path !== null}
+        disabled={disabled}
+        onChange={(on) => update(['trade', 'rules'], on ? withRule(draft, NEWS_RULE) : withoutRule(draft, 'macro_news'))}
+      />
+      {path && (
+        <FieldGrid>
+          <NumberField label="From before a release" unit="min" path={[...path, 'minutes_before']} hint="0 to 120" />
+          <NumberField label="Until after it" unit="min" path={[...path, 'minutes_after']} hint="0 to 120" />
+          <NumberField
+            label="Until after an FOMC statement"
+            unit="min"
+            path={[...path, 'minutes_after_fomc']}
+            hint="Its press conference starts 30 minutes later"
+          />
+          {NEWS_EVENTS.map((entry) => (
+            <StretchSwitch
+              key={entry.event}
+              label={entry.label}
+              checked={Array.isArray(events) && events.includes(entry.event)}
+              disabled={disabled}
+              onChange={(on) => update([...path, 'events'], toggled(all, events, entry.event, on))}
+            />
+          ))}
+        </FieldGrid>
+      )}
+    </div>
+  )
 }
 
 function SettingsForm({ draft }: { draft: JsonObject }) {
@@ -124,6 +190,12 @@ function SettingsForm({ draft }: { draft: JsonObject }) {
           )}
         </RuleSection>
       ),
+    },
+    {
+      id: 'news',
+      title: 'US releases',
+      subtitle: 'No new entry around CPI, the jobs report, PCE and FOMC statements',
+      content: <NewsSection draft={draft} />,
     },
     {
       id: 'exits',

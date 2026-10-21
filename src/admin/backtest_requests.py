@@ -50,11 +50,39 @@ async def ask_backtest(queries, service, body: dict, *, made_by: str | None = No
         except DatabaseUnavailable:
             positions = None
     capital = await last_balance(queries)
+    execution = await measured_orders(queries, service) if asks_measured(body) else None
     # On the event loop: the run joins the service's line, which is not to be touched from another thread.
     return service.create(
         body, journal=journal, positions=positions, capital=capital,
-        made_by=made_by, made_via=made_via, experiment=experiment, lockbox=lockbox,
+        made_by=made_by, made_via=made_via, experiment=experiment, lockbox=lockbox, execution=execution,
     )
+
+
+def asks_measured(body) -> bool:
+    """Whether a request may fill orders by drawing from WATA's own (its changes, or a sweep's axis)."""
+    if not isinstance(body, dict):
+        return False
+    if (body.get("changes") or {}).get("execution") == "measured":
+        return True
+    axes = (body.get("sweep") or {}).get("axes") or [] if isinstance(body.get("sweep"), dict) else []
+    return any(isinstance(axis, dict) and axis.get("name") == "execution" and "measured" in (axis.get("values") or [])
+               for axis in axes)
+
+
+async def measured_orders(queries, service) -> dict:
+    """WATA's orders of the last EXECUTION_DAYS, one measure at a time: what a run on measured fills draws from."""
+    from src.backtest.clock import TradingClock
+    from src.backtest.execution_calibration import samples
+
+    clock = TradingClock(service.live_settings(None).timezone)
+    last_day = datetime.now(timezone.utc).astimezone(clock.zone).date()
+    first_day = last_day - timedelta(days=EXECUTION_DAYS - 1)
+    start, end = clock.day_bounds(first_day)[0], clock.day_bounds(last_day)[1]
+    try:
+        rows = await queries.execution_rows(datetime.fromtimestamp(start, timezone.utc), datetime.fromtimestamp(end, timezone.utc))
+    except DatabaseUnavailable:
+        rows = {}
+    return {"from": first_day.isoformat(), "to": last_day.isoformat(), "samples": samples(rows)}
 
 
 def _local_day(moment, zone) -> str | None:

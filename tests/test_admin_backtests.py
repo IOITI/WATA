@@ -429,6 +429,40 @@ def test_a_command_that_fails_or_cannot_start_leaves_what_it_said(tmp_path, scri
     assert unstarted["status"]["error"] == "The backtest could not be started: no python"
 
 
+def test_a_run_the_kernel_stopped_says_where_it_was_and_the_memory_then(tmp_path, scripts, config, monkeypatch):
+    from src.admin import backtests as service_module
+
+    class Killed(FakeLauncher):
+        async def __call__(self, arguments, log_path):
+            process = await super().__call__(arguments, log_path)
+            folder = arguments[arguments.index("--run") + 1]
+            with open(os.path.join(folder, "progress.json"), "w", encoding="utf-8") as out_file:
+                json.dump({"phase": "signals", "done": 3, "total": 90, "day": "2026-09-17",
+                           "engine_day": "2026-09-16T21:15:00Z", "bars": 102_365, "runner_peak_mb": 590.4}, out_file)
+            self.finish(len(self.processes) - 1, -9)
+            return process
+
+    kills = iter([3, 4])
+    monkeypatch.setattr(service_module, "oom_kills", lambda: next(kills))
+    monkeypatch.setattr(service_module, "cgroup_memory", lambda: (1480 * 1024 ** 2, 1536 * 1024 ** 2))
+
+    @worked
+    async def scenario(backtests):
+        run = backtests.create(pine(scripts))
+        await until(lambda: backtests.get(run["id"])["status"]["state"] == FAILED)
+        return backtests.get(run["id"])["status"]
+
+    status = scenario(service(tmp_path, scripts, config, Killed(ends_with=None)))
+
+    assert status["error"].splitlines()[0] == (
+        "The backtest was stopped by the kernel (SIGKILL), most likely for memory: the admin's children are the first it "
+        "stops, while running its script (3 of 90, 2026-09-17), on the engine day from 2026-09-16T21:15:00Z, 102,365 bars, "
+        "the runner having held 590 MB at most, the admin used 1,480 of its 1,536 MB then, the kernel's OOM killer "
+        "stopped 1 process(es) during the run."
+    )
+    assert status["failure"]["exit"] == -9 and status["failure"]["oom_kills"] == 1 and status["failure"]["bars"] == 102_365
+
+
 def test_a_run_is_stopped_waiting_or_running(tmp_path, scripts, config):
     launcher = FakeLauncher(ends_with=None)
     backtests = service(tmp_path, scripts, config, launcher)

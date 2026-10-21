@@ -42,6 +42,7 @@ from src.backtest.baseline import DEFAULT_SEED, Baseline, entry_hours
 from src.backtest.clock import TradingClock, days_between
 from src.backtest.rules import compounded
 from src.backtest.data import AssetSeries, DatabaseData, FileData
+from src.backtest.execution import EXECUTION_FILE, MEASURED, fills_for
 from src.backtest.settings import BacktestSettings
 from src.backtest.signals import by_day, closing_signals, journal_signals, pine_signals, raised_signals
 from src.backtest.simulator import ENTRY_ACTIONS, Simulator
@@ -94,13 +95,23 @@ class Progress:
     def __init__(self, folder: str):
         self._path = os.path.join(folder, "progress.json")
         self._last = 0.0
+        self._said: dict = {}
+        # What the runner is given now: the engine day, its bars, its peak memory so far.
+        self._runner: dict = {}
 
     def __call__(self, phase: str, done: int, total: int, day: date | str | None = None, *, force: bool = False) -> None:
+        self._said = {"phase": phase, "done": done, "total": total, "day": str(day) if day else None}
         now = time.monotonic()
         if not force and now - self._last < PROGRESS_EVERY_SECONDS:
             return
         self._last = now
-        _write(self._path, {"phase": phase, "done": done, "total": total, "day": str(day) if day else None})
+        _write(self._path, {**self._said, **self._runner})
+
+    def runner_day(self, begin: int, bars: int, peak_mb: float | None) -> None:
+        """The engine day the runner is about to be given: written at once, in case it is the last."""
+        self._runner = {"engine_day": datetime.fromtimestamp(begin, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "bars": bars, "runner_peak_mb": peak_mb}
+        _write(self._path, {**self._said, **self._runner})
 
 
 def _config():
@@ -266,7 +277,7 @@ async def run(arguments) -> int:
                     rule, _engine_rule(folder, rule), rows, settings, clock, start, end, node=arguments.node,
                     command=command, progress=lambda done, total, day: progress("signals", number * total + done,
                                                                                   len(input_sets) * total, day),
-                    cache=arguments.signal_cache,
+                    cache=arguments.signal_cache, on_window=progress.runner_day,
                 )
                 print(f"Signals of input set {number + 1}: {result.run_windows} days run, {result.cached_windows} read back", flush=True)
                 signal_sets[inputs] = result.events
@@ -290,23 +301,32 @@ async def run(arguments) -> int:
         closing_by_day = by_day(closing, clock)
 
         # ── 2. the days ──
-        if axes:
-            cells = []
-            for values in cells_of(axes):
-                cell_rules = cell_settings(settings, axes, values)
-                events = signal_sets[cell_inputs(axes, values)]
-                cells.append({"values": list(values), "simulator": Simulator(cell_rules, clock), "events": by_day(events, clock)})
-            main, baseline = None, None
-        else:
-            events = signal_sets[()]
-            main = Simulator(settings, clock)
-            cells = [{"values": [], "simulator": main, "events": by_day(events, clock)}]
-            baseline_request = request.get("baseline") or {}
-            repetitions = int(baseline_request.get("repetitions") or 0)
-            hours = entry_hours(events, clock)
-            # Without an entry of its own, a strategy has nothing to be set against.
-            baseline = Baseline(settings, clock, repetitions, int(baseline_request.get("seed") or DEFAULT_SEED), hours) \
-                if repetitions > 0 and hours is not None else None
+        # WATA's own orders, which a run on measured fills draws each order from.
+        execution_path = os.path.join(folder, EXECUTION_FILE)
+        execution = _read(execution_path) if os.path.exists(execution_path) else None
+        samples = (execution or {}).get("samples")
+        seed = int((request.get("baseline") or {}).get("seed") or DEFAULT_SEED)
+        try:
+            if axes:
+                cells = []
+                for values in cells_of(axes):
+                    cell_rules = cell_settings(settings, axes, values)
+                    events = signal_sets[cell_inputs(axes, values)]
+                    simulator = Simulator(cell_rules, clock, fills=fills_for(cell_rules, samples, f"{seed}:run", base=settings))
+                    cells.append({"values": list(values), "simulator": simulator, "events": by_day(events, clock)})
+                main, baseline = None, None
+            else:
+                events = signal_sets[()]
+                main = Simulator(settings, clock, fills=fills_for(settings, samples, f"{seed}:run"))
+                cells = [{"values": [], "simulator": main, "events": by_day(events, clock)}]
+                baseline_request = request.get("baseline") or {}
+                repetitions = int(baseline_request.get("repetitions") or 0)
+                hours = entry_hours(events, clock)
+                # Without an entry of its own, a strategy has nothing to be set against.
+                baseline = Baseline(settings, clock, repetitions, seed, hours, samples=samples) \
+                    if repetitions > 0 and hours is not None else None
+        except ValueError as e:
+            raise NotARun(str(e)) from None
         entries_by_day = Counter(
             day for day, events in cells[0]["events"].items() for event in events if event.action in ENTRY_ACTIONS
         )
@@ -365,6 +385,12 @@ async def run(arguments) -> int:
             "engine": engine or None,
             # Not part of the code: the news a day was known by.
             "calendar": {"digest": calendar.digest, "until": known_until.isoformat() if known_until else None},
+            # How its orders were filled: the settings' values, or drawn from WATA's own orders of a period.
+            "execution": {"kind": settings.execution} if settings.execution != MEASURED or execution is None else {
+                "kind": MEASURED, "from": execution.get("from"), "to": execution.get("to"),
+                "orders": len((samples or {}).get("order_seconds") or []),
+                "fills": {kind: len((samples or {}).get(kind) or []) for kind in ("slippage_buy", "slippage_sell")},
+            },
             "turbos": {"kind": "recorded"} if not isinstance(data, ModelData) else {
                 "kind": "modelled", "made_at": data.calibration.get("made_at"), "underlying": data.calibration.get("underlying"),
                 "days": len(data.calibration.get("days") or []), "few_days": bool(data.calibration.get("few_days")),

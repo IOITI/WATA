@@ -88,6 +88,7 @@ CALLS = {
     "backtest_start": {"experiment_id": "nothere", "request": {"from": "2026-10-13", "to": "2026-10-13"}},
     "backtest_derive": {"run_id": "20261019-200000-abcdef", "kind": "stress", "experiment_id": "nothere"},
     "backtest_wait": {"run_ids": ["20261019-200000-abcdef"], "seconds": 1},
+    "job_wait": {"job_id": "000000000000", "seconds": 0},
     "backtest_remove": {"run_id": "20261019-200000-abcdef"},
     "turbo_model_measure": {"start_day": "2026-10-13", "end_day": "2026-10-14"},
     "rule_shadow_save": {"name": "X", "script_id": "000000000000", "asset": "capital/US100", "indice": "us100",

@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 from starlette.concurrency import run_in_threadpool
 
-from src.admin.mcp_server.budget import Refused, research_tool
+from src.admin.mcp_server.budget import CONTEXT_CHARS, Refused, compact, research_tool
 from src.admin.mcp_server.facade import CLAUDE
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, page, period, refuse_lockbox
 from src.admin.ta_compare import compare, default_tolerance
@@ -18,6 +18,58 @@ from src.research.study import MAX_STUDY_DAYS, bars_of
 
 KINDS = ("", "indicator", "strategy", "library")
 MAX_COMPARED_ROWS = 300
+FITTED = ("Cut to the 32,000 characters an answer may have: ask for fewer plots (plots), fewer points, "
+          "alert_titles, a lower max_alerts or fewer days")
+
+
+def _thinned(points: list, count: int) -> list:
+    """``count`` of ``points``, evenly spaced, with the first and the last."""
+    if count >= len(points):
+        return points
+    if count <= 1:
+        return points[:count]
+    step = (len(points) - 1) / (count - 1)
+    return [points[round(index * step)] for index in range(count)]
+
+
+def fitted(answer, limit: int = CONTEXT_CHARS):
+    """
+    A run's answer within ``limit`` characters: its plots' points thinned
+    first, then the alerts listed cut, as ``fitted`` says. The summaries,
+    the counts and the warnings stay whole.
+    """
+    if not isinstance(answer, dict) or len(compact(answer)) <= limit:
+        return answer
+    plots = answer.get("plots") if isinstance(answer.get("plots"), dict) else {}
+    alerts = answer.get("alerts") if isinstance(answer.get("alerts"), list) else []
+    sampled = {name: plot for name, plot in plots.items() if isinstance(plot, dict) and isinstance(plot.get("points"), list)}
+    most = max((len(plot["points"]) for plot in sampled.values()), default=0)
+
+    def tried(points: int, listed: int) -> dict:
+        trial = {**answer, "plots": {**plots, **{name: {**plot, "points": _thinned(plot["points"], points)}
+                                                   for name, plot in sampled.items()}}}
+        if "alerts" in answer:
+            trial["alerts"] = alerts[:listed]
+        trial["fitted"] = {"points_per_plot": points, "alerts_listed": min(listed, len(alerts)), "said": FITTED}
+        return trial
+
+    def largest(fits, high: int) -> int:
+        low = 0
+        while low < high:
+            middle = (low + high + 1) // 2
+            if fits(middle):
+                low = middle
+            else:
+                high = middle - 1
+        return low
+
+    def fits(trial: dict) -> bool:
+        return len(compact(trial)) <= limit
+
+    # The most points that fit with every alert listed; with none, the most alerts that fit.
+    if fits(tried(0, len(alerts))):
+        return tried(largest(lambda points: fits(tried(points, len(alerts))), most), len(alerts))
+    return tried(0, largest(lambda listed: fits(tried(0, listed)), len(alerts)))
 
 
 def _script_line(meta: dict, users: list[str]) -> dict:
@@ -113,9 +165,10 @@ def _studies(research):
 
 def register_studies(server, research) -> None:
     calls = research.calls
-    seconds = research.limits.study_timeout_seconds + 25
+    # A study may outlast a call: these tools answer with a job then (job_wait).
+    jobs = research.jobs
 
-    @research_tool(server, calls, name="pine_check", title="Check a Pine script", read_only=True, seconds=seconds)
+    @research_tool(server, calls, name="pine_check", title="Check a Pine script", read_only=True, jobs=jobs)
     async def pine_check(source: str = "", script_id: str = "", version: int = 0, name: str = "") -> dict:
         """Compile a script (a source not saved yet, or a saved script_id) and run it once on made-up bars, without
         reading any data: where it fails (file, line, column; a library's own lines when the fault is in one), or its
@@ -127,23 +180,27 @@ def register_studies(server, research) -> None:
         return compacted(await _studies(research).study("check", request))
 
     @research_tool(server, calls, name="pine_run", title="Run a Pine script on recorded bars", read_only=True,
-                   seconds=seconds)
+                   jobs=jobs)
     async def pine_run(asset: str, start_day: date, end_day: date | None = None, bars: str = "1", side: str = "bid",
                        script_id: str = "", version: int = 0, source: str = "", name: str = "",
                        inputs: dict | None = None, warmup_days: int = 1, points: int = 300,
-                       plots: list[str] | None = None) -> dict:
+                       plots: list[str] | None = None, alert_titles: list[str] | None = None,
+                       max_alerts: int = 100) -> dict:
         """One continuous run of a script (saved, or a source not saved yet) on the bars WATA recorded of ``asset``
         (a ref of data_assets) over whole days, with ``warmup_days`` of bars before them: each plot summarised (na
-        share, min, max, mean, first, last) and downsampled to ``points`` points, the alerts it raised (time, title,
-        message), and PineTS's runtime warnings. bars: minutes (1, 5), seconds (10S, 45S) or range bars (R60).
-        inputs by id: {"in_0": 9}. What the script shows, not what a rule would send: that is pine_signals."""
+        share, min, max, mean, first, last) and downsampled to ``points`` points, the alerts it raised counted by
+        title, and listed (time, title, message): only ``alert_titles`` when given, ``max_alerts`` at most (0 lists
+        none, 500 at most), and PineTS's runtime warnings. bars: minutes (1, 5), seconds (10S, 45S) or range bars
+        (R60). inputs by id: {"in_0": 9}. What the script shows, not what a rule would send: that is pine_signals.
+        An answer over 32,000 characters has fewer points, then fewer alerts listed, as its ``fitted`` says."""
         request = _study_request(research, script_id=script_id, version=version, source=source, name=name, asset=asset,
                                  bars=bars, side=side, inputs=inputs or {}, start_day=start_day, end_day=end_day)
-        request.update(warmup_days=warmup_days, points=points, plots=plots or [])
-        return compacted(await _studies(research).study("run", request))
+        request.update(warmup_days=warmup_days, points=points, plots=plots or [], alert_titles=alert_titles or [],
+                       max_alerts=max_alerts)
+        return fitted(compacted(await _studies(research).study("run", request)))
 
     @research_tool(server, calls, name="pine_signals", title="What a rule of the script would raise", read_only=True,
-                   seconds=seconds)
+                   jobs=jobs)
     async def pine_signals(asset: str, start_day: date, alerts: dict, end_day: date | None = None, bars: str = "1",
                            side: str = "bid", script_id: str = "", version: int = 0, source: str = "", name: str = "",
                            inputs: dict | None = None, alert_calls: str = "ignore", history_days: int | None = None) -> dict:
@@ -160,14 +217,16 @@ def register_studies(server, research) -> None:
         return compacted(await _studies(research).study("signals", request))
 
     @research_tool(server, calls, name="pine_compare", title="A script's signals beside TradingView's", read_only=True,
-                   seconds=seconds)
+                   jobs=jobs)
     async def pine_compare(asset: str, start_day: date, alerts: dict, end_day: date | None = None, bars: str = "1",
                            side: str = "bid", script_id: str = "", version: int = 0, source: str = "", name: str = "",
-                           inputs: dict | None = None, indice: str = "us100", tolerance_seconds: int = 0) -> dict:
+                           inputs: dict | None = None, indice: str = "us100", tolerance_seconds: int = 0,
+                           rows: int = 50) -> dict:
         """The signals a rule of this script would have raised (as pine_signals) set beside those WATA received
         from TradingView for ``indice`` on the same days, paired by action within tolerance_seconds (two bars by
         default, five minutes for range bars): paired, only the script's, only TradingView's, day by day, and the
-        time between each pair. How close a script comes to the strategy TradingView runs."""
+        time between each pair (``rows`` of them, 0 for the days and totals alone, 300 at most). How close a script
+        comes to the strategy TradingView runs."""
         request = _study_request(research, script_id=script_id, version=version, source=source, name=name, asset=asset,
                                  bars=bars, side=side, inputs=inputs or {}, start_day=start_day, end_day=end_day,
                                  alerts=alerts)
@@ -179,7 +238,7 @@ def register_studies(server, research) -> None:
         ours = [{**signal, "bar_time": datetime.fromisoformat(signal["bar_time"].replace("Z", "+00:00"))}
                 for signal in found.get("signals") or []]
         first, last = date.fromisoformat(request["from"]), date.fromisoformat(request["to"])
-        days, rows = [], []
+        days, pairs = [], []
         day = first
         while day <= last:
             theirs = await research.queries.ta_other_signals(indice, day)
@@ -187,17 +246,18 @@ def register_studies(server, research) -> None:
             compared = compare(mine, theirs, tolerance)
             days.append({"day": day.isoformat(), "paired": compared["paired"], "only_script": compared["only_wata"],
                          "only_tradingview": compared["only_tradingview"]})
-            rows += [{"at": row["at"], "action": row["action"], "delta_seconds": row["delta_seconds"],
-                      "script": bool(row["wata"]), "tradingview": bool(row["tradingview"])} for row in compared["rows"]]
+            pairs += [{"at": row["at"], "action": row["action"], "delta_seconds": row["delta_seconds"],
+                       "script": bool(row["wata"]), "tradingview": bool(row["tradingview"])} for row in compared["rows"]]
             day += timedelta(days=1)
         return compacted({
             "tolerance_seconds": tolerance, "days": days,
             "paired": sum(entry["paired"] for entry in days), "only_script": sum(entry["only_script"] for entry in days),
             "only_tradingview": sum(entry["only_tradingview"] for entry in days),
-            "rows": rows[:MAX_COMPARED_ROWS], "rows_total": len(rows), "signals_total": found.get("signals_total"),
+            "rows": pairs[:max(0, min(rows, MAX_COMPARED_ROWS))], "rows_total": len(pairs),
+            "signals_total": found.get("signals_total"),
         })
 
-    @research_tool(server, calls, name="pine_save", title="Save a Pine script", read_only=False, seconds=seconds)
+    @research_tool(server, calls, name="pine_save", title="Save a Pine script", read_only=False, jobs=jobs)
     async def pine_save(source: str, name: str = "", script_id: str = "", description: str = "") -> dict:
         """Save a script, checked first (pine_check): a new one (``name``), or a new version of one of Claude's own
         (``script_id``). The operator's scripts are never changed: save a copy under a new name. A script that does

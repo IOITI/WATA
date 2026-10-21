@@ -717,6 +717,42 @@ class FakeQueries:
             if position["position_status"] == "Closed" and in_range(position["execution_time_open"], start, end)
         ]
 
+    async def execution_rows(self, start, end):
+        """
+        The rows the execution measure reads (src/backtest/execution_calibration.py):
+        the tracked orders, each against a made-up quote of when it left, a cent
+        or two better than what it was filled at.
+        """
+        rng = random.Random(13)
+        positions = {position["position_id"]: position for position in self.positions}
+        orders, quotes = [], []
+        for order in self.orders:
+            if order.get("sent_at") is None or order.get("purpose") not in ("open", "close") or not start <= order["sent_at"] < end:
+                continue
+            position = positions.get(order["position_id"], {})
+            orders.append({
+                "order_id": order["order_id"], "purpose": order["purpose"], "sent_at": order["sent_at"],
+                "accepted_at": order["accepted_at"], "outcome": order["outcome"], "instrument_uic": order["instrument_uic"],
+                "position_open_price": position.get("position_open_price"),
+                "position_close_price": position.get("position_close_price"),
+            })
+            worse = rng.choice((0.0, 0.01, 0.01, 0.02, 0.03))
+            if order["purpose"] == "open" and position.get("position_open_price") is not None:
+                quotes.append({"order_id": order["order_id"], "bid_close": None,
+                               "ask_close": round(position["position_open_price"] - worse, 2)})
+            elif order["purpose"] == "close" and position.get("position_close_price") is not None:
+                quotes.append({"order_id": order["order_id"], "ask_close": None,
+                               "bid_close": round(position["position_close_price"] + worse, 2)})
+        signals = [
+            {key: entry[key] for key in ("signal_timestamp", "received_timestamp", "decided_at", "outcome")}
+            for entry in self.journal if entry["action"] in ("long", "short") and start <= entry["decided_at"] < end
+        ]
+        requests = [
+            {key: request[key] for key in ("requested_at", "purpose", "outcome", "error_code")}
+            for request in self.requests if request["operation"] == "place" and start <= request["requested_at"] < end
+        ]
+        return {"signals": signals, "orders": orders, "quotes": quotes, "requests": requests}
+
     async def exits(self, start=None, end=None):
         closed = [p for p in self.positions if p["position_status"] == "Closed"]
         closed = [p for p in closed if in_range(p["execution_time_close"], start, end)]

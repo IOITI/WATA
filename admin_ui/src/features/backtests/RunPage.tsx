@@ -67,6 +67,8 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
   const engine = run.summary?.made_with.engine
   const turbos = run.summary?.made_with.turbos
   const modelled = turbos && turbos.kind === 'modelled' ? turbos : null
+  const execution = run.summary?.made_with.execution
+  const drawn = execution && execution.kind === 'measured' ? execution : null
   return (
     <Panel title="What it ran">
       <div className="grid gap-8 lg:grid-cols-2">
@@ -102,6 +104,12 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
             <Measure label="Made with">
               WATA {run.summary.made_with.version}
               {engine ? `, PineTS ${engine.runner.pinets} (${formatNumber(engine.milliseconds / 1000, 1)} s of script)` : ''}
+              {drawn && (
+                <span className="block text-xs text-muted-foreground">
+                  Each order’s time and price drawn from {formatNumber(drawn.orders)} of WATA’s own, from {formatDay(drawn.from)} to{' '}
+                  {formatDay(drawn.to)}
+                </span>
+              )}
               {run.stale && <span className="block text-xs text-warning">Other code than this admin’s: it could come out otherwise today.</span>}
             </Measure>
           )}

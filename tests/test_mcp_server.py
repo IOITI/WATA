@@ -16,6 +16,7 @@ from tests.test_mcp_gate import mcp_ctx
 
 # The whole list: a tool added or taken away is a decision, made here too.
 EXPECTED_TOOLS = {
+    "job_wait",
     "status",
     "data_assets", "data_coverage", "data_bars", "data_signals", "data_trades", "data_execution",
     "pine_list", "pine_get", "pine_check", "pine_run", "pine_signals", "pine_compare", "pine_save", "pine_delete",

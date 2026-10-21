@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import pytz
 import logging
 from .exceptions import TradingRuleViolation
+from .macro_calendar import NewsRule, read_calendar, refusal_text, window_at
 
 class TradingRule:
     def __init__(self, config_manager, db_position_manager, db_risk_state_manager=None):
@@ -25,6 +26,16 @@ class TradingRule:
         self.min_confidence_threshold = self.confidence_config.get("min_confidence_threshold", 0.0)
         # Track last loss timestamp for cooldown
         self._last_loss_timestamp = None
+        # No entry around the US releases (optional rule); the calendar only changes with a deploy.
+        news_config = self.get_rule_config_safe("macro_news")
+        self.news_rule = NewsRule.from_config(news_config) if news_config is not None else None
+        self.news_calendar = None
+        if self.news_rule is not None:
+            try:
+                self.news_calendar = read_calendar()
+            except (OSError, ValueError, KeyError) as e:
+                # Never a reason not to trade: the window is a filter, not a safeguard.
+                logging.error(f"The calendar of US releases cannot be read, no window is kept around them: {e}")
         logging.info(f"Trading rules using timezone: {self.timezone}")
         if self.cooldown_after_loss_minutes > 0:
             logging.info(f"Cooldown after loss: {self.cooldown_after_loss_minutes} minutes")
@@ -115,6 +126,21 @@ class TradingRule:
             logging.error(
                 f"Breaking trading rule: The signal is refused due to risky market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is refused due to risky market hours.")
+
+    def check_macro_news(self, now: datetime | None = None):
+        """
+        Refuses an entry in the window around a US release the macro_news rule
+        names (src/trade/macro_calendar.py). Past the calendar's last day no
+        release is known, and entries go on.
+        """
+        if self.news_rule is None or self.news_calendar is None:
+            return
+        moment = (now or datetime.now(pytz.utc)).timestamp()
+        window = window_at(self.news_calendar, self.news_rule, moment)
+        if window is not None:
+            message = refusal_text(window, self.timezone)
+            logging.info(message)
+            raise TradingRuleViolation(message)
 
     async def check_profit_per_day(self):
         try:

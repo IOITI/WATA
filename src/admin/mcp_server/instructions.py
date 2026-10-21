@@ -12,7 +12,8 @@ trade the recorded turbos under WATA's own rules.
 
 Limits: nothing here trades, edits the configuration or takes a rule live; going live stays the operator's. \
 Claude's runs wait behind the operator's; Pine studies run one at a time; large data comes as CSV, which Claude \
-Code saves to a file on the Mac, to analyse there.
+Code saves to a file on the Mac, to analyse there (data_bars: a week of 10 s bars a call). Every tool answers \
+within 50 s: a study not done by 45 s comes back as a job, which job_wait answers.
 
 Start with `status`. The loop:
 1. `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as trials of the family.
@@ -51,8 +52,9 @@ Work on WATA's strategies through the `wata` tools, on the live server's data, a
 belongs to). Every run counts 1 trial of the family, every sweep its combinations; the overfitting figures are \
 corrected with that count.
 3. The strategy, a Pine v6 indicator: `pine_check` (errors with their lines), `pine_run` on a few recorded days \
-(do the plots and alerts look right?), `pine_signals` (what a signal rule would raise, day by day), \
-`pine_compare` (against the signals TradingView sent), then `pine_save`.
+(do the plots and alerts look right? alert_titles lists only some), `pine_signals` (what a signal rule would \
+raise, day by day), `pine_compare` (against the signals TradingView sent), then `pine_save`. A study that takes \
+longer than 45 s comes back as a job: `job_wait` it.
 4. `backtest_start` with the experiment: the asset and bars the script reads, its inputs, what each alert \
 becomes. `backtest_wait`, then `backtest_result` from the summary down: the edge of the entries first (no edge \
 means the result came from WATA's exits and the days), random entries, risk, regimes, then `backtest_trades` \

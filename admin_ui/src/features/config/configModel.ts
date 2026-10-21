@@ -43,6 +43,27 @@ export function ruleConfigPath(config: JsonObject, ruleType: string): ConfigPath
   return index === -1 ? null : ['trade', 'rules', index, 'rule_config']
 }
 
+/** The rules of ``trade.rules`` with ``rule`` added, if no rule of its type is there yet. */
+export function withRule(config: JsonObject, rule: JsonObject): JsonValue[] {
+  const rules = getAt(config, ['trade', 'rules'])
+  const list = Array.isArray(rules) ? rules : []
+  return list.some((entry) => isObject(entry) && entry.rule_type === rule.rule_type) ? list : [...list, rule]
+}
+
+/** The rules of ``trade.rules`` without those of ``ruleType``. */
+export function withoutRule(config: JsonObject, ruleType: string): JsonValue[] {
+  const rules = getAt(config, ['trade', 'rules'])
+  return (Array.isArray(rules) ? rules : []).filter((entry) => !(isObject(entry) && entry.rule_type === ruleType))
+}
+
+/** ``chosen`` with ``item`` in or out, in the order of ``all``. */
+export function toggled(all: readonly string[], chosen: JsonValue | undefined, item: string, on: boolean): string[] {
+  const current = new Set(Array.isArray(chosen) ? chosen.filter((value): value is string => typeof value === 'string') : [])
+  if (on) current.add(item)
+  else current.delete(item)
+  return all.filter((value) => current.has(value))
+}
+
 /** Only the parts of the config the server lets this interface change. */
 export function pickEditable(config: JsonObject, editablePaths: readonly string[]): JsonObject {
   let picked: JsonValue = {}

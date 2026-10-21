@@ -238,6 +238,18 @@ def test_bars_come_as_compact_json_or_as_a_table_for_a_file(research):
     assert rows[0][:2] == ["t", "bid_open"] and len(rows) == 4
 
 
+def test_a_week_of_bars_comes_as_one_csv_and_no_more(research):
+    week = call(research, "data_bars", {"asset": "capital/US100", "start_day": "2026-10-13", "end_day": "2026-10-19",
+                                        "interval_seconds": 10, "format": "csv"})
+    longer = refusal(research, "data_bars", {"asset": "capital/US100", "start_day": "2026-10-13", "end_day": "2026-10-20",
+                                             "interval_seconds": 10, "format": "csv"})
+
+    assert not week[1] and week[0].splitlines()[0].startswith("t,bid_open")
+    # Asked of the database as up to 70,000 bars, one more to know there is more.
+    assert ("capital_bars", 10, 70_001) in research.queries._queries.calls
+    assert "7 days at most" in longer
+
+
 def test_numbers_keep_six_digits_and_a_price_its_thousandths():
     # Six digits of Dukascopy's 29143.543 were 29143.5, which hid the decimal its range bars count in.
     assert compacted({"price": 29143.543, "share": 12.3456789, "small": 0.123456789, "large": 1234567.891234,
@@ -342,6 +354,17 @@ def test_a_runs_summary_has_its_figures_and_its_curve_in_a_few_numbers(tmp_path,
     assert found["asked"]["source"]["inputs"] == {"in_0": 12}
 
 
+def test_a_run_that_died_says_how_and_where(tmp_path, research, scripts):
+    run_id = finished_run(tmp_path, research, scripts, {})
+    failure = {"exit": -9, "said": "stopped by the kernel (SIGKILL)", "phase": "signals", "engine_day": "2026-09-16T21:15:00Z",
+               "bars": 102365, "memory_mb": {"used": 1480, "limit": 1536}, "oom_kills": 1}
+    (folder_of(tmp_path, run_id) / "status.json").write_text(json.dumps({"state": "failed", "error": "The backtest was stopped", "failure": failure}))
+
+    [listed] = answer(research, "backtest_list")["items"]
+
+    assert listed["state"] == "failed" and listed["failure"] == failure
+
+
 def test_a_part_a_run_does_not_have_is_said(tmp_path, research, scripts):
     run_id = finished_run(tmp_path, research, scripts, {"summary.json": SUMMARY})
 
@@ -362,6 +385,19 @@ def test_trades_are_sorted_and_narrowed_and_days_carry_their_regime(tmp_path, re
     assert [trade["id"] for trade in stops["items"]] == [2]
     assert days["items"][0]["turbos"] == {"long": 40, "short": 38} and days["items"][0]["labels"] == {"volatility": "high"}
     assert "turbo.issuer" in table.splitlines()[0]
+
+
+def test_the_turbos_an_entry_could_have_bought_come_only_when_asked(tmp_path, research, scripts):
+    offered = [{"uic": number, "ask": 5.0 + number / 100} for number in range(20)]
+    trades = [{**TRADES[0], "entry": {**TRADES[0]["entry"], "candidates": offered}}]
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": SUMMARY, "trades.json": trades, "days.json": DAYS})
+
+    plain = answer(research, "backtest_trades", {"run_id": run_id})
+    asked = answer(research, "backtest_trades", {"run_id": run_id, "candidates": True})
+    table = call(research, "backtest_trades", {"run_id": run_id, "format": "csv"})[0]
+
+    assert "candidates" not in plain["items"][0] and len(asked["items"][0]["candidates"]) == 20
+    assert "candidates" not in table.splitlines()[0]
 
 
 def test_two_runs_are_set_side_by_side_day_by_day(tmp_path, research, scripts):

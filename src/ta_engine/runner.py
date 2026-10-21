@@ -11,13 +11,14 @@ What it answers is data for the engine to check, never trusted as more.
 """
 
 import asyncio
+import collections
 import json
 import logging
 import os
 import shutil
 from collections.abc import Awaitable, Callable
 
-from src.price_history.process import give_up_memory_first
+from src.price_history.process import exit_said, give_up_memory_first, peak_memory_mb
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ RUNNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runner",
 LINE_LIMIT = 64 * 1024 * 1024
 # What the runner writes on stderr is logged, a line at a time, up to this many characters.
 STDERR_LINE_CHARACTERS = 500
+# The last lines of what the runner wrote on stderr, said when it ends (V8's "heap out of memory").
+STDERR_TAIL_LINES = 3
 
 
 class RunnerFailed(Exception):
@@ -81,6 +84,7 @@ class NodeRunner:
         self._memory_first = memory_first
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task | None = None
+        self._stderr_tail: collections.deque = collections.deque(maxlen=STDERR_TAIL_LINES)
         self._lock = asyncio.Lock()
         self._next_id = 0
         self.versions: dict = {}
@@ -90,10 +94,15 @@ class NodeRunner:
     def running(self) -> bool:
         return self._process is not None and self._process.returncode is None
 
+    def peak_mb(self) -> float | None:
+        """The most memory the runner has held since it started, in MB (Linux)."""
+        return peak_memory_mb(self._process.pid) if self._process is not None else None
+
     async def start(self) -> dict:
         """Start the runner (again) and return its versions."""
         await self.stop()
         self.starts += 1
+        self._stderr_tail.clear()
         self._process = await asyncio.create_subprocess_exec(
             *self._command,
             stdin=asyncio.subprocess.PIPE,
@@ -117,7 +126,10 @@ class NodeRunner:
                 line = await process.stderr.readline()
                 if not line:
                     return
-                logger.warning("Pine runner: %s", line.decode("utf-8", "replace").rstrip()[:STDERR_LINE_CHARACTERS])
+                text = line.decode("utf-8", "replace").rstrip()[:STDERR_LINE_CHARACTERS]
+                if text:
+                    self._stderr_tail.append(text)
+                logger.warning("Pine runner: %s", text)
         except (asyncio.CancelledError, ValueError):
             return
 
@@ -167,7 +179,7 @@ class NodeRunner:
             line = await self._process.stdout.readline()
             if not line:
                 code = await self._process.wait()
-                raise RunnerDown(f"The Pine runner ended (exit code {code})")
+                raise RunnerDown(f"The Pine runner ended (exit code {code}): {exit_said(code)}{await self._last_words()}")
             reply = json.loads(line)
             if not isinstance(reply, dict):
                 raise ValueError("Not an object")
@@ -179,6 +191,15 @@ class NodeRunner:
             if not reply.get("ok"):
                 raise RunnerFailed(reply.get("error"))
             return reply
+
+    async def _last_words(self) -> str:
+        """What the runner wrote on stderr before it ended, once its reader has read it all."""
+        if self._stderr_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(self._stderr_task), 1)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        return f". It said: {' | '.join(self._stderr_tail)}" if self._stderr_tail else ""
 
     async def _answered(self, ask: dict) -> dict:
         try:

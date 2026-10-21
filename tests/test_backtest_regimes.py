@@ -1,6 +1,6 @@
 """
 The kind of day each day was (src/backtest/regimes.py), and the macro
-calendar it reads (src/backtest/data/macro_calendar.csv).
+calendar it reads (src/trade/data/macro_calendar.csv).
 """
 
 from array import array

@@ -26,17 +26,20 @@ are the server's own, apart from this lab's. Its tools, by step of the loop:
 |---|---|---|
 | Look | `lab status` | `status`, `data_assets`, `data_coverage` |
 | Experiment | `lab exp new`, `exp conclude` | `exp_new`, `exp_get`, `exp_conclude`, `lockbox_set` |
-| Strategy | `lab script check` | `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save` |
+| Strategy | `lab script check` | `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`; `job_wait` for a study handed back as a job |
 | Run | `lab run`, `lab sweep` | `backtest_start`, `backtest_wait` |
 | Read | `lab show`, `edge`, `regimes`, `trades`, `days`, `compare` | `backtest_result` (parts), `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare` |
 | Test | `lab neighbours`, `lab stress` | `backtest_derive` (neighbours, stress, a sweep's cell) |
 | Shadow | the user's steps | `rule_shadow_save`, `rule_set_reference`, `rule_list` (once the user switched them on) |
 
 The server's runs wait behind the user's and are counted (3 waiting, 60 a
-day); its studies run one at a time. Heavy analysis stays here: ask for CSV
-(`data_bars`, `backtest_trades` with `format` csv), which Claude Code saves to
-a file, and read it with pandas or DuckDB in `.venv-lab`. Nothing behind the
-tools trades, edits the configuration or takes a rule live.
+day); its studies run one at a time. Every tool answers within 50 s: a study
+not done by 45 s comes back as a job (`{"job": ..., "state": "running"}`), which
+`job_wait` answers once it is done. Heavy analysis stays here: ask for CSV
+(`data_bars`, a week of 10 s bars a call; `backtest_trades` with `format` csv),
+which Claude Code saves to a file, and read it with pandas or DuckDB in
+`.venv-lab`. Nothing behind the tools trades, edits the configuration or takes
+a rule live.
 
 ## First, look
 
@@ -86,7 +89,9 @@ tools trades, edits the configuration or takes a rule live.
    - for long histories: runs on made-up turbos (`"turbos": "modelled"` in the spec, 731 days),
      after `lab model show` (measured? on how many days?) and `lab model validate <spec>` (how far
      made-up turbos are from recorded ones on the same signals);
-   - `lab calibrate execution`: what WATA's own orders took and cost; `--set` those values.
+   - `lab calibrate execution`: what WATA's own orders took and cost; `--set` those values, or
+     `--set execution=measured` to draw each order's time and price from them (the last three months,
+     10 of each kind at least; the run keeps them as `execution.json` and its `made_with.execution`).
 8. **Conclude**: `lab exp conclude <id> --verdict kept|rejected|inconclusive --notes "…"`, then
    `lab exp report <id>` writes a page to publish for the user as an Artifact (load the
    artifact-design skill before publishing).
@@ -134,7 +139,11 @@ tools trades, edits the configuration or takes a rule live.
 ## Analysing the data
 
 - `lab calendar check`: the macro calendar (FOMC, CPI, NFP, PCE) must be ahead of the days run;
-  each row names its source. Never add a date that was not read from that source.
+  each row names its source. Never add a date that was not read from that source. The trader
+  reads it too: its `macro_news` rule, when the user added it, keeps entries out from 5 minutes
+  before a release to 15 after (45 after FOMC). A run repeats it with `--set news_window=true`
+  (`news_minutes_before`, `news_minutes_after`, `news_minutes_after_fomc`, `news_fomc`, `news_cpi`,
+  `news_nfp`, `news_pce`), or takes it from the configuration as the services do.
 - `lab sql "<query>"` runs DuckDB over the research files. Each table of the server is a view of
   the same name over every day: `price_bar_10s`, `price_instrument` (the newest copy),
   `price_recorder_coverage`, `capital_bar_10s`, `capital_instrument`, `signal_journal`,

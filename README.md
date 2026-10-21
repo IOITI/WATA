@@ -363,6 +363,12 @@ After deployment, you need to set up your configuration:
      - `allowed_indices`: Configure allowed trading indices
      - `market_closed_dates`: Set market holidays
      - `day_trading`: Define profit targets and limits
+     - `macro_news` (optional, off unless it is there): no new entry around the US releases that move the Nasdaq. From `minutes_before` (5) a release to `minutes_after` (15) it, and to `minutes_after_fomc` (45) after an FOMC statement, whose press conference follows; `events` names which of FOMC, CPI, NFP and PCE. CPI, the jobs report and PCE come out at 08:30 in New York, 14:30 in Paris most of the year; WATA reads New York's hours whatever either side's clocks. The admin's Configuration page switches it on and off (US releases). The releases come from `src/trade/data/macro_calendar.csv`: past its last day nothing is known and the trader trades on, so from 30 days before it Telegram says so each morning and the admin's health warns; `python -m lab calendar check` says what to add, then deploy.
+
+       ```json
+       {"rule_name": "No entry around US releases", "rule_type": "macro_news",
+        "rule_config": {"events": ["FOMC", "CPI", "NFP", "PCE"], "minutes_before": 5, "minutes_after": 15, "minutes_after_fomc": 45}}
+       ```
 
    - **Other Settings**
      - Logging configuration
@@ -813,7 +819,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 3. **Period**: up to 92 days, with what was recorded each day (turbos, bars of the asset); or up to two years on [turbos made up from the index](#turbos-made-up-from-the-index).
 4. **Settings**, for this run only; the live configuration is not touched:
    - **WATA's settings**, each beside its live value: which signals are taken, the day's target and limits, the stop, take-profit and trailing stop, the price range of the turbo bought, how much is bought;
-   - **what a backtest assumes**: see [What is replayed](#what-is-replayed). What WATA's own orders took and cost (the delay from a signal to the trader, from an order to Saxo, the price paid against the quote recorded) is shown there, measured on the last three months, with "Use the measured values";
+   - **what a backtest assumes**: see [What is replayed](#what-is-replayed). What WATA's own orders took and cost (the delay from a signal to the trader, from an order to Saxo, the price paid against the quote recorded) is shown there, measured on the last three months, with "Use the measured values". **Order times and prices** "measured" goes further: each order of the run takes its time and its price drawn from WATA's own orders of those months (kept with the run), a long tail included, where "fixed" gives every order the same;
    - **random entries or a sweep**: how many times the same days are traded with entries at random, or a sweep instead.
 5. **Review**: what differs from live, a name and tags.
 
@@ -869,12 +875,13 @@ What it does on the server:
 - **The Trader's checks on an entry**, in its order:
   1. the signal's age;
   2. closed dates, trading hours and the risky minutes, at the moment it is decided;
-  3. the indice;
-  4. a position already open in that direction;
-  5. the day's profit cap and loss limit;
-  6. the cooldown after a loss;
-  7. the trade limit;
-  8. the minimum confidence.
+  3. the window around a US release, when the `macro_news` rule is on (or the run's settings switch it on);
+  4. the indice;
+  5. a position already open in that direction;
+  6. the day's profit cap and loss limit;
+  7. the cooldown after a loss;
+  8. the trade limit;
+  9. the minimum confidence.
 
   A refused entry closes nothing. The trader takes one signal at a time: a signal is decided once the orders of the one before are filled.
 - **The turbo bought** is chosen by the trader's own code among the turbos recorded and quoted at that moment: the twenty closest to their knock-out level, then the lowest bid in the price range. Its size is the trader's: the share of the account an order may use, scaled by the time of day and by the confidence, in whole turbos with one left unbought.
@@ -889,6 +896,7 @@ What it does on the server:
 | From a sale to the next purchase | 0.5 s | When the trader sells before it buys |
 | A stop crossed inside ten seconds sells at | the worst bid | `worst`: the bid that crossed it; `level`: the stop's own price, or the first tick under it |
 | Slippage, commissions | 0 | Taken from each fill; Saxo's commissions are not known here |
+| Order times and prices | fixed | `fixed`: the values above for every order; `measured`: each order's time to its fill and its price against the quote when it left, drawn from WATA's own orders of the last three months (10 of each at least), the same draws each time the run is made |
 
 ### Reading the result
 
@@ -944,7 +952,7 @@ python -m src.backtest.run --run <folder> --data database --low-priority
 ### What to keep in mind
 
 - **Only the recorded days, or a model.** The recorder has run on the server since mid-October 2026: runs will say for a while that they rest on too few trades and days. Retention may drop old days later. Longer histories are on made-up turbos, which are a model.
-- **The macro calendar must be kept ahead.** The news a day is known by come from `src/backtest/data/macro_calendar.csv`, read from the Fed's, BLS's and BEA's calendars; a run past its end warns. `python -m lab calendar check` says when to add the next dates.
+- **The macro calendar must be kept ahead.** The news a day is known by come from `src/trade/data/macro_calendar.csv`, read from the Fed's, BLS's and BEA's calendars; a run past its end warns. `python -m lab calendar check` says when to add the next dates.
 - **A total proves nothing by itself.** Read it with the random entries it beat, and with the number of trades and days it rests on.
 - **Ten seconds is the resolution**, against a monitor that looks about every second. The order of prices inside ten seconds is assumed, and how a stop is filled there is a setting.
 - **The turbos the trader looked at are worked out again**: those recorded and quoted, the twenty closest to their knock-out level. That approximates Saxo's search. A new issue is seen up to five minutes late, and turbos beyond the recorder's limit are missing.
@@ -971,12 +979,14 @@ Claude Code on the operator's Mac can do strategy research on the server itself,
 
 ### What it has
 
-Thirty-seven tools, in groups: `status`; the data (`data_assets`, `data_coverage`, `data_bars`, `data_signals`, `data_trades`, `data_execution`); Pine (`pine_list`, `pine_get`, `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`, `pine_delete`); backtests (`backtest_options`, `backtest_start`, `backtest_derive`, `backtest_wait`, `backtest_list`, `backtest_result`, `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare`, `backtest_remove`, `turbo_model`, `turbo_model_measure`); the journal (`exp_new`, `exp_get`, `exp_conclude`, `lockbox_set`); rules (`rule_list`, `rule_compare`, `rule_shadow_save`, `rule_shadow_remove`, `rule_set_reference`). A prompt, `/wata:research`, gives the research loop of the lab's skill (`.claude/skills/wata-lab/SKILL.md`).
+Thirty-eight tools, in groups: `status`; the data (`data_assets`, `data_coverage`, `data_bars`, `data_signals`, `data_trades`, `data_execution`); Pine (`pine_list`, `pine_get`, `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`, `pine_delete`); backtests (`backtest_options`, `backtest_start`, `backtest_derive`, `backtest_wait`, `backtest_list`, `backtest_result`, `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare`, `backtest_remove`, `turbo_model`, `turbo_model_measure`); the journal (`exp_new`, `exp_get`, `exp_conclude`, `lockbox_set`); rules (`rule_list`, `rule_compare`, `rule_shadow_save`, `rule_shadow_remove`, `rule_set_reference`); `job_wait`. A prompt, `/wata:research`, gives the research loop of the lab's skill (`.claude/skills/wata-lab/SKILL.md`).
 
 - **Pine studies** run in a child process of the admin (`python -m src.research.study`), one at a time, at nice 10, with their own Node heap and time limit, the first process stopped if memory runs short. A check also reads TradingView's v6 rules (`src/ta_engine/checker/check.mjs`, confined as the runner is).
+- **No call lasts a minute.** Claude Code ends an HTTP call after 60 s, so every tool answers within 50 s. A tool that runs a study (`pine_*`, `rule_shadow_save`) gives its answer within 45 s, or a job while the study goes on: `job_wait` gives the answer once there is one (a job is kept 15 minutes after it ends). `backtest_wait` waits 45 s at most, and is called again.
+- **When a run or a study dies**, its error says how (the kernel stopping it for memory, Node's full heap), where it was (the engine day and its bars, the runner's memory) and the admin's memory then; `backtest_list` gives the same as `failure`.
 - **Backtests** are the admin's own, in the same line: Claude's runs wait behind the operator's and the paper runs.
 - **The experiment journal and the lock box** are kept on the server (`var/lib/backtests/_research/`). Trials are counted per family of ideas and given to sweeps as the trials before. The lock box keeps days out of every study and run until a candidate's final check, which the journal notes; Claude may only widen it.
-- **Large answers** (bars, trades) come as CSV, which Claude Code saves to a file on the Mac to analyse there.
+- **Large answers** (bars, trades) come as CSV, which Claude Code saves to a file on the Mac to analyse there: `data_bars` gives up to a week of ten-second bars a call. What comes into Claude's context is held under 32,000 characters: `pine_run` lists only the alerts asked for (all counted by title), and an answer still too long has fewer points per plot, then fewer alerts listed, as its `fitted` says; `pine_compare` lists its rows when asked, `backtest_trades` its candidate turbos when asked.
 - **Claude's own shadow rules**, once switched on (below): the TA engine journals their signals, never sends them, and each finished day is traded on paper beside the rule's reference run. Each is first run as the engine would on the last finished day, on its own history if it has one, and refused if it fails, takes more than `admin.mcp.shadow_day_ms` an engine day (2 s by default), or has more than 20,000 bars a day.
 
 ### Enabling it, on the server

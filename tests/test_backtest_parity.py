@@ -32,6 +32,7 @@ from src.backtest.settings import DictConfig, from_config  # noqa: E402
 from src.trade.async_services import AsyncPerformanceMonitor, AsyncTradingOrchestrator  # noqa: E402
 from src.trade.exceptions import InsufficientFundsException  # noqa: E402
 from src.trade.rules import TradingRule  # noqa: E402
+from src.trade.macro_calendar import read_calendar  # noqa: E402
 
 with open("etc/config_example.json", encoding="utf-8") as config_file:
     EXAMPLE = json.load(config_file)
@@ -188,6 +189,44 @@ def test_an_entry_is_refused_for_the_same_reason_as_live(
 
     mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
     assert mirrored == live
+
+
+def config_with_news(**news) -> dict:
+    config = json.loads(json.dumps(EXAMPLE))
+    config["trade"]["rules"].append({"rule_name": "No entry around US releases", "rule_type": "macro_news", "rule_config": news})
+    return config
+
+
+NEWS_SCENARIOS = [
+    # (name, the moment in Paris, the rule, taken)
+    ("just before CPI's window", (2026, 10, 14, 14, 24, 59), {}, True),
+    ("CPI's window opens", (2026, 10, 14, 14, 25), {}, False),
+    ("CPI's window about to close", (2026, 10, 14, 14, 44, 59), {}, False),
+    ("CPI's window over", (2026, 10, 14, 14, 45), {}, True),
+    ("FOMC's press conference", (2026, 10, 28, 19, 44), {}, False),
+    ("FOMC's 45 minutes over", (2026, 10, 28, 19, 45), {}, True),
+    ("CPI not named", (2026, 10, 14, 14, 30), {"events": ["FOMC"]}, True),
+    ("a wider window", (2026, 10, 14, 14, 15), {"minutes_before": 15}, False),
+    ("New York on summer time first", (2026, 3, 11, 13, 30), {}, False),
+    ("PCE past the calendar's end", (2027, 1, 29, 14, 30), {}, True),
+]
+
+
+@pytest.mark.parametrize("name, moment, news, taken", NEWS_SCENARIOS, ids=[scenario[0] for scenario in NEWS_SCENARIOS])
+def test_an_entry_around_a_us_release_is_refused_as_live(name, moment, news, taken):
+    config = config_with_news(**news)
+    now = PARIS.localize(datetime(*moment))
+
+    live = live_outcome(config, now=now, action="long", indice="us100", alert_at=now - timedelta(seconds=1),
+                        positions=Positions(), last_loss=None, confidence=None)
+    refusal = entry_refusal(
+        from_config(config), CLOCK, action="long", indice="us100", decided_at=now.timestamp(),
+        alert_at=now.timestamp() - 1, open_directions=[], day_percent=0.0, last_loss_at=None, entries_today=0,
+        confidence=None, calendar=read_calendar(),
+    )
+
+    mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
+    assert mirrored == live and (live[0] == "executed") == taken
 
 
 # ── the size of an order ──
