@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.26.1 - certifi no longer trusts the compromised emSign root
+
+**Release date:** 2026-10-21, not deployed yet
+
+- **certifi 2026.10.19** (from 2024.7.4), for GitHub's critical advisory GHSA-6q48-6c7w-9gw2 (Dependabot alert 46 on `main`). The bundle `requests` and `httpx` verify every HTTPS connection with trusted "emSign ECC Root CA - G3", eight of whose intermediate certificates had their private keys compromised: whoever holds one, and sits on the network path, could pass for any site. WATA's connections that go through it are Saxo's REST API and login (the trader's balances and orders), Capital.com's API, Telegram and Dukascopy. The new bundle drops that root and keeps the three emSign roots not affected (120 certificates where there were 147).
+- Nothing else changes: certifi needs no other package, and `requirements.txt` stays the whole environment (`tests/requirements_lock.py`).
+
+**On the live path**: the image's library layer is rebuilt at the next deploy; no code changes.
+
+**Verification status:**
+- A fresh environment of `requirements.txt` is exactly what it lists, and 2,281 tests pass in it (1 skipped), on Python 3.12 with Node 24 on the PATH.
+- With the new bundle, TLS verifies to every outside host WATA names, as with the old one: `gateway.saxobank.com`, `live.logonvalidation.net` and `live-streaming.saxobank.com` (DigiCert), `api-capital.backend-capital.com` (GlobalSign), `api-streaming-capital.backend-capital.com` (Amazon), `api.telegram.org` (GoDaddy), `datafeed.dukascopy.com` (ZeroSSL).
+
+**Not seen:** the server. At the deploy:
+- the image's certifi: 2026.10.19;
+- the image's Debian store, which Saxo's and Capital.com's streams verify with (`websockets`, not certifi): whether `/etc/ssl/certs/ca-certificates.crt` still holds "emSign ECC Root CA - G3". The `python:3.14` base is pulled again at each build, so Debian's fix arrives with it;
+- pip's own copy of certifi, used only while the image is built.
+
 ## v0.26.0 - Signal rules on seconds bars, model checks, and trials made elsewhere
 
 **Release date:** 2026-10-21, with v0.24.0 and v0.25.0
