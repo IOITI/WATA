@@ -56,7 +56,7 @@ export function extractWorkerSource(bundle: string): string {
 
 /**
  * The package's code with its copy of the worker left empty: the page always starts the
- * worker from its file (`workerUrl`), and the string would otherwise ship twice (850 KB).
+ * worker from its file (`workerUrl`), and the string would otherwise ship twice (930 KB).
  */
 export function withoutInlinedWorker(bundle: string): string {
   const program = parse(bundle, { ecmaVersion: 'latest', sourceType: 'module' })

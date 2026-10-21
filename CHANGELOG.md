@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.26.3 - PineTS 0.12.0, Vela 0.8.5 and Vela-pinets 0.2.17
+
+**Release date:** not released yet
+
+The three LuxAlgo packages of the Technical Analysis pages and the TA engine, released on 2026-10-19, pinned exactly as before (`admin_ui/package.json`). Nothing else changes in the lock file; their licences and Vela's NOTICE are the same.
+
+- **PineTS 0.12.0** (from 0.11.1) mostly rebuilds how a `strategy()` fills its orders (TradingView's path inside a bar, margin, risk rules), which WATA does not use: only alerts make signals. Beside it come fixes that bring scripts closer to TradingView: `ta.cross*` inside a lazy `and` or `or`, `ta.*` inside local blocks and on sources that start with `na`, `request.security` in a function called from several places, `(expr)[n]` inside `and`, `or` and `?:`, `x := switch`, `math.round_to_mintick`, `varip`. They can change what another script raises; they did not change what the Kernel VWAP scripts raise (below).
+- **Vela-pinets 0.2.17** (from 0.2.16) carries PineTS 0.12.0 in its worker, the one the Charts page runs scripts in, and now moves a `plot()` by its `offset`, which it drew unshifted.
+- **Vela 0.8.5** (from 0.8.4): panes keep the height they were dragged to when an indicator is added, an overlay can be brought in front of the candles from its legend, built-in studies wait for the whole history before they compute instead of sliding while it loads, and a plot shifted forward draws past the last candle. Linear Regression becomes two studies, Least Squares Moving Average and Linear Regression Slope; a saved chart opens with the one it had.
+- **WATA's three changes to the packages at build time still find their code**, unchanged: seconds on Vela's chart (`vite/velaSeconds.ts`), a formatter per time zone in each copy of PineTS (`vite/pinetsZoneFormat.ts`), Vela-pinets' worker as a file of its own (`vite/velaPineWorker.ts`). The runner's hello says `0.12.0+zone-format`.
+
+**On the live path**: the TA engine's runner is built with PineTS 0.12.0 at the deploy, so every signal rule, live or shadow, runs on it from then on: on the scripts compared below its alerts are the same as 0.11.1's, and it is about 5 % slower. The trader, the web server and the position monitor are untouched, and TradingView's alerts never go through PineTS. Backtests made before are not marked stale (the code digest covers the Python code; each run names its PineTS in `engine.runner`), and the runner's day cache starts empty after the deploy: its keys hold the runner's build.
+
+**Verification status:**
+- The interface's 843 tests pass, the live strategy's among them (it reads `wata-tradingview-scripts`); lint, type checks, the build, `build:runner` and `build:checker` are clean, and `python -m src.ta_engine.runner` answers with PineTS 0.12.0. The Python suite passes with the new runner and checker built (2,285 tests; those that need a PostgreSQL, a RabbitMQ or `pgserver` skipped, as without them before).
+- The same signals: `python -m src.ta_engine.replay` run with the runner built from 0.11.1 and from 0.12.0, on the three Dukascopy days of this Mac (2026-09-15, 09-17 and 09-22), for the lean and the live copies of the Kernel VWAP script (the live one's providers on the chart's own series) and `kernel-vwap.pine`, on R6000, 1-minute and 30-second bars: 21,157 alerts, every one and every signal the same. The same replay took 8.3 s with 0.12.0 and 7.9 s with 0.11.1.
+- In a browser, against the fake admin built with them: Capital.com's US100 live on 10-second bars with the seconds on the crosshair, a Pine script and its alerts drawn through the new worker file, the editor's test, a built-in study of Vela drawn at once.
+
+**Not seen:** the server; Capital.com's real prices and the recorded turbos with PineTS 0.12.0; Vela's new pane and layer controls.
+
 ## v0.26.2 - Long Pine backtests no longer run out of memory, and research gets more of the server
 
 **Release date:** not released yet

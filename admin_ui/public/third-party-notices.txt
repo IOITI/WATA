@@ -12,8 +12,8 @@ This file ships with the built admin, as the licences below ask.
 
 PineTS and Vela-pinets (GNU Affero General Public License v3.0 only)
 --------------------------------------------------------------------
-pinets 0.11.1 - https://github.com/LuxAlgo/PineTS
-@luxalgo/vela-pinets 0.2.16 - https://github.com/LuxAlgo/Vela-pinets
+pinets 0.12.0 - https://github.com/LuxAlgo/PineTS
+@luxalgo/vela-pinets 0.2.17 - https://github.com/LuxAlgo/Vela-pinets
 Copyright (c) LuxAlgo
 
 They run the Pine scripts of the Technical Analysis pages, in the browser
@@ -30,7 +30,7 @@ LuxAlgo nor WATA is affiliated with, sponsored by or endorsed by TradingView.
 
 Vela (Apache License 2.0)
 -------------------------
-@luxalgo/vela 0.8.4 - https://github.com/LuxAlgo/Vela
+@luxalgo/vela 0.8.5 - https://github.com/LuxAlgo/Vela
 Licence: https://www.apache.org/licenses/LICENSE-2.0
 Its NOTICE file, reproduced as section 4(d) of the licence asks:
 

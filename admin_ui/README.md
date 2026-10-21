@@ -195,9 +195,9 @@ are loaded with these pages only (lazy routes), and the TradingView reference of
 
 | Library | Version | Licence |
 |---|---|---|
-| `pinets` | 0.11.1 | AGPL-3.0-only |
-| `@luxalgo/vela-pinets` | 0.2.16 | AGPL-3.0-only |
-| `@luxalgo/vela` | 0.8.4 | Apache-2.0, with a NOTICE to keep |
+| `pinets` | 0.12.0 | AGPL-3.0-only |
+| `@luxalgo/vela-pinets` | 0.2.17 | AGPL-3.0-only |
+| `@luxalgo/vela` | 0.8.5 | Apache-2.0, with a NOTICE to keep |
 | `@codemirror/*`, `pinescript-v6-validator` | | MIT |
 
 The three LuxAlgo packages are pinned exactly: Vela's interface is young and changes. `public/third-party-notices.txt`
@@ -228,13 +228,14 @@ which is the source the AGPL asks to offer.
   Vela's chart itself reads no seconds (`10S` would be an hour, its times stop at the minute):
   `vite/velaSeconds.ts` patches it when it is built, in the dev server too, and stops the build if a new
   version of Vela no longer has the code it changes.
-- **PineTS keeps a formatter per time zone** (`vite/pinetsZoneFormat.ts`): PineTS 0.11.1 made an
-  `Intl.DateTimeFormat` at each `hour(time, "Europe/Paris")` or `timestamp("Europe/Paris", ...)`, most of the
-  time of a script that reads the time in a zone. The plugin changes the two pieces of PineTS that make them,
-  in the three copies the admin ships: the TA engine's runner (`vite.runner.config.ts`, whose hello names it:
-  `0.11.1+zone-format`), the pages' Pine worker (`worker.plugins`, and `optimizeDeps` in the dev server) and
-  Vela-pinets' worker (`vite/velaPineWorker.ts`). The build stops if a new version of PineTS no longer has
-  them; `vite/pinetsZoneFormat.test.ts` runs PineTS patched beside PineTS as it is around the clock changes.
+- **PineTS keeps a formatter per time zone** (`vite/pinetsZoneFormat.ts`): PineTS makes an
+  `Intl.DateTimeFormat` at each `hour(time, "Europe/Paris")` or `timestamp("Europe/Paris", ...)` (0.11.1 did,
+  0.12.0 still does), most of the time of a script that reads the time in a zone. The plugin changes the two
+  pieces of PineTS that make them, in the three copies the admin ships: the TA engine's runner
+  (`vite.runner.config.ts`, whose hello names it: `0.12.0+zone-format`), the pages' Pine worker
+  (`worker.plugins`, and `optimizeDeps` in the dev server) and Vela-pinets' worker (`vite/velaPineWorker.ts`).
+  The build stops if a new version of PineTS no longer has them; `vite/pinetsZoneFormat.test.ts` runs PineTS
+  patched beside PineTS as it is around the clock changes.
 - **What can be wrong without a browser is in plain functions with tests**: `prepare.ts`, `outline.ts` (the
   alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`,
   `signals/ruleModel.ts`. The editor itself (CodeMirror) and the charts are replaced in page tests, and

@@ -227,7 +227,7 @@ class FakeEngine:
             "figures": {
                 "rules": len(self._rules_now()), "live": sum(1 for rule in on if rule["mode"] == LIVE),
                 "shadow": sum(1 for rule in on if rule["mode"] != LIVE), "failing": 0,
-                "covered_until": int(now.timestamp()) // 10 * 10, "runner": {"pinets": "0.11.1", "node": "v24.21.0"},
+                "covered_until": int(now.timestamp()) // 10 * 10, "runner": {"pinets": "0.12.0", "node": "v24.21.0"},
                 "runner_starts": 1,
             },
         }

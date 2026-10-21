@@ -25,7 +25,7 @@ export interface PinetsPatch {
   replace: string
 }
 
-/** Named after PineTS's version in the runner's hello ("0.11.1+zone-format"), which a run's made_with keeps. */
+/** Named after PineTS's version in the runner's hello ("0.12.0+zone-format"), which a run's made_with keeps. */
 export const PINETS_PATCH_TAG = 'zone-format'
 
 // The formatter `make` gives for `key` (what it formats, and its time zone), made once.
