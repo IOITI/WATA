@@ -32,6 +32,7 @@ import { BacktestsDisabled, ChangeList, Measure, StateBadge } from './parts'
 import { ReconciliationPanel } from './ReconciliationPanel'
 import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
 import { DaysTable, SignalsTable, TradesTable } from './runTables'
+import { ModelCheckPanel } from './ModelCheckPanel'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { underlyingLabel } from './turboModel'
@@ -234,9 +235,15 @@ export function RunPage() {
                 <StateBadge status={run.status} />
                 {run.kind === 'sweep' && <Badge tone="neutral">{run.stress_of ? 'Stress' : 'Sweep'}</Badge>}
                 {run.turbos === 'modelled' && <Badge tone="warning">Modelled turbos</Badge>}
+                {run.model_check_of && <Badge tone="neutral">Model check</Badge>}
                 {run.stress_of && (
                   <Link to={`/backtests/${run.stress_of}`} className="text-sm font-medium underline-offset-4 hover:underline">
                     The run it stresses
+                  </Link>
+                )}
+                {run.model_check_of && (
+                  <Link to={`/backtests/${run.model_check_of}`} className="text-sm font-medium underline-offset-4 hover:underline">
+                    The run it checks
                   </Link>
                 )}
                 {run.tags.map((tag) => (
@@ -320,6 +327,7 @@ export function RunPage() {
                   {run.request.source.kind === 'journal' && <ReconciliationPanel runId={run.id} />}
                   <EdgePanel runId={run.id} />
                   <StressPanel run={run} />
+                  <ModelCheckPanel run={run} />
                   <CurvesPanel summary={summary} />
                   <WhyPanel summary={summary} />
                   <BreakdownsPanel runId={run.id} />

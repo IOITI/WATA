@@ -57,6 +57,20 @@ def register(server, research) -> None:
             "lockbox": box,
         })
 
+    @research_tool(server, calls, name="exp_trials", title="Count trials made elsewhere", read_only=False,
+                   idempotent=False)
+    async def exp_trials(experiment_id: str, trials: int, note: str) -> dict:
+        """Configurations of an open experiment tried outside WATA's runs (a port of the script screened on the Mac,
+        a grid in pandas, by hand): ``trials`` of them, counted in the family's trials as a run's are, so that the
+        overfitting figures of the family's later sweeps are corrected for them too. note: what was tried, where,
+        and on which days."""
+        await run_in_threadpool(journal.record_trials, experiment_id, trials, note)
+        found = await run_in_threadpool(journal.get, experiment_id)
+        return compacted({
+            **_experiment_line(found), "elsewhere": found["elsewhere"],
+            "family_trials": await run_in_threadpool(journal.family_trials, found["family"]),
+        })
+
     @research_tool(server, calls, name="exp_conclude", title="Conclude an experiment", read_only=False, idempotent=False)
     async def exp_conclude(experiment_id: str, verdict: str, notes: str) -> dict:
         """Conclude an experiment: verdict kept, rejected or inconclusive, and in notes what it rests on (days and

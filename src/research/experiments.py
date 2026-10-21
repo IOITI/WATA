@@ -7,7 +7,9 @@ chance alone. The overfitting figures (deflated Sharpe, src/backtest/robustness.
 are worked out with the number of trials of the family, every run and every
 combination of a sweep counting as one, a stress sweep none (it chooses
 nothing), the neighbours of a value one less than their count (the value
-itself was tried already).
+itself was tried already). Configurations tried outside the runs (a port of
+a script screened on the Mac, by hand) are written down too, with what they
+were (``record_trials``), and count as much.
 
 One event per line, never rewritten: an experiment is opened, gets runs, and
 is concluded. The lab keeps one on the Mac (``var/lib/lab/experiments.jsonl``),
@@ -29,6 +31,8 @@ from datetime import date, datetime, timezone
 
 VERDICTS = ("kept", "rejected", "inconclusive")
 MAX_TEXT = 2000
+# The most configurations written down at once as tried elsewhere.
+MAX_TRIALS_ELSEWHERE = 100_000
 
 
 class JournalError(ValueError):
@@ -97,6 +101,24 @@ class ExperimentJournal:
             "lockbox": lockbox, "note": note,
         })
 
+    def record_trials(self, experiment_id: str, trials: int, note: str) -> dict:
+        """
+        Configurations of an open experiment tried outside its runs: counted in
+        the family's trials as a run's are, and listed apart with what they were.
+        """
+        if isinstance(trials, bool) or not isinstance(trials, int) or not 1 <= trials <= MAX_TRIALS_ELSEWHERE:
+            raise JournalError(f"Trials made elsewhere are a whole number from 1 to {MAX_TRIALS_ELSEWHERE:,}")
+        text = (note or "").strip()
+        if not text or len(text) > MAX_TEXT:
+            raise JournalError(f"Say what was tried, where and on which days, in {MAX_TEXT} characters at most")
+        found = self.get(experiment_id)
+        if found["verdict"] is not None:
+            raise JournalError(
+                f"Experiment {experiment_id} is concluded ({found['verdict']}): write them in an open experiment of "
+                "its family"
+            )
+        return self._append({"event": "trials", "experiment": experiment_id, "trials": trials, "note": text})
+
     def conclude(self, experiment_id: str, verdict: str, notes: str) -> dict:
         if verdict not in VERDICTS:
             raise JournalError(f"A verdict is one of {', '.join(VERDICTS)}")
@@ -114,13 +136,16 @@ class ExperimentJournal:
                 found[key] = {
                     "id": key, "title": event["title"], "hypothesis": event["hypothesis"], "family": event["family"],
                     "plan": event.get("plan"), "made_by": event.get("made_by"), "opened_at": event["at"], "runs": [],
-                    "trials": 0, "verdict": None, "notes": None, "concluded_at": None,
+                    "elsewhere": [], "trials": 0, "verdict": None, "notes": None, "concluded_at": None,
                 }
             elif key in found and event["event"] == "run":
                 found[key]["runs"].append({
                     "run": event["run"], "kind": event["kind"], "trials": event["trials"],
                     "lockbox": event.get("lockbox", False), "note": event.get("note", ""), "at": event["at"],
                 })
+                found[key]["trials"] += event["trials"]
+            elif key in found and event["event"] == "trials":
+                found[key]["elsewhere"].append({"trials": event["trials"], "note": event["note"], "at": event["at"]})
                 found[key]["trials"] += event["trials"]
             elif key in found and event["event"] == "concluded":
                 found[key].update(verdict=event["verdict"], notes=event["notes"], concluded_at=event["at"])

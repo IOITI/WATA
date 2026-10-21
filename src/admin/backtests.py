@@ -81,6 +81,7 @@ from src.backtest.settings import (
     options as setting_options,
     with_changes,
 )
+from src.backtest.turbo_model import MODEL_CHECK_FILE, RECORDED_TRADES_FILE
 from src.backtest.sweep import (
     DEFAULT_HELD_OUT,
     LEAST_HELD_OUT,
@@ -256,7 +257,7 @@ def checked_chart(chart) -> dict:
     if side not in SIDES:
         raise InvalidRequest("The price side is bid or ask")
     try:
-        bars = checked_bars(chart.get("bars"), any_length=True)
+        bars = checked_bars(chart.get("bars"))
     except InvalidRule as e:
         raise InvalidRequest(str(e)) from None
     return {"asset": checked_asset(chart.get("asset")), "side": side, "bars": bars}
@@ -377,15 +378,19 @@ class BacktestService:
         except (OSError, ValueError, KeyError, TypeError) as e:
             raise NotPossible(f"The live configuration cannot be read: {e}") from e
 
-    def options(self, capital: float | None = None) -> dict:
-        """What the form offers: every setting with its live value, and the limits of a run."""
-        settings = self.live_settings(capital)
+    def options(self, balance: float | None = None) -> dict:
+        """
+        What the form offers: every setting with its live value, the limits of a
+        run, and the account a run starts with beside the live one (``balance``,
+        the account's value at the last daily report), which it may start from.
+        """
+        settings = self.live_settings()
         return {
             "fields": setting_options(settings),
             "groups": list(GROUPS),
             "timezone": settings.timezone,
             "indices": list(settings.allowed_indices),
-            "capital": {"value": settings.capital, "from_balance": capital is not None},
+            "capital": {"value": settings.capital, "balance": balance},
             "signal_delay": DEFAULT_SIGNAL_DELAY,
             # What a run shows but does not change: they are the configuration's own.
             "fixed": {
@@ -505,7 +510,7 @@ class BacktestService:
                 "name": meta["name"],
                 "asset": checked_asset(source.get("asset")),
                 "side": source.get("side", "bid"),
-                "bars": checked_bars(source.get("bars"), any_length=True),
+                "bars": checked_bars(source.get("bars")),
                 "script": pinned,
                 "libraries": libraries,
                 "inputs": checked_inputs(source.get("inputs")),
@@ -727,7 +732,8 @@ class BacktestService:
         return self._queue_run(request, settings_doc, sources, kept_journal, positions=kept_positions)
 
     def _queue_run(self, request: dict, settings_doc: dict, sources: list, journal: list | None, copy_from: str | None = None,
-                   *, positions: list | None = None, raised: list | None = None) -> dict:
+                   *, positions: list | None = None, raised: list | None = None,
+                   recorded_trades: list | None = None) -> dict:
         run_id = self._new_run_id()
         folder = os.path.join(self._runs_root, run_id)
         os.makedirs(os.path.join(folder, "sources"))
@@ -759,6 +765,8 @@ class BacktestService:
                 write_json(os.path.join(folder, POSITIONS_FILE), positions)
             if raised is not None:
                 write_json(os.path.join(folder, RAISED_FILE), raised)
+            if recorded_trades is not None:
+                write_json(os.path.join(folder, RECORDED_TRADES_FILE), recorded_trades)
             write_json(os.path.join(folder, "settings.json"), settings_doc)
             write_json(os.path.join(folder, "status.json"), {"state": QUEUED, "created_at": utc(self._clock())})
             # Last: a folder without its request is not a run.
@@ -813,6 +821,39 @@ class BacktestService:
         new_settings = {**settings_doc, "settings": settings.to_dict(), "changed": changes}
         journal = read_json(os.path.join(folder, "journal.json"))
         return self._queue_run(new_request, new_settings, [], journal, copy_from=folder)
+
+    def model_check(self, run_id: str, *, made_by: str | None = None, made_via: str | None = None,
+                    experiment: str | None = None, lockbox: dict | None = None) -> dict:
+        """
+        A finished run on the recorded turbos made again on turbos made up from
+        the index, by the measure of now: the same signals on the same days,
+        without random entries. The run it checks keeps its trades in the new
+        folder, which pairs its own with them by signal (``model_check.json``):
+        how far the made-up turbos are from the recorded ones.
+        """
+        self._check_room()
+        folder = self._directory(run_id)
+        request = read_json(os.path.join(folder, "request.json")) or {}
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        trades = read_json(os.path.join(folder, "trades.json"))
+        if (request.get("kind") != "run" or (request.get("turbos") or RECORDED) != RECORDED
+                or self._status(run_id).get("state") != DONE or settings_doc is None or trades is None):
+            raise NotPossible("Only a finished run on the recorded turbos can be set beside made-up ones")
+        model = read_json(self._model_path())
+        if not self._model_summary(model):
+            raise NotPossible("The turbos have not been measured yet: measure them on the recorded days first")
+        if model.get("indice") != request.get("indice"):
+            raise NotPossible(f"The turbos were measured for {model.get('indice')}, not {request.get('indice')}")
+        new_request = {
+            **{key: value for key, value in _without_research(request).items() if key not in ("from_sweep", "stress_of")},
+            "turbos": MODELLED, "baseline": {**(request.get("baseline") or {}), "repetitions": 0},
+            "name": f"Model check: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
+            "asked_at": utc(self._clock()), "model_check_of": run_id,
+            **_research_fields(made_by, made_via, experiment, lockbox),
+        }
+        journal = read_json(os.path.join(folder, "journal.json"))
+        return self._queue_run(new_request, {**settings_doc, "turbo_model": model}, [], journal, copy_from=folder,
+                               recorded_trades=trades)
 
     def stress(self, run_id: str, *, made_by: str | None = None, made_via: str | None = None,
                experiment: str | None = None, lockbox: dict | None = None) -> dict:
@@ -1190,6 +1231,8 @@ class BacktestService:
             "changes": request.get("changes") or {},
             # The run a stress sweep made again with worse fills.
             "stress_of": request.get("stress_of"),
+            # The run on the recorded turbos a model check made again on made-up ones.
+            "model_check_of": request.get("model_check_of"),
             "turbos": request.get("turbos") or RECORDED,
             "paper": request.get("paper"),
             # Who asked for it through an agent, and for which experiment of its journal.
@@ -1375,6 +1418,10 @@ class BacktestService:
     def reconciliation(self, run_id: str) -> dict | None:
         """A replay of the journal beside WATA's real positions; None for any other run, or one made before."""
         return read_json(self._file(run_id, "reconciliation.json"))
+
+    def model_check_result(self, run_id: str) -> dict | None:
+        """A model check's trades paired with those of the recorded run it checks; None for any other run."""
+        return read_json(self._file(run_id, MODEL_CHECK_FILE))
 
     def baseline(self, run_id: str) -> dict | None:
         return read_json(self._file(run_id, "baseline.json"))

@@ -1,11 +1,11 @@
 """
 What a backtest Claude asks for must stay within, checked before anything is
 queued: an open experiment of the journal, Claude's share of the line, the
-day's budget of runs, the days a request simulates, the disk left free, and
-the lock box.
+day's budget of runs, the days a request simulates (its trading days, which
+weekends and the closed dates are not), the disk left free, and the lock box.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from src.admin.mcp_server.budget import Refused
 from src.admin.mcp_server.facade import CLAUDE
@@ -25,6 +25,16 @@ def period_of(body: dict) -> tuple[date, date]:
         return date.fromisoformat(body.get("from")), date.fromisoformat(body.get("to"))
     except (TypeError, ValueError):
         raise Refused('The request names its period: "from" and "to", YYYY-MM-DD') from None
+
+
+def trading_days(research, first: date, last: date) -> int:
+    """
+    The days of a period a run may trade: its weekdays, less the closed dates
+    of the live configuration (DD/MM/YYYY, as the trader reads them).
+    """
+    closed = set(research.service().live_settings().closed_dates)
+    found = (first + timedelta(days=offset) for offset in range((last - first).days + 1))
+    return max(1, sum(1 for day in found if day.weekday() < 5 and day.strftime("%d/%m/%Y") not in closed))
 
 
 def cost_of(body: dict, days: int) -> int:
@@ -60,8 +70,8 @@ def check_room(research, cost: int) -> None:
         raise Refused(f"Claude asked for {done_today} runs today (UTC), the day's budget (admin.mcp.runs_per_day)")
     if cost > limits.max_day_simulations:
         raise Refused(
-            f"This request simulates {cost:,} days (days × combinations, or × 1 + random repetitions), over the "
-            f"{limits.max_day_simulations:,} a request may: a shorter period, fewer values, or fewer repetitions"
+            f"This request simulates {cost:,} days (its trading days × combinations, or × 1 + random repetitions), "
+            f"over the {limits.max_day_simulations:,} a request may: a shorter period, fewer values, or fewer repetitions"
         )
     free = research.free_disk_gb()
     if free is not None and free < limits.min_free_disk_gb:

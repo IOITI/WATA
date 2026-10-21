@@ -457,6 +457,11 @@ def test_the_command_line_keeps_the_journal_and_the_lock_box(capsys):
     assert listed[0]["title"] == "Gap"
     assert main(["lockbox", "set", "2026-11-02"]) == 0
     assert "the days from 2026-11-02" in capsys.readouterr().out
+    # Configurations screened outside the lab's runs count in the family.
+    assert main(["exp", "trials", listed[0]["id"], "--count", "35", "--notes", "A Python port, 12 Jun to 16 Oct"]) == 0
+    assert "35 in the family gap" in capsys.readouterr().out
+    assert main(["exp", "trials", listed[0]["id"], "--notes", "No count"]) == 2
+    assert "from 1 to 100,000" in capsys.readouterr().err
     # Only the verdicts the journal knows.
     with pytest.raises(SystemExit):
         main(["exp", "conclude", listed[0]["id"], "--verdict", "fine"])

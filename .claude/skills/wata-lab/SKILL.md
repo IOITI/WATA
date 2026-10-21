@@ -25,11 +25,11 @@ are the server's own, apart from this lab's. Its tools, by step of the loop:
 | Step | The lab | The server's tool |
 |---|---|---|
 | Look | `lab status` | `status`, `data_assets`, `data_coverage` |
-| Experiment | `lab exp new`, `exp conclude` | `exp_new`, `exp_get`, `exp_conclude`, `lockbox_set` |
+| Experiment | `lab exp new`, `exp trials`, `exp conclude` | `exp_new`, `exp_get`, `exp_trials`, `exp_conclude`, `lockbox_set` |
 | Strategy | `lab script check` | `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`; `job_wait` for a study handed back as a job |
 | Run | `lab run`, `lab sweep` | `backtest_start`, `backtest_wait` |
 | Read | `lab show`, `edge`, `regimes`, `trades`, `days`, `compare` | `backtest_result` (parts), `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare` |
-| Test | `lab neighbours`, `lab stress` | `backtest_derive` (neighbours, stress, a sweep's cell) |
+| Test | `lab neighbours`, `lab stress`, `lab model validate` | `backtest_derive` (neighbours, stress, a sweep's cell, model_check) |
 | Shadow | the user's steps | `rule_shadow_save`, `rule_set_reference`, `rule_list` (once the user switched them on) |
 
 The server's runs wait behind the user's and are counted (3 waiting, 60 a
@@ -61,7 +61,9 @@ a rule live.
 1. **Open an experiment** before running anything:
    `lab exp new --title "…" --hypothesis "<a statement the data can refute>" --family <family of ideas>`.
    A family groups the experiments of one idea; its trial count is what the overfitting
-   figures are corrected with.
+   figures are corrected with. Configurations screened outside the runs (a Python port, a grid
+   in pandas) count too: `lab exp trials <id> --count N --notes "what, where, which days"`
+   (`exp_trials` on the server).
 2. **Write or change the strategy**: a Pine v6 indicator in `lab/strategies/`, checked with
    `lab script check lab/strategies/<file>.pine` (compiles with PineTS and lists the alerts
    it raised on made-up bars).
@@ -69,7 +71,7 @@ a rule live.
    `script_file`): the asset and bars the script reads, its inputs, what each alert becomes.
 4. **Run**: `lab run <spec> --exp <id> [--set name=value] [--input in_N=value] [--from D --to D]`.
    Each setting changed (`--set`) is one of the form's fields: `lab show` lists them with the
-   live values.
+   live values. A run starts with 1,000 € (`--set capital=…` for another, such as the live balance).
 5. **Read**, from the summary down:
    - `lab show <run>`: figures, risk, money, random entries, refusals, edge, sample;
    - `lab edge <run> [--by hour|direction|fate|volatility|day_type|gap|us_open|news]`: the index's
@@ -88,7 +90,8 @@ a rule live.
    - `lab stress <run>`: the same run with each order later and each fill dearer;
    - for long histories: runs on made-up turbos (`"turbos": "modelled"` in the spec, 731 days),
      after `lab model show` (measured? on how many days?) and `lab model validate <spec>` (how far
-     made-up turbos are from recorded ones on the same signals);
+     made-up turbos are from recorded ones on the same signals; on the server, `backtest_derive`
+     kind model_check of a finished recorded run, then `backtest_result` part model_check);
    - `lab calibrate execution`: what WATA's own orders took and cost; `--set` those values, or
      `--set execution=measured` to draw each order's time and price from them (the last three months,
      10 of each kind at least; the run keeps them as `execution.json` and its `made_with.execution`).

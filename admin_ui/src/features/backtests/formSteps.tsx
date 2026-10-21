@@ -13,7 +13,7 @@ import type { ScriptInputs } from '@/features/ta/signals/useScriptInputs'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import type { RuleDraft } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
-import { formatDay, formatNumber, toIsoDay } from '@/lib/format'
+import { formatDay, formatMoney, formatNumber, toIsoDay } from '@/lib/format'
 import type { BacktestCoverage, BacktestCoverageDay, BacktestField, BacktestOptions, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -103,7 +103,7 @@ export function AssetStep({
               options={offered.some((option) => option.value === draft.asset) || !chosen ? offered : [{ value: draft.asset, label: assetLabel(chosen) }, ...offered]}
             />
           </label>
-          <BarsFields draft={draft.rule} update={updateRule} anyLength rangeNote={rangeHint(draft.rule.ticks, tick)} />
+          <BarsFields draft={draft.rule} update={updateRule} rangeNote={rangeHint(draft.rule.ticks, tick)} />
         </div>
         {chosen?.provider === 'saxo' && (
           <p className="text-xs text-muted-foreground">Saxo quotes the index only from 15:30 to 22:15: the strategy has no bar before.</p>
@@ -447,6 +447,17 @@ export function SettingsStep({
                           </>
                         ) : field.source ? (
                           'As live'
+                        ) : field.name === 'capital' && options.capital.balance !== null ? (
+                          <>
+                            The backtest’s default; the live account holds {formatMoney(options.capital.balance, 'EUR')}:{' '}
+                            <button
+                              type="button"
+                              className="underline underline-offset-2"
+                              onClick={() => setText(field, String(options.capital.balance))}
+                            >
+                              start from it
+                            </button>
+                          </>
                         ) : (
                           'The backtest’s default'
                         ))}

@@ -48,6 +48,9 @@ DEFAULT_SPREAD = 0.01
 UNDERLYING = {"provider": "dukascopy", "key": "us100", "side": "bid"}
 # Under this many recorded days the measure is said to be thin.
 FEW_DAYS = 5
+# A model check: the trades of the run it checks, kept in its folder, and their pairing with its own.
+RECORDED_TRADES_FILE = "recorded_trades.json"
+MODEL_CHECK_FILE = "model_check.json"
 
 
 class NoCalibration(ValueError):

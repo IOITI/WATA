@@ -17,7 +17,7 @@ from src.admin.mcp_server.gate import current_caller
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, csv_text, page
 from src.research.requests import body_of, neighbour_values, trials_of, value_of
 
-PARTS = ("summary", "edge", "breakdowns", "baseline", "sweep", "reconciliation", "settings")
+PARTS = ("summary", "edge", "breakdowns", "baseline", "sweep", "reconciliation", "model_check", "settings")
 TRADE_ORDERS = ("time", "worst", "best")
 FATES = ("executed", "refused", "failed", "unpriced", "closed", "ignored", "not_a_signal")
 FORMATS = ("json", "csv")
@@ -74,7 +74,7 @@ def _run_line(run: dict) -> dict:
         "failure": status.get("failure"),
         "position": run.get("position"), "headline": run.get("headline"), "stale": run.get("stale"),
         "made_by": run.get("made_by"), "experiment": run.get("experiment"), "stress_of": run.get("stress_of"),
-        "tags": run.get("tags") or [],
+        "model_check_of": run.get("model_check_of"), "tags": run.get("tags") or [],
     }
 
 
@@ -188,11 +188,11 @@ def register(server, research) -> None:
     @research_tool(server, calls, name="backtest_options", title="What a backtest can be asked", read_only=True)
     async def backtest_options() -> dict:
         """Everything a backtest request (backtest_start) can say: every setting of WATA's rules with its live value
-        and bounds (change them by name in ``changes``), the indices, the account it starts from, the default signal
-        delays, the random-entry and sweep limits, the longest period, and the turbo model's state. Read it before
-        writing a request."""
-        capital = await backtest_requests.last_balance(research.queries)
-        return compacted(await run_in_threadpool(research.service().options, capital))
+        and bounds (change them by name in ``changes``), the indices, the account a run starts from (1,000 € unless
+        changes.capital says otherwise; the live balance beside it), the default signal delays, the random-entry and
+        sweep limits, the longest period, and the turbo model's state. Read it before writing a request."""
+        balance = await backtest_requests.last_balance(research.queries)
+        return compacted(await run_in_threadpool(research.service().options, balance))
 
     @research_tool(server, calls, name="backtest_list", title="Backtest runs", read_only=True)
     async def backtest_list(made_by: str = "", experiment: str = "", offset: int = 0, limit: int = 20) -> dict:
@@ -214,7 +214,8 @@ def register(server, research) -> None:
         hour, weekday, direction, exit, holding time, turbo price, regime (group= one of them). baseline: the random
         entries' totals. sweep: each combination's figures on the tuning and held-out days, with the walk-forward,
         the probability of overfitting and the deflated Sharpe in summary. reconciliation: a journal replay set
-        beside WATA's real trades. settings: every setting the run used."""
+        beside WATA's real trades. model_check: a model check's trades paired by signal with the recorded run's
+        (backtest_derive kind model_check). settings: every setting the run used."""
         if part not in PARTS:
             raise Refused(f"part is one of {', '.join(PARTS)}")
         if part == "summary":
@@ -259,6 +260,12 @@ def register(server, research) -> None:
                 "summary": found.get("summary"), "pairs": (found.get("pairs") or [])[:50],
                 "backtest_only": (found.get("backtest_only") or [])[:25], "live_only": (found.get("live_only") or [])[:25],
             })
+        if part == "model_check":
+            found = await run_in_threadpool(research.service().model_check_result, run_id)
+            if not found:
+                return {"note": "Only a model check (backtest_derive kind model_check) sets made-up turbos beside "
+                                "recorded ones"}
+            return compacted(found)
         run = await run_in_threadpool(research.service().get, run_id)
         return compacted(run.get("settings") or {})
 
@@ -357,7 +364,7 @@ START_DESCRIPTION = (
     "unless changes sets it. Days of the lock box only with lockbox_final. Claude's runs wait behind the "
     "operator's, a few at most at once. Then backtest_wait."
 )
-DERIVED = ("stress", "cell", "neighbours")
+DERIVED = ("stress", "cell", "neighbours", "model_check")
 # Under the 60 s after which Claude Code ends a call: wait again for longer.
 WAIT_MOST_SECONDS = 45
 WAIT_MOST_RUNS = 10
@@ -394,7 +401,7 @@ def register_writing(server, research) -> None:
         guards.check_source(research, body)
         body = _with_rule_history(research, body)
         first, last = guards.period_of(body)
-        guards.check_room(research, guards.cost_of(body, (last - first).days + 1))
+        guards.check_room(research, guards.cost_of(body, await run_in_threadpool(guards.trading_days, research, first, last)))
         lockbox = guards.lockbox_of(journal, first, last, lockbox_final)
         if isinstance(body.get("sweep"), dict):
             body["sweep"] = {**body["sweep"], "trials_before": journal.family_trials(experiment["family"])}
@@ -414,19 +421,26 @@ def register_writing(server, research) -> None:
         and each fill dearer (a sweep that chooses nothing: no trial counted). kind="cell": a sweep's combination
         ``cell`` made a run of its own, with random entries (already counted). kind="neighbours": a sweep of
         ``parameter`` (a setting, or a script input in_N) around the run's value, ``count`` steps of ``step`` each
-        side (a tenth of the value by default) or the given ``values``: a plateau, or a peak among worse values?"""
+        side (a tenth of the value by default) or the given ``values``: a plateau, or a peak among worse values?
+        kind="model_check": a finished run on the recorded turbos made again on turbos made up from the index (no
+        trial counted, no random entries), its trades paired by signal with the recorded ones (backtest_result part
+        model_check): how far made-up turbos are from what was recorded, before trusting a run on them."""
         if kind not in DERIVED:
             raise Refused(f"kind is one of {', '.join(DERIVED)}")
         experiment = guards.open_experiment(journal, experiment_id)
         service = research.service()
         run = await run_in_threadpool(service.get, run_id)
         first, last = guards.period_of(run.get("request") or {})
-        days = (last - first).days + 1
+        days = await run_in_threadpool(guards.trading_days, research, first, last)
         lockbox = guards.lockbox_of(journal, first, last, lockbox_final)
         research_fields = {"made_by": CLAUDE, "made_via": made_via(), "experiment": experiment_id, "lockbox": lockbox}
         if kind == "stress":
             guards.check_room(research, days * 16)
             return await started(service.stress(run_id, **research_fields), experiment_id, 0, lockbox, note=f"stress of {run_id}")
+        if kind == "model_check":
+            guards.check_room(research, days)
+            return await started(service.model_check(run_id, **research_fields), experiment_id, 0, lockbox,
+                                 note=f"model check of {run_id}")
         if kind == "cell":
             guards.check_room(research, days * 101)
             return await started(service.run_cell(run_id, cell, **research_fields), experiment_id, 0, lockbox,

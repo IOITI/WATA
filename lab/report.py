@@ -106,6 +106,12 @@ def _signed_class(value) -> str:
     return "gain" if value > 0 else "loss"
 
 
+def _elsewhere(experiment: dict) -> str:
+    """How many of an experiment's trials were made outside its runs, when some were."""
+    count = sum(entry["trials"] for entry in experiment.get("elsewhere") or [])
+    return f" ({count} of them elsewhere)" if count else ""
+
+
 def _nice_step(span: float, ticks: int = 5) -> float:
     raw = span / max(ticks, 1)
     magnitude = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1
@@ -208,7 +214,7 @@ def render(experiment: dict, found_runs: list[dict]) -> str:
         f"  <h1>{_escape(experiment['title'])}</h1>\n"
         f'  <div class="meta"><span class="verdict {_escape(verdict)}">{_escape(verdict)}</span>'
         f"<span>Family {_escape(experiment['family'])}</span>"
-        f"<span>{experiment['trials']} configurations tried here, {family_trials} in the family</span>"
+        f"<span>{experiment['trials']} configurations tried here{_elsewhere(experiment)}, {family_trials} in the family</span>"
         f"<span>Opened {_escape(experiment['opened_at'][:10])}</span></div>\n"
         "</header>\n"
         f'<section><h2>Hypothesis</h2><p class="hypothesis">{_escape(experiment["hypothesis"])}</p></section>\n'

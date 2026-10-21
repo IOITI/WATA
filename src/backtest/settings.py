@@ -24,8 +24,10 @@ _TIME_OF_DAY = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 # How a run's fills are taken: at the bid that crossed a stop, or at the stop's own price.
 STOP_FILLS = ("worst", "level")
 
-# The account a run counts its money on when the live balance is not known.
-DEFAULT_CAPITAL = 10_000.0
+# The account every run starts with unless it says another: one that pays for a turbo at
+# each entry. The live balance, which may not (21.82 € paid for none of 34 entries on
+# 2026-10-21), is offered beside it.
+DEFAULT_CAPITAL = 1_000.0
 # The time between a bar's close and the trader seeing its signal: the TA engine's
 # run and its request to the web server, or the web server's own long poll.
 DEFAULT_SIGNAL_DELAY = {"pine": 3.0, "journal": 0.5}

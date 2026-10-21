@@ -67,7 +67,7 @@ def research(request: Request):
 
 @router.get("/options")
 async def options(request: Request, service=Depends(backtests)):
-    """What the form offers: every setting with its live value, the limits of a run, the account to start from."""
+    """What the form offers: every setting with its live value, the limits of a run, the account to start from and the live one."""
     return await run_in_threadpool(service.options, await backtest_requests.last_balance(request.app.state.ctx.queries))
 
 
@@ -247,6 +247,12 @@ async def reference(run_id: str, service=Depends(backtests)):
 async def stress(run_id: str, service=Depends(backtests)):
     """The run made again with each order filled later and at a worse price."""
     return service.stress(run_id)
+
+
+@router.post("/{run_id}/model-check", status_code=202)
+async def model_check(run_id: str, service=Depends(backtests)):
+    """The run made again on turbos made up from the index, its trades set beside the recorded ones."""
+    return service.model_check(run_id)
 
 
 @router.post("/{run_id}/cells/{cell}/run", status_code=202)

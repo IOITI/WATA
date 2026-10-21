@@ -120,6 +120,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/20261012-213045-a1b2c3/reconciliation"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/cells/2/run"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/stress"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/model-check"),
     ("GET", "/api/backtests/turbo-model"),
     ("GET", "/api/backtests/execution"),
     ("GET", "/api/backtests/paper"),
@@ -3014,7 +3015,7 @@ def test_the_research_files_follow_the_backtests_switch(client, ctx, backtests):
     assert client.get("/api/backtests/research").status_code == 503
 
 
-def test_a_run_is_asked_for_with_the_accounts_last_value(client, ctx, backtests):
+def test_a_run_starts_at_the_backtests_account_and_the_form_is_told_the_live_one(client, ctx, backtests):
     ctx.queries.balance = 12_345.6
     body = {"from": "2026-10-13", "to": "2026-10-16", "source": {"kind": "pine"}}
 
@@ -3022,7 +3023,8 @@ def test_a_run_is_asked_for_with_the_accounts_last_value(client, ctx, backtests)
     options = client.get("/api/backtests/options").json()
 
     assert response.status_code == 202
-    assert backtests.asked == [("create", body, None, 12_345.6, None), ("options", 12_345.6)]
+    # No capital handed in: the run's own default, unless its changes say another.
+    assert backtests.asked == [("create", body, None, None, None), ("options", 12_345.6)]
     assert options == {"fields": []}
 
 

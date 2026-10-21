@@ -339,15 +339,18 @@ def test_what_a_sweep_says_beyond_its_best_combination():
     assert backtest_run.sweep_robustness(cells, {}, first_held=days[15])["deflated_sharpe"] is None
 
 
+CALIBRATION = {
+    "format": 1, "made_at": "2026-10-20T00:00:00Z", "indice": "us100", "days": ["2026-10-13", "2026-10-14"],
+    "underlying": {"provider": "saxo", "key": "1", "side": "bid"}, "few_days": True,
+    "directions": {direction: {"factor": 0.01, "offset": 0.0, "spacing": 50.0, "turbos": 2, "bars": 100, "error_percent": 1.5}
+                   for direction in ("long", "short")},
+    "spread_by_hour": {"9": 0.02}, "quoting": {"first_minute": 8 * 60, "last_minute": 22 * 60}, "decimals": 2,
+}
+
+
 def test_a_run_on_turbos_made_up_from_the_index_trades_them_as_recorded_ones(tmp_path, recorded):
     calibration = tmp_path / "turbo_model.json"
-    calibration.write_text(json.dumps({
-        "format": 1, "made_at": "2026-10-20T00:00:00Z", "indice": "us100", "days": ["2026-10-13", "2026-10-14"],
-        "underlying": {"provider": "saxo", "key": "1", "side": "bid"}, "few_days": True,
-        "directions": {direction: {"factor": 0.01, "offset": 0.0, "spacing": 50.0, "turbos": 2, "bars": 100, "error_percent": 1.5}
-                       for direction in ("long", "short")},
-        "spread_by_hour": {"9": 0.02}, "quoting": {"first_minute": 8 * 60, "last_minute": 22 * 60}, "decimals": 2,
-    }))
+    calibration.write_text(json.dumps(CALIBRATION))
     folder = prepare(tmp_path, {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 0}})
     command, _ = fake_runner(tmp_path)
 
@@ -369,6 +372,31 @@ def test_a_run_on_turbos_made_up_from_the_index_trades_them_as_recorded_ones(tmp
     }
     calibration.write_text("{}")
     assert backtest_run.main(["--run", folder, "--data", f"model:{calibration}", "--files", recorded]) == 2
+
+
+def test_a_model_check_pairs_its_made_up_trades_with_those_of_the_recorded_run(tmp_path, recorded):
+    asked = {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 0}}
+    first = prepare(tmp_path, asked)
+    assert run_command(tmp_path, first, recorded) == 0
+    kept = read(first, "trades.json")
+    os.rename(first, str(tmp_path / "recorded_run"))
+    calibration = tmp_path / "turbo_model.json"
+    calibration.write_text(json.dumps(CALIBRATION))
+    check = prepare(tmp_path, {**asked, "turbos": "modelled", "model_check_of": "20261021-100000-aaaaaa"})
+    with open(os.path.join(check, "recorded_trades.json"), "w", encoding="utf-8") as out_file:
+        json.dump(kept, out_file)
+    command, _ = fake_runner(tmp_path)
+
+    assert backtest_run.main([
+        "--run", check, "--data", f"model:{calibration}", "--files", recorded, "--prices", str(tmp_path / "prices"),
+        "--runner", "\x1f".join(command),
+    ]) == 0
+
+    found = read(check, "model_check.json")
+    # The same signals on the recorded days: every recorded trade has its made-up one; the Monday only the latter.
+    assert found["recorded_trades"] == len(kept) and found["paired"] == len(kept) >= 2
+    assert found["modelled_trades"] > found["paired"]
+    assert read(check, "summary.json")["model_check"] == found
 
 
 def test_the_signals_a_rule_raised_are_traded_without_its_script(tmp_path, recorded):

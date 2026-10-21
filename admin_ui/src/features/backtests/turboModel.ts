@@ -1,5 +1,5 @@
 import { formatDay, formatNumber } from '@/lib/format'
-import type { BacktestTurboDirection, BacktestTurboMeasure, BacktestTurboModel } from '@/lib/types'
+import type { BacktestModelCheck, BacktestTurboDirection, BacktestTurboMeasure, BacktestTurboModel } from '@/lib/types'
 
 import { PROVIDER_LABEL } from './model'
 
@@ -46,4 +46,24 @@ export function defaultMeasurePeriod(today: string, days = 30): { from: string; 
   const end = new Date(`${today}T12:00:00Z`)
   const start = new Date(end.getTime() - (days - 1) * 86_400_000)
   return { from: start.toISOString().slice(0, 10), to: today }
+}
+
+function points(value: number | null, signed = false): string {
+  if (value === null) return '-'
+  return `${signed && value > 0 ? '+' : ''}${formatNumber(value, 2)}`
+}
+
+/** A model check in sentences: how far the made-up turbos are from the recorded ones, on the same signals. */
+export function modelCheckSentences(found: BacktestModelCheck): string[] {
+  const counted = `${formatNumber(found.recorded_trades)} on the recorded turbos, ${formatNumber(found.modelled_trades)} on made-up ones`
+  if (found.paired === 0) return [`No trade of the recorded run was made on made-up turbos too (${counted}): nothing to compare.`]
+  const prices = found.median_entry_price
+  return [
+    `${formatNumber(found.paired)} trades paired by signal (${counted}).`,
+    `Made up minus recorded: ${points(found.mean_difference_percent, true)} points of result a trade on average, ` +
+      `${points(found.median_absolute_difference_percent)} apart in the middle; correlation ${points(found.correlation)}.`,
+    `The same exit ${found.same_exit_percent === null ? '-' : `${formatNumber(found.same_exit_percent, 0)} %`} of the time; ` +
+      `turbos bought at ${points(prices.recorded)} € recorded and ${points(prices.modelled)} € made up, in the middle.`,
+    `The paired trades sum to ${points(found.recorded_total_percent, true)} % recorded and ${points(found.modelled_total_percent, true)} % made up.`,
+  ]
 }

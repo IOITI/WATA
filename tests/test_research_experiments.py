@@ -39,6 +39,41 @@ def test_trials_are_counted_by_family(journal):
     assert journal.family_trials("ema") == 6 + 0 + 4
 
 
+def test_trials_made_elsewhere_count_in_the_family_and_are_said_apart(journal):
+    first = journal.new("A", "a", "kernel")["experiment"]
+    journal.record_run(first, "20261021-100000-aaaaaa", kind="run", trials=1)
+    journal.record_trials(first, 35, "  A Python port of v2 screened on the Mac, 12 Jun to 16 Oct  ")
+
+    found = journal.get(first)
+    assert found["trials"] == 36 and journal.family_trials("kernel") == 36
+    assert [(entry["trials"], entry["note"]) for entry in found["elsewhere"]] == [
+        (35, "A Python port of v2 screened on the Mac, 12 Jun to 16 Oct"),
+    ]
+    # Not a run: nothing to open.
+    assert [entry["run"] for entry in found["runs"]] == ["20261021-100000-aaaaaa"]
+
+
+@pytest.mark.parametrize("trials, note, refused", [
+    (0, "n", "from 1 to 100,000"), (100_001, "n", "from 1 to 100,000"), (True, "n", "whole number"),
+    (2.5, "n", "whole number"), (3, " ", "Say what was tried"), (3, "n" * 2001, "Say what was tried"),
+])
+def test_trials_made_elsewhere_say_how_many_and_what(journal, trials, note, refused):
+    found = journal.new("A", "a", "kernel")["experiment"]
+
+    with pytest.raises(ValueError, match=refused):
+        journal.record_trials(found, trials, note)
+
+
+def test_a_concluded_experiment_takes_no_more_trials(journal):
+    found = journal.new("A", "a", "kernel")["experiment"]
+    journal.conclude(found, "rejected", "No edge")
+
+    with pytest.raises(ValueError, match="concluded"):
+        journal.record_trials(found, 3, "More variants")
+    with pytest.raises(UnknownExperiment):
+        journal.record_trials("nothere", 3, "Variants")
+
+
 def test_an_unknown_experiment_is_said_so(journal):
     with pytest.raises(UnknownExperiment):
         journal.record_run("nothere", "20261020-100000-aaaaaa", kind="run", trials=1)

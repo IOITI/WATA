@@ -23,7 +23,7 @@ EXPECTED_TOOLS = {
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "turbo_model",
     "rule_list", "rule_compare",
-    "exp_new", "exp_get", "exp_conclude", "lockbox_set",
+    "exp_new", "exp_get", "exp_trials", "exp_conclude", "lockbox_set",
     "backtest_start", "backtest_derive", "backtest_wait", "backtest_remove", "turbo_model_measure",
     "rule_shadow_save", "rule_shadow_remove", "rule_set_reference",
 }

@@ -12,6 +12,9 @@ writes beside them, each file whole or not at all:
 - ``progress.json`` while it runs;
 - ``signals.json``, ``trades.json``, ``days.json`` (a run) or ``sweep.json``
   (a sweep), ``baseline.json``;
+- for a model check (``model_check_of``: made-up turbos beside a run on the
+  recorded ones, whose trades the service kept as ``recorded_trades.json``),
+  ``model_check.json``: the two runs' trades paired by signal;
 - ``summary.json`` last: its presence says the run is done.
 
 Three phases, one after the other, so that the Pine runner and the recorded
@@ -37,7 +40,9 @@ from datetime import date, datetime, timedelta, timezone
 from src.backtest import figures, regimes, robustness
 from src.backtest.edge import EdgeMeter, headline as edge_headline
 from src.backtest.reconciliation import reconcile, sentence as reconciliation_sentence
-from src.backtest.turbo_model import ModelData, NoCalibration, read_calibration
+from src.backtest.turbo_model import (
+    MODEL_CHECK_FILE, RECORDED_TRADES_FILE, ModelData, NoCalibration, compare_trades, read_calibration,
+)
 from src.backtest.baseline import DEFAULT_SEED, Baseline, entry_hours
 from src.backtest.clock import TradingClock, days_between
 from src.backtest.rules import compounded
@@ -472,6 +477,11 @@ async def run(arguments) -> int:
                     trades, signals, _read(os.path.join(folder, "journal.json")), _read(os.path.join(folder, "positions.json")),
                 )
                 _write(os.path.join(folder, "reconciliation.json"), reconciled)
+            model_check = None
+            if request.get("model_check_of") and os.path.exists(os.path.join(folder, RECORDED_TRADES_FILE)):
+                # The same signals as the run it checks traded them on the recorded turbos, beside these made-up ones.
+                model_check = compare_trades(_read(os.path.join(folder, RECORDED_TRADES_FILE)), trades)
+                _write(os.path.join(folder, MODEL_CHECK_FILE), model_check)
             if baseline is not None:
                 _write(os.path.join(folder, "baseline.json"), {
                     "repetitions": len(totals), "seed": baseline.seed, "entries": baseline.entries,
@@ -490,6 +500,7 @@ async def run(arguments) -> int:
                 "edge": edge_headline(edge_report),
                 "reconciliation": {**reconciled["summary"], "sentence": reconciliation_sentence(reconciled["summary"])}
                 if reconciled else None,
+                "model_check": model_check,
                 "stress": {
                     "monte_carlo": robustness.monte_carlo_drawdown(day_percents),
                     "without_best_days": robustness.without_best_days(day_percents),

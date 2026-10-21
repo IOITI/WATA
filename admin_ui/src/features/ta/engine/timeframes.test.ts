@@ -5,7 +5,6 @@ import {
   daysPerRequest,
   DEFAULT_TIMEFRAME,
   readTimeframe,
-  RULE_TIMEFRAMES,
   shortName,
   TIMEFRAMES,
   timeframeOf,
@@ -13,7 +12,7 @@ import {
 } from './timeframes'
 
 describe('timeframes', () => {
-  it('offers bars of seconds and of minutes, and signal rules the minutes alone', () => {
+  it('offers bars of seconds and of minutes', () => {
     expect(TIMEFRAMES.map((timeframe) => [timeframe.pine, timeframe.label])).toEqual([
       ['10S', '10 s'],
       ['20S', '20 s'],
@@ -24,7 +23,6 @@ describe('timeframes', () => {
       ['15', '15 min'],
       ['60', '1 hour'],
     ])
-    expect(RULE_TIMEFRAMES.map((timeframe) => timeframe.pine)).toEqual(['1', '5', '15', '60'])
     expect(DEFAULT_TIMEFRAME.pine).toBe('1')
   })
 

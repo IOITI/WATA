@@ -242,12 +242,12 @@ def test_a_rule_edited_by_hand_into_something_wrong_is_not_run(scripts):
     rule = make_rule(scripts)
     path = os.path.join(scripts.root, "rules.json")
     stored = json.load(open(path))
-    stored["rules"][0]["bars"] = {"type": "time", "timeframe": "240"}
+    stored["rules"][0]["bars"] = {"type": "time", "timeframe": "5S"}
     json.dump(stored, open(path, "w"))
 
     snapshot = read_rules(scripts.root)
 
-    assert snapshot.rules == () and "timeframe" in snapshot.errors[rule["id"]]
+    assert snapshot.rules == () and "10 seconds to a day" in snapshot.errors[rule["id"]]
 
 
 def test_two_live_rules_on_one_indice_contest_it(scripts):
@@ -672,6 +672,31 @@ def test_a_live_rules_signal_is_sent_stamped_with_its_bars_close(scripts):
     [(signal_id, outcome, details)] = journal.completed
     assert (outcome, details["http_status"], details["signal_uuid"]) == ("sent", 200, "5e1f2a3b-0000-4000-8000-000000000001")
     assert journal.signals[0]["outcome"] == "sending"
+
+
+def test_a_live_rule_on_ten_second_bars_sends_at_the_tick_after_its_bar_and_never_late(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(
+        scripts, mode="live", bars={"type": "time", "timeframe": "10S"},
+    )
+    run(engine.tick())
+    load = runner.requests[0]
+    # From the restart before (21:15 UTC), every row a bar.
+    assert load["timeframe"] == "10S" and len(load["bars"]) == (10 * 3600 + 45 * 60) // 10
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 2, seed=3)
+    source.covered, clock.at = T0 + 10, T0 + 11.5
+
+    run(engine.tick())
+
+    assert runner.requests[-1]["op"] == "append" and len(runner.requests[-1]["bars"]) == 1
+    assert sender.sent == [{
+        "action": "long", "indice": "us100", "signal_timestamp": iso_seconds(T0 + 10), "alert_timestamp": iso_seconds(T0 + 11),
+    }]
+    # A run that comes too late sends nothing, whatever the length of its bars.
+    runner.alerting = {(T0 + 10) * 1000}
+    source.covered, clock.at = T0 + 20, T0 + 20 + 75
+    run(engine.tick())
+    assert len(sender.sent) == 1 and "The bar closed 75 s ago" in journal.completed[-1][2]["detail"]
 
 
 def test_a_bar_that_raises_an_entry_and_a_close_sends_the_entry_alone(scripts):

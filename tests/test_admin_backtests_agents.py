@@ -189,5 +189,6 @@ def test_asking_for_a_backtest_hands_who_asked_to_the_service():
                                                                      "source": {"kind": "pine"}}, **CLAUDE))
 
     body, options = service_.asked[0]
-    assert options["capital"] == 20_000.0
+    # The live balance is not the run's account: the backtests' own is, unless the request says another.
+    assert "capital" not in options
     assert {key: options[key] for key in CLAUDE} == CLAUDE

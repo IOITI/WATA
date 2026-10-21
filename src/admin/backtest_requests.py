@@ -49,11 +49,11 @@ async def ask_backtest(queries, service, body: dict, *, made_by: str | None = No
             positions = await queries.closed_positions(first - timedelta(days=1), last + timedelta(days=1))
         except DatabaseUnavailable:
             positions = None
-    capital = await last_balance(queries)
     execution = await measured_orders(queries, service) if asks_measured(body) else None
     # On the event loop: the run joins the service's line, which is not to be touched from another thread.
+    # It starts with the backtests' own account (DEFAULT_CAPITAL) unless its changes say another.
     return service.create(
-        body, journal=journal, positions=positions, capital=capital,
+        body, journal=journal, positions=positions,
         made_by=made_by, made_via=made_via, experiment=experiment, lockbox=lockbox, execution=execution,
     )
 

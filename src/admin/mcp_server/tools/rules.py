@@ -82,8 +82,8 @@ SAVE_DESCRIPTION = """Make one of Claude's own shadow rules, or change one (rule
 the Capital.com feed records and journals its signals, never sends them; each finished day is traded on paper
 (rule_list shows those days beside its reference run). A new rule needs name (Claude · is put first), script_id (an
 indicator or strategy; version: its current one by default), asset (capital/<EPIC>), indice (us100...) and alerts by
-title ({"Long": "long", "Short": "short", "Exit": "close-position"}, or ignore, message); bars 1, 5, 15, 60 (minutes)
-or R<ticks>, side bid or ask, inputs by id ({"in_0": 9}), alert_calls ignore or message, history_days (0 to 30 days
+title ({"Long": "long", "Short": "short", "Exit": "close-position"}, or ignore, message); bars of 10 s to a day (10S,
+45S, 1, 5, 60) or R<ticks>, side bid or ask, inputs by id ({"in_0": 9}), alert_calls ignore or message, history_days (0 to 30 days
 of bars before each engine day, for a script that needs less warm-up than the engine's or more; -1 gives it the
 engine's again). A change sets only what is given: inputs and alerts given are set by id and title, the others kept
 (all dropped for another script). mode shadow or off. Before it runs, it is run as the engine would on the last

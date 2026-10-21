@@ -326,7 +326,8 @@ def test_a_scripts_source_is_read_at_any_version(research, scripts):
 def test_options_say_every_setting_with_its_live_value(research):
     found = answer(research, "backtest_options")
 
-    assert found["capital"]["value"] == 25_000.0
+    # 1,000 € unless a request says another; the live balance beside it.
+    assert found["capital"] == {"value": 1_000.0, "balance": 25_000.0}
     assert any(entry["name"] == "stoploss_percent" for entry in found["fields"])
 
 

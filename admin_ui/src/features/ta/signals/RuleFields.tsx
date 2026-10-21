@@ -11,7 +11,7 @@ import type { TaAlertAction, TaScriptSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { messageAction } from '../engine/outline'
-import { readTimeframe, RULE_TIMEFRAMES, TIMEFRAME_HINT, TIMEFRAMES, unevenNote } from '../engine/timeframes'
+import { readTimeframe, TIMEFRAME_HINT, TIMEFRAMES, unevenNote } from '../engine/timeframes'
 import { ACTION_LABEL, ALERT_ACTIONS, inputValueOf } from './ruleModel'
 import type { InputValue, RuleDraft } from './ruleModel'
 import type { ScriptInputs } from './useScriptInputs'
@@ -126,27 +126,25 @@ export function ScriptChoice({
 }
 
 /**
- * The price side and the bars the script runs on. A signal rule runs on whole minutes
- * (RULE_TIMEFRAMES); a backtest (`anyLength`) on any length WATA makes, typed when it is
- * none of the menu's.
+ * The price side and the bars the script runs on, a signal rule's or a backtest's: any
+ * length WATA makes, from ten seconds to a day, typed when it is none of the menu's, or
+ * range bars. The engine runs a rule's script over all its bars at each new one.
  */
 export function BarsFields({
   draft,
   update,
-  anyLength = false,
   rangeNote = null,
 }: {
   draft: RuleDraft
   update: Update
-  anyLength?: boolean
   /** What the range is in the asset's points, said under its field. */
   rangeNote?: string | null
 }) {
-  const offered = anyLength ? TIMEFRAMES : RULE_TIMEFRAMES
+  const offered = TIMEFRAMES
   const inMenu = offered.some((timeframe) => timeframe.pine === draft.timeframe)
   // Typed rather than chosen: kept while it is typed, even when it reads as one of the menu's ("1" on the way to "15s").
-  const [typingChosen, setTyping] = useState(() => anyLength && !inMenu)
-  const typing = anyLength && (typingChosen || (draft.barsType === 'time' && !inMenu))
+  const [typingChosen, setTyping] = useState(() => !inMenu)
+  const typing = typingChosen || (draft.barsType === 'time' && !inMenu)
   const typed = typing ? readTimeframe(draft.timeframe) : null
   const length = typing ? (typed && 'timeframe' in typed ? typed.timeframe : null) : offered.find((timeframe) => timeframe.pine === draft.timeframe)
   const note = draft.barsType === 'time' && length ? unevenNote(length.seconds) : null
@@ -179,7 +177,7 @@ export function BarsFields({
           }}
           options={[
             ...offered.map((timeframe) => ({ value: timeframe.pine, label: timeframe.label })),
-            ...(anyLength ? [{ value: 'typed', label: 'Other length…' }] : []),
+            { value: 'typed', label: 'Other length…' },
             { value: 'range', label: 'Range bars' },
           ]}
         />

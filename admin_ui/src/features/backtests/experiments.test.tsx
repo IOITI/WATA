@@ -29,7 +29,7 @@ function experiment(changes: Partial<Experiment> = {}): Experiment {
     id: '1a2b3c', title: 'EMA cross on 5 min', hypothesis: 'A cross of the fast average leads the next hour', family: 'ema-cross',
     plan: 'Run, sweep the lengths, stress the best', made_by: 'claude', opened_at: '2026-10-20T08:00:00Z',
     runs: [{ run: '20261020-080500-aaaaaa', kind: 'run', trials: 1, lockbox: false, note: '', at: '2026-10-20T08:05:00Z' }],
-    trials: 1, verdict: null, notes: null, concluded_at: null, ...changes,
+    elsewhere: [], trials: 1, verdict: null, notes: null, concluded_at: null, ...changes,
   }
 }
 
@@ -92,7 +92,10 @@ function renderPage() {
 beforeEach(() => {
   journal = {
     experiments: [
-      experiment({ id: '4d5e6f', title: 'RSI bounce', family: 'rsi', runs: [], trials: 0 }),
+      experiment({
+        id: '4d5e6f', title: 'RSI bounce', family: 'rsi', runs: [], trials: 35,
+        elsewhere: [{ trials: 35, note: 'A Python port screened on the Mac, 12 Jun to 16 Oct', at: '2026-10-20T09:30:00Z' }],
+      }),
       experiment({ verdict: 'rejected', notes: 'Did not beat random entries (61 %)', concluded_at: '2026-10-20T10:00:00Z' }),
     ],
     lockbox: { from: '2026-10-14', to: null, set_at: '2026-10-19T20:00:00Z', set_by: 'claude' },
@@ -112,6 +115,10 @@ describe('the Experiments page', () => {
     const concluded = screen.getByText('Did not beat random entries (61 %)').closest('tr') as HTMLElement
     expect(within(concluded).getByText('Rejected')).toBeInTheDocument()
     expect(screen.getByText('Every day from 14 Oct 2026 is kept out.')).toBeInTheDocument()
+    // Trials made outside the runs: said with what they were, without a link, and counted in the family.
+    const elsewhere = screen.getByText('+35 tried elsewhere: A Python port screened on the Mac, 12 Jun to 16 Oct')
+    expect(elsewhere.closest('a')).toBeNull()
+    expect(within(elsewhere.closest('tr') as HTMLElement).getByText('35 tried in all')).toBeInTheDocument()
     const trail = screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0]
     expect(trail).toHaveTextContent(/Analysis.*Backtests.*Experiments/)
   })

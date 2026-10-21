@@ -1189,7 +1189,8 @@ export interface BacktestOptions {
   timezone: string
   indices: string[]
   /** The account a run starts with: the last daily report's value when there is one. */
-  capital: { value: number; from_balance: boolean }
+  /** The account a run starts with (1,000 € unless it says another), and the live one, null when not known. */
+  capital: { value: number; balance: number | null }
   signal_delay: { pine: number; journal: number }
   fixed: {
     time_periods: { start_minute: number; end_minute: number; scale_percent: number; label: string }[]
@@ -1442,7 +1443,24 @@ export interface BacktestStoredRequest {
   from_sweep?: { id: string; cell: number }
   /** A stress sweep: the run it made again with later and dearer fills. */
   stress_of?: string
+  /** A model check: the run on the recorded turbos it made again on made-up ones. */
+  model_check_of?: string
   turbos?: BacktestTurbos
+}
+
+/** The same signals on recorded and on made-up turbos, their trades paired by signal (compare_trades, src/backtest/turbo_model.py). */
+export interface BacktestModelCheck {
+  recorded_trades: number
+  modelled_trades: number
+  paired: number
+  /** Made up minus recorded, in points of a trade's result (%). */
+  mean_difference_percent: number | null
+  median_absolute_difference_percent: number | null
+  correlation: number | null
+  same_exit_percent: number | null
+  median_entry_price: { recorded: number | null; modelled: number | null }
+  recorded_total_percent: number | null
+  modelled_total_percent: number | null
 }
 
 export interface BacktestStatus {
@@ -1491,6 +1509,8 @@ export interface BacktestRunListed {
   stale?: boolean
   /** A stress sweep: the run it made again with later and dearer fills. */
   stress_of?: string | null
+  /** A model check: the run on the recorded turbos it made again on made-up ones. */
+  model_check_of?: string | null
   turbos?: BacktestTurbos
   /** Who asked for it through an agent ("claude"), and for which experiment of its journal; absent for the operator's. */
   made_by?: string | null
@@ -1712,6 +1732,8 @@ export interface BacktestSummary {
   stress?: BacktestStress
   /** A replay of the journal's, beside WATA's real positions. */
   reconciliation?: (BacktestReconciliationSummary & { sentence: string }) | null
+  /** A model check's: its trades paired by signal with the recorded run's. */
+  model_check?: BacktestModelCheck | null
   edge?: { horizons: (Pick<BacktestEdgeHorizon, 'minutes' | 'signals' | 'mean_bp' | 'hit_rate' | 't' | 'independent'> & { random_mean_bp: number | null; beaten: number | null })[]; unpriced: number }
   /** A sweep's: null when asked for with too few days, absent when not asked for. */
   walk_forward?: BacktestWalkForward | null
@@ -2269,6 +2291,14 @@ export interface ExperimentRun {
   at: string
 }
 
+/** Configurations tried outside the experiment's runs (a port screened on the Mac, by hand), counted in its trials. */
+export interface ExperimentElsewhere {
+  trials: number
+  /** What was tried, where, and on which days. */
+  note: string
+  at: string
+}
+
 export type ExperimentVerdict = 'kept' | 'rejected' | 'inconclusive'
 
 /** An experiment of the journal Claude keeps on the server, its runs and its conclusion. */
@@ -2281,6 +2311,8 @@ export interface Experiment {
   made_by: string | null
   opened_at: string
   runs: ExperimentRun[]
+  elsewhere: ExperimentElsewhere[]
+  /** Its runs' trials and those made elsewhere. */
   trials: number
   verdict: ExperimentVerdict | null
   notes: string | null

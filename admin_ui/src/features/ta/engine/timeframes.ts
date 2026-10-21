@@ -46,14 +46,8 @@ export function timeframeOfSeconds(seconds: number): Timeframe | null {
   return { pine: seconds % 60 === 0 ? String(seconds / 60) : `${seconds}S`, seconds, label: lengthLabel(seconds) }
 }
 
-/** The lengths the pickers offer: the Charts page, the editor's test and the backtests; any other can be typed. */
+/** The lengths the pickers offer: the Charts page, the editor's test, the signal rules and the backtests; any other can be typed. */
 export const TIMEFRAMES: Timeframe[] = [10, 20, 30, 45, 60, 300, 900, 3600].map((seconds) => timeframeOfSeconds(seconds)!)
-
-/**
- * What a signal rule runs on: whole minutes. The TA engine runs a rule's script over
- * all of its bars at each new one, which bars of seconds would make several times a minute.
- */
-export const RULE_TIMEFRAMES: Timeframe[] = TIMEFRAMES.filter((timeframe) => timeframe.seconds >= 60)
 
 export const DEFAULT_TIMEFRAME = timeframeOfSeconds(60)!
 

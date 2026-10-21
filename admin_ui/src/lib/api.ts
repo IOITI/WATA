@@ -334,6 +334,7 @@ export const api = {
   measureTurbos: (period: { from: string; to: string }) => request<BacktestTurboModel>('POST', '/api/backtests/turbo-model', { body: period }),
   /** The run made again as a sweep, with each order filled later and at a worse price. */
   stressBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/stress`),
+  modelCheckBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/model-check`),
 
   // ── Dukascopy's history: what is there, its downloads, keeping it up to date ──
   // `label`: another Dukascopy instrument than the history kept up to date, which is meant when it is left out.

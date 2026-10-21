@@ -23,7 +23,7 @@ The lab's commands:
     python -m lab stress RUN                the run again with later and dearer fills
     python -m lab neighbours RUN --param P  the values around the run's own, alone
     python -m lab runs | show RUN | compare RUN RUN... | trades RUN | days RUN | signals RUN
-    python -m lab exp new|list|show|conclude|report   the experiment journal
+    python -m lab exp new|list|show|trials|conclude|report   the experiment journal
     python -m lab lockbox show|set DAY|clear  the days kept for a candidate's final check
 
 Run from the checkout's root, in the lab's environment (lab/setup.sh):
@@ -533,6 +533,8 @@ def command_exp(arguments) -> int:
         print(f"{found['id']}  {found['title']}  [{found['verdict'] or 'open'}]")
         print(f"family {found['family']} · {found['trials']} trials ({experiments.family_trials(found['family'])} in the family)")
         print(f"hypothesis: {found['hypothesis']}")
+        for entry in found["elsewhere"]:
+            print(f"- {entry['trials']} tried elsewhere: {entry['note']}")
         reader = runs.reader()
         for entry in found["runs"]:
             try:
@@ -552,6 +554,11 @@ def command_exp(arguments) -> int:
                   f"{text.cell(headline.get('trades'))} trades, beats random {text.cell(headline.get('beaten'))}%{locked}")
         if found["notes"]:
             print(f"conclusion: {found['notes']}")
+    elif action == "trials":
+        experiments.record_trials(arguments.id, arguments.count, arguments.notes or "")
+        found = experiments.get(arguments.id)
+        print(f"{arguments.count} trials made elsewhere written down: {found['trials']} in {found['id']}, "
+              f"{experiments.family_trials(found['family'])} in the family {found['family']}")
     elif action == "conclude":
         experiments.conclude(arguments.id, arguments.verdict or "", arguments.notes or "")
         print("Concluded.")
@@ -714,11 +721,12 @@ def parser() -> argparse.ArgumentParser:
     signals.set_defaults(handler=command_signals)
 
     exp = commands.add_parser("exp", parents=[common], help="the experiment journal")
-    exp.add_argument("action", choices=("new", "list", "show", "conclude", "report"))
+    exp.add_argument("action", choices=("new", "list", "show", "trials", "conclude", "report"))
     exp.add_argument("id", nargs="?")
     exp.add_argument("--title")
     exp.add_argument("--hypothesis")
     exp.add_argument("--family", help="the family of ideas it belongs to: trials are counted by family")
+    exp.add_argument("--count", type=int, default=0, help="trials: how many configurations were tried elsewhere")
     exp.add_argument("--verdict", choices=experiments.VERDICTS)
     exp.add_argument("--notes")
     exp.add_argument("--out", help="report: the HTML file written")

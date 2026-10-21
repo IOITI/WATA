@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { BacktestTurboMeasure, BacktestTurboModel } from '@/lib/types'
 
-import { defaultMeasurePeriod, measureSentence, measureState, underlyingOfRef } from './turboModel'
+import { defaultMeasurePeriod, measureSentence, measureState, modelCheckSentences, underlyingOfRef } from './turboModel'
 
 const MEASURE: BacktestTurboMeasure = {
   made_at: '2026-10-20T01:00:00Z',
@@ -42,5 +42,28 @@ describe('the turbos made up from the index', () => {
 
   it('measure the last thirty days by default', () => {
     expect(defaultMeasurePeriod('2026-10-20')).toEqual({ from: '2026-09-21', to: '2026-10-20' })
+  })
+})
+
+describe('a model check', () => {
+  const found = {
+    recorded_trades: 34, modelled_trades: 41, paired: 31, mean_difference_percent: 0.42, median_absolute_difference_percent: 0.9,
+    correlation: 0.91, same_exit_percent: 84, median_entry_price: { recorded: 5.04, modelled: 5.11 },
+    recorded_total_percent: -67.42, modelled_total_percent: -66.43,
+  }
+
+  it('says how far the made-up turbos are from the recorded ones on the same signals', () => {
+    expect(modelCheckSentences(found)).toEqual([
+      '31 trades paired by signal (34 on the recorded turbos, 41 on made-up ones).',
+      'Made up minus recorded: +0.42 points of result a trade on average, 0.90 apart in the middle; correlation 0.91.',
+      'The same exit 84 % of the time; turbos bought at 5.04 € recorded and 5.11 € made up, in the middle.',
+      'The paired trades sum to -67.42 % recorded and -66.43 % made up.',
+    ])
+  })
+
+  it('says when nothing could be paired', () => {
+    expect(modelCheckSentences({ ...found, paired: 0, modelled_trades: 3 })).toEqual([
+      'No trade of the recorded run was made on made-up turbos too (34 on the recorded turbos, 3 on made-up ones): nothing to compare.',
+    ])
   })
 })

@@ -84,6 +84,7 @@ CALLS = {
     "rule_list": {}, "rule_compare": {"rule_id": "0123456789ab", "day": "2026-10-13"},
     "exp_new": {"title": "T", "hypothesis": "H", "family": "F"}, "exp_get": {},
     "exp_conclude": {"experiment_id": "nothere", "verdict": "kept", "notes": "n"},
+    "exp_trials": {"experiment_id": "nothere", "trials": 1, "note": "n"},
     "lockbox_set": {"start_day": "2026-10-19"},
     "backtest_start": {"experiment_id": "nothere", "request": {"from": "2026-10-13", "to": "2026-10-13"}},
     "backtest_derive": {"run_id": "20261019-200000-abcdef", "kind": "stress", "experiment_id": "nothere"},

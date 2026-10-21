@@ -63,15 +63,15 @@ ALERT_CALL_ACTIONS = (IGNORE, MESSAGE)
 # The assets a rule may run on: those with live bars in WATA, Capital.com's.
 PROVIDERS = ("capital",)
 SIDES = ("bid", "ask")
-# A rule runs on bars of whole minutes, as Pine names its timeframes, or range bars of a
-# number of ticks. The engine runs a rule's script over all its bars at each new one.
-TIMEFRAMES = ("1", "5", "15", "60")
+# A rule runs on bars of time or on range bars of a number of ticks. The engine runs a rule's
+# script over all its bars at each new one, every ten seconds at most: a rule on ten-second
+# bars, or on small range bars, costs that much more.
 TIME_BARS = "time"
 RANGE_BARS = "range"
 MAX_RANGE_TICKS = 100_000
-# A backtest or a replay runs on bars of any length made of the ten-second bars WATA
-# records, from ten seconds to a day, named as Pine names a timeframe: whole minutes
-# as a number ("1", "1440"), any other length in seconds ("10S", "45S", "90S").
+# Bars of time are of any length made of the ten-second bars WATA records, from ten seconds
+# to a day, named as Pine names a timeframe: whole minutes as a number ("1", "1440"), any
+# other length in seconds ("10S", "45S", "90S"); for a rule, a backtest or a replay alike.
 MIN_BAR_SECONDS = BAR_SECONDS
 MAX_BAR_SECONDS = MAX_INTERVAL
 _TIMEFRAME = re.compile(r"([1-9][0-9]{0,5})([Ss]?)")
@@ -164,15 +164,15 @@ def timeframe_name(seconds: int) -> str:
     return str(seconds // 60) if seconds % 60 == 0 else f"{seconds}S"
 
 
-def checked_bars(bars, *, any_length: bool = False) -> dict:
+def checked_bars(bars) -> dict:
     """
-    A rule's bars: whole minutes (TIMEFRAMES) or range bars. With ``any_length``, a
-    backtest's: any length from ten seconds to a day, named as Pine names it ("120S" is "2").
+    The bars of a rule, a backtest or a replay: of time, any length from ten seconds
+    to a day, named as Pine names it ("120S" is "2"); or range bars of a number of ticks.
     """
     if not isinstance(bars, dict):
-        raise InvalidRule("A rule needs its bars: minutes or range")
+        raise InvalidRule("A rule needs its bars: of time or range")
     kind = _choice(bars.get("type"), "The bars", (TIME_BARS, RANGE_BARS))
-    if kind == TIME_BARS and any_length:
+    if kind == TIME_BARS:
         seconds = timeframe_seconds(bars.get("timeframe"))
         if seconds is None:
             raise InvalidRule(
@@ -180,8 +180,6 @@ def checked_bars(bars, *, any_length: bool = False) -> dict:
                 "10S, 45S, 90S, 1, 5, 60"
             )
         return {"type": TIME_BARS, "timeframe": timeframe_name(seconds)}
-    if kind == TIME_BARS:
-        return {"type": TIME_BARS, "timeframe": _choice(bars.get("timeframe"), "The timeframe", TIMEFRAMES)}
     ticks = bars.get("ticks")
     if not _whole(ticks) or not 1 <= ticks <= MAX_RANGE_TICKS:
         raise InvalidRule(f"Range bars are 1 to {MAX_RANGE_TICKS} ticks")

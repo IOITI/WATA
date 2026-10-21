@@ -32,6 +32,11 @@ def record_run(experiment_id: str, run_id: str, *, kind: str, trials: int, lockb
     return _journal().record_run(experiment_id, run_id, kind=kind, trials=trials, lockbox=lockbox, note=note)
 
 
+def record_trials(experiment_id: str, trials: int, note: str) -> dict:
+    """Configurations tried outside the lab's runs (a Python port, by hand), counted in the family's trials."""
+    return _journal().record_trials(experiment_id, trials, note)
+
+
 def conclude(experiment_id: str, verdict: str, notes: str) -> dict:
     return _journal().conclude(experiment_id, verdict, notes)
 

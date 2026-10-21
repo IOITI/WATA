@@ -258,11 +258,12 @@ describe('the Signal rules page', () => {
 
     await user.click(await screen.findByRole('button', { name: 'New rule' }))
     const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
-    // The engine runs a rule's script over all its bars at each new one: whole minutes, or range bars.
+    // Bars of seconds too, any other length typed, or range bars.
     const bars = within(dialog).getByRole('combobox', { name: 'Bars' })
     expect(within(bars).getAllByRole('option').map((option) => option.textContent)).toEqual([
-      '1 min', '5 min', '15 min', '1 hour', 'Range bars',
+      '10 s', '20 s', '30 s', '45 s', '1 min', '5 min', '15 min', '1 hour', 'Other length…', 'Range bars',
     ])
+    await user.selectOptions(bars, '10S')
     const fast = await within(dialog).findByRole('spinbutton', { name: 'Fast' })
     await user.clear(fast)
     await user.type(fast, '12')
@@ -278,7 +279,7 @@ describe('the Signal rules page', () => {
       name: 'Cross on US100',
       asset: { provider: 'capital', key: 'US100' },
       side: 'bid',
-      bars: { type: 'time', timeframe: '1' },
+      bars: { type: 'time', timeframe: '10S' },
       script: { id: CROSS.id, version: 1 },
       inputs: [{ id: 'in_0', var: 'fast', title: 'Fast', value: 12 }],
       alerts: [

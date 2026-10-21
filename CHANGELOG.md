@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.26.0 - Signal rules on seconds bars, model checks, and trials made elsewhere
+
+**Release date:** not released yet
+
+The gaps marked "later" after the first research session through the MCP endpoint (2026-10-21).
+
+- **Signal rules run on bars of any length**, live and shadow, from 10 seconds to a day: the Signal rules dialog offers 10, 20, 30 and 45 s and "Other length…", as the Backtests form does. One check for every rule, backtest and replay (`checked_bars`). The engine was already able to: it ticks every 10 s and builds bars of any length. A rule on 10-second bars runs its script over up to 8,300 bars a day at each new one, about what one on R60 does. A signal its run delays past `max_signal_age_seconds` (60 s) is not sent, journaled with why; Claude's shadow rules stay held to `admin.mcp.shadow_day_ms` an engine day. `rule_shadow_save` takes them (`bars="10S"`).
+- **A model check**: a finished run on the recorded turbos made again on turbos made up from the index, without random entries, and its trades paired with the recorded run's by signal. It says how far apart their results are, the correlation, the same exit and both totals. "Check the turbo model" on the run's page (once the turbos are measured), MCP `backtest_derive` kind `model_check` (no trial counted) then `backtest_result` part `model_check`. The comparison is the lab's own (`compare_trades`); the check's folder keeps the recorded run's trades (`recorded_trades.json`) and writes `model_check.json`.
+- **Trials made elsewhere count in the journal**: MCP `exp_trials` and `python -m lab exp trials <id> --count N --notes "…"` write down configurations tried outside the runs (a port screened on the Mac, by hand). They count in the family's trials, so in later sweeps' overfitting figures, and the Experiments page lists them with what they were. The 35 variants of the first session can now be counted. 39 tools.
+- **The MCP's day budget counts trading days**: weekdays outside the live closed dates, where it counted every calendar day. 120 days with 100 random repetitions fit within `max_day_simulations` (about 86 × 101 = 8,686 of 10,000), where 81 repetitions did before.
+- **Every backtest starts with 1,000 €** unless it says another (`DEFAULT_CAPITAL`, 10,000 € before, used when no balance was known): the live balance is no longer handed in, but offered beside it ("start from it" under the form's account; `backtest_options`). At 21.82 €, 34 entries of the session found no turbo to buy. Paper days start with it too; runs made before keep theirs.
+- **Not done**, as decided: a second live price source for multi-provider scripts (`request.security` reads Capital.com only).
+
+**On the live path**: the TA engine accepts rules on seconds bars, inert until one is made; the check of a rule's bars is shared by the admin and the engine. The trader, the web server and the position monitor are untouched. Every backtest made before shows as stale (the code digest); its results are unchanged at the same capital.
+
+**Verification status:**
+- 2,281 tests pass in Python's suite, 1 skipped, on Python 3.12 with Node 24 on the PATH. Not run on Python 3.14 here: CI runs both. 842 pass in the interface's suite; lint, type checks, the build, `build:runner` and `build:checker` are clean.
+- **At the same capital, a run gives the same files as v0.25.0's code**: a run of the EMA cross on the fake admin's recorded days (10 trades, 10 random repetitions), replayed by both versions on the same files. Trades, signals, days, random entries and edge are identical; the summary differs only in `made_with` and the new `model_check` (empty).
+- Through the MCP SDK's client, on the fake admin (`FAKE_MCP=1`):
+  - `exp_trials` wrote down 35 trials made elsewhere, and the next sweep's `trials_before` was 36;
+  - a run without a capital started with 1,000 €;
+  - a model check derived from it ran and paired its 6 made-up trades with the recorded ones by signal (`backtest_result` part `model_check`), on a made-up measure;
+  - 120 days of made-up turbos with 100 random repetitions were accepted;
+  - a shadow rule on 10-second bars was saved after its first run, 8,250 bars in 83 ms.
+- In the browser pane:
+  - the recorded run's page shows the check with what its trades say, and the check's page its badge, its link and the same sentences;
+  - the Experiments page shows "+35 tried elsewhere" and 39 in the family;
+  - the Signal rules page lists the 10 s rule;
+  - the form's options give 1,000 € with the live balance beside it (the "start from it" link is the interface tests'; the pane, hidden, held the form's steps).
+- The engine's tests run a live rule on 10-second bars (sent at the tick after its bar, refused 75 s late) and refuse a rule edited by hand into a length WATA does not make.
+
+**Not seen:** the server. After a deploy:
+- a 10 s shadow rule's journal and paper days, and the engine's time per run with it;
+- a model check through Claude Code on the server's recorded days, once the turbos are measured again on more days than the four the model rests on;
+- `exp_trials` for the 35 variants of the first session, in an open experiment of the family `kernel-avg-vwap` (6a5787, where they were screened, is concluded and refuses them).
+
 ## v0.25.0 - No entry around US releases, backtests on WATA's own fills, and MCP calls that end in time
 
 **Release date:** not released yet

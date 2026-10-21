@@ -110,6 +110,15 @@ def test_a_rule_is_run_first_as_the_engine_would_on_the_last_finished_day_then_s
     assert (rule["made_by"], rule["mode"], rule["name"]) == (CLAUDE, "shadow", "Claude · cross")
 
 
+def test_a_rule_on_ten_second_bars_is_run_first_on_them_then_saved(shadow, scripts):
+    saved = new_rule(shadow, scripts, bars="10S")
+
+    [(_, request)] = shadow.studies.asked
+    assert request["bars"] == "10S" and saved["saved"]
+    [rule] = stored(shadow)
+    assert rule["bars"] == {"type": "time", "timeframe": "10S"}
+
+
 def test_a_name_given_with_claudes_mark_is_not_marked_twice(shadow, scripts):
     assert new_rule(shadow, scripts, name="Claude · trend")["name"] == "Claude · trend"
 
@@ -166,7 +175,7 @@ def test_a_rule_runs_only_on_an_epic_the_feed_records_now(shadow, scripts, last_
 
 @pytest.mark.parametrize("changes, said", [
     ({"asset": "dukascopy/us100"}, "capital/<EPIC>"),
-    ({"bars": "45S"}, "The timeframe must be one of"),
+    ({"bars": "5S"}, "10 seconds to a day"),
     ({"indice": "dax"}, "one WATA trades"),
     ({"alerts": {"Enter Long": "buy"}}, "must be one of"),
 ])

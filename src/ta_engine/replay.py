@@ -108,7 +108,7 @@ def _bars_of(text: str) -> dict:
     text = text.strip()
     if text[:1] in ("R", "r"):
         return checked_bars({"type": "range", "ticks": int(text[1:]) if text[1:].isdigit() else 0})
-    return checked_bars({"type": "time", "timeframe": text}, any_length=True)
+    return checked_bars({"type": "time", "timeframe": text})
 
 
 def _script_rule(args, scripts: ScriptStore) -> dict:

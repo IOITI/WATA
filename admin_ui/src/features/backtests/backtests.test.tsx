@@ -163,6 +163,12 @@ const MEASURE: BacktestTurboMeasure = {
 }
 let turboModel: BacktestTurboModel = { state: 'idle', error: null, asked: null, finished_at: null, measure: null, underlying: 'dukascopy/us100', max_days: 92 }
 const STRESS_ID = '20261020-010000-dddddd'
+const CHECK_ID = '20261020-020000-eeeeee'
+const MODEL_CHECK = {
+  recorded_trades: 34, modelled_trades: 41, paired: 31, mean_difference_percent: 0.42, median_absolute_difference_percent: 0.9,
+  correlation: 0.91, same_exit_percent: 84, median_entry_price: { recorded: 5.04, modelled: 5.11 },
+  recorded_total_percent: -67.42, modelled_total_percent: -66.43,
+}
 
 function serve() {
   sent = []
@@ -240,6 +246,8 @@ function serve() {
             return json(reconciliations[match[1]] ?? {})
           case 'stress':
             return json(run({ id: STRESS_ID, kind: 'sweep', name: `Stress: ${found.name}`, stress_of: found.id, status: { state: 'queued' } }), 202)
+          case 'model-check':
+            return json(run({ id: CHECK_ID, name: `Model check: ${found.name}`, model_check_of: found.id, turbos: 'modelled', status: { state: 'queued' } }), 202)
           default:
             return json({ detail: `Not served: ${route}` }, 404)
         }
@@ -442,6 +450,10 @@ describe('a new backtest', () => {
     await user.clear(stop)
     await user.type(stop, '-10')
     expect(screen.getByText(/Live: -15 %/)).toBeInTheDocument()
+    // The account: the backtests' own, the live one a click away.
+    expect(screen.getByText(/The backtest’s default; the live account holds €21\.82/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'start from it' }))
+    expect(screen.getByRole('spinbutton', { name: /^Account at the start/ })).toHaveValue(21.82)
     expect(await screen.findByText(/a signal reached the trader 2\.6 s after its time/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Use the measured values' }))
     expect(screen.getByRole('button', { name: 'Measured values in use' })).toBeDisabled()
@@ -467,7 +479,7 @@ describe('a new backtest', () => {
           { title: 'Cross down', action: 'short' },
         ],
       },
-      changes: { stoploss_percent: -10, signal_delay_seconds: 2.6, order_seconds: 0.4, slippage: 0.005 },
+      changes: { stoploss_percent: -10, capital: 21.82, signal_delay_seconds: 2.6, order_seconds: 0.4, slippage: 0.005 },
       baseline: { repetitions: 100, seed: 1 },
     })
   })
@@ -636,6 +648,40 @@ describe('a run', () => {
     expect(sent.some((request) => request.method === 'POST' && request.path === `/api/backtests/${RUN_ID}/stress`)).toBe(true)
     expect(await screen.findByRole('link', { name: 'Stress: Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${STRESS_ID}`)
     expect(screen.getByRole('button', { name: 'Stress it again' })).toBeDisabled()
+  })
+
+  it('offers no model check before the turbos are measured', async () => {
+    renderAt(`/backtests/${RUN_ID}`)
+
+    expect(await screen.findByText('The turbos are not measured yet: measure them on the Backtests page first.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check the turbo model' })).toBeDisabled()
+  })
+
+  it('makes a model check of a recorded run, and says what its trades show', async () => {
+    options = { ...OPTIONS, turbo_model: MEASURE }
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
+
+    expect(await screen.findByText('Not checked yet: one run of the same signals on made-up turbos.')).toBeInTheDocument()
+    runs[CHECK_ID] = run({ id: CHECK_ID, name: 'Model check: Smoke EMA cross', model_check_of: RUN_ID, turbos: 'modelled', status: { state: 'queued' }, summary: null })
+    await user.click(screen.getByRole('button', { name: 'Check the turbo model' }))
+
+    expect(sent.some((request) => request.method === 'POST' && request.path === `/api/backtests/${RUN_ID}/model-check`)).toBe(true)
+    expect(await screen.findByRole('link', { name: 'Model check: Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${CHECK_ID}`)
+    expect(screen.getByRole('button', { name: 'Check it again' })).toBeDisabled()
+  })
+
+  it('shows on a model check what its trades show beside the recorded ones', async () => {
+    runs[CHECK_ID] = run({
+      id: CHECK_ID, name: 'Model check: Smoke EMA cross', model_check_of: RUN_ID, turbos: 'modelled',
+      summary: { ...run().summary!, model_check: MODEL_CHECK },
+    })
+    renderAt(`/backtests/${CHECK_ID}`)
+
+    expect(await screen.findByText('31 trades paired by signal (34 on the recorded turbos, 41 on made-up ones).')).toBeInTheDocument()
+    expect(screen.getByText('Model check')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'The run it checks' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    expect(screen.queryByRole('button', { name: 'Check the turbo model' })).not.toBeInTheDocument()
   })
 
   it('follows a run while it waits its turn', async () => {

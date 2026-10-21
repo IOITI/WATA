@@ -24,7 +24,7 @@ from tests.test_admin_backtests import (  # noqa: F401 (fixtures)
     scripts,
 )
 from tests.test_admin_ta_rules import fields
-from tests.test_mcp_tools_read import SUMMARY, answer, call, finished_run, journal, refusal, research  # noqa: F401
+from tests.test_mcp_tools_read import SUMMARY, TRADES, answer, call, finished_run, journal, refusal, research  # noqa: F401
 
 
 def request_of(scripts, **changes) -> dict:
@@ -73,6 +73,19 @@ def test_an_experiment_is_opened_listed_and_concluded(research, experiment):
     assert "No experiment" in refusal(research, "exp_get", {"experiment_id": "nothere"})
 
 
+def test_trials_made_elsewhere_count_in_the_family_and_its_next_sweep(tmp_path, research, scripts, experiment):
+    noted = answer(research, "exp_trials", {"experiment_id": experiment, "trials": 35,
+                                            "note": "A Python port screened on the Mac, 12 Jun to 16 Oct"})
+    sweep = {"axes": [{"kind": "setting", "name": "stoploss_percent", "values": [-5, -10]}]}
+    made = answer(research, "backtest_start", {"experiment_id": experiment, "request": request_of(scripts, sweep=sweep)})
+
+    assert (noted["trials"], noted["family_trials"], noted["elsewhere"][0]["trials"]) == (35, 35, 35)
+    request = json.loads((folder_of(tmp_path, made["id"]) / "request.json").read_text())
+    assert request["sweep"]["trials_before"] == 35 and made["family_trials"] == 37
+    assert "whole number" in refusal(research, "exp_trials", {"experiment_id": experiment, "trials": 0, "note": "x"})
+    assert "No experiment" in refusal(research, "exp_trials", {"experiment_id": "nothere", "trials": 3, "note": "x"})
+
+
 def test_claude_may_only_make_the_lock_box_larger(research):
     answer(research, "lockbox_set", {"start_day": "2026-10-19", "end_day": "2026-10-23"})
 
@@ -108,10 +121,21 @@ def test_a_sweep_counts_each_combination_and_is_told_the_familys_trials(tmp_path
     ({"source": {"kind": "ta_signals", "rule": {"id": "x"}}}, "Pine script"),
     ({"paper": {"rule": "x", "day": "2026-10-13"}}, "Paper runs"),
     ({"from": "monday"}, "names its period"),
-    ({"from": "2026-07-01", "to": "2026-10-16"}, "simulates"),
+    ({"from": "2026-03-02", "to": "2026-10-16"}, "simulates"),
 ])
 def test_a_request_outside_what_claude_may_ask_is_refused(research, scripts, experiment, changes, refused):
     assert refused in refusal(research, "backtest_start", {"experiment_id": experiment, "request": request_of(scripts, **changes)})
+
+
+def test_the_budget_counts_the_trading_days_of_a_period(research):
+    from src.admin.mcp_server import guards
+
+    # 120 calendar days from Monday 15 June 2026: 86 weekdays, 100 random repetitions within the 10,000.
+    days = guards.trading_days(research, date(2026, 6, 15), date(2026, 10, 12))
+    assert days == 86 and guards.cost_of({}, days) == 8_686
+    guards.check_room(research, guards.cost_of({}, days))
+    # Christmas Eve, Christmas and New Year's Day are closed dates of the configuration, the 26th not.
+    assert guards.trading_days(research, date(2025, 12, 22), date(2026, 1, 2)) == 10 - 3
 
 
 def test_a_run_needs_an_open_experiment(research, scripts, experiment):
@@ -211,6 +235,25 @@ def test_stress_and_neighbours_are_made_from_a_finished_run_and_counted_as_the_l
     assert request["sweep"]["axes"][0] == {"kind": "setting", "name": "stoploss_percent", "values": [-19, -17, -15, -13, -11]}
     assert neighbours["trials_recorded"] == 4 and inputs["trials_recorded"] == 2
     assert request["made_by"] == CLAUDE and request["experiment"] == experiment
+
+
+def test_a_model_check_is_made_from_a_finished_recorded_run_and_read_as_a_part(tmp_path, research, scripts, experiment):
+    from tests.test_admin_backtests import MEASURE
+
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": SUMMARY, "trades.json": TRADES})
+    assert "measured yet" in refusal(research, "backtest_derive", {"run_id": run_id, "kind": "model_check", "experiment_id": experiment})
+    measured = tmp_path / "backtests" / "_turbo_model" / "calibration.json"
+    measured.parent.mkdir(parents=True, exist_ok=True)
+    measured.write_text(json.dumps(MEASURE))
+
+    checked = answer(research, "backtest_derive", {"run_id": run_id, "kind": "model_check", "experiment_id": experiment})
+
+    assert checked["trials_recorded"] == 0 and checked["model_check_of"] == run_id
+    assert research.journal.get(experiment)["runs"][-1]["note"] == f"model check of {run_id}"
+    assert "Only a model check" in answer(research, "backtest_result", {"run_id": run_id, "part": "model_check"})["note"]
+    paired = {"recorded_trades": 2, "modelled_trades": 3, "paired": 2, "correlation": 0.91}
+    (folder_of(tmp_path, checked["id"]) / "model_check.json").write_text(json.dumps(paired))
+    assert answer(research, "backtest_result", {"run_id": checked["id"], "part": "model_check"}) == paired
 
 
 def test_neighbours_need_a_parameter_the_run_had(tmp_path, research, scripts, experiment):

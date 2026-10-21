@@ -731,6 +731,40 @@ def test_turbos_are_measured_by_a_command_and_a_run_on_made_up_turbos_keeps_the_
         backtests.create(pine(scripts, **{"from": "2024-10-20", "to": "2026-10-19"}))
 
 
+def test_a_finished_recorded_run_is_checked_on_made_up_turbos_with_its_trades_kept(tmp_path, scripts, config):
+    backtests = service(tmp_path, scripts, config)
+    trades = [trade(1, "2026-10-14", "2026-10-14T08:00:00Z", 1.5, "Performance (Trailing stop ...)")]
+    run_id = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {}}, "trades.json": trades})
+
+    def check(of: str):
+        return asyncio.run(asyncio.to_thread(backtests.model_check, of))
+
+    with pytest.raises(NotPossible, match="measured yet"):
+        check(run_id)
+    measured = tmp_path / "backtests" / "_turbo_model" / "calibration.json"
+    measured.parent.mkdir(parents=True, exist_ok=True)
+    measured.write_text(json.dumps(MEASURE))
+
+    checked = check(run_id)
+
+    assert checked["model_check_of"] == run_id and checked["turbos"] == "modelled"
+    folder = folder_of(tmp_path, checked["id"])
+    request = json.loads((folder / "request.json").read_text())
+    assert request["baseline"]["repetitions"] == 0 and request["name"].startswith("Model check: ")
+    assert json.loads((folder / "recorded_trades.json").read_text()) == trades
+    assert json.loads((folder / "turbo_model.json").read_text()) == MEASURE
+    assert len(os.listdir(folder / "sources")) == len(os.listdir(folder_of(tmp_path, run_id) / "sources"))
+    assert [listed["model_check_of"] for listed in backtests.list_runs() if listed["id"] == checked["id"]] == [run_id]
+    # Only a finished run on the recorded turbos: not the check itself, made up and not finished.
+    backtests._waiting.clear()
+    with pytest.raises(NotPossible, match="recorded turbos"):
+        check(checked["id"])
+    # The model measured for another indice.
+    measured.write_text(json.dumps({**MEASURE, "indice": "de40"}))
+    with pytest.raises(NotPossible, match="measured for de40"):
+        check(run_id)
+
+
 MEASURE = {
     "format": 1, "made_at": "2026-10-20T01:00:00Z", "indice": "us100",
     "underlying": {"provider": "dukascopy", "key": "us100", "side": "bid"},
@@ -743,9 +777,14 @@ MEASURE = {
 
 
 def test_the_form_is_told_every_setting_its_live_value_and_the_account_to_start_from(tmp_path, scripts, config):
-    offered = service(tmp_path, scripts, config).options(30_000.0)
+    backtests = service(tmp_path, scripts, config)
+    offered = backtests.options(30_000.0)
 
-    assert offered["capital"] == {"value": 30_000.0, "from_balance": True}
+    # 1,000 € unless a run says another, the live balance beside it.
+    assert offered["capital"] == {"value": 1_000.0, "balance": 30_000.0}
+    assert next(entry for entry in offered["fields"] if entry["name"] == "capital")["value"] == 1_000.0
+    made = asyncio.run(asyncio.to_thread(backtests.create, pine(scripts)))
+    assert json.loads((folder_of(tmp_path, made["id"]) / "settings.json").read_text())["settings"]["capital"] == 1_000.0
     assert offered["indices"] == ["us100"] and offered["signal_delay"] == {"pine": 3.0, "journal": 0.5}
     stop = next(entry for entry in offered["fields"] if entry["name"] == "stoploss_percent")
     assert stop["value"] == -15

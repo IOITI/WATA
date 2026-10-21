@@ -13,7 +13,7 @@ import { FormItem, FormLabel, Input } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay } from '@/lib/format'
+import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { Experiment, ResearchLockbox } from '@/lib/types'
 
 import { familyTrials, lockboxText, RUNS_SHOWN, VERDICT } from './experiments'
@@ -73,6 +73,11 @@ function experimentColumns(timezone: string, trials: Map<string, number>): Colum
                   {entry.kind}
                   {entry.lockbox && ', on the lock box'}
                 </span>
+              </li>
+            ))}
+            {row.elsewhere.map((entry) => (
+              <li key={`elsewhere-${entry.at}`} className="line-clamp-3 text-muted-foreground" title={entry.note}>
+                +{formatNumber(entry.trials)} tried elsewhere: {entry.note}
               </li>
             ))}
           </ul>
