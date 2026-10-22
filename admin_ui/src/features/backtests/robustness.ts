@@ -175,12 +175,17 @@ export interface ChoiceTrust {
   doubtful: boolean
 }
 
+/** A sweep's probability of overfitting above this is not believed. */
+export const MAX_OVERFITTING = 0.5
+/** Nor the deflated Sharpe ratio of its best combination under this. */
+export const MIN_DEFLATED_SHARPE = 0.95
+
 /** What the figures of a sweep's choice say: deflated Sharpe ratio and probability of overfitting. */
 export function choiceTrust(summary: Pick<BacktestSummary, 'deflated_sharpe' | 'pbo'>): ChoiceTrust[] {
   const found: ChoiceTrust[] = []
   if (summary.deflated_sharpe) {
-    found.push({ sentence: summary.deflated_sharpe.sentence, doubtful: summary.deflated_sharpe.probability < 0.95 })
+    found.push({ sentence: summary.deflated_sharpe.sentence, doubtful: summary.deflated_sharpe.probability < MIN_DEFLATED_SHARPE })
   }
-  if (summary.pbo) found.push({ sentence: summary.pbo.sentence, doubtful: summary.pbo.probability > 0.5 })
+  if (summary.pbo) found.push({ sentence: summary.pbo.sentence, doubtful: summary.pbo.probability > MAX_OVERFITTING })
   return found
 }

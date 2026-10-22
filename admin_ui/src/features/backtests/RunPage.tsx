@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Flag, Pencil, RotateCcw, Square, Trash2 } from 'lucide-react'
-import { useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Flag, Pencil, Radar, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
-
 import { KpiTile } from '@/components/KpiTile'
 import { PageHeader, Panel } from '@/components/Panel'
 import { RouterLink } from '@/components/RouterLink'
@@ -26,7 +25,6 @@ import {
   daysSentence,
   isActive,
   progressSentence,
-  sampleWarning,
   settingChanges,
   sourceLabel,
 } from './model'
@@ -36,9 +34,50 @@ import { ReconciliationPanel } from './ReconciliationPanel'
 import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
 import { DaysTable, SignalsTable, TradesTable } from './runTables'
 import { ModelCheckPanel } from './ModelCheckPanel'
+import { choiceTrust } from './robustness'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { underlyingLabel } from './turboModel'
+import { SectionIndex, VerdictPanel } from './VerdictPanel'
+import type { PageSection } from './VerdictPanel'
+
+/** Where a part of the page starts when a link of the index leads to it: below the index, which stays at the top. */
+const ANCHORED = 'scroll-mt-14'
+
+/** The parts of a done run's page, in their order: what the index lists, each an anchor. */
+function runSections(run: BacktestRun): PageSection[] {
+  const summary = run.summary
+  if (run.status.state !== 'done' || !summary) return []
+  const judged = !run.stress_of && !run.model_check_of
+  if (run.kind === 'sweep') {
+    const choosing = !run.stress_of && (choiceTrust(summary).length > 0 || summary.walk_forward !== undefined)
+    return [
+      ...(judged ? [{ id: 'verdict', label: 'Verdict' }] : []),
+      { id: 'sweep', label: 'Combinations' },
+      ...(choosing ? [{ id: 'choice', label: 'Choosing' }] : []),
+      { id: 'setup', label: 'What it ran' },
+    ]
+  }
+  if (!summary.figures) return []
+  return [
+    ...(judged ? [{ id: 'verdict', label: 'Verdict' }] : []),
+    { id: 'trust', label: 'Trust' },
+    ...(run.request.source.kind === 'journal' ? [{ id: 'reconciliation', label: 'Real trades' }] : []),
+    { id: 'edge', label: 'Edge' },
+    { id: 'stress', label: 'Stress' },
+    ...(hasModelCheck(run) ? [{ id: 'model-check', label: 'Made-up turbos' }] : []),
+    { id: 'curves', label: 'Day after day' },
+    { id: 'why', label: 'Why' },
+    { id: 'breakdowns', label: 'Where it comes from' },
+    { id: 'tables', label: 'Trades, signals, days' },
+    { id: 'setup', label: 'What it ran' },
+  ]
+}
+
+/** As ModelCheckPanel shows itself: on a model check, or on a run of the recorded turbos. */
+function hasModelCheck(run: BacktestRun): boolean {
+  return Boolean(run.model_check_of) || (run.turbos ?? 'recorded') === 'recorded'
+}
 
 function Progress({ run }: { run: BacktestRun }) {
   const progress = run.progress
@@ -78,9 +117,17 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
       <div className="grid gap-8 lg:grid-cols-2">
         <dl className="flex flex-col gap-1.5">
           <Measure label="Signals">
-            {source.kind === 'pine'
-              ? `${source.rule.name} v${source.rule.script.version}${source.from_rule ? ` (the rule ${source.from_rule.name})` : ''}`
-              : `The ${source.signals} signal${source.signals === 1 ? '' : 's'} WATA received`}
+            {source.kind === 'pine' ? (
+              <>
+                <Link to={`/ta/indicators/${source.rule.script.id}`} className="underline-offset-4 hover:underline">
+                  {source.rule.name}
+                </Link>{' '}
+                v{source.rule.script.version}
+                {source.from_rule ? ` (the rule ${source.from_rule.name})` : ''}
+              </>
+            ) : (
+              `The ${source.signals} signal${source.signals === 1 ? '' : 's'} WATA received`
+            )}
           </Measure>
           <Measure label="Asset">
             {assetLabel(request.chart.asset)} · {barsLabel(request.chart.bars)} · {request.chart.side}
@@ -146,6 +193,7 @@ export function RunPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
+  const { hash } = useLocation()
   const tab = tableOf(params.get('tab'))
   // Going through the tables does not leave as many steps to go back through.
   const setTab = (next: string) => {
@@ -196,7 +244,13 @@ export function RunPage() {
   const summary = run?.summary
   const figures = summary?.figures
   const money = summary?.money
-  const warning = figures ? sampleWarning(figures.sample, figures.trades, figures.days) : null
+  const sections = run ? runSections(run) : []
+
+  // An address that names a part of the page (#edge) is brought to it once the run is drawn.
+  const drawn = sections.length > 0
+  useEffect(() => {
+    if (drawn && hash) document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView?.()
+  }, [drawn, hash])
 
   return (
     <>
@@ -239,6 +293,12 @@ export function RunPage() {
                 >
                   {reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference'}
                 </Button>
+              )}
+              {/* Its script, inputs, alerts and bars made a signal rule, in shadow: reviewed in the rule's dialog first. */}
+              {run.kind === 'run' && run.status.state === 'done' && run.request.source.kind === 'pine' && !run.stress_of && !run.model_check_of && (
+                <ButtonLink to={`/ta/signals?from-run=${run.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
+                  Make a shadow rule
+                </ButtonLink>
               )}
               <ButtonLink to={`/backtests/new?again=${run.id}`} size="sm" leftIcon={<RotateCcw className="size-3.5" />}>
                 Run again with changes
@@ -295,11 +355,22 @@ export function RunPage() {
                 </Alert>
               )}
 
+              {sections.length > 0 && <SectionIndex sections={sections} />}
+
               {done && summary && run.kind === 'sweep' && (
                 <>
                   <p className="text-sm text-muted-foreground">{daysSentence(summary.days)}</p>
-                  <SweepPanel runId={run.id} fields={fields} stress={Boolean(run.stress_of)} />
-                  {!run.stress_of && <ChoicePanel runId={run.id} summary={summary} fields={fields} />}
+                  <div id="verdict" className={ANCHORED}>
+                    <VerdictPanel run={run} />
+                  </div>
+                  <div id="sweep" className={ANCHORED}>
+                    <SweepPanel runId={run.id} fields={fields} stress={Boolean(run.stress_of)} />
+                  </div>
+                  {!run.stress_of && (
+                    <div id="choice" className={ANCHORED}>
+                      <ChoicePanel runId={run.id} summary={summary} fields={fields} />
+                    </div>
+                  )}
                 </>
               )}
 
@@ -334,26 +405,45 @@ export function RunPage() {
                     what an order may use{money.commissions ? `; ${formatMoney(money.commissions, 'EUR')} of commissions` : ''}
                     {money.unfunded ? `; ${money.unfunded} entr${money.unfunded === 1 ? 'y' : 'ies'} the account could not buy a turbo for` : ''}.
                   </p>
-                  {warning && (
-                    <Alert tone="warning">
-                      <AlertDescription>{warning}</AlertDescription>
-                    </Alert>
-                  )}
+                  {/* What the run's trades and days are worth: said by the verdict's first check. */}
+                  <div id="verdict" className={ANCHORED}>
+                    <VerdictPanel run={run} />
+                  </div>
                   {summary.warnings.length > 0 && (
                     <Alert tone="neutral">
                       <AlertTitle>What the Pine runner said</AlertTitle>
                       <AlertDescription>{summary.warnings.slice(0, 5).join(' · ')}</AlertDescription>
                     </Alert>
                   )}
-                  <TrustPanel runId={run.id} summary={summary} />
-                  {run.request.source.kind === 'journal' && <ReconciliationPanel runId={run.id} />}
-                  <EdgePanel runId={run.id} />
-                  <StressPanel run={run} />
-                  <ModelCheckPanel run={run} />
-                  <CurvesPanel summary={summary} />
-                  <WhyPanel summary={summary} />
-                  <BreakdownsPanel runId={run.id} />
-                  <Panel>
+                  <div id="trust" className={ANCHORED}>
+                    <TrustPanel runId={run.id} summary={summary} />
+                  </div>
+                  {run.request.source.kind === 'journal' && (
+                    <div id="reconciliation" className={ANCHORED}>
+                      <ReconciliationPanel runId={run.id} />
+                    </div>
+                  )}
+                  <div id="edge" className={ANCHORED}>
+                    <EdgePanel runId={run.id} />
+                  </div>
+                  <div id="stress" className={ANCHORED}>
+                    <StressPanel run={run} />
+                  </div>
+                  {hasModelCheck(run) && (
+                    <div id="model-check" className={ANCHORED}>
+                      <ModelCheckPanel run={run} />
+                    </div>
+                  )}
+                  <div id="curves" className={ANCHORED}>
+                    <CurvesPanel summary={summary} />
+                  </div>
+                  <div id="why" className={ANCHORED}>
+                    <WhyPanel summary={summary} />
+                  </div>
+                  <div id="breakdowns" className={ANCHORED}>
+                    <BreakdownsPanel runId={run.id} />
+                  </div>
+                  <Panel id="tables" className={ANCHORED}>
                     <AnimatedTabs
                       tabs={[
                         { id: 'trades', label: 'Trades', badge: tradesQuery.data?.items.length, href: tableHref('trades') },
@@ -386,7 +476,9 @@ export function RunPage() {
                 </>
               )}
 
-              <RunFacts run={run} labels={fields} />
+              <div id="setup" className={ANCHORED}>
+                <RunFacts run={run} labels={fields} />
+              </div>
             </div>
           )}
         </QueryState>

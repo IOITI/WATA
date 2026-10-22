@@ -28,6 +28,8 @@ export interface RunRequest {
   symbol: string
   timeframe: string
   inputs?: Record<string, unknown>
+  /** The moments (epoch ms, both included) whose plotted numbers the answer carries: the day a test draws. */
+  series?: { from: number; to: number }
 }
 
 export type WorkerRequest = { id: number; op: 'compile'; source: string } | RunRequest
@@ -64,6 +66,8 @@ export interface PlotSummary {
   title: string
   points: number
   last: number | boolean | string | null
+  /** Its numbers within the request's ``series`` window, as [time (epoch ms), value]; absent when none was asked. */
+  data?: [number, number][]
 }
 
 export interface AlertEvent {

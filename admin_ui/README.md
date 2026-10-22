@@ -73,8 +73,9 @@ operator.
 - **Text colours are checked, not judged by eye.** The status colours as text (`--positive`, `--negative`,
   `--warning`, `--info`) and the secondary greys reach 4.5:1 on every surface of their theme, a hovered row
   included; the light values of `theme.css` say which of EasyUI's own were lowered for that.
-- **The price chart draws on a canvas** with the colours it read when it was made: `AssetChart.tsx` gives it
-  the theme as its `key`, so another theme makes another chart. The Recharts charts read CSS variables and
+- **The price chart draws on a canvas** with the colours it read when it was made: every page that shows one
+  gives it the theme as its `key` (an asset's chart, a backtest's day and its trade, the editor's test, the
+  TradingView comparison), so another theme makes another chart. The Recharts charts read CSS variables and
   follow by themselves.
 - Tests stand in for the system setting with `src/test/systemTheme.ts` (jsdom has no `matchMedia`). A
   component rendered without a `ThemeProvider` is shown dark.
@@ -176,12 +177,14 @@ through the day included. It is loaded with the pages that draw candles only.
 - **`features/prices/PriceChart.tsx` is the only file that imports it.** It is given data that is ready to
   draw and draws it. Everything that can be wrong without a canvas (times, holes, markers, intervals) is in
   `chartData.ts`, which is plain functions with tests.
-- **Four places show it**: an asset's page and an opened row of the Assets View (`features/data/AssetChart.tsx`,
-  full and compact), a rule's day beside TradingView (`features/ta/signals/ComparisonPanel.tsx`), and a day of a
-  backtest with a trade's turbo (`features/backtests/DayPage.tsx`), which gives it `overlays`: lines over the
-  prices, on their scale (the price paid, the stop and the day's target, the trailing stop as it moved). A
-  line is told by more than its colour: the price paid is thick, a limit thin and dashed, the trailing stop
-  climbs in steps. `features/prices/ChartAttribution.tsx` is the licence notice: it goes on every page where
+- **Five places show it**: an asset's page and an opened row of the Assets View (`features/data/AssetChart.tsx`,
+  full and compact), a rule's day beside TradingView (`features/ta/signals/ComparisonPanel.tsx`), a day of a
+  backtest with a trade's turbo (`features/backtests/DayPage.tsx`), and the day of the editor's test
+  (`features/ta/editor/TestResult.tsx`). The last two give it `overlays`: lines over the prices, on their scale.
+  On a backtest's day, the price paid, the stop and the day's target, the trailing stop as it moved, told by
+  more than their colour: the price paid is thick, a limit thin and dashed, the trailing stop climbs in steps.
+  On the test, the script's plots near the prices, four at most (`series-1` to `series-4`, the
+  `--chart-compare-*` colours), each named in a legend under the chart. `features/prices/ChartAttribution.tsx` is the licence notice: it goes on every page where
   `PriceChart` goes.
 - **The library only knows UTC.** To show the trading timezone, `chartData.ts` shifts every time by that
   zone's offset before the chart sees it; what comes back from the chart (the time under the pointer) is in
@@ -252,8 +255,10 @@ which is the source the AGPL asks to offer.
   The build stops if a new version of PineTS no longer has them; `vite/pinetsZoneFormat.test.ts` runs PineTS
   patched beside PineTS as it is around the clock changes.
 - **What can be wrong without a browser is in plain functions with tests**: `prepare.ts`, `outline.ts` (the
-  alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`,
-  `signals/ruleModel.ts`. The editor itself (CodeMirror) and the charts are replaced in page tests, and
+  alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`, `editor/testChart.ts`
+  (what the test draws: its day, the plots near the prices, an oscillator listed apart, the alerts on their
+  bars), `signals/ruleModel.ts` (with `ruleDraftOfRun`: a backtest made a rule, its range in the feed's tick)
+  and `signals/readiness.ts` (whether a rule is ready to go live, said in the confirmation, never stopping it). The editor itself (CodeMirror) and the charts are replaced in page tests, and
   checked in a browser against `npm run dev:api`.
 - **The fake server** keeps the scripts and the rules in the real store, on its temporary directory, seeded
   with examples and a rule in shadow (`dev/fake_ta.py`), and makes up what a TA engine would have done with

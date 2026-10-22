@@ -34,7 +34,7 @@ export async function answer(request: WorkerRequest, ask: SeriesAsker): Promise<
     const pine = new PineTS(provider, request.symbol, request.timeframe, request.bars.length)
     pine.setAlertMode('all')
     const context = await pine.run(new Indicator(request.source, request.inputs ?? {}))
-    return { id: request.id, ok: true, op: 'run', ...runSummary(context, performance.now() - started) }
+    return { id: request.id, ok: true, op: 'run', ...runSummary(context, performance.now() - started, request.series) }
   } catch (error) {
     return { id: request.id, ok: false, error: compileFailure(error) }
   }

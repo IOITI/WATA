@@ -2,6 +2,7 @@ import type { IPineInput } from 'pinets'
 import { describe, expect, it } from 'vitest'
 
 import type { TaComparisonRow, TaRule } from '@/lib/types'
+import { run } from '@/test/backtests'
 
 import {
   barsLabel,
@@ -13,6 +14,7 @@ import {
   mappedAlerts,
   newDraft,
   ruleChanges,
+  ruleDraftOfRun,
   ruleFields,
   updatesOf,
 } from './ruleModel'
@@ -155,6 +157,50 @@ describe('a signal rule', () => {
     for (const typed of ['31', '1.5', '-1', 'two']) {
       expect(draftProblems({ ...own, historyDays: typed }, [])).toEqual(['Its history is 0 to 30 days, or left empty for the engine’s.'])
     }
+  })
+})
+
+describe('a rule made from a backtest', () => {
+  const instruments = [{ epic: 'US100', label: 'us100' }, { epic: 'US500', label: 'us500' }]
+  const TICKS: Record<string, number> = { 'capital/US100': 0.1, 'dukascopy/us100': 0.001 }
+  const tickOf = (ref: string) => TICKS[ref] ?? null
+
+  it('runs the script, version, inputs, alerts and bars the run traded, in shadow from the dialog', () => {
+    const draft = ruleDraftOfRun(run(), instruments, tickOf)
+    expect(draft).toMatchObject({
+      name: 'EMA cross on US100',
+      scriptId: '8c2df05570d5',
+      version: 1,
+      epic: 'US100',
+      side: 'bid',
+      barsType: 'time',
+      timeframe: '1',
+      indice: 'us100',
+      inputs: { in_0: 12 },
+      inputNames: { in_0: { var: 'fastLength', title: 'Fast length' } },
+      alerts: { 'Cross up': 'long', 'Cross down': 'short' },
+      alertCalls: 'ignore',
+      historyDays: '',
+    })
+  })
+
+  it('reads a run on Dukascopy on the Capital.com instrument of its indice, the range as the same move in points', () => {
+    const base = run()
+    const dukascopy = run({
+      request: {
+        ...base.request,
+        chart: { asset: { provider: 'dukascopy', key: 'us100' }, side: 'bid', bars: { type: 'range', ticks: 6000 } },
+        changes: { history_days: 0 },
+      },
+    })
+    expect(ruleDraftOfRun(dukascopy, instruments, tickOf)).toMatchObject({ epic: 'US100', barsType: 'range', ticks: '60', historyDays: '0' })
+    // A tick not known: the range as it was.
+    expect(ruleDraftOfRun(dukascopy, instruments, () => null)).toMatchObject({ ticks: '6000' })
+  })
+
+  it('has nothing to make of a replay of the journal', () => {
+    const base = run()
+    expect(ruleDraftOfRun(run({ request: { ...base.request, source: { kind: 'journal', signals: 40, entries: 20 } } }), instruments, tickOf)).toBeNull()
   })
 })
 

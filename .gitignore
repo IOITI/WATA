@@ -29,3 +29,9 @@ src/ta_engine/checker/
 
 # The research lab's environment (lab/setup.sh)
 .venv-lab/
+# The lab's research: the specs and strategies written while iterating stay on the Mac (the examples are tracked)
+lab/specs/*
+!lab/specs/ema_cross.json
+!lab/specs/journal.json
+lab/strategies/*
+!lab/strategies/ema_cross.pine

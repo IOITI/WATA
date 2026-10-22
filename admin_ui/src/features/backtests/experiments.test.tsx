@@ -114,6 +114,8 @@ describe('the Experiments page', () => {
     expect(screen.getByRole('link', { name: '20261020-080500-aaaaaa' })).toHaveAttribute('href', '/backtests/20261020-080500-aaaaaa')
     const concluded = screen.getByText('Did not beat random entries (61 %)').closest('tr') as HTMLElement
     expect(within(concluded).getByText('Rejected')).toBeInTheDocument()
+    // Every run of it, in the list of runs narrowed to it.
+    expect(within(concluded).getByRole('link', { name: '1 run' })).toHaveAttribute('href', '/backtests?experiment=1a2b3c')
     expect(screen.getByText('Every day from 14 Oct 2026 is kept out.')).toBeInTheDocument()
     // Trials made outside the runs: said with what they were, without a link, and counted in the family.
     const elsewhere = screen.getByText('+35 tried elsewhere: A Python port screened on the Mac, 12 Jun to 16 Oct')

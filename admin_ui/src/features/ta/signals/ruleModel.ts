@@ -4,7 +4,7 @@
 import type { IPineInput } from 'pinets'
 
 import type { ChartMarker } from '@/features/prices/chartData'
-import type { TaAlertAction, TaComparisonRow, TaRule, TaRuleBars, TaRuleFields, TaRuleMode, TaScriptSummary } from '@/lib/types'
+import type { BacktestRun, TaAlertAction, TaComparisonRow, TaRule, TaRuleBars, TaRuleFields, TaRuleMode, TaScriptSummary } from '@/lib/types'
 
 import { timeframeOf } from '../engine/timeframes'
 
@@ -124,6 +124,52 @@ export function newDraft(script: TaScriptSummary | undefined, instrument: { epic
     alertCalls: 'ignore',
     confidencePlot: '',
     historyDays: '',
+  }
+}
+
+/**
+ * A rule made from a backtest of a Pine script: its script version, inputs, alerts, side and bars, on
+ * the Capital.com instrument of its indice, the feed the engine reads. A range read on another asset is
+ * the same move in points, counted in the instrument's own tick: R6000 on Dukascopy's us100 (0.001) is
+ * R60 on Capital.com's US100 (0.1). Null for a replay of the journal, which has no script.
+ */
+export function ruleDraftOfRun(
+  run: BacktestRun,
+  instruments: readonly { epic: string; label: string }[],
+  tickOf: (ref: string) => number | null | undefined,
+): RuleDraft | null {
+  const request = run.request
+  if (request.source.kind !== 'pine') return null
+  const rule = request.source.rule
+  const asset = request.chart.asset
+  const epic =
+    (asset.provider === 'capital' && instruments.some((instrument) => instrument.epic === asset.key) ? asset.key : null) ??
+    instruments.find((instrument) => instrument.label === request.indice)?.epic ??
+    instruments[0]?.epic ??
+    ''
+  const bars = request.chart.bars
+  let ticks = bars.type === 'range' ? bars.ticks : 60
+  if (bars.type === 'range' && !(asset.provider === 'capital' && asset.key === epic)) {
+    const [from, to] = [tickOf(`${asset.provider}/${asset.key}`), tickOf(`capital/${epic}`)]
+    if (from && to) ticks = Math.max(1, Math.round((bars.ticks * from) / to))
+  }
+  const history = request.changes.history_days
+  return {
+    name: `${rule.name} on ${epic}`,
+    scriptId: rule.script.id,
+    version: rule.script.version,
+    epic,
+    side: request.chart.side,
+    barsType: bars.type,
+    timeframe: bars.type === 'time' ? bars.timeframe : '1',
+    ticks: String(ticks),
+    indice: request.indice,
+    inputs: Object.fromEntries(rule.inputs.map((entry) => [entry.id, entry.value])),
+    inputNames: Object.fromEntries(rule.inputs.map((entry) => [entry.id, { var: entry.var, title: entry.title }])),
+    alerts: Object.fromEntries(rule.alerts.map((entry) => [entry.title, entry.action])),
+    alertCalls: rule.alert_calls,
+    confidencePlot: rule.confidence_plot ?? '',
+    historyDays: history === null || history === undefined ? '' : String(history),
   }
 }
 

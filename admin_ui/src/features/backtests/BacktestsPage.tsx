@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Columns3, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
 import { ButtonLink } from '@/components/ButtonLink'
@@ -11,20 +11,74 @@ import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/form'
+import { Checkbox, Select } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
 import { formatBytes, formatDateTime, formatDay, formatPercent } from '@/lib/format'
-import type { BacktestRunListed } from '@/lib/types'
+import type { BacktestRunListed, Experiment } from '@/lib/types'
 
-import { comparable, isActive, sourceLabel, STATE_LABEL } from './model'
+import { collapseAttempts, comparable, failureLine, filterRuns, isActive, RUN_FILTER_NAMES, runFilterOf, sourceLabel, STATE_LABEL } from './model'
+import type { RunFilter } from './model'
 import { BacktestsDisabled, StateBadge } from './parts'
 import { ResearchFiles } from './ResearchFiles'
 import { TurboModelPanel } from './TurboModelPanel'
 
-function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (runId: string) => void): ColumnDef<BacktestRunListed>[] {
+/** What each filter of the list offers: the first, empty, leaves the list whole. */
+const FILTERS: Record<Exclude<keyof RunFilter, 'experiment'>, { label: string; options: [string, string][] }> = {
+  state: { label: 'State', options: [['', 'Any'], ['active', 'Waiting or running'], ['done', 'Done'], ['failed', 'Failed'], ['stopped', 'Stopped']] },
+  by: { label: 'Made by', options: [['', 'Anyone'], ['me', 'You'], ['claude', 'Claude']] },
+  turbos: { label: 'Turbos', options: [['', 'Any'], ['recorded', 'Recorded'], ['modelled', 'Made up']] },
+  code: { label: 'Code', options: [['', 'Any'], ['current', 'Today’s'], ['older', 'Older']] },
+}
+
+/**
+ * The list narrowed by state, by who made the runs, by experiment, turbos and
+ * code: in the address, so that a list narrowed can be opened elsewhere, kept or
+ * sent. Search and sort stay the table's.
+ */
+function RunFilters({
+  filter,
+  experiments,
+  onChange,
+}: {
+  filter: RunFilter
+  experiments: { id: string; title: string }[]
+  onChange: (name: keyof RunFilter, value: string) => void
+}) {
+  const narrowed = RUN_FILTER_NAMES.some((name) => filter[name] !== null)
+  const field = (name: keyof RunFilter, label: string, options: [string, string][]) => (
+    <label key={name} className="flex flex-col gap-1 text-xs">
+      <span className="text-text-secondary">{label}</span>
+      <Select
+        value={filter[name] ?? ''}
+        onChange={(event) => onChange(name, event.target.value)}
+        options={options.map(([value, text]) => ({ value, label: text }))}
+      />
+    </label>
+  )
+  return (
+    <div role="group" aria-label="Narrow the list" className="flex flex-wrap items-end gap-3">
+      {(Object.keys(FILTERS) as (keyof typeof FILTERS)[]).map((name) => field(name, FILTERS[name].label, FILTERS[name].options))}
+      {experiments.length > 0 &&
+        field('experiment', 'Experiment', [['', 'Any'], ...experiments.map((entry): [string, string] => [entry.id, entry.title])])}
+      {narrowed && (
+        <ButtonLink to="/backtests" variant="ghost" size="sm">
+          Every run
+        </ButtonLink>
+      )}
+    </div>
+  )
+}
+
+function runColumns(
+  timezone: string,
+  selected: ReadonlySet<string>,
+  toggle: (runId: string) => void,
+  earlier: ReadonlyMap<string, BacktestRunListed[]>,
+  removeAttempts: (attempts: BacktestRunListed[]) => void,
+): ColumnDef<BacktestRunListed>[] {
   return [
     {
       id: 'select',
@@ -69,6 +123,7 @@ function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (ru
               </span>
             )}
           </p>
+          <Attempts attempts={earlier.get(row.id) ?? []} timezone={timezone} onRemove={removeAttempts} />
         </div>
       ),
     },
@@ -111,7 +166,8 @@ function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (ru
         ) : (
           <div>
             {row.headline?.trades ?? '-'}
-            {row.headline?.sample === 'too_few' && <p className="text-xs text-warning">too few to conclude</p>}
+            {/* On two lines rather than one: on one, it made the column the widest of the figures. */}
+            {row.headline?.sample === 'too_few' && <p className="whitespace-normal text-xs text-warning">too few to conclude</p>}
           </div>
         ),
     },
@@ -151,9 +207,58 @@ function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (ru
   ]
 }
 
+/** The failed runs of the same request, folded under the run that came after them. */
+function Attempts({
+  attempts,
+  timezone,
+  onRemove,
+}: {
+  attempts: BacktestRunListed[]
+  timezone: string
+  onRemove: (attempts: BacktestRunListed[]) => void
+}) {
+  if (attempts.length === 0) return null
+  return (
+    <details className="mt-1 text-xs">
+      <summary className="cursor-pointer text-muted-foreground">
+        {attempts.length} earlier failed attempt{attempts.length === 1 ? '' : 's'}
+      </summary>
+      <ul className="mt-1 flex flex-col gap-1">
+        {attempts.map((attempt) => (
+          <li key={attempt.id}>
+            <Link to={`/backtests/${attempt.id}`} className="underline-offset-2 hover:underline">
+              {formatDateTime(attempt.status.created_at, timezone, false)}
+            </Link>
+            <span className="line-clamp-2 text-muted-foreground" title={failureLine(attempt)}>
+              {failureLine(attempt)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <Button variant="ghost" size="sm" className="mt-1" onClick={() => onRemove(attempts)}>
+        Remove them
+      </Button>
+    </details>
+  )
+}
+
 export function BacktestsPage() {
   const { timezone, backtests_enabled: enabled } = useSession()
   const queryClient = useQueryClient()
+  const [params, setParams] = useSearchParams()
+  const filter = runFilterOf(params)
+  // Changing what is shown starts the table over: its pages, sort and search were of another list.
+  const shownKey = RUN_FILTER_NAMES.map((name) => filter[name] ?? '').join('|')
+  const setFilter = (name: keyof RunFilter, value: string) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        if (value) next.set(name, value)
+        else next.delete(name)
+        return next
+      },
+      { replace: true },
+    )
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [removing, setRemoving] = useState(false)
   const [clearing, setClearing] = useState(false)
@@ -167,17 +272,36 @@ export function BacktestsPage() {
   })
   const runs = runsQuery.data?.items
   const storage = runsQuery.data?.storage
+  // Names for the experiments the runs belong to.
+  const experimentsQuery = useQuery({ queryKey: ['experiments'], queryFn: api.experiments, enabled, staleTime: 60_000 })
+  const experiments = useMemo(() => {
+    const titles = new Map((experimentsQuery.data?.experiments ?? []).map((entry: Experiment) => [entry.id, entry.title]))
+    const ids = [...new Set((runs ?? []).flatMap((run) => (run.experiment ? [run.experiment] : [])))]
+    return ids.map((id) => ({ id, title: titles.get(id) ?? id }))
+  }, [runs, experimentsQuery.data])
+  const { shown, earlier } = useMemo(() => collapseAttempts(filterRuns(runs ?? [], filter)), [runs, shownKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const columns = useMemo(
     () =>
-      runColumns(timezone, selected, (runId) =>
-        setSelected((current) => {
-          const next = new Set(current)
-          if (!next.delete(runId)) next.add(runId)
-          return next
-        }),
+      runColumns(
+        timezone,
+        selected,
+        (runId) =>
+          setSelected((current) => {
+            const next = new Set(current)
+            if (!next.delete(runId)) next.add(runId)
+            return next
+          }),
+        earlier,
+        (attempts) => {
+          removeMutation.reset()
+          setSelected(new Set(attempts.map((attempt) => attempt.id)))
+          setRemoving(true)
+        },
       ),
-    [timezone, selected],
+    // The mutation's reset is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [timezone, selected, earlier],
   )
   // A run removed meanwhile is no longer selected.
   const chosen = (runs ?? []).filter((run) => selected.has(run.id))
@@ -247,12 +371,18 @@ export function BacktestsPage() {
           <QueryState isPending={runsQuery.isPending} error={runsQuery.error} hasData={!!runs}>
             {runs && (
               <div className="flex flex-col gap-2">
+                {runs.length > 0 && <RunFilters filter={filter} experiments={experiments} onChange={setFilter} />}
                 <AdvancedDataTable<BacktestRunListed>
+                  key={shownKey}
                   title="Runs"
                   searchPlaceholder="Search…"
-                  emptyTitle="No backtest yet"
-                  emptyDescription="Ask for one with “New backtest”: a Pine script or the signals WATA received, on days the price recorder kept turbos."
-                  data={runs}
+                  emptyTitle={runs.length > 0 ? 'No run of these' : 'No backtest yet'}
+                  emptyDescription={
+                    runs.length > 0
+                      ? 'No run is left once narrowed so: “Every run” shows them all again.'
+                      : 'Ask for one with “New backtest”: a Pine script or the signals WATA received, on days the price recorder kept turbos.'
+                  }
+                  data={shown}
                   columns={columns}
                   getRowId={(row) => row.id}
                   defaultPageSize={10}

@@ -124,8 +124,12 @@ export interface EmptyPoint {
  * A line drawn over the prices, on their scale: something measured on them.
  * "trend" is told by its colour as well (rising or falling at each point),
  * "reference" is a level the prices are compared with, "band" a limit around it.
+ * "series-1" to "series-4" are lines of their own, a script's plots say, in the
+ * colours runs compared on one chart take (--chart-compare-*): a legend names them.
  */
-export type OverlayTone = 'trend' | 'reference' | 'band'
+export type OverlayTone = 'trend' | 'reference' | 'band' | SeriesTone
+export type SeriesTone = 'series-1' | 'series-2' | 'series-3' | 'series-4'
+export const SERIES_TONES: readonly SeriesTone[] = ['series-1', 'series-2', 'series-3', 'series-4']
 export interface OverlayPoint extends LinePoint {
   /** For a trend: whether the line was rising at this point. */
   rising?: boolean

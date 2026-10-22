@@ -27,6 +27,12 @@ const STEPS = [
   { title: 'Review' },
 ]
 
+/** A script asked for by its page (?script=<id>&version=<n>): one that runs, at a version it has. */
+interface AskedScript {
+  id: string | null
+  version: number | null
+}
+
 function initialDraft(
   options: BacktestOptions,
   scripts: TaScriptSummary[],
@@ -34,13 +40,17 @@ function initialDraft(
   timezone: string,
   again: BacktestRun | undefined,
   rule: TaRule | undefined,
+  asked: AskedScript = { id: null, version: null },
 ): BacktestDraft {
   if (again) return draftOfRun(again, options)
   const today = todayIn(timezone)
   const asset = strategyAssets(assets).find((entry) => entry.value.startsWith('capital/'))?.value ?? strategyAssets(assets)[0]?.value ?? ''
-  const script = scripts.find((entry) => entry.kind !== 'library')
+  const runnable = scripts.filter((entry) => entry.kind !== 'library')
+  const script = runnable.find((entry) => entry.id === asked.id) ?? runnable[0]
   const draft = newBacktestDraft(options, script, asset, { from: shiftDay(today, -6), to: today })
-  return rule ? withRule(draft, rule) : draft
+  const version = script && script.id === asked.id && asked.version && script.versions.some((entry) => entry.number === asked.version) ? asked.version : null
+  const pinned = version ? { ...draft, rule: { ...draft.rule, version } } : draft
+  return rule ? withRule(pinned, rule) : pinned
 }
 
 export function NewBacktestPage() {
@@ -50,6 +60,7 @@ export function NewBacktestPage() {
   const [params] = useSearchParams()
   const againId = params.get('again')
   const ruleId = params.get('rule')
+  const asked: AskedScript = { id: params.get('script'), version: Number(params.get('version')) || null }
 
   const optionsQuery = useQuery({ queryKey: ['backtest-options'], queryFn: api.backtestOptions, enabled, staleTime: 60_000 })
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts, enabled })
@@ -69,7 +80,7 @@ export function NewBacktestPage() {
   const [draft, setDraft] = useState<BacktestDraft | null>(null)
   // Made once everything it is made of has arrived: set while rendering, as React's own guide does it.
   if (draft === null && loaded) {
-    setDraft(initialDraft(options, scripts, assets, timezone, againQuery.data, rules.find((rule) => rule.id === ruleId)))
+    setDraft(initialDraft(options, scripts, assets, timezone, againQuery.data, rules.find((rule) => rule.id === ruleId), asked))
   }
   const [step, setStep] = useState(0)
   const [invalidInputs, setInvalidInputs] = useState<Record<string, string>>({})

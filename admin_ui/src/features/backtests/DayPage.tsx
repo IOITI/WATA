@@ -6,6 +6,7 @@ import { useParams, useSearchParams } from 'react-router'
 import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader, Panel } from '@/components/Panel'
 import { ActionBadge, PnlValue, QueryState } from '@/components/status'
+import { useTheme } from '@/components/theme-context'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { useSession } from '@/features/auth/auth-context'
@@ -66,6 +67,7 @@ function soldBy(trade: BacktestTrade, closer: BacktestSignal | undefined): strin
 /** One trade on the chart of the turbo it bought, with the levels that could have sold it, and all it was made of. */
 function TradeDetail({ run, trade, day, signals }: { run: BacktestRun; trade: BacktestTrade; day: string; signals: BacktestSignal[] }) {
   const { timezone } = useSession()
+  const { theme } = useTheme()
   const settings = useMemo(() => exitSettings(run.settings.settings), [run.settings.settings])
   const turboRef = `saxo/${trade.turbo.instrument_id}`
   const linked = trade.turbo.instrument_id > 0
@@ -165,6 +167,8 @@ function TradeDetail({ run, trade, day, signals }: { run: BacktestRun; trade: Ba
             {chart && (
               <div className="flex flex-col gap-2">
                 <PriceChart
+                  // The chart draws with the colours it read when it was made: another theme, another chart.
+                  key={theme}
                   candles={chart.candles}
                   markers={markers}
                   decimals={Math.max(chart.decimals, 2)}
@@ -260,6 +264,7 @@ export function DayPage() {
   const { runId = '', day = '' } = useParams()
   const [params, setParams] = useSearchParams()
   const { timezone, backtests_enabled: enabled } = useSession()
+  const { theme } = useTheme()
   const tradeId = Number(params.get('trade')) || null
 
   const runQuery = useQuery({ queryKey: ['backtest', runId], queryFn: () => api.backtest(runId), enabled })
@@ -364,6 +369,8 @@ export function DayPage() {
                     <div className="flex flex-col gap-2">
                       {chart.hasCandles ? (
                         <PriceChart
+                          // The chart draws with the colours it read when it was made: another theme, another chart.
+                          key={theme}
                           candles={chart.candles}
                           markers={markers}
                           decimals={chart.decimals}

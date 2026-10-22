@@ -26,13 +26,15 @@ interface RuleDialogProps {
   open: boolean
   /** null for a new rule. */
   rule: TaRule | null
+  /** What a new rule starts from, when it is made from elsewhere (a script, a backtest). */
+  draft?: RuleDraft
   start?: RuleDialogStart
   rules: TaRules
   scripts: TaScriptSummary[]
   onClose: () => void
 }
 
-export function RuleDialog({ open, rule, start = 'edit', rules, scripts, onClose }: RuleDialogProps) {
+export function RuleDialog({ open, rule, draft, start = 'edit', rules, scripts, onClose }: RuleDialogProps) {
   return (
     <SettleModal
       open={open}
@@ -44,7 +46,15 @@ export function RuleDialog({ open, rule, start = 'edit', rules, scripts, onClose
     >
       {/* Another revision, another draft: what was typed against the old one is not kept. */}
       {open && (
-        <RuleForm key={`${rule?.id ?? 'new'}|${rules.revision}|${start}`} rule={rule} start={start} rules={rules} scripts={scripts} onClose={onClose} />
+        <RuleForm
+          key={`${rule?.id ?? 'new'}|${rules.revision}|${start}`}
+          rule={rule}
+          draft={draft}
+          start={start}
+          rules={rules}
+          scripts={scripts}
+          onClose={onClose}
+        />
       )}
     </SettleModal>
   )
@@ -52,12 +62,14 @@ export function RuleDialog({ open, rule, start = 'edit', rules, scripts, onClose
 
 function RuleForm({
   rule,
+  draft: startedFrom,
   start,
   rules,
   scripts,
   onClose,
 }: {
   rule: TaRule | null
+  draft: RuleDraft | undefined
   start: RuleDialogStart
   rules: TaRules
   scripts: TaScriptSummary[]
@@ -67,7 +79,7 @@ function RuleForm({
   const queryClient = useQueryClient()
   const runnable = useMemo(() => scripts.filter((script) => script.kind !== 'library'), [scripts])
   const [draft, setDraft] = useState<RuleDraft>(() => {
-    if (!rule) return newDraft(runnable[0], rules.instruments[0], rules.indices)
+    if (!rule) return startedFrom ?? newDraft(runnable[0], rules.instruments[0], rules.indices)
     const opened = draftOfRule(rule)
     return start === 'update-script' && rule.latest.script !== null ? { ...opened, version: rule.latest.script } : opened
   })

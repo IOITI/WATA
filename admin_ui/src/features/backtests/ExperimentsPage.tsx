@@ -61,7 +61,15 @@ function experimentColumns(timezone: string, trials: Map<string, number>): Colum
       cell: ({ row }) => (
         <div className="min-w-0 max-w-64 whitespace-normal text-xs">
           <span className="tabular-nums">
-            {row.runs.length} run{row.runs.length === 1 ? '' : 's'}, {row.trials} tried
+            {row.runs.length > 0 ? (
+              // Every one of them, in the list of runs narrowed to this experiment.
+              <Link to={`/backtests?experiment=${row.id}`} className="underline-offset-2 hover:underline">
+                {row.runs.length} run{row.runs.length === 1 ? '' : 's'}
+              </Link>
+            ) : (
+              '0 runs'
+            )}
+            , {row.trials} tried
           </span>
           <ul className="mt-1 flex flex-col gap-0.5">
             {row.runs.slice(-RUNS_SHOWN).map((entry) => (

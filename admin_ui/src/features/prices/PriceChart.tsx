@@ -46,6 +46,8 @@ interface Palette {
   up: string
   down: string
   line: string
+  /** The lines of their own (a script's plots), told apart by these. */
+  series: string[]
   tones: Record<MarkerTone, string>
 }
 
@@ -57,6 +59,12 @@ function readPalette(): Palette {
     up: token('--chart-positive', '#059669'),
     down: token('--chart-negative', '#ef4444'),
     line: token('--chart-series', '#3b82f6'),
+    series: [
+      token('--chart-compare-1', '#3b82f6'),
+      token('--chart-compare-2', '#d95926'),
+      token('--chart-compare-3', '#199e70'),
+      token('--chart-compare-4', '#d936d9'),
+    ],
     // A marker is mostly its label: the steps made for text, not the ones for filled marks.
     tones: {
       entry: token('--info', '#38bdf8'),
@@ -86,6 +94,7 @@ function overlayOptions(tone: ChartOverlay['tone'], colors: Palette) {
   const common = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
   if (tone === 'trend') return { ...common, color: colors.text, lineWidth: 2 as const }
   if (tone === 'reference') return { ...common, color: colors.line, lineWidth: 2 as const }
+  if (tone.startsWith('series-')) return { ...common, color: colors.series[Number(tone.slice('series-'.length)) - 1] ?? colors.line, lineWidth: 2 as const }
   return { ...common, color: withAlpha(colors.line, 0.6), lineWidth: 1 as const, lineStyle: LineStyle.Dashed }
 }
 

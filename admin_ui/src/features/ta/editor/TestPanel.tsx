@@ -1,7 +1,7 @@
 // The editor's test: the script run on a day of one of WATA's assets, as the chart
-// and the signal engine would run it, with what it plotted last and every alert it
-// raised that day. Its bars, and the script as it ran (its libraries inlined), can
-// be downloaded for pinets-cli or an agent: `pinets run <script> --data <bars>`.
+// and the signal engine would run it. What it found is drawn under the editor
+// (TestResult). Its bars, and the script as it ran (its libraries inlined), can be
+// downloaded for pinets-cli or an agent: `pinets run <script> --data <bars>`.
 
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ChartSpline, Download, Play } from 'lucide-react'
@@ -24,7 +24,7 @@ import type { PineWorkerClient, RunResponse } from '../engine/pineWorkerClient'
 import { tickerText } from '../engine/tickers'
 import type { PriceSide, WataTicker } from '../engine/tickers'
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, timeframeOf } from '../engine/timeframes'
-import type { Candle } from '../engine/workerProtocol'
+import type { Candle, RunSummary } from '../engine/workerProtocol'
 
 interface TestPanelProps {
   prepared: PreparedScript | null
@@ -32,6 +32,8 @@ interface TestPanelProps {
   worker: PineWorkerClient | null
   scriptId: string | null
   scriptName: string
+  /** What a test that ran found, for the page to show; null when the last one failed. */
+  onResult?: (result: TestDone | null) => void
 }
 
 type BarsKind = 'time' | 'range'
@@ -43,6 +45,9 @@ interface TestRun {
   candles: Candle[]
   response: RunResponse
 }
+
+/** A test that ran: its day, its bars, what the script plotted and raised. */
+export type TestDone = Omit<TestRun, 'response'> & { response: RunSummary }
 
 function assetLabel(asset: DataAsset): string {
   const provider = { capital: 'Capital.com', dukascopy: 'Dukascopy', saxo: 'Saxo' }[asset.provider]
@@ -57,12 +62,6 @@ function inputValue(input: IPineInput, text: string | boolean): unknown {
     return Number.isFinite(number) ? number : input.defval
   }
   return text
-}
-
-function formatValue(value: number | boolean | string | null): string {
-  if (value === null) return 'na'
-  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(4)
-  return String(value)
 }
 
 function download(filename: string, content: string, type: string): void {
@@ -80,7 +79,7 @@ function fileName(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'script'
 }
 
-export function TestPanel({ prepared, inputs, worker, scriptId, scriptName }: TestPanelProps) {
+export function TestPanel({ prepared, inputs, worker, scriptId, scriptName, onResult }: TestPanelProps) {
   const { timezone } = useSession()
   const bars = useMemo(() => new WataBars(), [])
   const assetsQuery = useQuery({ queryKey: ['data-assets', 'all'], queryFn: () => api.dataAssets('all'), staleTime: 60_000 })
@@ -115,6 +114,8 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName }: Te
       const found = await bars.bars(ticker, length.seconds, window)
       if (found.length === 0) throw new Error(`No bars of ${tickerText(ticker)} on ${day}`)
       const candles = found.map(toCandle)
+      // The plots' numbers of the day alone: what the result draws.
+      const ofDay = candles.filter((candle) => dayIn(candle.openTime, timezone) === day)
       const response = await worker.run(
         {
           source: prepared.source,
@@ -122,21 +123,17 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName }: Te
           symbol: tickerText(ticker),
           timeframe: length.pine,
           inputs: overrides,
+          series: ofDay.length > 0 ? { from: ofDay[0].openTime, to: ofDay[ofDay.length - 1].openTime } : undefined,
         },
         wataSeriesFetcher(bars),
       )
       return { day, ticker, timeframe: length.pine, candles, response }
     },
+    onSuccess: (done) => onResult?.(done.response.ok && done.response.op === 'run' ? { ...done, response: done.response } : null),
+    onError: () => onResult?.(null),
   })
   const run = runMutation.data
   const response = run?.response
-  const alertsOfDay =
-    response?.ok && response.op === 'run' && run
-      ? response.alerts.filter((alert) => dayIn(alert.time, timezone) === run.day)
-      : []
-
-  const timeOf = (ms: number) =>
-    new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(ms)
 
   return (
     <Panel
@@ -309,57 +306,9 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName }: Te
         </p>
       )}
       {response?.ok && response.op === 'run' && run && (
-        <div className="flex flex-col gap-3 text-xs" data-testid="test-result">
-          <p className="text-muted-foreground">
-            {scriptName || 'The script'} ran on {response.bars} bars of {tickerText(run.ticker)} in {response.milliseconds} ms.
-          </p>
-          <div>
-            <h3 className="mb-1 font-medium">
-              Alerts on {run.day} ({alertsOfDay.length})
-            </h3>
-            {alertsOfDay.length === 0 ? (
-              <p className="text-muted-foreground">None.</p>
-            ) : (
-              <ul className="max-h-60 divide-y divide-border overflow-auto rounded-lg border border-border">
-                {alertsOfDay.map((alert, index) => (
-                  <li key={`${alert.time}:${index}`} className="flex flex-col gap-0.5 px-2 py-1.5">
-                    <span>
-                      <span className="font-mono">{timeOf(alert.time)}</span> {alert.title ?? alert.type}
-                    </span>
-                    {alert.message && <span className="break-all font-mono text-muted-foreground">{alert.message}</span>}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <div>
-            <h3 className="mb-1 font-medium">Last values</h3>
-            <table className="w-full">
-              <tbody>
-                {response.plots
-                  .filter((plot) => !plot.title.startsWith('__'))
-                  .map((plot) => (
-                    <tr key={plot.title} className="border-b border-border/60 last:border-0">
-                      <td className="py-1 pr-2">{plot.title}</td>
-                      <td className="py-1 text-right font-mono">{formatValue(plot.last)}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-          {response.warnings.length > 0 && (
-            <div>
-              <h3 className="mb-1 font-medium text-warning">Warnings</h3>
-              <ul className="list-disc pl-4">
-                {response.warnings.slice(0, 10).map((warning, index) => (
-                  <li key={index}>
-                    Bar {warning.bar}: {warning.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+        <p className="text-xs text-muted-foreground">
+          Ran on {response.bars} bars of {tickerText(run.ticker)} in {response.milliseconds} ms: what it found is under the editor.
+        </p>
       )}
     </Panel>
   )

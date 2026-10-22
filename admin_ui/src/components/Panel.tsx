@@ -6,6 +6,8 @@ import { usePageName } from '@/components/page-trail-context'
 import { cn } from '@/lib/utils'
 
 interface PanelProps {
+  /** An anchor a link can lead to (`#trades`). */
+  id?: string
   title?: ReactNode
   description?: ReactNode
   action?: ReactNode
@@ -15,9 +17,10 @@ interface PanelProps {
 }
 
 /** The card every section of a page sits in. Same surface as the EasyUI data table. */
-export function Panel({ title, description, action, className, bodyClassName, children }: PanelProps) {
+export function Panel({ id, title, description, action, className, bodyClassName, children }: PanelProps) {
   return (
     <section
+      id={id}
       className={cn(
         'rounded-2xl border border-border/70 bg-surface/50 text-foreground dark:bg-surface/25',
         className,

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
@@ -24,6 +24,7 @@ import type {
 } from '@/lib/types'
 import { day, OPTIONS, run, RUN_ID, SETTINGS, signal, trade } from '@/test/backtests'
 import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
+import { stubSystemTheme } from '@/test/systemTheme'
 import { WithTrail } from '@/test/WithTrail'
 
 import { BacktestsPage } from './BacktestsPage'
@@ -79,6 +80,15 @@ const SCRIPT: TaScriptSummary = {
   versions: [{ number: 1, saved_at: '2026-10-19T10:00:00+00:00', size: 300, sha256: 'x' }],
   created_at: '2026-10-19T10:00:00+00:00',
   updated_at: '2026-10-19T10:00:00+00:00',
+}
+
+// A second script, at its second version: what a script's page asks the form for.
+const OTHER: TaScriptSummary = {
+  ...SCRIPT,
+  id: 'aaaabbbbcccc',
+  name: 'Breakout',
+  version: 2,
+  versions: [SCRIPT.versions[0], { number: 2, saved_at: '2026-10-20T10:00:00+00:00', size: 320, sha256: 'y' }],
 }
 
 const RULE: TaRule = {
@@ -201,6 +211,7 @@ function serve() {
         return json(turboModel, method === 'POST' ? 202 : 200)
       }
       if (route === '/api/backtests/former' && method === 'DELETE') return json({ removed: 7 })
+      if (route === '/api/backtests/remove' && method === 'POST') return json({ removed: (body as { ids: string[] }).ids, kept: [] })
       if (route === '/api/research/experiments') return json({ experiments: [], lockbox: null })
       if (route === '/api/backtests/research') {
         if (method === 'PUT') research = { ...research, ...(body as object), state: 'waiting_for_close' }
@@ -252,8 +263,9 @@ function serve() {
             return json({ detail: `Not served: ${route}` }, 404)
         }
       }
-      if (route === '/api/ta/scripts') return json({ items: [SCRIPT] })
-      if (route === `/api/ta/scripts/${SCRIPT.id}/versions/1`) return json({ ...SCRIPT.versions[0], source: SOURCE })
+      if (route === '/api/ta/scripts') return json({ items: [SCRIPT, OTHER] })
+      const version = /^\/api\/ta\/scripts\/([0-9a-f]+)\/versions\/(\d+)$/.exec(route)
+      if (version) return json({ ...SCRIPT.versions[0], number: Number(version[2]), source: SOURCE })
       if (route === '/api/ta/rules') {
         return json({ revision: 'r1', rules: [RULE], indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1 })
       }
@@ -355,6 +367,44 @@ describe('the list of backtests', () => {
     expect(screen.getByRole('link', { name: 'New backtest' })).toHaveAttribute('href', '/backtests/new')
     await user.click(screen.getByRole('link', { name: 'Compare 2' }))
     expect(address()).toBe(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
+  })
+
+  it('narrows the list as its address says, and keeps what is chosen in the address', async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, [RUN_ID]: run({ made_by: 'claude', experiment: '1a2b3c' }) }
+    renderAt('/backtests?by=claude')
+
+    expect(await screen.findByRole('link', { name: 'Smoke EMA cross' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Stop at 10' })).not.toBeInTheDocument()
+    const narrow = screen.getByRole('group', { name: 'Narrow the list' })
+    expect(within(narrow).getByRole('combobox', { name: 'Made by' })).toHaveValue('claude')
+
+    await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Made by' }), 'me')
+    expect(address()).toBe('/backtests?by=me')
+    expect(await screen.findByRole('link', { name: 'Stop at 10' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Smoke EMA cross' })).not.toBeInTheDocument()
+    // Every run again: a link to the list whole.
+    expect(within(narrow).getByRole('link', { name: 'Every run' })).toHaveAttribute('href', '/backtests')
+  })
+
+  it('folds the failed attempts of a run under it, and removes them when asked', async () => {
+    const user = userEvent.setup()
+    const attempt = (id: string) =>
+      run({ id, status: { state: 'failed', created_at: '2026-10-19T20:30:00Z', error: 'Traceback\nThe backtest failed: stopped by the kernel' }, summary: null, headline: null })
+    runs = { ...runs, '20261019-203000-cccc01': attempt('20261019-203000-cccc01'), '20261019-202000-cccc02': attempt('20261019-202000-cccc02') }
+    renderAt('/backtests')
+
+    const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
+    expect(within(row).getByText('2 earlier failed attempts')).toBeInTheDocument()
+    expect(within(row).getAllByText('The backtest failed: stopped by the kernel')).toHaveLength(2)
+    await user.click(within(row).getByText('2 earlier failed attempts'))
+    await user.click(within(row).getByRole('button', { name: 'Remove them' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Remove 2 backtests?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/backtests/remove')?.body).toEqual({
+      ids: ['20261019-203000-cccc01', '20261019-202000-cccc02'],
+    }))
   })
 
   it("marks Claude's runs, and leads to its experiments", async () => {
@@ -560,6 +610,15 @@ describe('a new backtest', () => {
     expect(await screen.findByRole('button', { name: 'Made up from the index' })).toBeDisabled()
   })
 
+  it('starts from the script its page asked for, at the version asked', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/new?script=${OTHER.id}&version=1`)
+
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    expect(await screen.findByRole('combobox', { name: 'Script' })).toHaveValue(OTHER.id)
+    expect(screen.getByRole('combobox', { name: 'Version' })).toHaveValue('1')
+  })
+
   it('starts from a signal rule', async () => {
     renderAt(`/backtests/new?rule=${RULE.id}`)
 
@@ -578,6 +637,9 @@ describe('a run', () => {
     expect(screen.getByText('of the random runs did worse than this one')).toBeInTheDocument()
     expect(screen.getAllByText('85%').length).toBeGreaterThan(0)
     expect(await screen.findByRole('link', { name: '#1' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
+    // Its script, and the rule it can become: pages of their own.
+    expect(screen.getByRole('link', { name: 'EMA cross' })).toHaveAttribute('href', `/ta/indicators/${SCRIPT.id}`)
+    expect(screen.getByRole('link', { name: 'Make a shadow rule' })).toHaveAttribute('href', `/ta/signals?from-run=${RUN_ID}`)
   })
 
   it('keeps its table in the address, each tab and its run again a link', async () => {
@@ -586,16 +648,40 @@ describe('a run', () => {
     expect(await screen.findByRole('link', { name: '#1' })).toBeInTheDocument()
 
     expect(screen.getByRole('link', { name: 'Run again with changes' })).toHaveAttribute('href', `/backtests/new?again=${RUN_ID}`)
-    const signals = screen.getByRole('link', { name: /^Signals/ })
+    // The tabs of the panel of tables (the index of the page names that panel too).
+    const tables = () => within(document.getElementById('tables') as HTMLElement)
+    const signals = tables().getByRole('link', { name: /^Signals/ })
     expect(signals).toHaveAttribute('href', `/backtests/${RUN_ID}?tab=signals`)
-    expect(screen.getByRole('link', { name: /^Trades/ })).toHaveAttribute('aria-current', 'page')
+    expect(tables().getByRole('link', { name: /^Trades/ })).toHaveAttribute('aria-current', 'page')
 
     await user.click(signals)
     expect(address()).toBe(`/backtests/${RUN_ID}?tab=signals`)
     expect(screen.queryByRole('link', { name: '#1' })).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /^Signals/ })).toHaveAttribute('aria-current', 'page')
-    await user.click(screen.getByRole('link', { name: /^Trades/ }))
+    expect(tables().getByRole('link', { name: /^Signals/ })).toHaveAttribute('aria-current', 'page')
+    await user.click(tables().getByRole('link', { name: /^Trades/ }))
     expect(address()).toBe(`/backtests/${RUN_ID}`)
+  })
+
+  it('says whether it can be believed, each check leading to its part of the page', async () => {
+    renderAt(`/backtests/${RUN_ID}`)
+
+    const verdict = (await screen.findByText('Can it be believed?')).closest('section') as HTMLElement
+    // Three trades over three days, 85 % of the random runs beaten: under the bar Claude's research is held to.
+    expect(within(verdict).getByText('Not to be believed yet: enough trades and days, beats random entries.')).toBeInTheDocument()
+    expect(within(verdict).getAllByLabelText('Failed')).toHaveLength(2)
+    expect(within(verdict).getByRole('link', { name: 'Enough trades and days' })).toHaveAttribute('href', '#trust')
+    expect(within(verdict).getByRole('link', { name: 'An edge in its entries' })).toHaveAttribute('href', '#edge')
+    expect(within(verdict).getByText('Not stressed yet.')).toBeInTheDocument()
+
+    // The parts of the page, each an anchor the index leads to.
+    const index = screen.getByRole('navigation', { name: 'Parts of this page' })
+    const parts = within(index).getAllByRole('link').map((link) => [link.textContent, link.getAttribute('href')])
+    expect(parts).toEqual([
+      ['Verdict', '#verdict'], ['Trust', '#trust'], ['Edge', '#edge'], ['Stress', '#stress'], ['Made-up turbos', '#model-check'],
+      ['Day after day', '#curves'], ['Why', '#why'], ['Where it comes from', '#breakdowns'], ['Trades, signals, days', '#tables'],
+      ['What it ran', '#setup'],
+    ])
+    for (const [, href] of parts) expect(document.getElementById((href as string).slice(1))).not.toBeNull()
   })
 
   it('says the risk the days show, and what they give without the best of them', async () => {
@@ -747,10 +833,11 @@ describe('a sweep', () => {
     expect(screen.queryByText('Would choosing have worked')).not.toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Days shown' })).not.toBeInTheDocument()
 
-    // And the run it stresses shows the same.
+    // And the run it stresses shows the same, its verdict too.
     renderAt(`/backtests/${RUN_ID}`)
     expect(await screen.findByRole('link', { name: 'Stress: Smoke EMA cross' })).toBeInTheDocument()
     expect(await screen.findAllByText(/As it was run: \+5\.21%/)).toHaveLength(2)
+    expect(screen.getAllByText('Still above zero with each order a step later and dearer.').length).toBeGreaterThan(0)
   })
 
   it('says whether choosing would have worked: walk-forward and overfitting', async () => {
@@ -810,6 +897,23 @@ describe('a day of a run', () => {
     expect(screen.getByRole('button', { name: 'Day before' })).toBeDisabled()
     // The 16th had no turbo recorded: the day after the 14th that was traded is the 15th.
     await waitFor(() => expect(screen.getByRole('link', { name: 'Day after' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-15`))
+  })
+
+  it('draws the day again in another theme, its chart drawn with the colours it read when it was made', async () => {
+    const system = stubSystemTheme(true)
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
+    const first = charts[0]
+    await waitFor(() => expect(seriesOf(first, 'Candlestick')!.markers).toHaveLength(4))
+
+    act(() => system.set(false))
+
+    expect(first.removed).toBe(true)
+    await waitFor(() => {
+      const drawn = charts.filter((chart) => !chart.removed)
+      expect(drawn).toHaveLength(1)
+      expect(seriesOf(drawn[0], 'Candlestick')!.markers.map((marker) => marker.text)).toEqual(['Short', '#1 short', '+1.72 %', 'Long ✕'])
+    })
   })
 
   it('opens a trade on the chart of its turbo, with the turbos the trader looked at', async () => {

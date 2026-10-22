@@ -2,10 +2,11 @@
 // script is written, its versions, and a test on WATA's prices.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChartSpline, History, Save } from 'lucide-react'
+import { ChartSpline, FlaskConical, History, Radar, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 
+import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { Alert, AlertTitle } from '@/components/ui/alert'
@@ -22,6 +23,8 @@ import { DiagnosticsList } from './editor/DiagnosticsList'
 import { HistoryDialog } from './editor/HistoryDialog'
 import { PineEditor } from './editor/PineEditor'
 import { TestPanel } from './editor/TestPanel'
+import type { TestDone } from './editor/TestPanel'
+import { TestResult } from './editor/TestResult'
 import { usePineReference, usePineWorker, useScriptCheck } from './editor/useScriptCheck'
 import { declaredKind, declaredTitle, isKind, KIND_LABEL, TEMPLATES } from './templates'
 
@@ -47,7 +50,7 @@ function ScriptEditor({ id }: { id: string | undefined }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { timezone } = useSession()
+  const { timezone, backtests_enabled: backtestsEnabled } = useSession()
   const newKind: TaScriptKind = isKind(searchParams.get('kind')) ? (searchParams.get('kind') as TaScriptKind) : 'indicator'
 
   const scriptQuery = useQuery({
@@ -64,6 +67,8 @@ function ScriptEditor({ id }: { id: string | undefined }) {
   )
   const [conflict, setConflict] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // The last test that ran, drawn under the editor.
+  const [tested, setTested] = useState<TestDone | null>(null)
   // A script just created, or the changes saved as a copy: the page goes to it once that is drawn,
   // and what it leaves is saved, so the guard against losing changes lets it go.
   const [leavingTo, setLeavingTo] = useState<string | null>(null)
@@ -161,14 +166,27 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                 History
               </Button>
             )}
+            {/* The next steps of a script that runs, each a page of its own: as saved, not as being edited. */}
             {script && kind !== 'library' && (
-              <Link
-                to={chartsPath({ script: script.id })}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-xs hover:bg-surface-hover"
-              >
-                <ChartSpline className="size-3.5" />
-                Open in Charts
-              </Link>
+              <>
+                <ButtonLink to={chartsPath({ script: script.id })} variant="outline" size="sm" leftIcon={<ChartSpline className="size-3.5" />}>
+                  Open in Charts
+                </ButtonLink>
+                {backtestsEnabled && (
+                  <ButtonLink
+                    to={`/backtests/new?script=${script.id}&version=${script.version}`}
+                    variant="outline"
+                    size="sm"
+                    leftIcon={<FlaskConical className="size-3.5" />}
+                    title={`Backtest version ${script.version}, the one saved last`}
+                  >
+                    Backtest v{script.version}
+                  </ButtonLink>
+                )}
+                <ButtonLink to={`/ta/signals?new=${script.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
+                  New signal rule
+                </ButtonLink>
+              </>
             )}
             <Button
               size="sm"
@@ -256,10 +274,12 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                     worker={worker}
                     scriptId={script?.id ?? null}
                     scriptName={title}
+                    onResult={setTested}
                   />
                 )}
               </div>
             </div>
+            {tested && kind !== 'library' && <TestResult run={tested} scriptName={title} timeZone={timezone} />}
           </>
         )}
       </QueryState>

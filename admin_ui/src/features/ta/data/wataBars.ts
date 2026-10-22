@@ -70,6 +70,13 @@ export function addDays(day: string, days: number): string {
   return date.toISOString().slice(0, 10)
 }
 
+/** The weekday before (-1) or after (1) a day: the markets' days, a weekend stepped over. */
+export function nextWeekday(day: string, step: 1 | -1): string {
+  let next = addDays(day, step)
+  while ([0, 6].includes(new Date(`${next}T00:00:00Z`).getUTCDay())) next = addDays(next, step)
+  return next
+}
+
 function later(a: string, b: string): string {
   return a > b ? a : b
 }

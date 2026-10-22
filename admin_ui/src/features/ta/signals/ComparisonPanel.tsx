@@ -3,13 +3,15 @@
 // tolerance, listed, and marked on the day's prices.
 
 import { useQuery } from '@tanstack/react-query'
-import { ChartSpline } from 'lucide-react'
+import { ChartSpline, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import { Panel } from '@/components/Panel'
 import { ActionBadge, QueryState } from '@/components/status'
+import { useTheme } from '@/components/theme-context'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/form'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { chartTime, priceDecimals, timeLocator } from '@/features/prices/chartData'
@@ -19,7 +21,7 @@ import { formatDateTime } from '@/lib/format'
 import type { TaRule } from '@/lib/types'
 
 import { chartsPath } from '../chartLinks'
-import { dayIn } from '../data/wataBars'
+import { dayIn, nextWeekday } from '../data/wataBars'
 import { tickerText } from '../engine/tickers'
 import { barsLabel, comparisonMarkers } from './ruleModel'
 
@@ -28,6 +30,7 @@ export function ComparisonPanel({ rules, timeZone }: { rules: TaRule[]; timeZone
   const [today] = useState(() => dayIn(Date.now(), timeZone))
   const [day, setDay] = useState(today)
   const [tolerance, setTolerance] = useState('')
+  const { theme } = useTheme()
   const rule = rules.find((entry) => entry.id === ruleId) ?? null
   const toleranceSeconds = tolerance.trim() === '' ? undefined : Number(tolerance)
 
@@ -93,10 +96,27 @@ export function ComparisonPanel({ rules, timeZone }: { rules: TaRule[]; timeZone
           <span className="text-xs text-text-secondary">Rule</span>
           <Select value={ruleId} onChange={(event) => setRuleId(event.target.value)} options={rules.map((entry) => ({ value: entry.id, label: entry.name }))} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-text-secondary">Day</span>
-          <Input type="date" value={day} max={today} onChange={(event) => setDay(event.target.value || today)} />
-        </label>
+        {/* Day after day, the weekends stepped over: the agreement of one day says little. */}
+        <div className="flex items-end gap-1">
+          <Button variant="outline" size="icon" className="size-10" aria-label="The weekday before" title="The weekday before" onClick={() => setDay(nextWeekday(day, -1))}>
+            <ChevronLeft className="size-4" />
+          </Button>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">Day</span>
+            <Input type="date" value={day} max={today} onChange={(event) => setDay(event.target.value || today)} />
+          </label>
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-10"
+            aria-label="The weekday after"
+            title="The weekday after"
+            disabled={day >= today}
+            onClick={() => setDay((current) => (nextWeekday(current, 1) > today ? today : nextWeekday(current, 1)))}
+          >
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
         <label className="flex w-40 flex-col gap-1">
           <span className="text-xs text-text-secondary">Within (seconds)</span>
           <Input
@@ -125,6 +145,8 @@ export function ComparisonPanel({ rules, timeZone }: { rules: TaRule[]; timeZone
               <div className="space-y-1">
                 <div className="h-80">
                   <PriceChart
+                    // The chart draws with the colours it read when it was made: another theme, another chart.
+                    key={theme}
                     candles={chart.candles}
                     markers={chart.markers}
                     decimals={chart.decimals}

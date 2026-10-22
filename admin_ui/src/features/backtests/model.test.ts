@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { FIELDS, listedRun, run, SUMMARY } from '@/test/backtests'
 
 import {
+  collapseAttempts,
   comparable,
   compareCurves,
   comparisonWarnings,
@@ -11,6 +12,8 @@ import {
   differingInputs,
   differingSettings,
   distribution,
+  failureLine,
+  filterRuns,
   heldFor,
   localDay,
   progressSentence,
@@ -18,6 +21,7 @@ import {
   randomVerdict,
   researchSentence,
   roomSentences,
+  runFilterOf,
   ruleLabel,
   sampleWarning,
   settingChanges,
@@ -231,5 +235,47 @@ describe('the research files', () => {
 
   it('says what switching them on does', () => {
     expect(researchSentence({ ...status, enabled: false, state: 'off' })).toMatch(/^Each finished day can be written as files/)
+  })
+})
+
+describe('the list of runs', () => {
+  const failed = (id: string, name: string) =>
+    listedRun({ id, name, status: { state: 'failed', error: `Traceback\n  raise RunnerDown(...)\nThe backtest failed: stopped by the kernel (${id})` } })
+
+  it('collapses the failed attempts of a request under the run that came after them', () => {
+    // The server's list of 22 Oct, newest first: E7 E3 done after nine failed attempts, E7 E2 failed three times.
+    const runs = [
+      listedRun({ id: 'e3-done', name: 'E7 E3' }),
+      ...Array.from({ length: 9 }, (_, index) => failed(`e3-${index}`, 'E7 E3')),
+      failed('e2-c', 'E7 E2'),
+      failed('e2-b', 'E7 E2'),
+      failed('e2-a', 'E7 E2'),
+      listedRun({ id: 'other', name: 'E6 C' }),
+    ]
+    const { shown, earlier } = collapseAttempts(runs)
+
+    expect(shown.map((run) => run.id)).toEqual(['e3-done', 'e2-c', 'other'])
+    expect(earlier.get('e3-done')).toHaveLength(9)
+    expect(earlier.get('e2-c')?.map((run) => run.id)).toEqual(['e2-b', 'e2-a'])
+    // Another period is another request.
+    expect(collapseAttempts([listedRun({ id: 'a' }), failed('b', 'Smoke EMA cross')]).shown).toHaveLength(1)
+    expect(collapseAttempts([listedRun({ id: 'a' }), { ...failed('b', 'Smoke EMA cross'), to: '2026-10-17' }]).shown).toHaveLength(2)
+    expect(failureLine(failed('x', 'E7 E2'))).toBe('The backtest failed: stopped by the kernel (x)')
+  })
+
+  it('narrows the list as its address says, and ignores what it does not know', () => {
+    const runs = [
+      listedRun({ id: 'mine' }),
+      listedRun({ id: 'claudes', made_by: 'claude', experiment: 'f59bc8', turbos: 'modelled', stale: true }),
+      failed('broken', 'E7 E2'),
+    ]
+    const ids = (query: string) => filterRuns(runs, runFilterOf(new URLSearchParams(query))).map((run) => run.id)
+
+    expect(ids('')).toEqual(['mine', 'claudes', 'broken'])
+    expect(ids('by=claude')).toEqual(['claudes'])
+    expect(ids('by=me&state=done')).toEqual(['mine'])
+    expect(ids('state=failed')).toEqual(['broken'])
+    expect(ids('experiment=f59bc8&turbos=modelled&code=older')).toEqual(['claudes'])
+    expect(ids('state=nonsense&by=someone')).toEqual(['mine', 'claudes', 'broken'])
   })
 })

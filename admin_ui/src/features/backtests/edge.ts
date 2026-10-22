@@ -1,5 +1,5 @@
 import { formatNumber } from '@/lib/format'
-import type { BacktestDayKind, BacktestEdge, BacktestEdgeHorizon } from '@/lib/types'
+import type { BacktestDayKind, BacktestEdge, BacktestEdgeHorizon, BacktestSummary } from '@/lib/types'
 
 /** What the moves after a run's entry signals say (src/backtest/edge.py). Pure. */
 
@@ -10,6 +10,8 @@ export const LEAST_SIGNALS = 10
  * five is picked, so the 5 % a single test is allowed is shared among them (1 %).
  */
 export const EDGE_T = 2.6
+/** The share of random draws (%) an edge beats at that horizon. */
+export const EDGE_BEATEN = 95
 
 export function horizonLabel(minutes: number): string {
   return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
@@ -28,13 +30,40 @@ export interface EdgeVerdict {
   minutes: number | null
 }
 
-function strongest(horizons: readonly BacktestEdgeHorizon[]): BacktestEdgeHorizon | null {
-  const counted = horizons.filter((row) => row.signals >= LEAST_SIGNALS && row.random.beaten !== null)
+interface Strength {
+  signals: number
+  t: number | null
+  beaten: number | null
+}
+
+/** The horizon that beats the random draws most, the t-statistic deciding between equals. */
+function strongestOf<T>(horizons: readonly T[], strength: (row: T) => Strength): T | null {
+  const counted = horizons.filter((row) => strength(row).signals >= LEAST_SIGNALS && strength(row).beaten !== null)
   if (counted.length === 0) return null
   return counted.reduce((kept, row) => {
-    const [a, b] = [row.random.beaten ?? 0, kept.random.beaten ?? 0]
-    return a > b || (a === b && (row.t ?? -Infinity) > (kept.t ?? -Infinity)) ? row : kept
+    const [a, b] = [strength(row), strength(kept)]
+    const [beaten, keptBeaten] = [a.beaten ?? 0, b.beaten ?? 0]
+    return beaten > keptBeaten || (beaten === keptBeaten && (a.t ?? -Infinity) > (b.t ?? -Infinity)) ? row : kept
   })
+}
+
+function strongest(horizons: readonly BacktestEdgeHorizon[]): BacktestEdgeHorizon | null {
+  return strongestOf(horizons, (row) => ({ signals: row.signals, t: row.t, beaten: row.random.beaten }))
+}
+
+export interface HeadlineEdge {
+  tone: EdgeVerdict['tone']
+  minutes: number | null
+  t: number | null
+  beaten: number | null
+}
+
+/** The edge a run's summary carries (its headline), judged as ``edgeVerdict`` judges the whole of it. */
+export function headlineEdge(edge: NonNullable<BacktestSummary['edge']>): HeadlineEdge {
+  const best = strongestOf(edge.horizons, (row) => ({ signals: row.signals, t: row.t, beaten: row.beaten }))
+  if (best === null) return { tone: 'unknown', minutes: null, t: null, beaten: null }
+  const holds = (best.beaten ?? 0) >= EDGE_BEATEN && (best.t ?? 0) >= EDGE_T
+  return { tone: holds ? 'edge' : 'none', minutes: best.minutes, t: best.t, beaten: best.beaten }
 }
 
 /**
@@ -58,13 +87,13 @@ export function edgeVerdict(edge: BacktestEdge): EdgeVerdict {
     `After ${horizonLabel(best.minutes)} the asset had moved ${basisPoints(best.mean_bp)} in the signals' direction on average, ` +
     `${formatNumber(best.hit_rate ?? 0, 0)} % of them right, against ${basisPoints(best.random.mean_bp)} at random moments of the same hours: ` +
     `better than ${beaten >= 100 ? 'all' : `${formatNumber(beaten, 1)} %`} of the random draws (${t} over the ${best.independent} signals whose windows do not overlap).`
-  if (beaten >= 95 && (best.t ?? 0) >= EDGE_T) return { tone: 'edge', minutes: best.minutes, sentence: said }
+  if (beaten >= EDGE_BEATEN && (best.t ?? 0) >= EDGE_T) return { tone: 'edge', minutes: best.minutes, sentence: said }
   return {
     tone: 'none',
     minutes: best.minutes,
     sentence:
       `${said} Not enough to tell from chance: what the trades made came from the exits and the days` +
-      (beaten >= 95 ? ', or the signals are too few apart.' : '.'),
+      (beaten >= EDGE_BEATEN ? ', or the signals are too few apart.' : '.'),
   }
 }
 

@@ -18,6 +18,7 @@ export function compileFailure(error: unknown): PineFailure {
 }
 
 interface PlotPoint {
+  time?: number
   value?: unknown
 }
 
@@ -64,15 +65,31 @@ function plotValue(value: unknown): PlotSummary['last'] {
   return null
 }
 
-/** The last value of each plot that is not na, and the alerts in bar order. */
-export function runSummary(context: ContextLike, milliseconds: number): RunSummary {
+/** A plot's numbers between two moments: what a chart draws of it. */
+function numbersWithin(points: readonly PlotPoint[], window: { from: number; to: number }): [number, number][] {
+  const found: [number, number][] = []
+  for (const point of points) {
+    const { time, value } = point
+    if (typeof time === 'number' && time >= window.from && time <= window.to && typeof value === 'number' && Number.isFinite(value)) {
+      found.push([time, value])
+    }
+  }
+  return found
+}
+
+/**
+ * The last value of each plot that is not na, and the alerts in bar order; with a
+ * ``window``, each plot's numbers within it too (the day a test draws).
+ */
+export function runSummary(context: ContextLike, milliseconds: number, window?: { from: number; to: number }): RunSummary {
   const plots: PlotSummary[] = Object.entries(context.plots ?? {}).map(([key, plot]) => {
     const points = plot.data ?? []
     let last: PlotSummary['last'] = null
     for (let index = points.length - 1; index >= 0 && last === null; index -= 1) {
       last = plotValue(points[index]?.value)
     }
-    return { title: plot.title ?? key, points: points.length, last }
+    const summary: PlotSummary = { title: plot.title ?? key, points: points.length, last }
+    return window ? { ...summary, data: numbersWithin(points, window) } : summary
   })
   const alerts: AlertEvent[] = (context.alerts ?? [])
     .map((alert) => ({

@@ -2,12 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMemoryRouter, RouterProvider } from 'react-router'
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { ToastProvider } from '@/components/ToastProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import type { BacktestPaper, Session, TaEngine, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
+import { run as backtest } from '@/test/backtests'
 import { WithTrail } from '@/test/WithTrail'
 
 import { SignalRulesPage } from './SignalRulesPage'
@@ -146,16 +147,54 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
       }
       if (url.pathname.startsWith('/api/data/assets/')) return json({ bars: [] })
       if (url.pathname === '/api/backtests/paper') return json(paper)
+      if (url.pathname === `/api/backtests/${FROM_RUN.id}`) return json(FROM_RUN)
+      if (url.pathname === '/api/data/assets') {
+        return json({
+          timezone: 'Europe/Paris', seen: 'all', truncated: false, max: 5000, saxo_error: null,
+          items: [
+            { provider: 'capital', key: 'US100', ref: 'capital/US100', role: 'underlying', status: 'recording', tick: 0.1 },
+            { provider: 'dukascopy', key: 'us100', ref: 'dukascopy/us100', role: 'underlying', status: 'files', tick: 0.001 },
+          ],
+        })
+      }
       return json({ detail: `Not served in this test: ${method} ${url.pathname}` }, 404)
     }),
   )
 }
 
-function renderPage(session: Session = SESSION) {
+/** A backtest of the Cross on Dukascopy's us100, in range bars of 6 points: R6000 in its tick. */
+const FROM_RUN = (() => {
+  const made = backtest({ id: '20261021-133842-453160', name: 'Cross on Dukascopy' })
+  return {
+    ...made,
+    request: {
+      ...made.request,
+      chart: { asset: { provider: 'dukascopy' as const, key: 'us100' }, side: 'bid' as const, bars: { type: 'range' as const, ticks: 6000 } },
+      source: {
+        kind: 'pine' as const,
+        rule: {
+          ...(made.request.source.kind === 'pine' ? made.request.source.rule : ({} as never)),
+          name: 'Cross',
+          script: { id: CROSS.id, version: 1, sha256: 'x' },
+          inputs: [{ id: 'in_0', var: 'fast', title: 'Fast', value: 12 }],
+          alerts: [{ title: 'Up', action: 'long' as const }, { title: 'Down', action: 'short' as const }],
+        },
+        from_rule: null,
+      },
+    },
+  }
+})()
+
+function Address() {
+  const location = useLocation()
+  return <output data-testid="address">{`${location.pathname}${location.search}`}</output>
+}
+
+function renderPage(session: Session = SESSION, address = '/ta/signals') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
-    [{ path: '/ta/signals', element: <WithTrail><SignalRulesPage /></WithTrail> }],
-    { initialEntries: ['/ta/signals'] },
+    [{ path: '/ta/signals', element: <WithTrail><SignalRulesPage /><Address /></WithTrail> }],
+    { initialEntries: [address] },
   )
   render(
     <QueryClientProvider client={queryClient}>
@@ -226,6 +265,12 @@ describe('the Signal rules page', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Switch Cross on US100 to live' })
     expect(within(dialog).getByText(/switch TradingView's alerts for us100 off first/)).toBeInTheDocument()
     expect(within(dialog).getByText('“Up” → long')).toBeInTheDocument()
+    // Whether it is ready, as far as the page knows: the engine fails to run it, no signal journaled yet.
+    const ready = within(dialog).getByRole('list', { name: 'Is it ready?' })
+    expect(within(ready).getByText('Failing: The script does not run: Undeclared identifier (script, line 4).')).toBeInTheDocument()
+    expect(within(ready).getByText('None yet: what it would send is not known.')).toBeInTheDocument()
+    // Told, never stopped: the slide is there all the same.
+    expect(within(dialog).getByRole('slider')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(sent.filter((request) => request.method === 'POST')).toEqual([])
   })
@@ -294,5 +339,41 @@ describe('the Signal rules page', () => {
       revision: 'r1',
       mode: 'shadow',
     })
+  })
+
+  it('makes a rule in shadow from a backtest, its range brought to the tick of the Capital.com feed', async () => {
+    rules = []
+    const user = userEvent.setup()
+    renderPage(SESSION, `/ta/signals?from-run=${FROM_RUN.id}`)
+
+    const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    expect(within(dialog).getByRole('combobox', { name: 'Bars' })).toHaveValue('range')
+    // 6 points: R6000 on Dukascopy's us100 (0.001), R60 on Capital.com's US100 (0.1).
+    expect(within(dialog).getByRole('spinbutton', { name: 'Range, in steps of the price' })).toHaveValue(60)
+    expect(await within(dialog).findByRole('spinbutton', { name: 'Fast' })).toHaveValue(12)
+    await user.click(within(dialog).getByRole('button', { name: 'Review' }))
+    await user.click(await within(dialog).findByRole('button', { name: 'Make the rule' }))
+
+    await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/ta/rules')).toBe(true))
+    expect(sent.find((request) => request.method === 'POST' && request.path === '/api/ta/rules')!.body).toMatchObject({
+      name: 'Cross on US100',
+      asset: { provider: 'capital', key: 'US100' },
+      bars: { type: 'range', ticks: 60 },
+      script: { id: CROSS.id, version: 1 },
+      inputs: [{ id: 'in_0', var: 'fast', title: 'Fast', value: 12 }],
+      alerts: [{ title: 'Up', action: 'long' }, { title: 'Down', action: 'short' }],
+      mode: 'shadow',
+    })
+    // Asked once: the address forgets it, so that the page opened again does not make it twice.
+    await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent(/^\/ta\/signals$/))
+  })
+
+  it('makes a rule of the script its page asked for', async () => {
+    rules = []
+    renderPage(SESSION, `/ta/signals?new=${CROSS.id}`)
+
+    const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    expect(within(dialog).getByRole('combobox', { name: 'Script' })).toHaveValue(CROSS.id)
+    expect(within(dialog).getByRole('textbox', { name: 'Name' })).toHaveValue('Cross on US100')
   })
 })

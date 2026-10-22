@@ -73,5 +73,15 @@ alertcondition(ta.crossover(close, fast), title = "Cross up", message = "up {{cl
     expect(summary.alerts.every((alert) => alert.title === 'Cross up' && alert.message === 'up {{close}}')).toBe(true)
     const times = summary.alerts.map((alert) => alert.time)
     expect(times).toEqual([...times].sort((a, b) => a - b))
+    // Nothing of the plots' numbers unless a window is asked for.
+    expect(fast).not.toHaveProperty('data')
+
+    // A test draws its day: the numbers of that window alone, na left out.
+    const day = { from: 1_760_000_000_000 + 100 * 60_000, to: 1_760_000_000_000 + 109 * 60_000 }
+    const drawn = runSummary(context, 12.4, day)
+    const points = drawn.plots.find((plot) => plot.title === 'Fast')?.data ?? []
+    expect(points.map(([time]) => time)).toEqual(Array.from({ length: 10 }, (_, index) => day.from + index * 60_000))
+    expect(points.every(([, value]) => Number.isFinite(value))).toBe(true)
+    expect(drawn.plots.find((plot) => plot.title === 'Never')?.data).toEqual([])
   })
 })

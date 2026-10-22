@@ -1,5 +1,6 @@
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
 import type { BadgeTone } from '@/components/ui/badge'
+import { madeByClaude } from '@/features/system/claude'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { formatBytes, formatDay, formatPercent } from '@/lib/format'
 import type {
@@ -395,4 +396,88 @@ export function researchSentence(status: ResearchFiles): string {
       : 'No day written yet'
   const writing = status.exporting ? ` Writing ${formatDay(status.exporting)}.` : ` ${STATE_SENTENCE[status.state]}`
   return `Research files on: ${days}; the last ${status.keep_days} are kept.${writing}`
+}
+
+// ── the list of runs ──
+
+/** What the list of runs is narrowed to, as its address says it (?state=failed&by=claude…). */
+export interface RunFilter {
+  state: 'active' | 'done' | 'failed' | 'stopped' | null
+  by: 'me' | 'claude' | null
+  experiment: string | null
+  turbos: BacktestTurbos | null
+  code: 'current' | 'older' | null
+}
+
+export const RUN_FILTER_NAMES = ['state', 'by', 'experiment', 'turbos', 'code'] as const
+
+const STATE_GROUP: Record<BacktestState, NonNullable<RunFilter['state']>> = {
+  queued: 'active',
+  running: 'active',
+  done: 'done',
+  failed: 'failed',
+  interrupted: 'failed',
+  cancelled: 'stopped',
+}
+
+/** The filter an address names; what it does not know is left out. */
+export function runFilterOf(params: URLSearchParams): RunFilter {
+  const one = <T extends string>(name: string, known: readonly T[]): T | null => {
+    const value = params.get(name)
+    return known.includes(value as T) ? (value as T) : null
+  }
+  return {
+    state: one('state', ['active', 'done', 'failed', 'stopped']),
+    by: one('by', ['me', 'claude']),
+    experiment: params.get('experiment') || null,
+    turbos: one('turbos', ['recorded', 'modelled']),
+    code: one('code', ['current', 'older']),
+  }
+}
+
+export function filterRuns(runs: readonly BacktestRunListed[], filter: RunFilter): BacktestRunListed[] {
+  return runs.filter(
+    (run) =>
+      (!filter.state || STATE_GROUP[run.status.state] === filter.state) &&
+      (!filter.by || (filter.by === 'claude') === madeByClaude(run)) &&
+      (!filter.experiment || run.experiment === filter.experiment) &&
+      (!filter.turbos || (run.turbos ?? 'recorded') === filter.turbos) &&
+      (!filter.code || (filter.code === 'older') === Boolean(run.stale)),
+  )
+}
+
+/** What makes two runs the same request, asked again after one failed: everything but when. */
+function requestKey(run: BacktestRunListed): string {
+  return JSON.stringify([
+    run.kind, run.name, run.from, run.to, run.indice, run.source.kind, run.source.script?.id ?? null, run.source.script?.version ?? null,
+    run.chart, run.changes, run.turbos ?? 'recorded', run.stress_of ?? null, run.model_check_of ?? null,
+  ])
+}
+
+/**
+ * The failed runs a later run of the same request stands for, listed under it
+ * rather than as rows of their own: a run asked again and again until it
+ * finished (13 of 32 on the server on 22 Oct 2026). The runs come newest first.
+ */
+export function collapseAttempts(runs: readonly BacktestRunListed[]): { shown: BacktestRunListed[]; earlier: Map<string, BacktestRunListed[]> } {
+  const keeper = new Map<string, string>()
+  const earlier = new Map<string, BacktestRunListed[]>()
+  const shown: BacktestRunListed[] = []
+  for (const run of runs) {
+    const key = requestKey(run)
+    const kept = keeper.get(key)
+    if (kept && (run.status.state === 'failed' || run.status.state === 'interrupted')) {
+      earlier.set(kept, [...(earlier.get(kept) ?? []), run])
+      continue
+    }
+    shown.push(run)
+    if (!kept) keeper.set(key, run.id)
+  }
+  return { shown, earlier }
+}
+
+/** What a failed run said last: the sentence its error ends with. */
+export function failureLine(run: Pick<BacktestRunListed, 'status'>): string {
+  const lines = (run.status.error ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+  return lines[lines.length - 1] ?? ''
 }

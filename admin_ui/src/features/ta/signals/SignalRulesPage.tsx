@@ -7,8 +7,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
+import { CheckList } from '@/components/CheckList'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { PageHeader, Panel } from '@/components/Panel'
 import { ClaudeBadge, QueryState, ServiceStatusBadge } from '@/components/status'
@@ -29,8 +30,10 @@ import type { TaEngine, TaRule, TaRuleMode, TaRules } from '@/lib/types'
 import { ComparisonPanel } from './ComparisonPanel'
 import { RuleDialog } from './RuleDialog'
 import type { RuleDialogStart } from './RuleDialog'
-import { barsLabel, MODE_LABEL, MODE_TONE, mappedAlerts, updatesOf } from './ruleModel'
+import { barsLabel, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, updatesOf } from './ruleModel'
+import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
+import { liveReadiness } from './readiness'
 import { SignalJournal } from './SignalJournal'
 
 const STATE_LABEL: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
@@ -99,10 +102,40 @@ export function SignalRulesPage() {
   const paperQuery = useQuery({ queryKey: ['backtest-paper'], queryFn: api.backtestPaper, enabled: backtestsEnabled, staleTime: 60_000 })
   const paper = paperQuery.data
   const rules: TaRules | undefined = rulesQuery.data
-  const scripts = scriptsQuery.data?.items ?? []
+  const scripts = useMemo(() => scriptsQuery.data?.items ?? [], [scriptsQuery.data])
   const states = engineQuery.data?.rules ?? {}
 
   const [dialog, setDialog] = useState<{ rule: TaRule | null; start: RuleDialogStart } | null>(null)
+
+  // A rule asked for from elsewhere: from a script's page (?new=<script>), or made from a backtest
+  // (?from-run=<run>). Its dialog opens once what it is made of is read, and the address forgets it as it closes.
+  const [params, setParams] = useSearchParams()
+  const askedScript = params.get('new')
+  const askedRun = params.get('from-run')
+  const fromRunQuery = useQuery({
+    queryKey: ['backtest', askedRun],
+    queryFn: () => api.backtest(askedRun ?? ''),
+    enabled: Boolean(askedRun) && backtestsEnabled,
+  })
+  // An asset's tick, for a range read on another asset than the rule's.
+  const assetsQuery = useQuery({ queryKey: ['data-assets', 'all'], queryFn: () => api.dataAssets('all'), enabled: Boolean(askedRun), staleTime: 60_000 })
+  const askedDraft = useMemo((): RuleDraft | null => {
+    if (!rules) return null
+    if (askedScript) {
+      const script = scripts.find((entry) => entry.id === askedScript && entry.kind !== 'library')
+      return script ? newDraft(script, rules.instruments[0], rules.indices) : null
+    }
+    if (askedRun && fromRunQuery.data && assetsQuery.data) {
+      const ticks = new Map(assetsQuery.data.items.map((asset) => [asset.ref, asset.tick]))
+      return ruleDraftOfRun(fromRunQuery.data, rules.instruments, (ref) => ticks.get(ref))
+    }
+    return null
+  }, [rules, scripts, askedScript, askedRun, fromRunQuery.data, assetsQuery.data])
+  const shownDialog = dialog ?? (askedDraft ? { rule: null, start: 'edit' as const, draft: askedDraft } : null)
+  const closeDialog = () => {
+    setDialog(null)
+    if (askedScript || askedRun) setParams({}, { replace: true })
+  }
   const [changing, setChanging] = useState<ModeChange | null>(null)
   const [deleting, setDeleting] = useState<TaRule | null>(null)
 
@@ -369,8 +402,16 @@ export function SignalRulesPage() {
       {rules && <SignalJournal rules={rules.rules} timeZone={timezone} />}
       {rules && rules.rules.length > 0 && <ComparisonPanel rules={rules.rules} timeZone={timezone} />}
 
-      {rules && dialog && (
-        <RuleDialog open rule={dialog.rule} start={dialog.start} rules={rules} scripts={scripts} onClose={() => setDialog(null)} />
+      {rules && shownDialog && (
+        <RuleDialog
+          open
+          rule={shownDialog.rule}
+          draft={'draft' in shownDialog ? shownDialog.draft : undefined}
+          start={shownDialog.start}
+          rules={rules}
+          scripts={scripts}
+          onClose={closeDialog}
+        />
       )}
 
       <ConfirmLiveAction
@@ -400,6 +441,14 @@ export function SignalRulesPage() {
                 ))}
               </ul>
               <p>The trader applies its usual rules to each of them. The switch is recorded in the audit trail.</p>
+              <div className="space-y-2 pt-2">
+                <p className="font-medium">Is it ready?</p>
+                <CheckList
+                  checks={liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone)}
+                  label="Is it ready?"
+                />
+                <p className="text-xs text-muted-foreground">What this page knows of it. Nothing here stops the switch: it is yours.</p>
+              </div>
             </div>
           ) : (
             <p>

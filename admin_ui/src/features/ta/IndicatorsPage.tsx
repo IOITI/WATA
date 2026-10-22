@@ -2,7 +2,7 @@
 // strategies and the libraries they import), kept by the admin as .pine files.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChartSpline, Copy, Download, FileUp, Plus, Trash2 } from 'lucide-react'
+import { ChartSpline, Copy, Download, FileUp, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -55,10 +55,14 @@ function ScriptNames({ entries }: { entries: { name: string; script?: TaScriptSu
   )
 }
 
+// An icon of a row's actions that leads to a page.
+const ICON_LINK = 'inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground'
+
 function scriptColumns(
   timezone: string,
   importers: Map<string, TaScriptSummary[]>,
   libraries: Map<string, TaScriptSummary>,
+  backtests: boolean,
   act: (action: 'duplicate' | 'delete', script: TaScriptSummary) => void,
 ): ColumnDef<TaScriptSummary>[] {
   return [
@@ -153,18 +157,23 @@ function scriptColumns(
         // Lifted by half their height above a line of text, so that they sit on the row's first line.
         <div className="-my-2 flex justify-end gap-1">
           {row.kind !== 'library' && (
-            <Link
-              to={chartsPath({ script: row.id })}
-              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
-              aria-label={`Open ${row.name} in Charts`}
-              title="Open in Charts"
-            >
+            <Link to={chartsPath({ script: row.id })} className={ICON_LINK} aria-label={`Open ${row.name} in Charts`} title="Open in Charts">
               <ChartSpline className="size-4" />
+            </Link>
+          )}
+          {row.kind !== 'library' && backtests && (
+            <Link
+              to={`/backtests/new?script=${row.id}&version=${row.version}`}
+              className={ICON_LINK}
+              aria-label={`Backtest ${row.name}`}
+              title={`Backtest version ${row.version}`}
+            >
+              <FlaskConical className="size-4" />
             </Link>
           )}
           <a
             href={taScriptSourceUrl(row.id)}
-            className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
+            className={ICON_LINK}
             aria-label={`Download ${row.name} as a .pine file`}
             title="Download .pine"
           >
@@ -185,7 +194,7 @@ function scriptColumns(
 }
 
 export function IndicatorsPage() {
-  const { timezone } = useSession()
+  const { timezone, backtests_enabled: backtests } = useSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
@@ -234,7 +243,7 @@ export function IndicatorsPage() {
 
   const columns = useMemo(
     () =>
-      scriptColumns(timezone, importers, libraries, (action, script) => {
+      scriptColumns(timezone, importers, libraries, backtests, (action, script) => {
         if (action === 'delete') {
           deleteMutation.reset()
           setDeleting(script)
@@ -246,7 +255,7 @@ export function IndicatorsPage() {
       }),
     // The mutations' reset is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone, importers, libraries],
+    [timezone, importers, libraries, backtests],
   )
 
   const onFile = (event: ChangeEvent<HTMLInputElement>) => {

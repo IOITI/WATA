@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.28.0 - Technical Analysis and Backtests: from a script to a live rule, and whether to believe a run
+
+**Release date:** not released yet
+
+The first batch of a review of the Technical Analysis and Backtests pages, for the way a strategy goes: a script, its test, its backtests, a rule in shadow, its days on paper, live. The admin interface only, with one change to the pages' Pine worker: nothing the trading services or the TA engine run changes.
+
+- **Whether a run can be believed, at the top of its page.** A run is checked against the bar Claude's research is held to (the MCP's instructions), each check saying what it found and leading to the part of the page that says more. The pages and Claude now judge a run alike.
+  - For a run: at least 30 trades over 20 days, random entries beaten 95 % of the time, an edge in its entries (t of 2.6 at its strongest horizon), its result still above zero a step later and dearer (when it has been stressed), made-up turbos checked against recorded ones (for a run on them), today's code.
+  - For a sweep: the choice held on the days held out, its probability of overfitting (0.5 at most), its deflated Sharpe ratio (95 %).
+  - The checks say "Not to be believed yet", "Nothing against it so far" with what is still open, or that every check passes. The sentence on too few trades moves into the first check.
+- **A run's page has an index of its parts** (Verdict, Trust, Edge, Stress, Day after day, Why, Where it comes from, the tables, What it ran), staying at its top from a tablet up. Each part has an address (`#edge`), which opens the page at it.
+- **The steps of a strategy lead to each other.**
+  - The script editor has "Backtest v5" (the form filled with that script and version) and "New signal rule" (the rule's dialog opened on it), beside "Open in Charts"; a row of the Indicators list has the backtest too.
+  - A run of a Pine script has "Make a shadow rule": the rule's dialog filled with its script version, inputs, alerts, price and bars, made in shadow once reviewed. A run on Dukascopy's us100 becomes a rule on Capital.com's US100, its range counted in that tick: R6000 is R60.
+  - The script a run traded is a link on the run's page.
+  - The form takes `?script=<id>&version=<n>`, and the Signal rules page `?new=<script>` and `?from-run=<run>`: links like any other.
+- **The editor's test draws what the script did**, under the editor across the page: the day's bars, its plots near the prices as lines (four at most, named in a legend; an oscillator off the prices' scale is listed apart), its alerts on their bars. A click on an alert in the list brings it into view. The pages' Pine worker now hands back the plots' numbers of the day it is asked for (`series` of a run); nothing else asks for them.
+- **Going live says whether the rule is ready**, in the confirmation, and never stops the switch:
+  - a week in shadow;
+  - signals journaled;
+  - its days on paper within the range of its reference run;
+  - the engine running it without fault;
+  - the latest version of its script.
+- **The TradingView comparison goes from day to day** with ◀ and ▶, the weekends stepped over.
+- **Every price chart follows a change of theme**: those of a backtest's day and of one of its trades, and the TradingView comparison's, are drawn again in the other theme, as an asset's chart already was. They kept the colours of the theme they were made in.
+- **The list of runs narrows by state, by who made them, experiment, turbos and code**, in its address. Each experiment's runs count is a link to that list. The failed attempts of a request are folded under the run that came after them ("9 earlier failed attempts", each with what it said), and can be removed from there: on the server, 13 of the 32 runs were such attempts.
+
+**Verification status:**
+- 885 interface tests pass, 33 of them new, among them a PineTS run on the plots' numbers of a day and the comparison's first tests; each chart's test of another theme fails without its fix. Lint, type checks, the build, `build:runner` and `build:checker` are clean.
+- The runner is built from code the change touches (`pineRun.ts`, whose summary it does not use): the TA engine's and the replay's 91 Python tests pass on it, none skipped.
+- In a browser against the fake admin, in the light theme, at 1,440 px and on a phone's 375 px: a script tested (its two averages drawn over the day, an alert brought into view from the list), backtested from the editor's button, the run read from its checks down (three failed, the stress one open) and an index link followed to its part, below the index; the rule's dialog opened from that run (its script version, inputs, alerts and bars filled in; not saved), the live confirmation's checks, the comparison stepped back three weekdays, the list narrowed from its address. The list fits a 1,440 px screen. On the phone the index stays in the page's flow and nothing scrolls sideways.
+
+**Not seen:** the dark theme of the new parts (their colours are the theme's tokens); failed attempts folded in a browser (the fake admin had none) and a stress check that passes; the server.
+
 ## v0.27.0 - The admin: links that open in another tab, charts in full screen, versions side by side
 
 **Release date:** not released yet

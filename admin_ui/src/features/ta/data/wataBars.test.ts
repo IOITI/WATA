@@ -5,7 +5,7 @@ import type { AssetDetails, AssetStatus, PriceBarRow, PriceBars, PriceRangeBars,
 
 import { parseTicker } from '../engine/tickers'
 import type { WataTicker } from '../engine/tickers'
-import { addDays, dayIn, timeBar, WataBars, windowed } from './wataBars'
+import { addDays, dayIn, nextWeekday, timeBar, WataBars, windowed } from './wataBars'
 import type { BarsClient } from './wataBars'
 
 const PARIS = 'Europe/Paris'
@@ -62,6 +62,10 @@ describe('days', () => {
     expect(dayIn(Date.UTC(2026, 9, 14, 23, 30), PARIS)).toBe('2026-10-15')
     expect(addDays('2026-10-01', -1)).toBe('2026-09-30')
     expect(addDays('2026-10-24', 2)).toBe('2026-10-26')
+    // The weekday before Monday 26 is Friday 23, the one after Friday 23 is Monday 26.
+    expect(nextWeekday('2026-10-26', -1)).toBe('2026-10-23')
+    expect(nextWeekday('2026-10-23', 1)).toBe('2026-10-26')
+    expect(nextWeekday('2026-10-21', 1)).toBe('2026-10-22')
   })
 })
 

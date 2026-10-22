@@ -177,8 +177,10 @@ describe('the Indicators page', () => {
       `/api/ta/scripts/${EMA.id}/source.pine`,
     )
     expect(screen.getByRole('link', { name: 'Open EMA in Charts' })).toHaveAttribute('href', `/ta/charts?script=${EMA.id}`)
-    // A library is not opened on a chart by itself.
+    expect(screen.getByRole('link', { name: 'Backtest EMA' })).toHaveAttribute('href', `/backtests/new?script=${EMA.id}&version=2`)
+    // A library is not opened on a chart by itself, nor backtested.
     expect(screen.queryByRole('link', { name: 'Open Helpers in Charts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Backtest Helpers' })).not.toBeInTheDocument()
     // Claude's script says so beside its name.
     expect(within(rowOf('Doubled')).getByText('Claude')).toBeInTheDocument()
     expect(within(rowOf('EMA')).queryByText('Claude')).toBeNull()
@@ -218,6 +220,15 @@ describe('the Indicators page', () => {
 })
 
 describe('the script editor', () => {
+  it('leads to the next steps of the script as saved: its chart, a backtest, a signal rule', async () => {
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    await screen.findByRole('textbox', { name: 'Pine source of EMA' })
+    expect(screen.getByRole('link', { name: 'Open in Charts' })).toHaveAttribute('href', `/ta/charts?script=${EMA.id}`)
+    expect(screen.getByRole('link', { name: 'Backtest v2' })).toHaveAttribute('href', `/backtests/new?script=${EMA.id}&version=2`)
+    expect(screen.getByRole('link', { name: 'New signal rule' })).toHaveAttribute('href', `/ta/signals?new=${EMA.id}`)
+  })
+
   it('saves a changed source as a new version, naming the version it started from', async () => {
     const user = userEvent.setup()
     renderAt(`/ta/indicators/${EMA.id}`)
