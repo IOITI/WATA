@@ -860,6 +860,23 @@ def test_a_runner_that_ended_is_started_again_and_every_rule_loaded_again(script
     assert any("ended" in message for message in telegram.messages)
 
 
+def test_a_runner_gone_between_two_ticks_loads_its_rules_again_and_says_nothing_failed(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts, mode="live")
+    run(engine.tick())
+    # Gone while the engine waited (killed for memory, say): the process started again holds no
+    # rule, and answers a bar of one as the runner does (runnerCore.ts).
+    runner.running = False
+    runner.failing = ("append", RunnerFailed({"message": f"No rule {rule['id']} is loaded"}))
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 61.5
+
+    run(engine.tick())
+
+    assert runner.starts == 2 and [request["op"] for request in runner.requests] == ["load", "load"]
+    assert runner.requests[-1]["bars"][-1][6] == (T0 + 60) * 1000
+    assert telegram.messages == [] and journal.rule_states[-1][0]["state"] == "running"
+
+
 def test_each_day_at_restart_time_every_rule_starts_again_from_fewer_bars(scripts):
     engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, settings=TaEngineSettings(enabled=True, history_days=0))
     run(engine.tick())

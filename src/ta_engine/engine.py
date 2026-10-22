@@ -205,6 +205,9 @@ class Engine:
         if not any(ready.values()):
             await self._write_states(now)
             return
+        # Read again: a runner started just now (it had ended since the last tick) holds none of
+        # its rules, which _slot_ready made anew. Those of before would send it bars of rules it never loaded.
+        active = [run for run in self._runs.values() if run.rule.mode != OFF and run.retry_at <= now]
         # Live rules first: a shadow rule never holds back a signal that is sent. Then the shadow
         # rule given its bars longest ago: one slow rule never keeps the others waiting tick after tick.
         active.sort(key=lambda run: (0, 0.0) if run.rule.mode == LIVE else (1, run.given_at))
