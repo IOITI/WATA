@@ -2,7 +2,7 @@
 
 ## v0.29.0 - Technical Analysis: the Engine monitor
 
-**Release date:** not released yet
+**Release date:** 2026-10-22, with v0.27.0 and v0.28.0
 
 How fast the TA engine runs each rule, how late its signals are, and what became of them, on a page of its own. The engine measures itself to that end and keeps it a week; the signals' delivery and results are read from the journals WATA already keeps, which nothing deletes.
 
@@ -36,7 +36,7 @@ How fast the TA engine runs each rule, how late its signals are, and what became
 
 ## v0.28.0 - Technical Analysis and Backtests: from a script to a live rule, and whether to believe a run
 
-**Release date:** not released yet
+**Release date:** 2026-10-22, with v0.29.0
 
 The first batch of a review of the Technical Analysis and Backtests pages, for the way a strategy goes: a script, its test, its backtests, a rule in shadow, its days on paper, live. The admin interface only, with one change to the pages' Pine worker: nothing the trading services or the TA engine run changes.
 
@@ -70,7 +70,7 @@ The first batch of a review of the Technical Analysis and Backtests pages, for t
 
 ## v0.27.0 - The admin: links that open in another tab, charts in full screen, versions side by side
 
-**Release date:** not released yet
+**Release date:** 2026-10-22, with v0.29.0
 
 The admin interface only: nothing the trading services run changes.
 
