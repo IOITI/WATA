@@ -40,17 +40,22 @@ def test_the_engines_measures_have_tables_of_their_own_made_without_touching_oth
 
 def test_each_tick_is_a_statement_and_the_runs_of_all_of_them_are_one():
     db = FakeConnMgr()
-    ticks = [{"tick_at": AT, "milliseconds": 182, "deferred_rules": ["0123456789ab"]}, {"tick_at": AT + timedelta(seconds=10)}]
+    ticks = [
+        {"tick_at": AT, "milliseconds": 182, "deferred_rules": ["0123456789ab"], "figures": {"first": True}},
+        {"tick_at": AT + timedelta(seconds=10)},
+    ]
     runs = [{"rule_id": "0123456789ab", "tick_at": AT, "kind": "append"}, {"rule_id": "ba9876543210", "tick_at": AT, "kind": "load"}]
 
     asyncio.run(AsyncDbTaManager(db).write_monitoring(ticks, runs))
 
     first, second, all_runs = db.calls
     assert first[0].startswith("INSERT INTO ta_engine_tick (tick_at, ended_at, milliseconds,")
-    assert first[0].endswith(f"VALUES ({', '.join(f'${index}' for index in range(1, len(TA_TICK_COLUMNS) + 1))}) "
-                             "ON CONFLICT (tick_at) DO NOTHING")
+    assert ", oom_kills, figures) VALUES (" in first[0]
+    assert first[0].endswith(f"VALUES ({', '.join(f'${index}' for index in range(1, len(TA_TICK_COLUMNS) + 1))}, "
+                             f"${len(TA_TICK_COLUMNS) + 1}::jsonb) ON CONFLICT (tick_at) DO NOTHING")
     assert first[1][0] == AT and first[1][2] == 182 and first[1][TA_TICK_COLUMNS.index("deferred_rules")] == ["0123456789ab"]
-    assert second[1][0] == AT + timedelta(seconds=10)
+    assert first[1][-1] == '{"first": true}'
+    assert second[1][0] == AT + timedelta(seconds=10) and second[1][-1] == "{}"
     assert "SELECT * FROM unnest($1::text[], $2::timestamptz[], $3::text[]" in all_runs[0]
     assert all_runs[0].endswith("ON CONFLICT (rule_id, tick_at) DO NOTHING")
     columns = [name for name, _ in TA_RUN_COLUMNS]

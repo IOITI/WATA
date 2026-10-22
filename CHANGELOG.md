@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.29.1 - A deploy no longer sets off the TA engine's feed warning, and the engine gets 2.5 GB
+
+**Release date:** not released yet
+
+- **The feed check leaves out the engine's first tick after a start.** At the deploy of v0.29.0, the engine's first tick found the Capital.com feed 99 s behind, the feed having stopped with it, and health said a TA engine warning for the next 15 minutes; every tick after it was 1 to 2 s behind. The engine now marks that tick (`figures.first` of its `ta_engine_tick` row), and the feed's check, its tile and health leave it out. The charts still show it. The daily restart is not a start: the engine's process and the feed keep running.
+- **The TA engine's container has 2.5 GB** (`2560M`, was `1024M`; held by `tests/test_deploy_compose.py`). Its first measures on the server: a shadow runner of 256 MB of heap held 729 MB, the native memory PineTS's compiles keep beside the heap, and the container 768 MB of its 1,024, where the memory check fails at 85 %. The runners' heaps are unchanged (`runner_memory_mb` 512, `shadow_runner_memory_mb` 256 by default).
+
+**Deploying it:** nothing to set; the container takes its new memory when `watastart` creates it again.
+
+**Verification status:** 2,357 Python tests pass; the 15 skipped need a database and a queue of their own. On a real PostgreSQL 16 (pgserver), the TA engine's live tests, a first tick 99 s behind among them, left out of how far the feed was.
+
+**Not seen:** a deploy without the warning; the container's 2.5 GB on the server.
+
 ## v0.29.0 - Technical Analysis: the Engine monitor
 
 **Release date:** 2026-10-22, with v0.27.0 and v0.28.0

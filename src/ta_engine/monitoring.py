@@ -130,6 +130,8 @@ class TickMark:
     # The rules not run: their runner would not start, or ended earlier in the tick.
     skipped: int = 0
     restarted: bool = False
+    # The engine's first tick since it started: the feed it read may have stopped with it (a deploy).
+    first: bool = False
     error: str | None = None
     runner_starts: int | None = None
     shadow_runner_starts: int | None = None
@@ -156,6 +158,7 @@ class TickMark:
             "runner_starts": self.runner_starts,
             "shadow_runner_starts": self.shadow_runner_starts,
             **{name: memory.get(name) for name in MEMORY_FIELDS},
+            "figures": {"first": True} if self.first else {},
         }
 
 

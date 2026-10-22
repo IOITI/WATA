@@ -323,7 +323,8 @@ def _feed_check(ticks: dict, settings) -> dict:
             f"The Capital.com feed fell {duration(lag)} behind: nothing is sent past {duration(limit)}."
         ))
     return _check("feed", label, "pass", (
-        f"The Capital.com feed was {duration(lag)} behind at most (nothing is sent past {duration(limit)})."
+        f"The Capital.com feed was {duration(lag)} behind at most, the engine's first tick after a start aside "
+        f"(nothing is sent past {duration(limit)})."
     ))
 
 

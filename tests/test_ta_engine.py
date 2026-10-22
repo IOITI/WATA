@@ -1262,6 +1262,8 @@ def test_each_run_is_measured_and_a_signal_finds_its_run_by_its_tick(scripts):
     assert append["bar_closed_at"] == moment(T0 + 60) and append["done_at"] == moment(T0 + 61.75)
     first, second = journal.ticks
     assert (first["loads"], first["runs"], first["rules_on"], first["restarted"]) == (1, 1, 1, False)
+    # The engine's first tick since it started is said: the feed may have stopped with it.
+    assert first["figures"] == {"first": True} and second["figures"] == {}
     assert (second["tick_at"], second["runs"], second["loads"], second["failed"]) == (moment(T0 + 61.5), 1, 0, 0)
     assert second["rows_read"] == sum(1 for row in source.rows_by_time if T0 <= row[0] < T0 + 60)
     assert (second["covered_until"], second["milliseconds"], second["error"]) == (moment(T0 + 60), 250, None)
@@ -1343,6 +1345,8 @@ def test_measures_older_than_the_days_kept_are_removed_at_start_and_at_each_rest
 
     assert journal.purged == [moment(T0 + 1.5 - 3 * 86_400), moment(restart + 601.5 - 3 * 86_400)]
     assert [tick["restarted"] for tick in journal.ticks] == [False, True, False]
+    # The daily restart is not a start: the engine's process, and the feed, kept running.
+    assert [tick["figures"] for tick in journal.ticks] == [{"first": True}, {}, {}]
 
 
 def test_the_engine_says_how_long_it_keeps_its_measures_and_how_their_writing_goes(scripts):

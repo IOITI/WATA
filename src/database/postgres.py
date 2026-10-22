@@ -1698,17 +1698,21 @@ class AsyncDbTaManager:
             )
 
     async def write_monitoring(self, ticks: list[dict], runs: list[dict]) -> None:
-        """What the engine measured of its ticks and runs (keys of TA_TICK_COLUMNS, TA_RUN_COLUMNS); a row there stays."""
+        """
+        What the engine measured of its ticks and runs (keys of TA_TICK_COLUMNS, a tick's ``figures``,
+        TA_RUN_COLUMNS); a row there stays.
+        """
         placeholders = ", ".join(f"${index}" for index in range(1, len(TA_TICK_COLUMNS) + 1))
         for tick in ticks:
             # One a statement: a tick's deferred rules are an array, which unnest would flatten.
             await self.db.execute(
                 f"""
-                INSERT INTO ta_engine_tick ({", ".join(TA_TICK_COLUMNS)})
-                VALUES ({placeholders})
+                INSERT INTO ta_engine_tick ({", ".join(TA_TICK_COLUMNS)}, figures)
+                VALUES ({placeholders}, ${len(TA_TICK_COLUMNS) + 1}::jsonb)
                 ON CONFLICT (tick_at) DO NOTHING
                 """,
                 *(tick.get(column) for column in TA_TICK_COLUMNS),
+                json.dumps(tick.get("figures") or {}),
             )
         if not runs:
             return

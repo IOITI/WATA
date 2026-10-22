@@ -621,12 +621,14 @@ def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_old
         return tick.row(moment + 0.2, {"memory_used_mb": 500.0, "memory_limit_mb": 1024.0, "oom_kills": 0}), run.row()
 
     old_tick, old_run = measured(at - 9 * 86_400, LOAD, 400)
+    # The engine's first tick after a start, the feed stopped with it 99 s before.
+    started = TickMark(at - 30, covered_until=int(at - 129), first=True).row(at - 29.9, {})
     tick, run = measured(at, APPEND, 60)
 
     async def scenario(writer, reader):
         await init_ta_schema(writer)
         store = AsyncDbTaManager(writer)
-        await store.write_monitoring([old_tick, tick], [old_run, run])
+        await store.write_monitoring([old_tick, started, tick], [old_run, run])
         await store.write_monitoring([tick], [run])  # written again: kept as it was
         signal_id = await store.journal_signal({
             "rule_id": "aaaaaaaaaaaa", "rule_name": "Rule aa", "script_id": "0123456789ab", "script_version": 3,
@@ -658,7 +660,8 @@ def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_old
     ]
     assert recent["deferred"] == [{"rule_id": "bbbbbbbbbbbb", "ticks": 1}]
     assert recent["signals"] == [{"rule_id": "aaaaaaaaaaaa", "outcome": "sent", "detail": None, "signals": 1}]
-    assert recent["ticks"]["ticks"] == 1 and recent["ticks"]["feed_lag_max_ms"] == pytest.approx(1500, abs=1000)
+    # The first tick after a start counts as a tick, but not for how far behind the feed was.
+    assert recent["ticks"]["ticks"] == 2 and recent["ticks"]["feed_lag_max_ms"] == pytest.approx(1500, abs=1000)
     # The steps of the signal, its run's among them: the join of the signal's raised_at and the run's tick_at held.
     steps = {row["step"]: row for row in period["steps"]}
     assert steps["close_to_tick"]["p50"] == pytest.approx(1500)
@@ -668,7 +671,7 @@ def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_old
     assert [row["rule_id"] for row in period["rules"]] == ["aaaaaaaaaaaa"] and period["rules"][0]["loads"] == 1
     assert of_another["rules"] == [] and of_another["deferred"] == [{"rule_id": "bbbbbbbbbbbb", "ticks": 2}]
     # The tick of nine days ago and its run, gone; the rest kept.
-    assert removed == 2 and left["kept_since"] == tick["tick_at"] and left["rules"][0]["loads"] == 0
+    assert removed == 2 and left["kept_since"] == started["tick_at"] and left["rules"][0]["loads"] == 0
 
 
 # ── RabbitMQ, through what the services publish and consume with ──

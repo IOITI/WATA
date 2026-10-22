@@ -162,6 +162,12 @@ def test_the_ta_engine_is_only_started_on_request_and_reachable_by_nothing(compo
         assert "ta_engine1" not in (service.get("depends_on") or {}), name
 
 
+def test_the_ta_engine_has_room_for_its_runners_beyond_their_heaps(compose_services):
+    # Its two runners' heaps, the native memory PineTS's compiles keep beside them, and the engine:
+    # at 1024M, a shadow runner of 256 MB of heap held 729 MB and the container 768 MB.
+    assert compose_services["ta_engine1"]["deploy"]["resources"]["limits"]["memory"] == "2560M"
+
+
 def test_the_ta_engine_writes_only_its_log_and_reads_only_what_it_runs(compose_services):
     modes = _mount_modes(compose_services["ta_engine1"])
 

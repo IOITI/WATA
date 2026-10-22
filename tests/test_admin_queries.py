@@ -570,6 +570,8 @@ def test_the_last_minutes_of_the_engine_are_read_in_five_statements_that_count_i
     last, ticks, runs, deferred, signals = db.calls
     assert "FROM ta_engine_tick ORDER BY tick_at DESC LIMIT 1" in last[0] and last[1] == ()
     assert ticks[1] == (SINCE, 10_000) and "count(*) FILTER (WHERE milliseconds > $2 AND loads = 0 AND NOT restarted)" in ticks[0]
+    # How far behind the feed was leaves out the engine's first tick after a start (a deploy stops the feed too).
+    assert "FILTER (WHERE figures->'first' IS NULL) AS feed_lag_max_ms" in ticks[0]
     assert "GROUP BY rule_id, mode, runner" in runs[0] and runs[1] == (SINCE,)
     assert "unnest(deferred_rules)" in deferred[0]
     assert "WHERE mode = 'live' AND raised_at >= $1" in signals[0]

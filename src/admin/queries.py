@@ -1022,7 +1022,8 @@ class AdminQueries:
                    max(milliseconds) AS tick_max_ms,
                    max(milliseconds) FILTER (WHERE loads = 0 AND NOT restarted) AS steady_tick_max_ms,
                    count(*) FILTER (WHERE milliseconds > $2 AND loads = 0 AND NOT restarted) AS slow_ticks,
-                   max({_MS.format("tick_at - covered_until")}) AS feed_lag_max_ms,
+                   -- The engine's first tick after a start may find the feed stopped with it (a deploy).
+                   max({_MS.format("tick_at - covered_until")}) FILTER (WHERE figures->'first' IS NULL) AS feed_lag_max_ms,
                    max(memory_used_mb) AS memory_used_max_mb,
                    max(memory_limit_mb) AS memory_limit_mb,
                    greatest(max(oom_kills) - min(oom_kills), 0) AS oom_kills,

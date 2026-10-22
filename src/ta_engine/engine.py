@@ -184,6 +184,7 @@ class Engine:
         # What each tick and run took, written in the background; the tick being measured.
         self.monitoring = monitoring or Monitoring(journal, days=settings.monitoring_days, clock=clock)
         self._mark: TickMark | None = None
+        self._ticked = False
 
     # ── the loop ──
 
@@ -209,7 +210,8 @@ class Engine:
 
     async def tick(self) -> None:
         now = self._clock()
-        mark = self._mark = TickMark(now)
+        mark = self._mark = TickMark(now, first=not self._ticked)
+        self._ticked = True
         try:
             await self._tick(now, mark)
         except Exception as e:

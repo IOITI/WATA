@@ -475,8 +475,10 @@ services:
         limits:
           # The Pine runners' heaps (trade.config.ta_engine.runner_memory_mb for the live
           # rules, shadow_runner_memory_mb for the shadow ones) and the engine. The shadow
-          # runner is the first process stopped when it runs short.
-          memory: 1024M
+          # runner is the first process stopped when it runs short. A runner holds more
+          # than its heap: PineTS's compiles keep native memory (729 MB for a shadow
+          # runner of 256 MB of heap on 2026-10-22, 768 MB of the 1024M then).
+          memory: 2560M
     depends_on:
       rabbitmq1:
         condition: service_healthy

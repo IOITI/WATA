@@ -299,7 +299,7 @@ class FakeEngine:
             "feed_lag_p50_ms": 11_500 + rng.uniform(-300, 300),
             "feed_lag_max_ms": 38_000.0 if timedelta(hours=30) <= ago < timedelta(hours=30, minutes=10) else 13_200 + rng.uniform(0, 900),
             "live_rss_mb": round(live_rss, 1), "shadow_rss_mb": round(shadow_rss, 1) if shadow_rss else None,
-            "engine_rss_mb": 92.4, "memory_used_mb": round(live_rss + (shadow_rss or 0) + 92.4 + 64, 1), "memory_limit_mb": 1024.0,
+            "engine_rss_mb": 92.4, "memory_used_mb": round(live_rss + (shadow_rss or 0) + 92.4 + 64, 1), "memory_limit_mb": 2560.0,
         }
 
     def monitor_recent(self, since: datetime, slow_tick_ms: int) -> dict:
@@ -327,14 +327,14 @@ class FakeEngine:
             "runs": len(on), "loads": 0, "failed": 0, "deferred_rules": [], "skipped": 0, "restarted": False, "error": None,
             "runner_starts": 9, "shadow_runner_starts": 8, "live_rss_mb": tick["live_rss_mb"], "live_peak_mb": tick["live_rss_mb"] + 18,
             "shadow_rss_mb": tick["shadow_rss_mb"], "shadow_peak_mb": tick["shadow_rss_mb"] and tick["shadow_rss_mb"] + 12,
-            "engine_rss_mb": 92.4, "memory_used_mb": tick["memory_used_mb"], "memory_limit_mb": 1024.0, "oom_kills": 0,
+            "engine_rss_mb": 92.4, "memory_used_mb": tick["memory_used_mb"], "memory_limit_mb": 2560.0, "oom_kills": 0,
         }
         return {
             "last_tick": last, "kept_since": now - timedelta(days=7),
             "ticks": {
                 "ticks": 90, "tick_p50_ms": tick["tick_p50_ms"], "tick_max_ms": tick["tick_max_ms"], "steady_tick_max_ms": tick["tick_max_ms"],
                 "slow_ticks": 0, "feed_lag_max_ms": tick["feed_lag_max_ms"], "memory_used_max_mb": tick["memory_used_mb"] + 6,
-                "memory_limit_mb": 1024.0, "oom_kills": 0, "deferred": sum(row["ticks"] for row in deferred),
+                "memory_limit_mb": 2560.0, "oom_kills": 0, "deferred": sum(row["ticks"] for row in deferred),
             },
             "runs": runs, "deferred": deferred,
             "signals": [{"rule_id": rule_id, "outcome": outcome, "detail": detail, "signals": count} for (rule_id, outcome, detail), count in signals.items()],
