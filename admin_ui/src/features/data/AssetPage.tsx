@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
 import { PageHeader, Panel } from '@/components/Panel'
+import { RouterLink } from '@/components/RouterLink'
 import { QueryState } from '@/components/status'
 import { AnimatedTabs } from '@/components/ui/animated-tabs'
 import { Button } from '@/components/ui/button'
@@ -152,15 +153,21 @@ function AssetView({ details }: { details: AssetDetails }) {
   const downloaded = asset.provider === 'dukascopy'
   const streamed = asset.provider === 'capital'
 
-  // Going through bars and periods must not leave as many steps to go back through.
-  const show = useCallback(
-    (next: ChartView, nextTab: Tab = tab) => {
+  const paramsFor = useCallback(
+    (next: ChartView, nextTab: Tab) => {
       const params = viewParams(next, anchor)
       if (nextTab !== 'chart') params.set('tab', nextTab)
-      setSearchParams(params, { replace: true })
+      return params
     },
-    [anchor, setSearchParams, tab],
+    [anchor],
   )
+  // Going through bars and periods must not leave as many steps to go back through.
+  const show = useCallback(
+    (next: ChartView, nextTab: Tab = tab) => setSearchParams(paramsFor(next, nextTab), { replace: true }),
+    [paramsFor, setSearchParams, tab],
+  )
+  // Each tab a link to the same period on it, which can be opened in another tab.
+  const tabs = TABS.map((entry) => ({ ...entry, href: `?${paramsFor(view, parseTab(entry.id)).toString()}` }))
 
   // Live while the recorder still names it (or the feed follows it) and the period reaches today.
   const live = (recorded || streamed) && asset.status === 'recording' && view.to >= today
@@ -226,7 +233,13 @@ function AssetView({ details }: { details: AssetDetails }) {
         )}
       </p>
 
-      <AnimatedTabs tabs={TABS} activeTab={tab} onChange={(next) => show(view, parseTab(next))} renderContent={false} />
+      <AnimatedTabs
+        tabs={tabs}
+        activeTab={tab}
+        onChange={(next) => show(view, parseTab(next))}
+        linkComponent={RouterLink}
+        renderContent={false}
+      />
 
       {tab === 'chart' &&
         (tooLong ? (

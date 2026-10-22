@@ -61,12 +61,19 @@ export function declaredKind(source: string): TaScriptKind | null {
 }
 
 /** The scripts that import each library, by the name the library declares. */
-export function importersOf(scripts: TaScriptSummary[]): Map<string, string[]> {
-  const importers = new Map<string, string[]>()
+export function importersOf(scripts: TaScriptSummary[]): Map<string, TaScriptSummary[]> {
+  const importers = new Map<string, TaScriptSummary[]>()
   for (const script of scripts) {
     for (const entry of script.imports) {
-      importers.set(entry.name, [...(importers.get(entry.name) ?? []), script.name])
+      importers.set(entry.name, [...(importers.get(entry.name) ?? []), script])
     }
   }
   return importers
+}
+
+/** The libraries, by the name each declares (what a script imports them by). */
+export function librariesOf(scripts: TaScriptSummary[]): Map<string, TaScriptSummary> {
+  return new Map(
+    scripts.filter((script) => script.kind === 'library' && script.library_name).map((script) => [script.library_name as string, script]),
+  )
 }

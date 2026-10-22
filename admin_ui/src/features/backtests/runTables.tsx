@@ -7,6 +7,7 @@ import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
 import { formatDay, formatMoney, formatNumber, formatPercent, formatTime } from '@/lib/format'
+import { isPlainClick } from '@/lib/links'
 import type { CsvColumn } from '@/lib/csv'
 import type { BacktestDay, BacktestSignal, BacktestTrade, BacktestTurbos } from '@/lib/types'
 
@@ -169,6 +170,11 @@ const TRADE_CSV: CsvColumn<BacktestTrade>[] = [
   { header: 'asset_at_exit', value: (row) => row.exit.asset_price },
 ]
 
+/** A trade's address: its day, with it opened. */
+function tradePath(runId: string, day: string, tradeId: number): string {
+  return `/backtests/${runId}/days/${day}?trade=${tradeId}`
+}
+
 export function TradesTable({
   runId,
   trades,
@@ -179,7 +185,7 @@ export function TradesTable({
   runId: string
   trades: BacktestTrade[]
   timezone: string
-  /** On a day's page: what a click on a trade does. Elsewhere, a trade links to its day. */
+  /** On a day's page: what a click on a trade does there. Opened in another tab, a trade's link is its day. */
   onShow?: (trade: BacktestTrade) => void
   withDay?: boolean
 }) {
@@ -190,16 +196,19 @@ export function TradesTable({
         header: 'Trade',
         accessorFn: (row) => row.id,
         sortable: true,
-        cell: ({ row }) =>
-          onShow ? (
-            <button type="button" className="font-medium underline-offset-4 hover:underline" onClick={() => onShow(row)}>
-              #{row.id}
-            </button>
-          ) : (
-            <Link to={`/backtests/${runId}/days/${row.day}?trade=${row.id}`} className="font-medium underline-offset-4 hover:underline">
-              #{row.id}
-            </Link>
-          ),
+        cell: ({ row }) => (
+          <Link
+            to={tradePath(runId, row.day, row.id)}
+            className="font-medium underline-offset-4 hover:underline"
+            onClick={(event) => {
+              if (!onShow || !isPlainClick(event)) return
+              event.preventDefault()
+              onShow(row)
+            }}
+          >
+            #{row.id}
+          </Link>
+        ),
       },
       ...(withDay
         ? [{ id: 'day', header: 'Day', accessorKey: 'day' as const, sortable: true, cell: ({ row }: { row: BacktestTrade }) => formatDay(row.day) }]
@@ -418,16 +427,19 @@ export function SignalsTable({
           if (ids.length === 0) return '-'
           return (
             <span className="flex flex-wrap gap-1 text-xs">
-              {row.trade_id !== null &&
-                (onTrade ? (
-                  <button type="button" className="underline underline-offset-2" onClick={() => onTrade(row.trade_id as number)}>
-                    bought #{row.trade_id}
-                  </button>
-                ) : (
-                  <Link className="underline underline-offset-2" to={`/backtests/${runId}/days/${row.day}?trade=${row.trade_id}`}>
-                    bought #{row.trade_id}
-                  </Link>
-                ))}
+              {row.trade_id !== null && (
+                <Link
+                  className="underline underline-offset-2"
+                  to={tradePath(runId, row.day, row.trade_id)}
+                  onClick={(event) => {
+                    if (!onTrade || !isPlainClick(event)) return
+                    event.preventDefault()
+                    onTrade(row.trade_id as number)
+                  }}
+                >
+                  bought #{row.trade_id}
+                </Link>
+              )}
               {row.closed_trade_ids.length > 0 && <span>sold {row.closed_trade_ids.map((id) => `#${id}`).join(', ')}</span>}
             </span>
           )

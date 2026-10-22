@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Columns3, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
+import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader } from '@/components/Panel'
 import { ClaudeBadge, PnlValue, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
@@ -152,7 +153,6 @@ function runColumns(timezone: string, selected: ReadonlySet<string>, toggle: (ru
 
 export function BacktestsPage() {
   const { timezone, backtests_enabled: enabled } = useSession()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [removing, setRemoving] = useState(false)
@@ -221,26 +221,20 @@ export function BacktestsPage() {
               >
                 Remove{chosen.length > 0 ? ` ${chosen.length}` : ''}
               </Button>
-              <Button
+              <ButtonLink
+                to={canCompare ? `/backtests/compare?runs=${compared.map((run) => run.id).join(',')}` : null}
                 variant="outline"
                 size="sm"
                 leftIcon={<Columns3 className="size-3.5" />}
-                disabled={!canCompare}
-                onClick={() => navigate(`/backtests/compare?runs=${compared.map((run) => run.id).join(',')}`)}
               >
                 Compare{canCompare ? ` ${compared.length}` : ''}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                leftIcon={<FlaskConical className="size-3.5" />}
-                onClick={() => navigate('/backtests/experiments')}
-              >
+              </ButtonLink>
+              <ButtonLink to="/backtests/experiments" variant="outline" size="sm" leftIcon={<FlaskConical className="size-3.5" />}>
                 Experiments
-              </Button>
-              <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={() => navigate('/backtests/new')}>
+              </ButtonLink>
+              <ButtonLink to="/backtests/new" size="sm" leftIcon={<Plus className="size-3.5" />}>
                 New backtest
-              </Button>
+              </ButtonLink>
             </>
           )
         }

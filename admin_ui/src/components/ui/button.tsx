@@ -67,6 +67,25 @@ const sizeStyles: Record<ButtonSize, string> = {
   icon: 'h-10 w-10 p-0 rounded-lg justify-center shrink-0',
 };
 
+/**
+ * WATA: the classes of a button of this variant and size, for a link that looks like one
+ * (`components/ButtonLink.tsx`): what leads to another page is a link.
+ */
+export function buttonClassName({
+  variant = 'primary',
+  size = 'md',
+  fullWidth = false,
+  className,
+}: Pick<ButtonProps, 'variant' | 'size' | 'fullWidth'> & { className?: string }): string {
+  return cn(
+    'relative inline-flex items-center justify-center font-medium select-none focus-ring transition-colors duration-150',
+    variantStyles[variant],
+    variant !== 'link' && sizeStyles[size],
+    fullWidth && 'w-full',
+    className
+  );
+}
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
     {
@@ -95,14 +114,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         whileTap={isDisabled ? undefined : { scale: 0.97 }}
         transition={motionTransitions.springSnappy}
         aria-busy={isLoading}
-        className={cn(
-          'relative inline-flex items-center justify-center font-medium select-none focus-ring transition-colors duration-150',
-          variantStyles[variant],
-          variant !== 'link' && sizeStyles[size],
-          fullWidth && 'w-full',
-          isDisabled && 'opacity-30 cursor-not-allowed pointer-events-none',
-          className
-        )}
+        className={buttonClassName({
+          variant,
+          size,
+          fullWidth,
+          className: cn(isDisabled && 'opacity-30 cursor-not-allowed pointer-events-none', className),
+        })}
         {...props}
       >
         {/* Subtle shimmer gradient for gradient variant */}

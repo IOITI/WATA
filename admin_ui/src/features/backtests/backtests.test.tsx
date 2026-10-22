@@ -346,11 +346,14 @@ describe('the list of backtests', () => {
     expect(screen.getAllByText('too few to conclude')).toHaveLength(2)
     expect(screen.getByText('2 runs take 52.0 kB on disk.')).toBeInTheDocument()
 
+    // Nowhere to go before two runs are chosen; then a link, which can be opened in another tab.
     const compare = screen.getByRole('button', { name: 'Compare' })
     expect(compare).toBeDisabled()
     await user.click(screen.getByRole('checkbox', { name: 'Select: Smoke EMA cross' }))
     await user.click(screen.getByRole('checkbox', { name: 'Select: Stop at 10' }))
-    await user.click(screen.getByRole('button', { name: 'Compare 2' }))
+    expect(screen.getByRole('link', { name: 'Compare 2' })).toHaveAttribute('href', `/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
+    expect(screen.getByRole('link', { name: 'New backtest' })).toHaveAttribute('href', '/backtests/new')
+    await user.click(screen.getByRole('link', { name: 'Compare 2' }))
     expect(address()).toBe(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
   })
 
@@ -368,7 +371,7 @@ describe('the list of backtests', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Stop at 10' })).toBeNull())
     expect(screen.getByRole('link', { name: 'Smoke EMA cross' })).toBeInTheDocument()
     await user.clear(screen.getByPlaceholderText('Search…'))
-    await user.click(screen.getByRole('button', { name: 'Experiments' }))
+    await user.click(screen.getByRole('link', { name: 'Experiments' }))
     expect(address()).toBe('/backtests/experiments')
     expect(await screen.findByText('No experiment yet')).toBeInTheDocument()
   })
@@ -575,6 +578,24 @@ describe('a run', () => {
     expect(screen.getByText('of the random runs did worse than this one')).toBeInTheDocument()
     expect(screen.getAllByText('85%').length).toBeGreaterThan(0)
     expect(await screen.findByRole('link', { name: '#1' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
+  })
+
+  it('keeps its table in the address, each tab and its run again a link', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
+    expect(await screen.findByRole('link', { name: '#1' })).toBeInTheDocument()
+
+    expect(screen.getByRole('link', { name: 'Run again with changes' })).toHaveAttribute('href', `/backtests/new?again=${RUN_ID}`)
+    const signals = screen.getByRole('link', { name: /^Signals/ })
+    expect(signals).toHaveAttribute('href', `/backtests/${RUN_ID}?tab=signals`)
+    expect(screen.getByRole('link', { name: /^Trades/ })).toHaveAttribute('aria-current', 'page')
+
+    await user.click(signals)
+    expect(address()).toBe(`/backtests/${RUN_ID}?tab=signals`)
+    expect(screen.queryByRole('link', { name: '#1' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /^Signals/ })).toHaveAttribute('aria-current', 'page')
+    await user.click(screen.getByRole('link', { name: /^Trades/ }))
+    expect(address()).toBe(`/backtests/${RUN_ID}`)
   })
 
   it('says the risk the days show, and what they give without the best of them', async () => {
@@ -785,15 +806,20 @@ describe('a day of a run', () => {
     expect(candles.markers.map((marker) => marker.text)).toEqual(['Short', '#1 short', '+1.72 %', 'Long ✕'])
     // Minute bars of the asset, as the strategy read them.
     expect(sent.some((request) => request.path.startsWith('/api/data/assets/capital/US100/bars?from=2026-10-14&to=2026-10-14&interval=60'))).toBe(true)
+    // The first day has none before it; the next one is a link.
     expect(screen.getByRole('button', { name: 'Day before' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Day after' })).toBeEnabled()
+    // The 16th had no turbo recorded: the day after the 14th that was traded is the 15th.
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Day after' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-15`))
   })
 
   it('opens a trade on the chart of its turbo, with the turbos the trader looked at', async () => {
     const user = userEvent.setup()
     renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
 
-    await user.click(await screen.findByRole('button', { name: '#1' }))
+    // A link to the day with the trade opened (another tab opens it so); here, a click opens it in place.
+    const trade = await screen.findByRole('link', { name: '#1' })
+    expect(trade).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
+    await user.click(trade)
     expect(address()).toBe(`/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
     expect(await screen.findByText('Trade #1: short on SG-NDX-S5')).toBeInTheDocument()
     expect(screen.getByText('the position monitor')).toBeInTheDocument()
@@ -807,7 +833,7 @@ describe('a day of a run', () => {
     expect(sent.some((request) => request.path.startsWith('/api/data/assets/saxo/5/bars?from=2026-10-14&to=2026-10-14&interval=10'))).toBe(true)
 
     // The same trade again closes it.
-    await user.click(screen.getByRole('button', { name: '#1' }))
+    await user.click(screen.getByRole('link', { name: '#1' }))
     expect(address()).toBe(`/backtests/${RUN_ID}/days/2026-10-14`)
     expect(screen.queryByText('Trade #1: short on SG-NDX-S5')).not.toBeInTheDocument()
   })

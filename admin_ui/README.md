@@ -94,8 +94,8 @@ npx shadcn@latest add Surajmaurya1/easyui/<slug>
 - Source: https://github.com/Surajmaurya1/easyui at commit `4dbc8b18f4ce0f1173807e8ba22e586619d52b3e`
   (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya.
 - Components in use: `advanced-data-table`, `alert`, `animated-tabs`, `badge`, `breadcrumb`, `button`,
-  `calendar`, `date-picker`, `drag-to-confirm`, `form`, `loader`, `not-found`, `settle-modal`, `sidebar`,
-  `skeleton`, `smooth-accordion`, `spring-select`, `stepper`, `stretch-switch`, `velocity-toast`.
+  `calendar`, `date-picker`, `drag-to-confirm`, `form`, `loader`, `not-found`, `otp-input`, `settle-modal`,
+  `sidebar`, `skeleton`, `smooth-accordion`, `spring-select`, `stepper`, `stretch-switch`, `velocity-toast`.
 - `src/lib/motion-tokens.ts`, `src/lib/utils.ts` and `src/styles/tokens.css` come from it too.
 
 Changes made to the copied files:
@@ -119,7 +119,22 @@ Changes made to the copied files:
   on one line, for the top bar: each crumb cut short with an ellipsis, the last one first.
 - `settle-modal.tsx`: rendered in `document.body` (a dialog opened from a table cell took the cell's
   alignment and wrapping); focus moves into the dialog, stays in it and returns to what opened it. An `xl`
-  size (`max-w-2xl`), and a panel no taller than the screen, what does not fit scrolling inside it.
+  size (`max-w-2xl`), a `full` one (`max-w-[110rem]`, two versions of a script side by side), and a panel no
+  taller than the screen, what does not fit scrolling inside it.
+- `otp-input.tsx` (the login page's one-time code; the same at the pinned commit and at EasyUI's `d5f660f` of
+  2026-10-14): `id`, given to the first box for a `<label htmlFor>`. A box no longer keeps one character
+  (`maxLength`): several digits arriving in one box (a keyboard's suggestion) go on from it, a whole code (the
+  autofill of a password manager or of a phone) fills every box as a paste does, a digit typed beside the one
+  a box holds replaces it, a letter is ignored. Its pop is a 0.25 s tween: framer-motion 13 animates a spring
+  between two keyframes only, and EasyUI's `[1, 1.25, 1]` threw at each digit in development (in production the
+  box stopped at 1.25 until the animation ended). Given a `value`, the component lays the digits out from the
+  first box, so a box left empty moves them: the login page leaves it uncontrolled, and makes it again to empty it.
+- `sidebar.tsx`, `animated-tabs.tsx`: an entry or a tab with an `href` is a link, drawn by `linkComponent`
+  (`components/RouterLink.tsx`), so that it can be opened in another tab; a click with ⌘, Ctrl, Shift or Alt is
+  left to the browser (`isPlainClick`, `src/lib/links.ts`). The sidebar's `onActiveChange` is optional; a tab's
+  plain click still goes through `onChange`, and a tab without `href` is `type="button"`.
+- `button.tsx`: `buttonClassName`, the classes of a variant and size, for a link drawn as a button
+  (`components/ButtonLink.tsx`).
 - `drag-to-confirm.tsx`: the hidden fallback button is out of the Tab order (it was a stop nobody could see,
   on which Enter confirmed); ArrowRight no longer confirms, only Enter and Space.
 - `velocity-toast.tsx`: `wrapperClassName`, to lift the toast above the bar at the bottom of the configuration page.

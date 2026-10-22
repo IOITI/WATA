@@ -19,8 +19,11 @@ export interface SettleModalProps {
   hideCloseButton?: boolean;
   /** Click on backdrop closes the modal (default true) */
   closeOnBackdrop?: boolean;
-  /** Maximum width of the modal (Tailwind class). WATA: `xl` for a form with rows of fields. */
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  /**
+   * Maximum width of the modal (Tailwind class). WATA: `xl` for a form with rows of fields, `full` for
+   * what is read side by side (two versions of a script).
+   */
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   className?: string;
 }
 
@@ -31,6 +34,7 @@ const sizeMap: Record<NonNullable<SettleModalProps['size']>, string> = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-2xl',
+  full: 'max-w-[110rem]',
 };
 
 /**

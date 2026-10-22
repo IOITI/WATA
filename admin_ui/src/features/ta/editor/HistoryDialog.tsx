@@ -5,7 +5,7 @@
 import { syntaxHighlighting } from '@codemirror/language'
 import { MergeView } from '@codemirror/merge'
 import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, lineNumbers } from '@codemirror/view'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 
@@ -31,14 +31,23 @@ interface HistoryDialogProps {
 const readOnly = [
   EditorState.readOnly.of(true),
   EditorView.editable.of(false),
+  // Each side as wide as half the dialog: a long line wraps instead of hiding its end.
+  EditorView.lineWrapping,
+  lineNumbers(),
   pineLanguage,
   syntaxHighlighting(pineHighlight),
   EditorView.theme({
     '&': { fontSize: '12px', backgroundColor: 'var(--surface)', color: 'var(--text-primary)' },
     '.cm-scroller': { fontFamily: 'var(--font-mono)' },
+    // CodeMirror's own is a light grey whatever the theme. The side's colour, not the editor's darker one:
+    // it stops where the text does, above the room the two sides are given.
+    '.cm-gutters': { backgroundColor: 'var(--surface)', color: 'var(--text-muted)', borderRight: '1px solid var(--border)' },
     '.cm-changedLine': { backgroundColor: 'var(--accent-subtle)' },
   }),
 ]
+
+// The screen less the dialog's margins, title, the labels of the two sides and its buttons.
+const DIFF_HEIGHT = 'h-[calc(100dvh-17rem)] min-h-60'
 
 function Diff({ before, after }: { before: string; after: string }) {
   const host = useRef<HTMLDivElement>(null)
@@ -52,13 +61,15 @@ function Diff({ before, after }: { before: string; after: string }) {
     })
     return () => view.destroy()
   }, [before, after])
-  return <div ref={host} className="max-h-[55vh] overflow-auto rounded-lg border border-border" data-testid="version-diff" />
+  // As tall as the dialog leaves room for: the two sides scroll together.
+  return <div ref={host} className={cn('overflow-auto rounded-lg border border-border', DIFF_HEIGHT)} data-testid="version-diff" />
 }
 
 export function HistoryDialog({ open, onClose, script, current, onRestore }: HistoryDialogProps) {
   const { timezone } = useSession()
   const versions = [...script.versions].reverse()
   const [chosen, setChosen] = useState<number>(script.version)
+  const chosenEntry = script.versions.find((entry) => entry.number === chosen)
   const versionQuery = useQuery({
     queryKey: ['ta-script-version', script.id, chosen],
     queryFn: () => api.taScriptVersion(script.id, chosen),
@@ -71,8 +82,8 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
       open={open}
       onClose={onClose}
       title={`History of ${script.name}`}
-      description="The version chosen (left) beside the text being edited (right)."
-      size="xl"
+      description="The version chosen in the list, beside the text being edited."
+      size="full"
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -91,7 +102,7 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
       }
     >
       <div className="flex flex-col gap-3 md:flex-row">
-        <ul className="flex max-h-[55vh] shrink-0 flex-col gap-1 overflow-auto md:w-48" aria-label="Versions">
+        <ul className="flex max-h-40 shrink-0 flex-col gap-1 overflow-auto md:max-h-[calc(100dvh-15rem)] md:w-48" aria-label="Versions">
           {versions.map((entry) => (
             <li key={entry.number}>
               <button
@@ -110,18 +121,29 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
             </li>
           ))}
         </ul>
-        <div className="min-w-0 flex-1">
-          {versionQuery.error && (
-            <p role="alert" className="text-sm text-negative">
+        {/* The same height whatever is shown, so that choosing a version does not move the dialog. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          {/* Over the two halves of the comparison, which side is which. */}
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <p>
+              <span className="font-medium">Version {chosen}</span>
+              {chosenEntry && (
+                <span className="text-muted-foreground"> · saved {formatDateTime(chosenEntry.saved_at, timezone, false)}</span>
+              )}
+            </p>
+            <p className="font-medium">In the editor</p>
+          </div>
+          {versionQuery.error ? (
+            <p role="alert" className={cn('text-sm text-negative', DIFF_HEIGHT)}>
               {versionQuery.error.message}
             </p>
+          ) : versionQuery.data && versionQuery.data.source !== current ? (
+            <Diff before={versionQuery.data.source} after={current} />
+          ) : (
+            <div className={cn('grid place-items-center rounded-lg border border-border text-sm text-muted-foreground', DIFF_HEIGHT)}>
+              {versionQuery.data && `Version ${chosen} is the text in the editor.`}
+            </div>
           )}
-          {versionQuery.data &&
-            (versionQuery.data.source === current ? (
-              <p className="text-sm text-muted-foreground">Version {chosen} is the text in the editor.</p>
-            ) : (
-              <Diff before={versionQuery.data.source} after={current} />
-            ))}
         </div>
       </div>
     </SettleModal>

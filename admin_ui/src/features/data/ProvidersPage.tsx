@@ -1,8 +1,9 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link } from 'react-router'
 
+import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader, Panel } from '@/components/Panel'
 import { QueryState, ServiceStatusBadge } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
@@ -13,6 +14,7 @@ import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
+import { isPlainClick } from '@/lib/links'
 import type { DataProvider, DataProviders } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -27,6 +29,8 @@ import type { RecorderDialogStart } from './RecorderSettingsDialog'
 
 /** The state of the providers is read again now and then: the recorder writes every ten seconds. */
 const REFRESH_MS = 30_000
+// The providers switched on from their settings, in a dialog; the others are set up on their own page.
+const SET_UP_IN_A_DIALOG = new Set(['saxo', 'capital'])
 
 type Editing =
   | { provider: 'saxo'; start: RecorderDialogStart }
@@ -161,11 +165,23 @@ function CatalogDialog({
                 </Badge>
               )}
               {item.state === 'coming' && <Badge>Coming later</Badge>}
-              {item.state === 'available' && (
-                <Button size="sm" onClick={() => onSetUp(item)}>
-                  Set up
-                </Button>
-              )}
+              {item.state === 'available' &&
+                (SET_UP_IN_A_DIALOG.has(item.entry.id) ? (
+                  <Button size="sm" onClick={() => onSetUp(item)}>
+                    Set up
+                  </Button>
+                ) : (
+                  // Set up on its own page: a link, which can be opened in another tab.
+                  <ButtonLink
+                    to={`${PROVIDERS_PATH}/${item.entry.id}`}
+                    size="sm"
+                    onClick={(event) => {
+                      if (isPlainClick(event)) onClose()
+                    }}
+                  >
+                    Set up
+                  </ButtonLink>
+                ))}
             </div>
             {item.state === 'available' && item.entry.id === 'saxo' && (
               <p className="mt-2 text-xs text-muted-foreground">
@@ -200,7 +216,6 @@ function CatalogDialog({
  */
 export function ProvidersPage() {
   const { timezone } = useSession()
-  const navigate = useNavigate()
   const providersQuery = useQuery({
     queryKey: ['data-providers'],
     queryFn: api.dataProviders,
@@ -268,7 +283,6 @@ export function ProvidersPage() {
           setCatalogOpen(false)
           if (item.entry.id === 'saxo') setEditing({ provider: 'saxo', start: 'enable' })
           else if (item.entry.id === 'capital') setEditing({ provider: 'capital', start: 'enable' })
-          else navigate(`${PROVIDERS_PATH}/${item.entry.id}`)
         }}
       />
       <RecorderSettingsDialog

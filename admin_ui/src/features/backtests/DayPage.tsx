@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { useParams, useSearchParams } from 'react-router'
 
+import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader, Panel } from '@/components/Panel'
 import { ActionBadge, PnlValue, QueryState } from '@/components/status'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth/auth-context'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { rangeChart, timeChart } from '@/features/prices/chartModel'
@@ -259,7 +259,6 @@ function TradeDetail({ run, trade, day, signals }: { run: BacktestRun; trade: Ba
 export function DayPage() {
   const { runId = '', day = '' } = useParams()
   const [params, setParams] = useSearchParams()
-  const navigate = useNavigate()
   const { timezone, backtests_enabled: enabled } = useSession()
   const tradeId = Number(params.get('trade')) || null
 
@@ -327,12 +326,12 @@ export function DayPage() {
         parents={run ? [{ label: run.name, href: `/backtests/${runId}` }] : []}
         actions={
           <>
-            <Button variant="outline" size="sm" leftIcon={<ChevronLeft className="size-3.5" />} disabled={!previous} onClick={() => navigate(`/backtests/${runId}/days/${previous}`)}>
+            <ButtonLink to={previous && `/backtests/${runId}/days/${previous}`} variant="outline" size="sm" leftIcon={<ChevronLeft className="size-3.5" />}>
               Day before
-            </Button>
-            <Button variant="outline" size="sm" leftIcon={<ChevronRight className="size-3.5" />} disabled={!next} onClick={() => navigate(`/backtests/${runId}/days/${next}`)}>
+            </ButtonLink>
+            <ButtonLink to={next && `/backtests/${runId}/days/${next}`} variant="outline" size="sm" leftIcon={<ChevronRight className="size-3.5" />}>
               Day after
-            </Button>
+            </ButtonLink>
           </>
         }
       />

@@ -343,10 +343,11 @@ describe('a link from an order to its position', () => {
     renderAt('/positions?find=5098')
 
     await screen.findByText('Opened by order')
-    // The tabs come before the table, which has a column of the same name.
-    await user.click(screen.getAllByRole('button', { name: 'Closed' })[0])
+    // A tab is a link (the table has a column of the same name, a button).
+    expect(screen.getByRole('link', { name: 'Closed' })).toHaveAttribute('href', '/positions?status=closed')
+    await user.click(screen.getByRole('link', { name: 'Closed' }))
 
-    expect(screen.getByLabelText('address')).toHaveTextContent('/positions')
+    expect(screen.getByLabelText('address')).toHaveTextContent('/positions?status=closed')
     expect(screen.getByLabelText('address')).not.toHaveTextContent('find')
     expect(screen.getByPlaceholderText(/Search/)).toHaveValue('')
   })

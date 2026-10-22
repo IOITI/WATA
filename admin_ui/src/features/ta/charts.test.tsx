@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
@@ -196,5 +196,59 @@ describe('the Charts page', () => {
     await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent('/ta/charts?symbol=SAXO_2&tf=15'))
     // The chart is not told to go where it already is.
     expect(workspaces[0].active.symbols).toEqual([])
+  })
+
+  describe('full screen', () => {
+    // jsdom has no full screen: the browser's, as it answers.
+    const root = document.documentElement
+    const setFullscreenElement = (element: Element | null) => {
+      Object.defineProperty(document, 'fullscreenElement', { value: element, configurable: true })
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }
+    afterEach(() => {
+      Reflect.deleteProperty(document, 'fullscreenElement')
+      Reflect.deleteProperty(root, 'requestFullscreen')
+      Reflect.deleteProperty(document, 'exitFullscreen')
+    })
+
+    it('shows the chart alone over the whole screen, until the browser\'s full screen is left', async () => {
+      const requestFullscreen = vi.fn(async () => setFullscreenElement(root))
+      const exitFullscreen = vi.fn(async () => setFullscreenElement(null))
+      Object.assign(root, { requestFullscreen })
+      Object.assign(document, { exitFullscreen })
+      const user = userEvent.setup()
+      renderAt('/ta/charts')
+      await waitFor(() => expect(workspaces).toHaveLength(1))
+      const chart = screen.getByTestId('ta-chart').parentElement as HTMLElement
+
+      await user.click(screen.getByRole('button', { name: 'Full screen' }))
+      expect(chart).toHaveAttribute('data-full-screen', 'true')
+      expect(chart).toHaveClass('fixed', 'inset-0')
+      // The page, not the chart: a dialog or a notice opened over it stays in sight.
+      expect(requestFullscreen).toHaveBeenCalledTimes(1)
+
+      // Escape is the browser's there: it leaves its full screen, and the chart goes back to the page.
+      await act(() => exitFullscreen())
+      expect(chart).not.toHaveAttribute('data-full-screen')
+      expect(screen.getByRole('button', { name: 'Full screen' })).toBeInTheDocument()
+
+      // The button leaves both.
+      await user.click(screen.getByRole('button', { name: 'Full screen' }))
+      await user.click(screen.getByRole('button', { name: 'Exit full screen' }))
+      expect(chart).not.toHaveAttribute('data-full-screen')
+      expect(exitFullscreen).toHaveBeenCalledTimes(2)
+    })
+
+    it('fills the window where the browser has no full screen for a page, and leaves it on Escape', async () => {
+      const user = userEvent.setup()
+      renderAt('/ta/charts')
+      await waitFor(() => expect(workspaces).toHaveLength(1))
+      const chart = screen.getByTestId('ta-chart').parentElement as HTMLElement
+
+      await user.click(screen.getByRole('button', { name: 'Full screen' }))
+      expect(chart).toHaveAttribute('data-full-screen', 'true')
+      await user.keyboard('{Escape}')
+      expect(chart).not.toHaveAttribute('data-full-screen')
+    })
   })
 })

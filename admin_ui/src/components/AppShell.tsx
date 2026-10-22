@@ -26,10 +26,11 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Link, Outlet, useLocation, useNavigate } from 'react-router'
+import { Link, Outlet, useLocation } from 'react-router'
 
 import { isWidePage, MENU, MENU_SECTIONS, menuEntry } from '@/components/navigation'
 import { PageTrailProvider, TopBarTrail } from '@/components/PageTrail'
+import { RouterLink } from '@/components/RouterLink'
 import { ServiceStatusBadge } from '@/components/status'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { Sidebar, SidebarTrigger, useSidebar } from '@/components/ui/sidebar'
@@ -64,9 +65,10 @@ const ICONS: Record<string, SidebarSection['items'][number]['icon']> = {
   config: <SlidersHorizontal />,
 }
 
+// Each entry a link: it can be opened in another tab as well as followed.
 const SECTIONS: SidebarSection[] = MENU_SECTIONS.map((title) => ({
   title,
-  items: MENU.filter((entry) => entry.section === title).map(({ id, label }) => ({ id, label, icon: ICONS[id] })),
+  items: MENU.filter((entry) => entry.section === title).map(({ id, label, path }) => ({ id, label, icon: ICONS[id], href: path })),
 }))
 
 // The 400 steps are made for a dark surface; on a light one the 800 steps carry the text.
@@ -150,7 +152,6 @@ function Shell() {
   const session = useSession()
   const { logout } = useAuth()
   const location = useLocation()
-  const navigate = useNavigate()
   const wide = isWidePage(location.pathname)
   const [mobileOpen, setMobileOpen] = useState(false)
   const main = useRef<HTMLElement>(null)
@@ -176,10 +177,7 @@ function Shell() {
       <Sidebar
         sections={SECTIONS}
         activeId={current?.id ?? ''}
-        onActiveChange={(id) => {
-          const entry = MENU.find((candidate) => candidate.id === id)
-          if (entry) navigate(entry.path)
-        }}
+        linkComponent={RouterLink}
         header={<SidebarHeader />}
         footer={<SignOutButton onSignOut={() => void logout()} />}
         mobileOpen={mobileOpen}

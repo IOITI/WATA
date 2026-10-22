@@ -7,6 +7,7 @@ import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 
+import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader } from '@/components/Panel'
 import { ClaudeBadge, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
@@ -22,7 +23,7 @@ import { formatDateTime } from '@/lib/format'
 import type { TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
-import { declaredTitle, importersOf, KIND_LABEL } from './templates'
+import { declaredTitle, importersOf, KIND_LABEL, librariesOf } from './templates'
 
 const KIND_TONE: Record<TaScriptKind, 'neutral' | 'success' | 'warning'> = {
   indicator: 'success',
@@ -30,9 +31,34 @@ const KIND_TONE: Record<TaScriptKind, 'neutral' | 'success' | 'warning'> = {
   library: 'neutral',
 }
 
+// A column of short values as narrow as they are: the room left goes to the scripts and their libraries.
+// Left to itself, the browser gives it all to the scripts, whose descriptions are the longest text.
+const FIT = '1%'
+const LIBRARIES_SHARE = '28%'
+
+/** Scripts one under the other, each a link to its page; a name WATA does not hold stays text. */
+function ScriptNames({ entries }: { entries: { name: string; script?: TaScriptSummary }[] }) {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {entries.map((entry) => (
+        <li key={entry.script?.id ?? entry.name}>
+          {entry.script ? (
+            <Link to={`/ta/indicators/${entry.script.id}`} className="underline-offset-4 hover:underline">
+              {entry.name}
+            </Link>
+          ) : (
+            entry.name
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function scriptColumns(
   timezone: string,
-  importers: Map<string, string[]>,
+  importers: Map<string, TaScriptSummary[]>,
+  libraries: Map<string, TaScriptSummary>,
   act: (action: 'duplicate' | 'delete', script: TaScriptSummary) => void,
 ): ColumnDef<TaScriptSummary>[] {
   return [
@@ -42,7 +68,8 @@ function scriptColumns(
       accessorFn: (row) => `${row.name} ${row.description} ${row.library_name ?? ''}${madeByClaude(row) ? ' Claude' : ''}`,
       sortable: true,
       cell: ({ row }) => (
-        <div className="min-w-0 max-w-96 whitespace-normal">
+        // Its floor in the table only: a card on a phone is narrower.
+        <div className="max-w-96 whitespace-normal [td_&]:min-w-48">
           <Link to={`/ta/indicators/${row.id}`} className="font-medium underline-offset-4 hover:underline">
             {row.name}
           </Link>
@@ -54,6 +81,7 @@ function scriptColumns(
     {
       id: 'kind',
       header: 'Kind',
+      width: FIT,
       accessorFn: (row) => KIND_LABEL[row.kind],
       sortable: true,
       filterable: true,
@@ -63,6 +91,7 @@ function scriptColumns(
     {
       id: 'pine',
       header: 'Pine',
+      width: FIT,
       accessorFn: (row) => row.pine_version,
       sortable: true,
       cell: ({ row }) => `v${row.pine_version}`,
@@ -70,6 +99,7 @@ function scriptColumns(
     {
       id: 'version',
       header: 'Version',
+      width: FIT,
       accessorFn: (row) => row.updated_at,
       sortable: true,
       cell: ({ row }) => (
@@ -82,20 +112,35 @@ function scriptColumns(
     {
       id: 'libraries',
       header: 'Libraries',
+      width: LIBRARIES_SHARE,
       accessorFn: (row) => row.imports.map((entry) => entry.name).join(' '),
+      // One name a line, wrapped within the column: on one line, the scripts using a library made it the
+      // widest of the table, and pushed the actions out of sight.
       cell: ({ row }) => {
-        if (row.kind === 'library') {
-          const users = importers.get(row.library_name ?? '') ?? []
-          return (
-            <span className="text-xs text-muted-foreground">
-              library("{row.library_name}"){users.length > 0 ? `, used by ${users.join(', ')}` : ', not imported yet'}
-            </span>
-          )
-        }
-        return row.imports.length === 0 ? (
-          <span className="text-xs text-muted-foreground">none</span>
-        ) : (
-          <span className="text-xs">{row.imports.map((entry) => entry.name).join(', ')}</span>
+        const users = row.kind === 'library' ? (importers.get(row.library_name ?? '') ?? []) : []
+        return (
+          <div className="flex max-w-72 flex-col gap-1 whitespace-normal text-xs [td_&]:min-w-48">
+            {row.kind === 'library' ? (
+              <>
+                {/* Broken after its parenthesis when it must, and inside the name only in a card too narrow for it. */}
+                <code className="font-mono text-muted-foreground wrap-break-word">
+                  library(<wbr />"{row.library_name}")
+                </code>
+                {users.length > 0 ? (
+                  <div>
+                    <span className="text-muted-foreground">Used by</span>
+                    <ScriptNames entries={users.map((script) => ({ name: script.name, script }))} />
+                  </div>
+                ) : (
+                  <span className="text-muted-foreground">Not imported yet</span>
+                )}
+              </>
+            ) : row.imports.length === 0 ? (
+              <span className="text-muted-foreground">None</span>
+            ) : (
+              <ScriptNames entries={row.imports.map((entry) => ({ name: entry.name, script: libraries.get(entry.name) }))} />
+            )}
+          </div>
         )
       },
     },
@@ -103,8 +148,10 @@ function scriptColumns(
       id: 'actions',
       header: 'Actions',
       align: 'right',
+      width: FIT,
       cell: ({ row }) => (
-        <div className="flex justify-end gap-1">
+        // Lifted by half their height above a line of text, so that they sit on the row's first line.
+        <div className="-my-2 flex justify-end gap-1">
           {row.kind !== 'library' && (
             <Link
               to={chartsPath({ script: row.id })}
@@ -124,11 +171,11 @@ function scriptColumns(
             <Download className="size-4" />
           </a>
           {row.kind !== 'library' && (
-            <Button variant="ghost" size="icon" aria-label={`Duplicate ${row.name}`} title="Duplicate" onClick={() => act('duplicate', row)}>
+            <Button variant="ghost" size="icon" className="size-8" aria-label={`Duplicate ${row.name}`} title="Duplicate" onClick={() => act('duplicate', row)}>
               <Copy className="size-4" />
             </Button>
           )}
-          <Button variant="ghost" size="icon" aria-label={`Delete ${row.name}`} title="Delete" onClick={() => act('delete', row)}>
+          <Button variant="ghost" size="icon" className="size-8" aria-label={`Delete ${row.name}`} title="Delete" onClick={() => act('delete', row)}>
             <Trash2 className="size-4" />
           </Button>
         </div>
@@ -150,6 +197,7 @@ export function IndicatorsPage() {
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts })
   const scripts = scriptsQuery.data?.items
   const importers = useMemo(() => importersOf(scripts ?? []), [scripts])
+  const libraries = useMemo(() => librariesOf(scripts ?? []), [scripts])
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['ta-scripts'] })
@@ -186,7 +234,7 @@ export function IndicatorsPage() {
 
   const columns = useMemo(
     () =>
-      scriptColumns(timezone, importers, (action, script) => {
+      scriptColumns(timezone, importers, libraries, (action, script) => {
         if (action === 'delete') {
           deleteMutation.reset()
           setDeleting(script)
@@ -198,7 +246,7 @@ export function IndicatorsPage() {
       }),
     // The mutations' reset is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone, importers],
+    [timezone, importers, libraries],
   )
 
   const onFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -226,15 +274,15 @@ export function IndicatorsPage() {
             >
               Import .pine
             </Button>
-            <Button variant="outline" size="sm" onClick={() => navigate('/ta/indicators/new?kind=library')}>
+            <ButtonLink to="/ta/indicators/new?kind=library" variant="outline" size="sm">
               New library
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => navigate('/ta/indicators/new?kind=strategy')}>
+            </ButtonLink>
+            <ButtonLink to="/ta/indicators/new?kind=strategy" variant="outline" size="sm">
               New strategy
-            </Button>
-            <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={() => navigate('/ta/indicators/new?kind=indicator')}>
+            </ButtonLink>
+            <ButtonLink to="/ta/indicators/new?kind=indicator" size="sm" leftIcon={<Plus className="size-3.5" />}>
               New indicator
-            </Button>
+            </ButtonLink>
           </>
         }
       />
@@ -247,7 +295,8 @@ export function IndicatorsPage() {
 
       <QueryState isPending={scriptsQuery.isPending} error={scriptsQuery.error} hasData={!!scripts}>
         {scripts && (
-          <div className="flex flex-col gap-2">
+          // A row as tall as its longest cell: the others start at its top, not halfway down.
+          <div className="flex flex-col gap-2 [&_td]:align-top">
             <AdvancedDataTable<TaScriptSummary>
               title="Scripts"
               searchPlaceholder="Search…"

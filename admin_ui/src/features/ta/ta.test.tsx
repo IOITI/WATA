@@ -92,6 +92,12 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
         return json({ ...EMA, id: 'cccccccccccc', name: (body as { name: string }).name, version: 1 }, 201)
       }
       if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'GET') return json(EMA)
+      const version = /^\/api\/ta\/scripts\/[0-9a-f]+\/versions\/(\d+)$/.exec(url.pathname)
+      if (version && method === 'GET') {
+        const number = Number(version[1])
+        const entry = EMA.versions.find((candidate) => candidate.number === number)
+        return json({ ...entry, source: number === EMA.version ? EMA_SOURCE : EMA_SOURCE.replace('20', '10') })
+      }
       if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'PUT') {
         if (saveConflict) {
           return json({ detail: 'The script was saved meanwhile (version 3, not 2): reload it, or save yours as a copy' }, 409)
@@ -143,6 +149,13 @@ function renderAt(address: string) {
   return router
 }
 
+/** The row of the list whose script has this name (other rows may link to it). */
+function rowOf(name: string): HTMLElement {
+  const row = screen.getAllByRole('row').find((candidate) => candidate.querySelector('td a')?.textContent === name)
+  if (!row) throw new Error(`No row for ${name}`)
+  return row
+}
+
 beforeEach(() => serve())
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -153,7 +166,12 @@ describe('the Indicators page', () => {
     renderAt('/ta/indicators')
 
     expect(await screen.findByRole('link', { name: 'EMA' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}`)
-    expect(screen.getByText('library("Helpers"), used by Doubled')).toBeInTheDocument()
+    // A library says who imports it, and a script what it imports, each a link to the other.
+    const helpers = rowOf('Helpers')
+    expect(within(helpers).getByText('library("Helpers")')).toBeInTheDocument()
+    expect(within(helpers).getByRole('link', { name: 'Doubled' })).toHaveAttribute('href', `/ta/indicators/${DOUBLED.id}`)
+    expect(within(rowOf('Doubled')).getByRole('link', { name: 'Helpers' })).toHaveAttribute('href', `/ta/indicators/${HELPERS.id}`)
+    expect(within(rowOf('EMA')).getByText('None')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Download EMA as a .pine file' })).toHaveAttribute(
       'href',
       `/api/ta/scripts/${EMA.id}/source.pine`,
@@ -162,8 +180,12 @@ describe('the Indicators page', () => {
     // A library is not opened on a chart by itself.
     expect(screen.queryByRole('link', { name: 'Open Helpers in Charts' })).not.toBeInTheDocument()
     // Claude's script says so beside its name.
-    expect(within(screen.getByRole('link', { name: 'Doubled' }).closest('tr') as HTMLElement).getByText('Claude')).toBeInTheDocument()
-    expect(within(screen.getByRole('link', { name: 'EMA' }).closest('tr') as HTMLElement).queryByText('Claude')).toBeNull()
+    expect(within(rowOf('Doubled')).getByText('Claude')).toBeInTheDocument()
+    expect(within(rowOf('EMA')).queryByText('Claude')).toBeNull()
+    // A new script is a page: its buttons are links, which can be opened in another tab.
+    expect(screen.getByRole('link', { name: 'New indicator' })).toHaveAttribute('href', '/ta/indicators/new?kind=indicator')
+    expect(screen.getByRole('link', { name: 'New strategy' })).toHaveAttribute('href', '/ta/indicators/new?kind=strategy')
+    expect(screen.getByRole('link', { name: 'New library' })).toHaveAttribute('href', '/ta/indicators/new?kind=library')
   })
 
   it('asks before deleting, and says why a library still imported is kept', async () => {
@@ -229,6 +251,24 @@ describe('the script editor', () => {
       name: 'EMA (copy)',
       source: `${EMA_SOURCE}// mine`,
     })
+  })
+
+  it('sets a version beside the text being edited, across the screen', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    await screen.findByRole('textbox', { name: 'Pine source of EMA' })
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const dialog = await screen.findByRole('dialog', { name: 'History of EMA' })
+    // As wide as the screen allows: two scripts side by side, not 42rem for both and the list.
+    expect(within(dialog).getByRole('heading', { name: 'History of EMA' }).closest('.max-w-\\[110rem\\]')).not.toBeNull()
+    expect(await within(dialog).findByText('Version 2 is the text in the editor.')).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: /^v1/ }))
+    expect(await within(dialog).findByTestId('version-diff')).toBeInTheDocument()
+    expect(within(dialog).getByText('Version 1')).toBeInTheDocument()
+    expect(within(dialog).getByText('In the editor')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Put version 1 in the editor' })).toBeEnabled()
   })
 
   it('shows where PineTS found a mistake', async () => {

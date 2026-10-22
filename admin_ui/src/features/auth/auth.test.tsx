@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router'
@@ -152,16 +152,59 @@ describe('sign-in', () => {
     const user = userEvent.setup()
     renderApp('/login')
 
-    const code = await screen.findByLabelText('One-time code')
+    const code = await screen.findByRole('group', { name: 'One-time code' })
+    const boxes = within(code).getAllByRole('textbox')
+    expect(boxes).toHaveLength(6)
     await user.type(screen.getByLabelText('Password'), 'correct horse battery')
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled()
 
-    await user.type(code, '123 456')
-    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    // Each digit moves on to the next box; five are not a code yet.
+    await user.type(boxes[0], '12345')
+    expect(boxes.map((box) => (box as HTMLInputElement).value)).toEqual(['1', '2', '3', '4', '5', ''])
+    expect(boxes[5]).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled()
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+
+    // The sixth signs in, the password being there.
+    await user.keyboard('6')
 
     expect(await screen.findByText('Dashboard')).toBeInTheDocument()
     const login = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
-    expect(JSON.parse(login?.[1]?.body as string)).toEqual({ password: 'correct horse battery', code: '123 456' })
+    expect(JSON.parse(login?.[1]?.body as string)).toEqual({ password: 'correct horse battery', code: '123456' })
+  })
+
+  it('takes a code pasted or filled in whole, and empties the boxes when it is refused', async () => {
+    const fetchMock = stubApi({
+      'GET /api/session': () => json(401, { detail: 'Not authenticated' }),
+      'GET /api/healthz': () => json(200, { service: 'admin', totp: true }),
+      'POST /api/session': () => json(401, { detail: 'Invalid password or code' }),
+    })
+    const user = userEvent.setup()
+    renderApp('/login')
+
+    const codeBoxes = () => within(screen.getByRole('group', { name: 'One-time code' })).getAllByRole('textbox') as HTMLInputElement[]
+    const typed = () => codeBoxes().map((box) => box.value).join('')
+    await screen.findByRole('group', { name: 'One-time code' })
+    const boxes = codeBoxes()
+    // The label leads to the first box.
+    expect(screen.getByText('One-time code').closest('label')).toHaveAttribute('for', boxes[0].id)
+
+    // A code typed before the password waits for it.
+    await user.click(boxes[0])
+    await user.paste('654 321')
+    expect(typed()).toBe('654321')
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+
+    await user.type(screen.getByLabelText('Password'), 'wrong')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid password or code')
+    await waitFor(() => expect(typed()).toBe(''))
+
+    // A password manager or a phone fills the whole code into the first box.
+    fireEvent.change(codeBoxes()[0], { target: { value: '111222' } })
+    expect(typed()).toBe('111222')
+    const sent = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(sent.map(([, init]) => JSON.parse(init?.body as string))).toEqual([{ password: 'wrong', code: '654321' }])
   })
 
   it('does not submit an empty password', async () => {

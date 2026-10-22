@@ -9,6 +9,7 @@ import { NotFoundPage } from '@/features/NotFoundPage'
 import type { Session } from '@/lib/types'
 
 import { AppShell } from './AppShell'
+import { MENU } from './navigation'
 import { PageHeader } from './Panel'
 import { ToastProvider } from './ToastProvider'
 
@@ -201,6 +202,30 @@ describe('where the page is, in the top bar', () => {
 
     expect(isCurrent(await wholeTrail().findByText('Page not found'))).toBe(true)
     expect(wholeTrail().getByRole('link', { name: 'Positions' })).toHaveAttribute('href', '/positions')
+    // The way out is a link too.
+    expect(screen.getByRole('link', { name: 'Back to the dashboard' })).toHaveAttribute('href', '/')
+  })
+})
+
+describe('the menu', () => {
+  it('is made of links, each opening its page here, or in another tab', async () => {
+    const user = userEvent.setup()
+    renderShell({ path: '/' })
+    const menu = within(await screen.findByRole('navigation', { name: 'Main' }))
+
+    // An address each: what a right click offers to open in another tab.
+    for (const entry of MENU) expect(menu.getByRole('link', { name: entry.label })).toHaveAttribute('href', entry.path)
+    expect(menu.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
+
+    // A click with Ctrl or ⌘ is the browser's, for another tab: this one stays where it is.
+    await user.keyboard('{Control>}')
+    await user.click(menu.getByRole('link', { name: 'Positions' }))
+    await user.keyboard('{/Control}')
+    expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument()
+
+    await user.click(menu.getByRole('link', { name: 'Positions' }))
+    expect(await screen.findByRole('heading', { name: 'Positions' })).toBeInTheDocument()
+    expect(menu.getByRole('link', { name: 'Positions' })).toHaveAttribute('aria-current', 'page')
   })
 })
 

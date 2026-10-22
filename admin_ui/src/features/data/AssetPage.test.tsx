@@ -483,11 +483,15 @@ describe('choosing what to look at', () => {
     renderPage('/data/assets/saxo/2?from=2026-10-06&to=2026-10-12')
     await chartIsDrawn()
 
-    await user.click(screen.getByRole('button', { name: 'Statistics' }))
+    // Each tab a link to the period on it, which can be opened in another tab.
+    const statistics = screen.getByRole('link', { name: 'Statistics' })
+    expect(statistics).toHaveAttribute('href', '/data/assets/saxo/2?from=2026-10-06&to=2026-10-12&tab=statistics')
+    await user.click(statistics)
 
     await waitFor(() => expect(address()).toBe('/data/assets/saxo/2?from=2026-10-06&to=2026-10-12&tab=statistics'))
     await waitFor(() => expect(requests).toContain('/api/data/assets/saxo/2/statistics?from=2026-10-06&to=2026-10-12'))
-    await user.click(screen.getByRole('button', { name: 'Chart' }))
+    expect(screen.getByRole('link', { name: 'Statistics' })).toHaveAttribute('aria-current', 'page')
+    await user.click(screen.getByRole('link', { name: 'Chart' }))
     await waitFor(() => expect(address()).toBe('/data/assets/saxo/2?from=2026-10-06&to=2026-10-12'))
   })
 })

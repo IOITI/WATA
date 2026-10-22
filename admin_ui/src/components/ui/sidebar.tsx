@@ -3,6 +3,7 @@
 import * as React from "react";
 import { AnimatePresence, motion, type PanInfo } from "framer-motion";
 import { ChevronRight, PanelLeft } from "lucide-react";
+import { isPlainClick } from "../../lib/links";
 import { cn } from "../../lib/utils";
 
 function useControllableState<T>(
@@ -34,13 +35,15 @@ const spring = { type: "spring", stiffness: 420, damping: 36, mass: 0.8 } as con
 const EXPANDED = 248;
 const COLLAPSED = 56;
 
-export type SidebarChild = { id: string; label: string; badge?: string | number };
+// WATA: `href` makes an entry a link, which can be opened in another tab as well as followed.
+export type SidebarChild = { id: string; label: string; badge?: string | number; href?: string };
 export type SidebarItem = {
   id: string;
   label: string;
   icon?: React.ReactNode;
   badge?: string | number;
   children?: SidebarChild[];
+  href?: string;
 };
 export type SidebarSection = { title?: string; items: SidebarItem[] };
 
@@ -51,7 +54,10 @@ export const useSidebar = () => React.useContext(SidebarContext);
 export interface SidebarProps {
   sections: SidebarSection[];
   activeId: string;
-  onActiveChange: (id: string) => void;
+  /** WATA: optional; an entry with an `href` leads there by itself. */
+  onActiveChange?: (id: string) => void;
+  /** WATA: what draws an entry that has an `href` (the router's link, given `href`); `a` by default. */
+  linkComponent?: React.ElementType;
   header?: React.ReactNode;
   footer?: React.ReactNode;
   collapsed?: boolean;
@@ -170,7 +176,7 @@ export function SidebarTrigger({ className, ...props }: React.ComponentProps<"bu
 
 /* ───────────────────────── internals ───────────────────────── */
 
-type PanelProps = Pick<SidebarProps, "sections" | "activeId" | "onActiveChange" | "header" | "footer"> & {
+type PanelProps = Pick<SidebarProps, "sections" | "activeId" | "onActiveChange" | "header" | "footer" | "linkComponent"> & {
   collapsed: boolean;
   onToggle?: () => void;
   onNavigate?: () => void;
@@ -180,6 +186,7 @@ function Panel({
   sections,
   activeId,
   onActiveChange,
+  linkComponent: LinkComponent = "a",
   header,
   footer,
   collapsed,
@@ -215,10 +222,13 @@ function Panel({
     const isOpen = hasChildren && open.has(item.id) && !collapsed;
     const childActive = !!item.children?.some((c) => c.id === activeId);
     const isActive = !hasChildren && activeId === item.id;
+    const linked = !hasChildren && item.href !== undefined;
+    const Entry: React.ElementType = linked ? LinkComponent : "button";
 
-    const onClick = () => {
+    const onClick = (e: React.MouseEvent) => {
+      if (linked && !isPlainClick(e)) return;
       if (!hasChildren) {
-        onActiveChange(item.id);
+        onActiveChange?.(item.id);
         onNavigate?.();
       } else if (collapsed) {
         onToggle?.();
@@ -235,11 +245,11 @@ function Panel({
 
     return (
       <div key={item.id}>
-        <button
-          type="button"
+        <Entry
+          {...(linked ? { href: item.href } : { type: "button" })}
           onClick={onClick}
-          onMouseEnter={(e) => enter(e, item.label)}
-          onFocus={(e) => enter(e, item.label)}
+          onMouseEnter={(e: React.MouseEvent<HTMLElement>) => enter(e, item.label)}
+          onFocus={(e: React.FocusEvent<HTMLElement>) => enter(e, item.label)}
           aria-label={collapsed ? item.label : undefined}
           aria-expanded={hasChildren ? isOpen : undefined}
           aria-current={isActive ? "page" : undefined}
@@ -283,7 +293,7 @@ function Panel({
               )}
             />
           )}
-        </button>
+        </Entry>
 
         <AnimatePresence initial={false}>
           {isOpen && (
@@ -297,12 +307,14 @@ function Panel({
               <div className="ml-[19px] mt-0.5 space-y-0.5 border-l border-neutral-200 py-0.5 pl-3 dark:border-neutral-800">
                 {item.children!.map((c) => {
                   const active = c.id === activeId;
+                  const Child: React.ElementType = c.href !== undefined ? LinkComponent : "button";
                   return (
-                    <button
+                    <Child
                       key={c.id}
-                      type="button"
-                      onClick={() => {
-                        onActiveChange(c.id);
+                      {...(c.href !== undefined ? { href: c.href } : { type: "button" })}
+                      onClick={(e: React.MouseEvent) => {
+                        if (c.href !== undefined && !isPlainClick(e)) return;
+                        onActiveChange?.(c.id);
                         onNavigate?.();
                       }}
                       onMouseEnter={() => {
@@ -328,7 +340,7 @@ function Panel({
                       {c.badge !== undefined && (
                         <span className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">{c.badge}</span>
                       )}
-                    </button>
+                    </Child>
                   );
                 })}
               </div>

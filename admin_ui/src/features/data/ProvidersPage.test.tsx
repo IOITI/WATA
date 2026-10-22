@@ -242,7 +242,8 @@ describe('the providers', () => {
     // Its name comes first in its entry; another entry's text may name it too.
     const entry = (name: string) => within(dialog).getAllByText(name, { exact: false, selector: 'p' })[0].closest('li') as HTMLElement
     expect(within(entry('Saxo Bank')).getByText('Active')).toBeInTheDocument()
-    expect(within(entry('Dukascopy')).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
+    // Set up on its own page: a link, which can be opened in another tab.
+    expect(within(entry('Dukascopy')).getByRole('link', { name: 'Set up' })).toHaveAttribute('href', '/data/providers/dukascopy')
     expect(within(entry('Capital.com')).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
     expect(within(entry('Capital.com')).getByText(/three/)).toHaveTextContent('CAPITAL_*')
   })
@@ -279,7 +280,7 @@ describe('the providers', () => {
 
     const catalog = await screen.findByRole('dialog')
     const entry = within(catalog).getAllByText('Dukascopy', { exact: false, selector: 'p' })[0].closest('li') as HTMLElement
-    await user.click(within(entry).getByRole('button', { name: 'Set up' }))
+    await user.click(within(entry).getByRole('link', { name: 'Set up' }))
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Dukascopy' })).toBeInTheDocument()
   })

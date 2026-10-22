@@ -1,10 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Flag, Pencil, RotateCcw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+
+import { ButtonLink } from '@/components/ButtonLink'
 
 import { KpiTile } from '@/components/KpiTile'
 import { PageHeader, Panel } from '@/components/Panel'
+import { RouterLink } from '@/components/RouterLink'
 import { PnlValue, QueryState } from '@/components/status'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AnimatedTabs } from '@/components/ui/animated-tabs'
@@ -124,12 +127,31 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
   )
 }
 
+// The tables of a run: each tab has its address (`?tab=`), and can be opened in another tab.
+const TABLES = ['trades', 'signals', 'days'] as const
+type Table = (typeof TABLES)[number]
+
+function tableOf(value: string | null): Table {
+  return TABLES.find((table) => table === value) ?? 'trades'
+}
+
+/** The address of a table of the run, as a tab's link: the first one is the run's own address. */
+function tableHref(table: Table): string {
+  return table === 'trades' ? '?' : `?tab=${table}`
+}
+
 export function RunPage() {
   const { runId = '' } = useParams()
   const { timezone, backtests_enabled: enabled } = useSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState('trades')
+  const [params, setParams] = useSearchParams()
+  const tab = tableOf(params.get('tab'))
+  // Going through the tables does not leave as many steps to go back through.
+  const setTab = (next: string) => {
+    const table = tableOf(next)
+    setParams(table === 'trades' ? {} : { tab: table }, { replace: true })
+  }
   const [removing, setRemoving] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
@@ -218,9 +240,9 @@ export function RunPage() {
                   {reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference'}
                 </Button>
               )}
-              <Button size="sm" leftIcon={<RotateCcw className="size-3.5" />} onClick={() => navigate(`/backtests/new?again=${run.id}`)}>
+              <ButtonLink to={`/backtests/new?again=${run.id}`} size="sm" leftIcon={<RotateCcw className="size-3.5" />}>
                 Run again with changes
-              </Button>
+              </ButtonLink>
             </>
           )
         }
@@ -334,12 +356,13 @@ export function RunPage() {
                   <Panel>
                     <AnimatedTabs
                       tabs={[
-                        { id: 'trades', label: 'Trades', badge: tradesQuery.data?.items.length },
-                        { id: 'signals', label: 'Signals', badge: signalsQuery.data?.items.length },
-                        { id: 'days', label: 'Days', badge: daysQuery.data?.items.length },
+                        { id: 'trades', label: 'Trades', badge: tradesQuery.data?.items.length, href: tableHref('trades') },
+                        { id: 'signals', label: 'Signals', badge: signalsQuery.data?.items.length, href: tableHref('signals') },
+                        { id: 'days', label: 'Days', badge: daysQuery.data?.items.length, href: tableHref('days') },
                       ]}
                       activeTab={tab}
                       onChange={setTab}
+                      linkComponent={RouterLink}
                       renderContent={false}
                     />
                     <div className="mt-4">

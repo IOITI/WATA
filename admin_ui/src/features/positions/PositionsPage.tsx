@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router'
 import { DateRangeFilter } from '@/components/DateRangeFilter'
 import { ExportButton } from '@/components/ExportButton'
 import { PageHeader } from '@/components/Panel'
+import { RouterLink } from '@/components/RouterLink'
 import { QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import { AnimatedTabs } from '@/components/ui/animated-tabs'
@@ -20,10 +21,17 @@ import { PositionOrders } from './PositionOrders'
 
 type StatusFilter = 'open' | 'closed' | 'all'
 
+// Each tab has its address (`?status=`), and can be opened in another tab; the open positions are the page's own.
+const STATUSES: StatusFilter[] = ['open', 'closed', 'all']
+
+function statusHref(status: StatusFilter): string {
+  return status === 'open' ? '?' : `?status=${status}`
+}
+
 const TABS = [
-  { id: 'open', label: 'Open' },
-  { id: 'closed', label: 'Closed' },
-  { id: 'all', label: 'All' },
+  { id: 'open', label: 'Open', href: statusHref('open') },
+  { id: 'closed', label: 'Closed', href: statusHref('closed') },
+  { id: 'all', label: 'All', href: statusHref('all') },
 ]
 
 const TABLE_TEXT: Record<StatusFilter, { title: string; emptyTitle: string; emptyDescription?: string }> = {
@@ -52,7 +60,7 @@ export function PositionsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   // A link from an order: its position, open or closed, with its orders shown.
   const find = searchParams.get('find') ?? ''
-  const [status, setStatus] = useState<StatusFilter>(() => (find ? 'all' : 'open'))
+  const status = STATUSES.find((candidate) => candidate === searchParams.get('status')) ?? (find ? 'all' : 'open')
   const [range, setRange] = useState<DateRange>(ALL_TIME)
   const params = rangeParams(range)
 
@@ -81,11 +89,9 @@ export function PositionsPage() {
         <AnimatedTabs
           tabs={TABS}
           activeTab={status}
-          onChange={(tab) => {
-            setStatus(tab as StatusFilter)
-            // The position that was looked for has been seen: the other tabs start unsearched.
-            if (find) setSearchParams({}, { replace: true })
-          }}
+          // The position that was looked for has been seen: the other tabs start unsearched.
+          onChange={(tab) => setSearchParams(tab === 'open' ? {} : { status: tab }, { replace: true })}
+          linkComponent={RouterLink}
           renderContent={false}
         />
         <div className="flex flex-wrap items-center gap-2">

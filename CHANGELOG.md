@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.27.0 - The admin: links that open in another tab, charts in full screen, versions side by side
+
+**Release date:** not released yet
+
+The admin interface only: nothing the trading services run changes.
+
+- **What leads to another page is a link**, so that it can be opened in another tab (a right click, ⌘ or Ctrl and a click) as well as followed. Every entry of the menu was a button. So were New indicator, New strategy and New library, New backtest, Experiments and Compare, "Run again with changes", a backtest's day before and after, its trades and the purchases of its signals on a day (a plain click still opens a trade in place, and a second one closes it), Dukascopy's "Set up" in the provider catalog, and the way back to the dashboard from a page that does not exist. Tabs whose view has an address are links too: a run's Trades, Signals and Days (`?tab=`, new), the positions' Open, Closed and All (`?status=`, new), an asset's tabs. A click with a modifier is left to the browser and leaves the page as it was. The Configuration page's tabs stay buttons: they are the modes of one editor, whose unsaved changes another tab would not have.
+- **The one-time code of the login page is six boxes** (EasyUI's `OTPInput`), drawn like the password field. Each digit moves on to the next box, Backspace goes back, a pasted code fills them all, and the sixth digit signs in once the password is there (Enter still does). A code filled in whole by a password manager or a phone fills every box: EasyUI's boxes kept one character, which would have cut such a code to its last digit.
+- **Indicators**: the Libraries column lists one name a line, each a link to its script. A library's users made one long line there, which pushed the table past the page and the actions out of sight, behind a hidden scroll bar. The columns of short values take what they need, the scripts and their libraries share the rest, and a row's cells start at its top. The table fits without scrolling down to a 1,280 px screen with the sidebar open; a phone shows cards, as before.
+- **A script's History is as wide as the screen**: the version chosen and the editor's text side by side, about 650 px each on a 1,440 px screen where they had 200, with line numbers, long lines wrapped, each side named above it. The dialog keeps its height from one version to the next.
+- **Charts go full screen**: the chart and its controls over the whole window, and the window over the whole screen where the browser allows it. The page itself is made full screen, so Vela's menus and the admin's notices stay in sight. Escape leaves it, after closing an open menu of Vela's first. On an iPhone, which has no full screen for a page, the chart fills the window.
+
+**Verification status:**
+- 852 tests pass in the interface's suite (9 new: the menu's links and a click with Ctrl, the code boxes and the sign-in by the sixth digit, a whole code at once, the history dialog, full screen with and without the browser's, a run's tabs); lint, type checks and the build are clean.
+- In a browser against the fake admin, light and dark, at 1,440 px and on a phone's 375 px, with four scripts shaped like the server's (their names, imports and description lengths, read from its list): the Indicators table, the history of a script saved twice, the chart in full screen and back with Vela's indicator menu opened over it, the sign-in with the code boxes (five digits arriving at once, then the sixth), the menu's links followed in place without reloading the page.
+
+**Not seen:** a browser's own full screen (the browser used grants none to a page, so the chart filling the window is what was seen); "Open in new tab" from a right click (a ⌘-click was left to the browser, which opened the link's address); a phone's or a password manager's autofill of the code; the server.
+
 ## v0.26.3 - PineTS 0.12.0, Vela 0.8.5 and Vela-pinets 0.2.17
 
 **Release date:** 2026-10-21, with v0.26.1 and v0.26.2

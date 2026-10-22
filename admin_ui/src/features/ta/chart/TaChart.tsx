@@ -9,11 +9,16 @@
 // Bars of time are of any length WATA makes, from ten seconds to a day: Vela's menu
 // offers the usual ones, the length field above the chart takes any other.
 //
+// Full screen: the chart and its controls over the whole window, and the window over
+// the whole screen where the browser allows it. Vela keeps its menus inside its own
+// element, and the admin's dialogs and notices are above it.
+//
 // The only file that builds Vela, as PriceChart.tsx is the only one that builds
 // Lightweight Charts.
 
 import { PineWorkerEngine } from '@luxalgo/vela-pinets'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
+import { Maximize2, Minimize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import velaWorkerUrl from 'virtual:vela-pine-worker'
 
@@ -107,12 +112,55 @@ function LengthField({ timeframe, onApply }: { timeframe: string; onApply: (time
   )
 }
 
+/**
+ * Whether the chart is shown alone. The page itself is made the browser's full screen, not the chart's
+ * element, so that what opens over it (a dialog, a notice) stays in sight; where the browser has no full
+ * screen for a page (an iPhone) or refuses it, the chart fills the window. Leaving the browser's full
+ * screen (Escape) leaves the chart's too.
+ */
+function useFullScreen(): [boolean, (full: boolean) => void] {
+  const [full, setFull] = useState(false)
+  useEffect(() => {
+    if (!full) return
+    let left = false
+    let entered = false
+    const root = document.documentElement
+    if (root.requestFullscreen && !document.fullscreenElement) {
+      root.requestFullscreen().then(
+        () => {
+          entered = true
+          // Left before the browser had answered.
+          if (left) void document.exitFullscreen().catch(() => undefined)
+        },
+        () => undefined,
+      )
+    }
+    const onChange = () => {
+      if (!document.fullscreenElement) setFull(false)
+    }
+    // Only when the browser is not in full screen: there, Escape is its own, and ends in onChange.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && !document.fullscreenElement) setFull(false)
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      left = true
+      document.removeEventListener('fullscreenchange', onChange)
+      document.removeEventListener('keydown', onKey)
+      if (entered && document.fullscreenElement === root) void document.exitFullscreen().catch(() => undefined)
+    }
+  }, [full])
+  return [full, setFull]
+}
+
 export function TaChart(props: TaChartProps) {
   const { layout, symbol, timeframe, fallbackSymbol, timeZone, resolve, addScript, className } = props
   const host = useRef<HTMLDivElement>(null)
   const workspace = useRef<VelaWorkspace | null>(null)
   const callbacks = useRef(props)
   const { theme } = useTheme()
+  const [full, setFull] = useFullScreen()
   const [market, setMarket] = useState({ symbol: symbol ?? fallbackSymbol, timeframe: timeframe ?? DEFAULT_TIMEFRAME.pine })
   // Where the chart last said it is: an address that only follows it asks nothing of it.
   const shown = useRef(market)
@@ -217,84 +265,98 @@ export function TaChart(props: TaChartProps) {
   }
 
   return (
-    <div className={cn('flex min-h-0 flex-col gap-2', className)}>
-      {ticker && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs" aria-label="Prices of the chart">
-          <span className="font-mono text-muted-foreground">{tickerText(ticker)}</span>
-          <div role="group" aria-label="Price side" className="flex overflow-hidden rounded-lg border border-border">
-            {(['bid', 'ask'] as const).map((side) => (
+    <div
+      className={cn('flex min-h-0 flex-col gap-2', className, full && 'fixed inset-0 z-40 h-auto bg-background p-3 sm:p-4')}
+      data-full-screen={full || undefined}
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs" aria-label="Prices of the chart">
+        {ticker && (
+          <>
+            <span className="font-mono text-muted-foreground">{tickerText(ticker)}</span>
+            <div role="group" aria-label="Price side" className="flex overflow-hidden rounded-lg border border-border">
+              {(['bid', 'ask'] as const).map((side) => (
+                <button
+                  key={side}
+                  type="button"
+                  aria-pressed={ticker.side === side}
+                  className={cn('px-2.5 py-1 capitalize', ticker.side === side ? 'bg-surface-raised font-medium' : 'hover:bg-surface-hover')}
+                  onClick={() => switchTo({ side })}
+                >
+                  {side}
+                </button>
+              ))}
+            </div>
+            <div role="group" aria-label="Bars" className="flex items-center overflow-hidden rounded-lg border border-border">
               <button
-                key={side}
                 type="button"
-                aria-pressed={ticker.side === side}
-                className={cn('px-2.5 py-1 capitalize', ticker.side === side ? 'bg-surface-raised font-medium' : 'hover:bg-surface-hover')}
-                onClick={() => switchTo({ side })}
+                aria-pressed={!ticker.rangeTicks}
+                className={cn('px-2.5 py-1', !ticker.rangeTicks ? 'bg-surface-raised font-medium' : 'hover:bg-surface-hover')}
+                onClick={() => switchTo({ rangeTicks: null })}
               >
-                {side}
+                Time
               </button>
-            ))}
-          </div>
-          <div role="group" aria-label="Bars" className="flex items-center overflow-hidden rounded-lg border border-border">
-            <button
-              type="button"
-              aria-pressed={!ticker.rangeTicks}
-              className={cn('px-2.5 py-1', !ticker.rangeTicks ? 'bg-surface-raised font-medium' : 'hover:bg-surface-hover')}
-              onClick={() => switchTo({ rangeTicks: null })}
-            >
-              Time
-            </button>
-            <button
-              type="button"
-              aria-pressed={!!ticker.rangeTicks}
-              className={cn('px-2.5 py-1', ticker.rangeTicks ? 'bg-surface-raised font-medium' : 'hover:bg-surface-hover')}
-              onClick={() => switchTo({ rangeTicks: ticker.rangeTicks ?? 60 })}
-            >
-              Range
-            </button>
-          </div>
-          {!ticker.rangeTicks && (
-            <LengthField
-              key={market.timeframe}
-              timeframe={market.timeframe}
-              onApply={lengthTo}
-            />
-          )}
-          {!ticker.rangeTicks && uneven && (
-            <span className="text-muted-foreground">
-              {uneven} On this chart a bar's time_close is its open time and its length; the editor's test and the
-              backtests use the end of its last ten seconds.
-            </span>
-          )}
-          {ticker.rangeTicks && (
-            <label className="flex items-center gap-1.5">
-              <span className="text-muted-foreground">R</span>
-              <input
-                type="number"
-                min={1}
-                defaultValue={ticker.rangeTicks}
-                key={ticker.rangeTicks}
-                aria-label="Range, in steps of the price"
-                className="w-16 rounded-md border border-border bg-surface px-1.5 py-0.5 font-mono"
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter') return
-                  const value = Number((event.target as HTMLInputElement).value)
-                  if (Number.isInteger(value) && value >= 1) switchTo({ rangeTicks: value })
-                }}
-                onBlur={(event) => {
-                  const value = Number(event.target.value)
-                  if (Number.isInteger(value) && value >= 1 && value !== ticker.rangeTicks) switchTo({ rangeTicks: value })
-                }}
+              <button
+                type="button"
+                aria-pressed={!!ticker.rangeTicks}
+                className={cn('px-2.5 py-1', ticker.rangeTicks ? 'bg-surface-raised font-medium' : 'hover:bg-surface-hover')}
+                onClick={() => switchTo({ rangeTicks: ticker.rangeTicks ?? 60 })}
+              >
+                Range
+              </button>
+            </div>
+            {!ticker.rangeTicks && (
+              <LengthField
+                key={market.timeframe}
+                timeframe={market.timeframe}
+                onApply={lengthTo}
               />
-            </label>
-          )}
-          {ticker.rangeTicks && (
-            <span className="text-muted-foreground">
-              Built from ten-second bars. On this chart a range bar's time_close is when the next one began; the
-              editor's test and the signal engine use the end of its last ten seconds.
-            </span>
-          )}
-        </div>
-      )}
+            )}
+            {!ticker.rangeTicks && uneven && (
+              <span className="text-muted-foreground">
+                {uneven} On this chart a bar's time_close is its open time and its length; the editor's test and the
+                backtests use the end of its last ten seconds.
+              </span>
+            )}
+            {ticker.rangeTicks && (
+              <label className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">R</span>
+                <input
+                  type="number"
+                  min={1}
+                  defaultValue={ticker.rangeTicks}
+                  key={ticker.rangeTicks}
+                  aria-label="Range, in steps of the price"
+                  className="w-16 rounded-md border border-border bg-surface px-1.5 py-0.5 font-mono"
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return
+                    const value = Number((event.target as HTMLInputElement).value)
+                    if (Number.isInteger(value) && value >= 1) switchTo({ rangeTicks: value })
+                  }}
+                  onBlur={(event) => {
+                    const value = Number(event.target.value)
+                    if (Number.isInteger(value) && value >= 1 && value !== ticker.rangeTicks) switchTo({ rangeTicks: value })
+                  }}
+                />
+              </label>
+            )}
+            {ticker.rangeTicks && (
+              <span className="text-muted-foreground">
+                Built from ten-second bars. On this chart a range bar's time_close is when the next one began; the
+                editor's test and the signal engine use the end of its last ten seconds.
+              </span>
+            )}
+          </>
+        )}
+        <button
+          type="button"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover"
+          title={full ? 'Back to the page (Escape)' : 'The chart alone, over the whole screen'}
+          onClick={() => setFull(!full)}
+        >
+          {full ? <Minimize2 className="size-3.5" aria-hidden /> : <Maximize2 className="size-3.5" aria-hidden />}
+          {full ? 'Exit full screen' : 'Full screen'}
+        </button>
+      </div>
       <div ref={host} className="min-h-[480px] flex-1 overflow-hidden rounded-2xl border border-border" data-testid="ta-chart" />
     </div>
   )

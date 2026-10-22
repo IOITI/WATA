@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { isPlainClick } from '../../lib/links';
 import { cn } from '../../lib/utils';
 import { motionTransitions } from '../../lib/motion-tokens';
 
@@ -11,6 +12,11 @@ export interface TabItem {
   icon?: React.ReactNode;
   content?: React.ReactNode;
   badge?: string | number;
+  /**
+   * WATA: the address of the view the tab shows. The tab is then a link, which can be opened in another
+   * tab; a plain click still goes through `onChange`.
+   */
+  href?: string;
 }
 
 export interface AnimatedTabsProps {
@@ -23,6 +29,8 @@ export interface AnimatedTabsProps {
   renderContent?: boolean;
   layoutId?: string;
   variant?: 'default' | 'glass' | 'pill';
+  /** WATA: what draws a tab that has an `href` (the router's link, given `href`); `a` by default. */
+  linkComponent?: React.ElementType;
 }
 
 export const AnimatedTabs: React.FC<AnimatedTabsProps> = ({
@@ -35,6 +43,7 @@ export const AnimatedTabs: React.FC<AnimatedTabsProps> = ({
   renderContent = true,
   layoutId: customLayoutId,
   variant = 'default',
+  linkComponent: LinkComponent = 'a',
 }) => {
   const [internalActiveTab, setInternalActiveTab] = useState<string>(defaultTab || tabs[0]?.id || '');
   const activeTab = controlledActiveTab !== undefined ? controlledActiveTab : internalActiveTab;
@@ -70,10 +79,18 @@ export const AnimatedTabs: React.FC<AnimatedTabsProps> = ({
       >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
+          const Tab: React.ElementType = tab.href !== undefined ? LinkComponent : 'button';
           return (
-            <button
+            <Tab
               key={tab.id}
-              onClick={() => handleTabClick(tab.id)}
+              {...(tab.href !== undefined ? { href: tab.href, 'aria-current': isActive ? 'page' : undefined } : { type: 'button' })}
+              onClick={(e: React.MouseEvent) => {
+                if (tab.href !== undefined) {
+                  if (!isPlainClick(e)) return;
+                  e.preventDefault();
+                }
+                handleTabClick(tab.id);
+              }}
               className={cn(
                 'relative text-xs sm:text-sm font-medium transition-colors focus-ring select-none flex items-center gap-2 cursor-pointer',
                 isGlass
@@ -105,7 +122,7 @@ export const AnimatedTabs: React.FC<AnimatedTabsProps> = ({
                   </span>
                 )}
               </span>
-            </button>
+            </Tab>
           );
         })}
       </div>

@@ -8,11 +8,23 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Form, FormControl, FormItem, FormLabel, Input } from '@/components/ui/form'
+import { OTPInput } from '@/components/ui/otp-input'
 import { api, ApiError } from '@/lib/api'
 import { formatDuration } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 import { useAuth } from './auth-context'
 import { returnPath } from './returnPath'
+
+/** The digits of the authenticator app's code (TOTP_DIGITS on the server). */
+const CODE_LENGTH = 6
+
+// Six boxes that look like the password field above them, and fill its width.
+const CODE_BOX = cn(
+  'h-11 w-full rounded-lg border text-base transition-colors duration-150',
+  'border-neutral-300 bg-white text-neutral-900 hover:border-neutral-500 focus:border-neutral-500',
+  'dark:border-[#1F1F1F] dark:bg-[#141414] dark:text-[#FAFAFA] dark:hover:border-[#4A4A4A] dark:focus:border-[#4A4A4A]',
+)
 
 function loginErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -29,6 +41,9 @@ export function LoginPage() {
   const location = useLocation()
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
+  // The boxes keep their digits where they were typed (a value given to them would be laid out from the
+  // first box): they are made again, empty, after a refused attempt.
+  const [codeBoxes, setCodeBoxes] = useState(0)
   // Whether a one-time code is asked for as well: known before the first attempt.
   const methodsQuery = useQuery({ queryKey: ['login-methods'], queryFn: api.loginMethods, staleTime: 60_000 })
   const needsCode = methodsQuery.data?.totp ?? false
@@ -39,20 +54,25 @@ export function LoginPage() {
     return <Navigate to={returnPath((location.state as { from?: unknown } | null)?.from)} replace />
   }
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!password || submitting || (needsCode && !code)) return
+  const signIn = async (typedCode: string) => {
+    if (!password || submitting || (needsCode && typedCode.length < CODE_LENGTH)) return
     setSubmitting(true)
     setError(null)
     try {
-      await login(password, needsCode ? code : undefined)
+      await login(password, needsCode ? typedCode : undefined)
     } catch (loginError) {
       setError(loginErrorMessage(loginError))
       setPassword('')
       setCode('')
+      setCodeBoxes((made) => made + 1)
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    void signIn(code)
   }
 
   return (
@@ -95,15 +115,17 @@ export function LoginPage() {
             <FormItem>
               <FormLabel htmlFor="code">One-time code</FormLabel>
               <FormControl>
-                <Input
+                <OTPInput
+                  key={codeBoxes}
                   id="code"
-                  name="code"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  placeholder="6 digits from the authenticator app"
-                  maxLength={7}
-                  value={code}
-                  onChange={(event) => setCode(event.target.value.replace(/[^\d ]/g, ''))}
+                  aria-label="One-time code"
+                  length={CODE_LENGTH}
+                  onChange={setCode}
+                  // The last digit signs in, once the password is there; Enter does too.
+                  onComplete={(completed) => void signIn(completed)}
+                  disabled={submitting}
+                  className="grid grid-cols-6 gap-2"
+                  boxClassName={CODE_BOX}
                 />
               </FormControl>
             </FormItem>
@@ -113,7 +135,7 @@ export function LoginPage() {
             fullWidth
             isLoading={submitting}
             loadingText="Signing in"
-            disabled={!password || (needsCode && !code)}
+            disabled={!password || (needsCode && code.length < CODE_LENGTH)}
           >
             Sign in
           </Button>
