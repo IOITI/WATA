@@ -18,7 +18,7 @@ import os
 import shutil
 from collections.abc import Awaitable, Callable
 
-from src.price_history.process import exit_said, give_up_memory_first, peak_memory_mb
+from src.price_history.process import exit_said, give_up_memory_first, peak_memory_mb, process_memory_mb
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,10 @@ class NodeRunner:
     def peak_mb(self) -> float | None:
         """The most memory the runner has held since it started, in MB (Linux)."""
         return peak_memory_mb(self._process.pid) if self._process is not None else None
+
+    def memory_mb(self) -> tuple[float | None, float | None]:
+        """(held now, most held since it started) of the runner's memory, in MB (Linux); none while it is not running."""
+        return process_memory_mb(self._process.pid) if self.running else (None, None)
 
     async def start(self) -> dict:
         """Start the runner (again) and return its versions."""

@@ -59,6 +59,7 @@ async def main():
     from src.logging_helper import setup_logging
     from src.mq_telegram.async_tools import AsyncTelegramSender
     from src.ta_engine.engine import Engine
+    from src.ta_engine.monitoring import Monitoring
     from src.ta_engine.rules import RulesFile
     from src.ta_engine.runner import RUNNER_PATH, NodeRunner, find_node, runner_command
     from src.ta_engine.sender import SignalSender
@@ -81,6 +82,7 @@ async def main():
     http = None
     runner = None
     shadow_runner = None
+    monitoring = None
     try:
         postgres_config = config_manager.get_config_value("postgresql", {})
         # Its own small pool: reads of the feed's bars, writes of its journal.
@@ -128,6 +130,8 @@ async def main():
             [nice, "-n", "10", *shadow_command] if nice else shadow_command, answer,
             timeout_seconds=settings.run_timeout_seconds, memory_first=True,
         )
+        # What the engine measures of itself, kept monitoring_days for the admin's Engine monitor.
+        monitoring = Monitoring(journal, days=settings.monitoring_days)
         engine = Engine(
             settings=settings,
             rules=rules_file.snapshot,
@@ -138,14 +142,15 @@ async def main():
             sender=sender,
             notify=telegram.send,
             version=version,
+            monitoring=monitoring,
         )
 
         loop = asyncio.get_running_loop()
         for stop_signal in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(stop_signal, engine.stop)
         logger.info(
-            "TA Engine startup complete: rules from %s, %d day(s) of history, restart at %s UTC.",
-            settings.rules_path, settings.history_days, settings.restart_time,
+            "TA Engine startup complete: rules from %s, %d day(s) of history, restart at %s UTC, measures kept %d day(s).",
+            settings.rules_path, settings.history_days, settings.restart_time, settings.monitoring_days,
         )
         await engine.run()
 
@@ -159,6 +164,9 @@ async def main():
         sys.exit(1)
     finally:
         logger.info("--- Shutting down WATA TA Engine ---")
+        if monitoring is not None:
+            # The last ticks' measures, if the database takes them at once: Docker allows 10 s to stop in all.
+            await monitoring.flush(2)
         if runner is not None:
             await runner.stop()
         if shadow_runner is not None:

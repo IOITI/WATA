@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.29.0 - Technical Analysis: the Engine monitor
+
+**Release date:** not released yet
+
+How fast the TA engine runs each rule, how late its signals are, and what became of them, on a page of its own. The engine measures itself to that end and keeps it a week; the signals' delivery and results are read from the journals WATA already keeps, which nothing deletes.
+
+- **The Engine monitor** (Technical Analysis › Engine monitor, `/ta/monitor`):
+  - **The last 15 minutes**, checked against WATA's own limits, a check failing at half of its limit: the live signals sent; the live bars run in time (a signal is refused past `max_signal_age_seconds`); the runs on the live runner within their limit (`run_timeout_seconds`, or the rule's bar when shorter); the ticks within their ten seconds; the Capital.com feed up to date (`stale_feed_seconds`); the container's memory under 85 %. Each check leads to the part of the page that says more, five tiles set the figures against their limits, and the page notes what waits on no live signal (a shadow rule waiting its turn, a script that fails, the shadow runner's troubles, measures that could not be written).
+  - **Health says the first check that failed**: the TA engine's OK becomes a warning with its sentence in the top bar, on the System page and in the Signal rules page's engine panel, only for what can cost a live signal. The 15 minutes keep it from coming and going: one notice when it starts, one when it ends.
+  - **A period**, from an hour to the days kept (1 h, 6 h, 24 h, 3 days, 7 days as tabs that are links), for every rule or one (`?hours=`, `?rule=`):
+    - each rule's runs, their time against its limit (median, 95 %, slowest), PineTS's share, its loads and failures, the ticks a shadow rule waited, its signals;
+    - over time, the restarts marked: run time, bar close to signals done, tick time, how far the feed was behind, the memory of the container, the runners and the engine, the signals by what became of them;
+    - the delivery of the live signals step by step, all on the server's clock: from the bar's close to the engine's tick, the run, the web server's answer, then the trader's order, Saxo's acceptance and the position; what the engine did with each signal (refusals by reason) and what the trader made of those sent;
+    - the results: the positions of a live rule's signals, a shadow rule's days on paper.
+  - The Signal rules page leads to it (its engine panel, each rule's last run time), and so does the TA engine's name on the System page.
+- **The engine measures itself** (`src/ta_engine/monitoring.py`, tables `ta_engine_tick` and `ta_rule_run`):
+  - each tick: its time, what it read and wrote, how far the feed had come, the shadow rules left for the next one, the memory of each runner, of the engine and of the container (read from Linux);
+  - each run of a rule: the runner's time and PineTS's own, the bars given and the close of the newest, the series the script asked for, the signals it raised. A signal finds its run by its tick: its `raised_at` is the run's `tick_at`.
+  - Written in the background once the tick's signals are sent: nothing waits for them, and a database too slow to take them makes the engine drop them, counted and said on the page, never a signal.
+  - Kept `trade.config.ta_engine.monitoring_days` (7 by default, 1 to 30), the older ones removed at the engine's start and at each `restart_time`. The admin only reads them: no research export, no MCP tool.
+- **A runner gone between two ticks no longer reads as a script that failed.** When a runner process ended while the engine waited (stopped by the kernel for memory, say), the next tick started it again but gave its new bars to the rules it no longer held: each failed with "The script failed on a new bar: No rule … is loaded", said on Telegram, before loading again. The rules now load again at once, with nothing said. The bars the ended runner never evaluated stay unsent, as before: a load's alerts are never signals.
+- **Every backtest run shows "Made with other code" once.** The code a run rests on counted the whole of `src/ta_engine`, the live loop that no backtest runs included, so this release marks every run as made with other code (the verdict's code check goes to open; nothing is lost, and a run made again says whether it still holds). It now counts the files a replay runs (`replay`, `rules`, `runner`, `tickers`, `signals`, `settings`, `bars`, `source`): a later change to the live engine alone leaves runs as they are. A test fails on a file of `src/ta_engine` the backtest code imports that the list leaves out.
+- The fake admin (`npm run dev:api`) has a live rule and one of Claude's in shadow on ten-second bars, a week of measures, and `FAKE_TA_TROUBLE=slow` for a slow live run.
+
+**Deploying it:** nothing to set. The engine makes its two tables at its next start and keeps a week unless `monitoring_days` says otherwise; until it runs this version, the page says nothing was measured yet and shows the journals' delivery and results alone. `VERSION` goes from 0.27.0 to 0.29.0: v0.28.0, committed without a bump, comes with it.
+
+**Verification status:**
+- 2,355 Python tests pass, the TA engine's on the real Pine runner among them. 72 tests are new: the engine's measures and their writer (a store that refuses or hangs costs no signal), the tables and their SQL, the checks at their boundaries, the routes and health, the code digest, the fix (which fails without it). The 2 skipped need what this Mac's run lacks (the lab's real `asyncpg`, the TradingView checker's build).
+- 912 interface tests pass, 27 of them new (the monitor's model and page, the menu, the Signal rules page's links); lint, type checks, the build and `build:runner` are clean.
+- On a real PostgreSQL 16 (pgserver): the live tests of the TA engine's tables, a signal joined to its run to the microsecond among them, and the purge. With a week of measures of five rules, two on ten-second bars (60,481 ticks, 151,205 runs, 46 MB), the page reads a week in 0.55 s and the checks of the last 15 minutes take 2 ms; with a month (259,201 ticks, 648,005 runs, 195 MB), the 30 days take 2 to 2.5 s, which the page reads every 5 minutes (a day, every minute).
+- In a browser against the fake admin, light and dark, at 1,440 px and on a phone's 375 px: every part of the page, the period tabs and the rule filter, the menu's entry and the links from Signal rules and System; with `FAKE_TA_TROUBLE=slow`, the warning of the System page and the failed check with the same sentence. On the phone, nothing scrolls sideways.
+
+**Not seen:** the memory read on the server (`/proc` and cgroup v2, tested on files), the container's limit and the kernel's OOM kills, the real runners' memory; the real feed's lag; the trader's and Saxo's steps with real orders; the warning's notices with the real engine; the engine stopping in Docker. The thresholds may want tuning after a week on the server.
+
 ## v0.28.0 - Technical Analysis and Backtests: from a script to a live rule, and whether to believe a run
 
 **Release date:** not released yet

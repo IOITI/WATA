@@ -13,6 +13,8 @@ sys.modules.setdefault("asyncpg", asyncpg_stub)
 
 from src.admin.errors import DatabaseUnavailable
 from src.admin.queries import MAX_REPLAYED_ROWS, MAX_ROWS, AdminQueries, LazyDatabase, summarise_trades
+from src.admin.ta_monitor import DELIVERY_STEPS
+from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
 
 def _trade(day, action, percent, profit, instrument="TURBO A"):
@@ -553,3 +555,59 @@ def test_open_positions_are_still_given_before_the_table_of_requests_exists():
     positions = asyncio.run(AdminQueries(db, "Europe/Paris").open_positions())
 
     assert positions[0]["sell_refusals"] is None
+
+
+# ── what the TA engine measured of itself (the Engine monitor) ──
+
+SINCE = datetime(2026, 10, 22, 11, 45, tzinfo=timezone.utc)
+
+
+def test_the_last_minutes_of_the_engine_are_read_in_five_statements_that_count_in_sql():
+    db = FakeDb(rows=[{"tick_at": SINCE, "kept_since": SINCE - timedelta(days=3), "milliseconds": 180}])
+
+    recent = asyncio.run(AdminQueries(db, "Europe/Paris").ta_monitor_recent(SINCE, slow_tick_ms=10_000))
+
+    last, ticks, runs, deferred, signals = db.calls
+    assert "FROM ta_engine_tick ORDER BY tick_at DESC LIMIT 1" in last[0] and last[1] == ()
+    assert ticks[1] == (SINCE, 10_000) and "count(*) FILTER (WHERE milliseconds > $2 AND loads = 0 AND NOT restarted)" in ticks[0]
+    assert "GROUP BY rule_id, mode, runner" in runs[0] and runs[1] == (SINCE,)
+    assert "unnest(deferred_rules)" in deferred[0]
+    assert "WHERE mode = 'live' AND raised_at >= $1" in signals[0]
+    # The oldest tick kept is said apart from the last one.
+    assert recent["kept_since"] == SINCE - timedelta(days=3) and "kept_since" not in recent["last_tick"]
+
+
+def test_a_period_is_read_by_bar_of_time_and_narrowed_to_one_rule_in_every_statement():
+    db = FakeDb()
+    start, end = SINCE - timedelta(hours=24), SINCE
+
+    asyncio.run(AdminQueries(db, "Europe/Paris").ta_monitor_period(
+        start, end, 600, "0123456789ab", signal_age_seconds=60, slow_tick_ms=10_000,
+    ))
+
+    ticks, runs, signals_by_bucket, rules, deferred, signals, delivery, trader, results, kept = db.calls
+    assert "date_bin($3::interval, tick_at, TIMESTAMPTZ '2000-01-01 00:00:00+00')" in ticks[0]
+    assert ticks[1] == (start, end, timedelta(seconds=600), 10_000)
+    # Every statement but the ticks' (and the oldest tick's) is narrowed to the rule, as its last argument.
+    for query, args in (runs, signals_by_bucket, rules, deferred, signals, delivery, trader, results):
+        assert args[-1] == "0123456789ab" and f"= ${len(args)}" in query
+    assert signals_by_bucket[1][3] == CLOSE_WITH_ENTRY and signals[1][2] == 60.0
+    assert "LEFT JOIN ta_rule_run r ON r.rule_id = s.rule_id AND r.tick_at = s.raised_at" in delivery[0]
+    for key, _, _ in DELIVERY_STEPS:
+        assert f"('{key}', " in delivery[0]
+    assert "JOIN turbo_data_position p ON p.position_id = j.position_id" in results[0]
+    assert kept == ("SELECT min(tick_at) AS kept_since FROM ta_engine_tick", ())
+
+
+def test_before_the_engine_measured_anything_its_monitor_reads_as_empty():
+    class NoTables(FakeDb):
+        async def fetch(self, query, *args):
+            raise DatabaseUnavailable('relation "ta_rule_run" does not exist')
+
+    queries = AdminQueries(NoTables(), "Europe/Paris")
+
+    assert asyncio.run(queries.ta_monitor_recent(SINCE, slow_tick_ms=10_000)) == {
+        "last_tick": None, "kept_since": None, "ticks": {}, "runs": [], "deferred": [], "signals": [],
+    }
+    period = asyncio.run(queries.ta_monitor_period(SINCE, SINCE, 600, signal_age_seconds=60, slow_tick_ms=10_000))
+    assert all(value in (None, []) for value in period.values())

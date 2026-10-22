@@ -9,7 +9,7 @@ the trader and the scheduler, from the start/stop lines of their logs.
 
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytz
 
@@ -20,6 +20,7 @@ from src.admin.data import capital_provider_state
 from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
 from src.admin.logs import last_lifecycle_event
 from src.admin.services import OPS_QUEUE, TELEGRAM_QUEUE
+from src.admin.ta_monitor import TICK_SECONDS, WINDOW_MINUTES, checks, health_warning, rules_by_id
 from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
@@ -221,6 +222,24 @@ def ta_engine_status(enabled_on_disk: bool, state: dict | None, now: datetime) -
     return DOWN, detail or kind or "Unknown state"
 
 
+async def ta_engine_health(ctx, enabled_on_disk: bool, settings: TaEngineSettings, state: dict | None, now: datetime) -> tuple[str, str]:
+    """
+    ``ta_engine_status``, and while it says the engine runs, the Engine monitor's checks of the last
+    minutes (src/admin/ta_monitor.py): a warning with the first that failed, of what can cost a live
+    signal. The System, Signal rules and Engine monitor pages say the same.
+    """
+    status, detail = ta_engine_status(enabled_on_disk, state, now)
+    if status != OK:
+        return status, detail
+    try:
+        recent = await ctx.queries.ta_monitor_recent(now - timedelta(minutes=WINDOW_MINUTES), slow_tick_ms=TICK_SECONDS * 1000)
+    except DatabaseUnavailable:
+        return status, detail
+    rules = await run_in_threadpool(rules_by_id, getattr(ctx, "ta_scripts", None))
+    warning = health_warning(checks(recent, settings, rules))
+    return (WARNING, warning) if warning else (status, detail)
+
+
 async def _ta_engine(ctx) -> list[dict]:
     """The TA engine, when it is switched on: a rule in error is said on its page, not here."""
     name = "TA engine"
@@ -234,7 +253,7 @@ async def _ta_engine(ctx) -> list[dict]:
         state = await ctx.queries.ta_engine_state()
     except DatabaseUnavailable:
         return [_entry("ta_engine", name, UNKNOWN, "The database is unavailable")]
-    status, detail = ta_engine_status(True, state, datetime.now(timezone.utc))
+    status, detail = await ta_engine_health(ctx, True, settings, state, datetime.now(timezone.utc))
     return [_entry("ta_engine", name, DOWN if status == DISABLED else status, detail)]
 
 

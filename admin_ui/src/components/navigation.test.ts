@@ -27,6 +27,12 @@ describe('the menu', () => {
     expect(menuEntry('/ta/indicators/0123456789ab')?.id).toBe('ta-indicators')
     expect(trailFor('/ta/charts')).toEqual([{ label: 'Technical Analysis' }, { label: 'Charts' }])
   })
+
+  it('has the Engine monitor under Technical Analysis, apart from the Signal rules', () => {
+    expect(menuEntry('/ta/monitor')?.id).toBe('ta-monitor')
+    expect(menuEntry('/ta/signals')?.id).toBe('ta-signals')
+    expect(trailFor('/ta/monitor')).toEqual([{ label: 'Technical Analysis' }, { label: 'Engine monitor' }])
+  })
 })
 
 describe('where a page is', () => {

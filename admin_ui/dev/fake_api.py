@@ -652,6 +652,12 @@ class FakeQueries:
     async def ta_rule_states(self):
         return self.ta_engine.rule_states() if self.ta_engine else {}
 
+    async def ta_monitor_recent(self, since, *, slow_tick_ms):
+        return self.ta_engine.monitor_recent(since, slow_tick_ms) if self.ta_engine else {}
+
+    async def ta_monitor_period(self, start, end, bucket_seconds, rule_id=None, *, signal_age_seconds, slow_tick_ms):
+        return self.ta_engine.monitor_period(start, end, bucket_seconds, rule_id, signal_age_seconds) if self.ta_engine else {}
+
     async def capital_assets(self, epic=None):
         if epic not in (None, fake_capital.EPIC):
             return []

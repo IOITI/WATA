@@ -29,6 +29,7 @@ from src.admin.ta_rules import RuleStore  # noqa: E402
 from src.admin.ta_scripts import ScriptStore  # noqa: E402
 from src.ta_engine.bars import RangeBars, TimeBars, bucket_end  # noqa: E402
 from src.ta_engine.engine import Engine  # noqa: E402
+from src.ta_engine.monitoring import Monitoring  # noqa: E402
 from src.ta_engine.rules import read_rules  # noqa: E402
 from src.ta_engine.runner import NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command  # noqa: E402
 from src.ta_engine.sender import Sent  # noqa: E402
@@ -178,12 +179,16 @@ def test_the_engine_is_off_unless_switched_on():
     assert (settings.enabled, settings.history_days, settings.restart_minute) == (True, 3, 22 * 60 + 5)
     assert settings.service_url == "http://web_server1:80"
     for wrong in ({"enabled": "yes"}, {"history_days": 31}, {"restart_time": "9:15"}, {"max_signal_age_seconds": 1},
-                  {"shadow_runner_memory_mb": 64}, {"shadow_seconds_per_tick": 9}, {"shadow_seconds_per_tick": 0}):
+                  {"shadow_runner_memory_mb": 64}, {"shadow_seconds_per_tick": 9}, {"shadow_seconds_per_tick": 0},
+                  {"monitoring_days": 0}, {"monitoring_days": 31}, {"monitoring_days": True}):
         with pytest.raises(ValueError, match="trade.config.ta_engine"):
             TaEngineSettings.from_config(Config({"trade.config.ta_engine": wrong}))
     shadow = TaEngineSettings.from_config(Config({"trade.config.ta_engine": {"shadow_runner_memory_mb": 384, "shadow_seconds_per_tick": 3}}))
     assert (shadow.shadow_runner_memory_mb, shadow.shadow_seconds_per_tick) == (384, 3)
     assert (TaEngineSettings().shadow_runner_memory_mb, TaEngineSettings().shadow_seconds_per_tick) == (256, 5)
+    # What the engine measures of itself is kept a week, or as long as the configuration says, a month at most.
+    assert TaEngineSettings().monitoring_days == 7
+    assert TaEngineSettings.from_config(Config({"trade.config.ta_engine": {"monitoring_days": 30}})).monitoring_days == 30
 
 
 # ── the rules, as the engine reads them ──
@@ -526,6 +531,9 @@ class Journal:
         self.completed = []
         self.states = []
         self.rule_states = []
+        self.ticks = []
+        self.runs = []
+        self.purged = []
         self._keys = set()
 
     async def journal_signal(self, signal):
@@ -544,6 +552,14 @@ class Journal:
 
     async def write_rule_states(self, states):
         self.rule_states.append(states)
+
+    async def write_monitoring(self, ticks, runs):
+        self.ticks += ticks
+        self.runs += runs
+
+    async def purge_monitoring(self, before):
+        self.purged.append(before)
+        return 0
 
 
 class Sender:
@@ -581,6 +597,16 @@ def engine_with(scripts, *, mode="shadow", now=T0 + 1.5, settings=None, **rule_c
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+async def ticked(engine):
+    """A tick, and what it measured written: the writer runs in the background."""
+    await engine.tick()
+    await engine.monitoring.flush(1)
+
+
+def moment(seconds):
+    return datetime.fromtimestamp(seconds, timezone.utc)
 
 
 def test_a_rule_is_loaded_on_its_history_whose_alerts_are_never_signals(scripts):
@@ -1204,3 +1230,176 @@ def test_without_a_shadow_rule_no_second_runner_is_started(scripts):
     run(engine.tick())
 
     assert (live.starts, shadow.starts) == (1, 0)
+
+
+# ── what the engine measures of itself, for the admin's Engine monitor (src/ta_engine/monitoring.py) ──
+
+
+def test_each_run_is_measured_and_a_signal_finds_its_run_by_its_tick(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, mode="live")
+    run(ticked(engine))
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 61.5
+    answer = runner.request
+
+    async def slow(message):
+        # The runner takes a quarter of a second over the new bar.
+        clock.at += 0.25
+        return await answer(message)
+
+    runner.request = slow
+    run(ticked(engine))
+
+    load, append = journal.runs
+    assert (load["kind"], load["mode"], load["runner"], load["outcome"], load["signals"]) == ("load", "live", "live", "ok", 0)
+    assert load["bars_given"] == load["bars_held"] == len(runner.requests[0]["bars"]) and load["pinets_ms"] == 3
+    assert (append["kind"], append["bars_given"], append["alerts"], append["signals"], append["outcome"]) == ("append", 1, 1, 1, "ok")
+    # A signal's raised_at is its run's tick_at: how the Engine monitor joins the two.
+    [signal] = journal.signals
+    assert append["tick_at"] == signal["raised_at"] == moment(T0 + 61.5)
+    assert (append["started_at"], append["ended_at"], append["milliseconds"]) == (moment(T0 + 61.5), moment(T0 + 61.75), 250)
+    assert append["bar_closed_at"] == moment(T0 + 60) and append["done_at"] == moment(T0 + 61.75)
+    first, second = journal.ticks
+    assert (first["loads"], first["runs"], first["rules_on"], first["restarted"]) == (1, 1, 1, False)
+    assert (second["tick_at"], second["runs"], second["loads"], second["failed"]) == (moment(T0 + 61.5), 1, 0, 0)
+    assert second["rows_read"] == sum(1 for row in source.rows_by_time if T0 <= row[0] < T0 + 60)
+    assert (second["covered_until"], second["milliseconds"], second["error"]) == (moment(T0 + 60), 250, None)
+
+
+def test_a_run_the_script_refuses_and_one_that_ends_its_runner_are_told_apart(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    runner.failing = ("load", RunnerFailed({"message": "Undeclared identifier", "file": "script", "line": 4}))
+    run(ticked(engine))
+    runner.failing = None
+    source.rows_by_time += ten_second_rows(T0, 30, seed=3)
+    source.covered, clock.at = T0 + 300, T0 + 301.5
+    run(ticked(engine))
+    runner.failing = ("append", RunnerDown("The Pine runner ended (exit code 9)"))
+    new_bars(source, clock, 6)
+
+    run(ticked(engine))
+
+    failed, loaded, ended = journal.runs
+    assert (failed["kind"], failed["outcome"]) == ("load", "failed") and "Undeclared identifier (script, line 4)" in failed["detail"]
+    assert (loaded["kind"], loaded["outcome"]) == ("load", "ok")
+    assert (ended["kind"], ended["outcome"], ended["detail"]) == ("append", "ended", "The Pine runner ended (exit code 9)")
+    assert [tick["failed"] for tick in journal.ticks] == [1, 0, 1]
+
+
+def test_a_shadow_rule_left_for_the_next_tick_is_counted_and_its_time_is_its_runners(scripts):
+    settings = TaEngineSettings(enabled=True, history_days=0, shadow_seconds_per_tick=1)
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, *_ = two_runner_engine(scripts, settings)
+    second = make_rule(scripts, mode="shadow", name="Claude · second", made_by="claude")
+    answer = shadow.request
+
+    async def slow(message):
+        clock.at += 2
+        return await answer(message)
+
+    shadow.request = slow
+    run(ticked(engine))
+
+    [tick] = journal.ticks
+    assert (tick["deferred_rules"], tick["rules_on"], tick["runs"]) == ([second["id"]], 3, 2)
+    runs = {row["rule_id"]: row for row in journal.runs}
+    assert (runs[live_rule["id"]]["runner"], runs[live_rule["id"]]["milliseconds"]) == ("live", 0)
+    assert (runs[shadow_rule["id"]]["runner"], runs[shadow_rule["id"]]["mode"], runs[shadow_rule["id"]]["milliseconds"]) == ("shadow", "shadow", 2000)
+
+
+def test_the_series_a_script_asks_for_count_in_the_run_that_asked(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    series, answer = engine._series, runner.request
+
+    async def slow_series(ask):
+        clock.at += 0.04
+        return await series(ask)
+
+    async def request(message):
+        # As the runner asks for the series a script reads (request.security) while it loads a rule.
+        if message["op"] == "load":
+            for timeframe in ("5", "15"):
+                await engine.answer_series({"ticker": "CAPITAL_US100", "timeframe": timeframe, "from": None, "to": None})
+        return await answer(message)
+
+    engine._series, runner.request = slow_series, request
+    run(ticked(engine))
+
+    [load] = journal.runs
+    assert (load["asks"], load["asks_ms"], load["milliseconds"]) == (2, 80, 80)
+
+
+def test_measures_older_than_the_days_kept_are_removed_at_start_and_at_each_restart(scripts):
+    settings = TaEngineSettings(enabled=True, history_days=0, monitoring_days=3)
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, settings=settings)
+    run(ticked(engine))
+    # 15 Oct, 21:15 UTC: past the next restart.
+    restart = T0 + 13 * 3600 + 15 * 60
+    source.rows_by_time += ten_second_rows(T0, 13 * 360 + 120, seed=5)
+    source.covered, clock.at = restart + 600, restart + 601.5
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+
+    assert journal.purged == [moment(T0 + 1.5 - 3 * 86_400), moment(restart + 601.5 - 3 * 86_400)]
+    assert [tick["restarted"] for tick in journal.ticks] == [False, True, False]
+
+
+def test_the_engine_says_how_long_it_keeps_its_measures_and_how_their_writing_goes(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    run(ticked(engine))
+    run(ticked(engine))
+
+    figures = journal.states[-1]["figures"]["monitoring"]
+    assert (figures["days"], figures["waiting"], figures["dropped"], figures["error"]) == (7, 0, 0, None)
+    assert (figures["written_at"], figures["purged_at"]) == (T0 + 1.5, T0 + 1.5)
+
+
+@pytest.mark.parametrize("trouble", ["refuses", "hangs"])
+def test_measures_the_database_cannot_take_cost_no_signal(scripts, trouble, monkeypatch):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, mode="live")
+    monkeypatch.setattr("src.ta_engine.monitoring.WRITE_TIMEOUT_SECONDS", 0.05)
+
+    async def write_monitoring(ticks, runs):
+        if trouble == "refuses":
+            raise ConnectionError("the database is gone")
+        await asyncio.sleep(3600)
+
+    journal.write_monitoring = write_monitoring
+    run(ticked(engine))
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 61.5
+
+    run(ticked(engine))
+
+    assert len(sender.sent) == 1 and journal.completed[-1][1] == "sent"
+    assert engine.monitoring.dropped == 2 and journal.ticks == []
+    assert engine.monitoring.error == ("ConnectionError: the database is gone" if trouble == "refuses" else "TimeoutError (no answer in time)")
+
+
+def test_each_tick_reads_the_memory_of_both_runners_once_its_rules_ran(scripts):
+    live_rule = make_rule(scripts, mode="live", name="Live cross")
+    make_rule(scripts, mode="shadow", name="Claude · cross", made_by="claude")
+    clock, sequence = Clock(T0 + 1.5), Sequence()
+    live, shadow = NamedRunner("live", sequence), NamedRunner("shadow", sequence)
+    journal, read = Journal(), []
+
+    def memory(runners):
+        read.append((dict(runners), len(sequence.seen)))
+        return {"live_rss_mb": 210.5, "shadow_rss_mb": 150.0, "memory_used_mb": 520.0, "memory_limit_mb": 1024.0, "oom_kills": 0}
+
+    engine = Engine(
+        settings=TaEngineSettings(enabled=True, history_days=0), rules=lambda: read_rules(scripts.root),
+        source=Source(ten_second_rows(T0 - 3600, 360), covered=T0), runner=live, shadow_runner=shadow, journal=journal,
+        sender=Sender(), notify=Telegram(), clock=clock, version="test",
+        monitoring=Monitoring(journal, days=7, clock=clock, memory=memory),
+    )
+
+    run(ticked(engine))
+
+    assert read == [({"live": live, "shadow": shadow}, 2)]
+    [tick] = journal.ticks
+    assert (tick["live_rss_mb"], tick["shadow_rss_mb"], tick["memory_used_mb"], tick["memory_limit_mb"]) == (210.5, 150.0, 520.0, 1024.0)
+    assert (tick["engine_rss_mb"], tick["runner_starts"], tick["shadow_runner_starts"]) == (None, 1, 1)
+    assert {row["rule_id"] for row in journal.runs} >= {live_rule["id"]}

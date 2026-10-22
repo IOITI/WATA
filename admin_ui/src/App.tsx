@@ -49,6 +49,7 @@ const ChartsPage = lazy(() => import('@/features/ta/ChartsPage').then((module) =
 const SignalRulesPage = lazy(() =>
   import('@/features/ta/signals/SignalRulesPage').then((module) => ({ default: module.SignalRulesPage })),
 )
+const MonitorPage = lazy(() => import('@/features/ta/monitor/MonitorPage').then((module) => ({ default: module.MonitorPage })))
 
 // A run's pages: the performance charts, and a day's candles (Lightweight Charts).
 const BacktestRunPage = lazy(() => import('@/features/backtests/RunPage').then((module) => ({ default: module.RunPage })))
@@ -190,6 +191,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <SignalRulesPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/monitor"
+          element={
+            <ChartPage>
+              <MonitorPage />
             </ChartPage>
           }
         />

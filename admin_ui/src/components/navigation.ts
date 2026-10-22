@@ -31,6 +31,7 @@ export const MENU: MenuEntry[] = [
   { id: 'ta-charts', path: '/ta/charts', label: 'Charts', section: 'Technical Analysis' },
   // "Signal rules": the Trading section's Signals page sends signals by hand.
   { id: 'ta-signals', path: '/ta/signals', label: 'Signal rules', section: 'Technical Analysis' },
+  { id: 'ta-monitor', path: '/ta/monitor', label: 'Engine monitor', section: 'Technical Analysis' },
   { id: 'system', path: '/system', label: 'System', section: 'Operations' },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations' },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations' },

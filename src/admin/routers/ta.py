@@ -10,7 +10,7 @@ goes live, or a live rule changes, as an operator action does: allowed only
 when actions are, recorded in the audit trail and announced on Telegram.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -18,9 +18,21 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import require_session
-from src.admin.health import DOWN, ta_engine_status
+from src.admin.health import DOWN, ta_engine_health
 from src.admin.routers.actions import _allowed_indices, require_actions_enabled
 from src.admin.ta_compare import compare, default_tolerance
+from src.admin.ta_monitor import (
+    DEFAULT_HOURS,
+    TICK_SECONDS,
+    WINDOW_MINUTES,
+    bucket_of,
+    kept_days,
+    now_answer,
+    period_answer,
+    period_bounds,
+    period_of,
+    rules_by_id,
+)
 from src.admin.ta_rules import (
     LIVE,
     MAX_ALERTS,
@@ -412,7 +424,7 @@ async def engine_state(request: Request):
         enabled, (status, detail) = False, (DOWN, f"Invalid configuration: {e}")
     else:
         enabled = settings.enabled
-        status, detail = ta_engine_status(enabled, engine, datetime.now(timezone.utc))
+        status, detail = await ta_engine_health(ctx, enabled, settings, engine, datetime.now(timezone.utc))
     return {
         "enabled": enabled,
         "status": status,
@@ -420,3 +432,59 @@ async def engine_state(request: Request):
         "engine": engine,
         "rules": await ctx.queries.ta_rule_states(),
     }
+
+
+# ── the Engine monitor: how fast the engine runs, how late its signals are ──
+
+
+def _engine_settings(config_manager) -> TaEngineSettings:
+    """The engine's settings, its defaults while they are invalid (the System page says why)."""
+    try:
+        return TaEngineSettings.from_config(config_manager)
+    except ValueError:
+        return TaEngineSettings()
+
+
+@router.get("/monitor/now")
+async def monitor_now(request: Request):
+    """
+    The TA engine's last minutes: its last tick, what its runs and the live signals were, and the
+    checks of what can cost a live signal, the first failed one of which health says.
+    """
+    ctx = request.app.state.ctx
+    settings = _engine_settings(ctx.config_manager)
+    now = datetime.now(timezone.utc)
+    state = await ctx.queries.ta_engine_state()
+    recent = await ctx.queries.ta_monitor_recent(now - timedelta(minutes=WINDOW_MINUTES), slow_tick_ms=TICK_SECONDS * 1000)
+    rules = await run_in_threadpool(rules_by_id, ctx.ta_scripts)
+    return now_answer(state=state, settings=settings, mcp_limits=ctx.settings.mcp_limits, recent=recent, rules=rules, now=now)
+
+
+@router.get("/monitor")
+async def monitor(
+    request: Request,
+    hours: int = Query(DEFAULT_HOURS, ge=1, le=720),
+    rule: str | None = Query(None, pattern=r"^[0-9a-f]{12}$"),
+):
+    """
+    A period of what the TA engine measured (at most the days it keeps them), for every rule or one:
+    its runs and ticks by bar of time, its signals' delivery from the bar's close on, their results.
+    """
+    ctx = request.app.state.ctx
+    settings = _engine_settings(ctx.config_manager)
+    state = await ctx.queries.ta_engine_state()
+    days = kept_days(state, settings)
+    try:
+        hours = period_of(hours, days)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    bucket = bucket_of(hours)
+    start, end = period_bounds(datetime.now(timezone.utc), hours, bucket)
+    rows = await ctx.queries.ta_monitor_period(
+        start, end, bucket, rule, signal_age_seconds=settings.max_signal_age_seconds, slow_tick_ms=TICK_SECONDS * 1000,
+    )
+    rules = await run_in_threadpool(rules_by_id, ctx.ta_scripts)
+    return period_answer(
+        hours=hours, days=days, bucket=bucket, start=start, end=end, rule_id=rule, state=state, settings=settings,
+        mcp_limits=ctx.settings.mcp_limits, rows=rows, rules=rules,
+    )

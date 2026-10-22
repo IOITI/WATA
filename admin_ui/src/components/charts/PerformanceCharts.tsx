@@ -728,3 +728,209 @@ export function SpreadByTimeChart({ slots, decimals }: { slots: SpreadSlot[]; de
     </ResponsiveContainer>
   )
 }
+
+/** A line of a chart over time, and how it is told apart: by its colour, and by its dash beside a solid one. */
+export interface SeriesLine {
+  key: string
+  label: string
+  color: string
+  dashed?: boolean
+}
+
+/** A figure's limit drawn across a chart, named over its line. */
+export interface SeriesLimit {
+  value: number
+  label: string
+}
+
+type SeriesPoint = { t: number } & Record<string, number | null | boolean>
+
+interface TimeSeriesChartProps {
+  points: SeriesPoint[]
+  lines: SeriesLine[]
+  /** A value as the axis and the tooltip say it. */
+  format: (value: number) => string
+  /** The start of a bar of time as the axis says it, and as the tooltip names it. */
+  clock: (t: number) => string
+  title: (t: number) => string
+  limit?: SeriesLimit | null
+  /** Moments drawn across the chart: the engine's restarts. */
+  marks?: { t: number; label: string }[]
+  /** Where the time axis is marked: round moments, not where the library would fall. */
+  ticks?: number[]
+  /** The width of the value axis, for long labels (megabytes). */
+  yWidth?: number
+}
+
+function SeriesTooltip({
+  active,
+  payload,
+  lines,
+  format,
+  title,
+}: {
+  active?: boolean
+  payload?: readonly { payload?: SeriesPoint }[]
+  lines: SeriesLine[]
+  format: (value: number) => string
+  title: (t: number) => string
+}) {
+  const point = payload?.[0]?.payload
+  if (!active || !point) return null
+  const rows = lines
+    .filter((line) => typeof point[line.key] === 'number')
+    .map((line) => ({ label: line.label, value: format(point[line.key] as number), keyColor: line.color }))
+  return <TooltipCard title={title(point.t)} rows={rows.length ? rows : [{ label: 'Nothing measured', value: '—' }]} />
+}
+
+/**
+ * Figures of the same kind over time, one scale (milliseconds, or megabytes): a bar of time without
+ * any is a gap. A limit is drawn and named where one is given; the restarts are lines across.
+ */
+export function TimeSeriesChart({ points, lines, format, clock, title, limit, marks = [], ticks, yWidth = 60 }: TimeSeriesChartProps) {
+  return (
+    <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+      <LineChart data={points} margin={CHART_MARGIN}>
+        <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+        <XAxis
+          dataKey="t"
+          type="number"
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={clock}
+          ticks={ticks}
+          tick={AXIS_TICK}
+          tickLine={false}
+          axisLine={{ stroke: 'var(--chart-axis)' }}
+          minTickGap={24}
+        />
+        <YAxis tickFormatter={format} tick={AXIS_TICK} tickLine={false} axisLine={false} width={yWidth} />
+        <Tooltip
+          cursor={{ stroke: 'var(--muted-foreground)', strokeWidth: 1 }}
+          content={<SeriesTooltip lines={lines} format={format} title={title} />}
+        />
+        {marks.map((mark) => (
+          <ReferenceLine key={`${mark.t}-${mark.label}`} x={mark.t} stroke="var(--chart-axis)" strokeDasharray="2 3" />
+        ))}
+        {limit && (
+          <ReferenceLine
+            y={limit.value}
+            ifOverflow="extendDomain"
+            stroke="var(--chart-negative)"
+            strokeDasharray="6 4"
+            label={{ value: limit.label, position: 'insideTopRight', fill: 'var(--foreground)', fontSize: 11 }}
+          />
+        )}
+        {lines.map((line) => (
+          <Line
+            key={line.key}
+            type="linear"
+            dataKey={line.key}
+            name={line.label}
+            stroke={line.color}
+            strokeWidth={2}
+            strokeDasharray={line.dashed ? '5 4' : undefined}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            dot={false}
+            activeDot={{ r: 4, fill: line.color, stroke: 'var(--card)', strokeWidth: 2 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** Which line is which: always there for two of them or more, a colour is not enough to know a line by. */
+export function SeriesLegend({ lines, marks }: { lines: SeriesLine[]; marks?: string }) {
+  return (
+    <ul aria-label="Legend" className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+      {lines.map((line) => (
+        <li key={line.key} className="flex items-center gap-1.5">
+          <svg aria-hidden width="16" height="4" className="shrink-0">
+            <line x1="0" x2="16" y1="2" y2="2" stroke={line.color} strokeWidth="2" strokeDasharray={line.dashed ? '4 3' : undefined} />
+          </svg>
+          <span className="text-foreground">{line.label}</span>
+        </li>
+      ))}
+      {marks && (
+        <li className="flex items-center gap-1.5">
+          <svg aria-hidden width="4" height="12" className="shrink-0">
+            <line x1="2" x2="2" y1="0" y2="12" stroke="var(--muted-foreground)" strokeWidth="1" strokeDasharray="2 3" />
+          </svg>
+          <span>{marks}</span>
+        </li>
+      )}
+    </ul>
+  )
+}
+
+function CountTooltip({
+  active,
+  payload,
+  bars,
+  title,
+}: {
+  active?: boolean
+  payload?: readonly { payload?: SeriesPoint }[]
+  bars: SeriesLine[]
+  title: (t: number) => string
+}) {
+  const point = payload?.[0]?.payload
+  if (!active || !point) return null
+  return (
+    <TooltipCard
+      title={title(point.t)}
+      rows={bars.map((bar) => ({ label: bar.label, value: String(point[bar.key] ?? 0), keyColor: bar.color }))}
+    />
+  )
+}
+
+/** Counts by bar of time, stacked: each bar of time whole, its parts in the order of the legend. */
+export function CountBarsChart({
+  points,
+  bars,
+  clock,
+  title,
+  ticks,
+}: {
+  points: SeriesPoint[]
+  bars: SeriesLine[]
+  clock: (t: number) => string
+  title: (t: number) => string
+  /** Bars of the time axis it is marked at: among `points`' own. */
+  ticks?: number[]
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+      <BarChart data={points} margin={CHART_MARGIN} barCategoryGap={2}>
+        <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+        <XAxis
+          dataKey="t"
+          tickFormatter={clock}
+          ticks={ticks}
+          interval={0}
+          tick={AXIS_TICK}
+          tickLine={false}
+          axisLine={{ stroke: 'var(--chart-axis)' }}
+        />
+        <YAxis allowDecimals={false} tick={AXIS_TICK} tickLine={false} axisLine={false} width={40} />
+        <Tooltip cursor={{ fill: 'var(--foreground)', fillOpacity: 0.06 }} content={<CountTooltip bars={bars} title={title} />} />
+        {bars.map((bar) => (
+          <Bar
+            key={bar.key}
+            dataKey={bar.key}
+            name={bar.label}
+            stackId="counts"
+            fill={bar.color}
+            stroke="var(--card)"
+            strokeWidth={1}
+            maxBarSize={24}
+            isAnimationActive={false}
+          />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}

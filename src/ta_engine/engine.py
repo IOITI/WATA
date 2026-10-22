@@ -38,6 +38,10 @@ shadow rule given its bars longest ago goes first: none waits for ever behind
 a slow one. The shadow runner is stopped while no shadow rule is on, and the
 kernel stops it before anything else when memory runs short. Given one runner
 only, the engine runs every rule on it, as it always did.
+
+What each tick and each run took is measured as it goes and written once the
+tick is done, in the background (src/ta_engine/monitoring.py): the admin's
+Engine monitor reads it.
 """
 
 import asyncio
@@ -52,6 +56,7 @@ from typing import Any
 from src.admin.prices import price_decimals
 from src.admin.ta_rules import LIVE, OFF, SHADOW, bars_label, timeframe_seconds
 from src.ta_engine.bars import RangeBars, TimeBars
+from src.ta_engine.monitoring import APPEND, LOAD, RUN_ENDED, RUN_FAILED, Monitoring, RunMark, TickMark
 from src.ta_engine.rules import EngineRule, RulesSnapshot
 from src.ta_engine.runner import RunnerDown, RunnerFailed
 from src.ta_engine.signals import Candidate, interpret, payload, settled
@@ -73,6 +78,14 @@ AGENT_NOTIFY_EVERY_SECONDS = 86_400
 MESSAGE_CHARACTERS = 2000
 
 LOADING, WAITING, RUNNING, ERROR = "loading", "waiting", "running", "error"
+
+# Why a live rule's signal is not sent (_refusal, _send), the start of what its journal says: the
+# admin's Engine monitor counts the signals not sent by them (src/admin/ta_monitor.py, tested together).
+NOT_ALONE = "More than one rule is live on {indice}: none of them sends"
+TOO_OLD = "The bar closed {age:.0f} s ago, more than {limit} s"
+STALE_FEED = "The Capital.com feed is stale"
+NO_SENDER = "No way to send signals"
+NOT_TAKEN = "Not a signal the web server takes: {error}"
 
 
 @dataclass
@@ -113,6 +126,8 @@ class RuleRun:
     slot: RunnerSlot | None = None
     # When it was last given its bars: the shadow rule given them longest ago goes first.
     given_at: float = 0.0
+    # Its last request to the runner, as the monitor measures it.
+    mark: RunMark | None = None
 
 
 @dataclass
@@ -141,6 +156,7 @@ class Engine:
         clock: Callable[[], float] = time.time,
         version: str = "unknown",
         shadow_runner=None,
+        monitoring: Monitoring | None = None,
     ):
         self._settings = settings
         self._rules = rules
@@ -165,6 +181,9 @@ class Engine:
         self._restarted_at: int | None = None
         self._notified: dict[str, float] = {}
         self._stopping = asyncio.Event()
+        # What each tick and run took, written in the background; the tick being measured.
+        self.monitoring = monitoring or Monitoring(journal, days=settings.monitoring_days, clock=clock)
+        self._mark: TickMark | None = None
 
     # ── the loop ──
 
@@ -190,9 +209,29 @@ class Engine:
 
     async def tick(self) -> None:
         now = self._clock()
+        mark = self._mark = TickMark(now)
+        try:
+            await self._tick(now, mark)
+        except Exception as e:
+            mark.error = f"{type(e).__name__}: {e}"
+            raise
+        finally:
+            # Every signal of the tick is sent: what it measured goes to the writer, which never holds the next one.
+            self._mark = None
+            mark.runner_starts = getattr(self._live_slot.runner, "starts", None)
+            if self._shadow_slot is not self._live_slot:
+                mark.shadow_runner_starts = getattr(self._shadow_slot.runner, "starts", None)
+            self.monitoring.tick_ended(mark, self._clock(), {slot.name: slot.runner for slot in self._slots()})
+
+    async def _tick(self, now: float, mark: TickMark) -> None:
         await self._apply(self._rules())
+        mark.rules_on = sum(1 for run in self._runs.values() if run.rule.mode != OFF)
+        reading = self._clock()
         self._covered = await self._source.covered_until()
+        mark.read_seconds += self._clock() - reading
+        mark.covered_until = self._covered
         if self._restart_due(now):
+            mark.restarted = True
             await self._restart(now)
         active = [run for run in self._runs.values() if run.rule.mode != OFF and run.retry_at <= now]
         # The live rules' runner always (as the engine always did); the shadow rules' only while one is on.
@@ -203,6 +242,7 @@ class Engine:
                 await slot.runner.stop()
         ready = {slot.name: slot.name in needed and await self._slot_ready(slot, now) for slot in self._slots()}
         if not any(ready.values()):
+            mark.skipped = len(active)
             await self._write_states(now)
             return
         # Read again: a runner started just now (it had ended since the last tick) holds none of
@@ -211,19 +251,23 @@ class Engine:
         # Live rules first: a shadow rule never holds back a signal that is sent. Then the shadow
         # rule given its bars longest ago: one slow rule never keeps the others waiting tick after tick.
         active.sort(key=lambda run: (0, 0.0) if run.rule.mode == LIVE else (1, run.given_at))
+        reading = self._clock()
         for epic in {run.rule.epic for run in active}:
-            await self._read_rows(epic, now)
+            mark.rows_read += await self._read_rows(epic, now)
+        mark.read_seconds += self._clock() - reading
         lost: set[str] = set()
         shadow_until = None
         for run in active:
             slot = self._slot_of(run)
             if not ready[slot.name] or slot.name in lost:
+                mark.skipped += 1
                 continue
             if self._shadow_slot is not self._live_slot and slot is self._shadow_slot:
                 if shadow_until is None:
                     shadow_until = self._clock() + self._settings.shadow_seconds_per_tick
                 elif self._clock() >= shadow_until:
                     # Its rows wait where they are: it reads them at the next tick, no bar lost.
+                    mark.deferred.append(run.rule.id)
                     continue
             run.given_at = now
             try:
@@ -379,13 +423,17 @@ class Engine:
                     run.cursor += len(older)
         return found
 
-    async def _read_rows(self, epic: str, now: float) -> None:
+    async def _read_rows(self, epic: str, now: float) -> int:
+        """Read the rows of ``epic`` the feed wrote since; how many were read, older ones a rule wanted included."""
+        held = len(self._epics[epic].rows) if epic in self._epics else 0
         found = await self._epic(epic, now)
+        if found is None:
+            return 0
         covered = self._covered
-        if found is None or covered is None or covered <= found.read_until:
-            return
-        found.rows.extend(await self._source.rows(found.instrument_id, found.read_until, covered))
-        found.read_until = covered
+        if covered is not None and covered > found.read_until:
+            found.rows.extend(await self._source.rows(found.instrument_id, found.read_until, covered))
+            found.read_until = covered
+        return len(found.rows) - held
 
     def _builder(self, run: RuleRun, epic: EpicRows):
         bars = run.rule.rule["bars"]
@@ -438,34 +486,52 @@ class Engine:
             "bars": bars,
         }
 
+    async def _request(self, run: RuleRun, kind: str, message: dict, bars: list, now: float) -> dict:
+        """The runner's answer to a load or an append of ``run``, measured for the monitor (ta_rule_run)."""
+        slot = run.slot or self._slot_of(run)
+        mark = run.mark = RunMark(
+            rule_id=run.rule.id, mode=LIVE if run.rule.mode == LIVE else SHADOW, runner=slot.name, kind=kind,
+            tick_at=now, started_at=self._clock(), bars_given=len(bars), bar_closed_at=bars[-1][6] / 1000 if bars else None,
+        )
+        if self._mark is not None:
+            self._mark.runs.append(mark)
+        self._asking = run
+        try:
+            answer = await slot.runner.request(message)
+        except RunnerFailed as e:
+            mark.ended_with(self._clock(), RUN_FAILED, str(e))
+            raise
+        except RunnerDown as e:
+            mark.ended_with(self._clock(), RUN_ENDED, str(e))
+            raise
+        finally:
+            self._asking = None
+        mark.answered(self._clock(), answer, {bar[0] for bar in bars})
+        return answer
+
     async def _load(self, run: RuleRun, bars: list, now: float) -> None:
         run.state, run.detail = LOADING, None
         run.slot = self._slot_of(run)
-        self._asking = run
         try:
-            answer = await run.slot.runner.request(self._load_request(run, bars))
+            answer = await self._request(run, LOAD, self._load_request(run, bars), bars, now)
         except RunnerFailed as e:
             await self._failed(run, f"The script does not run: {e}", now)
             return
-        finally:
-            self._asking = None
         run.loaded, run.state = True, RUNNING
         run.detail = "; ".join(answer.get("warnings") or []) or None
         self._ran(run, answer, bars)
         logger.info("Rule %s (%s) loaded on %d bars in %d ms.", run.rule.id, run.rule.name, answer.get("bars", 0), answer.get("milliseconds", 0))
 
     async def _append(self, run: RuleRun, bars: list, now: float) -> None:
-        self._asking = run
         try:
-            answer = await (run.slot or self._slot_of(run)).runner.request({"op": "append", "rule": run.rule.id, "bars": bars})
+            answer = await self._request(run, APPEND, {"op": "append", "rule": run.rule.id, "bars": bars}, bars, now)
         except RunnerFailed as e:
             await self._failed(run, f"The script failed on a new bar: {e}", now)
             return
-        finally:
-            self._asking = None
         run.state, run.detail = RUNNING, run.detail if run.state == RUNNING else None
         self._ran(run, answer, bars)
         await self._signals(run, answer, bars, now)
+        run.mark.done_at = self._clock()
 
     def _ran(self, run: RuleRun, answer: dict, bars: list) -> None:
         run.bars = answer.get("bars", run.bars)
@@ -484,14 +550,14 @@ class Engine:
     def _refusal(self, run: RuleRun, bar: list, now: float) -> str | None:
         rule = run.rule.rule
         if rule["indice"] in self._contested:
-            return f"More than one rule is live on {rule['indice']}: none of them sends"
+            return NOT_ALONE.format(indice=rule["indice"])
         age = now - bar[6] / 1000
         if age > self._settings.max_signal_age_seconds:
-            return f"The bar closed {age:.0f} s ago, more than {self._settings.max_signal_age_seconds} s"
+            return TOO_OLD.format(age=age, limit=self._settings.max_signal_age_seconds)
         if self._covered is None or now - self._covered > self._settings.stale_feed_seconds:
-            return "The Capital.com feed is stale"
+            return STALE_FEED
         if self._sender is None:
-            return "No way to send signals"
+            return NO_SENDER
         return None
 
     def _journal_row(self, run: RuleRun, candidate: Candidate, bar: list, mode: str, outcome: str, now: float) -> dict:
@@ -546,6 +612,8 @@ class Engine:
                 else:
                     outcome = "sending" if mode == LIVE else "shadow"
                 signal_id = await self._journal.journal_signal(self._journal_row(run, candidate, bar, mode, outcome, now))
+                if signal_id is not None and run.mark is not None:
+                    run.mark.signals += 1
                 if signal_id is None or outcome != "sending":
                     continue
                 await self._send(run, candidate, bar, signal_id, now)
@@ -557,7 +625,7 @@ class Engine:
             try:
                 body = payload(rule, candidate, bar_closed_at=bar[6] / 1000, now=now)
             except Exception as e:
-                refusal = f"Not a signal the web server takes: {e}"
+                refusal = NOT_TAKEN.format(error=e)
         if refusal is not None:
             await self._journal.complete_signal(signal_id, "refused", detail=refusal)
             await self._say(f"{rule['id']}:refused", f"⚠️ WATA TA engine, rule {rule['name']!r}: {candidate.action} not sent. {refusal}.", now)
@@ -654,23 +722,38 @@ class Engine:
                     "runner_starts": getattr(self._runner, "starts", 0),
                     "shadow_runner_starts": getattr(self._shadow_slot.runner, "starts", 0)
                     if self._shadow_slot is not self._live_slot else None,
+                    "monitoring": self.monitoring.figures(),
                 },
             })
         except Exception as e:
             logger.warning("The TA engine's state could not be written: %s", e)
 
     async def _write_states(self, now: float) -> None:
+        writing = self._clock()
         state, detail = self.engine_state(now)
         await self._write_state(state, detail)
         try:
             await self._journal.write_rule_states(self.rule_states(now))
         except Exception as e:
             logger.warning("The rules' state could not be written: %s", e)
+        if self._mark is not None:
+            self._mark.write_seconds += self._clock() - writing
 
     # ── what a script asks for (request.security) ──
 
     async def answer_series(self, ask: dict) -> list:
         """The final bars of another series in [from, to], from the same feed and the same anchor."""
+        asking = self._asking
+        started = self._clock()
+        try:
+            return await self._series(ask)
+        finally:
+            # Part of the run that asked: its count and time, beside the runner's own.
+            if asking is not None and asking.mark is not None:
+                asking.mark.asks += 1
+                asking.mark.asks_seconds += self._clock() - started
+
+    async def _series(self, ask: dict) -> list:
         ticker = parse_ticker(str(ask.get("ticker") or ""))
         if ticker is None or ticker.provider != "capital":
             raise ValueError(f"WATA has no live bars of {ask.get('ticker')!r}: only Capital.com's (CAPITAL_<EPIC>)")

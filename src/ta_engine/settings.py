@@ -66,6 +66,9 @@ class TaEngineSettings:
     # The web server that takes the signals, as the scheduler reaches it (a protected setting of the admin).
     service_url: str = DEFAULT_SERVICE_URL
     request_timeout_seconds: int = 3
+    # The days the engine keeps what it measures of itself (ta_engine_tick, ta_rule_run), which
+    # the admin's Engine monitor reads: it removes older rows at its start and each restart_time.
+    monitoring_days: int = 7
 
     @classmethod
     def from_config(cls, config_manager) -> "TaEngineSettings":
@@ -89,6 +92,7 @@ class TaEngineSettings:
             shadow_seconds_per_tick=_whole(section, "shadow_seconds_per_tick", cls.shadow_seconds_per_tick, minimum=1, maximum=8),
             service_url=str(service_url).rstrip("/"),
             request_timeout_seconds=_whole(section, "request_timeout_seconds", cls.request_timeout_seconds, minimum=1, maximum=30),
+            monitoring_days=_whole(section, "monitoring_days", cls.monitoring_days, minimum=1, maximum=30),
         )
 
     @property

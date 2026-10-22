@@ -9,6 +9,7 @@ import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
+import { ButtonLink } from '@/components/ButtonLink'
 import { CheckList } from '@/components/CheckList'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { PageHeader, Panel } from '@/components/Panel'
@@ -23,6 +24,7 @@ import { Select } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
+import { monitorHref } from '@/features/ta/monitor/monitorModel'
 import { api, ApiError } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { TaEngine, TaRule, TaRuleMode, TaRules } from '@/lib/types'
@@ -47,7 +49,15 @@ const STATE_LABEL: Record<string, { label: string; tone: 'neutral' | 'success' |
 function EnginePanel({ engine, timeZone }: { engine: TaEngine; timeZone: string }) {
   const figures = (engine.engine?.figures ?? {}) as { live?: number; shadow?: number; covered_until?: number | null; runner?: { pinets?: string; node?: string } }
   return (
-    <Panel title="TA engine" description="The service that runs the rules on each bar of the Capital.com feed.">
+    <Panel
+      title="TA engine"
+      description="The service that runs the rules on each bar of the Capital.com feed."
+      action={
+        <ButtonLink to={monitorHref({})} variant="outline" size="sm">
+          Engine monitor
+        </ButtonLink>
+      }
+    >
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <ServiceStatusBadge status={engine.status} />
         <span>{engine.detail}</span>
@@ -285,7 +295,14 @@ export function SignalRulesPage() {
               {state.last_bar_time && (
                 <p className="text-muted-foreground">
                   Last bar {formatDateTime(state.last_bar_time, timezone, false)}
-                  {state.figures.milliseconds != null && `, run in ${state.figures.milliseconds} ms`}
+                  {state.figures.milliseconds != null && (
+                    <>
+                      ,{' '}
+                      <Link className="underline-offset-2 hover:underline" to={monitorHref({ rule: row.id })}>
+                        run in {state.figures.milliseconds} ms
+                      </Link>
+                    </>
+                  )}
                 </p>
               )}
               {state.last_alert_at && <p className="text-muted-foreground">Last signal {formatDateTime(state.last_alert_at, timezone, false)}</p>}

@@ -1,4 +1,7 @@
-"""What the commands the admin starts as child processes share: giving way to everything else."""
+"""
+What the commands the admin starts as child processes share: giving way to everything else,
+and what they hold of the machine's memory (read by the TA engine of itself too).
+"""
 
 import os
 
@@ -45,18 +48,29 @@ def exit_said(code: int | None) -> str:
     return f"ended with code {code}"
 
 
-def peak_memory_mb(pid: int | None, proc: str = "/proc") -> float | None:
-    """The most memory a process has held (VmHWM), in MB; None where it cannot be read (not Linux)."""
+def process_memory_mb(pid: int | str | None, proc: str = "/proc") -> tuple[float | None, float | None]:
+    """
+    (held now, most held) of a process's memory (VmRSS, VmHWM), in MB, from one read of its status;
+    ``"self"`` for this process. None for what cannot be read (not Linux, a process that ended).
+    """
+    held = most = None
     if pid is None:
-        return None
+        return held, most
     try:
         with open(os.path.join(proc, str(pid), "status"), encoding="utf-8") as status:
             for line in status:
-                if line.startswith("VmHWM:"):
-                    return round(int(line.split()[1]) / 1024, 1)
+                if line.startswith("VmRSS:"):
+                    held = round(int(line.split()[1]) / 1024, 1)
+                elif line.startswith("VmHWM:"):
+                    most = round(int(line.split()[1]) / 1024, 1)
     except (OSError, ValueError, IndexError):
-        return None
-    return None
+        return None, None
+    return held, most
+
+
+def peak_memory_mb(pid: int | None, proc: str = "/proc") -> float | None:
+    """The most memory a process has held (VmHWM), in MB; None where it cannot be read (not Linux)."""
+    return process_memory_mb(pid, proc)[1]
 
 
 def oom_kills(root: str = CGROUP_ROOT) -> int | None:
@@ -70,3 +84,34 @@ def oom_kills(root: str = CGROUP_ROOT) -> int | None:
     except (OSError, ValueError):
         return None
     return None
+
+
+def cgroup_memory(root: str = CGROUP_ROOT) -> tuple[int, int] | None:
+    """
+    (used, limit) of the container's memory in bytes, or None where there is no limit to read. The
+    file cache the kernel takes back when memory is asked for (``inactive_file``) is not counted as
+    used: the price files and the runner's day cache the admin reads fill the container with it.
+    """
+    try:
+        with open(os.path.join(root, "memory.max"), encoding="utf-8") as limit_file:
+            limit = limit_file.read().strip()
+        with open(os.path.join(root, "memory.current"), encoding="utf-8") as current_file:
+            current = int(current_file.read().strip())
+    except (OSError, ValueError):
+        return None
+    if limit == "max":
+        return None
+    return max(0, current - _inactive_file(root)), int(limit)
+
+
+def _inactive_file(root: str) -> int:
+    """The container's inactive file cache in bytes (``memory.stat``), 0 where it cannot be read."""
+    try:
+        with open(os.path.join(root, "memory.stat"), encoding="utf-8") as stat_file:
+            for line in stat_file:
+                name, _, value = line.strip().partition(" ")
+                if name == "inactive_file":
+                    return int(value)
+    except (OSError, ValueError):
+        return 0
+    return 0

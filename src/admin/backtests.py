@@ -39,7 +39,6 @@ import pytz
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
 from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
-from src.admin.studies import cgroup_memory
 from src.admin.processes import (
     CANCELLED,
     DONE,
@@ -67,7 +66,7 @@ from src.admin.ta_rules import (
     checked_inputs,
 )
 from src.admin.ta_scripts import ScriptNotFound, ScriptStore
-from src.price_history.process import exit_said, oom_kills
+from src.price_history.process import cgroup_memory, exit_said, oom_kills
 from src.backtest.baseline import DEFAULT_REPETITIONS, DEFAULT_SEED, MAX_REPETITIONS
 from src.backtest.execution import EXECUTION_FILE, MEASURED, missing
 from src.backtest.figures import code_digest

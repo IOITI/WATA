@@ -23,7 +23,9 @@ from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
 from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.admin.prices import Run as PriceRun
 from src.admin.prices import interval_served
-from src.database.postgres import ORDER_REQUEST_COLUMNS, AsyncDbPositionManager, AsyncDbRiskStateManager
+from src.admin.ta_monitor import DELIVERY_STEPS
+from src.ta_engine.signals import CLOSE_WITH_ENTRY
+from src.database.postgres import ORDER_REQUEST_COLUMNS, TA_TICK_COLUMNS, AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,10 @@ _TA_SIGNAL_COLUMNS = (
     "raised_at", "outcome", "sent_at", "http_status", "signal_uuid", "detail",
 )
 _TA_TRADER_COLUMNS = ("decided_at", "outcome", "reason", "position_id")
+# Milliseconds between two moments, and the start of the bar of time a moment falls in (epoch seconds, from
+# the bucket's length given as $3): the Engine monitor's figures, in SQL so that a month of runs is never read.
+_MS = "(extract(epoch FROM {}) * 1000)::float8"
+_BUCKET = "extract(epoch FROM date_bin($3::interval, {}, TIMESTAMPTZ '2000-01-01 00:00:00+00'))::bigint"
 
 # The signal an order came from.
 _ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp", "decided_at")
@@ -203,6 +209,13 @@ def _json_value(value):
         except ValueError:
             return None
     return value
+
+
+def _percentiles(row: dict, name: str) -> dict:
+    """``<name>_ms``, a median and a 95 % made in one sort, as ``<name>_p50_ms`` and ``<name>_p95_ms``."""
+    values = row.pop(f"{name}_ms", None) or [None, None]
+    row[f"{name}_p50_ms"], row[f"{name}_p95_ms"] = values[0], values[1]
+    return row
 
 
 def _is_missing_table(error: DatabaseUnavailable) -> bool:
@@ -990,6 +1003,282 @@ class AdminQueries:
             row["figures"] = _json_value(row.get("figures")) or {}
             states[row.pop("rule_id")] = row
         return states
+
+    # ── what the TA engine measured of itself (ta_engine_tick, ta_rule_run: src/ta_engine/monitoring.py) ──
+
+    async def ta_monitor_recent(self, since: datetime, *, slow_tick_ms: int) -> dict:
+        """
+        The engine's last tick, and what its ticks, its runs and the live signals were since ``since``:
+        the Engine monitor's checks, and health's. Empty before the engine measured anything.
+        """
+        last = await self._fetch_optional(
+            f"SELECT {', '.join(TA_TICK_COLUMNS)}, (SELECT min(tick_at) FROM ta_engine_tick) AS kept_since "
+            "FROM ta_engine_tick ORDER BY tick_at DESC LIMIT 1"
+        )
+        ticks = await self._fetch_optional(
+            f"""
+            SELECT count(*) AS ticks,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY milliseconds::float8) AS tick_p50_ms,
+                   max(milliseconds) AS tick_max_ms,
+                   max(milliseconds) FILTER (WHERE loads = 0 AND NOT restarted) AS steady_tick_max_ms,
+                   count(*) FILTER (WHERE milliseconds > $2 AND loads = 0 AND NOT restarted) AS slow_ticks,
+                   max({_MS.format("tick_at - covered_until")}) AS feed_lag_max_ms,
+                   max(memory_used_mb) AS memory_used_max_mb,
+                   max(memory_limit_mb) AS memory_limit_mb,
+                   greatest(max(oom_kills) - min(oom_kills), 0) AS oom_kills,
+                   sum(cardinality(deferred_rules)) AS deferred
+            FROM ta_engine_tick
+            WHERE tick_at >= $1
+            """,
+            since, slow_tick_ms,
+        )
+        runs = await self._fetch_optional(
+            f"""
+            SELECT rule_id, mode, runner,
+                   count(*) AS runs,
+                   count(*) FILTER (WHERE kind = 'load') AS loads,
+                   max(milliseconds) FILTER (WHERE kind = 'append') AS append_max_ms,
+                   max(milliseconds) FILTER (WHERE kind = 'load') AS load_max_ms,
+                   count(*) FILTER (WHERE outcome = 'failed') AS failed,
+                   count(*) FILTER (WHERE outcome = 'ended') AS ended,
+                   (array_agg(detail ORDER BY tick_at DESC) FILTER (WHERE outcome <> 'ok'))[1] AS last_failure,
+                   max({_MS.format("tick_at - bar_closed_at")}) FILTER (WHERE kind = 'append') AS age_max_ms,
+                   max({_MS.format("done_at - bar_closed_at")}) FILTER (WHERE kind = 'append') AS delay_max_ms
+            FROM ta_rule_run
+            WHERE tick_at >= $1
+            GROUP BY rule_id, mode, runner
+            ORDER BY rule_id, runner
+            """,
+            since,
+        )
+        deferred = await self._fetch_optional(
+            """
+            SELECT waited.rule_id, count(*) AS ticks
+            FROM ta_engine_tick, unnest(deferred_rules) AS waited(rule_id)
+            WHERE tick_at >= $1
+            GROUP BY waited.rule_id
+            ORDER BY waited.rule_id
+            """,
+            since,
+        )
+        signals = await self._fetch_optional(
+            """
+            SELECT rule_id, outcome, CASE WHEN outcome IN ('refused', 'failed') THEN detail END AS detail,
+                   count(*) AS signals
+            FROM ta_signal
+            WHERE mode = 'live' AND raised_at >= $1
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 2, 3
+            """,
+            since,
+        )
+        last_tick = _clean_row(last[0]) if last else None
+        return {
+            "last_tick": last_tick,
+            "kept_since": last_tick.pop("kept_since") if last_tick else None,
+            "ticks": _clean_row(ticks[0]) if ticks else {},
+            "runs": [_clean_row(row) for row in runs],
+            "deferred": [_clean_row(row) for row in deferred],
+            "signals": [_clean_row(row) for row in signals],
+        }
+
+    async def ta_monitor_period(
+        self,
+        start: datetime,
+        end: datetime,
+        bucket_seconds: int,
+        rule_id: str | None = None,
+        *,
+        signal_age_seconds: int,
+        slow_tick_ms: int,
+    ) -> dict:
+        """
+        A period of what the engine measured, by bar of time (``bucket_seconds``) and by rule, with its
+        signals' delivery (from the bar's close to the position) and results: the Engine monitor's page.
+        """
+        def rule(column: str, args: list) -> str:
+            if rule_id is None:
+                return ""
+            args.append(rule_id)
+            return f" AND {column} = ${len(args)}"
+
+        bucket = timedelta(seconds=bucket_seconds)
+        args = [start, end, bucket, slow_tick_ms]
+        ticks = await self._fetch_optional(
+            f"""
+            SELECT {_BUCKET.format("tick_at")} AS t,
+                   count(*) AS ticks,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY milliseconds::float8) AS tick_p50_ms,
+                   max(milliseconds) AS tick_max_ms,
+                   count(*) FILTER (WHERE milliseconds > $4 AND loads = 0 AND NOT restarted) AS slow,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY {_MS.format("tick_at - covered_until")}) AS feed_lag_p50_ms,
+                   max({_MS.format("tick_at - covered_until")}) AS feed_lag_max_ms,
+                   max(live_rss_mb) AS live_rss_mb, max(shadow_rss_mb) AS shadow_rss_mb, max(engine_rss_mb) AS engine_rss_mb,
+                   max(memory_used_mb) AS memory_used_mb, max(memory_limit_mb) AS memory_limit_mb,
+                   bool_or(restarted) AS restarted,
+                   min(runner_starts) AS runner_starts_min, max(runner_starts) AS runner_starts_max,
+                   sum(cardinality(deferred_rules)) AS deferred
+            FROM ta_engine_tick
+            WHERE tick_at >= $1 AND tick_at < $2
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            *args,
+        )
+        args = [start, end, bucket]
+        runs_by_bucket = await self._fetch_optional(
+            f"""
+            SELECT {_BUCKET.format("tick_at")} AS t,
+                   count(*) FILTER (WHERE kind = 'append') AS runs,
+                   count(*) FILTER (WHERE kind = 'load') AS loads,
+                   count(*) FILTER (WHERE outcome <> 'ok') AS failed,
+                   percentile_cont(ARRAY[0.5, 0.95]) WITHIN GROUP (ORDER BY milliseconds::float8)
+                       FILTER (WHERE kind = 'append') AS run_ms,
+                   max(milliseconds) FILTER (WHERE kind = 'append') AS run_max_ms,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY {_MS.format("done_at - bar_closed_at")})
+                       FILTER (WHERE kind = 'append') AS delay_p50_ms,
+                   max({_MS.format("done_at - bar_closed_at")}) FILTER (WHERE kind = 'append') AS delay_max_ms
+            FROM ta_rule_run
+            WHERE tick_at >= $1 AND tick_at < $2{rule("rule_id", args)}
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            *args,
+        )
+        args = [start, end, bucket, CLOSE_WITH_ENTRY]
+        signals_by_bucket = await self._fetch_optional(
+            f"""
+            SELECT {_BUCKET.format("raised_at")} AS t,
+                   count(*) FILTER (WHERE outcome = 'sent') AS sent,
+                   count(*) FILTER (
+                       WHERE mode = 'live' AND outcome IN ('refused', 'failed', 'sending') AND detail IS DISTINCT FROM $4
+                   ) AS not_sent,
+                   count(*) FILTER (WHERE mode = 'shadow') AS shadow
+            FROM ta_signal
+            WHERE raised_at >= $1 AND raised_at < $2{rule("rule_id", args)}
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            *args,
+        )
+        args = [start, end]
+        rules = await self._fetch_optional(
+            f"""
+            SELECT rule_id,
+                   count(*) FILTER (WHERE kind = 'append') AS runs,
+                   count(*) FILTER (WHERE kind = 'load') AS loads,
+                   count(*) FILTER (WHERE outcome = 'failed') AS failed,
+                   count(*) FILTER (WHERE outcome = 'ended') AS ended,
+                   percentile_cont(ARRAY[0.5, 0.95]) WITHIN GROUP (ORDER BY milliseconds::float8)
+                       FILTER (WHERE kind = 'append') AS run_ms,
+                   max(milliseconds) FILTER (WHERE kind = 'append') AS run_max_ms,
+                   max(milliseconds) FILTER (WHERE kind = 'load') AS load_max_ms,
+                   avg(pinets_ms::float8) FILTER (WHERE kind = 'append') AS pinets_avg_ms,
+                   max(bars_held) AS bars_max,
+                   sum(asks) AS asks,
+                   percentile_cont(ARRAY[0.5, 0.95]) WITHIN GROUP (ORDER BY {_MS.format("done_at - bar_closed_at")})
+                       FILTER (WHERE kind = 'append') AS delay_ms,
+                   max({_MS.format("done_at - bar_closed_at")}) FILTER (WHERE kind = 'append') AS delay_max_ms,
+                   max({_MS.format("tick_at - bar_closed_at")}) FILTER (WHERE kind = 'append') AS age_max_ms,
+                   max(tick_at) AS last_run_at,
+                   (array_agg(detail ORDER BY tick_at DESC) FILTER (WHERE outcome <> 'ok'))[1] AS last_failure
+            FROM ta_rule_run
+            WHERE tick_at >= $1 AND tick_at < $2{rule("rule_id", args)}
+            GROUP BY rule_id
+            ORDER BY rule_id
+            """,
+            *args,
+        )
+        args = [start, end]
+        deferred = await self._fetch_optional(
+            f"""
+            SELECT waited.rule_id, count(*) AS ticks
+            FROM ta_engine_tick, unnest(deferred_rules) AS waited(rule_id)
+            WHERE tick_at >= $1 AND tick_at < $2{rule("waited.rule_id", args)}
+            GROUP BY waited.rule_id
+            ORDER BY waited.rule_id
+            """,
+            *args,
+        )
+        args = [start, end, float(signal_age_seconds)]
+        signals = await self._fetch_optional(
+            f"""
+            SELECT rule_id, mode, outcome, CASE WHEN outcome IN ('refused', 'failed') THEN detail END AS detail,
+                   count(*) AS signals,
+                   count(*) FILTER (WHERE raised_at - bar_closed_at > make_interval(secs => $3)) AS late
+            FROM ta_signal
+            WHERE raised_at >= $1 AND raised_at < $2{rule("rule_id", args)}
+            GROUP BY 1, 2, 3, 4
+            ORDER BY 1, 2, 3, 4
+            LIMIT {MAX_ROWS}
+            """,
+            *args,
+        )
+        args = [start, end]
+        steps = ",\n".join(f"('{key}', {_MS.format('(' + moments + ')')})" for key, _, moments in DELIVERY_STEPS)
+        delivery = await self._fetch_optional(
+            f"""
+            SELECT step, count(ms) AS signals,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY ms) AS p50,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY ms) AS p95,
+                   max(ms) AS max
+            FROM ta_signal s
+            LEFT JOIN ta_rule_run r ON r.rule_id = s.rule_id AND r.tick_at = s.raised_at
+            LEFT JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            LEFT JOIN order_execution e ON e.order_id = j.order_id
+            CROSS JOIN LATERAL (VALUES
+                {steps}
+            ) AS steps(step, ms)
+            WHERE s.mode = 'live' AND s.outcome = 'sent' AND s.raised_at >= $1 AND s.raised_at < $2{rule("s.rule_id", args)}
+            GROUP BY step
+            """,
+            *args,
+        )
+        args = [start, end]
+        trader = await self._fetch_optional(
+            f"""
+            SELECT j.outcome, CASE WHEN j.outcome IN ('refused', 'failed') THEN j.reason END AS reason, count(*) AS signals
+            FROM ta_signal s
+            LEFT JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            WHERE s.mode = 'live' AND s.outcome = 'sent' AND s.raised_at >= $1 AND s.raised_at < $2{rule("s.rule_id", args)}
+            GROUP BY 1, 2
+            ORDER BY 3 DESC
+            LIMIT 50
+            """,
+            *args,
+        )
+        args = [start, end]
+        results = await self._fetch_optional(
+            f"""
+            SELECT s.rule_id,
+                   count(*) AS positions,
+                   count(*) FILTER (WHERE p.position_status = 'Open') AS open,
+                   count(*) FILTER (WHERE p.position_status = 'Closed' AND p.position_profit_loss > 0) AS won,
+                   count(*) FILTER (WHERE p.position_status = 'Closed' AND p.position_profit_loss < 0) AS lost,
+                   sum(p.position_profit_loss) FILTER (WHERE p.position_status = 'Closed') AS profit_loss,
+                   avg(p.position_total_performance_percent) FILTER (WHERE p.position_status = 'Closed') AS average_percent
+            FROM ta_signal s
+            JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            JOIN turbo_data_position p ON p.position_id = j.position_id
+            WHERE s.mode = 'live' AND s.raised_at >= $1 AND s.raised_at < $2{rule("s.rule_id", args)}
+            GROUP BY s.rule_id
+            ORDER BY s.rule_id
+            """,
+            *args,
+        )
+        kept = await self._fetch_optional("SELECT min(tick_at) AS kept_since FROM ta_engine_tick")
+        return {
+            "kept_since": kept[0]["kept_since"] if kept else None,
+            "ticks": [_clean_row(row) for row in ticks],
+            "runs_by_bucket": [_percentiles(_clean_row(row), "run") for row in runs_by_bucket],
+            "signals_by_bucket": [_clean_row(row) for row in signals_by_bucket],
+            "rules": [_percentiles(_percentiles(_clean_row(row), "run"), "delay") for row in rules],
+            "deferred": [_clean_row(row) for row in deferred],
+            "signals": [_clean_row(row) for row in signals],
+            "steps": [_clean_row(row) for row in delivery],
+            "trader": [_clean_row(row) for row in trader],
+            "results": [_clean_row(row) for row in results],
+        }
 
     # ── live values, journal, balance (written by the trading services) ──
 

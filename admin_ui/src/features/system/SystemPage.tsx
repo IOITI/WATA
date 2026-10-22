@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Link } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { PageHeader, Panel } from '@/components/Panel'
@@ -16,6 +17,9 @@ import { ClaudePanel } from './ClaudePanel'
 import { LicencesPanel } from './LicencesPanel'
 import { SaxoPanel } from './SaxoPanel'
 
+// The page that says more of a service, where there is one.
+const SERVICE_PAGES: Record<string, string> = { ta_engine: '/ta/monitor' }
+
 function ServicesTable({ health }: { health: Health }) {
   return (
     <div className="overflow-x-auto">
@@ -30,7 +34,15 @@ function ServicesTable({ health }: { health: Health }) {
         <tbody className="divide-y divide-border/40">
           {health.services.map((service) => (
             <tr key={service.id}>
-              <td className="py-2.5 pr-4 font-medium">{service.name}</td>
+              <td className="py-2.5 pr-4 font-medium">
+                {SERVICE_PAGES[service.id] ? (
+                  <Link className="underline-offset-2 hover:underline" to={SERVICE_PAGES[service.id]}>
+                    {service.name}
+                  </Link>
+                ) : (
+                  service.name
+                )}
+              </td>
               <td className="py-2.5 pr-4">
                 <ServiceStatusBadge status={service.status} />
               </td>

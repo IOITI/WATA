@@ -231,6 +231,13 @@ describe('the Signal rules page', () => {
     expect(await screen.findByText('Max trades per day reached')).toBeInTheDocument()
   })
 
+  it('leads to the Engine monitor, for the engine and for each rule it runs', async () => {
+    renderPage()
+
+    expect(await screen.findByRole('link', { name: 'Engine monitor' })).toHaveAttribute('href', '/ta/monitor')
+    expect(screen.getByRole('link', { name: 'run in 41 ms' })).toHaveAttribute('href', '/ta/monitor?rule=aaaaaaaaaaaa')
+  })
+
   it('shows each shadow rule traded on paper, beside its reference', async () => {
     paper = {
       rules: {

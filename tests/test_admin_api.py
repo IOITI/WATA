@@ -151,6 +151,8 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/ta/rules/0123456789ab/comparison"),
     ("GET", "/api/ta/signals"),
     ("GET", "/api/ta/engine"),
+    ("GET", "/api/ta/monitor/now"),
+    ("GET", "/api/ta/monitor"),
 ]
 
 
@@ -211,6 +213,9 @@ class FakeQueries:
         self.ta_engine = None
         self.ta_rules = {}
         self.ta_other_rows = []
+        # What the engine measured of itself: the last minutes, and a period (AdminQueries' shapes).
+        self.ta_monitor_recent_rows = {}
+        self.ta_monitor_period_rows = {}
         # What backtests read: the turbos and the recorder by day, an asset's bars by day, the account's value.
         self.backtest_turbo_rows = []
         self.backtest_recorder_rows = []
@@ -393,6 +398,16 @@ class FakeQueries:
     async def ta_rule_states(self):
         self._check()
         return self.ta_rules
+
+    async def ta_monitor_recent(self, since, *, slow_tick_ms):
+        self._check()
+        self.calls.append(("ta_monitor_recent", since, slow_tick_ms))
+        return self.ta_monitor_recent_rows
+
+    async def ta_monitor_period(self, start, end, bucket_seconds, rule_id=None, *, signal_age_seconds, slow_tick_ms):
+        self._check()
+        self.calls.append(("ta_monitor_period", start, end, bucket_seconds, rule_id, signal_age_seconds, slow_tick_ms))
+        return self.ta_monitor_period_rows
 
     async def capital_assets(self, epic=None):
         self._check()

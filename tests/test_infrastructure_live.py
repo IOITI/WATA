@@ -603,6 +603,74 @@ def test_the_signals_from_elsewhere_are_read_before_the_ta_engine_ever_ran(in_a_
     assert [row["signal_uuid"] for row in in_a_database_of_its_own(scenario)] == ["tradingview-0002"]
 
 
+def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_older_rows_go(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import AsyncDbSignalJournalManager, AsyncDbTaManager, init_ta_schema
+    from src.ta_engine.monitoring import APPEND, LOAD, RunMark, TickMark
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    # A moment with a fraction of a second: a signal finds its run by it, to the microsecond.
+    at = (now - timedelta(minutes=5)).timestamp() + 0.5
+
+    def measured(moment, kind, milliseconds):
+        run = RunMark(rule_id="aaaaaaaaaaaa", mode="live", runner="live", kind=kind, tick_at=moment, started_at=moment + 0.01,
+                      bars_given=1, bar_closed_at=moment - 1.5)
+        run.answered(moment + 0.01 + milliseconds / 1000, {"milliseconds": milliseconds - 5, "bars": 900, "alerts": []}, set())
+        run.done_at = run.ended_at + 0.02
+        tick = TickMark(moment, covered_until=int(moment - 1.5), rules_on=2, deferred=["bbbbbbbbbbbb"], runs=[run])
+        return tick.row(moment + 0.2, {"memory_used_mb": 500.0, "memory_limit_mb": 1024.0, "oom_kills": 0}), run.row()
+
+    old_tick, old_run = measured(at - 9 * 86_400, LOAD, 400)
+    tick, run = measured(at, APPEND, 60)
+
+    async def scenario(writer, reader):
+        await init_ta_schema(writer)
+        store = AsyncDbTaManager(writer)
+        await store.write_monitoring([old_tick, tick], [old_run, run])
+        await store.write_monitoring([tick], [run])  # written again: kept as it was
+        signal_id = await store.journal_signal({
+            "rule_id": "aaaaaaaaaaaa", "rule_name": "Rule aa", "script_id": "0123456789ab", "script_version": 3,
+            "asset": "capital/US100", "side": "bid", "bars": "1", "bar_time": run["bar_closed_at"] - timedelta(minutes=1),
+            "bar_closed_at": run["bar_closed_at"], "alert_key": "Enter Long", "alert_title": "Enter Long",
+            "alert_message": "", "action": "long", "indice": "us100", "confidence": None, "mode": "live",
+            "raised_at": run["tick_at"], "outcome": "sending", "detail": None,
+        })
+        await store.complete_signal(signal_id, "sent", sent_at=run["done_at"], http_status=200, signal_uuid="5e1f2a3b-0000-4000-8000-000000000002")
+        await AsyncDbSignalJournalManager(writer).record_decision({
+            "signal_uuid": "5e1f2a3b-0000-4000-8000-000000000002", "action": "long", "indice": "us100",
+            "decided_at": run["done_at"] + timedelta(seconds=2), "outcome": "refused", "reason": "Outside trading hours",
+        })
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        recent = await queries.ta_monitor_recent(now - timedelta(minutes=15), slow_tick_ms=10_000)
+        period = await queries.ta_monitor_period(now - timedelta(days=30), now, 3600, None, signal_age_seconds=60, slow_tick_ms=10_000)
+        of_another = await queries.ta_monitor_period(
+            now - timedelta(days=30), now, 3600, "bbbbbbbbbbbb", signal_age_seconds=60, slow_tick_ms=10_000,
+        )
+        removed = await store.purge_monitoring(now - timedelta(days=7))
+        left = await queries.ta_monitor_period(now - timedelta(days=30), now, 3600, None, signal_age_seconds=60, slow_tick_ms=10_000)
+        return recent, period, of_another, removed, left
+
+    recent, period, of_another, removed, left = in_a_database_of_its_own(scenario)
+
+    assert recent["last_tick"]["tick_at"] == tick["tick_at"] and recent["kept_since"] == old_tick["tick_at"]
+    assert [(row["rule_id"], row["runner"], row["append_max_ms"], row["load_max_ms"]) for row in recent["runs"]] == [
+        ("aaaaaaaaaaaa", "live", 60, None),
+    ]
+    assert recent["deferred"] == [{"rule_id": "bbbbbbbbbbbb", "ticks": 1}]
+    assert recent["signals"] == [{"rule_id": "aaaaaaaaaaaa", "outcome": "sent", "detail": None, "signals": 1}]
+    assert recent["ticks"]["ticks"] == 1 and recent["ticks"]["feed_lag_max_ms"] == pytest.approx(1500, abs=1000)
+    # The steps of the signal, its run's among them: the join of the signal's raised_at and the run's tick_at held.
+    steps = {row["step"]: row for row in period["steps"]}
+    assert steps["close_to_tick"]["p50"] == pytest.approx(1500)
+    assert (steps["run"]["p50"], steps["run_to_sent"]["p50"]) == (pytest.approx(60, abs=0.01), pytest.approx(20, abs=0.01))
+    assert steps["sent_to_decided"]["p50"] == pytest.approx(2000, abs=0.01) and steps["sent_to_order"]["signals"] == 0
+    assert period["trader"] == [{"outcome": "refused", "reason": "Outside trading hours", "signals": 1}]
+    assert [row["rule_id"] for row in period["rules"]] == ["aaaaaaaaaaaa"] and period["rules"][0]["loads"] == 1
+    assert of_another["rules"] == [] and of_another["deferred"] == [{"rule_id": "bbbbbbbbbbbb", "ticks": 2}]
+    # The tick of nine days ago and its run, gone; the rest kept.
+    assert removed == 2 and left["kept_since"] == tick["tick_at"] and left["rules"][0]["loads"] == 0
+
+
 # ── RabbitMQ, through what the services publish and consume with ──
 
 

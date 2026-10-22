@@ -115,8 +115,9 @@ def test_what_saxo_was_sent_and_answered_never_leaves_the_server():
     assert "request_body" not in query and "response_body" not in query
     # Every other column of the table is kept: the list follows the schema.
     assert ORDER_REQUEST_KEPT == tuple(column for column in ORDER_REQUEST_COLUMNS if column not in ("request_body", "response_body"))
-    # The tokens and the trading services' own state are never among the tables.
-    assert not {"tokens", "trade_risk_state", "position_live_value"} & {table.name for table in TABLES}
+    # The tokens and the trading services' own state are never among the tables, nor what the TA engine
+    # measures of itself (the Engine monitor's, kept a week on the server): no research reads it.
+    assert not {"tokens", "trade_risk_state", "position_live_value", "ta_engine_tick", "ta_rule_run"} & {table.name for table in TABLES}
 
 
 def test_the_configuration_written_holds_no_address_of_a_service_and_no_secret():

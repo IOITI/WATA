@@ -247,7 +247,8 @@
         "run_timeout_seconds": 30,
         "runner_memory_mb": 512,
         "shadow_runner_memory_mb": 256,
-        "shadow_seconds_per_tick": 5
+        "shadow_seconds_per_tick": 5,
+        "monitoring_days": 7
       },
       "watchlist_manager": {
         "enabled": true,

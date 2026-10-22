@@ -67,6 +67,8 @@ import type {
   SignalSent,
   TaComparison,
   TaEngine,
+  TaMonitor,
+  TaMonitorNow,
   TaRuleFields,
   TaRuleMode,
   TaRules,
@@ -378,6 +380,10 @@ export const api = {
   taSignals: (params: DateRangeParams & { rule?: string } = {}) =>
     request<{ items: TaSignal[] }>('GET', `/api/ta/signals${query({ ...params, limit: 500 })}`),
   taEngine: () => request<TaEngine>('GET', '/api/ta/engine'),
+  /** The Engine monitor: the last minutes and their checks, and a period of what the engine measured. */
+  taMonitorNow: () => request<TaMonitorNow>('GET', '/api/ta/monitor/now'),
+  taMonitor: (params: { hours: number; rule?: string | null }) =>
+    request<TaMonitor>('GET', `/api/ta/monitor${query({ hours: params.hours, rule: params.rule ?? undefined })}`),
   taComparison: (id: string, day: string, tolerance?: number) =>
     request<TaComparison>('GET', `/api/ta/rules/${encodeURIComponent(id)}/comparison${query({ day, tolerance })}`),
 

@@ -250,7 +250,12 @@ def histogram(values: list[float], bins: int = 24) -> list[dict]:
     ]
 
 
-_CODE = ("src/backtest", "src/ta_engine", "src/price_recorder/bars.py", "src/price_recorder/range_bars.py",
+# Of the TA engine, the files a replay runs: its live loop (engine.py, what it measures of itself, how it
+# sends, the service) decides nothing a backtest finds, and a change there leaves every run as it was.
+# A file of src/ta_engine that the code listed here imports must be listed too (tests/test_backtest_code_digest.py).
+_CODE = ("src/backtest", "src/ta_engine/replay.py", "src/ta_engine/rules.py", "src/ta_engine/runner.py",
+         "src/ta_engine/tickers.py", "src/ta_engine/signals.py", "src/ta_engine/settings.py", "src/ta_engine/bars.py",
+         "src/ta_engine/source.py", "src/price_recorder/bars.py", "src/price_recorder/range_bars.py",
          "src/trade/async_services.py", "src/admin/analysis.py")
 
 

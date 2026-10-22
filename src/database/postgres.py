@@ -1527,6 +1527,64 @@ CREATE TABLE IF NOT EXISTS ta_rule_state (
     last_alert_at   TIMESTAMPTZ,
     figures         JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+
+-- Each tick of the engine as it measured it (src/ta_engine/monitoring.py), kept
+-- trade.config.ta_engine.monitoring_days: the engine removes the older rows.
+CREATE TABLE IF NOT EXISTS ta_engine_tick (
+    tick_at               TIMESTAMPTZ PRIMARY KEY,
+    ended_at              TIMESTAMPTZ NOT NULL,
+    milliseconds          INTEGER NOT NULL,
+    read_ms               INTEGER NOT NULL DEFAULT 0,
+    rows_read             INTEGER NOT NULL DEFAULT 0,
+    write_ms              INTEGER NOT NULL DEFAULT 0,
+    covered_until         TIMESTAMPTZ,
+    rules_on              SMALLINT NOT NULL DEFAULT 0,
+    runs                  SMALLINT NOT NULL DEFAULT 0,
+    loads                 SMALLINT NOT NULL DEFAULT 0,
+    failed                SMALLINT NOT NULL DEFAULT 0,
+    deferred_rules        TEXT[] NOT NULL DEFAULT '{}',
+    skipped               SMALLINT NOT NULL DEFAULT 0,
+    restarted             BOOLEAN NOT NULL DEFAULT false,
+    error                 TEXT,
+    runner_starts         INTEGER,
+    shadow_runner_starts  INTEGER,
+    live_rss_mb           REAL,
+    live_peak_mb          REAL,
+    shadow_rss_mb         REAL,
+    shadow_peak_mb        REAL,
+    engine_rss_mb         REAL,
+    memory_used_mb        REAL,
+    memory_limit_mb       REAL,
+    oom_kills             INTEGER,
+    figures               JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+-- Each run of a rule's script (its history loaded, or its new bars), kept as
+-- ta_engine_tick. A signal's run is its rule's whose tick_at is its raised_at.
+CREATE TABLE IF NOT EXISTS ta_rule_run (
+    rule_id         VARCHAR(12) NOT NULL,
+    tick_at         TIMESTAMPTZ NOT NULL,
+    mode            VARCHAR(8) NOT NULL,
+    runner          VARCHAR(8) NOT NULL,
+    kind            VARCHAR(8) NOT NULL,
+    started_at      TIMESTAMPTZ NOT NULL,
+    ended_at        TIMESTAMPTZ NOT NULL,
+    done_at         TIMESTAMPTZ NOT NULL,
+    milliseconds    INTEGER NOT NULL,
+    pinets_ms       INTEGER,
+    bars_given      INTEGER NOT NULL,
+    bars_held       INTEGER,
+    bar_closed_at   TIMESTAMPTZ,
+    asks            SMALLINT NOT NULL DEFAULT 0,
+    asks_ms         INTEGER NOT NULL DEFAULT 0,
+    alerts          INTEGER NOT NULL DEFAULT 0,
+    signals         SMALLINT NOT NULL DEFAULT 0,
+    outcome         VARCHAR(8) NOT NULL,
+    detail          TEXT,
+    figures         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (rule_id, tick_at)
+);
+CREATE INDEX IF NOT EXISTS idx_ta_rule_run_tick_at ON ta_rule_run (tick_at);
 """
 
 # The columns of ta_signal the engine writes when it raises a signal, in the order of its table.
@@ -1538,6 +1596,21 @@ TA_SIGNAL_COLUMNS = (
 TA_RULE_STATE_COLUMNS = (
     "rule_id", "updated_at", "state", "detail", "mode", "script_version", "bars", "last_bar_time", "last_alert_at",
     "figures",
+)
+# The columns of ta_engine_tick the engine writes (src/ta_engine/monitoring.py).
+TA_TICK_COLUMNS = (
+    "tick_at", "ended_at", "milliseconds", "read_ms", "rows_read", "write_ms", "covered_until", "rules_on", "runs",
+    "loads", "failed", "deferred_rules", "skipped", "restarted", "error", "runner_starts", "shadow_runner_starts",
+    "live_rss_mb", "live_peak_mb", "shadow_rss_mb", "shadow_peak_mb", "engine_rss_mb", "memory_used_mb",
+    "memory_limit_mb", "oom_kills",
+)
+# ...and of ta_rule_run, each with its type as an array: the runs of many ticks go in one statement.
+TA_RUN_COLUMNS = (
+    ("rule_id", "text"), ("tick_at", "timestamptz"), ("mode", "text"), ("runner", "text"), ("kind", "text"),
+    ("started_at", "timestamptz"), ("ended_at", "timestamptz"), ("done_at", "timestamptz"), ("milliseconds", "int"),
+    ("pinets_ms", "int"), ("bars_given", "int"), ("bars_held", "int"), ("bar_closed_at", "timestamptz"),
+    ("asks", "smallint"), ("asks_ms", "int"), ("alerts", "int"), ("signals", "smallint"), ("outcome", "text"),
+    ("detail", "text"),
 )
 
 
@@ -1623,3 +1696,53 @@ class AsyncDbTaManager:
                 *(state.get(column) for column in TA_RULE_STATE_COLUMNS[:-1]),
                 json.dumps(state.get("figures") or {}),
             )
+
+    async def write_monitoring(self, ticks: list[dict], runs: list[dict]) -> None:
+        """What the engine measured of its ticks and runs (keys of TA_TICK_COLUMNS, TA_RUN_COLUMNS); a row there stays."""
+        placeholders = ", ".join(f"${index}" for index in range(1, len(TA_TICK_COLUMNS) + 1))
+        for tick in ticks:
+            # One a statement: a tick's deferred rules are an array, which unnest would flatten.
+            await self.db.execute(
+                f"""
+                INSERT INTO ta_engine_tick ({", ".join(TA_TICK_COLUMNS)})
+                VALUES ({placeholders})
+                ON CONFLICT (tick_at) DO NOTHING
+                """,
+                *(tick.get(column) for column in TA_TICK_COLUMNS),
+            )
+        if not runs:
+            return
+        arrays = ", ".join(f"${index}::{kind}[]" for index, (_, kind) in enumerate(TA_RUN_COLUMNS, start=1))
+        await self.db.execute(
+            f"""
+            INSERT INTO ta_rule_run ({", ".join(name for name, _ in TA_RUN_COLUMNS)})
+            SELECT * FROM unnest({arrays})
+            ON CONFLICT (rule_id, tick_at) DO NOTHING
+            """,
+            *([run.get(name) for run in runs] for name, _ in TA_RUN_COLUMNS),
+        )
+
+    async def purge_monitoring(self, before: datetime) -> int:
+        """
+        Remove what the engine measured before ``before``, a day at a time so that no statement holds
+        for long (a month of a rule on ten-second bars is 250,000 runs); the number of rows removed.
+        """
+        oldest = await self.db.fetchval(
+            "SELECT least((SELECT min(tick_at) FROM ta_engine_tick), (SELECT min(tick_at) FROM ta_rule_run))"
+        )
+        removed = 0
+        while oldest is not None and oldest < before:
+            step = min(oldest + timedelta(days=1), before)
+            for table in ("ta_rule_run", "ta_engine_tick"):
+                status = await self.db.execute(f"DELETE FROM {table} WHERE tick_at < $1", step)
+                removed += _deleted(status)
+            oldest = step
+        return removed
+
+
+def _deleted(status) -> int:
+    """The rows a DELETE removed, from its status ("DELETE 12"); 0 when it says nothing."""
+    try:
+        return int(str(status).split()[-1])
+    except (ValueError, IndexError):
+        return 0

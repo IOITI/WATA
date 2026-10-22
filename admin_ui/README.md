@@ -207,7 +207,9 @@ through the day included. It is loaded with the pages that draw candles only.
 ## Technical Analysis
 
 The pages of `features/ta/`: Indicators (the Pine scripts, `IndicatorsPage.tsx`), the editor with its test
-(`ScriptEditorPage.tsx`, `editor/`), Charts (`ChartsPage.tsx`, `chart/`) and Signal rules (`signals/`). They
+(`ScriptEditorPage.tsx`, `editor/`), Charts (`ChartsPage.tsx`, `chart/`), Signal rules (`signals/`) and the Engine
+monitor (`monitor/`: what the TA engine measured of itself, the checks of the last minutes, a period of runs, delivery and
+results, its charts in `components/charts/PerformanceCharts.tsx`). They
 are loaded with these pages only (lazy routes), and the TradingView reference of the editor
 (`pinescript-v6-validator`) with the editor only.
 
@@ -257,10 +259,14 @@ which is the source the AGPL asks to offer.
 - **What can be wrong without a browser is in plain functions with tests**: `prepare.ts`, `outline.ts` (the
   alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`, `editor/testChart.ts`
   (what the test draws: its day, the plots near the prices, an oscillator listed apart, the alerts on their
-  bars), `signals/ruleModel.ts` (with `ruleDraftOfRun`: a backtest made a rule, its range in the feed's tick)
-  and `signals/readiness.ts` (whether a rule is ready to go live, said in the confirmation, never stopping it). The editor itself (CodeMirror) and the charts are replaced in page tests, and
+  bars), `signals/ruleModel.ts` (with `ruleDraftOfRun`: a backtest made a rule, its range in the feed's tick),
+  `signals/readiness.ts` (whether a rule is ready to go live, said in the confirmation, never stopping it) and
+  `monitor/monitorModel.ts` (the monitor's address, its tiles against their limits, the gaps of its charts, the bars
+  of the delivery steps, the results beside the days on paper). The editor itself (CodeMirror) and the charts are replaced in page tests, and
   checked in a browser against `npm run dev:api`.
 - **The fake server** keeps the scripts and the rules in the real store, on its temporary directory, seeded
-  with examples and a rule in shadow (`dev/fake_ta.py`), and makes up what a TA engine would have done with
-  the rules: its state, a week of signals, and TradingView's near them.
+  with examples, a live rule and one of Claude's in shadow on ten-second bars (`dev/fake_ta.py`), and makes up
+  what a TA engine would have done with the rules: its state, a week of signals, TradingView's near them, and what
+  it measured of itself for the Engine monitor (`FAKE_TA_TROUBLE=slow` makes a live run slow now, for its warning
+  and health's).
 

@@ -1,5 +1,7 @@
 // Shapes of the admin API (src/admin/routers/*.py).
 
+import type { Check } from './checks'
+
 export interface Session {
   authenticated: boolean
   version: string
@@ -2144,6 +2146,231 @@ export interface TaEngine {
     figures: Record<string, unknown>
   } | null
   rules: Record<string, TaRuleState>
+}
+
+/** The Engine monitor (src/admin/ta_monitor.py): what the TA engine measured of itself, kept `days`. All durations in ms. */
+export interface TaMonitorSpread {
+  p50: number | null
+  p95: number | null
+  max: number | null
+}
+
+export interface TaMonitorRecording {
+  /** The days the engine applies; `configured_days` from its next start when they differ. */
+  days: number
+  configured_days: number
+  /** The oldest tick kept: none before the engine measured anything. */
+  since: string | null
+  written_at: string | null
+  waiting: number
+  dropped: number
+  error: string | null
+}
+
+export interface TaMonitorLimits {
+  tick_ms: number
+  run_timeout_ms: number
+  max_signal_age_ms: number
+  stale_feed_ms: number
+  /** A check fails at this share of a limit. */
+  share: number
+  memory_share: number
+  slow_ticks: number
+  runner_memory_mb: number
+  shadow_runner_memory_mb: number
+  shadow_ms_per_tick: number
+  shadow_day_ms: number | null
+}
+
+/** The engine's last tick (ta_engine_tick). */
+export interface TaMonitorTick {
+  tick_at: string
+  ended_at: string
+  milliseconds: number
+  read_ms: number
+  rows_read: number
+  write_ms: number
+  covered_until: string | null
+  rules_on: number
+  runs: number
+  loads: number
+  failed: number
+  deferred_rules: string[]
+  skipped: number
+  restarted: boolean
+  error: string | null
+  runner_starts: number | null
+  shadow_runner_starts: number | null
+  live_rss_mb: number | null
+  live_peak_mb: number | null
+  shadow_rss_mb: number | null
+  shadow_peak_mb: number | null
+  engine_rss_mb: number | null
+  memory_used_mb: number | null
+  memory_limit_mb: number | null
+  oom_kills: number | null
+  feed_lag_ms: number | null
+}
+
+export interface TaMonitorWindow {
+  ticks: number
+  tick_p50_ms: number | null
+  tick_max_ms: number | null
+  /** The longest tick without a load or the daily restart. */
+  steady_tick_max_ms: number | null
+  slow_ticks: number
+  feed_lag_max_ms: number | null
+  memory_used_max_mb: number | null
+  memory_limit_mb: number | null
+  oom_kills: number
+  deferred: number
+  runs: number
+  failed: number
+  ended: number
+  live_age_max_ms: number | null
+  live_delay_max_ms: number | null
+  live_signals: number
+  live_not_sent: number
+}
+
+export interface TaMonitorNow {
+  checked_at: string
+  window_minutes: number
+  recording: TaMonitorRecording
+  limits: TaMonitorLimits
+  last_tick: TaMonitorTick | null
+  window: TaMonitorWindow
+  /** The run of the live runner closest to its limit. */
+  slowest_run: { rule_id: string; name: string | null; ms: number; limit_ms: number } | null
+  checks: Check[]
+  notes: string[]
+}
+
+export interface TaMonitorRule {
+  rule_id: string
+  /** None for a rule no longer in the file. */
+  name: string | null
+  mode: TaRuleMode | null
+  made_by: string | null
+  bars: TaRuleBars | null
+  limit_ms: number
+  runs: number
+  loads: number
+  failed: number
+  ended: number
+  deferred: number
+  asks: number
+  run_ms: TaMonitorSpread
+  /** PineTS's own time of a run, on average: the rest is the runner's reading and answering. */
+  pinets_ms_avg: number | null
+  load_ms_max: number | null
+  bars_max: number | null
+  delay_ms: TaMonitorSpread
+  age_max_ms: number | null
+  last_run_at: string | null
+  last_failure: string | null
+  signals: { raised: number; sent: number; not_sent: number; shadow: number }
+}
+
+/** A bar of time of the charts: `t` its start, epoch seconds. */
+export interface TaMonitorTickPoint {
+  t: number
+  ticks: number
+  tick_p50_ms: number | null
+  tick_max_ms: number | null
+  slow: number
+  feed_lag_p50_ms: number | null
+  feed_lag_max_ms: number | null
+  live_rss_mb: number | null
+  shadow_rss_mb: number | null
+  engine_rss_mb: number | null
+  memory_used_mb: number | null
+  memory_limit_mb: number | null
+  restarted: boolean
+  deferred: number
+}
+
+export interface TaMonitorRunPoint {
+  t: number
+  runs: number
+  loads: number
+  failed: number
+  run_p50_ms: number | null
+  run_p95_ms: number | null
+  run_max_ms: number | null
+  delay_p50_ms: number | null
+  delay_max_ms: number | null
+}
+
+export interface TaMonitorSignalPoint {
+  t: number
+  sent: number
+  not_sent: number
+  shadow: number
+}
+
+export interface TaMonitorMark {
+  t: number
+  kind: 'daily_restart' | 'runner_started' | 'engine_started'
+  label: string
+}
+
+export interface TaMonitorStep {
+  step: string
+  label: string
+  /** From the bar's close to the end: the sum of steps before it. */
+  total: boolean
+  signals: number
+  p50: number | null
+  p95: number | null
+  max: number | null
+}
+
+export interface TaMonitorCount {
+  key: string
+  label: string
+  count: number
+}
+
+export interface TaMonitorDelivery {
+  rule: string | null
+  sent: number
+  steps: TaMonitorStep[]
+  engine: TaMonitorCount[]
+  refusals: (TaMonitorCount & { example: string | null })[]
+  /** Shadow signals whose bar was older than a live one may be. */
+  shadow_late: number
+  trader: (TaMonitorCount & { reason: string | null })[]
+}
+
+export interface TaMonitorResult {
+  rule_id: string
+  positions: number
+  open: number
+  won: number
+  lost: number
+  profit_loss: number | null
+  average_percent: number | null
+}
+
+export interface TaMonitor {
+  hours: number
+  periods: number[]
+  bucket_seconds: number
+  start: string
+  end: string
+  rule: string | null
+  recording: TaMonitorRecording
+  limits: TaMonitorLimits
+  rules: TaMonitorRule[]
+  series: {
+    ticks: TaMonitorTickPoint[]
+    runs: TaMonitorRunPoint[]
+    signals: TaMonitorSignalPoint[]
+    marks: TaMonitorMark[]
+  }
+  delivery: TaMonitorDelivery
+  results: TaMonitorResult[]
 }
 
 /** What the trader made of a signal the engine sent (signal_journal). */

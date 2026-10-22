@@ -20,7 +20,7 @@ import time
 
 from src.admin.errors import NotPossible
 from src.admin.processes import launch, tail
-from src.price_history.process import exit_said, oom_kills
+from src.price_history.process import cgroup_memory, exit_said, oom_kills
 
 MODES = ("check", "run", "signals")
 # How long a study waits for the one before it.
@@ -29,38 +29,6 @@ WAIT_SECONDS = 15
 GRACE_SECONDS = 20
 # Free memory a study needs beside its Node heap.
 MEMORY_MARGIN_MB = 128
-CGROUP_ROOT = "/sys/fs/cgroup"
-
-
-def cgroup_memory(root: str = CGROUP_ROOT) -> tuple[int, int] | None:
-    """
-    (used, limit) of the container's memory in bytes, or None where there is no limit to read. The
-    file cache the kernel takes back when memory is asked for (``inactive_file``) is not counted as
-    used: the price files and the runner's day cache the admin reads fill the container with it.
-    """
-    try:
-        with open(os.path.join(root, "memory.max"), encoding="utf-8") as limit_file:
-            limit = limit_file.read().strip()
-        with open(os.path.join(root, "memory.current"), encoding="utf-8") as current_file:
-            current = int(current_file.read().strip())
-    except (OSError, ValueError):
-        return None
-    if limit == "max":
-        return None
-    return max(0, current - _inactive_file(root)), int(limit)
-
-
-def _inactive_file(root: str) -> int:
-    """The container's inactive file cache in bytes (``memory.stat``), 0 where it cannot be read."""
-    try:
-        with open(os.path.join(root, "memory.stat"), encoding="utf-8") as stat_file:
-            for line in stat_file:
-                name, _, value = line.strip().partition(" ")
-                if name == "inactive_file":
-                    return int(value)
-    except (OSError, ValueError):
-        return 0
-    return 0
 
 
 class StudyService:
