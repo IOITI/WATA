@@ -162,8 +162,8 @@ describe('an open position whose sell Saxo does not take', () => {
 
     const marker = screen.getByRole('link', { name: /^Sell refused ×37 · 10:04:29/ })
     expect(marker).toHaveAttribute('href', '/orders?find=5002')
-    expect(marker).toHaveAttribute('title', expect.stringContaining('“À ce stade, seuls des ordres limites sont autorisés”'))
-    expect(marker).toHaveAccessibleName(expect.stringContaining('It is still open.'))
+    expect(marker).toHaveAccessibleDescription(expect.stringContaining('“À ce stade, seuls des ordres limites sont autorisés”'))
+    expect(marker).toHaveAccessibleDescription(expect.stringContaining('It is still open.'))
   })
 
   it('says nothing more while Saxo takes its sells', () => {

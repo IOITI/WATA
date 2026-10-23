@@ -66,6 +66,7 @@ from src.admin.ta_rules import (
     checked_inputs,
 )
 from src.admin.ta_scripts import ScriptNotFound, ScriptStore
+from src.admin.weekday_hour import stats_by_weekday_hour
 from src.price_history.process import cgroup_memory, exit_said, oom_kills
 from src.backtest.baseline import DEFAULT_REPETITIONS, DEFAULT_SEED, MAX_REPETITIONS
 from src.backtest.execution import EXECUTION_FILE, MEASURED, missing
@@ -1442,6 +1443,7 @@ class BacktestService:
         groups = {
             "hour": stats_by(trades, lambda trade: opened(trade).hour, name="hour"),
             "weekday": stats_by(trades, lambda trade: WEEKDAYS[opened(trade).weekday()], list(WEEKDAYS[:5]), name="weekday"),
+            "weekday_hour": stats_by_weekday_hour(trades, lambda trade: (opened(trade).isoweekday(), opened(trade).hour)),
             "direction": stats_by(trades, lambda trade: trade["direction"], ["long", "short"], name="direction"),
             "exit": stats_by(trades, lambda trade: exit_group(trade["exit"]["reason"]), name="exit"),
             "confidence": stats_by(

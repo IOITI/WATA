@@ -75,6 +75,8 @@ const DOUBLED = summary({
 })
 
 let sent: { method: string; path: string; body: unknown }[] = []
+/** The assets the fake server lists (the editor's test offers them). */
+let assets: unknown[] = []
 
 function serve({ saveConflict = false, deleteConflict = false } = {}) {
   sent = []
@@ -110,7 +112,7 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
       }
       if (url.pathname.endsWith('/duplicate')) return json({ ...EMA, id: 'dddddddddddd', name: (body as { name: string }).name }, 201)
       if (url.pathname.startsWith('/api/ta/libraries/')) return json({ detail: 'No library' }, 404)
-      if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', seen: 'all', items: [], truncated: false, max: 5000, saxo_error: null })
+      if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', seen: 'all', items: assets, truncated: false, max: 5000, saxo_error: null })
       return json({ detail: `Not served in this test: ${method} ${url.pathname}` }, 404)
     }),
   )
@@ -156,7 +158,10 @@ function rowOf(name: string): HTMLElement {
   return row
 }
 
-beforeEach(() => serve())
+beforeEach(() => {
+  assets = []
+  serve()
+})
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -318,5 +323,34 @@ describe('an address that names no script', () => {
     const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
     expect(suggestions.getByRole('link', { name: /^Indicators/ })).toHaveAttribute('href', '/ta/indicators')
     expect(suggestions.getByRole('link', { name: /^New script/ })).toHaveAttribute('href', '/ta/indicators/new')
+  })
+})
+
+describe("the editor's test", () => {
+  it('finds a turbo among the assets by its knock-out level, as typed', async () => {
+    const instrument = (changes: Record<string, unknown>) => ({
+      provider: 'capital', key: 'US100', ref: 'capital/US100', id: null, uic: null, asset_type: 'INDICES', symbol: 'US100',
+      description: 'US Tech 100', currency: 'USD', role: 'underlying', indice: 'us100', underlying_uic: null, direction: null,
+      barrier: null, issuer: null, first_t: null, last_t: null, last_bid: null, last_ask: null, status: 'recording', ...changes,
+    })
+    assets = [
+      instrument({}),
+      instrument({ provider: 'saxo', key: '7', ref: 'saxo/7', id: 7, role: 'turbo', description: 'TURBO LONG NASDAQ-100 KO 24,150 SG', barrier: 24150, direction: 'long' }),
+      instrument({ provider: 'saxo', key: '8', ref: 'saxo/8', id: 8, role: 'turbo', description: 'TURBO SHORT NASDAQ-100 KO 26,900 SG', barrier: 26900, direction: 'short' }),
+    ]
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    const field = await screen.findByRole('combobox', { name: 'Asset' })
+    await waitFor(() => expect(field).toHaveTextContent('US Tech 100 · Capital.com'))
+    await user.click(field)
+    // Written without its separator, as one types it.
+    await user.keyboard('24150')
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'TURBO LONG NASDAQ-100 KO 24,150 SG · Saxo',
+    ])
+    await user.keyboard('{Enter}')
+
+    expect(field).toHaveTextContent('TURBO LONG NASDAQ-100 KO 24,150 SG · Saxo')
   })
 })

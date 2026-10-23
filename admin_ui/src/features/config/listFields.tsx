@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from 'lucide-react'
 import { useId, useState } from 'react'
 
+import { Hint } from '@/components/Hint'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DatePicker } from '@/components/ui/date-picker'
@@ -34,23 +35,24 @@ function Cell({ ariaLabel, kind, value, disabled, onChange }: CellProps) {
   const invalid = kind === 'number' && !isNumberText(text)
   useReportInvalid(invalid)
 
+  // No room for a message under a cell: the reason is the field's hint, the count in the bar under the form.
   return (
-    <Input
-      aria-label={ariaLabel}
-      inputMode={kind === 'number' ? 'decimal' : undefined}
-      value={text}
-      disabled={disabled}
-      error={invalid}
-      aria-invalid={invalid}
-      // No room for a message under a cell: the reason is on the field, the count in the bar under the form.
-      title={invalid ? `Not a number: the value is still ${String(value ?? 'unset')}` : undefined}
-      onChange={(event) => {
-        const next = event.target.value
-        setText(next)
-        if (kind === 'text') onChange(next)
-        else if (isNumberText(next)) onChange(Number(next))
-      }}
-    />
+    <Hint content={invalid ? `Not a number: the value is still ${String(value ?? 'unset')}` : null} className="flex w-full">
+      <Input
+        aria-label={ariaLabel}
+        inputMode={kind === 'number' ? 'decimal' : undefined}
+        value={text}
+        disabled={disabled}
+        error={invalid}
+        aria-invalid={invalid}
+        onChange={(event) => {
+          const next = event.target.value
+          setText(next)
+          if (kind === 'text') onChange(next)
+          else if (isNumberText(next)) onChange(Number(next))
+        }}
+      />
+    </Hint>
   )
 }
 

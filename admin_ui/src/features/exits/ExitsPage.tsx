@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
+import { WeekdayHourHeatmap } from '@/components/charts/Heatmaps'
 import { ProfitByGroupChart, ProfitLossLegend } from '@/components/charts/PerformanceCharts'
 import { DateRangeFilter } from '@/components/DateRangeFilter'
 import { KpiTile } from '@/components/KpiTile'
@@ -116,6 +117,13 @@ function ExitsContent({ exits }: { exits: Exits }) {
         <div className="mt-4">
           <GroupTable groups={exits.by_hour} header="Hour" label={(group) => hourLabel(group.hour)} />
         </div>
+      </Panel>
+
+      <Panel
+        title="By weekday and hour of entry"
+        description={`Profit and loss of the trades opened in each hour of each weekday (${exits.timezone}), gains and losses each by size.`}
+      >
+        <WeekdayHourHeatmap rows={exits.by_weekday_hour} label="Profit and loss of the trades by weekday and hour of entry" />
       </Panel>
 
       <Panel title="By holding time" bodyClassName="pt-2">

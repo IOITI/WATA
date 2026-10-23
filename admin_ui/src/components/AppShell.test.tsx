@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Link, MemoryRouter, Route, Routes } from 'react-router'
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import { NotFoundPage } from '@/features/NotFoundPage'
 import type { Session } from '@/lib/types'
+import { run, RUN_ID } from '@/test/backtests'
 
 import { AppShell } from './AppShell'
 import { MENU } from './navigation'
@@ -25,6 +26,8 @@ const SESSION: Session = {
 }
 
 interface ServerState {
+  /** More answers of the fake server, by path. */
+  bodies?: Record<string, unknown>
   saxo?: 'ok' | 'down' | 'unknown'
   pausedSince?: string | null
   restartRequired?: boolean
@@ -32,8 +35,34 @@ interface ServerState {
   path?: string
 }
 
-function renderShell({ saxo = 'ok', pausedSince = null, restartRequired = false, path = '/positions' }: ServerState = {}) {
+/** A stand-in for the browser's EventSource: the test plays the server's messages. */
+class FakeEventSource {
+  static opened: FakeEventSource[] = []
+  private listeners = new Map<string, ((event: MessageEvent) => void)[]>()
+
+  constructor() {
+    FakeEventSource.opened.push(this)
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener])
+  }
+
+  close() {}
+
+  send(type: string, data: Record<string, unknown>) {
+    for (const listener of this.listeners.get(type) ?? []) listener(new MessageEvent(type, { data: JSON.stringify({ type, ...data }) }))
+  }
+}
+
+function Address() {
+  const location = useLocation()
+  return <output aria-label="address">{location.pathname + location.search}</output>
+}
+
+function renderShell({ bodies: more = {}, saxo = 'ok', pausedSince = null, restartRequired = false, path = '/positions' }: ServerState = {}) {
   const bodies: Record<string, unknown> = {
+    ...more,
     '/api/system/health': {
       status: saxo === 'down' ? 'down' : 'ok',
       services: [
@@ -84,6 +113,7 @@ function renderShell({ saxo = 'ok', pausedSince = null, restartRequired = false,
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>
+            <Address />
           </MemoryRouter>
         </ToastProvider>
       </AuthContext.Provider>
@@ -111,7 +141,9 @@ describe('trading state in the top bar', () => {
 
     const chip = await screen.findByRole('link', { name: /Saxo: authorise/ })
     expect(chip).toHaveAttribute('href', '/system')
-    expect(chip).toHaveAccessibleName(/nothing can be traded/)
+    // Named by what it is, described by what it means (its hint, on hover, focus and a tap).
+    expect(chip).toHaveAccessibleName('Saxo: authorise')
+    expect(chip).toHaveAccessibleDescription(/nothing can be traded/)
     // The summary beside it agrees.
     expect(screen.getByText('Down')).toBeInTheDocument()
   })
@@ -203,7 +235,7 @@ describe('where the page is, in the top bar', () => {
     expect(isCurrent(await wholeTrail().findByText('Page not found'))).toBe(true)
     expect(wholeTrail().getByRole('link', { name: 'Positions' })).toHaveAttribute('href', '/positions')
     expect(screen.getByRole('heading', { level: 1, name: 'There is no page here.' })).toBeInTheDocument()
-    expect(screen.getByText('/positions/nothing')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'There is no page here.' })).getByText('/positions/nothing')).toBeInTheDocument()
     expect(document.title).toBe('Page not found · WATA Admin')
     // The way out is a link too, and so is the page of the menu the address was under.
     expect(screen.getByRole('link', { name: 'Back to the dashboard' })).toHaveAttribute('href', '/')
@@ -255,5 +287,75 @@ describe('scrolling', () => {
     await user.click(screen.getByRole('link', { name: 'To the positions' }))
     await screen.findByRole('heading', { name: 'Positions' })
     expect(main.scrollTop).toBe(0)
+  })
+})
+
+describe('the bell', () => {
+  it('keeps what the live events told, each leading to where it is dealt with', async () => {
+    FakeEventSource.opened = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    window.sessionStorage.clear()
+    const user = userEvent.setup()
+    renderShell()
+    await screen.findByText('Up')
+
+    act(() =>
+      FakeEventSource.opened[0].send('position_closed', {
+        position_id: '5098', instrument_name: 'TURBO LONG', profit_loss: 25.2, performance_percent: 2.26,
+      }),
+    )
+    await user.click(await screen.findByRole('button', { name: '1 unread notifications' }))
+
+    const panel = within(screen.getByRole('dialog', { name: 'Notifications' }))
+    expect(panel.getByRole('link', { name: 'Position closed' })).toHaveAttribute('href', '/positions?find=5098')
+    expect(panel.getByText('TURBO LONG · +€25.20 (+2.26%)')).toBeInTheDocument()
+    // Kept for the tab: a reload of the page finds it.
+    expect(window.sessionStorage.getItem('wata-admin-events')).toContain('Position closed')
+    await user.click(panel.getByRole('button', { name: 'Read all' }))
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument()
+
+    await user.click(panel.getByRole('link', { name: 'Position closed' }))
+    expect(screen.getByRole('status', { name: 'address' })).toHaveTextContent('/positions?find=5098')
+    // Followed: the panel is closed.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Notifications' })).not.toBeInTheDocument())
+  })
+})
+
+describe('the palette (⌘K)', () => {
+  const BODIES = {
+    '/api/backtests': { items: [run()], storage: { runs: { count: 1, bytes: 1 }, former: { count: 0, bytes: 0 } } },
+    '/api/ta/rules': { revision: 'r1', rules: [], indices: [], instruments: [], engine_history_days: 1 },
+    '/api/ta/scripts': { items: [] },
+    '/api/data/assets?seen=all': { timezone: 'Europe/Paris', seen: 'all', items: [], truncated: false, max: 3000, saxo_error: null },
+  }
+
+  it('goes to a page or a run from the keyboard', async () => {
+    const user = userEvent.setup()
+    renderShell({ bodies: BODIES })
+    await screen.findByText('Up')
+
+    await user.keyboard('{Meta>}k{/Meta}')
+    const palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
+    await waitFor(() => expect(palette.getByRole('combobox', { name: 'Search' })).toHaveFocus())
+    await user.keyboard('smoke')
+    expect(await palette.findByRole('option', { name: /Smoke EMA cross/ })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    await user.keyboard('{Enter}')
+
+    expect(screen.getByRole('status', { name: 'address' })).toHaveTextContent(`/backtests/${RUN_ID}`)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Go to' })).not.toBeInTheDocument())
+  })
+
+  it('finds a position or an order by its number, and lists nothing that trades', async () => {
+    const user = userEvent.setup()
+    renderShell({ bodies: BODIES })
+    await screen.findByText('Up')
+
+    await user.click(screen.getByRole('button', { name: /^Go to a page/ }))
+    const palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
+    expect(palette.queryByRole('option', { name: /pause|resume|close|go live/i })).not.toBeInTheDocument()
+    await waitFor(() => expect(palette.getByRole('combobox', { name: 'Search' })).toHaveFocus())
+    await user.keyboard('5098')
+    expect(palette.getByRole('option', { name: /Position 5098/ })).toHaveAttribute('href', '/positions?find=5098')
+    expect(palette.getByRole('option', { name: /Order 5098/ })).toHaveAttribute('href', '/orders?find=5098')
   })
 })

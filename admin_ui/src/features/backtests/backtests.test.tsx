@@ -130,7 +130,13 @@ const ASSETS: DataAsset[] = [
 
 const BREAKDOWNS: BacktestBreakdowns = {
   trades: 3,
-  groups: { hour: [], weekday: [], direction: [], exit: [], confidence: [], holding: [], turbo_price: [], issuer: [] },
+  groups: {
+    hour: [], weekday: [], direction: [], exit: [], confidence: [], holding: [], turbo_price: [], issuer: [],
+    weekday_hour: [
+      { weekday: 2, hour: 9, trade_count: 2, win_count: 1, loss_count: 1, win_rate: 50, profit_loss: 5, average_percent: 0.5, average_best_percent: 1 },
+      { weekday: 3, hour: 15, trade_count: 1, win_count: 0, loss_count: 1, win_rate: 0, profit_loss: -2, average_percent: -0.4, average_best_percent: 0.2 },
+    ],
+  },
   given_back: { average_given_back: null, turned_negative_count: 0, turned_negative_percent: null },
 }
 
@@ -512,9 +518,12 @@ describe('a new backtest', () => {
     renderAt('/backtests/new')
 
     // 1. The asset: Capital.com's first; a turbo is not offered.
-    const assetSelect = await screen.findByRole('combobox', { name: 'Asset' })
-    expect(assetSelect).toHaveValue('capital/US100')
-    expect(within(assetSelect).queryByText(/Turbo Short/)).not.toBeInTheDocument()
+    const assetField = await screen.findByRole('combobox', { name: 'Asset' })
+    expect(assetField).toHaveTextContent('Capital.com · US Tech 100')
+    await user.click(assetField)
+    expect(await screen.findByRole('option', { name: 'Dukascopy · US Tech 100 (Dukascopy)' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Turbo Short/ })).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
     // 2. The strategy: the script's alerts made signals.
@@ -654,7 +663,21 @@ describe('a new backtest', () => {
     renderAt(`/backtests/new?rule=${RULE.id}`)
 
     expect(await screen.findByRole('combobox', { name: 'Signal rule to start from' })).toHaveValue(RULE.id)
-    expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveValue('capital/US100')
+    expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveTextContent('Capital.com · US Tech 100')
+  })
+
+  it('finds an asset by what is typed, its symbol too', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests/new')
+
+    await user.click(await screen.findByRole('combobox', { name: 'Asset' }))
+    // Typed into the field's own search: "nasdaq" is the recorder's index alone.
+    await user.keyboard('nasdaq')
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.textContent)).toEqual(['Saxo · NASDAQ 100'])
+    await user.keyboard('{Enter}')
+
+    expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveTextContent('Saxo · NASDAQ 100')
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument())
   })
 })
 
@@ -839,6 +862,23 @@ describe('a run', () => {
     expect(screen.queryByRole('button', { name: 'Check the turbo model' })).not.toBeInTheDocument()
   })
 
+  it('places its trades by the weekday and the hour they were bought, at once, as a heatmap', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
+
+    const choices = within(await screen.findByRole('group', { name: 'Trades grouped by' }))
+    const both = choices.getByRole('button', { name: 'Weekday and hour' })
+    // Beside the two it puts together.
+    const labels = choices.getAllByRole('button').map((button) => button.textContent)
+    expect(labels.slice(0, 3)).toEqual(['Hour of entry', 'Weekday', 'Weekday and hour'])
+    await user.click(both)
+
+    expect(both).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('img', { name: /^Profit and loss of the run's trades by weekday and hour of entry\./ })).toBeInTheDocument()
+    expect(screen.getByText('+€3.00 over 3 trades')).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: 'Wednesday, 15:00' })).toBeInTheDocument()
+  })
+
   it('follows a run while it waits its turn', async () => {
     runs[RUN_ID] = run({ status: { state: 'queued', created_at: '2026-10-19T20:33:49Z' }, position: 2, summary: null, headline: null })
     renderAt(`/backtests/${RUN_ID}`)
@@ -1001,6 +1041,26 @@ describe('runs compared', () => {
     expect(within(stopRow).getByText('-15 %')).toBeInTheDocument()
     expect(within(stopRow).getByText('-10 %')).toBeInTheDocument()
     expect(within(screen.getByRole('list', { name: 'Legend' })).getByText('Stop at 10')).toBeInTheDocument()
+  })
+
+  it('keeps only what differs between them when asked, and finds a row by its name', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
+
+    const table = await screen.findByRole('table', { name: 'The runs side by side' })
+    // Each run a column, its total under its name.
+    expect(within(table).getByRole('columnheader', { name: /Smoke EMA cross/ })).toBeInTheDocument()
+    expect(within(table).getByRole('row', { name: /^Asset/ })).toBeInTheDocument()
+
+    await user.click(within(table).getByRole('button', { name: 'Only what differs' }))
+    // The same asset for both: gone; the stop-loss they did not share stays.
+    await waitFor(() => expect(within(table).queryByRole('row', { name: /^Asset/ })).not.toBeInTheDocument())
+    expect(within(table).getByRole('row', { name: /Stop-loss/ })).toBeInTheDocument()
+
+    await user.click(within(table).getByRole('button', { name: 'Only what differs' }))
+    await user.type(within(table).getByRole('textbox', { name: 'Find a row…' }), 'drawdown')
+    await waitFor(() => expect(within(table).getAllByRole('row').filter((row) => row.getAttribute('role') === 'row' && row.textContent?.includes('Worst drawdown'))).toHaveLength(1))
+    expect(within(table).queryByRole('row', { name: /^Trades/ })).not.toBeInTheDocument()
   })
 
   it('asks for two runs at least', async () => {

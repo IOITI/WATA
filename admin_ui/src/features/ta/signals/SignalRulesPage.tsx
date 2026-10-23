@@ -12,6 +12,7 @@ import { Link, useSearchParams } from 'react-router'
 import { ButtonLink } from '@/components/ButtonLink'
 import { CheckList } from '@/components/CheckList'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
+import { Hint } from '@/components/Hint'
 import { PageHeader, Panel } from '@/components/Panel'
 import { ClaudeBadge, QueryState, ServiceStatusBadge } from '@/components/status'
 import { useToast } from '@/components/toast-context'
@@ -424,22 +425,26 @@ export function SignalRulesPage() {
         align: 'right',
         cell: ({ row }) => (
           <div className="flex justify-end gap-1">
-            <Button variant="ghost" size="icon" aria-label={`Edit ${row.name}`} title="Edit" onClick={() => setDialog({ rule: row, start: 'edit' })}>
-              <Pencil className="size-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Delete ${row.name}`}
-              title={row.mode === 'live' ? 'Switch it off before deleting it' : 'Delete'}
-              disabled={row.mode === 'live'}
-              onClick={() => {
-                deleteMutation.reset()
-                setDeleting(row)
-              }}
-            >
-              <Trash2 className="size-4" />
-            </Button>
+            <Hint content="Edit">
+              <Button variant="ghost" size="icon" aria-label={`Edit ${row.name}`} onClick={() => setDialog({ rule: row, start: 'edit' })}>
+                <Pencil className="size-4" />
+              </Button>
+            </Hint>
+            {/* A live rule's Delete is disabled: its hint says why, reached through a wrapper that takes the focus. */}
+            <Hint content={row.mode === 'live' ? 'Switch it off before deleting it' : 'Delete'} wrap={row.mode === 'live'}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Delete ${row.name}`}
+                disabled={row.mode === 'live'}
+                onClick={() => {
+                  deleteMutation.reset()
+                  setDeleting(row)
+                }}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </Hint>
           </div>
         ),
       },

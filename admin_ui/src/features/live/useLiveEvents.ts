@@ -4,12 +4,14 @@ import { useEffect, useState } from 'react'
 import { useToast } from '@/components/toast-context'
 import type { LiveEvent } from '@/lib/types'
 
-import { describeEvent, LIVE_EVENT_TYPES, staleQueries } from './liveEvents'
+import { useEventLog } from './eventLog'
+import { describeEvent, eventLink, LIVE_EVENT_TYPES, staleQueries } from './liveEvents'
 import { notificationsEnabled } from './notifications'
 
 /**
  * Listen to the server's event stream while a signed-in page is open: refresh
- * what an event made out of date, say what happened, and raise a browser
+ * what an event made out of date, say what happened (a toast, kept in the bell's
+ * log of the tab), and raise a browser
  * notification when the tab is not the one being looked at.
  *
  * Returns whether the stream is connected. The pages keep polling either way.
@@ -17,6 +19,7 @@ import { notificationsEnabled } from './notifications'
 export function useLiveEvents(): boolean {
   const queryClient = useQueryClient()
   const toast = useToast()
+  const add = useEventLog()?.add
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
@@ -39,6 +42,7 @@ export function useLiveEvents(): boolean {
       const notice = describeEvent(event)
       if (!notice) return
       toast({ title: notice.title, description: notice.body, variant: notice.variant })
+      add?.(notice, eventLink(event))
       if (document.visibilityState !== 'visible' && notificationsEnabled()) {
         new Notification(`WATA: ${notice.title}`, { body: notice.body, tag: event.type })
       }
@@ -49,7 +53,7 @@ export function useLiveEvents(): boolean {
       source.close()
       setConnected(false)
     }
-  }, [queryClient, toast])
+  }, [queryClient, toast, add])
 
   return connected
 }

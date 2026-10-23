@@ -1,3 +1,4 @@
+import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { formatMoney, formatPercent } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import type { LiveEvent } from '@/lib/types'
@@ -136,6 +137,39 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
     }
     default:
       // Pauses are shown by the dashboard itself, to whoever caused them and to everyone else.
+      return null
+  }
+}
+
+/** Where an event is dealt with, or read further: the page its entry in the bell leads to. */
+export function eventLink(event: LiveEvent): string | null {
+  switch (event.type) {
+    case 'position_opened':
+    case 'position_closed': {
+      const position = text(event.position_id)
+      return position ? positionLink(position) : '/positions'
+    }
+    case 'order_refused': {
+      // The Orders page finds the sells Saxo refused by their position.
+      const position = text(event.position_id)
+      return position ? orderLink(position) : '/orders'
+    }
+    case 'signal_decided':
+      return '/signals'
+    case 'entries_paused':
+    case 'entries_resumed':
+      return '/'
+    case 'service_status':
+    case 'saxo_authorisation_required':
+    case 'saxo_authorised':
+      return '/system'
+    case 'backtest_finished': {
+      const run = text(event.run_id)
+      return run ? `/backtests/${encodeURIComponent(run)}` : '/backtests'
+    }
+    case 'prices_fetch_finished':
+      return '/data/providers/dukascopy'
+    default:
       return null
   }
 }

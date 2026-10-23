@@ -103,7 +103,7 @@ describe('number fields of the configuration', () => {
     await user.clear(cell)
 
     expect(cell).toHaveAttribute('aria-invalid', 'true')
-    expect(cell).toHaveAttribute('title', 'Not a number: the value is still 50')
+    expect(cell).toHaveAccessibleDescription('Not a number: the value is still 50')
     expect(form.period()).toBe(50)
     expect(form.invalidCount()).toBe(1)
 

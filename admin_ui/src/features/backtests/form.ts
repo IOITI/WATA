@@ -1,5 +1,6 @@
 import type { IPineInput } from 'pinets'
 
+import { assetKeywords } from '@/features/data/assets'
 import { timeframeOf } from '@/features/ta/engine/timeframes'
 import { draftOfRule, inputValueOf, MAX_RANGE_TICKS, newDraft, ruleFields } from '@/features/ta/signals/ruleModel'
 import type { RuleDraft } from '@/features/ta/signals/ruleModel'
@@ -78,12 +79,13 @@ export function assetRef(asset: BacktestAsset): string {
 }
 
 /** The assets a strategy can run on: Capital.com's, Dukascopy's histories, and the indices the recorder kept. */
-export function strategyAssets(assets: readonly DataAsset[]): { value: string; label: string }[] {
+export function strategyAssets(assets: readonly DataAsset[]): { value: string; label: string; keywords: string[] }[] {
   return assets
     .filter((asset) => asset.provider !== 'saxo' || asset.role === 'underlying')
     .map((asset) => ({
       value: asset.ref,
       label: `${PROVIDER_LABEL[asset.provider as keyof typeof PROVIDER_LABEL] ?? asset.provider} · ${asset.description ?? asset.symbol ?? asset.key}`,
+      keywords: assetKeywords(asset),
     }))
 }
 

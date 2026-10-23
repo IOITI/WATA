@@ -461,6 +461,12 @@ export interface GroupStats {
   average_best_percent: number | null
 }
 
+/** The trades opened on a weekday (ISO: 1 is Monday) at an hour, for those that had some (src/admin/weekday_hour.py). */
+export interface WeekdayHourStats extends GroupStats {
+  weekday: number
+  hour: number
+}
+
 export interface Exits {
   from: string | null
   to: string | null
@@ -472,6 +478,7 @@ export interface Exits {
   }
   by_reason: (GroupStats & { reason: string })[]
   by_hour: (GroupStats & { hour: number })[]
+  by_weekday_hour: WeekdayHourStats[]
   by_holding_time: (GroupStats & { bucket: string })[]
 }
 
@@ -1885,7 +1892,10 @@ export interface BacktestBreakdowns {
   trades: number
   groups: Record<'hour' | 'weekday' | 'direction' | 'exit' | 'confidence' | 'holding' | 'turbo_price' | 'issuer', BacktestGroupRow[]> &
     /** The kind of day a trade was made on and its place against the US open (src/backtest/regimes.py), under `group`. */
-    Partial<Record<BacktestDayKind | 'session_part', BacktestGroupRow[]>>
+    Partial<Record<BacktestDayKind | 'session_part', BacktestGroupRow[]>> & {
+      /** By the weekday and hour bought, those that had trades; absent from an admin older than v0.32.0. */
+      weekday_hour?: WeekdayHourStats[]
+    }
   given_back: { average_given_back: number | null; turned_negative_count: number; turned_negative_percent: number | null }
 }
 

@@ -307,7 +307,7 @@ export function DashboardPage() {
             <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
               <KpiTile
                 label="Day profit and loss"
-                value={<PnlValue value={overview.day.profit_loss} kind="money" className="font-semibold" />}
+                value={<PnlValue value={overview.day.profit_loss} kind="money" className="font-semibold" animate />}
                 hint={`${overview.day.closed_count} closed trade${overview.day.closed_count === 1 ? '' : 's'}`}
               >
                 <SparkBars

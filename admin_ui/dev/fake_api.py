@@ -74,6 +74,7 @@ from src.admin.queries import (
     summarise_trades,
 )
 from src.admin.studies import StudyService
+from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
 from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
 
@@ -762,7 +763,7 @@ class FakeQueries:
     async def exits(self, start=None, end=None):
         closed = [p for p in self.positions if p["position_status"] == "Closed"]
         closed = [p for p in closed if in_range(p["execution_time_close"], start, end)]
-        return summarise_exits([
+        trades = [
             {
                 "action": p["action"],
                 "close_reason": p["position_close_reason"],
@@ -770,10 +771,12 @@ class FakeQueries:
                 "max_performance_percent": p["position_max_performance_percent"],
                 "profit_loss": p["position_profit_loss"],
                 "open_hour": (p["execution_time_open"].hour + 2) % 24,
+                "open_weekday": (p["execution_time_open"] + timedelta(hours=2)).isoweekday(),
                 "holding_seconds": (p["execution_time_close"] - p["execution_time_open"]).total_seconds(),
             }
             for p in closed
-        ])
+        ]
+        return {**summarise_exits(trades), "by_weekday_hour": stats_by_weekday_hour(trades, opened_weekday_hour)}
 
     async def report(self, milestones_eur=None):
         closed = sorted(

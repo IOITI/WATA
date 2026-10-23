@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { ExportButton } from '@/components/ExportButton'
+import { Hint } from '@/components/Hint'
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { useTheme } from '@/components/theme-context'
@@ -70,10 +71,10 @@ export function LiveBadge({ status }: { status: LiveStatus }) {
     text = status.delayMs === null ? 'Live' : `Live · ${Math.round(status.delayMs)} ms`
   }
   return (
+    <Hint content="Capital.com's time of the last quote to now, as the server's clock counts" wrap>
     <span
       role="status"
       aria-live="off"
-      title="Capital.com's time of the last quote to now, as the server's clock counts"
       className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs tabular-nums"
     >
       <span
@@ -87,6 +88,7 @@ export function LiveBadge({ status }: { status: LiveStatus }) {
       />
       {text}
     </span>
+    </Hint>
   )
 }
 
@@ -286,7 +288,7 @@ export function AssetChart({
         {INTERVALS.map((seconds) => {
           const possible = possibleIntervals.includes(seconds)
           const active = !ranged && seconds === view.interval
-          return (
+          const button = (
             <Button
               key={seconds}
               variant={active ? 'primary' : 'outline'}
@@ -294,11 +296,16 @@ export function AssetChart({
               className="max-sm:px-1.5"
               aria-pressed={active}
               disabled={!possible}
-              title={possible ? undefined : 'Too many bars for this period: choose a shorter one'}
               onClick={() => onViewChange({ ...view, interval: seconds, range: null })}
             >
               {intervalLabel(seconds)}
             </Button>
+          )
+          // Disabled: its hint says why.
+          return possible ? button : (
+            <Hint key={seconds} content="Too many bars for this period: choose a shorter one" wrap>
+              {button}
+            </Hint>
           )
         })}
         {full && (

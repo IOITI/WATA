@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
+import { Hint } from '@/components/Hint'
 import { KpiTile } from '@/components/KpiTile'
 import { useMainScroll } from '@/components/main-scroll-context'
 import { NotFoundState } from '@/components/NotFoundState'
@@ -294,17 +295,18 @@ export function RunPage() {
                 Rename
               </Button>
               {run.kind === 'run' && run.status.state === 'done' && run.source.from_rule && run.source.kind === 'pine' && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  leftIcon={<Flag className="size-3.5" />}
-                  isLoading={reference.isPending}
-                  disabled={reference.isSuccess}
-                  title={`The run the paper days of ${run.source.from_rule.name} are set against`}
-                  onClick={() => reference.mutate()}
-                >
-                  {reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference'}
-                </Button>
+                <Hint content={`The run the paper days of ${run.source.from_rule.name} are set against`} wrap={reference.isSuccess}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    leftIcon={<Flag className="size-3.5" />}
+                    isLoading={reference.isPending}
+                    disabled={reference.isSuccess}
+                    onClick={() => reference.mutate()}
+                  >
+                    {reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference'}
+                  </Button>
+                </Hint>
               )}
               {/* Its script, inputs, alerts and bars made a signal rule, in shadow: reviewed in the rule's dialog first. */}
               {run.kind === 'run' && run.status.state === 'done' && run.request.source.kind === 'pine' && !run.stress_of && !run.model_check_of && (

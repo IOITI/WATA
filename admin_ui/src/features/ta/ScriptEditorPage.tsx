@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
+import { Hint } from '@/components/Hint'
 import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader } from '@/components/Panel'
 import { QueryState } from '@/components/status'
@@ -151,6 +152,12 @@ function ScriptEditor({ id }: { id: string | undefined }) {
   const title = draft?.name.trim() || script?.name || `New ${KIND_LABEL[newKind].toLowerCase()}`
   const errors = check.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length
 
+  const saveButton = (
+    <Button size="sm" leftIcon={<Save className="size-3.5" />} isLoading={saveMutation.isPending} disabled={!dirty} onClick={save}>
+      {dirty ? 'Save' : 'Saved'}
+    </Button>
+  )
+
   if (id && isNotFound(scriptQuery.error)) {
     return (
       <NotFoundState
@@ -187,31 +194,25 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                   Open in Charts
                 </ButtonLink>
                 {backtestsEnabled && (
-                  <ButtonLink
-                    to={`/backtests/new?script=${script.id}&version=${script.version}`}
-                    variant="outline"
-                    size="sm"
-                    leftIcon={<FlaskConical className="size-3.5" />}
-                    title={`Backtest version ${script.version}, the one saved last`}
-                  >
-                    Backtest v{script.version}
-                  </ButtonLink>
+                  <Hint content={`Backtest version ${script.version}, the one saved last`}>
+                    <ButtonLink
+                      to={`/backtests/new?script=${script.id}&version=${script.version}`}
+                      variant="outline"
+                      size="sm"
+                      leftIcon={<FlaskConical className="size-3.5" />}
+                    >
+                      Backtest v{script.version}
+                    </ButtonLink>
+                  </Hint>
                 )}
                 <ButtonLink to={`/ta/signals?new=${script.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
                   New signal rule
                 </ButtonLink>
               </>
             )}
-            <Button
-              size="sm"
-              leftIcon={<Save className="size-3.5" />}
-              isLoading={saveMutation.isPending}
-              disabled={!dirty}
-              onClick={save}
-              title={errors > 0 ? 'It can be saved with its errors, and fixed later' : undefined}
-            >
-              {dirty ? 'Save' : 'Saved'}
-            </Button>
+            <Hint content={errors > 0 ? 'It can be saved with its errors, and fixed later' : null} wrap={!dirty}>
+              {saveButton}
+            </Hint>
           </>
         }
       />

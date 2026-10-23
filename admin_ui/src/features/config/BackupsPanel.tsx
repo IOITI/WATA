@@ -6,14 +6,18 @@ import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { useToast } from '@/components/toast-context'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
+import { RecoveryLedger } from '@/components/ui/recovery-ledger'
+import type { LedgerEntry } from '@/components/ui/recovery-ledger'
+import { Skeleton } from '@/components/ui/skeleton'
 import { api, ApiError } from '@/lib/api'
 import { formatDateTime, formatNumber } from '@/lib/format'
 import type { ConfigDocument } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { ChangeList } from './ChangeList'
 import { restoreChanges } from './configModel'
+
+/** The ledger's first entry: the file the services read, which is never restored. */
+const IN_USE = 'in-use'
 
 interface BackupsPanelProps {
   configDoc: ConfigDocument
@@ -21,9 +25,10 @@ interface BackupsPanelProps {
 }
 
 /**
- * The versions of config.json kept by each save: look at what one would change,
- * and put its trading parameters back. Like a save, a restore leaves the rest
- * of the file (credentials, infrastructure, the admin's own settings) alone.
+ * The versions of config.json kept by each save, as a timeline under the file
+ * in use: open one to see what it would change, and put its trading parameters
+ * back. Like a save, a restore leaves the rest of the file (credentials,
+ * infrastructure, the admin's own settings) alone.
  */
 export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
   const toast = useToast()
@@ -39,6 +44,7 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
   })
   const backups = backupsQuery.data?.items
   const backup = backupQuery.data
+  const chosen = backups?.find((entry) => entry.name === selected)
 
   // From the file as it is now to the backup: what restoring would change.
   const changes = useMemo(
@@ -67,11 +73,63 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
     },
   })
   const conflict = restoreMutation.error instanceof ApiError && restoreMutation.error.status === 409
+  const changeCount = `${changes.length} change${changes.length === 1 ? '' : 's'}`
+
+  // What the version opened shows under its entry.
+  const details = (
+    <div className="space-y-3">
+      <QueryState
+        isPending={backupQuery.isPending}
+        error={backupQuery.error}
+        hasData={!!backup}
+        skeleton={<Skeleton className="h-16 w-full" />}
+      >
+        {backup && changes.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            The trading parameters of this version are the same as the current ones: restoring it would change
+            nothing.
+          </p>
+        )}
+        {backup && changes.length > 0 && (
+          <>
+            <p className="text-sm text-text-secondary">
+              Restoring this version would make {changeCount} (current value → restored value):
+            </p>
+            <ChangeList changes={changes} />
+          </>
+        )}
+        {backup && !configDoc.editable && (
+          <Alert tone="neutral">
+            <AlertDescription>
+              Editing is switched off in the configuration (<code>admin.config_edit_enabled</code>).
+            </AlertDescription>
+          </Alert>
+        )}
+      </QueryState>
+    </div>
+  )
+
+  const entries: LedgerEntry[] = [
+    {
+      id: IN_USE,
+      action: `Written ${formatDateTime(configDoc.modified_at, timeZone)}`,
+      description: 'The file each service reads when it starts.',
+    },
+    ...(backups ?? []).map((entry) => ({
+      id: entry.name,
+      action: `Replaced ${formatDateTime(entry.created_at, timeZone)}`,
+      description: `${formatNumber(entry.size)} bytes`,
+      reference: entry.name,
+      details: { content: entry.name === selected ? details : null },
+      // Once it is open and read, so that what it would change is in front of the operator.
+      restorable: configDoc.editable && entry.name === selected && backup !== undefined,
+    })),
+  ]
 
   return (
     <Panel
       title="Previous versions"
-      description="Each save keeps the file it replaced. The twenty most recent are kept. Restoring one puts its trading parameters back, nothing else."
+      description="Each save keeps the file it replaced. The twenty most recent are kept. Open one to see what restoring it would change: only its trading parameters come back, nothing else."
     >
       <QueryState isPending={backupsQuery.isPending} error={backupsQuery.error} hasData={!!backups}>
         {backups && backups.length === 0 && (
@@ -80,74 +138,23 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
           </p>
         )}
         {backups && backups.length > 0 && (
-          <div className="grid gap-5 lg:grid-cols-[18rem_1fr]">
-            <ul className="max-h-[28rem] space-y-1 overflow-y-auto">
-              {backups.map((entry) => (
-                <li key={entry.name}>
-                  <button
-                    type="button"
-                    aria-pressed={entry.name === selected}
-                    onClick={() => {
-                      restoreMutation.reset()
-                      setSelected(entry.name)
-                    }}
-                    className={cn(
-                      'w-full rounded-lg border px-3 py-2 text-left text-xs transition-colors focus-ring',
-                      entry.name === selected
-                        ? 'border-border-hover bg-surface-hover text-foreground'
-                        : 'border-transparent text-muted-foreground hover:bg-surface-hover hover:text-foreground',
-                    )}
-                  >
-                    <span className="block font-medium">Replaced {formatDateTime(entry.created_at, timeZone)}</span>
-                    <span className="block text-xs">{formatNumber(entry.size)} bytes</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-
-            <div className="min-w-0 space-y-3">
-              {selected === null && (
-                <p className="text-sm text-muted-foreground">Pick a version to see what restoring it would change.</p>
-              )}
-              {selected !== null && (
-                <QueryState isPending={backupQuery.isPending} error={backupQuery.error} hasData={!!backup}>
-                  {backup && changes.length === 0 && (
-                    <p className="text-sm text-muted-foreground">
-                      The trading parameters of this version are the same as the current ones: restoring it would
-                      change nothing.
-                    </p>
-                  )}
-                  {backup && changes.length > 0 && (
-                    <>
-                      <p className="text-sm text-text-secondary">
-                        Restoring this version would make {changes.length} change{changes.length === 1 ? '' : 's'}{' '}
-                        (current value → restored value):
-                      </p>
-                      <ChangeList changes={changes} />
-                    </>
-                  )}
-                  {backup && configDoc.editable && (
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        restoreMutation.reset()
-                        setConfirming(true)
-                      }}
-                    >
-                      Restore this version
-                    </Button>
-                  )}
-                  {backup && !configDoc.editable && (
-                    <Alert tone="neutral">
-                      <AlertDescription>
-                        Editing is switched off in the configuration (<code>admin.config_edit_enabled</code>).
-                      </AlertDescription>
-                    </Alert>
-                  )}
-                </QueryState>
-              )}
-            </div>
-          </div>
+          <RecoveryLedger
+            entries={entries}
+            currentEntryId={IN_USE}
+            currentLabel="In use"
+            title="Versions"
+            countLabel={`${backups.length} kept`}
+            expandedId={selected}
+            onExpandedChange={(name) => {
+              restoreMutation.reset()
+              setSelected(name)
+            }}
+            restoreLabel="Restore"
+            onRestore={() => {
+              restoreMutation.reset()
+              setConfirming(true)
+            }}
+          />
         )}
       </QueryState>
 
@@ -167,6 +174,12 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
         onClose={() => setConfirming(false)}
         description={
           <>
+            {chosen && (
+              <>
+                Restoring the version replaced {formatDateTime(chosen.created_at, timeZone)}{' '}
+                {changes.length === 0 ? 'changes nothing' : `makes ${changeCount}`}.{' '}
+              </>
+            )}
             Only the trading parameters of this version are put back. Credentials, infrastructure settings and the
             admin&apos;s own settings stay as they are on the server now, whatever this version held for them. The
             current file is kept as a new backup, and the result is checked with the services&apos; validator first.

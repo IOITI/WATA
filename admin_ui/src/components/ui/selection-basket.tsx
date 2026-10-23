@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { motionTransitions } from '../../lib/motion-tokens';
+import { DirectionalTooltip } from './directional-tooltip';
 
 export interface SelectionActionItem {
   id: string;
@@ -20,7 +21,7 @@ export interface SelectionActionItem {
   onClick?: () => void;
   /** WATA: where it leads, when it leads to another page: a link, drawn by `linkComponent`. */
   href?: string;
-  /** WATA: not possible for the selection now; `title` says why. */
+  /** WATA: not possible for the selection now; `title` says why, in a tooltip (hover, focus, tap). */
   disabled?: boolean;
   title?: string;
 }
@@ -141,24 +142,28 @@ export const SelectionBasket: React.FC<SelectionBasketProps> = ({
                 );
 
                 // WATA: what leads to another page is a link (a click with ⌘ or Ctrl opens it in another tab).
-                if (action.href !== undefined && !action.disabled) {
-                  return (
-                    <LinkComponent key={action.id} href={action.href} onClick={action.onClick} title={action.title} className={classes}>
+                const control =
+                  action.href !== undefined && !action.disabled ? (
+                    <LinkComponent href={action.href} onClick={action.onClick} className={classes}>
                       {content}
                     </LinkComponent>
+                  ) : (
+                    <button type="button" onClick={action.onClick} disabled={action.disabled} className={classes}>
+                      {content}
+                    </button>
                   );
-                }
+                if (!action.title) return <React.Fragment key={action.id}>{control}</React.Fragment>;
+                // WATA: a disabled control takes neither focus nor pointer: a wrapper takes them for its tooltip.
                 return (
-                  <button
-                    key={action.id}
-                    type="button"
-                    onClick={action.onClick}
-                    disabled={action.disabled}
-                    title={action.title}
-                    className={classes}
-                  >
-                    {content}
-                  </button>
+                  <DirectionalTooltip key={action.id} content={action.title} side="top">
+                    {action.disabled ? (
+                      <span tabIndex={0} className="inline-flex rounded-lg [&>:disabled]:pointer-events-none">
+                        {control}
+                      </span>
+                    ) : (
+                      control
+                    )}
+                  </DirectionalTooltip>
                 );
               })}
             </div>

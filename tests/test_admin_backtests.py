@@ -579,6 +579,10 @@ def test_the_days_signals_and_trades_of_a_run_are_read_and_its_trades_broken_dow
     broken = backtests.breakdowns(run_id)
     assert broken["trades"] == 2
     assert [(row["hour"], row["trade_count"]) for row in broken["groups"]["hour"]] == [(9, 1), (15, 1)]
+    # Paris hours: a Tuesday at 9:30 and a Wednesday at 15:10, the weekdays as ISO numbers (Monday is 1).
+    assert [(row["weekday"], row["hour"], row["trade_count"]) for row in broken["groups"]["weekday_hour"]] == [
+        (2, 9, 1), (3, 15, 1),
+    ]
     assert [(row["exit"], row["trade_count"]) for row in broken["groups"]["exit"]] == [
         ("Signal or end of day", 1), ("Take-profit", 1),
     ]

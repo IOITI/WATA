@@ -1,6 +1,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router'
 
+import { Hint } from '@/components/Hint'
 import { Badge } from '@/components/ui/badge'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { valueDecimals } from '@/features/prices/chartData'
@@ -53,10 +54,12 @@ export function assetColumns(timeZone: string, flags: ReadonlyMap<string, string
               {row.name}
             </Link>
             {flag && (
-              <span className="shrink-0 text-warning" title={flag}>
-                <AlertTriangle aria-hidden className="size-3.5" />
-                <span className="sr-only">{flag}</span>
-              </span>
+              <Hint content={flag} wrap className="shrink-0">
+                <span className="text-warning">
+                  <AlertTriangle aria-hidden className="size-3.5" />
+                  <span className="sr-only">{flag}</span>
+                </span>
+              </Hint>
             )}
           </div>
         )

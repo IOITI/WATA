@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.32.0 - Admin: a bell for events, ⌘K, searchable lists, hints, versions as a ledger, runs side by side, heatmaps, rolling figures
+
+**Release date:** not released yet
+
+Eight more of EasyUI's components, where the admin's pages had a use for them. One server change, for the heatmaps: the Exits page and a backtest's breakdowns count the trades by weekday and hour of opening.
+
+- **A bell in the top bar keeps this tab's events** (EasyUI's `notification-bell`): what each toast said (a position opened or closed, a sell Saxo refused, a signal decided, a service down or back, Saxo's authorisation, a backtest finished, prices downloaded, entries paused or resumed), 50 at most, newest first, the unread counted. Each leads to where it happened: the position, its order, the run. A reload keeps them, another tab has its own. The switch for browser notifications moved into its footer.
+- **⌘K (Ctrl+K), or the top bar's search button, goes anywhere by name** (EasyUI's `spotlight-search`): the menu's pages, New backtest, New script, the runs, the signal rules, the scripts, the assets (turbos that ended left out), a position or an order by its number. It only goes somewhere: nothing in it trades or changes anything.
+- **Long lists can be searched** (EasyUI's `combobox`): the asset of the script editor's test (every turbo not ended: type a level, "24150", or a symbol), a backtest's asset and the setting of each sweep axis. Short lists keep their select.
+- **Hints show on a tap and on keyboard focus** (EasyUI's `directional-tooltip`, through `Hint`), where a `title` showed only to a mouse: why a control is disabled or what a state means. The top bar's chips and Live/Polling, a live rule's Delete, a run made with other code, a rule's days of history, the editor's Save while its script has errors, an interval with too many bars, a sell Saxo refused, a flagged asset, a configuration field in error, the basket's disabled actions. Screen readers read each with its control.
+- **The configuration's previous versions are a ledger** (EasyUI's `recovery-ledger`): the file in use at the top, then each version it replaced, newest first, with its size and file name. A version opens on what restoring it would change, and only then offers Restore, which still asks for the slide, now saying how many changes it makes.
+- **Runs compared are a matrix** (EasyUI's `smart-comparison`): a column per run (its name a link, its colour on the chart, its source and total at the top), rows of what it ran, what differs between the runs and their figures, "Only what differs" and a search over the rows; on a phone, one run at a time. The chart of the days stays.
+- **Heatmaps** (EasyUI's `activity-heatmap`), gains and losses each on a scale of its own, by size:
+  - Performance: the period's days as a calendar, a column a week from Monday.
+  - Exits: the trades by weekday and hour of opening, in the trading time zone; the same in a run's "Where the result comes from" ("Weekday and hour"). Each cell says its result, its trades and the share won, read cell by cell with the arrow keys; the figures are also in a table under it.
+  - Teal for gains, red for losses, four steps each: a gain and a loss of one size stay apart for colour-blind readers, which the bars' emerald and red do not at their paler steps.
+- **The live figures roll to each new value** (EasyUI's `animated-number`): an open position's performance and unrealised result (dashboard and Positions), the day's profit and loss on the dashboard. Still where the system asks for less motion; screen readers read the value, not the rolling digits.
+
+Server: `/api/exits` adds `by_weekday_hour`, a run's breakdowns `weekday_hour` (`src/admin/weekday_hour.py`). It stays out of `src/admin/analysis.py`, which is part of every run's code digest: no run is marked as made with other code.
+
+My calls: Restore offered only once a version is open and read; Monday to Friday always on the weekday heatmaps, a weekend day only with trades, the hours from the first traded to the last; the calendar from the start of the period (a year when it has none); 50 entries listed in ⌘K, the others found by typing. Fixed in the copies on the way: the heatmap found the cell a column and a row off the pointer, and its keyboard could start on a day not drawn; the ledger's line ran beside its pips; rolling digits stood higher than a sign beside them. The components were copied from EasyUI's commit `50effaf` of 23 October; `admin_ui/README.md` lists each change.
+
+**Verification status:**
+- 983 interface tests pass, 36 of them new (the bell and where each event leads, ⌘K, the searchable lists, the hints, the ledger and a restore, the matrix's "Only what differs", the heatmaps' cells, colours, keyboard, table and month labels, the Exits and Performance panels, a run's "Weekday and hour", the rolling figures with and without reduced motion); lint, type checks and the build are clean.
+- 2,352 Python tests pass (16 skipped), the weekday and hour of the Exits query and of a run's breakdowns among them. The Exits query run on a throwaway PostgreSQL 16: weekdays and hours of Paris across the change of clocks, a trade opened at 23:10 UTC on Sunday 25 October counted on Monday at 0:00.
+- In a browser against the fake admin, light and dark, at the pane's width (about 890 px) and a phone's 375 px: the Exits heatmap (the cell under the pointer, its tooltip and what a screen reader hears), the Performance calendar (the period's days only, read with the arrow keys), a run's "Weekday and hour"; the bell's events leading to their order and read once followed; ⌘K by its shortcut and its button (a turbo found by "24150", runs, rules and a script by "ema cross", each opened); the backtest form's asset list searched; a live rule's Delete hint on a phone; a version of the configuration saved, opened, restored after the slide, the ledger then listing the file the toast named; two runs compared, "Only what differs" leaving their one different input and the figures; the day's profit and loss and a position's live values settling on their digits.
+- Fixed after that look: the rolling digits' columns were one digit tall, so a roll moved them a tenth of a digit and showed the wrong ones; the calendar's months, the heatmap's cells when a run traded in two hours, a value cut after its minus sign on a phone, a tooltip's arrow beside its button.
+- Not seen: a real tap (the pane's taps are clicks: the tests cover the touch path), a screen reader, 1,440 px, the editor test's asset list in a browser (its test covers it), the events of the real services, the server.
+
 ## v0.31.0 - Admin: EasyUI's 404, a run's parts as a nav, a rule in steps, timelines, a selection basket
 
 **Release date:** not released yet

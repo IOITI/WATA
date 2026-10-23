@@ -5,14 +5,16 @@
 
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ChartSpline, Download, Play } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import type { IPineInput } from 'pinets'
 
 import { Panel } from '@/components/Panel'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Checkbox, Input, Select } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
+import { assetKeywords } from '@/features/data/assets'
 import { api } from '@/lib/api'
 import type { DataAsset } from '@/lib/types'
 
@@ -86,6 +88,7 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName, onRe
   const assets = useMemo(() => testableAssets(assetsQuery.data?.items ?? []), [assetsQuery.data])
 
   const [chosenRef, setChosenRef] = useState<string | null>(null)
+  const assetFieldId = useId()
   const asset = assets.find((candidate) => candidate.ref === chosenRef) ?? assets.find((candidate) => candidate.provider === 'capital') ?? assets[0]
   const [barsKind, setBarsKind] = useState<BarsKind>('time')
   const [timeframe, setTimeframe] = useState(DEFAULT_TIMEFRAME.pine)
@@ -141,15 +144,23 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName, onRe
       description="Runs the script on a day of WATA's prices, as Charts and the signal engine run it."
       bodyClassName="flex flex-col gap-3 pt-3"
     >
-      <label className="flex flex-col gap-1 text-xs">
-        <span className="font-medium text-text-secondary">Asset</span>
-        <Select
-          value={asset?.ref ?? ''}
-          onChange={(event) => setChosenRef(event.target.value)}
-          options={assets.map((candidate) => ({ value: candidate.ref, label: assetLabel(candidate) }))}
+      {/* Every turbo still quoted is offered: hundreds, found by typing ("24150"). A label beside, not around: it would pass an option's click on to the field. */}
+      <div className="flex flex-col gap-1 text-xs">
+        <label htmlFor={assetFieldId} className="font-medium text-text-secondary">
+          Asset
+        </label>
+        <Combobox
+          id={assetFieldId}
+          className="w-full"
+          value={asset?.ref ?? null}
+          onValueChange={(value) => value && setChosenRef(value)}
+          options={assets.map((candidate) => ({ value: candidate.ref, label: assetLabel(candidate), keywords: assetKeywords(candidate) }))}
           disabled={assets.length === 0}
+          placeholder="No asset"
+          searchPlaceholder="A name, a level, a symbol…"
+          emptyText="No asset of that name."
         />
-      </label>
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <label className="flex flex-col gap-1 text-xs">
           <span className="font-medium text-text-secondary">Bars</span>

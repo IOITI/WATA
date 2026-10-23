@@ -15,6 +15,7 @@
     ]
   },
   "ignorePatterns": [
-    "src/components/ui/**"
+    "src/components/ui/**",
+    "src/lib/chart-primitives.tsx"
   ]
 }

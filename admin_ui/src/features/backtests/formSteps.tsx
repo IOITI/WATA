@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Plus, RotateCcw, Trash2 } from 'lucide-react'
 import type { IPineInput } from 'pinets'
+import { useId } from 'react'
 import type { ReactNode } from 'react'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { DateRange } from '@/components/ui/calendar'
+import { Combobox } from '@/components/ui/combobox'
 import { DateRangePicker } from '@/components/ui/date-picker'
 import { Checkbox, Input, Select } from '@/components/ui/form'
 import { BarsFields, ScriptChoice, ScriptSettings } from '@/features/ta/signals/RuleFields'
@@ -69,6 +71,7 @@ export function AssetStep({
 }) {
   const offered = strategyAssets(assets)
   const chosen = parseAsset(draft.asset)
+  const assetFieldId = useId()
   const tick = assets.find((asset) => asset.ref === draft.asset)?.tick
   return (
     <div className="space-y-5 text-sm">
@@ -95,14 +98,22 @@ export function AssetStep({
         description="What the strategy reads: an asset of the Data pages, as time bars or range bars. A replay of the signals WATA received draws its days on it."
       >
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 sm:col-span-2">
-            <span className="text-xs text-text-secondary">Asset</span>
-            <Select
-              value={draft.asset}
-              onChange={(event) => update({ asset: event.target.value })}
+          {/* A label beside the field, not around it: a label passes an option's click on to its field. */}
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label htmlFor={assetFieldId} className="text-xs text-text-secondary">
+              Asset
+            </label>
+            <Combobox
+              id={assetFieldId}
+              className="w-full"
+              value={draft.asset || null}
+              onValueChange={(value) => value && update({ asset: value })}
               options={offered.some((option) => option.value === draft.asset) || !chosen ? offered : [{ value: draft.asset, label: assetLabel(chosen) }, ...offered]}
+              placeholder="Choose an asset"
+              searchPlaceholder="A name or a symbol…"
+              emptyText="No asset of that name."
             />
-          </label>
+          </div>
           <BarsFields draft={draft.rule} update={updateRule} rangeNote={rangeHint(draft.rule.ticks, tick)} />
         </div>
         {chosen?.provider === 'saxo' && (
@@ -516,6 +527,7 @@ function SweepAxes({
   options: BacktestOptions
   meta: readonly IPineInput[] | null
 }) {
+  const fieldId = useId()
   const setAxis = (index: number, changes: Partial<AxisDraft>) =>
     update({ axes: draft.axes.map((axis, place) => (place === index ? { ...axis, ...changes } : axis)) })
   const read = draft.axes.map((axis) => axisValues(axis, options.fields, meta, options.sweep.values))
@@ -525,7 +537,9 @@ function SweepAxes({
       {draft.axes.map((axis, index) => {
         const names =
           axis.kind === 'setting'
-            ? options.fields.filter((field) => field.group !== 'engine' || draft.sourceKind === 'pine').map((field) => ({ value: field.name, label: field.label }))
+            ? options.fields
+                .filter((field) => field.group !== 'engine' || draft.sourceKind === 'pine')
+                .map((field) => ({ value: field.name, label: field.label, keywords: [field.name] }))
             : (meta ?? []).map((input) => ({ value: input.id, label: input.title ?? input.name ?? input.id }))
         const entry = read[index]
         return (
@@ -541,10 +555,22 @@ function SweepAxes({
                 ]}
               />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-text-secondary">Which</span>
-              <Select value={axis.name} onChange={(event) => setAxis(index, { name: event.target.value })} options={[{ value: '', label: 'Choose…' }, ...names]} />
-            </label>
+            {/* Dozens of settings: found by typing. A label beside, not around: it would pass an option's click on to the field. */}
+            <div className="flex flex-col gap-1">
+              <label htmlFor={`${fieldId}-${index}`} className="text-xs text-text-secondary">
+                Which
+              </label>
+              <Combobox
+                id={`${fieldId}-${index}`}
+                className="w-full"
+                value={axis.name || null}
+                onValueChange={(value) => setAxis(index, { name: value ?? '' })}
+                options={names}
+                placeholder="Choose…"
+                searchPlaceholder="A setting or an input…"
+                emptyText="Nothing of that name."
+              />
+            </div>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-text-secondary">Values, separated by commas</span>
               <Input value={axis.values} placeholder="-8, -12, -15" onChange={(event) => setAxis(index, { values: event.target.value })} />

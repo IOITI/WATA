@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { describeEvent, LIVE_EVENT_TYPES, staleQueries } from './liveEvents'
+import { describeEvent, eventLink, LIVE_EVENT_TYPES, staleQueries } from './liveEvents'
 
 describe('describeEvent', () => {
   it('reports a closed position with its result, good or bad', () => {
@@ -119,5 +119,20 @@ describe('staleQueries', () => {
 
   it('covers every event type the page subscribes to', () => {
     for (const type of LIVE_EVENT_TYPES) expect(staleQueries({ type }).length).toBeGreaterThan(0)
+  })
+})
+
+describe('eventLink', () => {
+  it('leads each event to where it is dealt with', () => {
+    expect(eventLink({ type: 'position_closed', position_id: '5098' })).toBe('/positions?find=5098')
+    expect(eventLink({ type: 'position_opened' })).toBe('/positions')
+    // The sells Saxo refused are found among the orders by their position.
+    expect(eventLink({ type: 'order_refused', position_id: '5098' })).toBe('/orders?find=5098')
+    expect(eventLink({ type: 'signal_decided', action: 'long' })).toBe('/signals')
+    expect(eventLink({ type: 'service_status', name: 'Trader' })).toBe('/system')
+    expect(eventLink({ type: 'saxo_authorisation_required' })).toBe('/system')
+    expect(eventLink({ type: 'backtest_finished', run_id: '20261023-113051-b0a6b4' })).toBe('/backtests/20261023-113051-b0a6b4')
+    expect(eventLink({ type: 'prices_fetch_finished', state: 'done' })).toBe('/data/providers/dukascopy')
+    expect(eventLink({ type: 'something_new' })).toBeNull()
   })
 })

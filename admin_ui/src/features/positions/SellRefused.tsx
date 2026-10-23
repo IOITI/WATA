@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 
+import { Hint } from '@/components/Hint'
 import type { SellRefusals } from '@/lib/types'
 
 import { orderLink } from './orderLife'
@@ -16,14 +17,15 @@ export function SellRefused({
   timeZone: string
 }) {
   const sentence = sellRefusalSentence(refusals, timeZone, true)
+  // Named by the marker, described by the whole sentence: on hover, focus and a tap.
   return (
-    <Link
-      to={orderLink(positionId)}
-      title={sentence}
-      className="mt-0.5 block w-fit text-xs font-medium text-negative underline decoration-negative/40 underline-offset-2 hover:decoration-negative"
-    >
-      {sellRefusalMarker(refusals, timeZone)}
-      <span className="sr-only">. {sentence}</span>
-    </Link>
+    <Hint content={sentence} className="mt-0.5 flex w-fit">
+      <Link
+        to={orderLink(positionId)}
+        className="block w-fit text-xs font-medium text-negative underline decoration-negative/40 underline-offset-2 hover:decoration-negative"
+      >
+        {sellRefusalMarker(refusals, timeZone)}
+      </Link>
+    </Hint>
   )
 }

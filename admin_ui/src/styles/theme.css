@@ -42,6 +42,23 @@
   --chart-compare-2: #e8590c;
   --chart-compare-3: #0d9488;
   --chart-compare-4: #e65ccf;
+  /* Gains and losses by size on a heatmap, from the smallest step to the
+     largest (components/ui/activity-heatmap.tsx). Teal, not the bars' emerald:
+     emerald's and red's paler steps look alike to deuteranopes (dataviz
+     validator, ΔE 3.5 at step 300, 6.5 at 400). Teal 400/500/700/800 against
+     red at the same steps stay 10.3 to 12.8 apart under protanopia and
+     deuteranopia, 23 to 33 for full colour vision, and each side darkens step
+     by step (ΔL >= 0.06). The smallest steps recede towards the card (1.8:1,
+     2.7:1), as the small end of a sequential scale may: every heatmap says its
+     cells' figures in its tooltip, and its page has them as a table. */
+  --chart-gain-1: #2dd4bf;
+  --chart-gain-2: #14b8a6;
+  --chart-gain-3: #0f766e;
+  --chart-gain-4: #115e59;
+  --chart-loss-1: #f87171;
+  --chart-loss-2: #ef4444;
+  --chart-loss-3: #b91c1c;
+  --chart-loss-4: #991b1b;
 
   /* The Pine editor's highlighting (Technical Analysis): text colours, each 4.5:1
      at least on the editor's white surface. */
@@ -79,6 +96,16 @@
   --chart-compare-2: #d95926;
   --chart-compare-3: #199e70;
   --chart-compare-4: #d936d9;
+  /* The same steps the other way: on the dark card the small end is the
+     darkest (2.5:1 and 2.3:1), the large end the brightest. */
+  --chart-gain-1: #115e59;
+  --chart-gain-2: #0f766e;
+  --chart-gain-3: #14b8a6;
+  --chart-gain-4: #2dd4bf;
+  --chart-loss-1: #991b1b;
+  --chart-loss-2: #b91c1c;
+  --chart-loss-3: #ef4444;
+  --chart-loss-4: #f87171;
 
   --code-keyword: #c4b5fd;
   --code-string: #6ee7b7;

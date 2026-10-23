@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
+import { WeekdayHourHeatmap } from '@/components/charts/Heatmaps'
 import { CumulativeProfitChart, DailyProfitChart, DistributionChart, ProfitByGroupChart } from '@/components/charts/PerformanceCharts'
 import { Panel } from '@/components/Panel'
 import { PnlValue, QueryState } from '@/components/status'
@@ -219,7 +220,10 @@ export function WhyPanel({ summary }: { summary: BacktestSummary }) {
   )
 }
 
-type Dimension = keyof BacktestBreakdowns['groups']
+type Dimension = Exclude<keyof BacktestBreakdowns['groups'], 'weekday_hour'>
+
+/** The two at once: a heatmap rather than bars and a table. */
+const WEEKDAY_HOUR = 'weekday_hour'
 
 const DIMENSIONS: { id: Dimension; label: string; key: string; name?: (value: string | number | null) => string }[] = [
   { id: 'hour', label: 'Hour of entry', key: 'hour', name: (value) => `${String(value).padStart(2, '0')}:00` },
@@ -240,7 +244,8 @@ const DIMENSIONS: { id: Dimension; label: string; key: string; name?: (value: st
 
 /** The trades of a run by what could explain them, with the figures of the Exits page. */
 export function BreakdownsPanel({ runId }: { runId: string }) {
-  const [dimension, setDimension] = useState<Dimension>('hour')
+  const [choice, setChoice] = useState<Dimension | typeof WEEKDAY_HOUR>('hour')
+  const dimension: Dimension = choice === WEEKDAY_HOUR ? 'hour' : choice
   const breakdownsQuery = useQuery({
     queryKey: ['backtest-breakdowns', runId],
     queryFn: () => api.backtestBreakdowns(runId),
@@ -256,25 +261,36 @@ export function BreakdownsPanel({ runId }: { runId: string }) {
   return (
     <Panel
       title="Where the result comes from"
-      description="The trades by the hour and the weekday they were bought, their direction, what sold them, their confidence, how long they were held, the turbo's price and its issuer; by their place against the US open and the kind of day they were made on (its volatility among the run's days, its gap, whether it trended, its US open, its macro news)."
+      description="The trades by the hour and the weekday they were bought (and both at once), their direction, what sold them, their confidence, how long they were held, the turbo's price and its issuer; by their place against the US open and the kind of day they were made on (its volatility among the run's days, its gap, whether it trended, its US open, its macro news)."
     >
       <QueryState isPending={breakdownsQuery.isPending} error={breakdownsQuery.error} hasData={!!breakdowns}>
         {breakdowns && (
           <div className="flex flex-col gap-5">
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Trades grouped by">
-              {DIMENSIONS.filter((candidate) => breakdowns.groups[candidate.id]).map((candidate) => (
-                <Button
-                  key={candidate.id}
-                  variant={candidate.id === dimension ? 'primary' : 'outline'}
-                  size="sm"
-                  aria-pressed={candidate.id === dimension}
-                  onClick={() => setDimension(candidate.id)}
-                >
-                  {candidate.label}
-                </Button>
-              ))}
+              {DIMENSIONS.filter((candidate) => breakdowns.groups[candidate.id])
+                .flatMap((candidate) =>
+                  candidate.id === 'weekday' && breakdowns.groups.weekday_hour
+                    ? [candidate, { id: WEEKDAY_HOUR, label: 'Weekday and hour' } as const]
+                    : [candidate],
+                )
+                .map((candidate) => (
+                  <Button
+                    key={candidate.id}
+                    variant={candidate.id === choice ? 'primary' : 'outline'}
+                    size="sm"
+                    aria-pressed={candidate.id === choice}
+                    onClick={() => setChoice(candidate.id)}
+                  >
+                    {candidate.label}
+                  </Button>
+                ))}
             </div>
-            {groups.every((group) => group.trade_count === 0) ? (
+            {choice === WEEKDAY_HOUR ? (
+              <WeekdayHourHeatmap
+                rows={breakdowns.groups.weekday_hour ?? []}
+                label="Profit and loss of the run's trades by weekday and hour of entry"
+              />
+            ) : groups.every((group) => group.trade_count === 0) ? (
               <p className="py-6 text-center text-sm text-muted-foreground">No trade to group.</p>
             ) : (
               <>

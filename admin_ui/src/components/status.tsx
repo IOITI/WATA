@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { AnimatedNumber } from '@/components/ui/animated-number'
 import { Badge } from '@/components/ui/badge'
 import type { BadgeTone } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -54,13 +55,19 @@ export function PnlValue({
   kind,
   currency,
   className,
+  animate = false,
 }: {
   value: number | null | undefined
   kind: 'money' | 'percent'
   currency?: string | null
   className?: string
+  /** Its digits roll to each new value: for a figure that changes in front of the operator. */
+  animate?: boolean
 }) {
   const text = kind === 'money' ? formatMoney(value, currency ?? 'EUR', true) : formatPercent(value, true)
+  if (animate && typeof value === 'number' && Number.isFinite(value)) {
+    return <AnimatedNumber value={value} text={text} className={cn(TONE_TEXT[toneOf(value)], className)} />
+  }
   return <span className={cn('tabular-nums', TONE_TEXT[toneOf(value)], className)}>{text}</span>
 }
 

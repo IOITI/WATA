@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
+import { DayCalendar } from '@/components/charts/Heatmaps'
 import { CumulativeProfitChart, DailyProfitChart, ProfitLossLegend } from '@/components/charts/PerformanceCharts'
 import { DateRangeFilter } from '@/components/DateRangeFilter'
 import { ExportButton } from '@/components/ExportButton'
@@ -221,6 +222,18 @@ export function PerformancePage() {
 
                 <Panel title="Profit and loss per day" action={<ProfitLossLegend />}>
                   <DailyProfitChart days={performance.daily} />
+                </Panel>
+
+                <Panel
+                  title="Calendar"
+                  description="The same days by week, Monday at the top: gains and losses each by size."
+                >
+                  <DayCalendar
+                    daily={performance.daily}
+                    from={performance.from}
+                    to={performance.to}
+                    label="Profit and loss of each day, as a calendar"
+                  />
                 </Panel>
               </>
             )}

@@ -1,60 +1,94 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
 
 import { compareColor, MAX_COMPARED } from '@/components/charts/compare'
 import { CompareCurvesChart, CurvesLegend } from '@/components/charts/PerformanceCharts'
 import { PageHeader, Panel } from '@/components/Panel'
+import { RouterLink } from '@/components/RouterLink'
 import { PnlValue, QueryState } from '@/components/status'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { SmartComparison } from '@/components/ui/smart-comparison'
+import type { ComparisonCategory, ComparisonFeature, ComparisonPlan } from '@/components/ui/smart-comparison'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
 import { formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestRun } from '@/lib/types'
 
-import { assetLabel, compareCurves, comparisonWarnings, differingInputs, differingSettings } from './model'
+import { assetLabel, compareCurves, comparisonWarnings, differingInputs, differingSettings, sourceLabel } from './model'
+import type { DifferingRow } from './model'
 import { BacktestsDisabled } from './parts'
 
 interface Measure {
   label: string
-  cell: (run: BacktestRun) => ReactNode
+  value: (run: BacktestRun) => number | null | undefined
+  show: (value: number | null | undefined) => ReactNode
 }
+
+const count = (value: number | null | undefined) => formatNumber(value)
+const result = (value: number | null | undefined) => <PnlValue value={value} kind="percent" />
 
 const MEASURES: Measure[] = [
-  { label: 'Days tested', cell: (run) => formatNumber(run.summary?.figures?.days) },
-  { label: 'Days with an entry', cell: (run) => formatNumber(run.summary?.figures?.days_with_an_entry) },
-  { label: 'Trades', cell: (run) => formatNumber(run.summary?.figures?.trades) },
-  { label: 'Winning trades', cell: (run) => formatPercent(run.summary?.figures?.win_rate, false, 1) },
-  { label: 'Average win', cell: (run) => <PnlValue value={run.summary?.figures?.average_win} kind="percent" /> },
-  { label: 'Average loss', cell: (run) => <PnlValue value={run.summary?.figures?.average_loss} kind="percent" /> },
-  { label: 'Per trade, on average', cell: (run) => <PnlValue value={run.summary?.figures?.expectancy} kind="percent" /> },
-  { label: 'Won for 1 lost', cell: (run) => formatNumber(run.summary?.figures?.profit_factor, 2) },
-  { label: 'Longest losing streak', cell: (run) => formatNumber(run.summary?.figures?.longest_losing_streak) },
-  { label: 'All days, one on the other', cell: (run) => <PnlValue value={run.summary?.figures?.total_percent} kind="percent" /> },
-  { label: 'Best day', cell: (run) => <PnlValue value={run.summary?.figures?.best_day} kind="percent" /> },
-  { label: 'Worst day', cell: (run) => <PnlValue value={run.summary?.figures?.worst_day} kind="percent" /> },
-  { label: 'Median day', cell: (run) => <PnlValue value={run.summary?.figures?.median_day} kind="percent" /> },
-  { label: 'Worst drawdown', cell: (run) => <PnlValue value={run.summary?.figures?.worst_drawdown} kind="percent" /> },
-  { label: 'In money', cell: (run) => <PnlValue value={run.summary?.money?.profit_loss} kind="money" /> },
-  { label: 'Return on the account', cell: (run) => <PnlValue value={run.summary?.money?.return_percent} kind="percent" /> },
-  { label: 'Average stake', cell: (run) => formatMoney(run.summary?.money?.average_stake, 'EUR') },
-  { label: 'Random runs beaten', cell: (run) => formatPercent(run.summary?.against_random?.beaten, false, 0) },
+  { label: 'Days tested', value: (run) => run.summary?.figures?.days, show: count },
+  { label: 'Days with an entry', value: (run) => run.summary?.figures?.days_with_an_entry, show: count },
+  { label: 'Trades', value: (run) => run.summary?.figures?.trades, show: count },
+  { label: 'Winning trades', value: (run) => run.summary?.figures?.win_rate, show: (value) => formatPercent(value, false, 1) },
+  { label: 'Average win', value: (run) => run.summary?.figures?.average_win, show: result },
+  { label: 'Average loss', value: (run) => run.summary?.figures?.average_loss, show: result },
+  { label: 'Per trade, on average', value: (run) => run.summary?.figures?.expectancy, show: result },
+  { label: 'Won for 1 lost', value: (run) => run.summary?.figures?.profit_factor, show: (value) => formatNumber(value, 2) },
+  { label: 'Longest losing streak', value: (run) => run.summary?.figures?.longest_losing_streak, show: count },
+  { label: 'All days, one on the other', value: (run) => run.summary?.figures?.total_percent, show: result },
+  { label: 'Best day', value: (run) => run.summary?.figures?.best_day, show: result },
+  { label: 'Worst day', value: (run) => run.summary?.figures?.worst_day, show: result },
+  { label: 'Median day', value: (run) => run.summary?.figures?.median_day, show: result },
+  { label: 'Worst drawdown', value: (run) => run.summary?.figures?.worst_drawdown, show: result },
+  { label: 'In money', value: (run) => run.summary?.money?.profit_loss, show: (value) => <PnlValue value={value} kind="money" /> },
+  { label: 'Return on the account', value: (run) => run.summary?.money?.return_percent, show: result },
+  { label: 'Average stake', value: (run) => run.summary?.money?.average_stake, show: (value) => formatMoney(value, 'EUR') },
+  { label: 'Random runs beaten', value: (run) => run.summary?.against_random?.beaten, show: (value) => formatPercent(value, false, 0) },
 ]
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <tr>
-      <th scope="row" className="py-2.5 pr-4 text-left font-normal text-muted-foreground">
-        {label}
-      </th>
-      {children}
-    </tr>
-  )
+/** A row of the matrix whose values are text: compared as they read. */
+function textRow(id: string, name: string, runs: readonly BacktestRun[], texts: readonly string[]): ComparisonFeature {
+  return { id, name, values: Object.fromEntries(runs.map((run, index) => [run.id, texts[index]])) }
 }
 
-function Cell({ children }: { children: ReactNode }) {
-  return <td className="py-2.5 pl-4 text-right tabular-nums">{children}</td>
+/** The matrix (EasyUI's comparison): what each run ran, what they did not share, their figures; "only what differs". */
+function comparisonOf(runs: readonly BacktestRun[], differing: readonly DifferingRow[]): { plans: ComparisonPlan[]; categories: ComparisonCategory[] } {
+  const plans = runs.map((run, index) => ({
+    id: run.id,
+    name: run.name,
+    tagline: sourceLabel(run),
+    price: formatPercent(run.summary?.figures?.total_percent, true),
+    href: `/backtests/${run.id}`,
+    accent: compareColor(index),
+  }))
+  const ran = [
+    textRow('signals', 'Signals', runs, runs.map((run) =>
+      run.request.source.kind === 'pine' ? `${run.request.source.rule.name} v${run.request.source.rule.script.version}` : 'Those WATA received',
+    )),
+    textRow('asset', 'Asset', runs, runs.map((run) => `${assetLabel(run.chart.asset)} · ${barsLabel(run.chart.bars)}`)),
+    textRow('period', 'Period', runs, runs.map((run) => `${formatDay(run.from, false)} to ${formatDay(run.to, false)}`)),
+  ]
+  const figures = MEASURES.map((measure, index) => ({
+    id: `figure-${index}`,
+    name: measure.label,
+    values: Object.fromEntries(runs.map((run) => [run.id, measure.show(measure.value(run))])),
+    // Compared by the figure itself, not by how it is drawn.
+    keys: Object.fromEntries(runs.map((run) => [run.id, String(measure.value(run) ?? '')])),
+  }))
+  return {
+    plans,
+    categories: [
+      { id: 'ran', title: 'What it ran', features: ran },
+      ...(differing.length > 0
+        ? [{ id: 'differs', title: 'What differs', features: differing.map((row) => textRow(`setting-${row.name}`, row.label, runs, row.values)) }]
+        : []),
+      { id: 'figures', title: 'Figures', features: figures },
+    ],
+  }
 }
 
 function Comparison({ runs }: { runs: BacktestRun[] }) {
@@ -62,66 +96,22 @@ function Comparison({ runs }: { runs: BacktestRun[] }) {
   const optionsQuery = useQuery({ queryKey: ['backtest-options'], queryFn: api.backtestOptions, enabled, staleTime: 60_000 })
   const differing = [...differingInputs(runs), ...differingSettings(runs, optionsQuery.data?.fields ?? [])]
   const curves = compareCurves(runs)
+  const { plans, categories } = comparisonOf(runs, differing)
 
   return (
     <>
       <Panel title="Side by side" bodyClassName="pt-2">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr>
-                <th className="py-2 pr-4" />
-                {runs.map((run, index) => (
-                  <th key={run.id} scope="col" className="py-2 pl-4 text-right align-bottom font-medium">
-                    <Link to={`/backtests/${run.id}`} className="inline-flex items-center gap-1.5 underline-offset-4 hover:underline">
-                      <span aria-hidden className="h-0.5 w-4 shrink-0 rounded-full" style={{ backgroundColor: compareColor(index) }} />
-                      {run.name}
-                    </Link>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              <Row label="Signals">
-                {runs.map((run) => (
-                  <Cell key={run.id}>
-                    {run.request.source.kind === 'pine'
-                      ? `${run.request.source.rule.name} v${run.request.source.rule.script.version}`
-                      : 'Those WATA received'}
-                  </Cell>
-                ))}
-              </Row>
-              <Row label="Asset">
-                {runs.map((run) => (
-                  <Cell key={run.id}>
-                    {assetLabel(run.chart.asset)} · {barsLabel(run.chart.bars)}
-                  </Cell>
-                ))}
-              </Row>
-              <Row label="Period">
-                {runs.map((run) => (
-                  <Cell key={run.id}>
-                    {formatDay(run.from, false)} to {formatDay(run.to, false)}
-                  </Cell>
-                ))}
-              </Row>
-              {differing.map((row) => (
-                <Row key={row.name} label={row.label}>
-                  {row.values.map((value, index) => (
-                    <Cell key={runs[index].id}>{value}</Cell>
-                  ))}
-                </Row>
-              ))}
-              {MEASURES.map((measure) => (
-                <Row key={measure.label} label={measure.label}>
-                  {runs.map((run) => (
-                    <Cell key={run.id}>{measure.cell(run)}</Cell>
-                  ))}
-                </Row>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SmartComparison
+          plans={plans}
+          categories={categories}
+          label="The runs side by side"
+          matrixTitle="Runs compared"
+          countLabel={(rows) => `${rows} rows, the total of all days under each run`}
+          searchPlaceholder="Find a row…"
+          diffLabel="Only what differs"
+          emptyText="No row of that name, or none that differs."
+          linkComponent={RouterLink}
+        />
         {differing.length === 0 && optionsQuery.data && (
           <p className="mt-3 text-xs text-muted-foreground">They were made with the same settings and inputs.</p>
         )}

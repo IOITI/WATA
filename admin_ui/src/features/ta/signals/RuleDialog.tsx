@@ -6,6 +6,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
+import { Hint } from '@/components/Hint'
 import { useToast } from '@/components/toast-context'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -215,16 +216,20 @@ function RuleForm({
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-text-secondary">Days of bars before each day</span>
-              <Input
-                type="number"
-                min={0}
-                max={MAX_HISTORY_DAYS}
-                step={1}
-                value={draft.historyDays}
-                placeholder={`The engine’s: ${rules.engine_history_days}`}
-                title="The script runs each day from the engine's restart on the bars of so many days before: fewer for a script that needs little warm-up (it runs faster at each bar), more for one that needs a long one. Empty: the engine's history_days."
-                onChange={(event) => update({ historyDays: event.target.value })}
-              />
+              <Hint
+                content="The script runs each day from the engine's restart on the bars of so many days before: fewer for a script that needs little warm-up (it runs faster at each bar), more for one that needs a long one. Empty: the engine's history_days."
+                className="flex w-full"
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={MAX_HISTORY_DAYS}
+                  step={1}
+                  value={draft.historyDays}
+                  placeholder={`The engine’s: ${rules.engine_history_days}`}
+                  onChange={(event) => update({ historyDays: event.target.value })}
+                />
+              </Hint>
             </label>
           </div>
           <StepProblems problems={problemsOf(1)} />

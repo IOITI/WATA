@@ -24,6 +24,7 @@ from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.admin.prices import Run as PriceRun
 from src.admin.prices import interval_served
 from src.admin.ta_monitor import DELIVERY_STEPS
+from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
 from src.database.postgres import ORDER_REQUEST_COLUMNS, TA_TICK_COLUMNS, AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
@@ -1653,6 +1654,7 @@ class AdminQueries:
                 position_max_performance_percent AS max_performance_percent,
                 position_profit_loss AS profit_loss,
                 EXTRACT(HOUR FROM execution_time_open AT TIME ZONE $1)::int AS open_hour,
+                EXTRACT(ISODOW FROM execution_time_open AT TIME ZONE $1)::int AS open_weekday,
                 EXTRACT(EPOCH FROM (execution_time_close - execution_time_open))::float8 AS holding_seconds
             FROM turbo_data_position
             WHERE {' AND '.join(conditions)}
@@ -1660,7 +1662,8 @@ class AdminQueries:
             """,
             *args,
         )
-        return summarise_exits([_clean_row(row) for row in rows])
+        trades = [_clean_row(row) for row in rows]
+        return {**summarise_exits(trades), "by_weekday_hour": stats_by_weekday_hour(trades, opened_weekday_hour)}
 
     async def report(self, milestones_eur: list[float] | None = None, today: date | None = None) -> dict:
         """

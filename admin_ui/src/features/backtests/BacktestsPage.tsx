@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
 import { ButtonLink } from '@/components/ButtonLink'
+import { Hint } from '@/components/Hint'
 import { PageHeader } from '@/components/Panel'
 import { RouterLink } from '@/components/RouterLink'
 import { ClaudeBadge, PnlValue, QueryState } from '@/components/status'
@@ -111,9 +112,9 @@ function runColumns(
               </Badge>
             ))}
             {row.stale && (
-              <span className="text-warning" title="Made by other code than this admin's: it could come out otherwise today">
-                made with other code
-              </span>
+              <Hint content="Made by other code than this admin's: it could come out otherwise today" wrap>
+                <span className="text-warning">made with other code</span>
+              </Hint>
             )}
           </p>
           <Attempts attempts={earlier.get(row.id) ?? []} timezone={timezone} onRemove={removeAttempts} />

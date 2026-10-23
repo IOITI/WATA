@@ -93,15 +93,20 @@ npx shadcn@latest add Surajmaurya1/easyui/<slug>
 ```
 
 - Source: https://github.com/Surajmaurya1/easyui at commit `4dbc8b18f4ce0f1173807e8ba22e586619d52b3e`
-  (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya. `interactive-timeline`, `not-found` (redesigned
-  since), `scroll-progress-nav` and `selection-basket` at `50effaf67bb4cfcebac4dea7c4ba1fb40812a2cd`
-  (2026-10-23), copied by hand from that commit's `src/components/ui/`: the CLI takes the newest and would offer
+  (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya. `activity-heatmap`, `animated-number`, `combobox`,
+  `directional-tooltip`, `interactive-timeline`, `not-found` (redesigned since), `notification-bell`,
+  `recovery-ledger`, `scroll-progress-nav`, `selection-basket`, `smart-comparison` and `spotlight-search` at
+  `50effaf67bb4cfcebac4dea7c4ba1fb40812a2cd` (2026-10-23), copied by hand from that commit's `src/components/ui/`
+  (`ActivityHeatmap.tsx` is `activity-heatmap.tsx` here, and so on): the CLI takes the newest and would offer
   to overwrite `src/lib/utils.ts` and `src/lib/motion-tokens.ts`, which are the same there.
-- Components in use: `advanced-data-table`, `alert`, `animated-tabs`, `badge`, `breadcrumb`, `button`,
-  `calendar`, `date-picker`, `drag-to-confirm`, `form`, `interactive-timeline`, `loader`, `not-found`,
-  `otp-input`, `scroll-progress-nav`, `selection-basket`, `settle-modal`, `sidebar`, `skeleton`,
-  `smooth-accordion`, `spring-select`, `stepper`, `stretch-switch`, `velocity-toast`.
-- `src/lib/motion-tokens.ts`, `src/lib/utils.ts` and `src/styles/tokens.css` come from it too.
+- Components in use: `activity-heatmap`, `advanced-data-table`, `alert`, `animated-number`, `animated-tabs`,
+  `badge`, `breadcrumb`, `button`, `calendar`, `combobox`, `date-picker`, `directional-tooltip`,
+  `drag-to-confirm`, `form`, `interactive-timeline`, `loader`, `not-found`, `notification-bell`, `otp-input`,
+  `recovery-ledger`, `scroll-progress-nav`, `selection-basket`, `settle-modal`, `sidebar`, `skeleton`,
+  `smart-comparison`, `smooth-accordion`, `spotlight-search`, `spring-select`, `stepper`, `stretch-switch`,
+  `velocity-toast`.
+- `src/lib/motion-tokens.ts`, `src/lib/utils.ts` and `src/styles/tokens.css` come from it too, and
+  `src/lib/chart-primitives.tsx` (the heatmap's, at `50effaf`).
 
 Changes made to the copied files:
 
@@ -173,10 +178,68 @@ Changes made to the copied files:
   rings dropped for the admin's.
 - `selection-basket.tsx`: a `sticky` mode (at the bottom of the screen while its list is on it, resting under
   the list past it, so that it never covers what follows); an action with an `href` is a link drawn by
-  `linkComponent`, and an action can be `disabled` with a `title` saying why; `noun` ("2 runs selected");
+  `linkComponent`, and an action can be `disabled` with a `title` saying why, in a tooltip
+  (`directional-tooltip`) on a wrapper that takes the focus the disabled button cannot; `noun` ("2 runs selected");
   `allSelected` (EasyUI compared the counts, wrong once a search hides a selected row); the count's circle grows
   with three digits; the bar alone scrolls on a narrow screen (an inner scroll cut the focus ring); light values
   for every colour.
+- `notification-bell.tsx` (the top bar's events, `features/live/EventsBell.tsx`): an entry's `detail` (a second
+  line), `href` (a link drawn by `linkComponent`: a plain click marks it read and closes the panel, a click with a
+  modifier is the browser's) and `tone` (its dot's colour; only `danger` pulses, EasyUI pulsed every unread one);
+  a `footer` and a `triggerClassName`; Escape closes the panel and gives the bell the focus again; the panel is a
+  dialog named "Notifications", across the screen under the top bar on a phone (centred on the bell, it went past
+  the edge); light values for every colour.
+- `spotlight-search.tsx` (⌘K, `components/CommandPalette.tsx`): EasyUI's site imports and own entries removed
+  (`GITHUB_URL`, `CATALOG_INDEX`, its callbacks for them); an entry's `href` makes it a link, followed with Enter
+  too (`onNavigate`), and its `keywords` find it; every word typed must be in an entry; `onQueryChange`, `limit`
+  (50 listed, the others found by typing, said under the list) and `label`; a combobox over a listbox with
+  `aria-activedescendant`; the focus given back on closing; each entry shows what it is and its category; light
+  values for every colour.
+- `combobox.tsx` (the long lists of a form: an asset, a sweep's axis): `id` on the trigger for a `<label htmlFor>`
+  (a `<label>` around it passed the clicks on its options to the trigger, which opened again); named by its label,
+  not by its placeholder; placeholder, description and empty text a darker grey in light; its own focus ring
+  dropped for the admin's.
+- `directional-tooltip.tsx` (`components/Hint.tsx` puts it on a control, a disabled one through a wrapper that
+  takes the focus): drawn in `document.body` at fixed coordinates beside its trigger (a table's overflow cut it),
+  on the other side when there is no room, and inside the screen; shown on a tap too, hidden by Escape, a tap
+  elsewhere or a scroll; its arrow points at the trigger's middle, also when the tooltip was moved to stay on the
+  screen; its text always in the page for screen readers (`aria-describedby`), the drawn tooltip hidden from them;
+  nothing drawn, said or added to its trigger when its content is empty, so that a field keeps its wrapper, and
+  its focus, while a hint comes and goes; `wrapperClassName`; long text wraps within the screen; light values for
+  every colour.
+- `recovery-ledger.tsx` (the configuration's previous versions, `features/config/BackupsPanel.tsx`): an entry
+  opens from a button (`aria-expanded`) whose box covers its header (EasyUI's card took clicks only), and one
+  without details does not open; the entry opened can be held by the page (`expandedId`, `onExpandedChange`);
+  `details.content` (any node: the changes a restore would make), `reference` (a name in the footer, the file's),
+  `timestamp` optional, `title`, `countLabel`, `restoreLabel`, `currentLabel`; Restore only calls `onRestore`
+  (the page asks for the slide); an ordered list; the timeline's line through the pips (it ran 5 px to their
+  right); light values for every colour.
+- `smart-comparison.tsx` (runs compared, `features/backtests/ComparePage.tsx`): a table for screen readers (rows,
+  column and row headers, a group per category) drawn as EasyUI's grid, one column per plan whatever their number
+  (EasyUI's grid had three); a plan's `href` (its name a link, `linkComponent`) and `accent` (a colour before its
+  name: the run's on the chart); a feature's `keys`, its values as text for "differences only" (React nodes
+  cannot be compared); `label`, `matrixTitle`, `countLabel`, `searchPlaceholder`, `diffLabel`, `emptyText`; a
+  plan's button only when it does something; `aria-pressed` and `aria-expanded` on the toggles; light values for
+  every colour.
+- `activity-heatmap.tsx` (Performance's calendar, the Exits page's and a run's weekday × hour,
+  `components/charts/Heatmaps.tsx`): `diverging`, signed values on two scales (`--chart-gain-*`,
+  `--chart-loss-*` of `theme.css`), the steps of size counted on gains and losses together, the best and the
+  worst said above it, the legend from the largest loss to the largest gain; `format`, `summary`, `emptyText`
+  (a cell with nothing is not a cell of zero), `legend`; a line under each cell's value (`HeatDay.detail`,
+  `details`); in hours mode, `hours` (the columns), as many rows as `rowLabels`, cells 64 px wide at most (two
+  hours made two bars across the panel); in calendar mode, `startDate` (no day before the period), and the first
+  column's month gives way to the next one when that starts within three weeks; dates as the admin writes them;
+  the best and the worst each on one line; the cell under the pointer found again (EasyUI took the labels' room
+  off twice: a column and a row off); the keyboard starts on the first cell there is (a period that starts
+  mid-week had none where it started, and the keys led nowhere); the admin's focus ring; small text at 4.5:1 in
+  both themes. `src/lib/chart-primitives.tsx`: measured once where there is no `ResizeObserver`
+  (jsdom); excluded from the linter with the copies.
+- `animated-number.tsx` (`PnlValue`'s `animate`: the live values of open positions, the day's profit and loss on
+  the dashboard): `text`, the value in the admin's format (sign, € and %), whose digits roll and the rest stays;
+  read by screen readers as that text, the columns of digits hidden from them (an `aria-label` on a span is not
+  read); plain text when motion is reduced; the tabular figures of the admin's font (EasyUI's monospace digits
+  were 0.58 em wide); every character in a box clipped by `clip-path`, which keeps the text's baseline (with
+  EasyUI's `overflow: hidden`, digits stood higher than a sign beside them); colour inherited (EasyUI's was white).
 - For the light theme, which several components did not have: `form.tsx`, `smooth-accordion.tsx` and
   `loader.tsx` hardcoded dark colours (`bg-[#141414]`, `text-[#FAFAFA]`…); each literal now has a light value
   in front and stays as it was behind `dark:`. `velocity-toast.tsx` (icons), `spring-select.tsx` (error
@@ -194,7 +257,8 @@ adds made-up events) or site-specific imports, and none may load anything from a
 
 Chart colours are in `theme.css`, one set per theme. Each profit and loss pair was checked for colour-blind
 separation and lightness against the card surface of its theme; check a new pair the same way before
-changing it.
+changing it. A heatmap's gains are teal, not the bars' emerald: the paler steps of emerald and red look alike to
+deuteranopes; `theme.css` says what its eight steps were checked for.
 
 ## Lightweight Charts
 

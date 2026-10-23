@@ -29,6 +29,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
 
+import { CommandPalette } from '@/components/CommandPalette'
+import { Hint } from '@/components/Hint'
 import { MainScrollContext } from '@/components/main-scroll-context'
 import { isWidePage, MENU, MENU_SECTIONS, menuEntry } from '@/components/navigation'
 import { PageTrailProvider, TopBarTrail } from '@/components/PageTrail'
@@ -38,7 +40,8 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { Sidebar, SidebarTrigger, useSidebar } from '@/components/ui/sidebar'
 import type { SidebarSection } from '@/components/ui/sidebar'
 import { useAuth, useSession } from '@/features/auth/auth-context'
-import { NotificationToggle } from '@/features/live/NotificationToggle'
+import { EventLogProvider } from '@/features/live/EventLogProvider'
+import { EventsBell } from '@/features/live/EventsBell'
 import { useLiveEvents } from '@/features/live/useLiveEvents'
 import { api } from '@/lib/api'
 import { SAXO_SERVICE_ID } from '@/lib/types'
@@ -92,22 +95,23 @@ interface StateChipProps {
 /**
  * A state the operator must not miss, on whichever page they are: shown only
  * while it applies, and a link to the page where it is dealt with. On a narrow
- * screen the icon stays and the words go to the tooltip.
+ * screen the icon stays and the words are its name; what it means is its hint.
  */
 function StateChip({ to, tone, icon, label, hint }: StateChipProps) {
   return (
-    <Link
-      to={to}
-      title={hint}
-      aria-label={`${label}. ${hint}`}
-      className={cn(
-        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors lg:px-2.5',
-        CHIP_TONE[tone],
-      )}
-    >
-      {icon}
-      <span className="hidden lg:inline">{label}</span>
-    </Link>
+    <Hint content={hint} side="bottom">
+      <Link
+        to={to}
+        aria-label={label}
+        className={cn(
+          'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors lg:px-2.5',
+          CHIP_TONE[tone],
+        )}
+      >
+        {icon}
+        <span className="hidden lg:inline">{label}</span>
+      </Link>
+    </Hint>
   )
 }
 
@@ -146,7 +150,9 @@ function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
 export function AppShell() {
   return (
     <PageTrailProvider>
-      <Shell />
+      <EventLogProvider>
+        <Shell />
+      </EventLogProvider>
     </PageTrailProvider>
   )
 }
@@ -223,18 +229,19 @@ function Shell() {
               />
             )}
           </div>
-          <span
-            className="hidden shrink-0 items-center gap-1.5 text-xs text-muted-foreground sm:flex"
-            title={
-              live
-                ? 'Changes are pushed to this page as they happen'
-                : 'Not receiving live updates: the page refreshes on a timer'
-            }
+          <Hint
+            content={live ? 'Changes are pushed to this page as they happen' : 'Not receiving live updates: the page refreshes on a timer'}
+            side="bottom"
+            wrap
+            className="hidden shrink-0 sm:inline-flex"
           >
-            <span aria-hidden className={live ? 'size-1.5 rounded-full bg-positive' : 'size-1.5 rounded-full bg-chart-muted'} />
-            {live ? 'Live' : 'Polling'}
-          </span>
-          <NotificationToggle />
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span aria-hidden className={live ? 'size-1.5 rounded-full bg-positive' : 'size-1.5 rounded-full bg-chart-muted'} />
+              {live ? 'Live' : 'Polling'}
+            </span>
+          </Hint>
+          <CommandPalette />
+          <EventsBell />
           <ThemeToggle />
           {healthQuery.data && (
             <Link to="/system" className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">

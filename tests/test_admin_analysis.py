@@ -18,9 +18,10 @@ from src.admin.audit import AuditLog
 from src.admin.errors import DatabaseUnavailable
 from src.admin.queries import AdminQueries, json_safe
 from src.admin.timing import read_execution_timings
+from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
 
 
-def _trade(reason, percent, best, profit, hour=9, holding=600):
+def _trade(reason, percent, best, profit, hour=9, holding=600, weekday=1):
     return {
         "action": "long",
         "close_reason": reason,
@@ -28,6 +29,7 @@ def _trade(reason, percent, best, profit, hour=9, holding=600):
         "max_performance_percent": best,
         "profit_loss": profit,
         "open_hour": hour,
+        "open_weekday": weekday,
         "holding_seconds": holding,
     }
 
@@ -97,6 +99,29 @@ def test_exit_summary_of_nothing_and_of_incomplete_trades():
     assert incomplete["summary"]["average_best_percent"] is None
     assert incomplete["by_reason"][0]["reason"] == "Not recorded"
     assert incomplete["by_hour"] == []
+
+
+def test_trades_are_counted_by_the_weekday_and_hour_they_were_opened():
+    trades = [
+        _trade("Explicit Close (All)", 2.0, 3.0, 20.0, hour=15, weekday=2),
+        _trade("Explicit Close (All)", -1.0, 0.5, -10.0, hour=15, weekday=2),
+        _trade("Explicit Close (All)", 1.0, 1.0, 5.0, hour=9, weekday=4),
+        _trade("Explicit Close (All)", 1.0, 1.0, 5.0, hour=9, weekday=1),
+        # Its opening not known: in no group.
+        _trade("Explicit Close (All)", 1.0, 1.0, 5.0, hour=None, weekday=None),
+    ]
+
+    groups = stats_by_weekday_hour(trades, opened_weekday_hour)
+
+    # Only the weekdays and hours that had trades, Monday first.
+    assert [(row["weekday"], row["hour"], row["trade_count"]) for row in groups] == [(1, 9, 1), (2, 15, 2), (4, 9, 1)]
+    tuesday = groups[1]
+    # The figures of every other group (stats_by): the Exits page and a backtest's breakdowns say the same.
+    assert (tuesday["win_rate"], tuesday["profit_loss"], tuesday["average_percent"], tuesday["average_best_percent"]) == (
+        50.0, 10.0, 0.5, 1.75,
+    )
+    assert "opened" not in tuesday
+    assert stats_by_weekday_hour([], opened_weekday_hour) == []
 
 
 # ── queries over the tables the trading services write ──
@@ -215,15 +240,24 @@ def test_non_finite_numbers_are_removed_at_any_depth():
     assert json_safe(value) == {"a": None, "b": [1.5, None, {"c": None}], "d": [2.0], "e": "text"}
 
 
-def test_exits_query_buckets_by_local_day_and_hour():
-    db = FakeDb()
+def test_exits_query_buckets_by_local_day_hour_and_weekday():
+    db = FakeDb(rows={"FROM turbo_data_position": [
+        _trade("Explicit Close (All)", 2.0, 3.0, 20.0, hour=15, weekday=2),
+        _trade("SaxoAPI", -1.0, 0.5, -10.0, hour=15, weekday=2),
+    ]})
 
-    asyncio.run(AdminQueries(db, "Europe/Paris").exits(start=date(2026, 9, 1), end=date(2026, 9, 30)))
+    exits = asyncio.run(AdminQueries(db, "Europe/Paris").exits(start=date(2026, 9, 1), end=date(2026, 9, 30)))
 
     query, args = db.calls[0]
     assert args == ("Europe/Paris", date(2026, 9, 1), date(2026, 9, 30))
-    assert "execution_time_open AT TIME ZONE $1" in query
+    assert "EXTRACT(HOUR FROM execution_time_open AT TIME ZONE $1)::int AS open_hour" in query
+    # ISO: Monday is 1, as the heatmaps read it.
+    assert "EXTRACT(ISODOW FROM execution_time_open AT TIME ZONE $1)::int AS open_weekday" in query
     assert "position_status = 'Closed'" in query
+    assert [(row["weekday"], row["hour"], row["trade_count"], row["profit_loss"]) for row in exits["by_weekday_hour"]] == [
+        (2, 15, 2, 10.0),
+    ]
+    assert exits["summary"]["trade_count"] == 2
 
 
 # ── execution timings ──

@@ -43,6 +43,11 @@ export function assetHref(asset: Pick<PriceInstrument, 'ref'>): string {
   return `${ASSETS_PATH}/${asset.ref}`
 }
 
+/** What else an asset is found by when typed: its key, symbol and indice, a turbo's knock-out level written plain ("24150"). */
+export function assetKeywords(asset: Pick<PriceInstrument, 'key' | 'symbol' | 'indice' | 'barrier'>): string[] {
+  return [asset.key, asset.symbol ?? '', asset.indice ?? '', asset.barrier === null ? '' : String(asset.barrier)].filter(Boolean)
+}
+
 /** The day of the trading timezone a moment (epoch seconds) falls on. */
 export function dayOf(epoch: number, timeZone: string): string {
   return todayIn(timeZone, new Date(epoch * 1000))
