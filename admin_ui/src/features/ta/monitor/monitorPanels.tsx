@@ -47,6 +47,8 @@ const MEMORY_COLORS: Record<string, string> = {
   shadow_rss_mb: 'var(--chart-compare-3)',
   engine_rss_mb: 'var(--chart-compare-4)',
 }
+// The run charts measure runs: a bar of time in which no rule had a new bar (on range bars, a quiet price) has none.
+const NO_NEW_BAR = 'Where the line breaks, no rule had a new bar to run: nothing was measured then.'
 const SIGNAL_BARS: SeriesLine[] = [
   { key: 'sent', label: 'Sent', color: 'var(--chart-positive)' },
   { key: 'not_sent', label: 'Not sent', color: 'var(--chart-negative)' },
@@ -292,7 +294,7 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
       <div className="grid gap-x-8 gap-y-10 lg:grid-cols-2">
         <ChartCard
           title="Run time"
-          description={`${chosen ? ruleName(chosen) : 'Every rule'}: the runner's time over each new bar; its limit ${limitText(runLimit)}.`}
+          description={`${chosen ? ruleName(chosen) : 'Every rule'}: the runner's time over each new bar; its limit ${limitText(runLimit)}. ${NO_NEW_BAR}`}
         >
           <TimeSeriesChart
             points={runs}
@@ -308,7 +310,7 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
         </ChartCard>
         <ChartCard
           title="Bar close → signals done"
-          description={`How long after a bar closed its run had journaled and sent its signals; a live signal is refused past ${limitText(limits.max_signal_age_ms)}.`}
+          description={`How long after a bar closed its run had journaled and sent its signals; a live signal is refused past ${limitText(limits.max_signal_age_ms)}. ${NO_NEW_BAR}`}
         >
           <TimeSeriesChart
             points={runs}

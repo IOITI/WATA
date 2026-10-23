@@ -138,6 +138,13 @@ describe('the Engine monitor', () => {
     expect(screen.getByText('journaled in shadow')).toBeInTheDocument()
   })
 
+  it('says, under the charts of the runs, that a break in their lines is a time without a new bar', async () => {
+    renderPage()
+
+    const said = await screen.findAllByText(/Where the line breaks, no rule had a new bar to run: nothing was measured then\./)
+    expect(said).toHaveLength(2)
+  })
+
   it('sets out the delivery of the live signals step by step, and what became of them', async () => {
     renderPage()
     const steps = await screen.findByText("Bar close → the engine's tick")

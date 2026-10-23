@@ -21,6 +21,7 @@ The TA engine ran a rule's script over all of its bars at each new one. On the s
 - **Each rule's runs say how many continued its run**, and its checks against a whole run: how many, the longest, and the last difference (the Rules table).
 - **A new check of the last 15 minutes, "Continued runs as whole runs"**, fails when a whole run gave otherwise than a live rule's continued run, and health says it; a shadow rule's difference is a note.
 - **The ticks that checked a continued run are left out of "Ticks on time"**, as those that loaded a rule are: a whole run more, by design.
+- **The charts of the runs say what a break in their lines is**: a time in which no rule had a new bar to run, so nothing was measured. On range bars, a quiet price: on 23 October between 10:52 and 11:55 in Paris, the only minutes without an R60 bar of US100 were 11:03 and 11:14, where the lines broke.
 - The checks are kept in their tick's `figures.checks` (`ta_engine_tick`); a run's continuation in its row's `figures` (`ta_rule_run`, which the engine now writes).
 
 **Deploying it:** nothing to set. `package.sh` builds the runner again.
