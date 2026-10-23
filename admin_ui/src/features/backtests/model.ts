@@ -112,6 +112,16 @@ export function dayStatusLabel(status: BacktestDayStatus, turbos: BacktestTurbos
   return turbos === 'modelled' && status === 'no_recorded_turbos' ? 'No price of the index' : DAY_STATUS_LABEL[status]
 }
 
+/** What a run's page and its day's say when the address names no run. */
+export const RUN_NOT_FOUND = {
+  title: 'No such backtest',
+  description: 'No run has this address: it may have been removed, or the address is mistyped.',
+  suggestions: [
+    { label: 'Backtests', href: '/backtests', description: 'Every run kept' },
+    { label: 'New backtest', href: '/backtests/new', description: 'A strategy on the recorded turbos' },
+  ],
+}
+
 export const PROVIDER_LABEL: Record<BacktestAsset['provider'], string> = {
   capital: 'Capital.com',
   dukascopy: 'Dukascopy',

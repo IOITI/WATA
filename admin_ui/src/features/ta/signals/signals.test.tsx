@@ -138,6 +138,8 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
         const changed = rules.find((entry) => entry.id === mode[1])!
         return json({ rule: { ...changed, mode: (body as { mode: TaRule['mode'] }).mode }, revision: 'r2' })
       }
+      const one = /^\/api\/ta\/rules\/([0-9a-f]+)$/.exec(url.pathname)
+      if (one && method === 'DELETE') return json(null, 204)
       if (url.pathname === '/api/ta/scripts') return json({ items: [CROSS] })
       if (url.pathname === `/api/ta/scripts/${CROSS.id}/versions/1`) return json({ ...CROSS.versions[0], source: SOURCE })
       if (url.pathname === '/api/ta/engine') return json(ENGINE)
@@ -323,20 +325,29 @@ describe('the Signal rules page', () => {
 
     await user.click(await screen.findByRole('button', { name: 'New rule' }))
     const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    // Four steps: the script first, then its market, its inputs and alerts, and the review.
+    const steps = within(within(dialog).getByRole('list', { name: 'Progress' })).getAllByRole('listitem')
+    expect(steps.map((entry) => entry.textContent)).toEqual([
+      '1Scriptwhat it runs', '2Marketits bars, its indice', '3Inputs and alertswhat makes a signal', '4Review',
+    ])
+    expect(within(dialog).getByRole('combobox', { name: 'Script' })).toHaveValue(CROSS.id)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     // Bars of seconds too, any other length typed, or range bars.
-    const bars = within(dialog).getByRole('combobox', { name: 'Bars' })
+    const bars = await within(dialog).findByRole('combobox', { name: 'Bars' })
     expect(within(bars).getAllByRole('option').map((option) => option.textContent)).toEqual([
       '10 s', '20 s', '30 s', '45 s', '1 min', '5 min', '15 min', '1 hour', 'Other length…', 'Range bars',
     ])
     await user.selectOptions(bars, '10S')
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     const fast = await within(dialog).findByRole('spinbutton', { name: 'Fast' })
     await user.clear(fast)
     await user.type(fast, '12')
     expect(within(dialog).getByText('Its message says long.')).toBeInTheDocument()
     await user.selectOptions(within(dialog).getByRole('combobox', { name: 'What “Up” becomes' }), 'message')
     await user.selectOptions(within(dialog).getByRole('combobox', { name: 'What “Down” becomes' }), 'short')
-    await user.click(within(dialog).getByRole('button', { name: 'Review' }))
-    await user.click(await within(dialog).findByRole('button', { name: 'Make the rule' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(await within(dialog).findByText('The new rule, in shadow:')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Make the rule' }))
 
     await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/ta/rules')).toBe(true))
     const made = sent.find((request) => request.method === 'POST' && request.path === '/api/ta/rules')!.body
@@ -367,11 +378,13 @@ describe('the Signal rules page', () => {
     renderPage(SESSION, `/ta/signals?from-run=${FROM_RUN.id}`)
 
     const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
-    expect(within(dialog).getByRole('combobox', { name: 'Bars' })).toHaveValue('range')
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(await within(dialog).findByRole('combobox', { name: 'Bars' })).toHaveValue('range')
     // 6 points: R6000 on Dukascopy's us100 (0.001), R60 on Capital.com's US100 (0.1).
     expect(within(dialog).getByRole('spinbutton', { name: 'Range, in steps of the price' })).toHaveValue(60)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     expect(await within(dialog).findByRole('spinbutton', { name: 'Fast' })).toHaveValue(12)
-    await user.click(within(dialog).getByRole('button', { name: 'Review' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     await user.click(await within(dialog).findByRole('button', { name: 'Make the rule' }))
 
     await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/ta/rules')).toBe(true))
@@ -395,5 +408,160 @@ describe('the Signal rules page', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
     expect(within(dialog).getByRole('combobox', { name: 'Script' })).toHaveValue(CROSS.id)
     expect(within(dialog).getByRole('textbox', { name: 'Name' })).toHaveValue('Cross on US100')
+  })
+})
+
+describe('the rules chosen together', () => {
+  const choose = async (user: ReturnType<typeof userEvent.setup>, ...names: string[]) => {
+    for (const name of names) await user.click(await screen.findByRole('checkbox', { name: `Select ${name}` }))
+    return within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' }))
+  }
+
+  it('switches them off one after the other, each with the revision the last answer gave; a live rule has no box', async () => {
+    const user = userEvent.setup()
+    rules = [rule(), rule({ id: 'dddddddddddd', name: 'Second' }), rule({ id: 'eeeeeeeeeeee', name: 'Live one', mode: 'live' })]
+    renderPage()
+
+    expect(await screen.findByRole('checkbox', { name: 'Select Cross on US100' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Select Live one' })).not.toBeInTheDocument()
+    // The journal's signals are records: nothing to choose there.
+    expect(screen.queryByRole('checkbox', { name: /^Select row/ })).not.toBeInTheDocument()
+    const basket = await choose(user, 'Cross on US100', 'Second')
+    expect(basket.getByText('rules selected')).toBeInTheDocument()
+    // Both are in shadow already.
+    expect(basket.getByRole('button', { name: 'Switch to shadow' })).toBeDisabled()
+    await user.click(basket.getByRole('button', { name: 'Switch off' }))
+
+    expect(await screen.findByText('2 rules switched off')).toBeInTheDocument()
+    const switched = sent.filter((request) => request.method === 'POST' && request.path.endsWith('/mode'))
+    expect(switched.map((request) => [request.path, request.body])).toEqual([
+      ['/api/ta/rules/aaaaaaaaaaaa/mode', { mode: 'off', revision: 'r1' }],
+      ['/api/ta/rules/dddddddddddd/mode', { mode: 'off', revision: 'r2' }],
+    ])
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions toolbar' })).not.toBeInTheDocument())
+  })
+
+  it('has nothing to choose when every rule is live', async () => {
+    rules = [rule({ mode: 'live' })]
+    renderPage()
+
+    expect(await screen.findByRole('checkbox', { name: 'Select all rows' })).toBeDisabled()
+    expect(screen.queryByRole('checkbox', { name: 'Select Cross on US100' })).not.toBeInTheDocument()
+  })
+
+  it('stops at the first refusal, and says how far it went', async () => {
+    const user = userEvent.setup()
+    rules = [rule({ mode: 'off' }), rule({ id: 'dddddddddddd', name: 'Second', mode: 'off' })]
+    serve({ modeError: { status: 409, detail: 'The rules changed meanwhile (revision r0, not r1)' } })
+    renderPage()
+
+    const basket = await choose(user, 'Cross on US100', 'Second')
+    await user.click(basket.getByRole('button', { name: 'Switch to shadow' }))
+
+    expect(await screen.findByText(/^Stopped after 0 of 2: The rules changed since this page read them/)).toBeInTheDocument()
+    expect(sent.filter((request) => request.method === 'POST' && request.path.endsWith('/mode'))).toHaveLength(1)
+  })
+
+  it('deletes them once asked, reading the rules again between two', async () => {
+    const user = userEvent.setup()
+    rules = [rule(), rule({ id: 'dddddddddddd', name: 'Second' })]
+    renderPage()
+
+    const basket = await choose(user, 'Cross on US100', 'Second')
+    await user.click(basket.getByRole('button', { name: 'Delete 2' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Delete 2 rules?' })
+    expect(within(dialog).getByText('Second')).toBeInTheDocument()
+    const before = sent.length
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('2 rules deleted')).toBeInTheDocument()
+    const asked = sent.slice(before).filter((request) => request.method === 'DELETE' || request.path === '/api/ta/rules')
+    expect(asked.slice(0, 3).map((request) => `${request.method} ${request.path}`)).toEqual([
+      'DELETE /api/ta/rules/aaaaaaaaaaaa?revision=r1',
+      'GET /api/ta/rules',
+      'DELETE /api/ta/rules/dddddddddddd?revision=r1',
+    ])
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete 2 rules?' })).not.toBeInTheDocument())
+  })
+})
+
+describe('the rule dialog, step by step', () => {
+  it('says what is wrong under its step, and on the review what is left, each leading back to its step', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'New rule' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    // The name a new rule is given is the existing rule's: said under the step it is on.
+    expect(within(dialog).getByText('A rule named “Cross on US100” already exists.')).toBeInTheDocument()
+    for (let step = 0; step < 3; step += 1) await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(await within(dialog).findByText('Before it can be made:')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Make the rule' })).toBeDisabled()
+    await user.click(within(dialog).getByRole('button', { name: 'Script' }))
+    const name = await within(dialog).findByRole('textbox', { name: 'Name' })
+    await user.clear(name)
+    await user.type(name, 'Cross, fast')
+    expect(within(dialog).queryByText(/already exists/)).not.toBeInTheDocument()
+    for (let step = 0; step < 3; step += 1) await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(await within(dialog).findByRole('button', { name: 'Make the rule' })).toBeEnabled()
+    expect(within(dialog).queryByText('Before it can be made:')).not.toBeInTheDocument()
+  })
+
+  it('keeps what was typed when it goes back a step', async () => {
+    const user = userEvent.setup()
+    rules = []
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'New rule' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    await user.clear(within(dialog).getByRole('textbox', { name: 'Name' }))
+    await user.type(within(dialog).getByRole('textbox', { name: 'Name' }), 'Mine')
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.selectOptions(await within(dialog).findByRole('combobox', { name: 'Bars' }), '10S')
+    await user.click(within(dialog).getByRole('button', { name: 'Back' }))
+
+    expect(await within(dialog).findByRole('textbox', { name: 'Name' })).toHaveValue('Mine')
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(await within(dialog).findByRole('combobox', { name: 'Bars' })).toHaveValue('10S')
+  })
+
+  it('opens an edit at its start, with nothing to save until something changes', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Edit Cross on US100' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Signal rule: Cross on US100' })
+    expect(within(dialog).getByRole('textbox', { name: 'Name' })).toHaveValue('Cross on US100')
+    for (let step = 0; step < 3; step += 1) await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(await within(dialog).findByText('0 changes to the rule.')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('opens a newer version of the script on its inputs and alerts, and newer libraries on the review', async () => {
+    const user = userEvent.setup()
+    rules = [
+      rule({ latest: { script: 2, libraries: {} } }),
+      rule({
+        id: 'dddddddddddd', name: 'Cross with helpers',
+        libraries: [{ id: 'eeeeeeeeeeee', version: 1, sha256: 'y', name: 'Helpers' }],
+        latest: { script: 1, libraries: { Helpers: 2 } },
+      }),
+    ]
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Run v2' }))
+    let dialog = await screen.findByRole('dialog', { name: 'Signal rule: Cross on US100' })
+    const current = () => within(within(dialog).getByRole('list', { name: 'Progress' })).getAllByRole('listitem').find((step) => step.getAttribute('aria-current') === 'step')
+    expect(current()).toHaveTextContent('Inputs and alerts')
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }))
+
+    await user.click(await screen.findByRole('button', { name: 'Run Helpers v2' }))
+    dialog = await screen.findByRole('dialog', { name: 'Signal rule: Cross with helpers' })
+    expect(current()).toHaveTextContent('Review')
+    expect(within(dialog).getByText('The libraries it imports run at their current versions.')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled()
   })
 })

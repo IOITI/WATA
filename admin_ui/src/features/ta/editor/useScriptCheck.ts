@@ -5,7 +5,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useState } from 'react'
 
-import { api, ApiError } from '@/lib/api'
+import { api, isNotFound } from '@/lib/api'
 
 import type { LibraryResolver } from '../engine/prepare'
 import { PineWorkerClient } from '../engine/pineWorkerClient'
@@ -70,7 +70,7 @@ export function useLibraryResolver(): LibraryResolver {
         })
         return { id: library.id, name: library.library_name ?? name, version: library.version, source: library.source }
       } catch (error) {
-        if (error instanceof ApiError && error.status === 404) return null
+        if (isNotFound(error)) return null
         throw error
       }
     },

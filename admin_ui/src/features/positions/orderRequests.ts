@@ -184,11 +184,16 @@ export function sellRefusalsOf(requests: OrderRequest[] = []): SellRefusals | nu
   }
 }
 
-/** The line under an open position's name: "Sell refused ×37 · 14:04:30". */
-export function sellRefusalMarker(refusals: SellRefusals, timeZone: string): string {
+/** What became of a position's sells, counted: "Sell refused ×37". */
+export function sellRefusalLabel(refusals: SellRefusals): string {
   const what = refusals.outcome === 'refused' ? 'Sell refused' : refusals.outcome === 'no_answer' ? 'Sell not answered' : 'Sell failed'
   const count = refusals.count > 1 ? ` ×${formatNumber(refusals.count)}` : ''
-  return `${what}${count} · ${formatTime(refusals.last_at, timeZone)}`
+  return `${what}${count}`
+}
+
+/** The line under an open position's name: "Sell refused ×37 · 14:04:30". */
+export function sellRefusalMarker(refusals: SellRefusals, timeZone: string): string {
+  return `${sellRefusalLabel(refusals)} · ${formatTime(refusals.last_at, timeZone)}`
 }
 
 /** What a position's details say first while Saxo does not take its sells. */

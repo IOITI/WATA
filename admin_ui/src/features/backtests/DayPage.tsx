@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
+import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader, Panel } from '@/components/Panel'
 import { ActionBadge, PnlValue, QueryState } from '@/components/status'
 import { useTheme } from '@/components/theme-context'
@@ -16,13 +17,13 @@ import type { ChartModel } from '@/features/prices/chartModel'
 import { PriceChart } from '@/features/prices/PriceChart'
 import { timeframeOf } from '@/features/ta/engine/timeframes'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
-import { api } from '@/lib/api'
+import { api, isNotFound } from '@/lib/api'
 import { formatDay, formatMoney, formatNumber, formatPercent, formatTime } from '@/lib/format'
 import type { BacktestChart, BacktestRun, BacktestSignal, BacktestTrade } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { signalMarkers, tradeFocus, tradeMarkers } from './dayChart'
-import { assetLabel, dayStatusLabel, heldFor } from './model'
+import { assetLabel, dayStatusLabel, heldFor, RUN_NOT_FOUND } from './model'
 import { BacktestsDisabled, Measure } from './parts'
 import { SignalsTable, TradesTable } from './runTables'
 import { exitSettings, tradeLevels, tradeOverlays } from './tradeChart'
@@ -322,6 +323,22 @@ export function DayPage() {
       detail.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
     }
   }, [selected])
+
+  if (isNotFound(runQuery.error)) return <NotFoundState {...RUN_NOT_FOUND} />
+  // A day the run's days do not list: outside its period, or no day at all.
+  if (run && daysQuery.data && !record) {
+    return (
+      <NotFoundState
+        title="No such day"
+        description={`${run.name} covers ${formatDay(run.from)} to ${formatDay(run.to)}: the address names another day.`}
+        parents={[{ label: run.name, href: `/backtests/${runId}` }]}
+        suggestions={[
+          { label: run.name, href: `/backtests/${runId}`, description: 'The run and its days' },
+          { label: 'Backtests', href: '/backtests', description: 'Every run kept' },
+        ]}
+      />
+    )
+  }
 
   return (
     <>

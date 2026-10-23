@@ -202,8 +202,20 @@ describe('where the page is, in the top bar', () => {
 
     expect(isCurrent(await wholeTrail().findByText('Page not found'))).toBe(true)
     expect(wholeTrail().getByRole('link', { name: 'Positions' })).toHaveAttribute('href', '/positions')
-    // The way out is a link too.
+    expect(screen.getByRole('heading', { level: 1, name: 'There is no page here.' })).toBeInTheDocument()
+    expect(screen.getByText('/positions/nothing')).toBeInTheDocument()
+    expect(document.title).toBe('Page not found · WATA Admin')
+    // The way out is a link too, and so is the page of the menu the address was under.
     expect(screen.getByRole('link', { name: 'Back to the dashboard' })).toHaveAttribute('href', '/')
+    const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
+    expect(suggestions.getByRole('link', { name: /^Positions/ })).toHaveAttribute('href', '/positions')
+  })
+
+  it('suggests nothing for an address under no page of the menu', async () => {
+    renderShell({ path: '/nowhere' })
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'There is no page here.' })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Helpful links' })).not.toBeInTheDocument()
   })
 })
 

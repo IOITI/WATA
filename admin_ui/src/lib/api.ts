@@ -92,6 +92,11 @@ export class ApiError extends Error {
   }
 }
 
+/** The server has nothing of that name: a run, a script, an asset… named by the address. */
+export function isNotFound(error: unknown): error is ApiError & { status: 404 } {
+  return error instanceof ApiError && error.status === 404
+}
+
 type UnauthorizedListener = () => void
 let onUnauthorized: UnauthorizedListener | null = null
 

@@ -55,27 +55,8 @@ export function VerdictPanel({ run }: { run: BacktestRun }) {
   )
 }
 
+/** A part of a long run's page, as the nav at its top lists it (each an anchor the checks above lead to). */
 export interface PageSection {
   id: string
   label: string
-}
-
-/**
- * The parts of a long run's page, as links that jump to them (or open them in
- * another tab, at their place): it stays at the top while the page scrolls, from
- * a tablet up.
- */
-export function SectionIndex({ sections }: { sections: readonly PageSection[] }) {
-  return (
-    <nav
-      aria-label="Parts of this page"
-      className="-mx-4 flex flex-wrap gap-x-4 gap-y-1 border-b border-border/60 bg-background/95 px-4 py-2 text-xs backdrop-blur sm:-mx-6 sm:px-6 md:sticky md:top-0 md:z-10"
-    >
-      {sections.map((section) => (
-        <a key={section.id} href={`#${section.id}`} className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
-          {section.label}
-        </a>
-      ))}
-    </nav>
-  )
 }

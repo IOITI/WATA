@@ -157,6 +157,8 @@ export function SignalJournal({ rules, timeZone }: { rules: TaRule[]; timeZone: 
           columns={columns}
           getRowId={(row) => String(row.id)}
           defaultPageSize={20}
+          // Records: nothing to do with several at once.
+          selectable={false}
         />
       </QueryState>
     </Panel>

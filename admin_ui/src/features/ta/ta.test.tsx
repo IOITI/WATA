@@ -307,3 +307,16 @@ describe('the script editor', () => {
     expect(sent.find((request) => request.method === 'POST')?.body).toMatchObject({ name: 'MyLibrary' })
   })
 })
+
+describe('an address that names no script', () => {
+  it('says there is no such script, with the way to the scripts', async () => {
+    serve()
+    renderAt('/ta/indicators/fedcba987654')
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such script' })).toBeInTheDocument()
+    expect(document.title).toBe('No such script · WATA Admin')
+    const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
+    expect(suggestions.getByRole('link', { name: /^Indicators/ })).toHaveAttribute('href', '/ta/indicators')
+    expect(suggestions.getByRole('link', { name: /^New script/ })).toHaveAttribute('href', '/ta/indicators/new')
+  })
+})

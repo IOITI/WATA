@@ -228,25 +228,34 @@ export function ruleFields(draft: RuleDraft, meta: IPineInput[] | null): TaRuleF
   }
 }
 
-/** What stops a draft from being saved, in the words of its fields. */
-export function draftProblems(draft: RuleDraft, otherNames: string[]): string[] {
-  const problems: string[] = []
+/** The steps of the rule's dialog whose fields a draft's checks read: what it runs, and the market it runs on. */
+export type RuleStep = 'script' | 'market'
+
+export interface RuleProblem {
+  step: RuleStep
+  text: string
+}
+
+/** What stops a draft from being saved, in the words of its fields, each with the step of the dialog they are on. */
+export function draftProblems(draft: RuleDraft, otherNames: string[]): RuleProblem[] {
+  const problems: RuleProblem[] = []
+  const say = (step: RuleStep, text: string) => problems.push({ step, text })
   const name = draft.name.trim()
-  if (!name) problems.push('The rule needs a name.')
+  if (!name) say('script', 'The rule needs a name.')
   else if (otherNames.some((other) => other.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-    problems.push(`A rule named “${name}” already exists.`)
+    say('script', `A rule named “${name}” already exists.`)
   }
-  if (!draft.scriptId) problems.push('Choose the script it runs.')
-  if (!draft.epic) problems.push('Choose the asset it runs on.')
+  if (!draft.scriptId) say('script', 'Choose the script it runs.')
+  if (!draft.epic) say('market', 'Choose the asset it runs on.')
   if (draft.barsType === 'range') {
     const ticks = Number(draft.ticks)
-    if (!Number.isInteger(ticks) || ticks < 1 || ticks > MAX_RANGE_TICKS) problems.push(`Range bars are 1 to ${MAX_RANGE_TICKS} ticks.`)
+    if (!Number.isInteger(ticks) || ticks < 1 || ticks > MAX_RANGE_TICKS) say('market', `Range bars are 1 to ${MAX_RANGE_TICKS} ticks.`)
   }
-  if (!INDICE.test(draft.indice)) problems.push('Choose the indice its signals are for.')
+  if (!INDICE.test(draft.indice)) say('market', 'Choose the indice its signals are for.')
   if (draft.historyDays.trim() !== '') {
     const days = Number(draft.historyDays)
     if (!Number.isInteger(days) || days < 0 || days > MAX_HISTORY_DAYS) {
-      problems.push(`Its history is 0 to ${MAX_HISTORY_DAYS} days, or left empty for the engine’s.`)
+      say('market', `Its history is 0 to ${MAX_HISTORY_DAYS} days, or left empty for the engine’s.`)
     }
   }
   return problems

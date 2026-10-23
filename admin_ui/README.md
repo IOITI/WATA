@@ -93,10 +93,14 @@ npx shadcn@latest add Surajmaurya1/easyui/<slug>
 ```
 
 - Source: https://github.com/Surajmaurya1/easyui at commit `4dbc8b18f4ce0f1173807e8ba22e586619d52b3e`
-  (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya.
+  (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya. `interactive-timeline`, `not-found` (redesigned
+  since), `scroll-progress-nav` and `selection-basket` at `50effaf67bb4cfcebac4dea7c4ba1fb40812a2cd`
+  (2026-10-23), copied by hand from that commit's `src/components/ui/`: the CLI takes the newest and would offer
+  to overwrite `src/lib/utils.ts` and `src/lib/motion-tokens.ts`, which are the same there.
 - Components in use: `advanced-data-table`, `alert`, `animated-tabs`, `badge`, `breadcrumb`, `button`,
-  `calendar`, `date-picker`, `drag-to-confirm`, `form`, `loader`, `not-found`, `otp-input`, `settle-modal`,
-  `sidebar`, `skeleton`, `smooth-accordion`, `spring-select`, `stepper`, `stretch-switch`, `velocity-toast`.
+  `calendar`, `date-picker`, `drag-to-confirm`, `form`, `interactive-timeline`, `loader`, `not-found`,
+  `otp-input`, `scroll-progress-nav`, `selection-basket`, `settle-modal`, `sidebar`, `skeleton`,
+  `smooth-accordion`, `spring-select`, `stepper`, `stretch-switch`, `velocity-toast`.
 - `src/lib/motion-tokens.ts`, `src/lib/utils.ts` and `src/styles/tokens.css` come from it too.
 
 Changes made to the copied files:
@@ -107,7 +111,11 @@ Changes made to the copied files:
   cells padded 20 px instead of 24, so that the seven columns of the closed positions fit a 1440 px screen;
   `initialSearch` and `initialExpandedRowIds`, for a link that lands on one row found and opened (an order
   from its position, a position from its order: `?find=<id>`); `initialFilters`, for a link that opens the
-  table filtered (the Assets View from a provider); `expandOnRowClick` (a click anywhere on a row opens it,
+  table filtered (the Assets View from a provider); a selection the page holds (`selectedRowIds` with
+  `onSelectionChange`), `isRowSelectable` (a row that cannot be chosen has no box, and the header's box leaves it
+  out, disabled when no row of the page can be chosen), `selectionBasket` (the bulk actions in `selection-basket` after the table's frame, outside its
+  `overflow-hidden`, its "All" every selectable row the search and filters leave, on every page; the table's own
+  counter and bar not shown then) and each row's box named after `rowLabel`; `expandOnRowClick` (a click anywhere on a row opens it,
   except on a link, a button, a field or the end of a selection of its text; the arrow stays for the
   keyboard), `singleExpand` (one row open at a time) and `rowLabel` (each arrow named after its row, "Open
   …", instead of all of them "Expand row details"); a search goes back to the first page, where what it
@@ -143,8 +151,32 @@ Changes made to the copied files:
   (`aria-labelledby`, `aria-describedby`); it had no name, so a screen reader only said "switch, on".
 - `form.tsx`, `animated-tabs.tsx`, `smooth-accordion.tsx`: the literal grey `#6B6B6B` (3.6:1 on the dark
   surface) replaced by `text-muted-foreground`; hints at 12 px instead of 11.
-- `not-found.tsx`: import of `./button` in lower case, as the file is named (the original casing only
-  resolves on case-insensitive file systems).
+- `not-found.tsx` (EasyUI's 404 of 2026-10-23): a `<section>` named by its heading, not a `<main>` (the shell
+  has one), drawn in the page's area rather than filling the screen; no `<title>` or `<meta name="robots">` (the
+  page names the tab as every page does, `useTabTitle`; nothing behind the login is indexed); light values for the
+  text, the heading's gradient, the address chip, the buttons and the suggestions; its own white focus ring dropped
+  for the admin's; `ResizeObserver` and `matchMedia` used only where they exist (jsdom has neither). The
+  admin's pages show it through `components/NotFoundState.tsx`.
+- `scroll-progress-nav.tsx`: a part with an `href` is a link: a plain click scrolls to it and writes it in the
+  address in place (`history.replaceState`, no step more to go back through), a click with ⌘, Ctrl, Shift or
+  Alt is the browser's (`isPlainClick`); a part is scrolled into view in its container too, so that its
+  `scroll-margin-top` keeps it clear of a sticky nav (EasyUI scrolled the container to 20 px of its top, under the
+  nav), at once when motion is reduced; from a tablet up the parts are a row that scrolls sideways when wider than
+  the page, the current one kept in it, with room for the focus ring (ten parts do not fit at 1,280 px); the
+  phone's menu centred under the pill and as wide as its longest part; `aria-current` on the current part,
+  `aria-expanded` on the phone's toggle, the parts' numbers hidden from screen readers, and a `label` (default
+  "Table of contents"); light values for every colour.
+- `interactive-timeline.tsx`: a `warning` status (amber); the status badge only for an item with a
+  `statusLabel` (EasyUI printed the raw status on every item); `defaultExpandedIds`; a `label` that names the list,
+  and no landmark region (a page of orders opens several); an item with nothing but its title and time has no
+  fold (EasyUI drew an empty footer under it); its note wraps; light values for every colour, its white focus
+  rings dropped for the admin's.
+- `selection-basket.tsx`: a `sticky` mode (at the bottom of the screen while its list is on it, resting under
+  the list past it, so that it never covers what follows); an action with an `href` is a link drawn by
+  `linkComponent`, and an action can be `disabled` with a `title` saying why; `noun` ("2 runs selected");
+  `allSelected` (EasyUI compared the counts, wrong once a search hides a selected row); the count's circle grows
+  with three digits; the bar alone scrolls on a narrow screen (an inner scroll cut the focus ring); light values
+  for every colour.
 - For the light theme, which several components did not have: `form.tsx`, `smooth-accordion.tsx` and
   `loader.tsx` hardcoded dark colours (`bg-[#141414]`, `text-[#FAFAFA]`…); each literal now has a light value
   in front and stays as it was behind `dark:`. `velocity-toast.tsx` (icons), `spring-select.tsx` (error

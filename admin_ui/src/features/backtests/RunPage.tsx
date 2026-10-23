@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Flag, Pencil, Radar, RotateCcw, Square, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
 import { KpiTile } from '@/components/KpiTile'
+import { useMainScroll } from '@/components/main-scroll-context'
+import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader, Panel } from '@/components/Panel'
 import { RouterLink } from '@/components/RouterLink'
 import { PnlValue, QueryState } from '@/components/status'
@@ -13,10 +15,11 @@ import { AnimatedTabs } from '@/components/ui/animated-tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/form'
+import { ScrollProgressNav } from '@/components/ui/scroll-progress-nav'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
-import { api } from '@/lib/api'
+import { api, isNotFound } from '@/lib/api'
 import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestRun } from '@/lib/types'
 
@@ -25,6 +28,7 @@ import {
   daysSentence,
   isActive,
   progressSentence,
+  RUN_NOT_FOUND,
   settingChanges,
   sourceLabel,
 } from './model'
@@ -38,10 +42,10 @@ import { choiceTrust } from './robustness'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { underlyingLabel } from './turboModel'
-import { SectionIndex, VerdictPanel } from './VerdictPanel'
+import { VerdictPanel } from './VerdictPanel'
 import type { PageSection } from './VerdictPanel'
 
-/** Where a part of the page starts when a link of the index leads to it: below the index, which stays at the top. */
+/** Where a part of the page starts when the nav leads to it: below the nav, which stays at the top. */
 const ANCHORED = 'scroll-mt-14'
 
 /** The parts of a done run's page, in their order: what the index lists, each an anchor. */
@@ -244,13 +248,21 @@ export function RunPage() {
   const summary = run?.summary
   const figures = summary?.figures
   const money = summary?.money
-  const sections = run ? runSections(run) : []
+  const sections = useMemo(() => (run ? runSections(run) : []), [run])
+  // Numbered as the nav shows them, each a link to its place (`#edge`), which can be opened in another tab.
+  const parts = useMemo(
+    () => sections.map((section, index) => ({ ...section, index: String(index + 1).padStart(2, '0'), href: `#${section.id}` })),
+    [sections],
+  )
+  const scroller = useMainScroll()
 
   // An address that names a part of the page (#edge) is brought to it once the run is drawn.
   const drawn = sections.length > 0
   useEffect(() => {
     if (drawn && hash) document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView?.()
   }, [drawn, hash])
+
+  if (isNotFound(runQuery.error)) return <NotFoundState {...RUN_NOT_FOUND} />
 
   return (
     <>
@@ -355,7 +367,9 @@ export function RunPage() {
                 </Alert>
               )}
 
-              {sections.length > 0 && <SectionIndex sections={sections} />}
+              {parts.length > 0 && (
+                <ScrollProgressNav mode="sticky" containerRef={scroller ?? undefined} label="Parts of this page" sections={parts} />
+              )}
 
               {done && summary && run.kind === 'sweep' && (
                 <>

@@ -6,12 +6,13 @@ import { Link, useSearchParams } from 'react-router'
 import { MAX_COMPARED } from '@/components/charts/compare'
 import { ButtonLink } from '@/components/ButtonLink'
 import { PageHeader } from '@/components/Panel'
+import { RouterLink } from '@/components/RouterLink'
 import { ClaudeBadge, PnlValue, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox, Select } from '@/components/ui/form'
+import { Select } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
@@ -72,24 +73,16 @@ function RunFilters({
   )
 }
 
+/** A run that waits or runs can neither be compared nor removed: it has no box. */
+const selectableRun = (run: BacktestRunListed) => !isActive(run.status.state)
+const runName = (run: BacktestRunListed) => run.name
+
 function runColumns(
   timezone: string,
-  selected: ReadonlySet<string>,
-  toggle: (runId: string) => void,
   earlier: ReadonlyMap<string, BacktestRunListed[]>,
   removeAttempts: (attempts: BacktestRunListed[]) => void,
 ): ColumnDef<BacktestRunListed>[] {
   return [
-    {
-      id: 'select',
-      header: 'Select',
-      width: '5rem',
-      cell: ({ row }) =>
-        // A run that waits or runs can neither be compared nor removed.
-        isActive(row.status.state) ? null : (
-          <Checkbox aria-label={`Select: ${row.name}`} checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
-        ),
-    },
     {
       id: 'run',
       header: 'Backtest',
@@ -260,7 +253,8 @@ export function BacktestsPage() {
       { replace: true },
     )
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
-  const [removing, setRemoving] = useState(false)
+  // The runs the removal dialog is about: those selected, or a run's earlier failed attempts.
+  const [removing, setRemoving] = useState<BacktestRunListed[] | null>(null)
   const [clearing, setClearing] = useState(false)
 
   const runsQuery = useQuery({
@@ -283,38 +277,30 @@ export function BacktestsPage() {
 
   const columns = useMemo(
     () =>
-      runColumns(
-        timezone,
-        selected,
-        (runId) =>
-          setSelected((current) => {
-            const next = new Set(current)
-            if (!next.delete(runId)) next.add(runId)
-            return next
-          }),
-        earlier,
-        (attempts) => {
-          removeMutation.reset()
-          setSelected(new Set(attempts.map((attempt) => attempt.id)))
-          setRemoving(true)
-        },
-      ),
+      runColumns(timezone, earlier, (attempts) => {
+        removeMutation.reset()
+        setRemoving(attempts)
+      }),
     // The mutation's reset is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone, selected, earlier],
+    [timezone, earlier],
   )
-  // A run removed meanwhile is no longer selected.
-  const chosen = (runs ?? []).filter((run) => selected.has(run.id))
-  const compared = comparable(runs ?? [], selected)
+  // A run removed meanwhile, or now waiting or running, is no longer selected.
+  const chosen = useMemo(() => (runs ?? []).filter((run) => selected.has(run.id) && selectableRun(run)), [runs, selected])
+  const chosenIds = useMemo(() => new Set(chosen.map((run) => run.id)), [chosen])
+  const compared = comparable(runs ?? [], chosenIds)
   const canCompare = compared.length >= 2 && compared.length <= MAX_COMPARED
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtests'] })
   const removeMutation = useMutation({
-    mutationFn: () => api.removeBacktests(chosen.map((run) => run.id)),
+    mutationFn: (ids: string[]) => api.removeBacktests(ids),
     onSuccess: (outcome) => {
       void refresh()
-      setSelected(new Set(outcome.kept.map((entry) => entry.id)))
-      if (outcome.kept.length === 0) setRemoving(false)
+      // What was removed is no longer selected; what could not be stays in the dialog, with why.
+      const removed = new Set(outcome.removed)
+      const kept = new Set(outcome.kept.map((entry) => entry.id))
+      setSelected((current) => new Set([...current].filter((id) => !removed.has(id))))
+      setRemoving(kept.size === 0 ? null : (current) => current?.filter((run) => kept.has(run.id)) ?? null)
     },
   })
   const clearMutation = useMutation({
@@ -333,26 +319,6 @@ export function BacktestsPage() {
         actions={
           enabled && (
             <>
-              <Button
-                variant="outline"
-                size="sm"
-                leftIcon={<Trash2 className="size-3.5" />}
-                disabled={chosen.length === 0}
-                onClick={() => {
-                  removeMutation.reset()
-                  setRemoving(true)
-                }}
-              >
-                Remove{chosen.length > 0 ? ` ${chosen.length}` : ''}
-              </Button>
-              <ButtonLink
-                to={canCompare ? `/backtests/compare?runs=${compared.map((run) => run.id).join(',')}` : null}
-                variant="outline"
-                size="sm"
-                leftIcon={<Columns3 className="size-3.5" />}
-              >
-                Compare{canCompare ? ` ${compared.length}` : ''}
-              </ButtonLink>
               <ButtonLink to="/backtests/experiments" variant="outline" size="sm" leftIcon={<FlaskConical className="size-3.5" />}>
                 Experiments
               </ButtonLink>
@@ -386,7 +352,34 @@ export function BacktestsPage() {
                   columns={columns}
                   getRowId={(row) => row.id}
                   defaultPageSize={10}
-                  selectable={false}
+                  rowLabel={runName}
+                  isRowSelectable={selectableRun}
+                  selectedRowIds={chosenIds}
+                  onSelectionChange={setSelected}
+                  selectionBasket={{
+                    noun: ['run', 'runs'],
+                    linkComponent: RouterLink,
+                    actions: [
+                      {
+                        id: 'compare',
+                        label: canCompare ? `Compare ${compared.length}` : 'Compare',
+                        icon: <Columns3 className="size-3.5" />,
+                        href: canCompare ? `/backtests/compare?runs=${compared.map((run) => run.id).join(',')}` : undefined,
+                        disabled: !canCompare,
+                        title: canCompare ? undefined : `Two to ${MAX_COMPARED} finished runs can be compared`,
+                      },
+                      {
+                        id: 'remove',
+                        label: `Remove ${chosen.length}`,
+                        icon: <Trash2 className="size-3.5" />,
+                        variant: 'danger',
+                        onClick: () => {
+                          removeMutation.reset()
+                          setRemoving(chosen)
+                        },
+                      },
+                    ],
+                  }}
                 />
                 <p className="text-xs text-muted-foreground">
                   Every trade buys a turbo the price recorder kept, at its recorded ask, and sells it at its recorded bid.
@@ -409,11 +402,6 @@ export function BacktestsPage() {
                         </Button>
                       </>
                     )}
-                    {selected.size > 0 && (
-                      <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-                        Select none
-                      </Button>
-                    )}
                   </div>
                 )}
                 <ResearchFiles />
@@ -426,16 +414,21 @@ export function BacktestsPage() {
       )}
 
       <SettleModal
-        open={removing}
-        onClose={() => setRemoving(false)}
-        title={`Remove ${chosen.length} backtest${chosen.length === 1 ? '' : 's'}?`}
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        title={`Remove ${removing?.length ?? 0} backtest${removing?.length === 1 ? '' : 's'}?`}
         size="sm"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setRemoving(false)}>
+            <Button variant="ghost" size="sm" onClick={() => setRemoving(null)}>
               Keep them
             </Button>
-            <Button variant="destructive" size="sm" isLoading={removeMutation.isPending} onClick={() => removeMutation.mutate()}>
+            <Button
+              variant="destructive"
+              size="sm"
+              isLoading={removeMutation.isPending}
+              onClick={() => removing && removeMutation.mutate(removing.map((run) => run.id))}
+            >
               Remove
             </Button>
           </>
@@ -445,7 +438,7 @@ export function BacktestsPage() {
           Their signals, trades and days are deleted from the server. The recorded prices they ran on are kept.
         </p>
         <ul className="mt-3 flex max-h-48 flex-col gap-1 overflow-auto text-sm">
-          {chosen.map((run) => (
+          {(removing ?? []).map((run) => (
             <li key={run.id} className="truncate">
               {run.name}
             </li>

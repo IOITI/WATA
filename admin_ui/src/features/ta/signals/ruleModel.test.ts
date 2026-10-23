@@ -97,16 +97,17 @@ describe('a signal rule', () => {
   it('says what stops a draft from being saved', () => {
     const draft = newDraft(undefined, undefined, [])
 
+    // Each said on the step of the dialog its field is on.
     expect(draftProblems(draft, [])).toEqual([
-      'The rule needs a name.',
-      'Choose the script it runs.',
-      'Choose the asset it runs on.',
-      'Choose the indice its signals are for.',
+      { step: 'script', text: 'The rule needs a name.' },
+      { step: 'script', text: 'Choose the script it runs.' },
+      { step: 'market', text: 'Choose the asset it runs on.' },
+      { step: 'market', text: 'Choose the indice its signals are for.' },
     ])
     const taken = { ...draftOfRule(rule()), name: 'cross ON us100', barsType: 'range' as const, ticks: '0' }
     expect(draftProblems(taken, ['Cross on US100'])).toEqual([
-      'A rule named “cross ON us100” already exists.',
-      'Range bars are 1 to 100000 ticks.',
+      { step: 'script', text: 'A rule named “cross ON us100” already exists.' },
+      { step: 'market', text: 'Range bars are 1 to 100000 ticks.' },
     ])
   })
 
@@ -155,7 +156,7 @@ describe('a signal rule', () => {
     ])
     expect([historyLabel(1), historyLabel(3), historyLabel(undefined)]).toEqual(['1 day', '3 days', 'The engine’s'])
     for (const typed of ['31', '1.5', '-1', 'two']) {
-      expect(draftProblems({ ...own, historyDays: typed }, [])).toEqual(['Its history is 0 to 30 days, or left empty for the engine’s.'])
+      expect(draftProblems({ ...own, historyDays: typed }, [])).toEqual([{ step: 'market', text: 'Its history is 0 to 30 days, or left empty for the engine’s.' }])
     }
   })
 })

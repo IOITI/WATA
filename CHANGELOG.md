@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.31.0 - Admin: EasyUI's 404, a run's parts as a nav, a rule in steps, timelines, a selection basket
+
+**Release date:** not released yet
+
+Five of EasyUI's components where the user asked for them. The admin interface only: nothing the trading services, the TA engine or the server's routes do changes.
+
+- **Every page whose address names nothing shows EasyUI's new 404** (a frosted folder over an orange "404", redesigned since the copy of 11 October): the address that was asked, the way to the dashboard and back, and up to three pages it may have meant. Besides the router's catch-all (which suggests the page of the menu the address was under), a backtest, a day it did not cover, a script, an asset or a provider that does not exist now say so in it, named in the top bar's trail ("Backtests › No such backtest") and the tab, where they showed "Could not load" or a panel of their own. `/data/providers/constructor` no longer reads as a provider.
+- **A run's parts are a nav that follows the scroll** (EasyUI's `scroll-progress-nav`): numbered, the part being read lit, a line of how far down the page is, a way back to the top. It stays at the top of the page, on a phone too as the part being read and a menu of the others. Each part is still a link (`#edge`), opened in another tab at its place; a click scrolls to it and puts it in the address without a step more to go back through. Trades, Signals and Days stay tabs.
+- **A signal rule is made in four steps** (EasyUI's `stepper`, as a backtest is): the script, its market (asset, bars, indice, days of history), its inputs and alerts, then the review, unchanged. What is wrong is said under its step; the review lists what is left, each leading back to its step, and the rule is made only once nothing is. Changing a rule takes the same steps. "Run v3" opens on the inputs and alerts, what a new version may change; "Run Helpers v2" on the review.
+- **An order's moments are a timeline** (EasyUI's `interactive-timeline`), on the Orders page: each step's moment and note, open; what went wrong in red, what did not end as it should in amber; the first of them, or else the last step, picked out. **A position's events are one timeline**: the moments of the order that opened it, the sells Saxo did not take, then those of the order that closed it, each marked Entry or Exit, under the two orders' lines and sentences.
+- **What is selected in the backtests and the signal rules is in a basket** (EasyUI's `selection-basket`) that stays at the bottom of the screen while the list is on it: how many, all of them (every row the search and filters leave, on every page), none, and what can be done with them.
+  - Backtests: Compare (a link, from two to four finished runs) and Remove, which leave the top of the page. A run that waits or runs has no box, as before.
+  - Signal rules: Switch off, Switch to shadow, Delete (after a confirmation that lists them). One rule after the other, each with the revision the last answer gave; the first refusal stops it and says how far it went. A live rule has no box: going live, or leaving it, stays one rule at a time with its confirmation. The table's boxes did nothing until now; the header's is disabled while no rule of the page can be chosen.
+  - The signal journal's rows lose their boxes: records, with nothing to do with several at once (they did nothing either).
+
+My calls: the 404's way back uses the admin's own buttons; a live rule and a waiting run cannot be selected; a newer script version opens the rule on its inputs and alerts. The components were copied from EasyUI's commit `50effaf` of 23 October and given a light theme, links where they lead elsewhere and the admin's focus ring (`admin_ui/README.md` lists each change).
+
+**Verification status:**
+- 947 interface tests pass, 22 of them new (the not-found pages and their trail, the nav's parts and a click on one, the rule's steps and where each start opens, the bulk changes of rules with their revisions and a refusal, the basket of runs, the table's held selection, the timelines' steps); lint, type checks and the build are clean. No Python changed; the Pine runner and checker are untouched.
+- In a browser against the fake admin, light and dark at 1,440 px and a phone's 375 px: the 404 of an unknown address, backtest, script, asset and provider (trail, tab, address, suggestions); a run's nav (all ten parts fit at 1,440 px, the part being read lit as the page scrolls, a click puts `#curves` in the address and lands the part just under the nav, the phone's pill and menu, nothing scrolling sideways); a rule made through the four steps, two rules switched off then deleted from the basket, a live rule without a box; two runs removed from the basket, Compare disabled with its reason; a position's timeline and an order's, one that gave no position in red.
+- Not seen: the smooth scroll itself (the browser pane was hidden, which stops a page's animations: where a part lands was checked with an instant scroll), Compare as a link with two finished runs (the tests cover it), the basket in the dark theme, a position's refused sells in a browser (the tests cover them), the server.
+
 ## v0.30.0 - Technical Analysis: each new bar continues its rule's run
 
 **Release date:** not released yet

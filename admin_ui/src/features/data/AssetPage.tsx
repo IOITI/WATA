@@ -2,6 +2,7 @@ import { keepPreviousData, skipToken, useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
+import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader, Panel } from '@/components/Panel'
 import { RouterLink } from '@/components/RouterLink'
 import { QueryState } from '@/components/status'
@@ -15,7 +16,7 @@ import { availabilityOf } from '@/features/prices/availability'
 import { daysBetween, instrumentLabel, todayIn } from '@/features/prices/chartData'
 import { parseView, periodPresets, viewParams, withPeriod } from '@/features/prices/view'
 import type { ChartView } from '@/features/prices/view'
-import { api, ApiError } from '@/lib/api'
+import { api, isNotFound } from '@/lib/api'
 import { formatDay, toIsoDay } from '@/lib/format'
 import type { AssetDetails } from '@/lib/types'
 
@@ -23,7 +24,7 @@ import { assetTicker, chartsPath } from '@/features/ta/chartLinks'
 import { tickerText } from '@/features/ta/engine/tickers'
 
 import { AssetChart } from './AssetChart'
-import { ASSETS_PATH, PROVIDER_LABELS } from './assets'
+import { ASSETS_PATH, PROVIDER_LABELS, PROVIDERS_PATH } from './assets'
 import { DetailsTab } from './DetailsTab'
 import { QualityTab } from './QualityTab'
 import { StatisticsTab } from './StatisticsTab'
@@ -100,19 +101,14 @@ function PeriodFilter({ view, anchor, today, onChange }: PeriodFilterProps) {
 
 function NotFound({ refused }: { refused: string }) {
   return (
-    <>
-      <PageHeader title="No such asset" />
-      <Panel title="This asset is not stored">
-        <p className="text-sm text-muted-foreground">
-          {refused} Its prices may have been dropped by the recorder&rsquo;s retention, or the address is not one of an
-          asset.{' '}
-          <Link to={ASSETS_PATH} className="text-foreground underline underline-offset-2">
-            Every asset stored
-          </Link>{' '}
-          is on the Assets View.
-        </p>
-      </Panel>
-    </>
+    <NotFoundState
+      title="No such asset"
+      description={`${refused} Its prices may have been dropped by the recorder’s retention, or the address is not one of an asset.`}
+      suggestions={[
+        { label: 'Assets View', href: ASSETS_PATH, description: 'Every asset stored' },
+        { label: 'Providers', href: PROVIDERS_PATH, description: 'Where the prices come from' },
+      ]}
+    />
   )
 }
 
@@ -127,7 +123,7 @@ export function AssetPage() {
   const ref = `${provider}/${key}`
   const detailsQuery = useQuery({ queryKey: ['data-asset', ref], queryFn: () => api.asset(ref) })
 
-  if (detailsQuery.error instanceof ApiError && detailsQuery.error.status === 404) {
+  if (isNotFound(detailsQuery.error)) {
     return <NotFound refused={detailsQuery.error.message.endsWith('.') ? detailsQuery.error.message : `${detailsQuery.error.message}.`} />
   }
   return (

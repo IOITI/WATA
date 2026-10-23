@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 
 import { trailFor } from './navigation'
@@ -35,6 +35,16 @@ export function usePageName(title: string, parents?: Crumb[]) {
     publisher.publish(named)
     return () => publisher.publish((current) => (current === named ? null : current))
   }, [publisher, title, parentsKey])
+}
+
+/** The tab says which page it is: several are often open side by side. */
+export function useTabTitle(title: string) {
+  useEffect(() => {
+    document.title = `${title} · WATA Admin`
+    return () => {
+      document.title = 'WATA Admin'
+    }
+  }, [title])
 }
 
 /** The trail of the page shown, after Home. */

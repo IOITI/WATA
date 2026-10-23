@@ -1,8 +1,7 @@
-import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 
 import type { Crumb } from '@/components/navigation'
-import { usePageName } from '@/components/page-trail-context'
+import { usePageName, useTabTitle } from '@/components/page-trail-context'
 import { cn } from '@/lib/utils'
 
 interface PanelProps {
@@ -58,14 +57,7 @@ interface PageHeaderProps {
  */
 export function PageHeader({ title, description, actions, parents }: PageHeaderProps) {
   usePageName(title, parents)
-
-  // The tab says which page it is: several are often open side by side.
-  useEffect(() => {
-    document.title = `${title} · WATA Admin`
-    return () => {
-      document.title = 'WATA Admin'
-    }
-  }, [title])
+  useTabTitle(title)
 
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">

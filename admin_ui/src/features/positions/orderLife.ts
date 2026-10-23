@@ -1,7 +1,8 @@
-import { formatNumber, formatWait } from '@/lib/format'
-import type { Order, Refusal } from '@/lib/types'
+import type { TimelineItem, TimelineStatus } from '@/components/ui/interactive-timeline'
+import { formatClock, formatNumber, formatWait } from '@/lib/format'
+import type { Order, Refusal, SellRefusals } from '@/lib/types'
 
-import { answerText } from './orderRequests'
+import { answerText, sellRefusalLabel } from './orderRequests'
 
 /**
  * What became of an order, read from what the service that sent it kept: the
@@ -178,10 +179,15 @@ function cancellation(order: Order): LifeStep | null {
   }
 }
 
+/** Attempts Saxo did not take, counted over the time they took: "37 attempts over 4 min". */
+function attemptsOver(count: number, firstAt: string | null, lastAt: string | null): string {
+  const span = between(firstAt, lastAt)
+  const attempts = count === 1 ? '1 attempt' : `${formatNumber(count)} attempts`
+  return `${attempts}${span != null && span > 0 ? ` over ${formatWait(span)}` : ''}`
+}
+
 /** The sells of the same position Saxo refused before taking this one. */
 function refusedBefore(refusal: Refusal): LifeStep {
-  const span = between(refusal.first_at, refusal.last_at)
-  const attempts = refusal.count === 1 ? '1 attempt' : `${formatNumber(refusal.count)} attempts`
   const answer =
     refusal.answers.length === 1 ? answerText(refusal.answers[0]) : `${refusal.answers.length} different answers`
   return {
@@ -189,7 +195,20 @@ function refusedBefore(refusal: Refusal): LifeStep {
     label: refusal.count === 1 ? 'Refused by Saxo' : `Refused by Saxo ×${formatNumber(refusal.count)}`,
     at: refusal.first_at,
     clock: 'wata',
-    note: `${attempts}${span != null && span > 0 ? ` over ${formatWait(span)}` : ''}: ${answer}`,
+    note: `${attemptsOver(refusal.count, refusal.first_at, refusal.last_at)}: ${answer}`,
+    tone: 'danger',
+  }
+}
+
+/** A position's sells Saxo did not take, from its requests: their last answer is all they keep of what Saxo said. */
+function sellsRefused(refusals: SellRefusals): LifeStep {
+  const answer = answerText(refusals)
+  return {
+    key: 'sells-refused',
+    label: sellRefusalLabel(refusals),
+    at: refusals.first_at,
+    clock: 'wata',
+    note: refusals.count === 1 ? answer : `${attemptsOver(refusals.count, refusals.first_at, refusals.last_at)}, the last answered: ${answer}`,
     tone: 'danger',
   }
 }
@@ -354,6 +373,47 @@ export function orderLife(order: Order, refusal: Refusal | null = null): OrderLi
   const result = orderResult(order)
   const life = tracked ? trackedLife(order, purpose, result, refusal) : untrackedLife(order, purpose)
   return { purpose, tracked, result, tookMs: tookMs(order), ...life }
+}
+
+function statusOf(step: LifeStep): TimelineStatus {
+  if (step.tone === 'danger') return 'failed'
+  if (step.tone === 'warning') return 'warning'
+  return 'completed'
+}
+
+/**
+ * Steps as the timeline draws them: the moment on the clock it was read on (a
+ * dash for a step without one), the note under it. Ids are prefixed by the order
+ * when a timeline holds several; the tag says which order of a position a step is of.
+ */
+export function timelineItems(steps: LifeStep[], timeZone: string, { prefix = '', tag }: { prefix?: string; tag?: string } = {}): TimelineItem[] {
+  return steps.map((step) => ({
+    id: `${prefix}${step.key}`,
+    title: step.label,
+    timestamp: formatClock(step.at, timeZone),
+    status: statusOf(step),
+    ...(step.note ? { description: step.note } : {}),
+    ...(tag ? { tag } : {}),
+  }))
+}
+
+/** The step a timeline is opened on: the first that went wrong, else the last. */
+export function stepToLookAt(items: TimelineItem[]): string | undefined {
+  return (items.find((item) => item.status === 'failed' || item.status === 'warning') ?? items[items.length - 1])?.id
+}
+
+/**
+ * What happened to a position, on one line: the moments of the orders that
+ * opened it, the sells Saxo did not take, then the moments of the orders that
+ * closed it, each marked Entry or Exit.
+ */
+export function positionTimeline(opening: Order[], closing: Order[], refusals: SellRefusals | null, timeZone: string): TimelineItem[] {
+  const ofOrder = (order: Order, tag: string) => timelineItems(orderLife(order).steps, timeZone, { prefix: `${order.order_id}-`, tag })
+  return [
+    ...opening.flatMap((order) => ofOrder(order, 'Entry')),
+    ...(refusals ? timelineItems([sellsRefused(refusals)], timeZone, { tag: 'Exit' }) : []),
+    ...closing.flatMap((order) => ofOrder(order, 'Exit')),
+  ]
 }
 
 /**

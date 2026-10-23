@@ -20,6 +20,8 @@ import {
   List,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { SelectionBasket } from './selection-basket';
+import type { SelectionActionItem } from './selection-basket';
 
 // =============================================================================
 // DESIGN SYSTEM CONSTANTS & SPRING TOKENS
@@ -74,10 +76,16 @@ export interface DataTableContextValue<T = any> {
   clearFilters: () => void;
   // Selection
   selectable: boolean;
-  selectedRowIds: Set<string>;
+  selectedRowIds: ReadonlySet<string>;
+  /** WATA: whether a row can be selected (a box of its own, counted by "select all"). */
+  isRowSelectable: (row: T) => boolean;
+  /** WATA: the bulk actions are in the selection basket under the table. */
+  selectionBasket?: DataTableSelectionBasket;
   toggleRowSelection: (id: string) => void;
   toggleSelectAll: () => void;
   isAllSelected: boolean;
+  /** WATA: whether a row of the page can be selected at all (the header's box is disabled otherwise). */
+  canSelectPage: boolean;
   isIndeterminate: boolean;
   // Expandable Rows
   expandedRowIds: Set<string>;
@@ -136,6 +144,7 @@ export const DataTableToolbar: React.FC<DataTableToolbarProps> = ({
     searchTerm,
     setSearchTerm,
     selectedRowIds,
+    selectionBasket,
     columns,
     hiddenColumnIds,
     toggleColumnVisibility,
@@ -144,7 +153,8 @@ export const DataTableToolbar: React.FC<DataTableToolbarProps> = ({
   } = useDataTable();
 
   const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
-  const selectedCount = selectedRowIds.size;
+  // WATA: the selection basket says what is selected and what can be done with it: said once.
+  const selectedCount = selectionBasket ? 0 : selectedRowIds.size;
   const shouldReduceMotion = useReducedMotion();
 
   return (
@@ -370,9 +380,11 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
     handleSort,
     selectable,
     selectedRowIds,
+    isRowSelectable,
     toggleRowSelection,
     toggleSelectAll,
     isAllSelected,
+    canSelectPage,
     isIndeterminate,
     expandedRowIds,
     toggleRowExpansion,
@@ -400,6 +412,11 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
     const name = rowLabel ? rowLabel(row) : null;
     if (name) return isExpanded ? `Close ${name}` : `Open ${name}`;
     return isExpanded ? 'Collapse row details' : 'Expand row details';
+  };
+  // WATA: a row's box named after the row, as its arrow is.
+  const selectLabel = (row: any, rowId: string) => {
+    const name = rowLabel ? rowLabel(row) : null;
+    return name ? `Select ${name}` : `Select row ${rowId}`;
   };
 
   const visibleColumns = useMemo(
@@ -488,12 +505,12 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-                  {selectable && (
+                  {selectable && isRowSelectable(row) && (
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleRowSelection(rowId)}
-                      aria-label={`Select row ${rowId}`}
+                      aria-label={selectLabel(row, rowId)}
                       className="rounded border-border accent-foreground cursor-pointer w-4 h-4 shrink-0"
                     />
                   )}
@@ -575,8 +592,9 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
                     if (el) el.indeterminate = isIndeterminate;
                   }}
                   onChange={toggleSelectAll}
+                  disabled={!canSelectPage}
                   aria-label="Select all rows"
-                  className="rounded border-border accent-foreground cursor-pointer w-4 h-4"
+                  className="rounded border-border accent-foreground cursor-pointer w-4 h-4 disabled:cursor-not-allowed disabled:opacity-40"
                 />
               </th>
             )}
@@ -643,13 +661,15 @@ export const DataTableContent: React.FC<DataTableContentProps> = ({
                   {/* Checkbox Cell */}
                   {selectable && (
                     <td className="w-10 sm:w-12 px-3.5 sm:px-6 py-3 sm:py-3.5">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleRowSelection(rowId)}
-                        aria-label={`Select row ${rowId}`}
-                        className="rounded border-border accent-foreground cursor-pointer w-4 h-4"
-                      />
+                      {isRowSelectable(row) && (
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRowSelection(rowId)}
+                          aria-label={selectLabel(row, rowId)}
+                          className="rounded border-border accent-foreground cursor-pointer w-4 h-4"
+                        />
+                      )}
                     </td>
                   )}
 
@@ -835,6 +855,14 @@ export const DataTablePagination: React.FC<DataTablePaginationProps> = ({
 // ROOT COMPOUND CONTAINER & CONTEXT PROVIDER
 // =============================================================================
 
+/** WATA: what the selection basket of a table offers, and what it calls a row. */
+export interface DataTableSelectionBasket {
+  noun: [string, string];
+  actions: SelectionActionItem[];
+  /** What draws an action that leads to another page (React Router's link). */
+  linkComponent?: React.ElementType;
+}
+
 export interface DataTableProps<T = any> {
   data: T[];
   columns: ColumnDef<T>[];
@@ -844,6 +872,13 @@ export interface DataTableProps<T = any> {
   accentColor?: string;
   /** Row checkboxes for bulk actions (default true). */
   selectable?: boolean;
+  /** WATA: a selection the page holds, told of each change; without it the table keeps its own. */
+  selectedRowIds?: ReadonlySet<string>;
+  onSelectionChange?: (ids: Set<string>) => void;
+  /** WATA: the rows that can be selected; the others have no box, and "select all" leaves them out. */
+  isRowSelectable?: (row: T) => boolean;
+  /** WATA: the bulk actions, in EasyUI's selection basket under the table once a row is selected. */
+  selectionBasket?: DataTableSelectionBasket;
   renderSubComponent?: (row: T) => React.ReactNode;
   /** WATA: what the search holds when the table appears (a link to one row). */
   initialSearch?: string;
@@ -871,6 +906,10 @@ export function DataTable<T = any>({
   defaultViewMode = 'auto',
   accentColor,
   selectable = true,
+  selectedRowIds: heldSelection,
+  onSelectionChange,
+  isRowSelectable = () => true,
+  selectionBasket,
   renderSubComponent,
   initialSearch = '',
   initialExpandedRowIds,
@@ -910,7 +949,13 @@ export function DataTable<T = any>({
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const [searchTerm, setSearchTermState] = useState(initialSearch);
   const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>(() => initialFilters ?? {});
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const [ownSelection, setOwnSelection] = useState<ReadonlySet<string>>(new Set());
+  // WATA: the page's selection when it holds one, the table's own otherwise.
+  const selectedRowIds: ReadonlySet<string> = heldSelection ?? ownSelection;
+  const setSelectedRowIds = (change: (prev: ReadonlySet<string>) => Set<string>) => {
+    if (heldSelection && onSelectionChange) onSelectionChange(change(heldSelection));
+    else setOwnSelection((prev) => change(prev));
+  };
   const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(() => new Set(initialExpandedRowIds));
   const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(
     () => new Set(columns.filter((column) => column.defaultHidden).map((column) => column.id))
@@ -1045,10 +1090,24 @@ export function DataTable<T = any>({
     return filteredData.slice(start, start + pageSize);
   }, [filteredData, currentPage, pageSize]);
 
+  // WATA: only the rows that can be selected.
   const currentPageIds = useMemo(
-    () => paginatedData.map((row, i) => getRowId(row, i)),
-    [paginatedData, getRowId]
+    () => paginatedData.flatMap((row, i) => (isRowSelectable(row) ? [getRowId(row, i)] : [])),
+    [paginatedData, getRowId, isRowSelectable]
   );
+  // WATA: every row the search and the filters leave that can be selected, on every page: the basket's "All".
+  const selectableIds = useMemo(
+    () => filteredData.flatMap((row, i) => (isRowSelectable(row) ? [getRowId(row, i)] : [])),
+    [filteredData, getRowId, isRowSelectable]
+  );
+  const allSelectableSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedRowIds.has(id));
+  const toggleAllSelectable = () => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev);
+      selectableIds.forEach((id) => (allSelectableSelected ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  };
   const selectedOnCurrentPage = currentPageIds.filter((id) => selectedRowIds.has(id));
   const isAllSelected = currentPageIds.length > 0 && selectedOnCurrentPage.length === currentPageIds.length;
   const isIndeterminate = selectedOnCurrentPage.length > 0 && !isAllSelected;
@@ -1081,9 +1140,12 @@ export function DataTable<T = any>({
     clearFilters,
     selectable,
     selectedRowIds,
+    isRowSelectable,
+    selectionBasket,
     toggleRowSelection,
     toggleSelectAll,
     isAllSelected,
+    canSelectPage: currentPageIds.length > 0,
     isIndeterminate,
     expandedRowIds,
     toggleRowExpansion,
@@ -1125,6 +1187,21 @@ export function DataTable<T = any>({
           </>
         )}
       </div>
+      {/* WATA: after the frame, not in it: its overflow would hold the basket, which sticks to the bottom of the screen. */}
+      {selectionBasket && selectable && (
+        <SelectionBasket
+          mode="sticky"
+          className="mt-2"
+          selectedCount={selectedRowIds.size}
+          totalCount={selectableIds.length}
+          allSelected={allSelectableSelected}
+          onSelectAll={toggleAllSelectable}
+          onClearSelection={() => setSelectedRowIds(() => new Set())}
+          actions={selectionBasket.actions}
+          noun={selectionBasket.noun}
+          linkComponent={selectionBasket.linkComponent}
+        />
+      )}
     </DataTableContext.Provider>
   );
 }

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
+import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { Alert, AlertTitle } from '@/components/ui/alert'
@@ -14,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { LeaveGuard } from '@/features/config/LeaveGuard'
-import { api, ApiError } from '@/lib/api'
+import { api, ApiError, isNotFound } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { TaScript, TaScriptKind } from '@/lib/types'
 
@@ -149,6 +150,19 @@ function ScriptEditor({ id }: { id: string | undefined }) {
 
   const title = draft?.name.trim() || script?.name || `New ${KIND_LABEL[newKind].toLowerCase()}`
   const errors = check.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length
+
+  if (id && isNotFound(scriptQuery.error)) {
+    return (
+      <NotFoundState
+        title="No such script"
+        description="No indicator, strategy or library has this address: it may have been deleted, or the address is mistyped."
+        suggestions={[
+          { label: 'Indicators', href: '/ta/indicators', description: 'Every script kept' },
+          { label: 'New script', href: '/ta/indicators/new', description: 'Write one' },
+        ]}
+      />
+    )
+  }
 
   return (
     <>

@@ -230,17 +230,21 @@ describe('the orders table', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Expand row details' }))
 
-    const moments = screen.getByRole('list', { name: 'The moments of order 5012' })
-    const lines = within(moments)
-      .getAllByRole('listitem')
-      .map((step) => [...step.children].map((part) => part.textContent))
-    expect(lines).toEqual([
+    // A timeline: each step's name, its moment, and its note, open.
+    const steps = within(screen.getByRole('list', { name: 'The moments of order 5012' })).getAllByRole('listitem')
+    const expected = [
       ['Signal received', '09:31:01.950'],
       ['Order sent', '09:31:02.120', '170 ms after the signal'],
       ['Accepted by Saxo', '09:31:02.310', '190 ms after it left'],
       ['Filled at Saxo', '09:31:02.297', "Saxo's clock: 177 ms after the order left"],
       ['Seen by WATA', '09:31:02.640', '330 ms after Saxo accepted the order, at the 2nd look'],
-    ])
+    ]
+    expect(steps).toHaveLength(expected.length)
+    expected.forEach((parts, index) => {
+      for (const part of parts) expect(within(steps[index]).getByText(part)).toBeInTheDocument()
+    })
+    // The step a reader looks at first: the last, nothing having gone wrong.
+    expect(within(steps[4]).getByRole('button', { name: 'Seen by WATA - completed' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('WATA saw the position 520 ms after the order left.')).toBeInTheDocument()
     expect(screen.getByText('Performance (Trailing Stop)')).toBeInTheDocument()
     expect(screen.getByText(/120 at €9.31 → €9.52/)).toBeInTheDocument()
@@ -329,8 +333,11 @@ describe('a link from an order to its position', () => {
     expect(screen.getByLabelText('address')).toHaveTextContent('/positions?find=5098')
     expect(await screen.findByText('Opened by order')).toBeInTheDocument()
     expect(screen.getByText('Closed by order')).toBeInTheDocument()
-    expect(screen.getByRole('list', { name: 'The moments of order 5012' })).toBeInTheDocument()
-    expect(screen.getByRole('list', { name: 'The moments of order 5013' })).toBeInTheDocument()
+    // One timeline for the position: the entry's moments, then the exit's.
+    const events = within(screen.getByRole('list', { name: 'The events of position 5098' })).getAllByRole('listitem')
+    expect(within(events[0]).getByText('Signal received')).toBeInTheDocument()
+    expect(within(events[0]).getByText('Entry')).toBeInTheDocument()
+    expect(within(events[events.length - 1]).getByText('Exit')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '5013' })).toHaveAttribute('href', '/orders?find=5013')
     // Open or closed: the position asked for must be there.
     expect(requests.some((path) => path.startsWith('/api/positions?') && !path.includes('status='))).toBe(true)
@@ -549,6 +556,10 @@ describe('orders Saxo did not take', () => {
       ),
     ).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'See them among the orders' })).toHaveAttribute('href', '/orders?find=5098')
+    // Its timeline ends on the sell Saxo did not take, after the entry's moments.
+    const events = within(screen.getByRole('list', { name: 'The events of position 5098' })).getAllByRole('listitem')
+    expect(within(events[0]).getByText('Entry')).toBeInTheDocument()
+    expect(within(events[events.length - 1]).getByRole('button', { name: 'Sell refused - failed' })).toBeInTheDocument()
     const list = screen.getByRole('list', { name: 'The requests about position 5098' })
     expect(within(list).getByText('Sell 120 · Market')).toBeInTheDocument()
     expect(within(list).getByText(`“${LIMIT_ONLY}” (OtherError, HTTP 400)`)).toBeInTheDocument()

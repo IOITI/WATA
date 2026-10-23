@@ -1,5 +1,6 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
 
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
@@ -28,6 +29,51 @@ const shown = () =>
     .filter((text) => text?.startsWith('Row'))
 
 describe('the data table, as WATA uses it', () => {
+  it('lets the page hold its selection, leaves out the rows that cannot be chosen, and selects all that a search leaves', async () => {
+    const user = userEvent.setup()
+    const changes: string[][] = []
+    function Held() {
+      const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+      return (
+        <AdvancedDataTable<Row>
+          data={ROWS}
+          columns={COLUMNS}
+          getRowId={(row) => row.id}
+          defaultPageSize={5}
+          rowLabel={(row) => row.name}
+          isRowSelectable={(row) => row.id !== 'r1'}
+          selectedRowIds={selected}
+          onSelectionChange={(ids) => {
+            changes.push([...ids])
+            setSelected(ids)
+          }}
+          selectionBasket={{ noun: ['row', 'rows'], actions: [{ id: 'act', label: 'Act' }] }}
+        />
+      )
+    }
+    render(<Held />)
+
+    // Row 1 cannot be chosen: no box, and the header's box leaves it out.
+    expect(screen.queryByRole('checkbox', { name: 'Select Row 1' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Select all rows' }))
+    expect(changes.at(-1)).toEqual(['r2', 'r3', 'r4', 'r5'])
+    const basket = within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' }))
+    expect(basket.getByText('rows selected')).toBeInTheDocument()
+    // Said once: the table's own counter is not shown beside the basket.
+    expect(screen.queryByText('4 selected')).not.toBeInTheDocument()
+    await user.click(basket.getByRole('button', { name: 'Clear selection' }))
+    expect(changes.at(-1)).toEqual([])
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions toolbar' })).not.toBeInTheDocument())
+
+    // "All" is every row the search leaves that can be chosen, on every page: Row 10, 11 and 12.
+    await user.type(screen.getByPlaceholderText('Search...'), 'Row 1')
+    await user.click(screen.getByRole('checkbox', { name: 'Select Row 10' }))
+    const searched = within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' }))
+    await user.click(searched.getByRole('button', { name: 'All (3)' }))
+    expect(new Set(changes.at(-1))).toEqual(new Set(['r10', 'r11', 'r12']))
+    expect(searched.getByRole('button', { name: 'Select none' })).toBeInTheDocument()
+  })
+
   it('shows what a search finds from its first page, wherever the reader was', async () => {
     const user = userEvent.setup()
     render(<AdvancedDataTable<Row> data={ROWS} columns={COLUMNS} getRowId={(row) => row.id} selectable={false} defaultPageSize={5} />)

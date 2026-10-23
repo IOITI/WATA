@@ -530,5 +530,14 @@ describe('a provider WATA has no code for', () => {
     renderPage('/data/providers/elsewhere')
 
     expect(await screen.findByRole('heading', { level: 1, name: 'No such provider' })).toBeInTheDocument()
+    const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
+    expect(suggestions.getByRole('link', { name: /^Providers/ })).toHaveAttribute('href', '/data/providers')
+  })
+
+  it('is not one of the names every object has', async () => {
+    serve()
+    renderPage('/data/providers/constructor')
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such provider' })).toBeInTheDocument()
   })
 })

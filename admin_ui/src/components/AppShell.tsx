@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
 
+import { MainScrollContext } from '@/components/main-scroll-context'
 import { isWidePage, MENU, MENU_SECTIONS, menuEntry } from '@/components/navigation'
 import { PageTrailProvider, TopBarTrail } from '@/components/PageTrail'
 import { RouterLink } from '@/components/RouterLink'
@@ -247,7 +248,9 @@ function Shell() {
             against the page would otherwise make the window itself scroll, onto nothing. */}
         <main ref={main} className="relative flex-1 overflow-y-auto">
           <div className={cn('mx-auto flex w-full flex-col gap-6 p-4 sm:p-6', wide ? 'max-w-none' : 'max-w-7xl')}>
-            <Outlet />
+            <MainScrollContext.Provider value={main}>
+              <Outlet />
+            </MainScrollContext.Provider>
           </div>
         </main>
       </div>

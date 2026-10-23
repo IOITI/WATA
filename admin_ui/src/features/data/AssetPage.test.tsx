@@ -362,8 +362,14 @@ describe('opening an asset', () => {
     serve()
     renderPage('/data/assets/saxo/99')
 
-    expect(await screen.findByRole('heading', { name: 'This asset is not stored' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Every asset stored' })).toHaveAttribute('href', '/data/assets')
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such asset' })).toBeInTheDocument()
+    // The address looked for, and where every asset is.
+    const notFound = within(screen.getByRole('region', { name: 'No such asset' }))
+    expect(notFound.getByText('/data/assets/saxo/99')).toBeInTheDocument()
+    const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
+    expect(suggestions.getByRole('link', { name: /^Assets View/ })).toHaveAttribute('href', '/data/assets')
+    expect(suggestions.getByRole('link', { name: /^Providers/ })).toHaveAttribute('href', '/data/providers')
+    expect(document.title).toBe('No such asset · WATA Admin')
     expect(barRequests()).toEqual([])
   })
 })

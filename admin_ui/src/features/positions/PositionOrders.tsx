@@ -7,12 +7,15 @@ import { api } from '@/lib/api'
 import { formatMoney } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { OrderTimeline } from './OrderTimeline'
-import { closureWithoutOrder, orderLink, purposeOf } from './orderLife'
+import { MomentsTimeline, OrderHeading } from './OrderTimeline'
+import { closureWithoutOrder, orderLife, orderLink, positionTimeline, purposeOf } from './orderLife'
 import { sellRefusalSentence, sellRefusalsOf } from './orderRequests'
 import { RequestList } from './RequestList'
 
-/** The orders behind a position, shown when its row is expanded: the one that opened it, the one that closed it. */
+/**
+ * The orders behind a position, shown when its row is expanded: the one that opened it, the one that closed it,
+ * and what happened to it on one timeline, the sells Saxo refused between the two.
+ */
 export function PositionOrders({ positionId }: { positionId: string }) {
   const { timezone } = useSession()
   const detailQuery = useQuery({
@@ -69,25 +72,15 @@ export function PositionOrders({ positionId }: { positionId: string }) {
 
       {opening.length === 0 && <p className="text-muted-foreground">No order recorded for this position.</p>}
       {opening.map((order) => (
-        <OrderTimeline
-          key={order.order_id}
-          order={order}
-          timeZone={timezone}
-          heading="Opened by order"
-          showPosition={false}
-          showRequests={false}
-        />
+        <OrderHeading key={order.order_id} order={order} life={orderLife(order)} timeZone={timezone} heading="Opened by order" />
       ))}
       {closing.map((order) => (
-        <OrderTimeline
-          key={order.order_id}
-          order={order}
-          timeZone={timezone}
-          heading="Closed by order"
-          showPosition={false}
-          showRequests={false}
-        />
+        <OrderHeading key={order.order_id} order={order} life={orderLife(order)} timeZone={timezone} heading="Closed by order" />
       ))}
+      <MomentsTimeline
+        items={positionTimeline(opening, closing, refusals, timezone)}
+        label={`The events of position ${position.position_id}`}
+      />
       {noSellOrder && <p className="max-w-[60rem] text-muted-foreground">{noSellOrder}</p>}
 
       {requests.length > 0 && (

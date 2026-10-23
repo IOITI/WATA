@@ -358,15 +358,46 @@ describe('the list of backtests', () => {
     expect(screen.getAllByText('too few to conclude')).toHaveLength(2)
     expect(screen.getByText('2 runs take 52.0 kB on disk.')).toBeInTheDocument()
 
-    // Nowhere to go before two runs are chosen; then a link, which can be opened in another tab.
-    const compare = screen.getByRole('button', { name: 'Compare' })
-    expect(compare).toBeDisabled()
-    await user.click(screen.getByRole('checkbox', { name: 'Select: Smoke EMA cross' }))
-    await user.click(screen.getByRole('checkbox', { name: 'Select: Stop at 10' }))
-    expect(screen.getByRole('link', { name: 'Compare 2' })).toHaveAttribute('href', `/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
+    // The basket comes with a first run chosen. Nowhere to go before two are; then a link, which can be opened in another tab.
+    expect(screen.queryByRole('toolbar', { name: 'Bulk actions toolbar' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Select Smoke EMA cross' }))
+    const basket = within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' }))
+    expect(basket.getByText('run selected')).toBeInTheDocument()
+    expect(basket.getByRole('button', { name: 'Compare' })).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: 'Select Stop at 10' }))
+    expect(basket.getByText('runs selected')).toBeInTheDocument()
+    expect(basket.getByRole('link', { name: 'Compare 2' })).toHaveAttribute('href', `/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
     expect(screen.getByRole('link', { name: 'New backtest' })).toHaveAttribute('href', '/backtests/new')
-    await user.click(screen.getByRole('link', { name: 'Compare 2' }))
+    await user.click(basket.getByRole('link', { name: 'Compare 2' }))
     expect(address()).toBe(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
+  })
+
+  it('selects every run that can be, empties the selection, and removes what is selected once asked', async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, '20261019-220000-dddddd': run({ id: '20261019-220000-dddddd', name: 'Still running', status: { state: 'running' } }) }
+    renderAt('/backtests')
+
+    // A run that waits or runs can neither be compared nor removed: no box.
+    expect(await screen.findByRole('link', { name: 'Still running' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Select Still running' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Select Stop at 10' }))
+    const basket = within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' }))
+    await user.click(basket.getByRole('button', { name: 'All (2)' }))
+    expect(screen.getByRole('checkbox', { name: 'Select Smoke EMA cross' })).toBeChecked()
+    expect(basket.getByRole('button', { name: 'Select none' })).toBeInTheDocument()
+    await user.click(basket.getByRole('button', { name: 'Clear selection' }))
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions toolbar' })).not.toBeInTheDocument())
+    expect(screen.getByRole('checkbox', { name: 'Select Stop at 10' })).not.toBeChecked()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select Stop at 10' }))
+    await user.click(within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' })).getByRole('button', { name: 'Remove 1' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Remove 1 backtest?' })
+    expect(within(dialog).getByText('Stop at 10')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/backtests/remove')?.body).toEqual({
+      ids: ['20261019-210000-bbbbbb'],
+    }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove 1 backtest?' })).not.toBeInTheDocument())
   })
 
   it('narrows the list as its address says, and keeps what is chosen in the address', async () => {
@@ -673,15 +704,32 @@ describe('a run', () => {
     expect(within(verdict).getByRole('link', { name: 'An edge in its entries' })).toHaveAttribute('href', '#edge')
     expect(within(verdict).getByText('Not stressed yet.')).toBeInTheDocument()
 
-    // The parts of the page, each an anchor the index leads to.
-    const index = screen.getByRole('navigation', { name: 'Parts of this page' })
-    const parts = within(index).getAllByRole('link').map((link) => [link.textContent, link.getAttribute('href')])
+    // The parts of the page, numbered, each an anchor the nav leads to.
+    const nav = within(screen.getByRole('navigation', { name: 'Parts of this page' }))
+    const parts = nav.getAllByRole('link').map((link) => [link.textContent, link.getAttribute('href')])
     expect(parts).toEqual([
-      ['Verdict', '#verdict'], ['Trust', '#trust'], ['Edge', '#edge'], ['Stress', '#stress'], ['Made-up turbos', '#model-check'],
-      ['Day after day', '#curves'], ['Why', '#why'], ['Where it comes from', '#breakdowns'], ['Trades, signals, days', '#tables'],
-      ['What it ran', '#setup'],
+      ['01Verdict', '#verdict'], ['02Trust', '#trust'], ['03Edge', '#edge'], ['04Stress', '#stress'], ['05Made-up turbos', '#model-check'],
+      ['06Day after day', '#curves'], ['07Why', '#why'], ['08Where it comes from', '#breakdowns'], ['09Trades, signals, days', '#tables'],
+      ['10What it ran', '#setup'],
     ])
     for (const [, href] of parts) expect(document.getElementById((href as string).slice(1))).not.toBeNull()
+    // Named by the part alone; the first is the current one until the page scrolls.
+    expect(nav.getByRole('link', { name: 'Verdict' })).toHaveAttribute('aria-current', 'location')
+  })
+
+  it('goes to a part from the nav, which says it is there and puts it in the address in place', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
+
+    const nav = within(await screen.findByRole('navigation', { name: 'Parts of this page' }))
+    const before = window.history.length
+    await user.click(nav.getByRole('link', { name: 'Edge' }))
+
+    expect(nav.getByRole('link', { name: 'Edge' })).toHaveAttribute('aria-current', 'location')
+    expect(nav.getByRole('link', { name: 'Verdict' })).not.toHaveAttribute('aria-current')
+    expect(window.location.hash).toBe('#edge')
+    expect(window.history.length).toBe(before)
+    expect(address()).toBe(`/backtests/${RUN_ID}`)
   })
 
   it('says the risk the days show, and what they give without the best of them', async () => {
@@ -965,5 +1013,37 @@ describe('runs compared', () => {
     runs['20261019-220000-dddddd'] = run({ id: '20261019-220000-dddddd', name: 'Third' })
     renderAt(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb,20261019-220000-dddddd`)
     expect(await screen.findByText(/1 of the runs chosen has no result to compare/)).toBeInTheDocument()
+  })
+})
+
+describe('an address that names no run', () => {
+  it('says there is no such backtest, under the trail of the backtests, with the way to them', async () => {
+    renderAt('/backtests/20261019-000000-ffffff')
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such backtest' })).toBeInTheDocument()
+    expect(document.title).toBe('No such backtest · WATA Admin')
+    const trail = within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
+    expect(trail.getByRole('link', { name: 'Backtests' })).toHaveAttribute('href', '/backtests')
+    expect(trail.getByText('No such backtest')).toBeInTheDocument()
+    const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
+    expect(suggestions.getByRole('link', { name: /^Backtests/ })).toHaveAttribute('href', '/backtests')
+    expect(suggestions.getByRole('link', { name: /^New backtest/ })).toHaveAttribute('href', '/backtests/new')
+    expect(screen.getByRole('link', { name: 'Back to the dashboard' })).toHaveAttribute('href', '/')
+  })
+
+  it('says the same on a day of a run that is not there', async () => {
+    renderAt('/backtests/20261019-000000-ffffff/days/2026-10-14')
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such backtest' })).toBeInTheDocument()
+  })
+
+  it('says there is no such day when the run did not cover it, under the run in the trail', async () => {
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-20`)
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'No such day' })).toBeInTheDocument()
+    const trail = within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
+    expect(trail.getByRole('link', { name: 'Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    const suggestions = within(screen.getByRole('navigation', { name: 'Helpful links' }))
+    expect(suggestions.getByRole('link', { name: /^Smoke EMA cross/ })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
   })
 })

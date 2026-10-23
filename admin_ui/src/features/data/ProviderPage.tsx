@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { KpiTile } from '@/components/KpiTile'
+import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader, Panel } from '@/components/Panel'
 import { QueryState, ServiceStatusBadge } from '@/components/status'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -541,11 +542,21 @@ export function ProviderPage() {
       </QueryState>
     )
   }
-  const name = PROVIDER_NAMES[providerId]
+  // Its own names only: an address like /data/providers/constructor names nothing.
+  const name = Object.hasOwn(PROVIDER_NAMES, providerId) ? PROVIDER_NAMES[providerId] : undefined
+  if (!name) {
+    return (
+      <NotFoundState
+        title="No such provider"
+        description="WATA has no code for a provider of this name."
+        suggestions={[{ label: 'Providers', href: PROVIDERS_PATH, description: 'The providers WATA has code for' }]}
+      />
+    )
+  }
   return (
     <>
-      <PageHeader title={name ?? 'No such provider'} />
-      <Panel title={name ? `${name} is not integrated yet` : 'No such provider'}>
+      <PageHeader title={name} />
+      <Panel title={`${name} is not integrated yet`}>
         <p className="text-sm text-muted-foreground">
           The providers WATA has code for are on the{' '}
           <Link to={PROVIDERS_PATH} className="text-foreground underline underline-offset-2">

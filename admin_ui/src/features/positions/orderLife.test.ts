@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Order, OrderRequest, Refusal } from '@/lib/types'
 
-import { entryFigures, orderLife, orderResult, purposeOf, tookMs } from './orderLife'
+import { entryFigures, orderLife, orderResult, positionTimeline, purposeOf, stepToLookAt, timelineItems, tookMs } from './orderLife'
 
 const POSITION = {
   position_id: '5098',
@@ -346,5 +346,70 @@ describe('a sell order Saxo had refused before taking it', () => {
       note: 'Order stop-1: “Order not found” (HTTP 404)',
       tone: 'warning',
     })
+  })
+})
+
+describe('the timeline of an order', () => {
+  it('draws each step with its moment on the clock it was read on, its note, and its state', () => {
+    const items = timelineItems(orderLife(BUY).steps, 'Europe/Paris')
+
+    expect(items.map((item) => [item.id, item.title, item.timestamp, item.status])).toEqual([
+      ['signal', 'Signal received', '09:31:01.950', 'completed'],
+      ['sent', 'Order sent', '09:31:02.120', 'completed'],
+      ['accepted', 'Accepted by Saxo', '09:31:02.310', 'completed'],
+      ['saxo', 'Filled at Saxo', '09:31:02.297', 'completed'],
+      ['seen', 'Seen by WATA', '09:31:02.640', 'completed'],
+    ])
+    // No note, no description: the step then has nothing to open.
+    expect(items[0]).not.toHaveProperty('description')
+    expect(items[1].description).toBe('170 ms after the signal')
+    expect(stepToLookAt(items)).toBe('seen')
+  })
+
+  it('marks what went wrong, and is opened on the first of it', () => {
+    const items = timelineItems(orderLife({ ...GIVEN_UP, cancel_accepted: false, detail: 'Order not found' } as Order).steps, 'Europe/Paris')
+
+    expect(items.map((item) => [item.title, item.status])).toEqual([
+      ['Signal received', 'completed'],
+      ['Order sent', 'completed'],
+      ['Accepted by Saxo', 'completed'],
+      ['No position', 'failed'],
+      ['Cancellation', 'failed'],
+    ])
+    // The cancellation has no moment of its own: a dash.
+    expect(items[4].timestamp).toBe('—')
+    expect(stepToLookAt(items)).toBe('gave_up')
+  })
+
+  it('draws what was not seen closed as a warning', () => {
+    const items = timelineItems(orderLife({ ...SELL, confirmed_at: null, gave_up_at: '2026-10-13T08:02:41.290Z', outcome: 'gave_up' } as Order).steps, 'Europe/Paris')
+
+    expect(items.at(-1)).toMatchObject({ title: 'Not seen closed', status: 'warning' })
+  })
+})
+
+describe('the timeline of a position', () => {
+  it('runs from its entry order to its exit order, each step marked with the order it is of', () => {
+    const items = positionTimeline([BUY], [SELL], null, 'Europe/Paris')
+
+    expect(items.map((item) => [item.id, item.tag])).toEqual([
+      ['5012-signal', 'Entry'], ['5012-sent', 'Entry'], ['5012-accepted', 'Entry'], ['5012-saxo', 'Entry'], ['5012-seen', 'Entry'],
+      ['5013-sent', 'Exit'], ['5013-accepted', 'Exit'], ['5013-saxo', 'Exit'], ['5013-seen', 'Exit'],
+    ])
+  })
+
+  it('puts the sells Saxo did not take between the two, with the last answer', () => {
+    const refusals = {
+      count: 37, first_at: '2026-10-13T07:58:00Z', last_at: '2026-10-13T08:02:00Z', outcome: 'refused' as const,
+      http_status: 400, error_code: 'OtherError', error_message: 'Limit orders only',
+    }
+    const items = positionTimeline([BUY], [], refusals, 'Europe/Paris')
+
+    expect(items.at(-1)).toMatchObject({
+      id: 'sells-refused', title: 'Sell refused ×37', timestamp: '09:58:00.000', status: 'failed', tag: 'Exit',
+      description: '37 attempts over 4 min, the last answered: “Limit orders only” (OtherError, HTTP 400)',
+    })
+    // Still open, Saxo refusing its sale: what a reader looks at first.
+    expect(stepToLookAt(items)).toBe('sells-refused')
   })
 })

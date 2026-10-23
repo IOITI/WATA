@@ -2,21 +2,14 @@ import { Link } from 'react-router'
 
 import { PnlValue } from '@/components/status'
 import { Badge } from '@/components/ui/badge'
-import { formatClock, formatDateTime, formatMoney, formatNumber } from '@/lib/format'
+import { InteractiveTimeline } from '@/components/ui/interactive-timeline'
+import type { TimelineItem } from '@/components/ui/interactive-timeline'
+import { formatDateTime, formatMoney, formatNumber } from '@/lib/format'
 import type { Order, OrderPosition, Refusal } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
-import { orderLife, orderLink, positionLink, RESULTS } from './orderLife'
-import type { LifeStep } from './orderLife'
+import { orderLife, orderLink, positionLink, RESULTS, stepToLookAt, timelineItems } from './orderLife'
+import type { OrderLife } from './orderLife'
 import { RequestList } from './RequestList'
-
-const STEP_TONE: Record<NonNullable<LifeStep['tone']>, string> = {
-  danger: 'text-negative',
-  warning: 'text-warning',
-}
-
-// Step and time side by side, the note under them on a phone and beside them from a tablet up.
-const STEP_GRID = 'grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-0.5 sm:grid-cols-[10.5rem_7.5rem_minmax(0,1fr)]'
 
 const LINK = 'font-mono text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground'
 
@@ -51,33 +44,14 @@ function LinkedPosition({ position, currency, timeZone }: { position: OrderPosit
   )
 }
 
-interface OrderTimelineProps {
-  order: Order
-  timeZone: string
-  /** Above the steps: "Opened by", "Closed by". The order's id then follows, as a link to the Orders page. */
-  heading?: string
-  /** The position the order gave or closed, with a link to it. Left out where the position is the row itself. */
-  showPosition?: boolean
-  /** The sells of the same position Saxo refused just before this order went through. */
-  refusal?: Refusal | null
-  /** Its requests to Saxo under the steps. Left out where every request about the position is listed below. */
-  showRequests?: boolean
-}
-
-/** The moments of an order, a line each: what, when, on whose clock, and how long after the step before. */
-export function OrderTimeline({
-  order,
-  timeZone,
-  heading,
-  showPosition = true,
-  refusal = null,
-  showRequests = true,
-}: OrderTimelineProps) {
-  const life = orderLife(order, refusal)
+/**
+ * What an order is, in a line and a sentence: what it did for the position ("Opened by"), its id (a link to the
+ * Orders page) and when it left, then what became of it.
+ */
+export function OrderHeading({ order, life, timeZone, heading }: { order: Order; life: OrderLife; timeZone: string; heading?: string }) {
   const result = RESULTS[life.result]
-
   return (
-    <div className="space-y-2 text-xs">
+    <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         {heading && (
           <>
@@ -91,35 +65,56 @@ export function OrderTimeline({
         <Badge tone={result.tone}>{result.label}</Badge>
       </div>
       <p className="max-w-[60rem] text-foreground/80">{life.summary}</p>
+    </div>
+  )
+}
 
-      {/*
-        A grid and not a table: on a phone the note goes under its step, where a
-        third column would be a few characters wide. Fixed widths on a wider
-        screen, so that two orders shown one under the other line up.
-      */}
-      <div className="max-w-[60rem]">
-        <div
-          aria-hidden="true"
-          className={cn(STEP_GRID, 'hidden border-b border-border/40 py-1 font-medium text-muted-foreground sm:grid')}
-        >
-          <span>Step</span>
-          <span>Time</span>
-          <span>What it tells</span>
-        </div>
-        <ol aria-label={`The moments of order ${order.order_id}`} className="divide-y divide-border/40">
-          {life.steps.map((step) => (
-            <li key={step.key} className={cn(STEP_GRID, 'grid py-1.5')}>
-              <span className={cn(step.tone && STEP_TONE[step.tone])}>{step.label}</span>
-              <span className="whitespace-nowrap tabular-nums">{formatClock(step.at, timeZone)}</span>
-              {step.note && (
-                <span className="col-span-2 text-muted-foreground [overflow-wrap:anywhere] sm:col-span-1">
-                  {step.note}
-                </span>
-              )}
-            </li>
-          ))}
-        </ol>
-      </div>
+/**
+ * EasyUI's timeline of moments, each with its note open, the first that went wrong (else the last) picked out.
+ * Made again when its steps change (an order in flight gains one), so that a new step opens too.
+ */
+export function MomentsTimeline({ items, label }: { items: TimelineItem[]; label: string }) {
+  if (items.length === 0) return null
+  return (
+    <InteractiveTimeline
+      key={items.map((item) => item.id).join('|')}
+      items={items}
+      label={label}
+      defaultExpandedIds={items.map((item) => item.id)}
+      defaultSelectedId={stepToLookAt(items)}
+      className="max-w-[60rem]"
+    />
+  )
+}
+
+interface OrderTimelineProps {
+  order: Order
+  timeZone: string
+  /** Above the steps: "Opened by", "Closed by". The order's id then follows, as a link to the Orders page. */
+  heading?: string
+  /** The position the order gave or closed, with a link to it. Left out where the position is the row itself. */
+  showPosition?: boolean
+  /** The sells of the same position Saxo refused just before this order went through. */
+  refusal?: Refusal | null
+  /** Its requests to Saxo under the steps. Left out where every request about the position is listed below. */
+  showRequests?: boolean
+}
+
+/** The moments of an order, on a timeline: what, when, on whose clock, and how long after the step before. */
+export function OrderTimeline({
+  order,
+  timeZone,
+  heading,
+  showPosition = true,
+  refusal = null,
+  showRequests = true,
+}: OrderTimelineProps) {
+  const life = orderLife(order, refusal)
+
+  return (
+    <div className="space-y-2 text-xs">
+      <OrderHeading order={order} life={life} timeZone={timeZone} heading={heading} />
+      <MomentsTimeline items={timelineItems(life.steps, timeZone)} label={`The moments of order ${order.order_id}`} />
 
       {showRequests && order.requests && order.requests.length > 0 && (
         <div className="space-y-1">

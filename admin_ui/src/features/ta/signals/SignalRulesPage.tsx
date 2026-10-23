@@ -5,7 +5,7 @@
 // what the engine did.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { Eye, Pencil, Plus, PowerOff, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
@@ -101,6 +101,32 @@ interface ModeChange {
   mode: TaRuleMode
 }
 
+/** What the selection basket does to the rules selected: never live, which is one rule at a time. */
+type BulkAction = 'off' | 'shadow' | 'delete'
+
+interface BulkOutcome {
+  action: BulkAction
+  /** Rules changed or deleted, and those asked. */
+  done: number
+  asked: number
+  /** What stopped it before the end, if anything did. */
+  error: Error | null
+}
+
+/** A live rule is switched or deleted alone, with its confirmation: it has no box. */
+const selectableRule = (rule: TaRule) => rule.mode !== 'live'
+const ruleName = (rule: TaRule) => rule.name
+
+const BULK_DONE: Record<BulkAction, { verb: string; description: string }> = {
+  off: { verb: 'switched off', description: 'The engine stops running them.' },
+  shadow: { verb: 'switched to shadow', description: 'Their signals are journaled, never sent.' },
+  delete: { verb: 'deleted', description: 'Their signals stay in the journal; their scripts stay on the Indicators page.' },
+}
+
+function rulesCounted(count: number): string {
+  return `${count} rule${count === 1 ? '' : 's'}`
+}
+
 export function SignalRulesPage() {
   const { timezone, actions_enabled: actionsEnabled, backtests_enabled: backtestsEnabled } = useSession()
   const toast = useToast()
@@ -148,6 +174,9 @@ export function SignalRulesPage() {
   }
   const [changing, setChanging] = useState<ModeChange | null>(null)
   const [deleting, setDeleting] = useState<TaRule | null>(null)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  // The rules the deletion of several is about, while it is asked.
+  const [deletingMany, setDeletingMany] = useState<TaRule[] | null>(null)
 
   const refresh = () => Promise.all([['ta-rules'], ['ta-engine']].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
   const conflictText = (error: Error | null) =>
@@ -184,6 +213,52 @@ export function SignalRulesPage() {
     },
     onError: () => void refresh(),
   })
+
+  // A rule deleted meanwhile, or gone live, is no longer selected.
+  const chosen = useMemo(() => (rules?.rules ?? []).filter((rule) => selected.has(rule.id) && selectableRule(rule)), [rules, selected])
+  const chosenIds = useMemo(() => new Set(chosen.map((rule) => rule.id)), [chosen])
+  /**
+   * The rules chosen, one after the other, each with the revision the last change left (a deletion answers none:
+   * the rules are read again). Stops at the first refusal, and says how far it went.
+   */
+  const bulkMutation = useMutation({
+    mutationFn: async ({ action, targets }: { action: BulkAction; targets: TaRule[] }): Promise<BulkOutcome> => {
+      let revision = rules!.revision
+      let done = 0
+      try {
+        for (const [index, rule] of targets.entries()) {
+          if (action === 'delete') {
+            await api.deleteTaRule(rule.id, revision)
+            done += 1
+            if (index < targets.length - 1) revision = (await api.taRules()).revision
+          } else if (rule.mode !== action) {
+            revision = (await api.setTaRuleMode(rule.id, action, revision)).revision
+            done += 1
+          }
+        }
+        return { action, done, asked: targets.length, error: null }
+      } catch (error) {
+        return { action, done, asked: targets.length, error: error instanceof Error ? error : new Error(String(error)) }
+      }
+    },
+    onSuccess: async (outcome, { targets }) => {
+      if (outcome.error && outcome.action === 'delete') {
+        // The dialog stays, on what is left, with why.
+        setDeletingMany(targets.slice(outcome.done))
+      } else {
+        setDeletingMany(null)
+      }
+      if (!outcome.error) {
+        setSelected(new Set())
+        toast({ title: `${rulesCounted(outcome.done)} ${BULK_DONE[outcome.action].verb}`, description: BULK_DONE[outcome.action].description, variant: 'success' })
+      }
+      await refresh()
+    },
+  })
+  const bulkError = bulkMutation.data?.error
+    ? `Stopped after ${bulkMutation.data.done} of ${bulkMutation.data.asked}: ${conflictText(bulkMutation.data.error)}`
+    : null
+  const allIn = (mode: TaRuleMode) => chosen.length > 0 && chosen.every((rule) => rule.mode === mode)
 
   const askMode = (rule: TaRule, mode: TaRuleMode) => {
     if (mode === rule.mode) return
@@ -408,9 +483,50 @@ export function SignalRulesPage() {
             columns={columns}
             getRowId={(row) => row.id}
             defaultPageSize={20}
+            rowLabel={ruleName}
+            isRowSelectable={selectableRule}
+            selectedRowIds={chosenIds}
+            onSelectionChange={setSelected}
+            selectionBasket={{
+              noun: ['rule', 'rules'],
+              actions: [
+                {
+                  id: 'off',
+                  label: 'Switch off',
+                  icon: <PowerOff className="size-3.5" />,
+                  disabled: allIn('off') || bulkMutation.isPending,
+                  title: allIn('off') ? 'They are off already' : undefined,
+                  onClick: () => bulkMutation.mutate({ action: 'off', targets: chosen }),
+                },
+                {
+                  id: 'shadow',
+                  label: 'Switch to shadow',
+                  icon: <Eye className="size-3.5" />,
+                  disabled: allIn('shadow') || bulkMutation.isPending,
+                  title: allIn('shadow') ? 'They are in shadow already' : undefined,
+                  onClick: () => bulkMutation.mutate({ action: 'shadow', targets: chosen }),
+                },
+                {
+                  id: 'delete',
+                  label: `Delete ${chosen.length}`,
+                  icon: <Trash2 className="size-3.5" />,
+                  variant: 'danger',
+                  disabled: bulkMutation.isPending,
+                  onClick: () => {
+                    bulkMutation.reset()
+                    setDeletingMany(chosen)
+                  },
+                },
+              ],
+            }}
           />
         )}
       </QueryState>
+      {bulkError && !deletingMany && (
+        <Alert tone="danger" role="alert">
+          <AlertDescription>{bulkError}</AlertDescription>
+        </Alert>
+      )}
       {modeMutation.error && !changing && (
         <Alert tone="danger" role="alert">
           <AlertDescription>{conflictText(modeMutation.error)}</AlertDescription>
@@ -477,6 +593,44 @@ export function SignalRulesPage() {
         onConfirm={() => change && modeMutation.mutate(change)}
         onClose={() => setChanging(null)}
       />
+
+      <SettleModal
+        open={deletingMany !== null}
+        onClose={() => setDeletingMany(null)}
+        title={`Delete ${rulesCounted(deletingMany?.length ?? 0)}?`}
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setDeletingMany(null)} disabled={bulkMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              isLoading={bulkMutation.isPending}
+              onClick={() => deletingMany && bulkMutation.mutate({ action: 'delete', targets: deletingMany })}
+            >
+              Delete
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-text-secondary">
+          The engine stops running them. Their signals stay in the journal; their scripts stay on the Indicators page.
+        </p>
+        <ul className="mt-3 flex max-h-48 flex-col gap-1 overflow-auto text-sm">
+          {(deletingMany ?? []).map((rule) => (
+            <li key={rule.id} className="truncate">
+              {rule.name}
+            </li>
+          ))}
+        </ul>
+        {bulkError && (
+          <Alert tone="danger" role="alert" className="mt-3">
+            <AlertDescription>{bulkError}</AlertDescription>
+          </Alert>
+        )}
+      </SettleModal>
 
       <SettleModal
         open={deleting !== null}
