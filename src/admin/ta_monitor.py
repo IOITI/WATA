@@ -11,8 +11,10 @@ The limits are WATA's own, and a check fails at half of one, so that it says so
 before a signal is lost: a bar older than ``max_signal_age_seconds`` sends
 nothing, a run longer than ``run_timeout_seconds`` ends its runner, a tick that
 outlasts ten seconds leaves new bars waiting, a feed behind by
-``stale_feed_seconds`` stops every signal. Health says only what can cost a
-live signal: the live runner, the live signals, the ticks, the feed, memory.
+``stale_feed_seconds`` stops every signal; a live rule's continued run that a
+whole run gave otherwise had its signals from it until then. Health says only
+what can cost a live signal: the live runner, the live signals, the ticks, the
+feed, memory, the live rules' continued runs.
 The shadow runner's troubles, a script that fails and the shadow rules waiting
 their turn are said on the page alone, as a rule in error is.
 """
@@ -307,8 +309,8 @@ def _ticks_check(ticks: dict) -> dict:
         ))
     steady = ticks.get("steady_tick_max_ms")
     return _check("ticks", label, "pass", (
-        f"Ticks took {duration(steady)} at most, one every {TICK_SECONDS} s (the daily restart and loads aside)."
-        if steady is not None else f"Every tick had a load or the daily restart: none to judge by."
+        f"Ticks took {duration(steady)} at most, one every {TICK_SECONDS} s (the daily restart, loads and checks aside)."
+        if steady is not None else "Every tick had a load, a check or the daily restart: none to judge by."
     ))
 
 
@@ -343,6 +345,23 @@ def _memory_check(ticks: dict) -> dict:
     return _check("memory", label, "pass", f"The container used {round(used):,} MB of its {round(limit):,} MB at most.")
 
 
+def _continued_check(found: list[dict], rules: dict) -> dict:
+    label = "Continued runs as whole runs"
+    live = [row for row in found if row.get("mode") == "live"]
+    if not live:
+        return _check("continued", label, "open", f"No live rule's continued run was checked in the last {WINDOW_MINUTES} minutes.")
+    differed = [row for row in live if row.get("differed")]
+    if differed:
+        row = differed[0]
+        return _check("continued", label, "fail", (
+            f"A whole run of {_name(row['rule_id'], rules)} gave otherwise than its continued run "
+            f"({row.get('last_difference') or 'no detail'}): it runs whole at each new bar from now on, "
+            "and its signals since its last check were the continued run's."
+        ))
+    count = sum(row.get("checks") or 0 for row in live)
+    return _check("continued", label, "pass", f"{_plural(count, 'check')} of the live rules' continued runs against a whole run: the same.")
+
+
 def checks(recent: dict, settings, rules: dict) -> list[dict]:
     """What the last minutes say of what can cost a live signal, in health's order."""
     ticks = recent.get("ticks") or {}
@@ -354,6 +373,7 @@ def checks(recent: dict, settings, rules: dict) -> list[dict]:
         _ticks_check(ticks),
         _feed_check(ticks, settings),
         _memory_check(ticks),
+        _continued_check(recent.get("checks") or [], rules),
     ]
 
 
@@ -389,6 +409,12 @@ def notes(recent: dict, settings, rules: dict, mcp_limits=None, kept: dict | Non
             said.append(
                 f"{name} took {duration(row['append_max_ms'])} a run, over the {duration(most)} an engine day of it was held to "
                 "when it was saved (admin.mcp.shadow_day_ms)."
+            )
+    for row in recent.get("checks") or []:
+        if row.get("mode") != "live" and row.get("differed"):
+            said.append(
+                f"A whole run of {_name(row['rule_id'], rules)} gave otherwise than its continued run "
+                f"({row.get('last_difference') or 'no detail'}): it runs whole at each new bar until the engine starts again."
             )
     for row in recent.get("deferred") or []:
         said.append(
@@ -461,6 +487,8 @@ def now_answer(*, state: dict | None, settings, mcp_limits, recent: dict, rules:
             "oom_kills": ticks.get("oom_kills") or 0,
             "deferred": ticks.get("deferred") or 0,
             "runs": sum(row.get("runs") or 0 for row in runs),
+            "checks": sum(row.get("checks") or 0 for row in recent.get("checks") or []),
+            "checks_differed": sum(row.get("differed") or 0 for row in recent.get("checks") or []),
             "failed": sum(row.get("failed") or 0 for row in runs),
             "ended": sum(row.get("ended") or 0 for row in runs),
             "live_age_max_ms": _ms(max((row["age_max_ms"] for row in live if row.get("age_max_ms") is not None), default=None)),
@@ -496,7 +524,21 @@ def _signal_counts(rows: list[dict]) -> dict[str, dict]:
     return counts
 
 
-def _rule_entry(rule_id: str, rule: dict | None, row: dict, settings, deferred: int, signals: dict) -> dict:
+def _checks_of(rows: list[dict]) -> dict[str, dict]:
+    """The checks of each rule's continued runs over a period, whatever runner and mode it had."""
+    found: dict[str, dict] = {}
+    for row in rows:
+        entry = found.setdefault(row["rule_id"], {"checks": 0, "differed": 0, "check_max_ms": None, "last_difference": None})
+        entry["checks"] += row.get("checks") or 0
+        entry["differed"] += row.get("differed") or 0
+        if row.get("check_max_ms") is not None:
+            entry["check_max_ms"] = max(entry["check_max_ms"] or 0, row["check_max_ms"])
+        entry["last_difference"] = entry["last_difference"] or row.get("last_difference")
+    return found
+
+
+def _rule_entry(rule_id: str, rule: dict | None, row: dict, settings, deferred: int, signals: dict, checked: dict | None = None) -> dict:
+    checked = checked or {}
     return {
         "rule_id": rule_id,
         "name": rule["name"] if rule else None,
@@ -506,6 +548,12 @@ def _rule_entry(rule_id: str, rule: dict | None, row: dict, settings, deferred: 
         "limit_ms": rule_limit_ms(rule, settings),
         "runs": row.get("runs") or 0,
         "loads": row.get("loads") or 0,
+        # The runs that continued the rule's run, and its checks against a whole run.
+        "continued": row.get("continued") or 0,
+        "checks": checked.get("checks") or 0,
+        "differed": checked.get("differed") or 0,
+        "check_ms_max": checked.get("check_max_ms"),
+        "last_difference": checked.get("last_difference"),
         "failed": row.get("failed") or 0,
         "ended": row.get("ended") or 0,
         "deferred": deferred,
@@ -609,6 +657,7 @@ def period_answer(
     by_rule = {row["rule_id"]: row for row in rows.get("rules") or []}
     deferred = {row["rule_id"]: row.get("ticks") or 0 for row in rows.get("deferred") or []}
     signals = _signal_counts(rows.get("signals") or [])
+    checked = _checks_of(rows.get("checks") or [])
     # The rules on now and those measured in the period, in the order of their file; then the ones gone from it.
     measured = set(by_rule) | set(signals)
     ids = [known for known, rule in rules.items() if rule.get("mode") != "off" or known in measured]
@@ -628,7 +677,10 @@ def period_answer(
         "recording": recording(state, settings, rows.get("kept_since")),
         "limits": limits(settings, mcp_limits),
         "rules": [
-            _rule_entry(entry, rules.get(entry), by_rule.get(entry) or {}, settings, deferred.get(entry, 0), signals.get(entry))
+            _rule_entry(
+                entry, rules.get(entry), by_rule.get(entry) or {}, settings, deferred.get(entry, 0), signals.get(entry),
+                checked.get(entry),
+            )
             for entry in dict.fromkeys(ids)
         ],
         "series": {

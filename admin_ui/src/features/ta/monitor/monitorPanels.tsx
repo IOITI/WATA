@@ -23,7 +23,10 @@ import {
   axisTicks,
   barLength,
   bucketTitle,
+  checksLabel,
   coarserCounts,
+  continuedLabel,
+  differedLabel,
   filledBuckets,
   limitInView,
   limitText,
@@ -60,6 +63,16 @@ function spread(values: { p50: number | null; p95: number | null }): string {
 
 // ── the rules ──
 
+function Differed({ differed }: { differed: { summary: string; detail: string } | null }) {
+  if (!differed) return null
+  return (
+    <details className="mt-1 text-xs">
+      <summary className="w-fit cursor-pointer select-none text-warning">{differed.summary}</summary>
+      <p className="mt-1 break-words text-muted-foreground">{differed.detail}</p>
+    </details>
+  )
+}
+
 export function RulesPanel({ period }: { period: TaMonitor }) {
   const { limits } = period
   const columns = useMemo<ColumnDef<TaMonitorRule>[]>(
@@ -79,6 +92,7 @@ export function RulesPanel({ period }: { period: TaMonitor }) {
               {row.mode && <Badge tone={MODE_TONE[row.mode]}>{MODE_LABEL[row.mode]}</Badge>}
               {row.bars && <span>{barsLabel(row.bars)}</span>}
             </p>
+            <Differed differed={differedLabel(row)} />
           </div>
         ),
       },
@@ -95,6 +109,7 @@ export function RulesPanel({ period }: { period: TaMonitor }) {
               {formatNumber(row.loads)} load{row.loads === 1 ? '' : 's'}
               {row.asks > 0 && `, ${formatNumber(row.asks)} series asked`}
             </p>
+            {continuedLabel(row) && <p className="text-xs text-muted-foreground">{continuedLabel(row)}</p>}
           </div>
         ),
       },
@@ -123,6 +138,7 @@ export function RulesPanel({ period }: { period: TaMonitor }) {
             {row.pinets_ms_avg !== null && (
               <p className="mt-1 text-xs text-muted-foreground">PineTS {formatWait(row.pinets_ms_avg)} of a run, on average</p>
             )}
+            {checksLabel(row) && <p className="mt-1 text-xs text-muted-foreground">{checksLabel(row)}</p>}
           </div>
         ),
       },
@@ -308,7 +324,7 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
         </ChartCard>
         <ChartCard
           title="Tick time"
-          description={`One tick every ${limitText(limits.tick_ms)} gives each rule its new bars; the longest are the daily restart's, which loads every rule.`}
+          description={`One tick every ${limitText(limits.tick_ms)} gives each rule its new bars; the longest are the daily restart's, which loads every rule, and those that checked a continued run against a whole one.`}
         >
           <TimeSeriesChart
             points={ticks}

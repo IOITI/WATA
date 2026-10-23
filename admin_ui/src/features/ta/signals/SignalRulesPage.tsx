@@ -306,6 +306,7 @@ export function SignalRulesPage() {
                 </p>
               )}
               {state.last_alert_at && <p className="text-muted-foreground">Last signal {formatDateTime(state.last_alert_at, timezone, false)}</p>}
+              {state.figures.whole && <p className="text-muted-foreground">Each new bar runs it whole: {state.figures.whole}.</p>}
             </div>
           )
         },

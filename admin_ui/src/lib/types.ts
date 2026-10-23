@@ -2130,7 +2130,11 @@ export interface TaRuleState {
   bars: number | null
   last_bar_time: string | null
   last_alert_at: string | null
-  figures: { milliseconds?: number | null } & Record<string, unknown>
+  /**
+   * Its last run's time; whether its new bars continue its run, or why each runs it whole over all its bars;
+   * the checks of its continued run against a whole run that agreed.
+   */
+  figures: { milliseconds?: number | null; continued?: boolean; whole?: string | null; checks?: number } & Record<string, unknown>
 }
 
 export interface TaEngine {
@@ -2216,7 +2220,7 @@ export interface TaMonitorWindow {
   ticks: number
   tick_p50_ms: number | null
   tick_max_ms: number | null
-  /** The longest tick without a load or the daily restart. */
+  /** The longest tick without a load, a check of a continued run or the daily restart. */
   steady_tick_max_ms: number | null
   slow_ticks: number
   feed_lag_max_ms: number | null
@@ -2225,6 +2229,9 @@ export interface TaMonitorWindow {
   oom_kills: number
   deferred: number
   runs: number
+  /** The continued runs checked against a whole run, and those a whole run gave otherwise. */
+  checks: number
+  checks_differed: number
   failed: number
   ended: number
   live_age_max_ms: number | null
@@ -2256,6 +2263,13 @@ export interface TaMonitorRule {
   limit_ms: number
   runs: number
   loads: number
+  /** The runs that continued the rule's run where it stopped, instead of running its script over all its bars. */
+  continued: number
+  /** Its continued runs checked against a whole run, those a whole run gave otherwise, the longest check, the last difference. */
+  checks: number
+  differed: number
+  check_ms_max: number | null
+  last_difference: string | null
   failed: number
   ended: number
   deferred: number

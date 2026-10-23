@@ -10,8 +10,11 @@ import {
   barLength,
   bucketTitle,
   checkHref,
+  checksLabel,
   coarserCounts,
+  continuedLabel,
   dayIn,
+  differedLabel,
   filledBuckets,
   limitInView,
   limitText,
@@ -213,5 +216,31 @@ describe('the delivery and the results', () => {
       ['bbbbbbbbbbbb', null, { days: 2, total: 0.30000000000000004, last: { day: '2026-10-21', percent: 0.4, run_id: '20261022-010000-aaaaaa' } }],
     ])
     expect(ruleName({ name: null, rule_id: 'cccccccccccc' })).toBe('A rule no longer there (cccccccccccc)')
+  })
+})
+
+describe('how a rule\'s new bars were run', () => {
+  it('says whether they continued its run, and how its checks against a whole run went', () => {
+    expect([continuedLabel(monitorRule()), checksLabel(monitorRule())]).toEqual(['all continued', '144 checks against a whole run, 2.9 s at most'])
+    expect([continuedLabel(monitorRule({ continued: 920 })), checksLabel(monitorRule({ checks: 1, check_ms_max: null }))]).toEqual([
+      '920 continued', '1 check against a whole run',
+    ])
+    expect(checksLabel(monitorRule({ checks: 0 }))).toBe('Not checked against a whole run yet')
+    expect([continuedLabel(monitorRule({ continued: 0, checks: 0 })), checksLabel(monitorRule({ continued: 0, checks: 0 }))]).toEqual([
+      'each a whole run', null,
+    ])
+    expect(continuedLabel(monitorRule({ runs: 0, continued: 0 }))).toBeNull()
+  })
+
+  it('says what a whole run gave otherwise, the last time', () => {
+    const difference = 'plot "plot_0" at 2026-10-22T09:12:30Z: 1.5 continued, 1.25 whole'
+
+    expect(differedLabel(monitorRule())).toBeNull()
+    expect(differedLabel(monitorRule({ differed: 1, last_difference: difference }))).toEqual({
+      summary: 'A whole run gave otherwise once', detail: `The last time: ${difference}. Each new bar runs it whole since.`,
+    })
+    expect(differedLabel(monitorRule({ differed: 2, last_difference: null }))).toEqual({
+      summary: 'A whole run gave otherwise 2 times', detail: 'Each new bar runs it whole since.',
+    })
   })
 })

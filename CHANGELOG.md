@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.30.0 - Technical Analysis: each new bar continues its rule's run
+
+**Release date:** not released yet
+
+The TA engine ran a rule's script over all of its bars at each new one. On the server that was 2.7 s a run (3.8 s at 95 %) for the user's Kernel + Avg multi VWAP rule on R60, and more as the day went on: about 5,600 bars at 08:47 in Paris with a day of history, 9,500 by the evening. The kernel library was 4 % of it; the rest was PineTS running every bar again. Each new bar now continues the run where it stopped.
+
+### Continued runs
+
+- **A rule's new bars continue its run** (`continued` in the load the engine sends, `Runner.continueRun` in `admin_ui/src/features/ta/engine/runnerCore.ts`). The runner keeps the PineTS and the context of the rule's whole run, and runs each new bar on them, as a whole run runs its last bar: PineTS's own loop (`_executeIterations`) on the same context, the bar added as PineTS adds one (`_appendCandle`). These are PineTS's private members, checked at each load: a PineTS without them runs every rule whole, as before.
+- **Measured on the user's rule** (script v5 with its KernelFunctions library, R60 on capital/US100, the bars of 21 and 22 October read through the MCP), with the built runner and the shadow runner's heap of 256 MB: loaded on the 4,263 bars before the restart, then 5,213 new bars one at a time, the day's every alert was the whole run's (5,238 of 5,238, the 13 that make signals among them). 0.34 ms a bar on the Mac (3 ms at most), where a whole run of the day's 9,476 bars took 2.0 s there and about 4.6 s on the server.
+- **What still runs whole at each new bar**: a script that reads what a whole run gives otherwise at an earlier bar (`wholeBecause`, read in its code, comments and strings left out): where the bars end (`barstate` but `isfirst`, `last_bar_index`, `last_bar_time`, `session.islastbar`), the clock (`timenow`, `math.random`), another series (`request.*`), the chart's visible range, and a `strategy()`. Its rule says why: `whole` in its state, said in the Engine column of the Signal rules page.
+- **Checked against a whole run**: at a rule's first new bar, then every ten minutes (`CHECK_SECONDS`), at the end of a tick that leaves the time it should take (its last whole run's and a quarter more), or anyway once ten minutes late; one check a tick, live rules first. The whole run's alerts and plots (keyed as PineTS keys them, two plots of one title apart) are compared with the continued run's over the bars since the last check; the same, the next bars continue the whole run's context. On the user's rule, a check every 60 bars over the day: 87 checks, all the same, 1.3 s each on the Mac.
+- **A difference**, or a whole run that fails where the continued one went on, makes the rule run whole at each new bar until the engine starts again. It is said on Telegram once (once a day for a shadow rule an agent made).
+- **Memory**: a held run keeps its memory between bars (56 MB of heap for the user's rule at 9,476 bars, 65 MB with one held, 175 MB with three). After a load or a check, a runner whose heap is past half of its old space (`HELD_HEAP_SHARE`, measured after a collection the runner makes itself, its `gc` in a context of its own that no script sees) puts its run of the most bars back to whole runs. A runner that ends while it holds continued runs (its memory, a timeout) runs its rules whole until the next `restart_time`.
+- **Unchanged**: replays, backtests, studies and paper days load whole days, as before; the backtests' code digest is the same, so no run is marked stale. The Pine runner's answers kept per day for backtests (`_signal_cache`) are keyed by the runner and are made again once.
+
+### The Engine monitor
+
+- **Each rule's runs say how many continued its run**, and its checks against a whole run: how many, the longest, and the last difference (the Rules table).
+- **A new check of the last 15 minutes, "Continued runs as whole runs"**, fails when a whole run gave otherwise than a live rule's continued run, and health says it; a shadow rule's difference is a note.
+- **The ticks that checked a continued run are left out of "Ticks on time"**, as those that loaded a rule are: a whole run more, by design.
+- The checks are kept in their tick's `figures.checks` (`ta_engine_tick`); a run's continuation in its row's `figures` (`ta_rule_run`, which the engine now writes).
+
+**Deploying it:** nothing to set. `package.sh` builds the runner again.
+
+**Verification status:** 2,366 Python tests pass, the built runner's among them (Node 24: a rule's continued appends against a whole runner's, bar by bar, then a check); the 16 skipped need a database and a queue of their own. On a real PostgreSQL 16 (pgserver), the TA engine's live tests, a continued run and a check that differed among them, written and read back by the monitor's queries. 924 admin interface tests, the type check and the lint pass; in the runner's, a script of many built-ins (averages, bands, an anchored VWAP, `var` state and arrays, a library's weights made on the first bar, times in Paris, labels, `alert()`) continued bar by bar answers what a whole run answers. The user's rule on the real bars of 21 and 22 October, as above. The Engine monitor's Rules table seen on the dev server.
+
+**Not seen:** the engine on the server: a trading day of continued runs, a check's time there, the shadow runner's memory holding a run.
+
 ## v0.29.1 - A deploy no longer sets off the TA engine's feed warning, and the engine gets 2.5 GB
 
 **Release date:** 2026-10-22

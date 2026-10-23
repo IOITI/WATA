@@ -562,18 +562,23 @@ def test_open_positions_are_still_given_before_the_table_of_requests_exists():
 SINCE = datetime(2026, 10, 22, 11, 45, tzinfo=timezone.utc)
 
 
-def test_the_last_minutes_of_the_engine_are_read_in_five_statements_that_count_in_sql():
+def test_the_last_minutes_of_the_engine_are_read_in_six_statements_that_count_in_sql():
     db = FakeDb(rows=[{"tick_at": SINCE, "kept_since": SINCE - timedelta(days=3), "milliseconds": 180}])
 
     recent = asyncio.run(AdminQueries(db, "Europe/Paris").ta_monitor_recent(SINCE, slow_tick_ms=10_000))
 
-    last, ticks, runs, deferred, signals = db.calls
+    last, ticks, runs, deferred, checks, signals = db.calls
     assert "FROM ta_engine_tick ORDER BY tick_at DESC LIMIT 1" in last[0] and last[1] == ()
-    assert ticks[1] == (SINCE, 10_000) and "count(*) FILTER (WHERE milliseconds > $2 AND loads = 0 AND NOT restarted)" in ticks[0]
+    # A tick that loaded a rule or checked a continued run is no slow tick: a whole run more, by design.
+    steady = "loads = 0 AND NOT restarted AND figures->'checks' IS NULL"
+    assert ticks[1] == (SINCE, 10_000) and f"count(*) FILTER (WHERE milliseconds > $2 AND {steady})" in ticks[0]
+    assert f"max(milliseconds) FILTER (WHERE {steady}) AS steady_tick_max_ms" in ticks[0]
     # How far behind the feed was leaves out the engine's first tick after a start (a deploy stops the feed too).
     assert "FILTER (WHERE figures->'first' IS NULL) AS feed_lag_max_ms" in ticks[0]
     assert "GROUP BY rule_id, mode, runner" in runs[0] and runs[1] == (SINCE,)
     assert "unnest(deferred_rules)" in deferred[0]
+    assert "FROM ta_engine_tick, jsonb_array_elements(figures->'checks') AS c WHERE tick_at >= $1 GROUP BY 1, 2, 3" in checks[0]
+    assert "count(*) FILTER (WHERE (c->>'same' = 'false' OR c->>'outcome' = 'failed')) AS differed" in checks[0]
     assert "WHERE mode = 'live' AND raised_at >= $1" in signals[0]
     # The oldest tick kept is said apart from the last one.
     assert recent["kept_since"] == SINCE - timedelta(days=3) and "kept_since" not in recent["last_tick"]
@@ -587,11 +592,12 @@ def test_a_period_is_read_by_bar_of_time_and_narrowed_to_one_rule_in_every_state
         start, end, 600, "0123456789ab", signal_age_seconds=60, slow_tick_ms=10_000,
     ))
 
-    ticks, runs, signals_by_bucket, rules, deferred, signals, delivery, trader, results, kept = db.calls
+    ticks, runs, signals_by_bucket, rules, deferred, checks, signals, delivery, trader, results, kept = db.calls
     assert "date_bin($3::interval, tick_at, TIMESTAMPTZ '2000-01-01 00:00:00+00')" in ticks[0]
     assert ticks[1] == (start, end, timedelta(seconds=600), 10_000)
+    assert "count(*) FILTER (WHERE kind = 'append' AND figures->>'continued' = 'true') AS continued" in rules[0]
     # Every statement but the ticks' (and the oldest tick's) is narrowed to the rule, as its last argument.
-    for query, args in (runs, signals_by_bucket, rules, deferred, signals, delivery, trader, results):
+    for query, args in (runs, signals_by_bucket, rules, deferred, checks, signals, delivery, trader, results):
         assert args[-1] == "0123456789ab" and f"= ${len(args)}" in query
     assert signals_by_bucket[1][3] == CLOSE_WITH_ENTRY and signals[1][2] == 60.0
     assert "LEFT JOIN ta_rule_run r ON r.rule_id = s.rule_id AND r.tick_at = s.raised_at" in delivery[0]
@@ -609,7 +615,7 @@ def test_before_the_engine_measured_anything_its_monitor_reads_as_empty():
     queries = AdminQueries(NoTables(), "Europe/Paris")
 
     assert asyncio.run(queries.ta_monitor_recent(SINCE, slow_tick_ms=10_000)) == {
-        "last_tick": None, "kept_since": None, "ticks": {}, "runs": [], "deferred": [], "signals": [],
+        "last_tick": None, "kept_since": None, "ticks": {}, "runs": [], "deferred": [], "checks": [], "signals": [],
     }
     period = asyncio.run(queries.ta_monitor_period(SINCE, SINCE, 600, signal_age_seconds=60, slow_tick_ms=10_000))
     assert all(value in (None, []) for value in period.values())

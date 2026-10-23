@@ -74,6 +74,17 @@ _TA_TRADER_COLUMNS = ("decided_at", "outcome", "reason", "position_id")
 # the bucket's length given as $3): the Engine monitor's figures, in SQL so that a month of runs is never read.
 _MS = "(extract(epoch FROM {}) * 1000)::float8"
 _BUCKET = "extract(epoch FROM date_bin($3::interval, {}, TIMESTAMPTZ '2000-01-01 00:00:00+00'))::bigint"
+# The ticks judged by their time: neither the daily restart, nor a load of a rule, nor a check of a continued run
+# (src/ta_engine/engine.py), each a whole run more by design.
+_STEADY = "loads = 0 AND NOT restarted AND figures->'checks' IS NULL"
+# What the continued runs' checks against a whole run were, by rule (the ticks' figures.checks, c): a check
+# differed when the whole run gave something else, or failed where the continued run went on.
+_DIFFERED = "(c->>'same' = 'false' OR c->>'outcome' = 'failed')"
+_CHECKS = f"""c->>'rule_id' AS rule_id, c->>'mode' AS mode, c->>'runner' AS runner, count(*) AS checks,
+       count(*) FILTER (WHERE {_DIFFERED}) AS differed,
+       max((c->>'ms')::int) AS check_max_ms,
+       (array_agg(coalesce(c->'differences'->>0, c->>'detail') ORDER BY tick_at DESC) FILTER (WHERE {_DIFFERED}))[1]
+           AS last_difference"""
 
 # The signal an order came from.
 _ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp", "decided_at")
@@ -1020,8 +1031,9 @@ class AdminQueries:
             SELECT count(*) AS ticks,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY milliseconds::float8) AS tick_p50_ms,
                    max(milliseconds) AS tick_max_ms,
-                   max(milliseconds) FILTER (WHERE loads = 0 AND NOT restarted) AS steady_tick_max_ms,
-                   count(*) FILTER (WHERE milliseconds > $2 AND loads = 0 AND NOT restarted) AS slow_ticks,
+                   -- A tick that loaded a rule or checked a continued run takes a whole run more, by design.
+                   max(milliseconds) FILTER (WHERE {_STEADY}) AS steady_tick_max_ms,
+                   count(*) FILTER (WHERE milliseconds > $2 AND {_STEADY}) AS slow_ticks,
                    -- The engine's first tick after a start may find the feed stopped with it (a deploy).
                    max({_MS.format("tick_at - covered_until")}) FILTER (WHERE figures->'first' IS NULL) AS feed_lag_max_ms,
                    max(memory_used_mb) AS memory_used_max_mb,
@@ -1062,6 +1074,11 @@ class AdminQueries:
             """,
             since,
         )
+        checks = await self._fetch_optional(
+            f"SELECT {_CHECKS} FROM ta_engine_tick, jsonb_array_elements(figures->'checks') AS c "
+            "WHERE tick_at >= $1 GROUP BY 1, 2, 3 ORDER BY 1, 3",
+            since,
+        )
         signals = await self._fetch_optional(
             """
             SELECT rule_id, outcome, CASE WHEN outcome IN ('refused', 'failed') THEN detail END AS detail,
@@ -1080,6 +1097,7 @@ class AdminQueries:
             "ticks": _clean_row(ticks[0]) if ticks else {},
             "runs": [_clean_row(row) for row in runs],
             "deferred": [_clean_row(row) for row in deferred],
+            "checks": [_clean_row(row) for row in checks],
             "signals": [_clean_row(row) for row in signals],
         }
 
@@ -1111,7 +1129,7 @@ class AdminQueries:
                    count(*) AS ticks,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY milliseconds::float8) AS tick_p50_ms,
                    max(milliseconds) AS tick_max_ms,
-                   count(*) FILTER (WHERE milliseconds > $4 AND loads = 0 AND NOT restarted) AS slow,
+                   count(*) FILTER (WHERE milliseconds > $4 AND {_STEADY}) AS slow,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY {_MS.format("tick_at - covered_until")}) AS feed_lag_p50_ms,
                    max({_MS.format("tick_at - covered_until")}) AS feed_lag_max_ms,
                    max(live_rss_mb) AS live_rss_mb, max(shadow_rss_mb) AS shadow_rss_mb, max(engine_rss_mb) AS engine_rss_mb,
@@ -1168,6 +1186,7 @@ class AdminQueries:
             SELECT rule_id,
                    count(*) FILTER (WHERE kind = 'append') AS runs,
                    count(*) FILTER (WHERE kind = 'load') AS loads,
+                   count(*) FILTER (WHERE kind = 'append' AND figures->>'continued' = 'true') AS continued,
                    count(*) FILTER (WHERE outcome = 'failed') AS failed,
                    count(*) FILTER (WHERE outcome = 'ended') AS ended,
                    percentile_cont(ARRAY[0.5, 0.95]) WITHIN GROUP (ORDER BY milliseconds::float8)
@@ -1199,6 +1218,13 @@ class AdminQueries:
             GROUP BY waited.rule_id
             ORDER BY waited.rule_id
             """,
+            *args,
+        )
+        args = [start, end]
+        of_rule = rule("c->>'rule_id'", args)
+        checks = await self._fetch_optional(
+            f"SELECT {_CHECKS} FROM ta_engine_tick, jsonb_array_elements(figures->'checks') AS c "
+            f"WHERE tick_at >= $1 AND tick_at < $2{of_rule} GROUP BY 1, 2, 3 ORDER BY 1, 3",
             *args,
         )
         args = [start, end, float(signal_age_seconds)]
@@ -1275,6 +1301,7 @@ class AdminQueries:
             "signals_by_bucket": [_clean_row(row) for row in signals_by_bucket],
             "rules": [_percentiles(_percentiles(_clean_row(row), "run"), "delay") for row in rules],
             "deferred": [_clean_row(row) for row in deferred],
+            "checks": [_clean_row(row) for row in checks],
             "signals": [_clean_row(row) for row in signals],
             "steps": [_clean_row(row) for row in delivery],
             "trader": [_clean_row(row) for row in trader],

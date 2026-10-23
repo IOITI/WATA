@@ -238,6 +238,19 @@ describe('the Signal rules page', () => {
     expect(screen.getByRole('link', { name: 'run in 41 ms' })).toHaveAttribute('href', '/ta/monitor?rule=aaaaaaaaaaaa')
   })
 
+  it('says why each new bar runs a rule whole, when it does', async () => {
+    const state = ENGINE.rules.aaaaaaaaaaaa
+    const whole = { ...state, state: 'running' as const, detail: null, figures: { milliseconds: 1840, continued: false, whole: 'its script reads barstate.islast' } }
+    ENGINE.rules.aaaaaaaaaaaa = whole
+    try {
+      renderPage()
+
+      expect(await screen.findByText('Each new bar runs it whole: its script reads barstate.islast.')).toBeInTheDocument()
+    } finally {
+      ENGINE.rules.aaaaaaaaaaaa = state
+    }
+  })
+
   it('shows each shadow rule traded on paper, beside its reference', async () => {
     paper = {
       rules: {

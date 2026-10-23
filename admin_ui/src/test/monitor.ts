@@ -21,7 +21,7 @@ export const NOW: TaMonitorNow = {
   },
   window: {
     ticks: 90, tick_p50_ms: 140, tick_max_ms: 3800, steady_tick_max_ms: 820, slow_ticks: 0, feed_lag_max_ms: 13_400,
-    memory_used_max_mb: 530.2, memory_limit_mb: 1024, oom_kills: 0, deferred: 4, runs: 105, failed: 0, ended: 0,
+    memory_used_max_mb: 530.2, memory_limit_mb: 1024, oom_kills: 0, deferred: 4, runs: 105, checks: 2, checks_differed: 0, failed: 0, ended: 0,
     live_age_max_ms: 1580, live_delay_max_ms: 1620, live_signals: 2, live_not_sent: 0,
   },
   slowest_run: { rule_id: 'aaaaaaaaaaaa', name: 'EMA cross', ms: 312, limit_ms: 30_000 },
@@ -35,7 +35,8 @@ export const NOW: TaMonitorNow = {
 
 export function monitorRule(changes: Partial<TaMonitorRule> = {}): TaMonitorRule {
   return {
-    rule_id: 'aaaaaaaaaaaa', name: 'EMA cross', mode: 'live', made_by: null, bars: { type: 'time', timeframe: '1' }, limit_ms: 30_000, runs: 1380, loads: 1, failed: 0,
+    rule_id: 'aaaaaaaaaaaa', name: 'EMA cross', mode: 'live', made_by: null, bars: { type: 'time', timeframe: '1' }, limit_ms: 30_000, runs: 1380, loads: 1,
+    continued: 1380, checks: 144, differed: 0, check_ms_max: 2900, last_difference: null, failed: 0,
     ended: 0, deferred: 0, asks: 0, run_ms: { p50: 41, p95: 80, max: 312 }, pinets_ms_avg: 36, load_ms_max: 2900, bars_max: 2760,
     delay_ms: { p50: 1610, p95: 1720, max: 3200 }, age_max_ms: 1580, last_run_at: '2026-10-22T09:59:51Z', last_failure: null,
     signals: { raised: 5, sent: 4, not_sent: 1, shadow: 0 },

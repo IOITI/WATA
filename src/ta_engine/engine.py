@@ -16,11 +16,19 @@ Every ten seconds, shortly after the feed has written its bars (``tick``):
    and the alerts they raise become signals.
 
 Each day at restart_time every rule starts again, its bars beginning
-history_days before that moment (its own, or the engine's): each new bar runs
-the script over all of a rule's bars, which this bounds to between history_days
-and one day more. The ten-second bars of an epic are kept from the earliest any
-of its rules needs. Best at a time the market is closed, as 21:15 UTC for the
-Nasdaq 100's daily break.
+history_days before that moment (its own, or the engine's), which bounds a
+rule's bars to between history_days and one day more. The ten-second bars of an
+epic are kept from the earliest any of its rules needs. Best at a time the
+market is closed, as 21:15 UTC for the Nasdaq 100's daily break.
+
+A rule's new bars continue its run in the runner, where its script allows it
+(runnerCore.ts says which do not): a bar costs about what it adds, instead of a
+run over all of the rule's bars. Such a run is run whole and compared now and
+then, at the end of a tick that has the time for it (``CHECK_SECONDS``, the
+first time at its first new bar): one that differs runs whole at each new bar
+from then on, as does every rule of a runner that ended while it held some,
+until the next restart_time. A rule whose run cannot continue is run whole at
+each new bar, over all of its bars.
 
 Before anything is sent: the rule is live in rules.json as it is now, alone on
 its indice; the action is long, short or close-position; the bar closed less
@@ -56,7 +64,7 @@ from typing import Any
 from src.admin.prices import price_decimals
 from src.admin.ta_rules import LIVE, OFF, SHADOW, bars_label, timeframe_seconds
 from src.ta_engine.bars import RangeBars, TimeBars
-from src.ta_engine.monitoring import APPEND, LOAD, RUN_ENDED, RUN_FAILED, Monitoring, RunMark, TickMark
+from src.ta_engine.monitoring import APPEND, LOAD, RUN_ENDED, RUN_FAILED, CheckMark, Monitoring, RunMark, TickMark
 from src.ta_engine.rules import EngineRule, RulesSnapshot
 from src.ta_engine.runner import RunnerDown, RunnerFailed
 from src.ta_engine.signals import Candidate, interpret, payload, settled
@@ -69,6 +77,11 @@ TICK_SECONDS = 10
 SETTLE_SECONDS = 1.5
 # A rule that failed is tried again after this long, unless it changed meanwhile.
 RETRY_SECONDS = 300
+# A continued run is run whole and compared this often, the first time at the rule's first new bar...
+CHECK_SECONDS = 600
+# ...at the end of a tick that leaves it time to end this long before the next one, unless it is
+# CHECK_SECONDS late: its last whole run's time, a quarter more, is what it is expected to take.
+CHECK_MARGIN_SECONDS = 1.0
 # A runner that keeps failing to start is tried again after these pauses, the last one repeated.
 RUNNER_RETRY_SECONDS = (5, 15, 60, 300)
 # A repeated message about the same rule is said on Telegram at most this often.
@@ -97,6 +110,8 @@ class RunnerSlot:
     failures: int = 0
     retry_at: float = 0.0
     error: str | None = None
+    # Its rules run whole at each new bar until then (the next restart_time): it ended while it held continued runs.
+    whole_until: float = 0.0
 
 
 def _moment(seconds: float) -> datetime:
@@ -128,6 +143,15 @@ class RuleRun:
     given_at: float = 0.0
     # Its last request to the runner, as the monitor measures it.
     mark: RunMark | None = None
+    # Its new bars continue its run in the runner; why they run it whole instead, the engine having asked otherwise.
+    continued: bool = False
+    whole: str | None = None
+    # When its run was last found a whole run's (its load, or a check), the bars continued since, the checks that
+    # agreed, and how long its last whole run took (about what its next check takes).
+    checked_at: float = 0.0
+    unchecked: int = 0
+    checks: int = 0
+    whole_seconds: float | None = None
 
 
 @dataclass
@@ -179,6 +203,8 @@ class Engine:
         self._asking: RuleRun | None = None
         self._covered: int | None = None
         self._restarted_at: int | None = None
+        # The runs a whole run differed from, by rule and what it runs: whole at each new bar until the engine starts again.
+        self._whole: dict[tuple, str] = {}
         self._notified: dict[str, float] = {}
         self._stopping = asyncio.Event()
         # What each tick and run took, written in the background; the tick being measured.
@@ -277,6 +303,8 @@ class Engine:
             except RunnerDown as e:
                 await self._runner_lost(slot, run, str(e), now)
                 lost.add(slot.name)
+        # Every signal of the tick is sent: a continued run may be checked with what is left of it.
+        await self._check_one(now, ready, lost)
         await self._write_states(now)
 
     # ── rules ──
@@ -314,7 +342,7 @@ class Engine:
                 await runner.request({"op": "unload", "rule": run.rule.id})
             except (RunnerFailed, RunnerDown) as e:
                 logger.warning("Rule %s could not be unloaded: %s", run.rule.id, e)
-        run.loaded, run.builder, run.pending = False, None, []
+        run.loaded, run.builder, run.pending, run.continued = False, None, [], False
 
     def last_restart(self, now: float) -> int:
         """The last restart_time at or before ``now``, epoch seconds."""
@@ -372,15 +400,27 @@ class Engine:
             await self._say(f"runner:{slot.name}", f"⚠️ WATA TA engine: {slot.error}", now)
             return False
         slot.failures, slot.error = 0, None
+        # It ended between two ticks if it held runs still (the kernel stops the shadow rules' first when memory runs short).
+        self._held_runs_lost(slot, now)
         # Nothing the old process held is there any more.
         for run in list(self._runs.values()):
             if run.loaded and run.slot is slot:
                 self._runs[run.rule.id] = RuleRun(rule=run.rule, state=OFF if run.rule.mode == OFF else LOADING)
         return True
 
+    def _held_runs_lost(self, slot: RunnerSlot, now: float) -> None:
+        """A runner that ended held continued runs, which it may have run short of memory for: its rules run whole until the next restart_time."""
+        if any(run.continued and run.loaded and run.slot is slot for run in self._runs.values()):
+            slot.whole_until = self.last_restart(now) + 86_400
+            logger.warning(
+                "TA engine: the %s runner ended while it held continued runs: its rules run whole at each new bar until %s.",
+                slot.name, _moment(slot.whole_until).isoformat(),
+            )
+
     async def _runner_lost(self, slot: RunnerSlot, run: RuleRun, why: str, now: float) -> None:
         """Nothing that runner held is left: its rules load again, the one it was running after a pause. The other runner's are untouched."""
         logger.error("TA engine: %s (rule %s)", why, run.rule.id)
+        self._held_runs_lost(slot, now)
         for rule_id, other in list(self._runs.items()):
             if self._slot_of(other) is not slot:
                 continue
@@ -471,7 +511,11 @@ class Engine:
         else:
             await self._append(run, bars, now)
 
-    def _load_request(self, run: RuleRun, bars: list) -> dict:
+    def _continues(self, run: RuleRun, now: float) -> bool:
+        """Whether a rule's new bars may continue its run: not once a whole run differed from it, nor on a runner that ended holding some."""
+        return (run.rule.id, run.rule.run_key) not in self._whole and now >= (run.slot or self._slot_of(run)).whole_until
+
+    def _load_request(self, run: RuleRun, bars: list, *, continued: bool = False) -> dict:
         rule = run.rule
         return {
             "op": "load",
@@ -486,6 +530,7 @@ class Engine:
             "ticker": rule.ticker().text(),
             "timeframe": rule.timeframe(),
             "bars": bars,
+            "continued": continued,
         }
 
     async def _request(self, run: RuleRun, kind: str, message: dict, bars: list, now: float) -> dict:
@@ -514,15 +559,30 @@ class Engine:
     async def _load(self, run: RuleRun, bars: list, now: float) -> None:
         run.state, run.detail = LOADING, None
         run.slot = self._slot_of(run)
+        asked = self._continues(run, now)
         try:
-            answer = await self._request(run, LOAD, self._load_request(run, bars), bars, now)
+            answer = await self._request(run, LOAD, self._load_request(run, bars, continued=asked), bars, now)
         except RunnerFailed as e:
             await self._failed(run, f"The script does not run: {e}", now)
             return
         run.loaded, run.state = True, RUNNING
         run.detail = "; ".join(answer.get("warnings") or []) or None
+        run.continued = answer.get("continued") is True
+        run.whole = None if run.continued else answer.get("whole") or (None if asked else self._why_whole(run))
+        run.checked_at, run.unchecked, run.checks = now, 0, 0
+        run.whole_seconds = run.mark.ended_at - run.mark.started_at
         self._ran(run, answer, bars)
-        logger.info("Rule %s (%s) loaded on %d bars in %d ms.", run.rule.id, run.rule.name, answer.get("bars", 0), answer.get("milliseconds", 0))
+        logger.info(
+            "Rule %s (%s) loaded on %d bars in %d ms; %s.", run.rule.id, run.rule.name, answer.get("bars", 0),
+            answer.get("milliseconds", 0), "its new bars continue its run" if run.continued else f"each new bar runs it whole: {run.whole}",
+        )
+
+    def _why_whole(self, run: RuleRun) -> str:
+        """Why the engine did not ask a rule's new bars to continue its run."""
+        found = self._whole.get((run.rule.id, run.rule.run_key))
+        if found:
+            return f"{found}, until the engine starts again"
+        return f"its runner ended while it held continued runs, until {_moment((run.slot or self._slot_of(run)).whole_until).isoformat()}"
 
     async def _append(self, run: RuleRun, bars: list, now: float) -> None:
         try:
@@ -531,9 +591,87 @@ class Engine:
             await self._failed(run, f"The script failed on a new bar: {e}", now)
             return
         run.state, run.detail = RUNNING, run.detail if run.state == RUNNING else None
+        continued = answer.get("continued") is True
+        if run.continued and not continued:
+            # The runner went back to whole runs (its heap, a check): it says why.
+            run.whole = answer.get("whole") or "the runner runs it whole"
+            logger.warning("Rule %s (%s): each new bar runs it whole from now on: %s.", run.rule.id, run.rule.name, run.whole)
+        run.continued = continued
+        if continued:
+            run.unchecked += len(bars)
         self._ran(run, answer, bars)
         await self._signals(run, answer, bars, now)
         run.mark.done_at = self._clock()
+
+    # ── continued runs, checked against a whole run ──
+
+    async def _check_one(self, now: float, ready: dict, lost: set) -> None:
+        """
+        The continued run due for a check longest, live ones first, run whole and compared: one a tick, when what
+        is left of it should hold it, or once it is CHECK_SECONDS late.
+        """
+        due = []
+        for run in self._runs.values():
+            slot = run.slot or self._slot_of(run)
+            if not (run.continued and run.loaded and run.unchecked and run.rule.mode != OFF and run.retry_at <= now):
+                continue
+            if not ready.get(slot.name) or slot.name in lost:
+                continue
+            due_at = run.checked_at + (CHECK_SECONDS if run.checks else 0)
+            if now >= due_at:
+                due.append((run.rule.mode != LIVE, due_at, run))
+        if not due:
+            return
+        _, due_at, run = min(due, key=lambda entry: entry[:2])
+        expected = 1.25 * (run.whole_seconds or 0.0)
+        if self._clock() - now + expected > TICK_SECONDS - CHECK_MARGIN_SECONDS and now - due_at < CHECK_SECONDS:
+            return
+        await self._check(run, now)
+
+    async def _check(self, run: RuleRun, now: float) -> None:
+        slot = run.slot or self._slot_of(run)
+        mark = CheckMark(rule_id=run.rule.id, mode=LIVE if run.rule.mode == LIVE else SHADOW, runner=slot.name, started_at=self._clock())
+        if self._mark is not None:
+            self._mark.checks.append(mark)
+        self._asking = run
+        try:
+            answer = await slot.runner.request({"op": "check", "rule": run.rule.id})
+        except RunnerFailed as e:
+            mark.ended_with(self._clock(), RUN_FAILED, str(e))
+            # The runner runs it whole from now on: its next bar says the failure again, as a whole run's.
+            await self._differed(run, f"a whole run of it failed where its continued run went on: {e}", now)
+            return
+        except RunnerDown as e:
+            mark.ended_with(self._clock(), RUN_ENDED, str(e))
+            await self._runner_lost(slot, run, str(e), now)
+            return
+        finally:
+            self._asking = None
+        mark.answered(self._clock(), answer)
+        if mark.compared:
+            run.whole_seconds = mark.ended_at - mark.started_at
+        if answer.get("same") is False:
+            differences = answer.get("differences") or ["no detail"]
+            await self._differed(run, answer.get("whole") or f"a whole run differed from its continued run: {differences[0]}", now)
+            return
+        run.checked_at, run.unchecked = now, 0
+        if answer.get("same") is True:
+            run.checks += 1
+        if answer.get("continued") is not True:
+            # The runner went back to whole runs for its heap: it says why.
+            run.continued, run.whole = False, answer.get("whole") or "the runner runs it whole"
+            logger.warning("Rule %s (%s): each new bar runs it whole from now on: %s.", run.rule.id, run.rule.name, run.whole)
+
+    async def _differed(self, run: RuleRun, why: str, now: float) -> None:
+        """A whole run did not give what the rule's continued run gave: whole at each new bar from now on, said once."""
+        run.continued, run.whole = False, why
+        self._whole[(run.rule.id, run.rule.run_key)] = why
+        logger.warning("Rule %s (%s): %s. Each new bar runs it whole until the engine starts again.", run.rule.id, run.rule.name, why)
+        await self._say(
+            f"{run.rule.id}:continued",
+            f"⚠️ WATA TA engine, rule {run.rule.name!r}: {why}. Each new bar runs its script whole from now on.",
+            now, every=self._every(run),
+        )
 
     def _ran(self, run: RuleRun, answer: dict, bars: list) -> None:
         run.bars = answer.get("bars", run.bars)
@@ -544,7 +682,7 @@ class Engine:
         logger.warning("Rule %s (%s): %s", run.rule.id, run.rule.name, why)
         run.state, run.detail, run.retry_at = ERROR, why, now + RETRY_SECONDS
         # Loaded again from its history when it is tried again.
-        run.loaded, run.builder, run.pending = False, None, []
+        run.loaded, run.builder, run.pending, run.continued = False, None, [], False
         await self._say(run.rule.id, f"⚠️ WATA TA engine, rule {run.rule.name!r}: {why}", now, every=self._every(run))
 
     # ── signals ──
@@ -678,7 +816,10 @@ class Engine:
                 "bars": run.bars,
                 "last_bar_time": run.last_bar_time,
                 "last_alert_at": run.last_alert_at,
-                "figures": {"milliseconds": run.milliseconds},
+                "figures": {
+                    "milliseconds": run.milliseconds, "continued": run.continued, "whole": run.whole if run.loaded else None,
+                    "checks": run.checks,
+                },
             })
         for rule_id, why in self._file_errors.items():
             if rule_id not in self._runs and rule_id != "*":

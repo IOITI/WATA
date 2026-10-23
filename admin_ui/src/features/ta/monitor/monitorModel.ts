@@ -121,7 +121,7 @@ export function tilesOf(now: TaMonitorNow): MonitorTile[] {
       key: 'tick',
       label: 'Longest tick',
       value: window.steady_tick_max_ms === null ? NONE : formatWait(window.steady_tick_max_ms),
-      hint: `One every ${limitText(limits.tick_ms)}; the daily restart and loads aside`,
+      hint: `One every ${limitText(limits.tick_ms)}; the daily restart, loads and checks aside`,
       ratio: ratioOf(window.steady_tick_max_ms, limits.tick_ms),
       tone: toneOf(window.steady_tick_max_ms, limits.tick_ms, limits.share),
       scale: ['0', limitText(limits.tick_ms)],
@@ -370,4 +370,27 @@ export function resultRows(
 /** A rule as the page names it: by its name, or as gone from the file. */
 export function ruleName(rule: { name: string | null; rule_id: string }): string {
   return rule.name ?? `A rule no longer there (${rule.rule_id})`
+}
+
+/** How a rule's new bars were run in the period: continuing its run where it stopped, or each a whole run over all its bars. */
+export function continuedLabel(rule: Pick<TaMonitorRule, 'runs' | 'continued'>): string | null {
+  if (rule.runs === 0) return null
+  if (rule.continued === 0) return 'each a whole run'
+  return rule.continued === rule.runs ? 'all continued' : `${formatNumber(rule.continued)} continued`
+}
+
+/** Its continued runs checked against a whole run in the period: how many, the longest. Null for a rule never continued. */
+export function checksLabel(rule: Pick<TaMonitorRule, 'continued' | 'checks' | 'check_ms_max'>): string | null {
+  if (rule.checks === 0) return rule.continued === 0 ? null : 'Not checked against a whole run yet'
+  const longest = rule.check_ms_max === null ? '' : `, ${formatWait(rule.check_ms_max)} at most`
+  return `${formatNumber(rule.checks)} check${rule.checks === 1 ? '' : 's'} against a whole run${longest}`
+}
+
+/** That a whole run gave otherwise than a rule's continued run, and what it gave the last time; null when they always agreed. */
+export function differedLabel(rule: Pick<TaMonitorRule, 'differed' | 'last_difference'>): { summary: string; detail: string } | null {
+  if (rule.differed === 0) return null
+  return {
+    summary: `A whole run gave otherwise ${rule.differed === 1 ? 'once' : `${formatNumber(rule.differed)} times`}`,
+    detail: `${rule.last_difference ? `The last time: ${rule.last_difference}. ` : ''}Each new bar runs it whole since.`,
+  }
 }

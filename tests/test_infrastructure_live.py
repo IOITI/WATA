@@ -606,24 +606,32 @@ def test_the_signals_from_elsewhere_are_read_before_the_ta_engine_ever_ran(in_a_
 def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_older_rows_go(in_a_database_of_its_own):
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.database.postgres import AsyncDbSignalJournalManager, AsyncDbTaManager, init_ta_schema
-    from src.ta_engine.monitoring import APPEND, LOAD, RunMark, TickMark
+    from src.ta_engine.monitoring import APPEND, LOAD, CheckMark, RunMark, TickMark
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
     # A moment with a fraction of a second: a signal finds its run by it, to the microsecond.
     at = (now - timedelta(minutes=5)).timestamp() + 0.5
 
-    def measured(moment, kind, milliseconds):
+    difference = 'plot "plot_0" at 2026-10-22T09:12:30Z: 1.5 continued, 1.25 whole'
+
+    def measured(moment, kind, milliseconds, *, checked=False):
         run = RunMark(rule_id="aaaaaaaaaaaa", mode="live", runner="live", kind=kind, tick_at=moment, started_at=moment + 0.01,
                       bars_given=1, bar_closed_at=moment - 1.5)
-        run.answered(moment + 0.01 + milliseconds / 1000, {"milliseconds": milliseconds - 5, "bars": 900, "alerts": []}, set())
+        run.answered(moment + 0.01 + milliseconds / 1000, {"milliseconds": milliseconds - 5, "bars": 900, "alerts": [], "continued": checked}, set())
         run.done_at = run.ended_at + 0.02
         tick = TickMark(moment, covered_until=int(moment - 1.5), rules_on=2, deferred=["bbbbbbbbbbbb"], runs=[run])
-        return tick.row(moment + 0.2, {"memory_used_mb": 500.0, "memory_limit_mb": 1024.0, "oom_kills": 0}), run.row()
+        if checked:
+            # Its continued run checked against a whole run, which gave otherwise.
+            check = CheckMark(rule_id="aaaaaaaaaaaa", mode="live", runner="live", started_at=run.done_at)
+            check.answered(run.done_at + 2.4, {"milliseconds": 2390, "bars": 900, "compared": 12, "same": False, "differences": [difference]})
+            tick.checks.append(check)
+        ended = moment + 0.2 + (2.4 if checked else 0)
+        return tick.row(ended, {"memory_used_mb": 500.0, "memory_limit_mb": 1024.0, "oom_kills": 0}), run.row()
 
     old_tick, old_run = measured(at - 9 * 86_400, LOAD, 400)
     # The engine's first tick after a start, the feed stopped with it 99 s before.
     started = TickMark(at - 30, covered_until=int(at - 129), first=True).row(at - 29.9, {})
-    tick, run = measured(at, APPEND, 60)
+    tick, run = measured(at, APPEND, 60, checked=True)
 
     async def scenario(writer, reader):
         await init_ta_schema(writer)
@@ -662,6 +670,12 @@ def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_old
     assert recent["signals"] == [{"rule_id": "aaaaaaaaaaaa", "outcome": "sent", "detail": None, "signals": 1}]
     # The first tick after a start counts as a tick, but not for how far behind the feed was.
     assert recent["ticks"]["ticks"] == 2 and recent["ticks"]["feed_lag_max_ms"] == pytest.approx(1500, abs=1000)
+    # A tick that checked a continued run is no steady tick; the check is read back from its figures.
+    assert recent["ticks"]["steady_tick_max_ms"] == 100 and recent["ticks"]["tick_max_ms"] == 2600
+    checked = {"rule_id": "aaaaaaaaaaaa", "mode": "live", "runner": "live", "checks": 1, "differed": 1, "check_max_ms": 2400,
+               "last_difference": difference}
+    assert recent["checks"] == [checked] and period["checks"] == [checked] and of_another["checks"] == []
+    assert period["rules"][0]["continued"] == 1
     # The steps of the signal, its run's among them: the join of the signal's raised_at and the run's tick_at held.
     steps = {row["step"]: row for row in period["steps"]}
     assert steps["close_to_tick"]["p50"] == pytest.approx(1500)

@@ -305,10 +305,15 @@ class FakeEngine:
     def monitor_recent(self, since: datetime, slow_tick_ms: int) -> dict:
         now = datetime.now(timezone.utc)
         tick, on = self._tick(now), self._on()
-        runs, deferred = [], []
+        runs, deferred, checks = [], [], []
         for rule in on:
             median, _, slowest = self._run_ms(rule, now - timedelta(minutes=2))
             live = rule["mode"] == LIVE
+            # Its continued run checked against a whole run every ten minutes.
+            checks.append({
+                "rule_id": rule["id"], "mode": rule["mode"], "runner": "live" if live else "shadow", "checks": 1, "differed": 0,
+                "check_max_ms": round(slowest * 40), "last_difference": None,
+            })
             runs.append({
                 "rule_id": rule["id"], "mode": rule["mode"], "runner": "live" if live else "shadow",
                 "runs": 900 // self._seconds_of(rule), "loads": 0, "append_max_ms": round(slowest), "load_max_ms": None,
@@ -336,7 +341,7 @@ class FakeEngine:
                 "slow_ticks": 0, "feed_lag_max_ms": tick["feed_lag_max_ms"], "memory_used_max_mb": tick["memory_used_mb"] + 6,
                 "memory_limit_mb": 2560.0, "oom_kills": 0, "deferred": sum(row["ticks"] for row in deferred),
             },
-            "runs": runs, "deferred": deferred,
+            "runs": runs, "deferred": deferred, "checks": checks,
             "signals": [{"rule_id": rule_id, "outcome": outcome, "detail": detail, "signals": count} for (rule_id, outcome, detail), count in signals.items()],
         }
 
@@ -375,13 +380,21 @@ class FakeEngine:
                     "delay_p50_ms": 1580 + busiest[1][0], "delay_max_ms": 1580 + max(ms[2] for _, ms, _ in figures),
                 })
             moment += timedelta(seconds=bucket_seconds)
-        rules, deferred = [], []
+        rules, deferred, checks = [], [], []
         for rule in on:
             median, p95, slowest = self._run_ms(rule, end)
             per = self._seconds_of(rule)
             spanned = (end - max(start, kept_since)).total_seconds()
+            # The rule on ten-second bars had a continued run a whole run gave otherwise, three days ago.
+            differed = 1 if per == 10 and spanned > 3 * 86_400 else 0
+            checks.append({
+                "rule_id": rule["id"], "mode": rule["mode"], "runner": "live" if rule["mode"] == LIVE else "shadow",
+                "checks": max(1, int(spanned // 600)), "differed": differed, "check_max_ms": 9800 if per == 10 else 2900,
+                "last_difference": 'plot "plot_2" at 2026-10-20T13:41:10Z: 25012.5 continued, 25012.25 whole' if differed else None,
+            })
             rules.append({
                 "rule_id": rule["id"], "runs": int(spanned // per), "loads": max(1, int(spanned // 86_400)),
+                "continued": int(spanned // per) - (int(spanned // per) // 3 if differed else 0),
                 "failed": 1 if per == 10 and spanned > 3 * 86_400 else 0, "ended": 0,
                 "run_p50_ms": median * 0.8, "run_p95_ms": p95, "run_max_ms": round(max(slowest, 7200 if per == 10 and spanned > 2 * 3600 else slowest)),
                 "load_max_ms": 9800 if per == 10 else 2900, "pinets_avg_ms": median * 0.8 - 4, "bars_max": 8640 if per == 10 else 1380,
@@ -408,7 +421,7 @@ class FakeEngine:
                 counts["not_sent"] += 1
         return {
             "kept_since": kept_since, "ticks": ticks, "runs_by_bucket": runs_by_bucket,
-            "signals_by_bucket": [by_bucket[key] for key in sorted(by_bucket)], "rules": rules, "deferred": deferred,
+            "signals_by_bucket": [by_bucket[key] for key in sorted(by_bucket)], "rules": rules, "deferred": deferred, "checks": checks,
             "signals": [{"rule_id": rule_id_, "mode": mode, "outcome": outcome, "detail": detail, "signals": count, "late": 0}
                         for (rule_id_, mode, outcome, detail), count in signals.items()],
             "steps": _steps(live_sent), "trader": _trader(live_sent), "results": _results(live_sent),

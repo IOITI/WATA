@@ -1,11 +1,12 @@
 """
 What the TA engine measures of itself, for the admin's Engine monitor: each tick
 (how long it took, what it read and wrote, how far the feed had come, the
-memory of the runners and of the container) and each run of a rule's script
-(how long the runner took, the bars it was given, the bar's close, the series
-it asked for, the signals it raised). Kept ``monitoring_days`` in ta_engine_tick
-and ta_rule_run; older rows are removed at the engine's start and at each
-restart_time.
+memory of the runners and of the container, the continued runs it checked
+against a whole run) and each run of a rule's script (how long the runner took,
+the bars it was given, the bar's close, the series it asked for, the signals it
+raised, whether it continued the rule's run). Kept ``monitoring_days`` in
+ta_engine_tick and ta_rule_run; older rows are removed at the engine's start and
+at each restart_time.
 
 Nothing here may hold back or fail a signal. The marks are plain values set by
 the loop as it goes, and handed over once the tick is done, every signal sent.
@@ -75,6 +76,8 @@ class RunMark:
     signals: int = 0
     outcome: str = RUN_OK
     detail: str | None = None
+    # {"continued": true}: its new bars continued the rule's run (a load: the run they will continue).
+    figures: dict = field(default_factory=dict)
 
     def answered(self, at: float, answer: dict, given: set) -> None:
         self.ended_at = at
@@ -83,6 +86,8 @@ class RunMark:
         held = answer.get("bars")
         self.bars_held = held if isinstance(held, int) and not isinstance(held, bool) else None
         self.alerts = sum(1 for alert in answer.get("alerts") or [] if isinstance(alert, dict) and alert.get("time") in given)
+        if answer.get("continued") is True:
+            self.figures["continued"] = True
 
     def ended_with(self, at: float, outcome: str, detail: str) -> None:
         self.ended_at, self.outcome, self.detail = at, outcome, detail[:DETAIL_CHARACTERS]
@@ -111,6 +116,48 @@ class RunMark:
             "signals": self.signals,
             "outcome": self.outcome,
             "detail": self.detail,
+            "figures": dict(self.figures),
+        }
+
+
+@dataclass
+class CheckMark:
+    """A rule's continued run run whole and compared (Runner.check of runnerCore.ts), in its tick's figures."""
+
+    rule_id: str
+    mode: str
+    runner: str
+    started_at: float
+    ended_at: float | None = None
+    # The runner's answer: its whole run's time, the bars it holds, those compared, whether they agreed.
+    pinets_ms: int | None = None
+    bars: int | None = None
+    compared: int = 0
+    same: bool | None = None
+    differences: list[str] = field(default_factory=list)
+    outcome: str = RUN_OK
+    detail: str | None = None
+
+    def answered(self, at: float, answer: dict) -> None:
+        self.ended_at = at
+        for name in ("pinets_ms", "bars", "compared"):
+            value = answer.get("milliseconds" if name == "pinets_ms" else name)
+            if isinstance(value, int) and not isinstance(value, bool):
+                setattr(self, name, value)
+        same = answer.get("same")
+        self.same = same if isinstance(same, bool) else None
+        self.differences = [str(entry)[:DETAIL_CHARACTERS] for entry in (answer.get("differences") or [])[:3]]
+
+    def ended_with(self, at: float, outcome: str, detail: str) -> None:
+        self.ended_at, self.outcome, self.detail = at, outcome, detail[:DETAIL_CHARACTERS]
+
+    def figure(self) -> dict:
+        """Its entry in its tick's ``figures.checks``."""
+        ended = self.ended_at if self.ended_at is not None else self.started_at
+        return {
+            "rule_id": self.rule_id, "mode": self.mode, "runner": self.runner, "ms": _ms(ended - self.started_at),
+            "pinets_ms": self.pinets_ms, "bars": self.bars, "compared": self.compared, "same": self.same,
+            "differences": self.differences, "outcome": self.outcome, "detail": self.detail,
         }
 
 
@@ -136,9 +183,13 @@ class TickMark:
     runner_starts: int | None = None
     shadow_runner_starts: int | None = None
     runs: list[RunMark] = field(default_factory=list)
+    checks: list[CheckMark] = field(default_factory=list)
 
     def row(self, ended: float, memory: dict) -> dict:
         """Its row of ta_engine_tick, with the memory read as it ended."""
+        figures: dict = {"first": True} if self.first else {}
+        if self.checks:
+            figures["checks"] = [check.figure() for check in self.checks]
         return {
             "tick_at": _moment(self.at),
             "ended_at": _moment(max(ended, self.at)),
@@ -158,7 +209,7 @@ class TickMark:
             "runner_starts": self.runner_starts,
             "shadow_runner_starts": self.shadow_runner_starts,
             **{name: memory.get(name) for name in MEMORY_FIELDS},
-            "figures": {"first": True} if self.first else {},
+            "figures": figures,
         }
 
 

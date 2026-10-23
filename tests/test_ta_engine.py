@@ -28,7 +28,7 @@ from src.admin.prices import range_bars, range_rows, range_volumes  # noqa: E402
 from src.admin.ta_rules import RuleStore  # noqa: E402
 from src.admin.ta_scripts import ScriptStore  # noqa: E402
 from src.ta_engine.bars import RangeBars, TimeBars, bucket_end  # noqa: E402
-from src.ta_engine.engine import Engine  # noqa: E402
+from src.ta_engine.engine import CHECK_SECONDS, Engine  # noqa: E402
 from src.ta_engine.monitoring import Monitoring  # noqa: E402
 from src.ta_engine.rules import read_rules  # noqa: E402
 from src.ta_engine.runner import NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command  # noqa: E402
@@ -491,7 +491,11 @@ class Source:
 
 
 class Runner:
-    """The runner as the engine sees it: an alert "Up" on each bar a test names, and "Down" after it on others."""
+    """
+    The runner as the engine sees it: an alert "Up" on each bar a test names, and "Down" after it on others. A rule
+    asked continued runs runs whole for ``whole_because`` (each new bar a whole run, as before them), or, a test
+    having set it to None, continues them; a check agrees unless ``differs`` says what differed.
+    """
 
     def __init__(self):
         self.running = False
@@ -501,13 +505,22 @@ class Runner:
         self.failing = None
         self.versions = {"pinets": "0.11.1", "node": "v24"}
         self.starts = 0
+        self.whole_because = "this runner runs every rule whole"
+        self.differs = None
+        # The rules asked continued runs, and why each runs whole (None: it continues).
+        self.modes = {}
 
     async def start(self):
         self.running, self.starts = True, self.starts + 1
+        self.modes = {}
         return self.versions
 
     async def stop(self):
         self.running = False
+
+    def _mode(self, rule):
+        whole = self.modes[rule]
+        return {"continued": whole is None, "whole": whole}
 
     async def request(self, message):
         self.requests.append(message)
@@ -515,6 +528,14 @@ class Runner:
             raise self.failing[1]
         if message["op"] == "unload":
             return {"ok": True}
+        if message["op"] == "check":
+            rule = message["rule"]
+            if self.differs is not None and self.modes.get(rule) is None:
+                self.modes[rule] = f"a whole run differed from its continued run: {self.differs}"
+                return {"ok": True, "op": "check", "bars": 120, "compared": 3, "from": 0, "same": False,
+                        "differences": [self.differs], "milliseconds": 40, **self._mode(rule)}
+            return {"ok": True, "op": "check", "bars": 120, "compared": 3, "from": 0, "same": True, "differences": [],
+                    "milliseconds": 40, **self._mode(rule)}
         bars = message["bars"]
         alerts = []
         for bar in bars:
@@ -522,7 +543,15 @@ class Runner:
                 alerts.append({"type": "alertcondition", "id": "alertcondition_0", "title": "Up", "message": "", "time": bar[0]})
             if bar[0] in self.closing:
                 alerts.append({"type": "alertcondition", "id": "alertcondition_1", "title": "Down", "message": "", "time": bar[0]})
-        return {"ok": True, "bars": len(bars), "milliseconds": 3, "alerts": alerts, "plots": {}, "warnings": []}
+        answer = {"ok": True, "bars": len(bars), "milliseconds": 3, "alerts": alerts, "plots": {}, "warnings": []}
+        rule = message["rule"]
+        if message["op"] == "load":
+            self.modes.pop(rule, None)
+            if message.get("continued"):
+                self.modes[rule] = self.whole_because
+        if rule in self.modes:
+            answer.update(self._mode(rule))
+        return answer
 
 
 class Journal:
@@ -1023,6 +1052,45 @@ def test_the_built_runner_runs_a_rule_in_its_confinement():
     assert set(appended["plots"]["Fast"]) == {str(bar[0]) for bar in bars[-5:]}
 
 
+@pytest.mark.skipif(not os.path.isfile(RUNNER) or _node_major() < 22, reason="the runner is not built, or no Node 22+ is here")
+def test_the_built_runner_continues_a_rule_as_a_whole_run_would_and_checks_it():
+    bars = TimeBars(60, "bid").add(ten_second_rows(T0 - 6 * 3600, 6 * 360), T0)
+    sha = hashlib.sha256(SCRIPT.encode()).hexdigest()
+    load = {
+        "op": "load", "rule": "0123456789ab", "script": {"source": SCRIPT, "sha256": sha}, "libraries": [],
+        "inputs": {"in_0": 8}, "ticker": "CAPITAL_US100", "timeframe": "1", "bars": bars[:-40],
+    }
+
+    async def answer(ask):
+        return []
+
+    async def scenario():
+        continuing = NodeRunner(runner_command(find_node("node"), RUNNER, 256), answer, timeout_seconds=30)
+        whole = NodeRunner(runner_command(find_node("node"), RUNNER, 256), answer, timeout_seconds=30)
+        await continuing.start()
+        await whole.start()
+        try:
+            loaded = await continuing.request({**load, "continued": True})
+            await whole.request(load)
+            pairs = []
+            for bar in bars[-40:]:
+                message = {"op": "append", "rule": "0123456789ab", "bars": [bar]}
+                pairs.append((await continuing.request(message), await whole.request(message)))
+            return loaded, pairs, await continuing.request({"op": "check", "rule": "0123456789ab"})
+        finally:
+            await continuing.stop()
+            await whole.stop()
+
+    loaded, pairs, checked = run(scenario())
+
+    assert (loaded["continued"], loaded["whole"]) == (True, None)
+    for continued, expected in pairs:
+        assert continued["continued"] is True and "continued" not in expected
+        assert (continued["bars"], continued["alerts"], continued["plots"]) == (expected["bars"], expected["alerts"], expected["plots"])
+    assert sum(len(continued["alerts"]) for continued, _ in pairs) > 0
+    assert (checked["same"], checked["compared"], checked["differences"], checked["continued"]) == (True, 40, [], True)
+
+
 ZONE_SCRIPT = """//@version=6
 indicator("Paris time")
 plot(hour(time, "Europe/Paris"), "Hour")
@@ -1407,3 +1475,151 @@ def test_each_tick_reads_the_memory_of_both_runners_once_its_rules_ran(scripts):
     assert (tick["live_rss_mb"], tick["shadow_rss_mb"], tick["memory_used_mb"], tick["memory_limit_mb"]) == (210.5, 150.0, 520.0, 1024.0)
     assert (tick["engine_rss_mb"], tick["runner_starts"], tick["shadow_runner_starts"]) == (None, 1, 1)
     assert {row["rule_id"] for row in journal.runs} >= {live_rule["id"]}
+
+
+# ── continued runs, checked against a whole run ──
+
+
+def ops(runner):
+    return [message["op"] for message in runner.requests]
+
+
+def test_a_rules_new_bars_continue_its_run_which_a_whole_run_checks_at_the_first_then_every_ten_minutes(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts, mode="live")
+    runner.whole_because = None
+    run(ticked(engine))
+    for count in (6, 6, CHECK_SECONDS // 10):
+        new_bars(source, clock, count)
+        run(ticked(engine))
+
+    assert ops(runner) == ["load", "append", "check", "append", "append", "check"]
+    assert runner.requests[0]["continued"] is True
+    assert [row["figures"] for row in journal.runs] == [{"continued": True}] * 4
+    first, second, third, fourth = journal.ticks
+    assert "checks" not in first["figures"] and "checks" not in third["figures"]
+    [check] = second["figures"]["checks"]
+    assert check == {
+        "rule_id": rule["id"], "mode": "live", "runner": "live", "ms": 0, "pinets_ms": 40, "bars": 120, "compared": 3,
+        "same": True, "differences": [], "outcome": "ok", "detail": None,
+    }
+    assert [entry["rule_id"] for entry in fourth["figures"]["checks"]] == [rule["id"]]
+    [state] = journal.rule_states[-1]
+    assert state["figures"] == {"milliseconds": 3, "continued": True, "whole": None, "checks": 2}
+    assert telegram.messages == []
+
+
+def test_a_check_waits_for_a_tick_that_leaves_it_time_unless_it_is_late(scripts):
+    engine, rule, clock, source, runner, *_ = engine_with(scripts)
+    runner.whole_because = None
+    answer = runner.request
+
+    async def slow(message):
+        if message["op"] in ("load", "check"):
+            # A whole run of 8 s: 10 s expected of the next, more than is left of a tick.
+            clock.at += 8
+        return await answer(message)
+
+    runner.request = slow
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+    new_bars(source, clock, CHECK_SECONDS // 10 - 6)
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+
+    # Due at the first new bar, the check waited; CHECK_SECONDS late, it ran all the same.
+    assert ops(runner) == ["load", "append", "append", "check", "append"]
+
+
+def test_a_continued_run_a_whole_run_differs_from_runs_whole_from_then_on_and_is_said(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts, mode="live")
+    differs = 'alertcondition "Up" at 2026-10-15T08:00:00Z only in the whole run'
+    runner.whole_because, runner.differs = None, differs
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+    # The next restart_time (15 Oct, 21:15 UTC): every rule starts again.
+    restart = T0 + 13 * 3600 + 15 * 60
+    count = (restart + 600 - source.covered) // 10
+    new_bars(source, clock, count)
+    run(ticked(engine))
+
+    why = f"a whole run differed from its continued run: {differs}"
+    assert ops(runner) == ["load", "append", "check", "append", "load"]
+    assert [entry["same"] for entry in journal.ticks[1]["figures"]["checks"]] == [False]
+    assert [row["figures"] for row in journal.runs[1:]] == [{"continued": True}, {}, {}]
+    assert telegram.messages == [f"⚠️ WATA TA engine, rule 'Cross on US100': {why}. Each new bar runs its script whole from now on."]
+    # Loaded again the next day, whole from the start: until the engine starts again.
+    assert runner.requests[-1]["continued"] is False
+    [state] = journal.rule_states[-1]
+    assert state["figures"]["continued"] is False and state["figures"]["whole"] == f"{why}, until the engine starts again"
+
+
+def test_a_runner_that_ended_holding_continued_runs_runs_its_rules_whole_until_the_next_restart_time(scripts):
+    engine, rule, clock, source, runner, journal, *_ = engine_with(scripts)
+    runner.whole_because = None
+    run(ticked(engine))
+    runner.failing = ("append", RunnerDown("The Pine runner ended (exit code -6): aborted (SIGABRT): Node does so when its heap is full."))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+    runner.failing = None
+    # Tried again after its pause, then the next day.
+    new_bars(source, clock, 36)
+    run(ticked(engine))
+    restart = T0 + 13 * 3600 + 15 * 60
+    new_bars(source, clock, (restart + 600 - source.covered) // 10)
+    run(ticked(engine))
+
+    loads = [message["continued"] for message in runner.requests if message["op"] == "load"]
+    assert loads == [True, False, True]
+    states = [state for states in journal.rule_states for state in states]
+    assert "its runner ended while it held continued runs, until 2026-10-15T21:15:00+00:00" in {
+        state["figures"]["whole"] for state in states
+    }
+
+
+def test_a_rule_whose_run_cannot_continue_runs_whole_says_why_and_is_never_checked(scripts):
+    engine, rule, clock, source, runner, journal, *_ = engine_with(scripts)
+    runner.whole_because = "its script reads barstate.islast"
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+
+    assert ops(runner) == ["load", "append"]
+    assert all(row["figures"] == {} for row in journal.runs)
+    [state] = journal.rule_states[-1]
+    assert (state["figures"]["continued"], state["figures"]["whole"]) == (False, "its script reads barstate.islast")
+
+
+def test_a_rule_the_runner_puts_back_to_whole_runs_is_no_longer_checked(scripts):
+    engine, rule, clock, source, runner, journal, *_ = engine_with(scripts)
+    runner.whole_because = None
+    run(ticked(engine))
+    # The runner's heap past its share: the rule of the most bars runs whole.
+    runner.modes[rule["id"]] = "the runner's heap was 61 % full, past the 50 % it may be at holding runs"
+    for _ in range(2):
+        new_bars(source, clock, CHECK_SECONDS // 10)
+        run(ticked(engine))
+
+    assert ops(runner) == ["load", "append", "append"]
+    [state] = journal.rule_states[-1]
+    assert state["figures"]["whole"] == "the runner's heap was 61 % full, past the 50 % it may be at holding runs"
+
+
+def test_one_check_a_tick_the_live_rules_first(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, *_ = two_runner_engine(scripts)
+    live.whole_because = shadow.whole_because = None
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+    new_bars(source, clock, 6)
+    run(ticked(engine))
+
+    checks = [(name, rule_id) for name, op, rule_id in sequence.seen if op == "check"]
+    assert checks == [("live", live_rule["id"]), ("shadow", shadow_rule["id"])]
+    assert [[entry["rule_id"] for entry in tick["figures"].get("checks", [])] for tick in journal.ticks] == [
+        [], [live_rule["id"]], [shadow_rule["id"]],
+    ]

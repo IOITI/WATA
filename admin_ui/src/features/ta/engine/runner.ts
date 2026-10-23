@@ -14,12 +14,27 @@
 import { createHash } from 'node:crypto'
 import { registerHooks } from 'node:module'
 import { createInterface } from 'node:readline'
+import { getHeapStatistics, setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 
 import type { SeriesAsk } from './provider'
 import { candleOf, Runner } from './runnerCore'
-import type { BarRow, RunnerRequest } from './runnerCore'
+import type { BarRow, HeapMeasure, RunnerRequest } from './runnerCore'
 
 declare const __PINETS_VERSION__: string
+
+// What the held runs keep is measured after a collection, the runner's own (in a context
+// of its own: not a global the scripts see), against the old space the engine gave it.
+setFlagsFromString('--expose-gc')
+const collect = runInNewContext('gc') as () => void
+const oldSpace = /^--max-old-space-size=(\d+)$/
+const oldSpaceMb = Number(process.execArgv.map((flag) => oldSpace.exec(flag)?.[1]).find(Boolean) ?? Number.NaN)
+const heap: HeapMeasure = () => {
+  collect()
+  const statistics = getHeapStatistics()
+  const limit = Number.isFinite(oldSpaceMb) ? oldSpaceMb * 1024 * 1024 : statistics.heap_size_limit
+  return { used: statistics.used_heap_size, limit }
+}
 
 // The scripts run here are PineTS's compile of Pine: nothing in them has to reach
 // the network, Node's modules or another process. Node's permissions keep files,
@@ -64,10 +79,12 @@ const ask: SeriesAsk = (symbol, timeframe, window) =>
     })
   }).then((rows) => rows.map(candleOf))
 
-const runner = new Runner(ask, (text) => createHash('sha256').update(text, 'utf8').digest('hex'), {
-  pinets: __PINETS_VERSION__,
-  node: process.version,
-})
+const runner = new Runner(
+  ask,
+  (text) => createHash('sha256').update(text, 'utf8').digest('hex'),
+  { pinets: __PINETS_VERSION__, node: process.version },
+  heap,
+)
 
 const waiting: RunnerRequest[] = []
 let busy = false

@@ -55,8 +55,15 @@ def recent(**parts):
                   "deferred": 0, **parts.pop("ticks", {})},
         "runs": parts.pop("runs", [run_row()]),
         "deferred": parts.pop("deferred", []),
+        "checks": parts.pop("checks", [check_row()]),
         "signals": parts.pop("signals", []),
     }
+
+
+def check_row(rule_id=LIVE_RULE, runner="live", mode="live", **figures):
+    """A rule's continued runs checked against a whole run in the window (the ticks' figures.checks)."""
+    return {"rule_id": rule_id, "mode": mode, "runner": runner, "checks": 2, "differed": 0, "check_max_ms": 2_700,
+            "last_difference": None, **figures}
 
 
 def states(found):
@@ -130,7 +137,10 @@ def test_the_reasons_of_a_live_signal_not_sent_are_read_from_what_the_engine_wri
 def test_a_quiet_engine_passes_every_check_it_can_judge():
     found = checks(recent(), SETTINGS, RULES)
 
-    assert states(found) == {"sent": "pass", "age": "pass", "runs": "pass", "ticks": "pass", "feed": "pass", "memory": "pass"}
+    assert states(found) == {
+        "sent": "pass", "age": "pass", "runs": "pass", "ticks": "pass", "feed": "pass", "memory": "pass", "continued": "pass",
+    }
+    assert found[-1]["detail"] == "2 checks of the live rules' continued runs against a whole run: the same."
     assert health_warning(found) is None
 
 
@@ -207,6 +217,26 @@ def test_memory_over_85_percent_of_the_container_or_a_process_stopped_for_it_fai
     assert states(found)["memory"] == state
 
 
+def test_a_live_rules_continued_run_a_whole_run_gave_otherwise_fails_a_shadow_rules_is_the_pages_alone():
+    difference = 'alertcondition "Up" at 2026-10-22T11:58:10Z only in the whole run'
+    live = checks(recent(checks=[check_row(differed=1, last_difference=difference)]), SETTINGS, RULES)
+    shadow_rows = [check_row(), check_row(SHADOW_RULE, "shadow", "shadow", differed=1, last_difference=difference)]
+    shadow = recent(checks=shadow_rows)
+    unchecked = checks(recent(checks=[check_row(SHADOW_RULE, "shadow", "shadow")]), SETTINGS, RULES)
+
+    assert states(live)["continued"] == "fail"
+    assert health_warning(live) == (
+        f"A whole run of “Live cross” gave otherwise than its continued run ({difference}): it runs whole at each new bar "
+        "from now on, and its signals since its last check were the continued run's."
+    )
+    assert states(checks(shadow, SETTINGS, RULES))["continued"] == "pass" and health_warning(checks(shadow, SETTINGS, RULES)) is None
+    assert notes(shadow, SETTINGS, RULES) == [
+        f"A whole run of “Claude · cross” gave otherwise than its continued run ({difference}): "
+        "it runs whole at each new bar until the engine starts again.",
+    ]
+    assert states(unchecked)["continued"] == "open"
+
+
 def test_health_says_the_first_failed_check_and_how_many_more():
     found = checks(recent(ticks={"slow_ticks": 4, "feed_lag_max_ms": 80_000.0}), SETTINGS, RULES)
 
@@ -250,7 +280,15 @@ def test_the_days_the_engine_applies_are_said_beside_those_configured():
 def test_a_period_lists_the_rules_on_with_what_they_did_and_every_step_of_the_delivery():
     rows = {
         "kept_since": NOW - timedelta(days=2),
-        "rules": [{"rule_id": LIVE_RULE, "runs": 1380, "loads": 1, "run_p50_ms": 41.0, "run_p95_ms": 80.0, "run_max_ms": 312}],
+        "rules": [{"rule_id": LIVE_RULE, "runs": 1380, "loads": 1, "continued": 1379, "run_p50_ms": 41.0, "run_p95_ms": 80.0,
+                   "run_max_ms": 312}],
+        # The live rule was checked on both runners: shadow before it went live.
+        "checks": [
+            {"rule_id": LIVE_RULE, "mode": "shadow", "runner": "shadow", "checks": 30, "differed": 0, "check_max_ms": 2_100,
+             "last_difference": None},
+            {"rule_id": LIVE_RULE, "mode": "live", "runner": "live", "checks": 114, "differed": 1, "check_max_ms": 3_400,
+             "last_difference": "plot \"plot_0\" at 2026-10-22T09:12:30Z: 1.5 continued, 1.25 whole"},
+        ],
         "signals": [
             {"rule_id": LIVE_RULE, "mode": "live", "outcome": "sent", "detail": None, "signals": 4, "late": 0},
             {"rule_id": LIVE_RULE, "mode": "live", "outcome": "refused", "detail": "The Capital.com feed is stale", "signals": 1, "late": 0},
@@ -270,6 +308,9 @@ def test_a_period_lists_the_rules_on_with_what_they_did_and_every_step_of_the_de
     live = answer["rules"][0]
     assert (live["name"], live["bars"], live["limit_ms"]) == ("Live cross", {"type": "time", "timeframe": "1"}, 30_000)
     assert live["run_ms"] == {"p50": 41.0, "p95": 80.0, "max": 312.0}
+    assert (live["continued"], live["checks"], live["differed"], live["check_ms_max"]) == (1379, 144, 1, 3_400)
+    assert live["last_difference"] == 'plot "plot_0" at 2026-10-22T09:12:30Z: 1.5 continued, 1.25 whole'
+    assert (answer["rules"][1]["checks"], answer["rules"][1]["check_ms_max"]) == (0, None)
     assert live["signals"] == {"raised": 7, "sent": 4, "not_sent": 1, "shadow": 0}
     assert answer["rules"][1]["runs"] == 0 and answer["rules"][2]["name"] is None
     delivery = answer["delivery"]

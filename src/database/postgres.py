@@ -1610,7 +1610,7 @@ TA_RUN_COLUMNS = (
     ("started_at", "timestamptz"), ("ended_at", "timestamptz"), ("done_at", "timestamptz"), ("milliseconds", "int"),
     ("pinets_ms", "int"), ("bars_given", "int"), ("bars_held", "int"), ("bar_closed_at", "timestamptz"),
     ("asks", "smallint"), ("asks_ms", "int"), ("alerts", "int"), ("signals", "smallint"), ("outcome", "text"),
-    ("detail", "text"),
+    ("detail", "text"), ("figures", "jsonb"),
 )
 
 
@@ -1717,13 +1717,17 @@ class AsyncDbTaManager:
         if not runs:
             return
         arrays = ", ".join(f"${index}::{kind}[]" for index, (_, kind) in enumerate(TA_RUN_COLUMNS, start=1))
+
+        def value(run: dict, name: str, kind: str):
+            return json.dumps(run.get(name) or {}) if kind == "jsonb" else run.get(name)
+
         await self.db.execute(
             f"""
             INSERT INTO ta_rule_run ({", ".join(name for name, _ in TA_RUN_COLUMNS)})
             SELECT * FROM unnest({arrays})
             ON CONFLICT (rule_id, tick_at) DO NOTHING
             """,
-            *([run.get(name) for run in runs] for name, _ in TA_RUN_COLUMNS),
+            *([value(run, name, kind) for run in runs] for name, kind in TA_RUN_COLUMNS),
         )
 
     async def purge_monitoring(self, before: datetime) -> int:
