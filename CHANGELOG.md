@@ -2,7 +2,7 @@
 
 ## v0.33.0 - Admin: a close followed to its sale, live lines, funnels, trend tiles, Claude's trace, an Undo, previews, a map of the services, clocks, a live pill
 
-**Release date:** not released yet
+**Release date:** 2026-10-23, with v0.30.0, v0.31.0 and v0.32.0
 
 Twelve more of EasyUI's components, three of them added to EasyUI that day (the funnel, the live line, the stat card). The admin interface only: no server route, query or trading service changes; the dev server's fake data follows (a close that takes a few seconds, Claude's calls).
 
@@ -30,7 +30,7 @@ My calls: one followed request at a time, its card under the top bar (toasts and
 
 ## v0.32.0 - Admin: a bell for events, ⌘K, searchable lists, hints, versions as a ledger, runs side by side, heatmaps, rolling figures
 
-**Release date:** not released yet
+**Release date:** 2026-10-23, with v0.33.0
 
 Eight more of EasyUI's components, where the admin's pages had a use for them. One server change, for the heatmaps: the Exits page and a backtest's breakdowns count the trades by weekday and hour of opening.
 
@@ -59,7 +59,7 @@ My calls: Restore offered only once a version is open and read; Monday to Friday
 
 ## v0.31.0 - Admin: EasyUI's 404, a run's parts as a nav, a rule in steps, timelines, a selection basket
 
-**Release date:** not released yet
+**Release date:** 2026-10-23, with v0.33.0
 
 Five of EasyUI's components where the user asked for them. The admin interface only: nothing the trading services, the TA engine or the server's routes do changes.
 
@@ -81,7 +81,7 @@ My calls: the 404's way back uses the admin's own buttons; a live rule and a wai
 
 ## v0.30.0 - Technical Analysis: each new bar continues its rule's run
 
-**Release date:** not released yet
+**Release date:** 2026-10-23, with v0.33.0
 
 The TA engine ran a rule's script over all of its bars at each new one. On the server that was 2.7 s a run (3.8 s at 95 %) for the user's Kernel + Avg multi VWAP rule on R60, and more as the day went on: about 5,600 bars at 08:47 in Paris with a day of history, 9,500 by the evening. The kernel library was 4 % of it; the rest was PineTS running every bar again. Each new bar now continues the run where it stopped.
 
