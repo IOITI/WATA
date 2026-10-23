@@ -24,6 +24,7 @@ import {
   runFilterOf,
   ruleLabel,
   sampleWarning,
+  signalFunnel,
   settingChanges,
   showValue,
   sourceLabel,
@@ -277,5 +278,34 @@ describe('the list of runs', () => {
     expect(ids('state=failed')).toEqual(['broken'])
     expect(ids('experiment=f59bc8&turbos=modelled&code=older')).toEqual(['claudes'])
     expect(ids('state=nonsense&by=someone')).toEqual(['mine', 'claudes', 'broken'])
+  })
+})
+
+describe('where a run’s entry signals went', () => {
+  it('follows them from the signal to the win, each drop named', () => {
+    const summary = {
+      ...SUMMARY,
+      signals: { ...SUMMARY.signals!, by_fate: { refused: 110, unpriced: 4, failed: 1, executed: 3, closed: 2, ignored: 3 } },
+    }
+
+    expect(signalFunnel(summary)).toEqual([
+      { label: 'Entry signals', value: 118, dropLabel: 'refused by a rule' },
+      { label: 'Passed the rules', value: 8, dropLabel: 'no recorded turbo' },
+      { label: 'Had a recorded turbo', value: 4, dropLabel: 'failed to buy' },
+      { label: 'Bought', value: 3, dropLabel: 'did not win' },
+      { label: 'Won', value: 3 },
+    ])
+  })
+
+  it('counts the won from the share, exactly', () => {
+    const summary = { ...SUMMARY, figures: { ...SUMMARY.figures!, trades: 7, win_rate: 42.9 } }
+
+    expect(signalFunnel(summary)?.at(-1)).toEqual({ label: 'Won', value: 3 })
+  })
+
+  it('stops at the bought without trades, and is nothing without entries or tallies', () => {
+    expect(signalFunnel({ ...SUMMARY, figures: { ...SUMMARY.figures!, trades: 0, win_rate: null } })?.at(-1)).toEqual({ label: 'Bought', value: 3 })
+    expect(signalFunnel({ ...SUMMARY, signals: { ...SUMMARY.signals!, by_fate: { closed: 2, ignored: 1 } } })).toBeNull()
+    expect(signalFunnel({ ...SUMMARY, signals: undefined })).toBeNull()
   })
 })

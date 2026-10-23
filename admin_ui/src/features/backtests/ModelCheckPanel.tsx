@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Scale } from 'lucide-react'
-import { Link } from 'react-router'
 
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
@@ -10,6 +9,7 @@ import type { BacktestModelCheck, BacktestRun } from '@/lib/types'
 
 import { isActive } from './model'
 import { StateBadge } from './parts'
+import { RunPeekLink } from './RunPeek'
 import { modelCheckSentences } from './turboModel'
 
 function Sentences({ found }: { found: BacktestModelCheck }) {
@@ -87,9 +87,9 @@ function CheckAction({ run }: { run: BacktestRun }) {
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <StateBadge status={latest.status} />
-              <Link to={`/backtests/${latest.id}`} className="font-medium underline-offset-4 hover:underline">
+              <RunPeekLink id={latest.id} className="font-medium underline-offset-4 hover:underline">
                 {latest.name}
-              </Link>
+              </RunPeekLink>
             </div>
             {done && found && <Sentences found={found} />}
           </div>

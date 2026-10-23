@@ -7,11 +7,12 @@ import { CumulativeProfitChart, DailyProfitChart, DistributionChart, ProfitByGro
 import { Panel } from '@/components/Panel'
 import { PnlValue, QueryState } from '@/components/status'
 import { Button } from '@/components/ui/button'
+import { FunnelChart } from '@/components/ui/funnel-chart'
 import { api } from '@/lib/api'
 import { formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestBreakdowns, BacktestFigures, BacktestGroupRow, BacktestSummary } from '@/lib/types'
 
-import { curveDays, distribution, FATE_LABEL, RANDOM_VERDICT, randomSentence, randomVerdict, roomSentences, ruleLabel, tally } from './model'
+import { curveDays, distribution, FATE_LABEL, RANDOM_VERDICT, randomSentence, randomVerdict, roomSentences, ruleLabel, signalFunnel, tally } from './model'
 import { Measure } from './parts'
 import { riskNote, riskRows, stressSentences } from './robustness'
 
@@ -208,8 +209,22 @@ function Tally({ title, counts, label }: { title: string; counts: Record<string,
 /** What became of the signals, what refused the entries, what made them fail, and what sold the positions. */
 export function WhyPanel({ summary }: { summary: BacktestSummary }) {
   const signals = summary.signals
+  const funnel = signalFunnel(summary)
   return (
     <Panel title="Why" description="Every signal of the period and what became of it, as the trader decided; every position and what sold it.">
+      {funnel && (
+        <section className="mb-8 max-w-2xl">
+          <Heading>Where the entry signals went</Heading>
+          <FunnelChart
+            className="mt-3"
+            stages={funnel}
+            formatValue={(value) => formatNumber(value)}
+            summaryLabel={funnel[funnel.length - 1].label === 'Won' ? 'of the entry signals won' : 'of the entry signals bought'}
+            noun="Signals"
+            ariaLabel="Where the run's entry signals went, stage by stage"
+          />
+        </section>
+      )}
       <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-4">
         <Tally title="Signals" counts={signals?.by_fate} label={(name) => FATE_LABEL[name as keyof typeof FATE_LABEL] ?? name} />
         <Tally title="Entries refused" counts={signals?.refusals} label={ruleLabel} />

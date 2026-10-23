@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import { Link } from 'react-router'
 
 import { ActionBadge, PnlValue } from '@/components/status'
 import { Badge } from '@/components/ui/badge'
@@ -10,10 +9,11 @@ import type { Order, Position } from '@/lib/types'
 
 import { ClosePositionButton } from './ClosePositionButton'
 import { LiveValue } from './LiveValue'
-import { orderResult, positionLink, purposeOf, RESULT_FILTER, RESULTS, tookMs } from './orderLife'
+import { orderResult, purposeOf, RESULT_FILTER, RESULTS, tookMs } from './orderLife'
 import type { OrderResult } from './orderLife'
 import { REQUEST_RESULTS, rowTime, runLabel, runTookMs } from './orderRequests'
 import type { OrderRow } from './orderRequests'
+import { PositionPeekLink } from './PositionPeek'
 import { SellRefused } from './SellRefused'
 
 export const POSITION_CSV: CsvColumn<Position>[] = [
@@ -315,13 +315,13 @@ function resultCell(row: OrderRow) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <Badge tone={RUN_RESULTS[rowResult(row) as keyof typeof RUN_RESULTS].tone}>{runLabel(row)}</Badge>
         {row.position_id && (
-          <Link
-            to={positionLink(row.position_id)}
+          <PositionPeekLink
+            id={row.position_id}
             className="font-mono text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
             aria-label={`Position ${row.position_id}`}
           >
             {row.position_id}
-          </Link>
+          </PositionPeekLink>
         )}
       </div>
     )
@@ -341,13 +341,13 @@ function orderResultCell(order: Order) {
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <Badge tone={RESULTS[result].tone}>{RESULTS[result].label}</Badge>
       {order.position_id && (
-        <Link
-          to={positionLink(order.position_id)}
+        <PositionPeekLink
+          id={order.position_id}
           className="font-mono text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
           aria-label={`Position ${order.position_id}`}
         >
           {order.position_id}
-        </Link>
+        </PositionPeekLink>
       )}
       {cancel && <span className="text-xs text-muted-foreground">{cancel}</span>}
     </div>

@@ -32,6 +32,7 @@ import { ComparePage } from './ComparePage'
 import { ExperimentsPage } from './ExperimentsPage'
 import { DayPage } from './DayPage'
 import { NewBacktestPage } from './NewBacktestPage'
+import { PendingRemovalsProvider } from './PendingRemovalsProvider'
 import { RunPage } from './RunPage'
 
 vi.mock('lightweight-charts', async () => (await import('@/test/fakeCharts')).fakeLightweightCharts)
@@ -321,7 +322,9 @@ function renderAt(address: string) {
       <ThemeProvider>
         <ToastProvider>
           <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
-            <RouterProvider router={router} />
+            <PendingRemovalsProvider duration={undoMs}>
+              <RouterProvider router={router} />
+            </PendingRemovalsProvider>
           </AuthContext.Provider>
         </ToastProvider>
       </ThemeProvider>
@@ -331,7 +334,13 @@ function renderAt(address: string) {
 
 const address = () => screen.getByRole('status', { name: 'address' }).textContent
 
+/** How long a removal waits for its Undo here: short, unless a test undoes it. */
+let undoMs = 50
+
+const removals = () => sent.filter((request) => request.method === 'POST' && request.path === '/api/backtests/remove')
+
 beforeEach(() => {
+  undoMs = 50
   resetCharts()
   sweeps = {}
   edges = {}
@@ -395,15 +404,28 @@ describe('the list of backtests', () => {
     await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions toolbar' })).not.toBeInTheDocument())
     expect(screen.getByRole('checkbox', { name: 'Select Stop at 10' })).not.toBeChecked()
 
+    // No question first: gone from the list at once, with an Undo, then deleted.
     await user.click(screen.getByRole('checkbox', { name: 'Select Stop at 10' }))
     await user.click(within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' })).getByRole('button', { name: 'Remove 1' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Remove 1 backtest?' })
-    expect(within(dialog).getByText('Stop at 10')).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
-    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/backtests/remove')?.body).toEqual({
-      ids: ['20261019-210000-bbbbbb'],
-    }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove 1 backtest?' })).not.toBeInTheDocument())
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByText('“Stop at 10” removed')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Stop at 10' })).not.toBeInTheDocument()
+    await waitFor(() => expect(removals().map((request) => request.body)).toEqual([{ ids: ['20261019-210000-bbbbbb'] }]))
+  })
+
+  it('keeps what is removed when its Undo is pressed in time, and deletes nothing', async () => {
+    undoMs = 10_000
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select Stop at 10' }))
+    await user.click(within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' })).getByRole('button', { name: 'Remove 1' }))
+    expect(screen.queryByRole('link', { name: 'Stop at 10' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+
+    expect(await screen.findByRole('link', { name: 'Stop at 10' })).toBeInTheDocument()
+    expect(screen.getByText('Kept: nothing was deleted')).toBeInTheDocument()
+    expect(removals()).toEqual([])
   })
 
   it('narrows the list as its address says, and keeps what is chosen in the address', async () => {
@@ -437,11 +459,10 @@ describe('the list of backtests', () => {
     await user.click(within(row).getByText('2 earlier failed attempts'))
     await user.click(within(row).getByRole('button', { name: 'Remove them' }))
 
-    const dialog = await screen.findByRole('dialog', { name: 'Remove 2 backtests?' })
-    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
-    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/backtests/remove')?.body).toEqual({
-      ids: ['20261019-203000-cccc01', '20261019-202000-cccc02'],
-    }))
+    expect(screen.getByText('2 backtests removed')).toBeInTheDocument()
+    await waitFor(() => expect(removals().map((request) => request.body)).toEqual([
+      { ids: ['20261019-203000-cccc01', '20261019-202000-cccc02'] },
+    ]))
   })
 
   it("marks Claude's runs, and leads to its experiments", async () => {
@@ -693,7 +714,23 @@ describe('a run', () => {
     expect(await screen.findByRole('link', { name: '#1' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-14?trade=1`)
     // Its script, and the rule it can become: pages of their own.
     expect(screen.getByRole('link', { name: 'EMA cross' })).toHaveAttribute('href', `/ta/indicators/${SCRIPT.id}`)
-    expect(screen.getByRole('link', { name: 'Make a shadow rule' })).toHaveAttribute('href', `/ta/signals?from-run=${RUN_ID}`)
+    expect(screen.getByRole('link', { name: 'Run again with changes' })).toHaveAttribute('href', `/backtests/new?again=${RUN_ID}`)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'More actions on this run' }))
+    const menu = within(screen.getByRole('menu', { name: 'More actions on this run' }))
+    expect(menu.getByRole('menuitem', { name: 'Make a shadow rule' })).toHaveAttribute('href', `/ta/signals?from-run=${RUN_ID}`)
+    expect(menu.getByRole('menuitem', { name: /^Remove/ })).toBeInTheDocument()
+  })
+
+  it('is removed from its menu, the list shown at once with an Undo', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
+
+    await user.click(await screen.findByRole('button', { name: 'More actions on this run' }))
+    await user.click(screen.getByRole('menuitem', { name: /^Remove/ }))
+
+    await waitFor(() => expect(address()).toBe('/backtests'))
+    expect(screen.getByText('“Smoke EMA cross” removed')).toBeInTheDocument()
+    await waitFor(() => expect(removals().map((request) => request.body)).toEqual([{ ids: [RUN_ID] }]))
   })
 
   it('keeps its table in the address, each tab and its run again a link', async () => {
@@ -877,6 +914,19 @@ describe('a run', () => {
     expect(screen.getByRole('img', { name: /^Profit and loss of the run's trades by weekday and hour of entry\./ })).toBeInTheDocument()
     expect(screen.getByText('+€3.00 over 3 trades')).toBeInTheDocument()
     expect(screen.getByRole('rowheader', { name: 'Wednesday, 15:00' })).toBeInTheDocument()
+  })
+
+  it('follows its entry signals from the signal to the win, the biggest drop named', async () => {
+    renderAt(`/backtests/${RUN_ID}`)
+
+    const funnel = await screen.findByRole('img', { name: "Where the run's entry signals went, stage by stage" })
+    expect(funnel).toBeInTheDocument()
+    expect(screen.getByText('of the entry signals won')).toBeInTheDocument()
+    expect(screen.getByText(/Biggest drop:\s*refused by a rule/)).toBeInTheDocument()
+    const rows = screen.getAllByRole('row').filter((row) => within(row).queryByRole('rowheader'))
+    expect(rows.map((row) => row.textContent)).toEqual(
+      expect.arrayContaining(['Entry signals113100%', 'Passed the rules32.7%', 'Won32.7%']),
+    )
   })
 
   it('follows a run while it waits its turn', async () => {

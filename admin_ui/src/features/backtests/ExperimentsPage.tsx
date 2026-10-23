@@ -17,6 +17,7 @@ import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { Experiment, ResearchLockbox } from '@/lib/types'
 
 import { familyTrials, lockboxText, RUNS_SHOWN, VERDICT } from './experiments'
+import { RunPeekLink } from './RunPeek'
 
 function experimentColumns(timezone: string, trials: Map<string, number>): ColumnDef<Experiment>[] {
   return [
@@ -74,9 +75,9 @@ function experimentColumns(timezone: string, trials: Map<string, number>): Colum
           <ul className="mt-1 flex flex-col gap-0.5">
             {row.runs.slice(-RUNS_SHOWN).map((entry) => (
               <li key={`${entry.run}-${entry.at}`}>
-                <Link to={`/backtests/${entry.run}`} className="font-mono underline-offset-2 hover:underline">
+                <RunPeekLink id={entry.run} className="font-mono underline-offset-2 hover:underline">
                   {entry.run}
-                </Link>{' '}
+                </RunPeekLink>{' '}
                 <span className="text-muted-foreground">
                   {entry.kind}
                   {entry.lockbox && ', on the lock box'}

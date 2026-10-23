@@ -4,6 +4,7 @@ import { BalanceChart } from '@/components/charts/PerformanceCharts'
 import { KpiTile } from '@/components/KpiTile'
 import { PageHeader, Panel } from '@/components/Panel'
 import { PnlValue, QueryState } from '@/components/status'
+import { StatCard } from '@/components/ui/stat-card'
 import { api } from '@/lib/api'
 import { formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { MilestoneProjection, Report, TradeSummary } from '@/lib/types'
@@ -146,15 +147,29 @@ function ReportContent({ report }: { report: Report }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        <KpiTile
-          label="Account value"
-          value={formatMoney(report.current_balance)}
-          hint={
-            report.balance_recorded_on
-              ? `Recorded with the daily report of ${formatDay(report.balance_recorded_on)}`
-              : 'Recorded with each daily report; none yet'
-          }
-        />
+        {report.current_balance !== null && report.balance_history.length >= 2 ? (
+          // Its value at each daily report, to scrub, and how far it moved since the first of them.
+          <StatCard
+            label="Account value"
+            value={report.current_balance}
+            trend={report.balance_history.map((point) => point.total_value)}
+            trendLabels={report.balance_history.map((point) => formatDay(point.date_day))}
+            previous={report.balance_history[0].total_value}
+            period={`Since ${formatDay(report.balance_history[0].date_day)}, one value per daily report`}
+            format={(value) => formatMoney(value)}
+            color="var(--chart-series)"
+          />
+        ) : (
+          <KpiTile
+            label="Account value"
+            value={formatMoney(report.current_balance)}
+            hint={
+              report.balance_recorded_on
+                ? `Recorded with the daily report of ${formatDay(report.balance_recorded_on)}`
+                : 'Recorded with each daily report; none yet'
+            }
+          />
+        )}
         <KpiTile
           label="Winning days in a row"
           value={formatNumber(report.streak.current_streak)}

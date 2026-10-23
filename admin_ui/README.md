@@ -96,17 +96,23 @@ npx shadcn@latest add Surajmaurya1/easyui/<slug>
   (2026-10-11), MIT License, Copyright (c) 2026 Suraj Maurya. `activity-heatmap`, `animated-number`, `combobox`,
   `directional-tooltip`, `interactive-timeline`, `not-found` (redesigned since), `notification-bell`,
   `recovery-ledger`, `scroll-progress-nav`, `selection-basket`, `smart-comparison` and `spotlight-search` at
-  `50effaf67bb4cfcebac4dea7c4ba1fb40812a2cd` (2026-10-23), copied by hand from that commit's `src/components/ui/`
+  `50effaf67bb4cfcebac4dea7c4ba1fb40812a2cd` (2026-10-23); `ai-agent-activity`, `airport-matrix-clock`,
+  `animated-file-upload`, `dependency-trace`, `dynamic-island`, `funnel-chart`, `live-line-chart`,
+  `payment-status`, `peek-card`, `split-button`, `stat-card` and `undo-toast` at
+  `7c106d4a195f9ce566ffbbc672fc48bed68d30bd` (2026-10-23, the merge that brought the funnel, the live line and the
+  stat card; the copies above are the same there). Copied by hand from those commits' `src/components/ui/`
   (`ActivityHeatmap.tsx` is `activity-heatmap.tsx` here, and so on): the CLI takes the newest and would offer
   to overwrite `src/lib/utils.ts` and `src/lib/motion-tokens.ts`, which are the same there.
-- Components in use: `activity-heatmap`, `advanced-data-table`, `alert`, `animated-number`, `animated-tabs`,
-  `badge`, `breadcrumb`, `button`, `calendar`, `combobox`, `date-picker`, `directional-tooltip`,
-  `drag-to-confirm`, `form`, `interactive-timeline`, `loader`, `not-found`, `notification-bell`, `otp-input`,
-  `recovery-ledger`, `scroll-progress-nav`, `selection-basket`, `settle-modal`, `sidebar`, `skeleton`,
-  `smart-comparison`, `smooth-accordion`, `spotlight-search`, `spring-select`, `stepper`, `stretch-switch`,
-  `velocity-toast`.
+- Components in use: `activity-heatmap`, `advanced-data-table`, `ai-agent-activity`, `airport-matrix-clock`,
+  `alert`, `animated-file-upload`, `animated-number`, `animated-tabs`, `badge`, `breadcrumb`, `button`, `calendar`,
+  `combobox`, `date-picker`, `dependency-trace`, `directional-tooltip`, `drag-to-confirm`, `dynamic-island`,
+  `form`, `funnel-chart`, `interactive-timeline`, `live-line-chart`, `loader`, `not-found`, `notification-bell`,
+  `otp-input`, `payment-status`, `peek-card`, `recovery-ledger`, `scroll-progress-nav`, `selection-basket`,
+  `settle-modal`, `sidebar`, `skeleton`, `smart-comparison`, `smooth-accordion`, `split-button`,
+  `spotlight-search`, `spring-select`, `stat-card`, `stepper`, `stretch-switch`, `undo-toast`, `velocity-toast`.
 - `src/lib/motion-tokens.ts`, `src/lib/utils.ts` and `src/styles/tokens.css` come from it too, and
-  `src/lib/chart-primitives.tsx` (the heatmap's, at `50effaf`).
+  `src/lib/chart-primitives.tsx` (the heatmap's, at `50effaf`, the same at `7c106d4`) and
+  `src/lib/dashboard-chart-utils.ts` (the funnel's, the live line's and the stat card's, at `7c106d4`, unchanged).
 
 Changes made to the copied files:
 
@@ -240,6 +246,79 @@ Changes made to the copied files:
   read); plain text when motion is reduced; the tabular figures of the admin's font (EasyUI's monospace digits
   were 0.58 em wide); every character in a box clipped by `clip-path`, which keeps the text's baseline (with
   EasyUI's `overflow: hidden`, digits stood higher than a sign beside them); colour inherited (EasyUI's was white).
+- `payment-status.tsx` (the card that follows a close or a signal sent by hand, `features/live/FollowProvider.tsx`):
+  the steps of what was asked rather than of a payment (`processing` asked, `verifying` sent and waiting for its
+  answer, `success`, `failed`, `unknown` for no news; `refunded` gone), each with the caller's `title` and
+  `description`; `subject` (EasyUI's amount), `figures` (EasyUI's receipt and transaction details), a copied
+  `reference` and one `link` (`linkComponent`); `onDismiss` and its close button; no Retry, other payment method,
+  receipt or download: the card acts on nothing; laid out in a row, the badge beside the words (docked at the edge
+  of the screen, EasyUI's centred column took half a phone's height); read out as it changes (`role="status"`);
+  its spinners still where motion is reduced; light values for every colour.
+- `live-line-chart.tsx` (an open position's performance, `features/positions/LivePositionChart.tsx`):
+  `initialPoints`, values known with their own times (EasyUI spaced them `intervalMs` apart up to now);
+  `formatTick` and `formatChange` (the change since the window's start in the caller's words: EasyUI gave a
+  percentage of the first value ever pushed, which means nothing for a value that is itself a percentage); a zero
+  line while zero is in view; times in minutes from two of them ("−15 min": the axis read "−900s"); a frame when
+  the line has moved half a pixel or something changed (EasyUI drew 60 frames a second, which a window of fifteen
+  minutes, moving under a pixel a second, does not need), its time step as long as that pace; drawn without an
+  `IntersectionObserver` where there is none (jsdom); the admin's status colours for the change (emerald-500 and
+  rose-500 are under 4.5:1 on white) and its focus ring on the pause button.
+- `funnel-chart.tsx` (where a run's entry signals went, `features/backtests/runPanels.tsx`, and the journal's,
+  `features/signals/JournalPanel.tsx`): the stages in `--chart-funnel-1..5` of `theme.css`, one hue (EasyUI mixed
+  indigo and teal); a stage's `dropLabel`, what was lost on the way to the next one, in the summary and the
+  tooltip; `summaryLabel`, `noun` (EasyUI's "Users") and `emptyText`; a stage that loses nothing says "0%"
+  (EasyUI wrote "−0.0%"); the loss in the admin's colour (rose-500 is 3.7:1 on white); muted text at 4.5:1 in both
+  themes; the admin's focus ring.
+- `stat-card.tsx` (the dashboard's day profit and loss, the Report's account value): the look of the admin's
+  tiles (`KpiTile`), which it sits among (border, surface, padding, type sizes; EasyUI's card was white, ringed
+  and shadowed); `toneOf`, the headline's colour by the value shown, the scrubbed one's too; the change pill only
+  when the caller gives what it is from (`previous`, `delta`): EasyUI worked one out from the line's two ends,
+  which means nothing for a profit that changes sign; the pill in the admin's status colours (emerald-600 on its
+  pale pill was 3.6:1); muted text at 4.5:1; the admin's focus ring.
+- `undo-toast.tsx` (removing backtests, `features/backtests/PendingRemovalsProvider.tsx`): `wrapperClassName`;
+  the time left kept at each frame, so that a pause takes up where it stopped and the bar shows what is left of
+  the whole (after a pause, EasyUI's went back to full); the caller's `onDismiss` through a ref (a new one at each
+  render of the caller restarted the countdown); paused while the keyboard is in it, as under the pointer; light
+  values for every colour.
+- `split-button.tsx` (a run's actions): the primary action and an option may have an `href` (a link drawn by
+  `linkComponent`; an option chosen from the keyboard is followed as a click would follow it); an option's
+  `description` (a line under it) and `tone: 'danger'`; `icon` and `menuLabel` (EasyUI named the chevron "More
+  <label> options"); the option the arrows are on announced (`aria-activedescendant`: the menu has the focus); a
+  lighter shadow in the light theme.
+- `peek-card.tsx` (a run's, a position's or a rule's preview, `components/PeekLink.tsx`,
+  `components/PeekRouterLink.tsx`): reworked around EasyUI's card. EasyUI's wrapped the trigger in a second tab
+  stop and opened on any click, which also followed the link inside: here the trigger keeps its own focus and
+  click; the card opens on hover (with a moment to move into it), on keyboard focus (not on a click's) and on a
+  first tap with a touch screen, whose link is then followed by a second tap or by the card's own (`href`); it is
+  drawn in `document.body` at fixed coordinates, centred on the trigger and kept in the window (a table's
+  overflow cut it), closed by Escape, a tap elsewhere or a scroll; what it shows is the caller's, read once it
+  opens (EasyUI's payment card, its customer and e-mail copy, are gone); the trigger described by it
+  (`aria-describedby`); light values for every colour.
+- `ai-agent-activity.tsx` (Claude's calls, `features/system/ClaudePanel.tsx`): an item that opens is a button
+  (`aria-expanded`; EasyUI's was a div taking clicks alone); its `statusLabel` in words and its `timestamp`
+  (EasyUI's item had one and never showed it) beside its duration; the header's `summary`, and `inputLabel` /
+  `outputLabel` (EasyUI's "Parameters" and "Output Result"); arguments as JSON with their lines kept.
+- `dependency-trace.tsx` (the services map, `features/system/serviceMap.ts`): a node's health as a ring, an icon
+  and a word, never colour alone (`status`, `statusLabel`, `detail`); its whole name under it (EasyUI cut names to
+  seven letters inside the circle); an arrow from what calls to what is called, and each link's name while traced;
+  nodes the keyboard reaches and traces, Enter or Space keeping a trace as a click does (`aria-pressed`); the
+  status bar says what the traced node calls and what calls it; `width`, `height` and `label`; light values for
+  every colour.
+- `airport-matrix-clock.tsx` (New York and the session's city on the dashboard): the caller's cities, each with its
+  IANA zone (EasyUI's list of 32, five countries and no Paris, its country and city selectors and its add and
+  remove buttons are gone); `title` (null for none), `footer` and a `sm` size for the side of a page's header;
+  light values for the footer.
+- `animated-file-upload.tsx` (the Indicators page's drop zone): `arrange`, the order the files are handled in
+  (libraries first), read before they are listed; `sequential`, one file after the other (EasyUI started them all
+  at once); a handler may answer with a link to what the file became, shown once done; `workingLabel` and
+  `doneLabel`; an error wrapped whole and announced; the drop zone named by its words, its colours by classes (a
+  light value in front of EasyUI's, which framer animated as dark ones only); light values for every colour.
+- `dynamic-island.tsx` (the top bar's live pill, `features/dashboard/LivePill.tsx`): reduced to its collapsed and
+  expanded states with the caller's content in both (`compact`, `children`, `label`); its profile and share states,
+  avatar, greeting and social links are gone. The pill is a button that keeps its place in the top bar, and the
+  island grows from it (shared `layoutId`) over the page from the pill's left edge, across the screen under the top
+  bar on a phone, so that the bar keeps its height; the keyboard follows it in and back out; a dialog over the page
+  (the confirmation of a Close opened from it) takes its own clicks and its Escape, which starts in it.
 - For the light theme, which several components did not have: `form.tsx`, `smooth-accordion.tsx` and
   `loader.tsx` hardcoded dark colours (`bg-[#141414]`, `text-[#FAFAFA]`…); each literal now has a light value
   in front and stays as it was behind `dark:`. `velocity-toast.tsx` (icons), `spring-select.tsx` (error
@@ -258,7 +337,9 @@ adds made-up events) or site-specific imports, and none may load anything from a
 Chart colours are in `theme.css`, one set per theme. Each profit and loss pair was checked for colour-blind
 separation and lightness against the card surface of its theme; check a new pair the same way before
 changing it. A heatmap's gains are teal, not the bars' emerald: the paler steps of emerald and red look alike to
-deuteranopes; `theme.css` says what its eight steps were checked for.
+deuteranopes; `theme.css` says what its eight steps were checked for. A funnel's stages are one ramp of the
+series' blue (`--chart-funnel-1..5`), a sequence and not categories: its lightness rises step by step, and only
+its last step may recede against the card, each stage's figure being written beside it.
 
 ## Lightweight Charts
 

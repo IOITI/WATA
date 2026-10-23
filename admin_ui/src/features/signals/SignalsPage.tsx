@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { FormControl, FormDescription, FormItem, FormLabel, Input } from '@/components/ui/form'
 import { SpringSelect } from '@/components/ui/spring-select'
 import { useSession } from '@/features/auth/auth-context'
+import { useFollow } from '@/features/live/follow-context'
 import { api } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
@@ -46,6 +47,7 @@ function allowedIndices(config: JsonObject | undefined): string[] {
 
 function SendSignal() {
   const toast = useToast()
+  const follow = useFollow()
   const queryClient = useQueryClient()
   const configQuery = useQuery({ queryKey: ['config'], queryFn: api.config, staleTime: 60_000 })
   const indices = allowedIndices(configQuery.data?.config)
@@ -63,15 +65,26 @@ function SendSignal() {
   const ready = opens ? selectedIndice !== '' && !confidenceInvalid : true
 
   const sendMutation = useMutation({
-    mutationFn: () =>
+    // When it was sent, by this browser's clock: the card that follows it waits a minute for the trader's decision.
+    mutationFn: (_sentAt: number) =>
       api.sendSignal(opens ? { action, indice: selectedIndice, confidence: confidenceValue } : { action }),
-    onSuccess: (sent) => {
+    onSuccess: (sent, sentAt) => {
       setConfirming(false)
-      toast({
-        title: `${actionLabel(sent.signal.action)} signal sent`,
-        description: `The trader takes it on its next poll. Reference ${sent.signal_uuid.slice(0, 8)}.`,
-        variant: 'success',
-      })
+      if (follow) {
+        follow({
+          kind: 'signal',
+          signalUuid: sent.signal_uuid,
+          action: sent.signal.action,
+          indice: opens ? selectedIndice : null,
+          sentAt,
+        })
+      } else {
+        toast({
+          title: `${actionLabel(sent.signal.action)} signal sent`,
+          description: `The trader takes it on its next poll. Reference ${sent.signal_uuid.slice(0, 8)}.`,
+          variant: 'success',
+        })
+      }
       void queryClient.invalidateQueries({ queryKey: ['signals'] })
     },
   })
@@ -133,7 +146,7 @@ function SendSignal() {
         doneLabel="Sent"
         pending={sendMutation.isPending}
         error={sendMutation.error?.message}
-        onConfirm={() => sendMutation.mutate()}
+        onConfirm={() => sendMutation.mutate(Date.now())}
         onClose={() => setConfirming(false)}
         description={
           opens ? (

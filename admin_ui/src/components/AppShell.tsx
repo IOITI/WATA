@@ -4,7 +4,6 @@ import {
   ChartCandlestick,
   ChartLine,
   ChartSpline,
-  CirclePause,
   ClipboardList,
   Database,
   Eye,
@@ -41,7 +40,11 @@ import { Sidebar, SidebarTrigger, useSidebar } from '@/components/ui/sidebar'
 import type { SidebarSection } from '@/components/ui/sidebar'
 import { useAuth, useSession } from '@/features/auth/auth-context'
 import { EventLogProvider } from '@/features/live/EventLogProvider'
+import { PendingRemovalsProvider } from '@/features/backtests/PendingRemovalsProvider'
+import { LivePill } from '@/features/dashboard/LivePill'
 import { EventsBell } from '@/features/live/EventsBell'
+import { FollowProvider } from '@/features/live/FollowProvider'
+import { recordLiveValues } from '@/features/positions/liveSamples'
 import { useLiveEvents } from '@/features/live/useLiveEvents'
 import { api } from '@/lib/api'
 import { SAXO_SERVICE_ID } from '@/lib/types'
@@ -151,7 +154,11 @@ export function AppShell() {
   return (
     <PageTrailProvider>
       <EventLogProvider>
-        <Shell />
+        <FollowProvider>
+          <PendingRemovalsProvider>
+            <Shell />
+          </PendingRemovalsProvider>
+        </FollowProvider>
       </EventLogProvider>
     </PageTrailProvider>
   )
@@ -173,11 +180,19 @@ function Shell() {
   const current = menuEntry(location.pathname)
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15_000 })
   // Shared with the dashboard, which refreshes it more often; a pause or a
-  // resume is also announced by a live event, which refreshes it at once.
-  const overviewQuery = useQuery({ queryKey: ['overview'], queryFn: api.overview, refetchInterval: 60_000 })
+  // resume is also announced by a live event, which refreshes it at once. While
+  // a position is open its live value is read as often as the dashboard reads it.
+  const overviewQuery = useQuery({
+    queryKey: ['overview'],
+    queryFn: api.overview,
+    refetchInterval: (query) => (query.state.data?.open_positions?.length ? 5_000 : 60_000),
+  })
+  // Every page's reading of the live values, kept for the lines of the open positions.
+  useEffect(() => {
+    if (overviewQuery.data) recordLiveValues(overviewQuery.data.open_positions ?? [])
+  }, [overviewQuery.data])
   const live = useLiveEvents()
 
-  const entriesPaused = !!overviewQuery.data?.entries_paused_since
   const saxoNeedsAuthorisation =
     healthQuery.data?.services.find((service) => service.id === SAXO_SERVICE_ID)?.status === 'down'
 
@@ -210,15 +225,6 @@ function Shell() {
                 hint="The Saxo token can no longer be renewed: nothing can be traded until a new authorisation is given, on the System page."
               />
             )}
-            {entriesPaused && (
-              <StateChip
-                to="/"
-                tone="warning"
-                icon={<CirclePause className="size-3.5" aria-hidden />}
-                label="Entries paused"
-                hint="Signals that would open a position are refused until entries are resumed, on the dashboard."
-              />
-            )}
             {session.restart_required && (
               <StateChip
                 to="/config"
@@ -229,6 +235,7 @@ function Shell() {
               />
             )}
           </div>
+          <LivePill />
           <Hint
             content={live ? 'Changes are pushed to this page as they happen' : 'Not receiving live updates: the page refreshes on a timer'}
             side="bottom"

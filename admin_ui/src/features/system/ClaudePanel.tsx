@@ -5,16 +5,17 @@ import { Link } from 'react-router'
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { useToast } from '@/components/toast-context'
+import { AIAgentActivity } from '@/components/ui/ai-agent-activity'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatDateTime, formatNumber, formatRelative } from '@/lib/format'
+import { formatDateTime, formatRelative } from '@/lib/format'
 import type { McpCall, McpState, McpToken } from '@/lib/types'
 
-import { callArguments, endpointState, OUTCOME, shareLines, TOKEN_STATE } from './claude'
+import { callActivity, callsSummary, endpointState, shareLines, TOKEN_STATE } from './claude'
 
 const CALLS_SHOWN = 15
 
@@ -89,39 +90,24 @@ function Tokens({ tokens, onRevoke }: { tokens: McpToken[]; onRevoke: (token: Mc
 function Calls({ calls, timeZone }: { calls: McpCall[]; timeZone: string }) {
   const [all, setAll] = useState(false)
   if (calls.length === 0) {
-    return <p className="py-3 text-sm text-muted-foreground">No call since the admin started.</p>
+    return (
+      <div>
+        <h3 className="text-xs font-semibold">Last calls</h3>
+        <p className="py-3 text-sm text-muted-foreground">No call since the admin started.</p>
+      </div>
+    )
   }
   const shown = all ? calls : calls.slice(0, CALLS_SHOWN)
   return (
     <div className="flex flex-col gap-2">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[40rem] text-left text-xs">
-          <thead className="text-muted-foreground">
-            <tr>
-              <th className="py-2 pr-4 font-medium">When</th>
-              <th className="py-2 pr-4 font-medium">Tool</th>
-              <th className="py-2 pr-4 font-medium">Outcome</th>
-              <th className="py-2 pr-4 text-right font-medium">Took</th>
-              <th className="py-2 font-medium">Asked</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/40">
-            {shown.map((call, index) => (
-              <tr key={`${call.at}-${call.tool}-${index}`}>
-                <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-muted-foreground">{formatDateTime(call.at, timeZone)}</td>
-                <td className="py-2 pr-4 font-mono">{call.tool}</td>
-                <td className="py-2 pr-4">
-                  <Badge tone={OUTCOME[call.outcome]?.tone ?? 'neutral'}>{OUTCOME[call.outcome]?.label ?? call.outcome}</Badge>
-                </td>
-                <td className="py-2 pr-4 text-right tabular-nums">{formatNumber(call.milliseconds)} ms</td>
-                <td className="max-w-[28rem] py-2 text-muted-foreground">
-                  <span className="line-clamp-2 break-words">{call.detail ?? callArguments(call)}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <AIAgentActivity
+        title="Last calls"
+        agentName="since the admin started"
+        summary={callsSummary(shown)}
+        activities={shown.map((call, index) => callActivity(call, index, timeZone))}
+        inputLabel="Arguments, as the log keeps them"
+        outputLabel="Detail"
+      />
       {calls.length > CALLS_SHOWN && (
         <div>
           <Button variant="ghost" size="sm" onClick={() => setAll(!all)}>
@@ -216,10 +202,7 @@ export function ClaudePanel() {
                 setRevoking(token)
               }} />
             </div>
-            <div>
-              <h3 className="text-xs font-semibold">Last calls</h3>
-              <Calls calls={state.calls} timeZone={timezone} />
-            </div>
+            <Calls calls={state.calls} timeZone={timezone} />
           </div>
         )}
       </QueryState>

@@ -7,8 +7,9 @@ import type { TimelineItem } from '@/components/ui/interactive-timeline'
 import { formatDateTime, formatMoney, formatNumber } from '@/lib/format'
 import type { Order, OrderPosition, Refusal } from '@/lib/types'
 
-import { orderLife, orderLink, positionLink, RESULTS, stepToLookAt, timelineItems } from './orderLife'
+import { orderLife, orderLink, RESULTS, stepToLookAt, timelineItems } from './orderLife'
 import type { OrderLife } from './orderLife'
+import { PositionPeekLink } from './PositionPeek'
 import { RequestList } from './RequestList'
 
 const LINK = 'font-mono text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground'
@@ -18,9 +19,9 @@ function LinkedPosition({ position, currency, timeZone }: { position: OrderPosit
   return (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
       <span>Position</span>
-      <Link to={positionLink(position.position_id)} className={LINK}>
+      <PositionPeekLink id={position.position_id} className={LINK}>
         {position.position_id}
-      </Link>
+      </PositionPeekLink>
       <Badge tone={closed ? 'neutral' : 'success'} dot={!closed}>
         {position.position_status ?? 'Unknown'}
       </Badge>
@@ -131,9 +132,9 @@ export function OrderTimeline({
           order.position_id && (
             <p className="text-muted-foreground">
               Position{' '}
-              <Link to={positionLink(order.position_id)} className={LINK}>
+              <PositionPeekLink id={order.position_id} className={LINK}>
                 {order.position_id}
-              </Link>
+              </PositionPeekLink>
             </p>
           )
         ))}

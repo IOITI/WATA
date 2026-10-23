@@ -8,9 +8,12 @@ import type { ChangeEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { ButtonLink } from '@/components/ButtonLink'
+import { RouterLink } from '@/components/RouterLink'
 import { PageHeader } from '@/components/Panel'
 import { ClaudeBadge, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
+import { AnimatedFileUpload } from '@/components/ui/animated-file-upload'
+import type { UploadFileItem, UploadResult } from '@/components/ui/animated-file-upload'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,7 +26,8 @@ import { formatDateTime } from '@/lib/format'
 import type { TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
-import { declaredTitle, importersOf, KIND_LABEL, librariesOf } from './templates'
+import { importScript, librariesFirst, MAX_SCRIPT_BYTES } from './importScripts'
+import { importersOf, KIND_LABEL, librariesOf } from './templates'
 
 const KIND_TONE: Record<TaScriptKind, 'neutral' | 'success' | 'warning'> = {
   indicator: 'success',
@@ -229,17 +233,22 @@ export function IndicatorsPage() {
     },
   })
   const importMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const source = await file.text()
-      const name = declaredTitle(source) ?? file.name.replace(/\.(pine|txt)$/i, '')
-      return api.createTaScript({ name, source })
-    },
+    mutationFn: importScript,
     onSuccess: (created) => {
       refresh()
       navigate(`/ta/indicators/${created.id}`)
     },
     onError: (error) => setImportError(error instanceof Error ? error.message : String(error)),
   })
+  // Files dropped: one opens in the editor, as the button's does; several stay listed, each with its outcome.
+  const dropped = useRef(0)
+  const importDropped = async (item: UploadFileItem): Promise<UploadResult> => {
+    if (!item.rawFile) throw new Error('The file could not be read')
+    const created = await importScript(item.rawFile)
+    refresh()
+    if (dropped.current === 1) navigate(`/ta/indicators/${created.id}`)
+    return { href: `/ta/indicators/${created.id}`, label: 'Open' }
+  }
 
   const columns = useMemo(
     () =>
@@ -301,6 +310,24 @@ export function IndicatorsPage() {
           The file could not be imported: {importError}
         </p>
       )}
+
+      <AnimatedFileUpload
+        variant="compact"
+        multiple
+        accept=".pine,.txt"
+        maxSize={MAX_SCRIPT_BYTES}
+        dropTitle="Drop .pine files here"
+        dropSubtitle="or choose them: several at once, libraries first"
+        arrange={librariesFirst}
+        sequential
+        workingLabel="Importing…"
+        doneLabel="Imported"
+        linkComponent={RouterLink}
+        onFilesSelected={(files) => {
+          dropped.current = files.length
+        }}
+        uploadHandler={importDropped}
+      />
 
       <QueryState isPending={scriptsQuery.isPending} error={scriptsQuery.error} hasData={!!scripts}>
         {scripts && (

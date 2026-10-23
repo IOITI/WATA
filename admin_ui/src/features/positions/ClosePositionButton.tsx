@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { useToast } from '@/components/toast-context'
 import { Button } from '@/components/ui/button'
+import { useFollow } from '@/features/live/follow-context'
 import { api } from '@/lib/api'
 import { formatNumber } from '@/lib/format'
 import type { Position } from '@/lib/types'
@@ -11,18 +12,30 @@ import type { Position } from '@/lib/types'
 /** Ask the position monitor to sell one open position. */
 export function ClosePositionButton({ position }: { position: Position }) {
   const toast = useToast()
+  const follow = useFollow()
   const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState(false)
 
   const closeMutation = useMutation({
-    mutationFn: () => api.closePosition(position.position_id),
-    onSuccess: () => {
+    // When it was asked, by this browser's clock: the card that follows it takes the sells sent from then on.
+    mutationFn: (_askedAt: number) => api.closePosition(position.position_id),
+    onSuccess: (_closing, askedAt) => {
       setConfirming(false)
-      toast({
-        title: 'Close requested',
-        description: 'The position monitor sells it now; the result shows here and on Telegram.',
-        variant: 'success',
-      })
+      if (follow) {
+        follow({
+          kind: 'close',
+          positionId: position.position_id,
+          instrument: position.instrument_name,
+          amount: position.position_amount,
+          askedAt,
+        })
+      } else {
+        toast({
+          title: 'Close requested',
+          description: 'The position monitor sells it now; the result shows here and on Telegram.',
+          variant: 'success',
+        })
+      }
       void queryClient.invalidateQueries({ queryKey: ['overview'] })
       void queryClient.invalidateQueries({ queryKey: ['positions'] })
     },
@@ -48,7 +61,7 @@ export function ClosePositionButton({ position }: { position: Position }) {
         doneLabel="Requested"
         pending={closeMutation.isPending}
         error={closeMutation.error?.message}
-        onConfirm={() => closeMutation.mutate()}
+        onConfirm={() => closeMutation.mutate(Date.now())}
         onClose={() => setConfirming(false)}
         description={
           <>

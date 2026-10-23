@@ -6,8 +6,9 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import { NotFoundPage } from '@/features/NotFoundPage'
-import type { Session } from '@/lib/types'
+import type { Position, Session } from '@/lib/types'
 import { run, RUN_ID } from '@/test/backtests'
+import { openPosition, overview } from '@/test/overview'
 
 import { AppShell } from './AppShell'
 import { MENU } from './navigation'
@@ -30,6 +31,7 @@ interface ServerState {
   bodies?: Record<string, unknown>
   saxo?: 'ok' | 'down' | 'unknown'
   pausedSince?: string | null
+  openPositions?: Position[]
   restartRequired?: boolean
   /** The page shown. */
   path?: string
@@ -60,7 +62,14 @@ function Address() {
   return <output aria-label="address">{location.pathname + location.search}</output>
 }
 
-function renderShell({ bodies: more = {}, saxo = 'ok', pausedSince = null, restartRequired = false, path = '/positions' }: ServerState = {}) {
+function renderShell({
+  bodies: more = {},
+  saxo = 'ok',
+  pausedSince = null,
+  openPositions = [],
+  restartRequired = false,
+  path = '/positions',
+}: ServerState = {}) {
   const bodies: Record<string, unknown> = {
     ...more,
     '/api/system/health': {
@@ -70,7 +79,7 @@ function renderShell({ bodies: more = {}, saxo = 'ok', pausedSince = null, resta
         { id: 'web_server', name: 'Web server', status: 'ok', detail: '' },
       ],
     },
-    '/api/overview': { entries_paused_since: pausedSince },
+    '/api/overview': overview({ entries_paused_since: pausedSince, open_positions: openPositions }),
   }
   vi.stubGlobal(
     'fetch',
@@ -156,9 +165,36 @@ describe('trading state in the top bar', () => {
   })
 
   it('says on every page that new entries are paused, and where to resume them', async () => {
+    const user = userEvent.setup()
     renderShell({ pausedSince: '2026-10-12T05:09:22Z' })
 
-    expect(await screen.findByRole('link', { name: /Entries paused/ })).toHaveAttribute('href', '/')
+    await user.click(await screen.findByRole('button', { name: 'Live trading: Entries paused' }))
+    const island = screen.getByRole('region', { name: 'Live trading' })
+    expect(within(island).getByRole('link', { name: 'Resume entries on the dashboard' })).toHaveAttribute('href', '/')
+    expect(within(island).getByText(/paused/i, { selector: 'li' })).toBeInTheDocument()
+  })
+
+  it('gives the open positions’ live result on every page, and their Close, which the island keeps open', async () => {
+    const user = userEvent.setup()
+    renderShell({ openPositions: [openPosition('5002', 'TURBO LONG NASDAQ-100 KO 24150 SG')] })
+
+    const pill = await screen.findByRole('button', { name: /^Live trading: 1 open/ })
+    expect(pill).toHaveTextContent('+€20.80')
+    await user.click(pill)
+    const island = screen.getByRole('region', { name: 'Live trading' })
+    expect(within(island).getByText('TURBO LONG NASDAQ-100 KO 24150 SG')).toBeInTheDocument()
+
+    // Its confirmation over the page takes the clicks and Escape: the island stays behind it.
+    await user.click(within(island).getByRole('button', { name: 'Close' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Close this position' })
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('region', { name: 'Live trading' })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Live trading: 1 open/ })).toHaveAttribute('aria-expanded', 'false'))
+    // Back on the pill. (The island shrinks into it: jsdom, which measures nothing, never ends that animation.)
+    expect(screen.getByRole('button', { name: /^Live trading: 1 open/ })).toHaveFocus()
   })
 
   it('says that the services run an older configuration, and links to it', async () => {

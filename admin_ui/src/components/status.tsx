@@ -7,24 +7,23 @@ import type { BadgeTone } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatMoney, formatPercent, toneOf } from '@/lib/format'
 import type { Tone } from '@/lib/format'
-import { actionLabel } from '@/lib/labels'
+import { actionLabel, SERVICE_STATUS_LABEL } from '@/lib/labels'
 import type { ServiceStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const SERVICE_STATUS: Record<ServiceStatus, { tone: BadgeTone; label: string }> = {
-  ok: { tone: 'success', label: 'Up' },
-  warning: { tone: 'warning', label: 'Degraded' },
-  down: { tone: 'danger', label: 'Down' },
-  unknown: { tone: 'neutral', label: 'Unknown' },
-  disabled: { tone: 'neutral', label: 'Disabled' },
+const SERVICE_TONE: Record<ServiceStatus, BadgeTone> = {
+  ok: 'success',
+  warning: 'warning',
+  down: 'danger',
+  unknown: 'neutral',
+  disabled: 'neutral',
 }
 
 /** State of a service: always a word next to the colour, never the colour alone. */
 export function ServiceStatusBadge({ status }: { status: ServiceStatus }) {
-  const { tone, label } = SERVICE_STATUS[status]
   return (
-    <Badge tone={tone} dot={status !== 'disabled'}>
-      {label}
+    <Badge tone={SERVICE_TONE[status]} dot={status !== 'disabled'}>
+      {SERVICE_STATUS_LABEL[status]}
     </Badge>
   )
 }

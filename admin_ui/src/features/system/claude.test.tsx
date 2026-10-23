@@ -9,7 +9,7 @@ import { ToastProvider } from '@/components/ToastProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import type { McpState, Session } from '@/lib/types'
 
-import { callArguments, endpointState, shareLines } from './claude'
+import { callActivity, callArguments, callsSummary, endpointState, shareLines } from './claude'
 import { ClaudePanel } from './ClaudePanel'
 
 const SESSION: Session = {
@@ -121,6 +121,28 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('a call as a step of the trace', () => {
+  it('says what was asked in a line, or why it was refused, and its outcome in words', () => {
+    const [saved, refused] = mcpState().calls
+    expect(callActivity(saved, 0, 'Europe/Paris')).toMatchObject({
+      title: 'pine_save',
+      description: 'source: 1830 characters, name: EMA cross',
+      status: 'success',
+      statusLabel: 'Done',
+      duration: '2,400 ms',
+      details: { input: saved.arguments },
+      metadata: { token: 'claude-mac' },
+    })
+    expect(callActivity(refused, 1, 'Europe/Paris')).toMatchObject({
+      description: 'Experiment 1a2b3c is concluded (kept): open a new one with exp_new',
+      status: 'error',
+      statusLabel: 'Refused',
+      details: { input: undefined, output: refused.detail },
+    })
+    expect(callsSummary(mcpState().calls)).toBe('2 calls: 1 done, 1 refused')
+  })
+})
+
 describe('the Claude panel', () => {
   it("shows the tokens without their secret, Claude's share and its last calls", async () => {
     renderPanel()
@@ -131,8 +153,23 @@ describe('the Claude panel', () => {
     expect(screen.getByText('pine_save')).toBeInTheDocument()
     expect(screen.getByText('source: 1830 characters, name: EMA cross')).toBeInTheDocument()
     expect(screen.getByText(/open a new one with exp_new/)).toBeInTheDocument()
+    expect(screen.getByText('2 calls: 1 done, 1 refused')).toBeInTheDocument()
     expect(screen.getByText(/shadow rules are switched off/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Experiments' })).toHaveAttribute('href', '/backtests/experiments')
+  })
+
+  it('opens a call on its full arguments, from the keyboard too', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+
+    const call = await screen.findByRole('button', { name: /pine_save/ })
+    expect(call).toHaveAttribute('aria-expanded', 'false')
+    call.focus()
+    await user.keyboard('{Enter}')
+
+    expect(call).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Arguments, as the log keeps them')).toBeInTheDocument()
+    expect(screen.getByText(/"chars": 1830/)).toBeInTheDocument()
   })
 
   it('pauses the endpoint and resumes it', async () => {

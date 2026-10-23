@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Columns3, FlaskConical, Plus, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
@@ -24,6 +24,7 @@ import type { BacktestRunListed, Experiment } from '@/lib/types'
 import { collapseAttempts, comparable, failureLine, filterRuns, isActive, RUN_FILTER_NAMES, runFilterOf, sourceLabel, STATE_LABEL } from './model'
 import type { RunFilter } from './model'
 import { BacktestsDisabled, StateBadge } from './parts'
+import { useHiddenRuns, useRemoveRuns } from './pending-removals-context'
 import { ResearchFiles } from './ResearchFiles'
 import { TurboModelPanel } from './TurboModelPanel'
 
@@ -254,9 +255,9 @@ export function BacktestsPage() {
       { replace: true },
     )
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
-  // The runs the removal dialog is about: those selected, or a run's earlier failed attempts.
-  const [removing, setRemoving] = useState<BacktestRunListed[] | null>(null)
   const [clearing, setClearing] = useState(false)
+  const hidden = useHiddenRuns()
+  const removeRuns = useRemoveRuns()
 
   const runsQuery = useQuery({
     queryKey: ['backtests'],
@@ -265,7 +266,8 @@ export function BacktestsPage() {
     // A run that waits or runs changes state by itself: follow it closely.
     refetchInterval: (query) => (query.state.data?.items.some((run) => isActive(run.status.state)) ? 2_000 : 30_000),
   })
-  const runs = runsQuery.data?.items
+  // Without the runs whose removal waits for its Undo, or is on its way.
+  const runs = useMemo(() => runsQuery.data?.items.filter((run) => !hidden.has(run.id)), [runsQuery.data, hidden])
   const storage = runsQuery.data?.storage
   // Names for the experiments the runs belong to.
   const experimentsQuery = useQuery({ queryKey: ['experiments'], queryFn: api.experiments, enabled, staleTime: 60_000 })
@@ -276,16 +278,16 @@ export function BacktestsPage() {
   }, [runs, experimentsQuery.data])
   const { shown, earlier } = useMemo(() => collapseAttempts(filterRuns(runs ?? [], filter)), [runs, shownKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const columns = useMemo(
-    () =>
-      runColumns(timezone, earlier, (attempts) => {
-        removeMutation.reset()
-        setRemoving(attempts)
-      }),
-    // The mutation's reset is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone, earlier],
+  // Selected runs, or a run's earlier failed attempts: gone from the list at once, with an Undo.
+  const remove = useCallback(
+    (removed: BacktestRunListed[]) => {
+      removeRuns(removed.map((run) => ({ id: run.id, name: run.name })))
+      const ids = new Set(removed.map((run) => run.id))
+      setSelected((current) => new Set([...current].filter((id) => !ids.has(id))))
+    },
+    [removeRuns, setSelected],
   )
+  const columns = useMemo(() => runColumns(timezone, earlier, remove), [timezone, earlier, remove])
   // A run removed meanwhile, or now waiting or running, is no longer selected.
   const chosen = useMemo(() => (runs ?? []).filter((run) => selected.has(run.id) && selectableRun(run)), [runs, selected])
   const chosenIds = useMemo(() => new Set(chosen.map((run) => run.id)), [chosen])
@@ -293,17 +295,6 @@ export function BacktestsPage() {
   const canCompare = compared.length >= 2 && compared.length <= MAX_COMPARED
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtests'] })
-  const removeMutation = useMutation({
-    mutationFn: (ids: string[]) => api.removeBacktests(ids),
-    onSuccess: (outcome) => {
-      void refresh()
-      // What was removed is no longer selected; what could not be stays in the dialog, with why.
-      const removed = new Set(outcome.removed)
-      const kept = new Set(outcome.kept.map((entry) => entry.id))
-      setSelected((current) => new Set([...current].filter((id) => !removed.has(id))))
-      setRemoving(kept.size === 0 ? null : (current) => current?.filter((run) => kept.has(run.id)) ?? null)
-    },
-  })
   const clearMutation = useMutation({
     mutationFn: api.removeFormerBacktests,
     onSuccess: () => {
@@ -374,10 +365,7 @@ export function BacktestsPage() {
                         label: `Remove ${chosen.length}`,
                         icon: <Trash2 className="size-3.5" />,
                         variant: 'danger',
-                        onClick: () => {
-                          removeMutation.reset()
-                          setRemoving(chosen)
-                        },
+                        onClick: () => remove(chosen),
                       },
                     ],
                   }}
@@ -413,49 +401,6 @@ export function BacktestsPage() {
           <TurboModelPanel />
         </div>
       )}
-
-      <SettleModal
-        open={removing !== null}
-        onClose={() => setRemoving(null)}
-        title={`Remove ${removing?.length ?? 0} backtest${removing?.length === 1 ? '' : 's'}?`}
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => setRemoving(null)}>
-              Keep them
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              isLoading={removeMutation.isPending}
-              onClick={() => removing && removeMutation.mutate(removing.map((run) => run.id))}
-            >
-              Remove
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm leading-relaxed text-text-secondary">
-          Their signals, trades and days are deleted from the server. The recorded prices they ran on are kept.
-        </p>
-        <ul className="mt-3 flex max-h-48 flex-col gap-1 overflow-auto text-sm">
-          {(removing ?? []).map((run) => (
-            <li key={run.id} className="truncate">
-              {run.name}
-            </li>
-          ))}
-        </ul>
-        {removeMutation.error && (
-          <p role="alert" className="mt-2 text-sm text-negative">
-            {removeMutation.error.message}
-          </p>
-        )}
-        {removeMutation.data && removeMutation.data.kept.length > 0 && (
-          <p role="alert" className="mt-2 text-sm text-warning">
-            {removeMutation.data.kept.length} could not be removed: {removeMutation.data.kept[0].reason}.
-          </p>
-        )}
-      </SettleModal>
 
       <SettleModal
         open={clearing}

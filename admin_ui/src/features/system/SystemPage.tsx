@@ -8,6 +8,7 @@ import { QueryState, ServiceStatusBadge } from '@/components/status'
 import { useToast } from '@/components/toast-context'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { DependencyTrace } from '@/components/ui/dependency-trace'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import { formatDateTime, formatNumber } from '@/lib/format'
@@ -16,6 +17,7 @@ import type { Health } from '@/lib/types'
 import { ClaudePanel } from './ClaudePanel'
 import { LicencesPanel } from './LicencesPanel'
 import { SaxoPanel } from './SaxoPanel'
+import { MAP_HEIGHT, MAP_LINKS, MAP_WIDTH, serviceMap } from './serviceMap'
 
 // The page that says more of a service, where there is one.
 const SERVICE_PAGES: Record<string, string> = { ta_engine: '/ta/monitor' }
@@ -178,6 +180,16 @@ export function SystemPage() {
               description="The admin cannot see the containers themselves. Each state comes from what the service answers, from the consumers on its queue, or from the start and stop lines of its log."
               bodyClassName="pt-2"
             >
+              {/* The services as a map, where there is room for it; the table says the same, line by line. */}
+              <DependencyTrace
+                className="mb-4 hidden lg:flex"
+                nodes={serviceMap(health.services)}
+                connections={MAP_LINKS}
+                width={MAP_WIDTH}
+                height={MAP_HEIGHT}
+                nodeSize={30}
+                label="WATA's services, and what each one calls"
+              />
               <ServicesTable health={health} />
             </Panel>
 

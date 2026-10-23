@@ -17,6 +17,7 @@ import type { Position } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { POSITION_CSV, positionColumns } from './columns'
+import { LivePositionChart } from './LivePositionChart'
 import { PositionOrders } from './PositionOrders'
 
 type StatusFilter = 'open' | 'closed' | 'all'
@@ -118,7 +119,16 @@ export function PositionsPage() {
               selectable={false}
               initialSearch={find}
               initialExpandedRowIds={find ? [find] : undefined}
-              renderSubComponent={(row) => <PositionOrders positionId={row.position_id} />}
+              renderSubComponent={(row) =>
+                row.position_status === 'Open' ? (
+                  <div className="space-y-4">
+                    <LivePositionChart position={row} />
+                    <PositionOrders positionId={row.position_id} />
+                  </div>
+                ) : (
+                  <PositionOrders positionId={row.position_id} />
+                )
+              }
             />
             {page.total > page.items.length && (
               <p className="text-xs text-muted-foreground">

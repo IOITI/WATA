@@ -1,4 +1,4 @@
-import { RouterLink } from '@/components/RouterLink'
+import { HoverPeekRouterLink } from '@/components/PeekRouterLink'
 import { NotificationBell } from '@/components/ui/notification-bell'
 import type { NotificationTone } from '@/components/ui/notification-bell'
 import { useSession } from '@/features/auth/auth-context'
@@ -42,7 +42,7 @@ export function EventsBell() {
       }))}
       onMarkAsRead={log.markRead}
       onMarkAllAsRead={log.markAllRead}
-      linkComponent={RouterLink}
+      linkComponent={HoverPeekRouterLink}
       triggerClassName={TRIGGER}
       footer={
         notificationsSupported() && (

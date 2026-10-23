@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
@@ -221,6 +221,21 @@ describe('the Indicators page', () => {
 
     await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent('/ta/indicators/dddddddddddd'))
     expect(sent.find((request) => request.path.endsWith('/duplicate'))?.body).toEqual({ name: 'EMA fifty' })
+  })
+
+  it('imports .pine files dropped on it one after the other, libraries first, each with its outcome', async () => {
+    renderAt('/ta/indicators')
+    const zone = await screen.findByRole('button', { name: /^Drop \.pine files here/ })
+    const script = new File(['//@version=6\nindicator("Mine")\nimport someone/Kit/1 as k'], 'mine.pine', { type: 'text/plain' })
+    const library = new File(['//@version=6\nlibrary("Kit")'], 'kit.pine', { type: 'text/plain' })
+
+    fireEvent.drop(zone, { dataTransfer: { files: [script, library] } })
+
+    await waitFor(() => expect(screen.getAllByText('Imported')).toHaveLength(2))
+    expect(sent.filter((request) => request.method === 'POST').map((request) => (request.body as { name: string }).name)).toEqual(['Kit', 'Mine'])
+    expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/ta/indicators/cccccccccccc')
+    // Several stay on the page, listed.
+    expect(screen.getByTestId('address')).toHaveTextContent(/^\/ta\/indicators$/)
   })
 })
 

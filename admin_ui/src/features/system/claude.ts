@@ -4,7 +4,9 @@
  * the server against its limits, and its calls in a line each.
  */
 
+import type { AgentActivityItemData, ActivityStatus } from '@/components/ui/ai-agent-activity'
 import type { BadgeTone } from '@/components/ui/badge'
+import { formatDateTime, formatNumber } from '@/lib/format'
 import type { McpCall, McpCallOutcome, McpState, McpTokenState } from '@/lib/types'
 
 /** Who Claude's work is written as, whichever of its tokens asked. */
@@ -111,3 +113,42 @@ export function callArguments(call: McpCall): string {
     })
     .join(', ')
 }
+
+const CALL_STATUS: Record<McpCallOutcome, ActivityStatus> = {
+  ok: 'success',
+  refused: 'error',
+  failed: 'error',
+  cancelled: 'cancelled',
+}
+
+/**
+ * A call as a step of Claude's trace: the tool, what it was asked in a line (or why it was refused), its outcome in
+ * words and how long it took; opened, its arguments as the log keeps them and the token that made it.
+ */
+export function callActivity(call: McpCall, index: number, timeZone: string): AgentActivityItemData {
+  const asked = Object.keys(call.arguments).length > 0
+  return {
+    id: `${call.at}-${call.tool}-${index}`,
+    type: 'tool_execution',
+    title: call.tool,
+    description: call.detail ?? (callArguments(call) || undefined),
+    status: CALL_STATUS[call.outcome] ?? 'pending',
+    statusLabel: OUTCOME[call.outcome]?.label ?? call.outcome,
+    duration: `${formatNumber(call.milliseconds)} ms`,
+    timestamp: formatDateTime(call.at, timeZone),
+    details: asked || call.detail ? { input: asked ? call.arguments : undefined, output: call.detail } : undefined,
+    metadata: call.caller ? { token: call.caller } : undefined,
+  }
+}
+
+/** What the calls shown add up to: "15 calls: 13 done, 2 refused". */
+export function callsSummary(calls: McpCall[]): string {
+  const counts = new Map<string, number>()
+  for (const call of calls) {
+    const label = (OUTCOME[call.outcome]?.label ?? call.outcome).toLowerCase()
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  const parts = [...counts].map(([label, count]) => `${count} ${label}`)
+  return `${calls.length} call${calls.length === 1 ? '' : 's'}: ${parts.join(', ')}`
+}
+

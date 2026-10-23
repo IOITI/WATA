@@ -21,12 +21,16 @@ var/lib/backtests of this checkout.
 
 Set FAKE_SAXO_EXPIRED=1 to see the Saxo re-authorisation flow, and
 FAKE_TOTP=1 to require a one-time code at login (the key is printed at start).
+A close asked from the pages takes a few seconds, as the monitor's would: set
+FAKE_SELL_REFUSED=1 to have Saxo refuse the first sell (the card that follows
+a close shows each step). A signal sent by hand is decided two seconds later.
 
 Set FAKE_MCP=1 for Claude's MCP endpoint, on http://127.0.0.1:8082/mcp: a
 token is printed at start, its Pine studies are real ones (the real Pine
 runner) on the made-up recorded days, and Claude's shadow rules are on.
 """
 
+import asyncio
 import json
 import math
 import os
@@ -468,6 +472,8 @@ class FakeQueries:
         self.positions, self.orders = build_history(self.today)
         self.requests, refused_buy = build_requests(self.positions, self.orders)
         self.paused_since = None
+        # FAKE_SELL_REFUSED=1: Saxo refuses the first sell asked from the pages.
+        self.refuse_next_sell = os.getenv("FAKE_SELL_REFUSED") == "1"
         self.journal: list[dict] = []
         self._ticks = 0
         if refused_buy is not None:
@@ -979,7 +985,11 @@ class FakeServices:
         print(f"[fake] signal: {payload}")
         signal_uuid = self._store(payload, datetime.now(timezone.utc))
         signal = {**payload, "signal_uuid": signal_uuid}
-        # What a trader would have journaled a moment later.
+        # What a trader would have journaled a moment later: its next poll, then its decision.
+        asyncio.get_running_loop().call_later(2.0, self._decide, payload, signal)
+        return signal_uuid
+
+    def _decide(self, payload, signal):
         if payload["action"] in ("long", "short"):
             if self._queries.paused_since is not None:
                 self._queries.add_decision(
@@ -996,7 +1006,6 @@ class FakeServices:
                 self._queries.add_decision(signal, "closed", f"Closed {len(open_ids)} position(s). Errors: 0")
             else:
                 self._queries.add_decision(signal, "ignored", "No open position to close")
-        return signal_uuid
 
     async def watchlist_best(self, indice, direction):
         now = datetime.now(timezone.utc)
@@ -1039,7 +1048,48 @@ class FakeServices:
     async def publish_ops(self, message):
         print(f"[fake] trading-ops: {message}")
         if message.get("action") == "close_position":
-            self._queries.close_position(message["position_id"], f"Explicit Close (position {message['position_id']})")
+            # As the monitor would: its sell leaves a moment later, and Saxo shows the position closed after it.
+            asyncio.get_running_loop().call_later(1.5, self._sell, message["position_id"])
+
+    def _sell(self, position_id: str) -> None:
+        position = next((p for p in self._queries.positions if p["position_id"] == position_id), None)
+        if position is None or position["position_status"] != "Open":
+            return
+        reason = f"Explicit Close (position {position_id})"
+        refused = self._queries.refuse_next_sell
+        self._queries.refuse_next_sell = False
+        sell = {
+            "buy_sell": "Sell", "action": position["action"], "position_id": position_id,
+            "order_id": str(8_100_000 + len(self._queries.requests)), "order_amount": position["position_amount"],
+            "instrument_uic": position["instrument_uic"], "instrument_name": position["instrument_name"],
+            "instrument_symbol": position["instrument_symbol"], "instrument_currency": position["instrument_currency"],
+            "instrument_price": position.get("live_bid") or position["position_open_price"],
+        }
+        request = fake_request(datetime.now(timezone.utc), sell, outcome="refused" if refused else "accepted")
+        request["reason"] = reason
+        self._queries.requests.append(request)
+        if not refused:
+            asyncio.get_running_loop().call_later(1.5, self._queries.close_position, position_id, reason)
+
+
+def seeded_mcp_calls(calls: CallLog) -> CallLog:
+    """A few of Claude's calls, done, refused and failed: System › Claude has a trace to show without FAKE_MCP."""
+    calls.record(caller="claude-mac", tool="status", arguments={}, outcome="ok", milliseconds=38)
+    calls.record(
+        caller="claude-mac", tool="pine_save", outcome="ok", milliseconds=2400,
+        arguments={"name": "EMA cross", "source": "//@version=6\nindicator('EMA cross', overlay=true)\n" + "// …\n" * 40},
+    )
+    calls.record(
+        caller="claude-mac", tool="backtest_start", outcome="refused", milliseconds=3,
+        arguments={"from": "2026-10-13", "to": "2026-10-22", "source": {"kind": "pine", "script": "ema-cross", "version": 2}},
+        detail="Experiment 1a2b3c is concluded (kept): open a new one with exp_new",
+    )
+    calls.record(
+        caller="claude-mac", tool="pine_run", outcome="failed", milliseconds=45012,
+        arguments={"script": "ema-cross", "days": 5, "alert_titles": ["Long", "Short"]},
+        detail="The Pine runner stopped: JavaScript heap out of memory",
+    )
+    return calls
 
 
 class FakeSaxo:
@@ -1207,7 +1257,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         # The Pine scripts, on the temporary folder, with a few examples.
         ta_scripts=ta_scripts,
         mcp_tokens=mcp_tokens,
-        mcp_calls=CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl")),
+        mcp_calls=seeded_mcp_calls(CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl"))),
         mcp_pause=McpPause(os.path.join(work_dir, "lib", "admin", "mcp_pause.json")),
         studies=studies,
         events=events,

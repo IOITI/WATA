@@ -1,5 +1,6 @@
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
 import type { BadgeTone } from '@/components/ui/badge'
+import type { FunnelStage } from '@/components/ui/funnel-chart'
 import { madeByClaude } from '@/features/system/claude'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { formatBytes, formatDay, formatPercent } from '@/lib/format'
@@ -202,6 +203,34 @@ export function tally(counts: Record<string, number> | undefined): { name: strin
   return entries
     .map(([name, count]) => ({ name, count, share: total > 0 ? count / total : 0 }))
     .sort((first, second) => second.count - first.count)
+}
+
+/**
+ * Where a run's entry signals went, stage by stage: the rules refuse some, some find no recorded turbo, some fail
+ * to buy (no money for a single turbo...), and of the bought, some win. The closes and what was no signal are not
+ * entries, so not in it. Null for a run without its signals' tallies (before they were kept) or without an entry.
+ */
+export function signalFunnel(summary: BacktestSummary): FunnelStage[] | null {
+  const fates = summary.signals?.by_fate
+  if (!fates) return null
+  const count = (fate: BacktestFate) => fates[fate] ?? 0
+  const entries = count('executed') + count('refused') + count('failed') + count('unpriced')
+  if (entries === 0) return null
+  const passed = entries - count('refused')
+  const priced = passed - count('unpriced')
+  const steps: FunnelStage[] = [
+    { label: 'Entry signals', value: entries, dropLabel: 'refused by a rule' },
+    { label: 'Passed the rules', value: passed, dropLabel: 'no recorded turbo' },
+    { label: 'Had a recorded turbo', value: priced, dropLabel: 'failed to buy' },
+    { label: 'Bought', value: count('executed') },
+  ]
+  const figures = summary.figures
+  if (figures && figures.trades > 0 && figures.win_rate !== null) {
+    steps[steps.length - 1].dropLabel = 'did not win'
+    // The share is rounded to a tenth of a percent: for fewer than 1,000 trades this gives the count back exactly.
+    steps.push({ label: 'Won', value: Math.round((figures.trades * figures.win_rate) / 100) })
+  }
+  return steps
 }
 
 // ── how far a run can be trusted ──

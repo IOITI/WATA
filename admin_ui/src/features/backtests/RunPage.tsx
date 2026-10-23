@@ -3,8 +3,6 @@ import { Flag, Pencil, Radar, RotateCcw, Square, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
-import { ButtonLink } from '@/components/ButtonLink'
-import { Hint } from '@/components/Hint'
 import { KpiTile } from '@/components/KpiTile'
 import { useMainScroll } from '@/components/main-scroll-context'
 import { NotFoundState } from '@/components/NotFoundState'
@@ -18,8 +16,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/form'
 import { ScrollProgressNav } from '@/components/ui/scroll-progress-nav'
 import { SettleModal } from '@/components/ui/settle-modal'
+import { SplitButton } from '@/components/ui/split-button'
+import type { SplitButtonOption } from '@/components/ui/split-button'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
+import { RulePeekName } from '@/features/ta/signals/RulePeek'
 import { api, isNotFound } from '@/lib/api'
 import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestRun } from '@/lib/types'
@@ -35,6 +36,7 @@ import {
 } from './model'
 import { EdgePanel } from './EdgePanel'
 import { BacktestsDisabled, ChangeList, Measure, StateBadge } from './parts'
+import { useRemoveRuns } from './pending-removals-context'
 import { ReconciliationPanel } from './ReconciliationPanel'
 import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
 import { DaysTable, SignalsTable, TradesTable } from './runTables'
@@ -45,6 +47,7 @@ import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { underlyingLabel } from './turboModel'
 import { VerdictPanel } from './VerdictPanel'
 import type { PageSection } from './VerdictPanel'
+import { RunPeekLink } from './RunPeek'
 
 /** Where a part of the page starts when the nav leads to it: below the nav, which stays at the top. */
 const ANCHORED = 'scroll-mt-14'
@@ -128,7 +131,12 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
                   {source.rule.name}
                 </Link>{' '}
                 v{source.rule.script.version}
-                {source.from_rule ? ` (the rule ${source.from_rule.name})` : ''}
+                {source.from_rule && (
+                  <>
+                    {' '}
+                    (the rule <RulePeekName id={source.from_rule.id} name={source.from_rule.name} />)
+                  </>
+                )}
               </>
             ) : (
               `The ${source.signals} signal${source.signals === 1 ? '' : 's'} WATA received`
@@ -205,7 +213,7 @@ export function RunPage() {
     const table = tableOf(next)
     setParams(table === 'trades' ? {} : { tab: table }, { replace: true })
   }
-  const [removing, setRemoving] = useState(false)
+  const removeRuns = useRemoveRuns()
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
   const [tags, setTags] = useState('')
@@ -227,13 +235,6 @@ export function RunPage() {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtest', runId] })
   const cancel = useMutation({ mutationFn: () => api.cancelBacktest(runId), onSuccess: refresh })
-  const remove = useMutation({
-    mutationFn: () => api.deleteBacktest(runId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['backtests'] })
-      navigate('/backtests')
-    },
-  })
   const reference = useMutation({
     mutationFn: () => api.setBacktestReference(runId),
     onSuccess: (paper) => queryClient.setQueryData(['backtest-paper'], paper),
@@ -265,6 +266,50 @@ export function RunPage() {
 
   if (isNotFound(runQuery.error)) return <NotFoundState {...RUN_NOT_FOUND} />
 
+  // What else can be done with the run, behind the chevron of "Run again with changes".
+  const runActions = (shown: BacktestRun): SplitButtonOption[] => {
+    const done = shown.kind === 'run' && shown.status.state === 'done'
+    const options: SplitButtonOption[] = []
+    // Its script, inputs, alerts and bars made a signal rule, in shadow: reviewed in the rule's dialog first.
+    if (done && shown.request.source.kind === 'pine' && !shown.stress_of && !shown.model_check_of) {
+      options.push({ value: 'rule', label: 'Make a shadow rule', icon: <Radar />, href: `/ta/signals?from-run=${shown.id}` })
+    }
+    if (done && shown.source.from_rule && shown.source.kind === 'pine') {
+      options.push({
+        value: 'reference',
+        label: reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference',
+        description: `The run the paper days of ${shown.source.from_rule.name} are set against`,
+        icon: <Flag />,
+        disabled: reference.isSuccess || reference.isPending,
+        onSelect: () => reference.mutate(),
+      })
+    }
+    options.push({
+      value: 'rename',
+      label: 'Rename',
+      icon: <Pencil />,
+      onSelect: () => {
+        setName(shown.name)
+        setTags(shown.tags.join(', '))
+        setRenaming(true)
+      },
+    })
+    if (!isActive(shown.status.state)) {
+      options.push({
+        value: 'remove',
+        label: 'Remove',
+        description: 'Gone at once, with a few seconds to undo it',
+        icon: <Trash2 />,
+        tone: 'danger',
+        onSelect: () => {
+          removeRuns([{ id: shown.id, name: shown.name }])
+          navigate('/backtests')
+        },
+      })
+    }
+    return options
+  }
+
   return (
     <>
       <PageHeader
@@ -273,50 +318,22 @@ export function RunPage() {
         actions={
           run && (
             <>
-              {isActive(run.status.state) ? (
+              {/* Urgent, so never in a menu. */}
+              {isActive(run.status.state) && (
                 <Button variant="outline" size="sm" leftIcon={<Square className="size-3.5" />} isLoading={cancel.isPending} onClick={() => cancel.mutate()}>
                   Stop
                 </Button>
-              ) : (
-                <Button variant="outline" size="sm" leftIcon={<Trash2 className="size-3.5" />} onClick={() => setRemoving(true)}>
-                  Remove
-                </Button>
               )}
-              <Button
-                variant="outline"
+              <SplitButton
                 size="sm"
-                leftIcon={<Pencil className="size-3.5" />}
-                onClick={() => {
-                  setName(run.name)
-                  setTags(run.tags.join(', '))
-                  setRenaming(true)
-                }}
-              >
-                Rename
-              </Button>
-              {run.kind === 'run' && run.status.state === 'done' && run.source.from_rule && run.source.kind === 'pine' && (
-                <Hint content={`The run the paper days of ${run.source.from_rule.name} are set against`} wrap={reference.isSuccess}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    leftIcon={<Flag className="size-3.5" />}
-                    isLoading={reference.isPending}
-                    disabled={reference.isSuccess}
-                    onClick={() => reference.mutate()}
-                  >
-                    {reference.isSuccess ? 'The rule’s reference' : 'Set as the rule’s reference'}
-                  </Button>
-                </Hint>
-              )}
-              {/* Its script, inputs, alerts and bars made a signal rule, in shadow: reviewed in the rule's dialog first. */}
-              {run.kind === 'run' && run.status.state === 'done' && run.request.source.kind === 'pine' && !run.stress_of && !run.model_check_of && (
-                <ButtonLink to={`/ta/signals?from-run=${run.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
-                  Make a shadow rule
-                </ButtonLink>
-              )}
-              <ButtonLink to={`/backtests/new?again=${run.id}`} size="sm" leftIcon={<RotateCcw className="size-3.5" />}>
-                Run again with changes
-              </ButtonLink>
+                variant="primary"
+                label="Run again with changes"
+                href={`/backtests/new?again=${run.id}`}
+                linkComponent={RouterLink}
+                icon={<RotateCcw className="size-3.5" aria-hidden />}
+                menuLabel="More actions on this run"
+                options={runActions(run)}
+              />
             </>
           )
         }
@@ -333,14 +350,14 @@ export function RunPage() {
                 {run.turbos === 'modelled' && <Badge tone="warning">Modelled turbos</Badge>}
                 {run.model_check_of && <Badge tone="neutral">Model check</Badge>}
                 {run.stress_of && (
-                  <Link to={`/backtests/${run.stress_of}`} className="text-sm font-medium underline-offset-4 hover:underline">
+                  <RunPeekLink id={run.stress_of} className="text-sm font-medium underline-offset-4 hover:underline">
                     The run it stresses
-                  </Link>
+                  </RunPeekLink>
                 )}
                 {run.model_check_of && (
-                  <Link to={`/backtests/${run.model_check_of}`} className="text-sm font-medium underline-offset-4 hover:underline">
+                  <RunPeekLink id={run.model_check_of} className="text-sm font-medium underline-offset-4 hover:underline">
                     The run it checks
-                  </Link>
+                  </RunPeekLink>
                 )}
                 {run.tags.map((tag) => (
                   <Badge key={tag} tone="neutral">
@@ -499,30 +516,6 @@ export function RunPage() {
           )}
         </QueryState>
       )}
-
-      <SettleModal
-        open={removing}
-        onClose={() => setRemoving(false)}
-        title="Remove this backtest?"
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => setRemoving(false)}>
-              Keep it
-            </Button>
-            <Button variant="destructive" size="sm" isLoading={remove.isPending} onClick={() => remove.mutate()}>
-              Remove
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-text-secondary">Its signals, trades and days are deleted from the server. The recorded prices are kept.</p>
-        {remove.error && (
-          <p role="alert" className="mt-2 text-sm text-negative">
-            {remove.error.message}
-          </p>
-        )}
-      </SettleModal>
 
       <SettleModal
         open={renaming}

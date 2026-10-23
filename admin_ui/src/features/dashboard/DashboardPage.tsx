@@ -1,20 +1,24 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { KpiTile, Meter, SparkBars } from '@/components/KpiTile'
+import { KpiTile, Meter } from '@/components/KpiTile'
 import { PageHeader, Panel } from '@/components/Panel'
 import { ActionBadge, PnlValue, QueryState, ServiceStatusBadge } from '@/components/status'
+import { AirportMatrixClock } from '@/components/ui/airport-matrix-clock'
 import { Skeleton } from '@/components/ui/skeleton'
+import { StatCard } from '@/components/ui/stat-card'
 import { useSession } from '@/features/auth/auth-context'
 import { ClosePositionButton } from '@/features/positions/ClosePositionButton'
+import { LivePositionChart } from '@/features/positions/LivePositionChart'
 import { LiveValue } from '@/features/positions/LiveValue'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent, formatRelative } from '@/lib/format'
+import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent, formatRelative, toneOf } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import type { Overview, Position } from '@/lib/types'
 
 import { entryBlockers, openDirections, upcomingNews } from './entryState'
+import { cityOfZone, marketClock, NEW_YORK } from './marketClock'
 import { PauseControl } from './PauseControl'
 
 /** Re-render on a timer, for the countdowns that depend on the current time. */
@@ -25,6 +29,54 @@ function useNow(intervalMs: number): number {
     return () => clearInterval(timer)
   }, [intervalMs])
   return now
+}
+
+const PNL_TEXT = { positive: 'text-positive', negative: 'text-negative', neutral: undefined }
+
+/**
+ * The day's profit and loss, with the days before it that closed a trade as a line to scrub, day by day: the line
+ * ends on today as it stands, the figure of the tile.
+ */
+function DayProfitTile({ overview }: { overview: Overview }) {
+  const before = overview.recent_days.filter((day) => day.day_date !== overview.date)
+  const closed = overview.day.closed_count
+  return (
+    <StatCard
+      label="Day profit and loss"
+      value={overview.day.profit_loss}
+      trend={[...before.map((day) => day.profit_loss), overview.day.profit_loss]}
+      trendLabels={[...before.map((day) => formatDay(day.day_date)), 'Today']}
+      period={`${closed} closed trade${closed === 1 ? '' : 's'}`}
+      format={(value) => formatMoney(value, 'EUR', true)}
+      toneOf={(value) => PNL_TEXT[toneOf(value)]}
+      color="var(--chart-series)"
+    />
+  )
+}
+
+/**
+ * New York's time beside the session's, and the US open in the latter: the trading hours are New York's, and the
+ * two cities change their clocks on different Sundays.
+ */
+function MarketClocks({ timeZone, now, className }: { timeZone: string; now: number; className?: string }) {
+  const here = cityOfZone(timeZone)
+  const cities = useMemo(
+    () => [
+      { id: 'new-york', name: 'New York', timeZone: NEW_YORK },
+      { id: 'here', name: here, timeZone },
+    ],
+    [here, timeZone],
+  )
+  const { openHere, hoursApart } = marketClock(now, timeZone)
+  return (
+    <AirportMatrixClock
+      cities={cities}
+      size="sm"
+      title={null}
+      footer={`US OPEN ${openHere} ${here.toUpperCase()} · ${hoursApart} H APART`}
+      className={className}
+    />
+  )
 }
 
 function DayPerformanceTile({ overview }: { overview: Overview }) {
@@ -276,10 +328,12 @@ export function DashboardPage() {
         title="Dashboard"
         description={overview ? `${formatDay(overview.date)} · ${overview.timezone}` : 'Today'}
         actions={
-          overview &&
-          overview.entries_paused_since === null && (
-            <PauseControl pausedSince={null} timeZone={timezone} actionsEnabled={actionsEnabled} />
-          )
+          <>
+            <MarketClocks timeZone={timezone} now={now} className="hidden sm:block" />
+            {overview && overview.entries_paused_since === null && (
+              <PauseControl pausedSince={null} timeZone={timezone} actionsEnabled={actionsEnabled} />
+            )}
+          </>
         }
       />
 
@@ -305,20 +359,12 @@ export function DashboardPage() {
               />
             )}
             <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-              <KpiTile
-                label="Day profit and loss"
-                value={<PnlValue value={overview.day.profit_loss} kind="money" className="font-semibold" animate />}
-                hint={`${overview.day.closed_count} closed trade${overview.day.closed_count === 1 ? '' : 's'}`}
-              >
-                <SparkBars
-                  values={overview.recent_days.map((day) => day.profit_loss)}
-                  label="Daily profit and loss over the last 30 days"
-                />
-              </KpiTile>
+              <DayProfitTile overview={overview} />
               <DayPerformanceTile overview={overview} />
               <TradesTile overview={overview} />
               <NextEntryTile overview={overview} now={now} />
             </div>
+            <MarketClocks timeZone={timezone} now={now} className="sm:hidden" />
 
             <Panel
               title="Open positions"
@@ -336,6 +382,13 @@ export function DashboardPage() {
                 now={now}
                 actionsEnabled={actionsEnabled}
               />
+              {overview.open_positions.length > 0 && (
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  {overview.open_positions.map((position) => (
+                    <LivePositionChart key={position.position_id} position={position} />
+                  ))}
+                </div>
+              )}
             </Panel>
           </>
         )}

@@ -59,6 +59,16 @@
   --chart-loss-2: #ef4444;
   --chart-loss-3: #b91c1c;
   --chart-loss-4: #991b1b;
+  /* The stages of a funnel, from the first (the widest) to the last
+     (components/ui/funnel-chart.tsx): one hue, the series' blue, its lightness
+     rising 0.06 to 0.09 (OKLab) a step. A sequential ramp, not categories: each
+     stage has its label and its figure beside it, and the chart a table for
+     screen readers, so only the last step may recede (2.5:1 on the card). */
+  --chart-funnel-1: #1e40af;
+  --chart-funnel-2: #1d4ed8;
+  --chart-funnel-3: #2563eb;
+  --chart-funnel-4: #3b82f6;
+  --chart-funnel-5: #60a5fa;
 
   /* The Pine editor's highlighting (Technical Analysis): text colours, each 4.5:1
      at least on the editor's white surface. */
@@ -106,6 +116,13 @@
   --chart-loss-2: #b91c1c;
   --chart-loss-3: #ef4444;
   --chart-loss-4: #f87171;
+  /* The same steps the other way: the first stage the brightest, the last
+     2.6:1 on the dark card. */
+  --chart-funnel-1: #93c5fd;
+  --chart-funnel-2: #60a5fa;
+  --chart-funnel-3: #3b82f6;
+  --chart-funnel-4: #2563eb;
+  --chart-funnel-5: #1d4ed8;
 
   --code-keyword: #c4b5fd;
   --code-string: #6ee7b7;

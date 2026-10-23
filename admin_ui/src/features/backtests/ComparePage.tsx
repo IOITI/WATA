@@ -5,7 +5,7 @@ import { useSearchParams } from 'react-router'
 import { compareColor, MAX_COMPARED } from '@/components/charts/compare'
 import { CompareCurvesChart, CurvesLegend } from '@/components/charts/PerformanceCharts'
 import { PageHeader, Panel } from '@/components/Panel'
-import { RouterLink } from '@/components/RouterLink'
+import { PeekRouterLink } from '@/components/PeekRouterLink'
 import { PnlValue, QueryState } from '@/components/status'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SmartComparison } from '@/components/ui/smart-comparison'
@@ -110,7 +110,7 @@ function Comparison({ runs }: { runs: BacktestRun[] }) {
           searchPlaceholder="Find a row…"
           diffLabel="Only what differs"
           emptyText="No row of that name, or none that differs."
-          linkComponent={RouterLink}
+          linkComponent={PeekRouterLink}
         />
         {differing.length === 0 && optionsQuery.data && (
           <p className="mt-3 text-xs text-muted-foreground">They were made with the same settings and inputs.</p>

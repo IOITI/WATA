@@ -4,8 +4,9 @@ import { Badge } from '@/components/ui/badge'
 import { formatNumber, formatTime } from '@/lib/format'
 import type { Refusal } from '@/lib/types'
 
-import { orderLink, positionLink } from './orderLife'
+import { orderLink } from './orderLife'
 import { REQUEST_RESULTS, answerText, refusalSummary, runLabel } from './orderRequests'
+import { PositionPeekLink } from './PositionPeek'
 import { RequestList } from './RequestList'
 
 const LINK = 'font-mono text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground'
@@ -20,9 +21,9 @@ export function RefusalDetail({ run, timeZone }: { run: Refusal; timeZone: strin
         {run.position_id && (
           <span className="text-muted-foreground">
             Position{' '}
-            <Link to={positionLink(run.position_id)} className={LINK}>
+            <PositionPeekLink id={run.position_id} className={LINK}>
               {run.position_id}
-            </Link>
+            </PositionPeekLink>
           </span>
         )}
         {run.followed_by?.order_id && (

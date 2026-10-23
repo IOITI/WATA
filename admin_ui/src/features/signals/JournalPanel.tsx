@@ -1,14 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
+import { Panel } from '@/components/Panel'
 import { ActionBadge, QueryState } from '@/components/status'
 import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Badge } from '@/components/ui/badge'
 import type { BadgeTone } from '@/components/ui/badge'
+import { FunnelChart } from '@/components/ui/funnel-chart'
+import { PositionPeekLink } from '@/features/positions/PositionPeek'
 import { api } from '@/lib/api'
-import { formatDateTime } from '@/lib/format'
+import { formatDateTime, formatNumber } from '@/lib/format'
 import type { JournalEntry } from '@/lib/types'
+
+import { journalFunnel } from './journalFunnel'
 
 const OUTCOMES: Record<string, { label: string; tone: BadgeTone }> = {
   executed: { label: 'Executed', tone: 'success' },
@@ -24,6 +29,7 @@ const OUTCOME_FILTER = Object.entries(OUTCOMES).map(([value, { label }]) => ({ v
 export function JournalPanel({ timeZone }: { timeZone: string }) {
   const journalQuery = useQuery({ queryKey: ['journal'], queryFn: () => api.journal(), refetchInterval: 15_000 })
   const entries = journalQuery.data?.items
+  const funnel = useMemo(() => (entries ? journalFunnel(entries) : null), [entries])
 
   const columns = useMemo<ColumnDef<JournalEntry>[]>(
     () => [
@@ -60,7 +66,17 @@ export function JournalPanel({ timeZone }: { timeZone: string }) {
         accessorKey: 'reason',
         cell: ({ row }) => (
           <span className="block max-w-[32rem] whitespace-normal">
-            {row.reason ?? (row.position_id ? `Position ${row.position_id}` : '—')}
+            {row.reason ??
+              (row.position_id ? (
+                <>
+                  Position{' '}
+                  <PositionPeekLink id={row.position_id} className="font-mono underline decoration-border underline-offset-2">
+                    {row.position_id}
+                  </PositionPeekLink>
+                </>
+              ) : (
+                '—'
+              ))}
           </span>
         ),
       },
@@ -70,6 +86,21 @@ export function JournalPanel({ timeZone }: { timeZone: string }) {
 
   return (
     <QueryState isPending={journalQuery.isPending} error={journalQuery.error} hasData={!!entries}>
+      {entries && funnel && (
+        <Panel
+          title="Where the entry signals went"
+          description={`The long and short signals the trader decided, counted over the ${formatNumber(entries.length)} decisions read: from ${formatDateTime(funnel.from, timeZone)} to ${formatDateTime(funnel.to, timeZone)}.`}
+        >
+          <FunnelChart
+            className="max-w-2xl"
+            stages={funnel.stages}
+            formatValue={(value) => formatNumber(value)}
+            summaryLabel="of the entry signals bought"
+            noun="Signals"
+            ariaLabel="Where the entry signals the trader decided went, stage by stage"
+          />
+        </Panel>
+      )}
       {entries && (
         <AdvancedDataTable<JournalEntry>
           title="Signal journal"

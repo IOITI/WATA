@@ -8,6 +8,7 @@ import { Hint } from '@/components/Hint'
 import { RouterLink } from '@/components/RouterLink'
 import { SpotlightSearch } from '@/components/ui/spotlight-search'
 import { useSession } from '@/features/auth/auth-context'
+import { useHiddenRuns } from '@/features/backtests/pending-removals-context'
 import { api } from '@/lib/api'
 
 const PAGES = pageItems()
@@ -22,6 +23,8 @@ export function CommandPalette() {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  // A run whose removal waits for its Undo is not offered.
+  const hiddenRuns = useHiddenRuns()
 
   const runsQuery = useQuery({ queryKey: ['backtests'], queryFn: api.backtests, enabled: open && backtestsEnabled })
   const rulesQuery = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules, enabled: open })
@@ -32,12 +35,12 @@ export function CommandPalette() {
     () => [
       ...idItems(query),
       ...PAGES,
-      ...runItems(runsQuery.data?.items ?? []),
+      ...runItems((runsQuery.data?.items ?? []).filter((run) => !hiddenRuns.has(run.id))),
       ...ruleItems(rulesQuery.data?.rules ?? []),
       ...scriptItems(scriptsQuery.data?.items ?? []),
       ...assetItems(assetsQuery.data?.items ?? []),
     ],
-    [query, runsQuery.data, rulesQuery.data, scriptsQuery.data, assetsQuery.data],
+    [query, runsQuery.data, hiddenRuns, rulesQuery.data, scriptsQuery.data, assetsQuery.data],
   )
 
   return (
