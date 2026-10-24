@@ -2,7 +2,7 @@
 
 ## v0.39.0 - Real-time prices from Saxo, and New York's hours read as such everywhere
 
-**Release date:** not released yet
+**Release date:** 2026-10-24
 
 The deploy of v0.38.0 showed that Saxo serves WATA's session at `OrdersOnly`, the level at which Saxo gives an app delayed market data. Saxo flagged none of the quotes recorded since 13 October as delayed (0 of 1.79 million bars), but the turbos WATA trades were quoted about every 30 seconds while the index moved every second.
 
