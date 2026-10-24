@@ -804,6 +804,8 @@ async def main():
             timezone_name=trading_rule.timezone,
             signal_silence_minutes=config_manager.get_config_value("reporting.signal_silence_minutes"),
             in_trading_hours=trading_rule.in_trading_hours,
+            # Real-time prices: ask Saxo for the full level of the session, which the other services share.
+            full_trading_level=config_manager.get_config_value("trade.config.saxo_session.full_trading_level") is True,
         )
         heartbeat_task = asyncio.create_task(
             beat_periodically(AsyncDbHeartbeatManager(pg), "trader", APP_VERSION, watch.figures)

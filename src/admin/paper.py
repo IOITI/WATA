@@ -18,7 +18,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from src.admin.downloads import trading_hours
+from src.admin.downloads import trading_hours, trading_timezone
 from src.admin.errors import NotPossible
 from src.backtest.clock import TradingClock
 
@@ -53,8 +53,7 @@ class PaperTrading:
     def due(self, now: float | None = None) -> list[tuple[dict, date]]:
         """The rules in shadow and the finished days of theirs not traded on paper yet."""
         now = self._clock() if now is None else now
-        zone, _, _ = trading_hours(self._config())
-        clock = TradingClock(zone)
+        clock = TradingClock(trading_timezone(self._config()))
         today = datetime.fromtimestamp(now, timezone.utc).astimezone(clock.zone).date()
         index = self._backtests.paper_index()
         found = []
@@ -93,8 +92,7 @@ class PaperTrading:
                 logger.info(f"Paper trading waits: {e}")
                 break
             asked += 1
-        zone, _, _ = trading_hours(self._config())
-        today = datetime.fromtimestamp(now, timezone.utc).astimezone(TradingClock(zone).zone).date()
+        today = datetime.fromtimestamp(now, timezone.utc).astimezone(TradingClock(trading_timezone(self._config())).zone).date()
         self._backtests.prune_paper(KEEP_DAYS, today)
         return asked
 

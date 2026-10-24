@@ -23,9 +23,12 @@ sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
 from src.trade.async_services import build_selected_turbo_from_candidate_snapshots  # noqa: E402
 from src.trade.exceptions import NoMarketAvailableException  # noqa: E402
 from src.trade.trader_watch import (  # noqa: E402
+    FULL_SESSION_CHECK_EVERY_SECONDS,
     LOGIN_ALERT_EVERY_SECONDS,
     POLL_FAILING_ALERT_SECONDS,
+    SESSION_ALERT_EVERY_SECONDS,
     SESSION_CHECK_EVERY_SECONDS,
+    SESSION_CONFIRM_SECONDS,
     TraderWatch,
 )
 
@@ -221,3 +224,102 @@ def test_a_quote_on_time_is_chosen_beside_a_delayed_one():
     selected = _select([_candidate(1, 5.0, delayed=15), _candidate(2, 6.0)])
 
     assert selected["selected_instrument"]["uic"] == 2
+
+
+# ── the full level asked for ──
+
+
+class FakeSaxo:
+    """Saxo's session endpoints: the levels it reads in turn, and what it was asked."""
+
+    def __init__(self, levels, refuse=None):
+        self.levels = list(levels)
+        self.refuse = refuse
+        self.asked = []
+
+    async def request(self, endpoint):
+        from src.saxo_openapi.endpoints.rootservices.sessions import GetSessionCapabilities, PatchSessionCapabilities
+
+        if isinstance(endpoint, PatchSessionCapabilities):
+            self.asked.append((endpoint.method, endpoint.data))
+            if self.refuse is not None:
+                raise self.refuse
+            return None
+        assert isinstance(endpoint, GetSessionCapabilities)
+        return {"TradeLevel": self.levels.pop(0), "DataLevel": "Standard"}
+
+
+def _checked(watch, saxo, clock, steps):
+    """The checks at each (seconds later) step."""
+
+    async def scenario():
+        for seconds in steps:
+            clock["now"] += seconds
+            await watch.check_session(saxo)
+
+    asyncio.run(scenario())
+
+
+def test_asked_for_the_full_level_the_trader_gets_it_and_says_so_once():
+    clock = {"now": paris(2026, 10, 26, 9, 0)}
+    watch, send = watch_for(clock, full_trading_level=True)
+    saxo = FakeSaxo(["OrdersOnly", "FullTradingAndChat", "FullTradingAndChat"])
+
+    # At start; read back 10 s after asking; then every minute.
+    _checked(watch, saxo, clock, [0, 5, SESSION_CONFIRM_SECONDS - 5, 30, FULL_SESSION_CHECK_EVERY_SECONDS - 30])
+
+    assert saxo.asked == [("PATCH", {"TradeLevel": "FullTradingAndChat"})]
+    assert saxo.levels == []
+    assert said(send) == [
+        "Saxo serves WATA's session at its full level (FullTradingAndChat), as asked: real-time prices. "
+        "The account's other sessions (SaxoTraderGO) lose it while WATA holds it.",
+    ]
+    session = watch.figures()["saxo_session"]
+    assert (session["trade_level"], session["wanted"], session["request_error"]) == ("FullTradingAndChat", "FullTradingAndChat", None)
+    assert session["requested_at"] is not None
+
+
+def test_a_full_level_another_session_took_is_asked_for_again_and_said():
+    clock = {"now": paris(2026, 10, 26, 9, 0)}
+    watch, send = watch_for(clock, full_trading_level=True)
+    saxo = FakeSaxo(["FullTradingAndChat", "OrdersOnly", "FullTradingAndChat"])
+
+    _checked(watch, saxo, clock, [0, FULL_SESSION_CHECK_EVERY_SECONDS, SESSION_CONFIRM_SECONDS])
+
+    assert saxo.asked == [("PATCH", {"TradeLevel": "FullTradingAndChat"})]
+    messages = said(send)
+    assert messages[1] == ("Another session of the account took the full level (SaxoTraderGO?): WATA's session was at "
+                           "OrdersOnly, with delayed prices, at 09:01. WATA asked for it again.")
+    assert messages[2].startswith("Saxo serves WATA's session at its full level (FullTradingAndChat), as asked")
+
+
+def test_a_full_level_saxo_refuses_is_said_once_a_quarter_of_an_hour_and_warned_of_in_health():
+    from src.admin.health import WARNING, trader_health
+
+    clock = {"now": paris(2026, 10, 26, 9, 0)}
+    watch, send = watch_for(clock, full_trading_level=True)
+    saxo = FakeSaxo(["OrdersOnly"] * 3, refuse=PermissionError("403 Forbidden"))
+
+    _checked(watch, saxo, clock, [0, FULL_SESSION_CHECK_EVERY_SECONDS, SESSION_ALERT_EVERY_SECONDS])
+
+    assert len(saxo.asked) == 3
+    assert said(send) == [
+        "WATA asked Saxo for the full session level (FullTradingAndChat) and Saxo refused: PermissionError: 403 Forbidden. "
+        "The session stays at OrdersOnly: delayed prices.",
+    ] * 2
+    beat = {"beat_at": datetime.fromtimestamp(clock["now"], timezone.utc), "figures": watch.figures()}
+    status, detail = trader_health(beat, datetime.fromtimestamp(clock["now"], timezone.utc), "Europe/Paris")
+    assert (status, detail) == (WARNING, "Saxo serves the session at OrdersOnly, delayed prices, though WATA asks for the "
+                                         "full level: PermissionError: 403 Forbidden")
+
+
+def test_without_the_setting_nothing_is_asked_of_saxo():
+    clock = {"now": paris(2026, 10, 26, 9, 0)}
+    watch, send = watch_for(clock)
+    saxo = FakeSaxo(["OrdersOnly", "OrdersOnly"])
+
+    _checked(watch, saxo, clock, [0, FULL_SESSION_CHECK_EVERY_SECONDS, SESSION_CHECK_EVERY_SECONDS])
+
+    assert saxo.asked == []
+    assert saxo.levels == []
+    assert watch.figures()["saxo_session"]["wanted"] is None

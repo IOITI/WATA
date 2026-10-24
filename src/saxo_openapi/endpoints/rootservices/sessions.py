@@ -56,6 +56,21 @@ class ChangeSessionCapabilities(RootService):
         self.data = data
 
 
+@endpoint("openapi/root/v1/sessions/capabilities/", "PATCH", 202)
+class PatchSessionCapabilities(RootService):
+    """
+    Change the capabilities given, and only those, as Saxo's guide changes a
+    session's trade level: ``{"TradeLevel": "FullTradingAndChat"}``. Saxo
+    answers 202 and applies it shortly after.
+    """
+
+    RESPONSE_DATA = None
+
+    def __init__(self, data):
+        super(PatchSessionCapabilities, self).__init__()
+        self.data = data
+
+
 @endpoint("openapi/root/v1/sessions/events/subscriptions/", "POST", 201)
 class CreateSessionCapabilitiesSubscription(RootService):
     """Set up a new session capabilities subscription. The data stream will

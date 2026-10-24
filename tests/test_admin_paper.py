@@ -89,6 +89,22 @@ def test_nothing_is_traded_on_paper_while_the_market_is_open(paper):
     assert queries.asked == [] and backtests.paper_index() == {}
 
 
+def test_hours_written_in_new_yorks_time_are_read_in_it_and_the_days_traded_stay_those_of_paris(paper, config):  # noqa: F811
+    backtests, queries, trading = paper
+    with open(config, encoding="utf-8") as config_file:
+        live = json.load(config_file)
+    hours = next(rule for rule in live["trade"]["rules"] if rule["rule_type"] == "market_hours")["rule_config"]
+    hours.update(timezone="America/New_York", trading_start_hour=2, trading_end_hour=16, risky_trading_start_hour=15)
+    with open(config, "w", encoding="utf-8") as config_file:
+        json.dump(live, config_file)
+
+    # Tuesday 20 October, 21:30 in Paris: 15:30 in New York, still open.
+    assert asyncio.run(trading.catch_up(datetime(2026, 10, 20, 19, 30, tzinfo=timezone.utc).timestamp())) == 0
+    # 23:00 in Paris, 17:00 in New York: the same days as with the hours of Paris.
+    assert asyncio.run(trading.catch_up()) == 3
+    assert [asked[0] for asked in queries.asked] == [date(2026, 10, day) for day in (15, 16, 19)]
+
+
 def test_a_full_queue_leaves_the_rest_for_later(paper):
     backtests, _, trading = paper
     backtests.max_queued = 1

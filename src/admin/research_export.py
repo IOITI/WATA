@@ -48,7 +48,7 @@ from typing import Awaitable, Callable
 import pytz
 
 from src.admin.config_editor import PROTECTED_PATHS, mask_secrets
-from src.admin.downloads import trading_hours
+from src.admin.downloads import trading_hours, trading_timezone
 from src.admin.errors import InvalidRequest
 from src.admin.processes import folder_bytes, read_json, utc, write_json
 from src.backtest.clock import TradingClock
@@ -235,8 +235,13 @@ class ResearchExport:
             return json.load(config_file)
 
     def _clock_and_hours(self) -> tuple[TradingClock, int, int]:
+        """The clock of the trading hours (in their own timezone) and those hours."""
         zone, start_hour, end_hour = trading_hours(self._config())
         return TradingClock(zone), start_hour, end_hour
+
+    def _day_clock(self) -> TradingClock:
+        """The clock days are counted on: the trading timezone's, whatever the hours are written in."""
+        return TradingClock(trading_timezone(self._config()))
 
     def _market_is_open(self, now: float) -> bool:
         """Whether WATA may be trading: its hours on a weekday. Unknown counts as open."""
@@ -251,7 +256,7 @@ class ResearchExport:
         """The finished days of the last ``keep_days`` not written yet, oldest first. Today is left to tomorrow."""
         now = self._clock() if now is None else now
         try:
-            clock, _, _ = self._clock_and_hours()
+            clock = self._day_clock()
         except (OSError, ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
             return []
         today = clock.day_of(now)
@@ -316,7 +321,7 @@ class ResearchExport:
 
     async def export_day(self, day: date) -> dict:
         """Write ``day`` whole, replacing what was written of it before. Returns its manifest."""
-        clock, _, _ = self._clock_and_hours()
+        clock = self._day_clock()
         start_epoch, end_epoch = clock.day_bounds(day)
         start = datetime.fromtimestamp(start_epoch, timezone.utc)
         end = datetime.fromtimestamp(end_epoch, timezone.utc)
@@ -357,7 +362,7 @@ class ResearchExport:
         """Remove the days older than ``keep_days``, and what an interrupted export left."""
         now = self._clock() if now is None else now
         try:
-            clock, _, _ = self._clock_and_hours()
+            clock = self._day_clock()
         except (OSError, ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
             return []
         oldest = clock.day_of(now) - timedelta(days=self.settings()["keep_days"])

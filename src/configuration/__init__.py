@@ -417,6 +417,18 @@ class ConfigurationManager:
                         logger.error(error_msg)
                         raise ValueError(error_msg)
 
+            # The full level of Saxo's session, for real-time prices (src/trade/trader_watch.py): off unless true
+            saxo_session = self.get_config_value("trade.config.saxo_session")
+            if saxo_session is not None:
+                if not isinstance(saxo_session, dict):
+                    error_msg = "Config field 'trade.config.saxo_session' must be an object"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                if not isinstance(saxo_session.get("full_trading_level", False), bool):
+                    error_msg = "Config field 'trade.config.saxo_session.full_trading_level' must be a boolean"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
             # Exits wait for a turbo's first quote after its purchase (src/trade/fresh_quote.py): on unless false
             fresh_quote = self.get_config_value("trade.config.position_management.wait_for_fresh_quote")
             if fresh_quote is not None and not isinstance(fresh_quote, bool):

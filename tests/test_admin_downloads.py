@@ -18,6 +18,7 @@ from src.admin.downloads import (
     HistoryDownloads,
     config_hours,
     trading_hours,
+    trading_timezone,
 )
 from src.admin.errors import InvalidRequest, NotPossible
 from src.admin.processes import DONE, INTERRUPTED, RUNNING
@@ -405,6 +406,21 @@ def test_the_hours_are_those_of_the_live_rules(tmp_path):
     assert config_hours(str(path))() == (zone, start_hour, end_hour)
     with pytest.raises(KeyError):
         trading_hours({"trade": {"rules": []}})
+
+
+def test_hours_written_in_new_yorks_time_say_so_and_the_days_keep_the_trading_timezone():
+    with open("etc/config_example.json", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    hours = next(rule for rule in config["trade"]["rules"] if rule["rule_type"] == "market_hours")["rule_config"]
+    hours.update(timezone="America/New_York", trading_start_hour=2, trading_end_hour=16, risky_trading_start_hour=15)
+
+    assert trading_hours(config) == ("America/New_York", 2, 16)
+    assert trading_timezone(config) == "Europe/Paris"
+    # Monday 19 October, 21:30 in Paris (15:30 in New York): a download waits for the close.
+    downloads = HistoryDownloads.__new__(HistoryDownloads)
+    downloads._hours = lambda: trading_hours(config)
+    assert downloads._market_is_open(datetime(2026, 10, 19, 19, 30, tzinfo=timezone.utc).timestamp()) is True
+    assert downloads._market_is_open(datetime(2026, 10, 19, 20, 30, tzinfo=timezone.utc).timestamp()) is False
 
 
 def test_a_download_that_went_well_is_followed_by_the_next_after_a_pause(tmp_path):

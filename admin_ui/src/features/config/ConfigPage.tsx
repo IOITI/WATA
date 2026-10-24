@@ -392,6 +392,11 @@ function SettingsForm({ draft }: { draft: JsonObject }) {
               hint="On Telegram, in trading hours. Empty or 0: never. TradingView's alerts can stop without a word"
             />
           </FieldGrid>
+          <SwitchField
+            label="Real-time prices: the full level of Saxo's session"
+            hint="FullTradingAndChat, asked for by the trader and checked every minute; below it Saxo gives delayed prices. One session of the account holds it: SaxoTraderGO loses it, and may be logged off"
+            path={['trade', 'config', 'saxo_session', 'full_trading_level']}
+          />
         </div>
       ),
     },

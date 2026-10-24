@@ -71,10 +71,12 @@ class RecorderSettings:
     alert_after_seconds: int = 300
     # Also ask Saxo for what it counts as traded on each instrument.
     record_volume: bool = False
-    # When the turbos are expected to quote: outside it, silence is not an incident.
+    # When the turbos are expected to quote: outside it, silence is not an incident. The hours are read in
+    # ``market_timezone`` (market_hours.timezone, as the trader reads them), the trading timezone unless given.
     trading_start_hour: int | None = None
     trading_end_hour: int | None = None
     market_closed_dates: frozenset[str] = frozenset()
+    market_timezone: str | None = None
 
     @classmethod
     def from_config(cls, config_manager) -> "RecorderSettings":
@@ -103,15 +105,17 @@ class RecorderSettings:
             trading_start_hour=market_hours.get("trading_start_hour"),
             trading_end_hour=market_hours.get("trading_end_hour"),
             market_closed_dates=frozenset(closed_dates),
+            market_timezone=market_hours.get("timezone") or None,
         )
 
     def is_trading_time(self, now: datetime) -> bool:
         """
         Whether the turbos should be quoting at ``now``: a weekday that is not a
         closed date, inside the trading hours of the configuration (the trader's
-        own test, src/trade/rules.py, plus the weekend).
+        own test, src/trade/rules.py, plus the weekend), in the timezone its hours
+        are written in.
         """
-        local = now.astimezone(pytz.timezone(self.timezone))
+        local = now.astimezone(pytz.timezone(self.market_timezone or self.timezone))
         if local.weekday() >= WEEKDAYS_TRADED:
             return False
         if local.strftime("%d/%m/%Y") in self.market_closed_dates:

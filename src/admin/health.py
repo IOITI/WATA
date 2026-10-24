@@ -416,8 +416,12 @@ def trader_health(beat: dict, now: datetime, timezone_name: str) -> tuple[str, s
         return WARNING, f"No signal since {_clock(figures.get('last_signal_at'), timezone_name)}"
     detail = f"Polling the web server, last signal {_clock(figures.get('last_signal_at'), timezone_name)}"
     session = figures.get("saxo_session") or {}
-    if session.get("trade_level") and session["trade_level"] != "FullTradingAndChat":
-        detail += f"; Saxo session at {session['trade_level']}"
+    level = session.get("trade_level")
+    if session.get("wanted") == "FullTradingAndChat" and level and level != "FullTradingAndChat":
+        refused = f": {session['request_error']}" if session.get("request_error") else ""
+        return WARNING, f"Saxo serves the session at {level}, delayed prices, though WATA asks for the full level{refused}"
+    if level and level != "FullTradingAndChat":
+        detail += f"; Saxo session at {level}"
     return OK, detail
 
 

@@ -120,6 +120,27 @@ def test_waiting_for_a_fresh_quote_is_switched_by_a_boolean(tmp_path, value, acc
             ConfigurationManager(str(path))
 
 
+@pytest.mark.parametrize("section, refusal", [
+    ({"full_trading_level": True}, None),
+    ({"full_trading_level": False}, None),
+    ({}, None),
+    ({"full_trading_level": "yes"}, "saxo_session.full_trading_level' must be a boolean"),
+    (True, "saxo_session' must be an object"),
+])
+def test_the_full_level_of_saxos_session_is_switched_by_a_boolean(tmp_path, section, refusal):
+    with open("tests/test_config.json") as config_file:
+        config = json.load(config_file)
+    config["trade"]["config"]["saxo_session"] = section
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+
+    if refusal is None:
+        ConfigurationManager(str(path))
+    else:
+        with pytest.raises(ValueError, match=refusal):
+            ConfigurationManager(str(path))
+
+
 def _config_with_market_timezone(tmp_path, timezone_name):
     with open("etc/config_example.json", encoding="utf-8") as config_file:
         config = json.load(config_file)

@@ -93,6 +93,24 @@ def test_trading_time_is_a_weekday_inside_the_hours_of_the_trading_timezone():
     assert settings.is_trading_time(_at("2026-10-12T20:00:00")) is False    # 22:00
 
 
+def test_hours_written_in_new_yorks_time_are_read_in_it_as_the_trader_reads_them():
+    rules = [
+        {"rule_type": "market_hours", "rule_config": {"trading_start_hour": 2, "trading_end_hour": 16, "timezone": "America/New_York"}},
+        {"rule_type": "market_closed_dates", "rule_config": {"market_closed_dates": ["25/12/2026"]}},
+    ]
+    settings = RecorderSettings.from_config(_config(rules=rules))
+
+    assert settings.market_timezone == "America/New_York" and settings.timezone == "Europe/Paris"
+    # Monday 12 Oct 2026: 02:00 to 16:00 in New York, 08:00 to 22:00 in Paris.
+    assert settings.is_trading_time(_at("2026-10-12T06:00:00")) is True
+    assert settings.is_trading_time(_at("2026-10-12T05:59:59")) is False
+    assert settings.is_trading_time(_at("2026-10-12T19:59:59")) is True
+    assert settings.is_trading_time(_at("2026-10-12T20:00:00")) is False
+    # Monday 26 Oct, Paris on winter time and New York not yet: 02:00 in New York is 07:00 in Paris.
+    assert settings.is_trading_time(_at("2026-10-26T06:00:00")) is True
+    assert settings.is_trading_time(_at("2026-10-26T20:00:00")) is False
+
+
 def test_weekends_and_closed_dates_are_not_trading_time():
     settings = RecorderSettings.from_config(_config())
 

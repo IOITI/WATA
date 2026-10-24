@@ -141,6 +141,9 @@
           "bid_calculation": 1
         }
       },
+      "saxo_session": {
+        "full_trading_level": false
+      },
       "position_management": {
         "performance_thresholds": {
           "stoploss_percent": -15,

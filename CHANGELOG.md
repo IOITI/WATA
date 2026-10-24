@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.39.0 - Real-time prices from Saxo, and New York's hours read as such everywhere
+
+**Release date:** not released yet
+
+The deploy of v0.38.0 showed that Saxo serves WATA's session at `OrdersOnly`, the level at which Saxo gives an app delayed market data. Saxo flagged none of the quotes recorded since 13 October as delayed (0 of 1.79 million bars), but the turbos WATA trades were quoted about every 30 seconds while the index moved every second.
+
+- **Real-time prices, when switched on** (`trade.config.saxo_session.full_trading_level`, off unless true; a switch under Market hours on the Configuration page). The trader asks Saxo for the full level of WATA's session (`FullTradingAndChat`) at its start, reads it back ten seconds later, then checks it every minute.
+  - The services share one login, hence one session: the position monitor and the price recorder get the level the trader got.
+  - One session of an account holds that level, the last to ask: while WATA holds it, SaxoTraderGO loses it and may be logged off.
+  - When another session takes it, WATA says so on Telegram and asks for it again.
+  - A refusal is said every quarter of an hour, and is a warning in health while WATA is below the level it asks for.
+- **Hours written in New York's time are read in it everywhere**, as the trader, the monitor and the scheduler already read them: in the price recorder, which would have taken the nights without quotes for incidents and the US session's silences for none, in the admin's downloads, paper days and research export, and in the MCP's market. Days are still counted in the trading timezone.
+  - In the weeks Europe and the US are five hours apart, 02:00 in New York is 07:00 in Paris, an hour before Saxo quotes the turbos: an entry then finds none.
+
+**Verification status:**
+- 2,545 Python tests pass, 13 of them new: the level asked for and confirmed, asked for again after another session took it, a refusal said every quarter of an hour and warned of in health, nothing asked without the setting, the setting's check, and New York's hours read in New York's time by the recorder, the downloads, paper days and the research export, with Paris days.
+- 1,048 interface tests pass; lint and type checks are clean.
+- Not seen: Saxo granting the level, and whether real-time prices change the turbos' 30-second quotes (to be read on Monday's bars).
+
 ## v0.38.0 - A position judged from Saxo's next quote, and backtests priced at it
 
 **Release date:** 2026-10-24, with v0.34.0, v0.35.0, v0.36.0 and v0.37.0

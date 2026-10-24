@@ -5,6 +5,14 @@ login, and at what level Saxo serves its session. Said on Telegram once it
 matters, written in its heartbeat (``service_heartbeat``) for the admin's
 health and the dashboard's "Next entry" tile.
 
+With ``trade.config.saxo_session.full_trading_level`` the trader also asks
+Saxo for the full level of WATA's session (FullTradingAndChat): below it, Saxo
+serves an app delayed market data. One session of an account holds it: the
+others (SaxoTraderGO's) lose it, which may log them off, and the last to ask
+gets it, so it is read every minute and asked for again when another took it.
+The services share one login, so one session: what the trader gets, the
+position monitor's and the recorder's prices get too.
+
 None of this was said before: on 2026-10-23 Saxo's login lapsed at 20:05
 Paris, and TradingView's alerts can stop without a word. Checked from the
 keep-warm loop; never raises.
@@ -28,8 +36,13 @@ POLL_FAILING_ALERT_SECONDS = 60
 LOGIN_ALERT_EVERY_SECONDS = 900
 # A refresh token left this long before it lapses, while renewals fail, is said.
 LOGIN_LAPSING_ALERT_SECONDS = 1200
-# Saxo's session level is read again this often (an app logged in elsewhere may take the full level).
+# Saxo's session level is read again this often (an app logged in elsewhere may take the full level), every
+# minute while WATA asks for the full level, and soon after asking for it (Saxo applies it shortly after).
 SESSION_CHECK_EVERY_SECONDS = 300
+FULL_SESSION_CHECK_EVERY_SECONDS = 60
+SESSION_CONFIRM_SECONDS = 10
+# A request for the full level Saxo refuses is said again at most this often.
+SESSION_ALERT_EVERY_SECONDS = 900
 FULL_TRADE_LEVEL = "FullTradingAndChat"
 
 
@@ -46,7 +59,7 @@ def _epoch(iso: str | None) -> float | None:
 
 class TraderWatch:
     def __init__(self, send, *, saxo_auth=None, timezone_name="Europe/Paris", signal_silence_minutes=None,
-                 in_trading_hours=None, now=time.time):
+                 in_trading_hours=None, full_trading_level=False, now=time.time):
         self.send = send
         self.saxo_auth = saxo_auth
         self.timezone = timezone_name
@@ -69,7 +82,12 @@ class TraderWatch:
         self.login_lapses_at: float | None = None
         self._login_said_at: float | None = None
         self.session: dict | None = None
-        self._session_checked_at: float | None = None
+        self._session_next_check: float | None = None
+        # Ask Saxo for the full level of the session (trade.config.saxo_session.full_trading_level).
+        self.full_trading_level = full_trading_level is True
+        self.session_requested_at: float | None = None
+        self.session_request_error: str | None = None
+        self._session_request_said_at: float | None = None
 
     # ── what the polling loop tells it ──
 
@@ -147,21 +165,30 @@ class TraderWatch:
         )
 
     async def check_session(self, api_client) -> None:
-        """The level Saxo serves WATA's session at, said when it is not the full one and when it changes."""
+        """
+        The level Saxo serves WATA's session at, said when it is not the full one
+        and when it changes; asked for when the configuration wants the full one.
+        """
         if api_client is None:
             return
         now = self.now()
-        if self._session_checked_at is not None and now - self._session_checked_at < SESSION_CHECK_EVERY_SECONDS:
+        if self._session_next_check is not None and now < self._session_next_check:
             return
-        self._session_checked_at = now
+        self._session_next_check = now + (FULL_SESSION_CHECK_EVERY_SECONDS if self.full_trading_level else SESSION_CHECK_EVERY_SECONDS)
         answer = await api_client.request(rs.sessions.GetSessionCapabilities()) or {}
         session = {"trade_level": answer.get("TradeLevel"), "data_level": answer.get("DataLevel"), "checked_at": moment(now)}
         before = self.session
         self.session = session
+        if self.full_trading_level and session["trade_level"] != FULL_TRADE_LEVEL:
+            await self._ask_full_level(api_client, now, before)
+            return
         if before is not None and before.get("trade_level") == session["trade_level"]:
             return
         if session["trade_level"] == FULL_TRADE_LEVEL:
-            if before is not None:
+            if self.full_trading_level:
+                await self._say(f"Saxo serves WATA's session at its full level ({FULL_TRADE_LEVEL}), as asked: real-time "
+                                "prices. The account's other sessions (SaxoTraderGO) lose it while WATA holds it.")
+            elif before is not None:
                 await self._say(f"Saxo serves WATA's session at its full level again ({FULL_TRADE_LEVEL}).")
             return
         await self._say(
@@ -169,6 +196,33 @@ class TraderWatch:
             f"{FULL_TRADE_LEVEL}: Saxo gives a session below the full level delayed prices, and an app logged in "
             "elsewhere (SaxoTraderGO) takes the full level. WATA buys no turbo on a quote Saxo says is delayed."
         )
+
+    async def _ask_full_level(self, api_client, now: float, before: dict | None) -> None:
+        """Ask Saxo for the full level; said when another session had taken it, or when Saxo refuses."""
+        level = self.session["trade_level"]
+        try:
+            await api_client.request(rs.sessions.PatchSessionCapabilities({"TradeLevel": FULL_TRADE_LEVEL}))
+        except Exception as e:
+            self.session_request_error = f"{type(e).__name__}: {e}"
+            logger.warning("Saxo refused the full session level: %s", self.session_request_error)
+            if self._session_request_said_at is None or now - self._session_request_said_at >= SESSION_ALERT_EVERY_SECONDS:
+                self._session_request_said_at = now
+                await self._say(
+                    f"WATA asked Saxo for the full session level ({FULL_TRADE_LEVEL}) and Saxo refused: "
+                    f"{self.session_request_error}. The session stays at {level}: delayed prices."
+                )
+            return
+        self.session_requested_at = now
+        self.session_request_error = None
+        self._session_request_said_at = None
+        # Saxo applies it shortly after: read it back soon.
+        self._session_next_check = now + SESSION_CONFIRM_SECONDS
+        logger.info("Asked Saxo for the full session level (the session was at %s).", level)
+        if before is not None and before.get("trade_level") == FULL_TRADE_LEVEL:
+            await self._say(
+                f"Another session of the account took the full level (SaxoTraderGO?): WATA's session was at {level}, "
+                f"with delayed prices, at {_clock(now, self.timezone)}. WATA asked for it again."
+            )
 
     # ── what the trader decides with it ──
 
@@ -194,7 +248,12 @@ class TraderWatch:
                 "error": self.login_error,
                 "lapses_at": moment(self.login_lapses_at),
             },
-            "saxo_session": self.session,
+            "saxo_session": None if self.session is None and not self.full_trading_level else {
+                **(self.session or {}),
+                "wanted": FULL_TRADE_LEVEL if self.full_trading_level else None,
+                "requested_at": moment(self.session_requested_at),
+                "request_error": self.session_request_error,
+            },
         }
 
     async def _say(self, message: str) -> None:

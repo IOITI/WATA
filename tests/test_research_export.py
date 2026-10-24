@@ -212,6 +212,23 @@ def test_nothing_is_written_while_the_market_is_open(tmp_path, config_path):
     assert export.status()["state"] == WAITING_FOR_CLOSE
 
 
+def test_hours_written_in_new_yorks_time_are_read_in_it_while_the_days_stay_those_of_paris(tmp_path):
+    config = json.loads(json.dumps(CONFIG))
+    config["trade"]["rules"][0]["rule_config"].update(
+        timezone="America/New_York", trading_start_hour=2, trading_end_hour=16, risky_trading_start_hour=15,
+    )
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+
+    # Tuesday 20 October: 21:30 in Paris is 15:30 in New York, open; 22:30 is 16:30, closed.
+    assert exporter(tmp_path, str(path), now="2026-10-20T21:30:00+02:00")._market_is_open(epoch("2026-10-20T21:30:00+02:00"))
+    late = exporter(tmp_path, str(path), now="2026-10-20T22:30:00+02:00")
+    assert not late._market_is_open(epoch("2026-10-20T22:30:00+02:00"))
+    late.update(enabled=True, keep_days=2)
+    # Still Tuesday in Paris: Sunday and Monday are the finished days, as with the hours of Paris.
+    assert [day.isoformat() for day in late.due_days()] == ["2026-10-18", "2026-10-19"]
+
+
 def test_the_days_older_than_those_kept_go(tmp_path, config_path):
     export = exporter(tmp_path, config_path)
     export.update(enabled=True, keep_days=5)

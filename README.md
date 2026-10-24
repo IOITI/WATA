@@ -195,6 +195,8 @@ WATA uses OAuth 2.0 for Saxo Bank API integration:
 
 Please refer to the [dedicated docs pages for Saxo Authentication](https://ioiti.github.io/wata-docs/docs/saxo-authentication) for more details.
 
+**Real-time prices**: Saxo serves a session at `OrdersOnly` unless the session asks for `FullTradingAndChat`, and an app at `OrdersOnly` gets delayed market data. With `"saxo_session": {"full_trading_level": true}` in `trade.config` (a switch under Market hours on the admin's Configuration page), the trader asks for the full level at its start and checks every minute that it still has it. The other services share its login, so they get it too. One session of an account holds that level, the last to ask for it: while WATA holds it, SaxoTraderGO loses it and may be logged off, and when another session takes it, WATA says so on Telegram and asks for it again.
+
 ### Webhook Security
 
 WATA uses token-based authentication to secure webhook endpoints:
