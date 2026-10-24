@@ -4,6 +4,7 @@ import pytz
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.admin.auth import require_session
+from src.heartbeat import HEARTBEAT_STALE_SECONDS
 from src.trade.macro_calendar import NewsRule, next_window, read_calendar
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
@@ -73,6 +74,23 @@ def _news(config_manager, now: datetime) -> dict | None:
     }
 
 
+def _saxo_login(beats: dict) -> dict | None:
+    """
+    Saxo's login as the trader last said it (its heartbeat): whether Saxo
+    refuses to renew it, which keeps entries out. None while the trader is not
+    heard from.
+    """
+    beat = beats.get("trader")
+    if beat is None or (datetime.now(pytz.utc) - beat["beat_at"]).total_seconds() > HEARTBEAT_STALE_SECONDS:
+        return None
+    login = (beat.get("figures") or {}).get("saxo_login") or {}
+    return {
+        "renewal_failing_since": login.get("renewal_failing_since"),
+        "error": login.get("error"),
+        "lapses_at": login.get("lapses_at"),
+    }
+
+
 def _cooldown(last_loss_at: datetime | None, cooldown_minutes: int) -> dict:
     if last_loss_at is None or cooldown_minutes <= 0:
         return {"last_loss_at": last_loss_at, "ends_at": None, "active": False}
@@ -97,6 +115,8 @@ async def overview(request: Request):
         # No entry around US releases (the macro_news rule); None while the rule is off.
         "news": _news(ctx.config_manager, datetime.now(pytz.utc)),
         "entries_paused_since": await ctx.queries.entries_paused_since(),
+        # Saxo refusing to renew the login keeps entries out (the trader's heartbeat); None while not heard from.
+        "saxo_login": _saxo_login(await ctx.queries.service_heartbeats()),
         "open_positions": await ctx.queries.open_positions(),
         "recent_days": recent["daily"],
     }

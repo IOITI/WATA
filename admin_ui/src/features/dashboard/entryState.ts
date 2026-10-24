@@ -3,6 +3,7 @@ import type { Overview } from '@/lib/types'
 
 export type EntryBlockerCode =
   | 'paused'
+  | 'saxo_login'
   | 'closed_date'
   | 'hours'
   | 'risky_hours'
@@ -50,6 +51,15 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
 
   if (overview.entries_paused_since !== null) {
     blockers.push({ code: 'paused', reason: 'Paused by the operator' })
+  }
+
+  // The trader's own refusal while Saxo refuses to renew its login (its heartbeat, through the server).
+  const failingSince = overview.saxo_login?.renewal_failing_since
+  if (failingSince) {
+    blockers.push({
+      code: 'saxo_login',
+      reason: `Saxo refuses to renew WATA's login since ${clock(failingSince, overview.timezone)}: no new position until it is renewed`,
+    })
   }
 
   if (overview.market_closed_today) {

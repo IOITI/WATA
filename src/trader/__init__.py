@@ -43,6 +43,7 @@ from src.database.postgres import (
     AsyncDbOrderExecutionManager,
     AsyncDbOrderRequestManager,
     AsyncDbBalanceHistoryManager,
+    AsyncDbHeartbeatManager,
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
@@ -59,6 +60,8 @@ from src.trade.signal_journal import (
 )
 from src.trade.order_tracker import OrderTracker
 from src.trade.ops_queue import AsyncOpsPublisher
+from src.trade.trader_watch import TraderWatch
+from src.heartbeat import beat_periodically
 from src.schema import SchemaLoader
 from src.message_helper import (
     TelegramMessageComposer,
@@ -178,10 +181,12 @@ async def handle_trading_signal(
     telegram: AsyncTelegramSender,
     journal: SignalJournal | None = None,
     hand_over=None,
+    watch: TraderWatch | None = None,
 ):
     """
     Process a long/short signal end-to-end. ``hand_over(position_id, reason)``
-    gives the position monitor a sale that did not go through.
+    gives the position monitor a sale that did not go through; ``watch`` says
+    whether Saxo still renews the login.
     """
     action = data["action"]
     indice = data["indice"]
@@ -199,6 +204,11 @@ async def handle_trading_signal(
 
         # Paused by the operator: refused before anything is closed or opened
         await trading_rule.check_entries_paused()
+
+        # No new position while Saxo refuses to renew the login: once it lapses, nothing can be sold.
+        login_refusal = watch.login_refusal() if watch is not None else None
+        if login_refusal is not None:
+            raise TradingRuleViolation(login_refusal)
 
         # Async-aware position duplicate check
         open_positions = await db_position_manager.get_open_positions_ids_actions()
@@ -468,6 +478,7 @@ async def dispatch_message(
     journal: SignalJournal | None = None,
     db_balance_manager: AsyncDbBalanceHistoryManager | None = None,
     hand_over=None,
+    watch: TraderWatch | None = None,
 ):
     # Validate schema
     try:
@@ -490,6 +501,7 @@ async def dispatch_message(
                 trade_turbo_exchange_id, telegram,
                 journal=journal,
                 hand_over=hand_over,
+                watch=watch,
             )
         elif action in CLOSE_ACTIONS:
             await handle_close_signal(body, performance_monitor, telegram, journal=journal, hand_over=hand_over)
@@ -596,6 +608,7 @@ async def poll_and_dispatch_signals(
     signal_client: SignalPollingClient,
     dispatch,
     journal: SignalJournal | None = None,
+    watch: TraderWatch | None = None,
 ) -> None:
     """
     Poll the web_server forever, handing each new signal to ``dispatch`` once.
@@ -618,8 +631,12 @@ async def poll_and_dispatch_signals(
                 signals = await signal_client.get_latest_signals()
         except Exception as e:
             logger.error("Error polling for latest signals: %s", e, exc_info=True)
+            if watch is not None:
+                await watch.polled(False, e)
             await asyncio.sleep(poll_interval_seconds)
             continue
+        if watch is not None:
+            await watch.polled(True)
 
         for signal in select_signals_to_dispatch(
             signals,
@@ -627,6 +644,9 @@ async def poll_and_dispatch_signals(
             startup_replay_max_age_seconds=signal_client.startup_replay_max_age_seconds,
             journal=journal,
         ):
+            if watch is not None and signal.get("indice") != "n/a":
+                # A signal from TradingView or the TA engine; the scheduler's close says nothing of them.
+                watch.signal_received()
             try:
                 await dispatch(signal)
             except Exception as e:
@@ -637,14 +657,19 @@ async def poll_and_dispatch_signals(
             await asyncio.sleep(poll_interval_seconds)
 
 
-async def keep_saxo_session_warm(trading_orchestrator: AsyncTradingOrchestrator, interval_seconds: float) -> None:
+async def keep_saxo_session_warm(
+    trading_orchestrator: AsyncTradingOrchestrator, interval_seconds: float,
+    watch: TraderWatch | None = None, api_client=None,
+) -> None:
     """
     Call Saxo on a timer between signals.
 
     The trader is otherwise silent until a signal arrives, which leaves the first
     request of a trade to pay for a new TLS connection (the HTTP keep-alive
     expires after 60s) and, once the access token has expired, for its refresh.
-    The balance fetched here also feeds the optional spending-power cache.
+    The balance fetched here also feeds the optional spending-power cache, and
+    the trader's watch is checked after it: the signals' silence, Saxo's login
+    and the level of WATA's session.
     """
     while True:
         await asyncio.sleep(interval_seconds)
@@ -652,6 +677,8 @@ async def keep_saxo_session_warm(trading_orchestrator: AsyncTradingOrchestrator,
             await trading_orchestrator.refresh_spending_power()
         except Exception as e:
             logger.warning("Saxo keep-warm call failed: %s", e)
+        if watch is not None:
+            await watch.check(api_client)
 
 
 # ─────────────────────────────────────────────────────
@@ -700,6 +727,7 @@ async def main():
     signal_client = None
     watchlist_client = None
     keep_warm_task = None
+    heartbeat_task = None
     performance_monitor = None
     journal = None
     order_tracker = None
@@ -769,19 +797,31 @@ async def main():
             order_tracker=order_tracker,
         )
 
-        # 8. Keep the Saxo session warm between signals
+        # 8. What the trader knows of its own health between signals, said and written in its heartbeat
+        watch = TraderWatch(
+            telegram.send,
+            saxo_auth=saxo_auth,
+            timezone_name=trading_rule.timezone,
+            signal_silence_minutes=config_manager.get_config_value("reporting.signal_silence_minutes"),
+            in_trading_hours=trading_rule.in_trading_hours,
+        )
+        heartbeat_task = asyncio.create_task(
+            beat_periodically(AsyncDbHeartbeatManager(pg), "trader", APP_VERSION, watch.figures)
+        )
+
+        # 9. Keep the Saxo session warm between signals
         keep_warm_interval_seconds = config_manager.get_config_value(
             "trade.config.general.keep_warm_interval_seconds", 30
         )
         if keep_warm_interval_seconds > 0:
             keep_warm_task = asyncio.create_task(
-                keep_saxo_session_warm(trading_orchestrator, keep_warm_interval_seconds)
+                keep_saxo_session_warm(trading_orchestrator, keep_warm_interval_seconds, watch, api_client)
             )
 
-        # 9. The position monitor takes over the sales that did not go through
+        # 10. The position monitor takes over the sales that did not go through
         ops_publisher = AsyncOpsPublisher(config_manager)
 
-        # 10. Signal polling client (replaces the RabbitMQ trading-signals consumer)
+        # 11. Signal polling client (replaces the RabbitMQ trading-signals consumer)
         signal_client = SignalPollingClient(config_manager)
         await signal_client.start()
 
@@ -811,11 +851,12 @@ async def main():
                 journal=journal,
                 db_balance_manager=db_balance_manager,
                 hand_over=ops_publisher.hand_over,
+                watch=watch,
             )
 
         # Keep polling forever
         try:
-            await poll_and_dispatch_signals(signal_client, _dispatch, journal=journal)
+            await poll_and_dispatch_signals(signal_client, _dispatch, journal=journal, watch=watch)
         except asyncio.CancelledError:
             pass
 
@@ -831,6 +872,8 @@ async def main():
         logger.info("--- Shutting down WATA Async Trader ---")
         if keep_warm_task is not None:
             keep_warm_task.cancel()
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
         if signal_client is not None:
             await signal_client.close()
         if performance_monitor is not None:

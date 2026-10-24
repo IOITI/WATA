@@ -7,6 +7,7 @@ from src.admin.events import EventHub, StateWatcher
 class Settings:
     log_path = "/nonexistent"
     config_path = __file__
+    timezone = "Europe/Paris"
 
 
 class Queries:

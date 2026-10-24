@@ -222,6 +222,15 @@ def group_instruments_by_asset_type(candidate_instruments: list[dict]) -> dict[s
     return instrument_groups
 
 
+def delayed_minutes(quote: dict) -> int:
+    """
+    How late Saxo says a quote is (``DelayedByMinutes``): a session below
+    FullTradingAndChat is served delayed prices, and nothing is bought on them.
+    """
+    delayed = quote.get("DelayedByMinutes")
+    return int(delayed) if isinstance(delayed, (int, float)) and not isinstance(delayed, bool) and delayed > 0 else 0
+
+
 def has_tradable_bid_in_price_range(item: dict, min_price: float, max_price: float) -> bool:
     quote = item.get("Quote")
     return (
@@ -230,6 +239,7 @@ def has_tradable_bid_in_price_range(item: dict, min_price: float, max_price: flo
         and quote.get("PriceTypeAsk") != "NoMarket"
         and quote.get("PriceTypeBid") != "NoMarket"
         and quote.get("MarketState") != "Closed"
+        and not delayed_minutes(quote)
         and min_price <= quote["Bid"] <= max_price
     )
 
@@ -247,7 +257,17 @@ def filter_tradable_market_items(items: list[dict]) -> list[dict]:
         if item["Quote"].get("PriceTypeAsk") != "NoMarket"
         and item["Quote"].get("PriceTypeBid") != "NoMarket"
         and item["Quote"].get("MarketState") != "Closed"
+        and not delayed_minutes(item["Quote"])
     ]
+
+
+def no_market_reason(items: list[dict], keywords: str, exchange_id: str) -> str:
+    """Why none of ``items`` can be bought: their quotes delayed, said as such, or no market."""
+    delays = sorted({delayed_minutes(item["Quote"]) for item in items} - {0})
+    if delays:
+        return (f"Saxo's quotes of the turbos are delayed by {delays[-1]} min: none is bought on them "
+                "(is WATA's session at Saxo below FullTradingAndChat?)")
+    return f"No markets available for {keywords} in {exchange_id}."
 
 
 def filter_items_in_price_range(items: list[dict], min_price: float, max_price: float) -> list[dict]:
@@ -297,7 +317,7 @@ def build_selected_turbo_from_candidate_snapshots(
 
     available_items = filter_tradable_market_items(valid_bid_items)
     if not available_items:
-        raise NoMarketAvailableException(f"No markets available for {keywords} in {exchange_id}.")
+        raise NoMarketAvailableException(no_market_reason(valid_bid_items, keywords, exchange_id))
 
     price_filtered = filter_items_in_price_range(available_items, min_price, max_price)
     if not price_filtered:
@@ -843,7 +863,7 @@ class AsyncInstrumentService:
         # 6. Market state filter
         available_items = filter_tradable_market_items(valid_bid_items)
         if not available_items:
-            raise NoMarketAvailableException(f"No markets available for {keywords} in {exchange_id}.")
+            raise NoMarketAvailableException(no_market_reason(valid_bid_items, keywords, exchange_id))
 
         # 7. Price range filter
         price_filtered = filter_items_in_price_range(available_items, min_price, max_price)
@@ -1747,6 +1767,11 @@ class AsyncPerformanceMonitor:
             self._last_today_pct = today_pct
 
         return db_positions, today_pct
+
+    async def managed_position_ids(self) -> set[str]:
+        """The positions WATA manages, as the DB last said (the last known ones while it is slow or down)."""
+        db_positions, _ = await self._load_managed_state()
+        return {str(pos["position_id"]) for pos in db_positions}
 
     async def _get_max_perf(self, position_id: str) -> float | None:
         """Highest performance seen for a position so far (None while it can't be read)."""

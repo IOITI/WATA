@@ -370,6 +370,14 @@ function SettingsForm({ draft }: { draft: JsonObject }) {
               />
             )}
           </RuleSection>
+          <FieldGrid>
+            <NumberField
+              label="Say when no signal came for"
+              unit="min"
+              path={['reporting', 'signal_silence_minutes']}
+              hint="On Telegram, in trading hours. Empty or 0: never. TradingView's alerts can stop without a word"
+            />
+          </FieldGrid>
         </div>
       ),
     },

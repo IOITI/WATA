@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 
 # Without a timeout a stalled token endpoint would block the caller forever.
 TOKEN_REQUEST_TIMEOUT_SECONDS = 10
+# A renewal Saxo did not answer, or answered with one of these, is tried again after each wait:
+# the refusal of the token itself (400, 401) is not.
+REFRESH_RETRY_WAITS_SECONDS = (1.0, 2.0)
+TRANSIENT_REFRESH_STATUSES = {429, 500, 502, 503, 504}
+
+
+def describe_token_refusal(response, secret: str | None = None) -> str:
+    """What Saxo's token endpoint said when it refused, its tokens never repeated."""
+    try:
+        body = response.json()
+        said = " ".join(str(body.get(key)) for key in ("error", "error_description") if body.get(key)) or str(body)
+    except Exception:
+        said = response.text or ""
+    said = said.strip()[:200]
+    if secret:
+        said = said.replace(secret, "…")
+    return f"Saxo answered {response.status_code}" + (f": {said}" if said else "")
 
 
 class SaxoAuth:
@@ -40,6 +57,8 @@ class SaxoAuth:
             "authentication.persistant.token_path"
         )
         self.auth_code_path = os.path.join(os.path.dirname(self.token_file_path), "saxo_auth_code.txt")
+        # Why the last renewal of the access token by this process did not go through; None once one did.
+        self.last_refresh_error: str | None = None
         self.token_lock_path = os.path.join(os.path.dirname(self.token_file_path), ".token_refresh.lock")
 
         # Ensure token directory exists
@@ -296,19 +315,29 @@ class SaxoAuth:
             "client_id": self.app_data["AppKey"],
             "client_secret": self.app_data["AppSecret"],
         }
-        try:
-            response = requests.post(self.app_data["TokenEndpoint"], data=data, timeout=TOKEN_REQUEST_TIMEOUT_SECONDS)
+        for wait in (None, *REFRESH_RETRY_WAITS_SECONDS):
+            if wait is not None:
+                time.sleep(wait)
+            try:
+                response = requests.post(self.app_data["TokenEndpoint"], data=data, timeout=TOKEN_REQUEST_TIMEOUT_SECONDS)
+            except requests.exceptions.RequestException as e:
+                self.last_refresh_error = f"no answer from Saxo's token endpoint ({type(e).__name__})"
+                logger.error(f"Error refreshing the access token: {self.last_refresh_error}")
+                continue
+            except Exception as e:
+                self.last_refresh_error = f"{type(e).__name__}"
+                logger.error(f"Unknown error refreshing the access token: {type(e).__name__}")
+                return None
             if response.status_code == 201:
                 logger.info("Successfully refreshed access token")
+                self.last_refresh_error = None
                 return response.json()
-            else:
+            # Kept and said: a refusal dropped in silence is a lapse no one can explain afterwards.
+            self.last_refresh_error = describe_token_refusal(response, refresh_token_param)
+            logger.error(f"Saxo refused to renew the access token: {self.last_refresh_error}")
+            if response.status_code not in TRANSIENT_REFRESH_STATUSES:
                 return None
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error exchanging code for token: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unknown error exchanging code for token: {e}")
-            return None
+        return None
 
     def ask_new_token(self):
         """

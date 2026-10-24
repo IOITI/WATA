@@ -3,8 +3,11 @@ Health of the WATA services, as far as it can be observed from outside them.
 
 The admin has no access to Docker. What it reports comes from talking to each
 service where there is something to talk to, from RabbitMQ's consumer counts
-(position_monitor and telegram are the consumers of their queues), and, for
-the trader and the scheduler, from the start/stop lines of their logs.
+(position_monitor and telegram are the consumers of their queues), from what
+the trader and the position monitor say of themselves every fifteen seconds
+(``service_heartbeat``: the position stream, the polling of signals, Saxo's
+login, the sales waiting), and, for the scheduler and a trader of before the
+heartbeat, from the start/stop lines of their logs.
 """
 
 import asyncio
@@ -26,6 +29,7 @@ from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
 from src.ta_engine.settings import TaEngineSettings
 from src.trade.macro_calendar import read_calendar, upkeep
+from src.heartbeat import HEARTBEAT_STALE_SECONDS
 
 OK = "ok"
 WARNING = "warning"
@@ -325,6 +329,85 @@ def _log_observed(log_path: str) -> list[dict]:
     return entries
 
 
+def _clock(iso: str | None, timezone_name: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone(pytz.timezone(timezone_name)).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _beat_age(beat: dict, now: datetime) -> float:
+    return (now - beat["beat_at"]).total_seconds()
+
+
+def trader_health(beat: dict, now: datetime, timezone_name: str) -> tuple[str, str]:
+    """What the trader's heartbeat says of it, as (status, detail)."""
+    age = _beat_age(beat, now)
+    if age > HEARTBEAT_STALE_SECONDS:
+        return DOWN, f"No heartbeat for {int(age // 60)} min"
+    figures = beat.get("figures") or {}
+    login = figures.get("saxo_login") or {}
+    if login.get("renewal_failing_since"):
+        return WARNING, (f"Saxo refuses to renew the login since {_clock(login['renewal_failing_since'], timezone_name)} "
+                         f"({login.get('error')}): no new position")
+    if figures.get("poll_failing_since"):
+        return WARNING, (f"Cannot reach the web server since {_clock(figures['poll_failing_since'], timezone_name)}: "
+                         f"{figures.get('poll_error')}")
+    if figures.get("signals_silent"):
+        return WARNING, f"No signal since {_clock(figures.get('last_signal_at'), timezone_name)}"
+    detail = f"Polling the web server, last signal {_clock(figures.get('last_signal_at'), timezone_name)}"
+    session = figures.get("saxo_session") or {}
+    if session.get("trade_level") and session["trade_level"] != "FullTradingAndChat":
+        detail += f"; Saxo session at {session['trade_level']}"
+    return OK, detail
+
+
+def position_monitor_health(beat: dict, now: datetime, timezone_name: str) -> tuple[str, str]:
+    """What the position monitor's heartbeat says of it, as (status, detail)."""
+    age = _beat_age(beat, now)
+    if age > HEARTBEAT_STALE_SECONDS:
+        return DOWN, f"No heartbeat for {int(age // 60)} min"
+    figures = beat.get("figures") or {}
+    intents = figures.get("close_intents") or []
+    if intents:
+        first = intents[0]
+        more = f", and {_count(len(intents) - 1, 'other position')}" if len(intents) > 1 else ""
+        return WARNING, (f"Selling position {first['position_id']} since {_clock(first.get('since'), timezone_name)} "
+                         f"({_count(first.get('attempts') or 0, 'failed attempt')}: {first.get('last_error')}){more}")
+    if not figures.get("stream_connected"):
+        return WARNING, "Not connected to Saxo's position stream"
+    if figures.get("rest_fallback_since"):
+        return WARNING, (f"The position stream is silent: positions checked through REST since "
+                         f"{_clock(figures['rest_fallback_since'], timezone_name)}")
+    listed = figures.get("positions_listed") or 0
+    return OK, f"Streaming, {_count(listed, 'position')} at Saxo" if listed else "Streaming, no position at Saxo"
+
+
+async def _heartbeats(ctx) -> dict[str, dict]:
+    """The heartbeats; none when they cannot be read, which leaves each entry as it is said otherwise."""
+    try:
+        return await ctx.queries.service_heartbeats()
+    except Exception:
+        return {}
+
+
+def with_heartbeats(services: list[dict], beats: dict[str, dict], now: datetime, timezone_name: str) -> list[dict]:
+    """
+    The trader's and the position monitor's entries as their heartbeat says,
+    when they have one; a monitor without a consumer on its queue stays down
+    (a close asked from the admin would be lost).
+    """
+    judged = {"trader": trader_health, "position_monitor": position_monitor_health}
+    result = []
+    for entry in services:
+        judge, beat = judged.get(entry["id"]), beats.get(entry["id"])
+        if judge is None or beat is None or (entry["id"] == "position_monitor" and entry["status"] == DOWN):
+            result.append(entry)
+            continue
+        result.append(_entry(entry["id"], entry["name"], *judge(beat, now, timezone_name)))
+    return result
+
+
 def _overall(services: list[dict]) -> str:
     statuses = {service["status"] for service in services}
     for status in (DOWN, WARNING):
@@ -336,7 +419,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed, ta_engine, macro_calendar,
+        capital_feed, ta_engine, macro_calendar, beats,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -348,11 +431,12 @@ async def collect_health(ctx) -> dict:
         _capital_feed(ctx),
         _ta_engine(ctx),
         run_in_threadpool(_macro_calendar, ctx),
+        _heartbeats(ctx),
     )
-    services = [
+    services = with_heartbeats([
         *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
         *macro_calendar, *postgres, rabbitmq[0],
-    ]
+    ], beats, datetime.now(timezone.utc), ctx.settings.timezone)
     return {
         "version": ctx.version,
         "checked_at": datetime.now(timezone.utc).isoformat(),

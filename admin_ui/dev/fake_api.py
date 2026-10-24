@@ -643,6 +643,25 @@ class FakeQueries:
     async def capital_feed_state(self):
         return fake_capital.feed_state(datetime.now(timezone.utc))
 
+    async def service_heartbeats(self):
+        # The trader and the position monitor alive, polling and streaming, Saxo's login renewed.
+        now = datetime.now(timezone.utc)
+        started = now - timedelta(hours=3)
+        return {
+            "trader": {"beat_at": now, "started_at": started, "version": "dev", "figures": {
+                "last_poll_at": now.isoformat(), "poll_failing_since": None, "poll_error": None,
+                "last_signal_at": (now - timedelta(minutes=7)).isoformat(), "signal_silence_minutes": None,
+                "signals_silent": False,
+                "saxo_login": {"renewal_failing_since": None, "error": None,
+                               "lapses_at": (now + timedelta(minutes=50)).isoformat()},
+                "saxo_session": {"trade_level": "FullTradingAndChat", "data_level": "Standard", "checked_at": now.isoformat()},
+            }},
+            "position_monitor": {"beat_at": now, "started_at": started, "version": "dev", "figures": {
+                "stream_connected": True, "last_message_at": now.isoformat(), "last_update_at": now.isoformat(),
+                "positions_listed": 1, "rest_fallback_since": None, "close_intents": [],
+            }},
+        }
+
     # ── the TA engine: made up from the signal rules of the store, see fake_ta.py ──
 
     ta_engine: "fake_ta.FakeEngine | None" = None

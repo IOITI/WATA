@@ -606,3 +606,55 @@ def test_a_frame_that_cannot_be_read_does_not_end_the_stream():
             return connections
 
     assert _run(scenario) == 1
+
+
+def test_a_slow_token_renewal_does_not_hold_the_position_monitors_loop():
+    # The token getter is SaxoAuth.get_token: a request to Saxo when the token is renewed, a wait of minutes for
+    # an authorisation code when the login lapsed. The monitor's stops run on the same loop.
+    import time as clock
+
+    def slow_token():
+        clock.sleep(0.3)
+        return "token-2"
+
+    client = SaxoStreamClient(
+        api_client=MagicMock(), account_key="account-key", client_key="client-key", on_positions_update=None,
+        access_token_getter=slow_token,
+    )
+
+    async def scenario():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        running = asyncio.create_task(ticker())
+        token = await client._current_token()
+        running.cancel()
+        return token, ticks
+
+    token, ticks = asyncio.run(scenario())
+
+    assert token == "token-2"
+    assert ticks >= 10
+
+
+def test_the_last_message_from_saxo_is_known():
+    async def scenario():
+        async def saxo(connection, number):
+            await connection.send(_frame(1, "_heartbeat", {"Heartbeats": []}))
+            await connection.wait_closed()
+
+        async with LocalSaxoStream(saxo) as stream:
+            client = _connected_client(stream)
+            running = asyncio.create_task(client.start())
+            await _until(lambda: client.last_message_at is not None)
+            connected = client.connected
+            await client.stop()
+            await _ends(running)
+        return connected, client.connected
+
+    assert _run(scenario) == (True, False)

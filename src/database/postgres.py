@@ -245,6 +245,17 @@ CREATE TABLE IF NOT EXISTS position_live_value (
     observed_at         TIMESTAMPTZ
 );
 
+-- What the trader and the position monitor say of themselves every fifteen
+-- seconds: alive, and what they see (the position stream, the polling of
+-- signals, Saxo's login). Read by the admin's health; nothing trades on it.
+CREATE TABLE IF NOT EXISTS service_heartbeat (
+    service     VARCHAR(32) PRIMARY KEY,
+    beat_at     TIMESTAMPTZ NOT NULL,
+    started_at  TIMESTAMPTZ,
+    version     VARCHAR(32),
+    figures     JSONB
+);
+
 -- What the trader did with each signal it received (executed, refused, ...).
 CREATE TABLE IF NOT EXISTS signal_journal (
     signal_uuid        VARCHAR(64) PRIMARY KEY,
@@ -794,6 +805,27 @@ class AsyncDbRiskStateManager:
         return await self.db.fetchval(
             "SELECT value_time FROM trade_risk_state WHERE key = $1",
             self.ENTRIES_PAUSED_KEY,
+        )
+
+
+class AsyncDbHeartbeatManager:
+    """What a trading service says of itself on a timer (see service_heartbeat)."""
+
+    def __init__(self, conn_mgr: PostgresConnectionManager):
+        self.db = conn_mgr
+
+    async def beat(self, service: str, started_at: datetime, version: str, figures: dict):
+        await self.db.execute(
+            """
+            INSERT INTO service_heartbeat (service, beat_at, started_at, version, figures)
+            VALUES ($1, $2, $3, $4, $5::jsonb)
+            ON CONFLICT (service) DO UPDATE SET
+                beat_at = EXCLUDED.beat_at,
+                started_at = EXCLUDED.started_at,
+                version = EXCLUDED.version,
+                figures = EXCLUDED.figures
+            """,
+            service, datetime.now(timezone.utc), started_at, version, json.dumps(figures, default=str),
         )
 
 

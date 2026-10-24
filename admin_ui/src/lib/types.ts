@@ -318,8 +318,19 @@ export interface Overview {
   entries_paused_since: string | null
   /** No entry around US releases (the macro_news rule); null or absent while the rule is off. */
   news?: OverviewNews | null
+  /** Saxo's login as the trader last said it; null or absent while the trader is not heard from. */
+  saxo_login?: OverviewSaxoLogin | null
   open_positions: Position[]
   recent_days: DailyPerformance[]
+}
+
+export interface OverviewSaxoLogin {
+  /** Since when Saxo refuses to renew WATA's login: the trader takes no new position meanwhile. */
+  renewal_failing_since: string | null
+  /** What Saxo answered to the last renewal refused. */
+  error: string | null
+  /** When the login lapses, after which nothing can be bought or sold. */
+  lapses_at: string | null
 }
 
 export interface OverviewNews {

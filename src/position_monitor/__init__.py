@@ -21,9 +21,11 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import aio_pika
+import httpx
 
 from src import event_loop
 from src.configuration import ConfigurationManager
@@ -44,6 +46,7 @@ from src.database.postgres import (
     AsyncDbRiskStateManager,
     AsyncDbLiveValueManager,
     AsyncDbBalanceHistoryManager,
+    AsyncDbHeartbeatManager,
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
@@ -52,6 +55,7 @@ from src.saxo_streaming.client import SaxoStreamClient
 from src.trade.rules import TradingRule
 from src.trade.order_tracker import OrderTracker
 from src.message_helper import build_daily_trading_report_message, DEFAULT_MILESTONES_EUR
+from src.heartbeat import beat_periodically, moment
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,18 @@ LIVE_VALUE_DB_TIMEOUT_SECONDS = 5.0
 # How often the sales due, and the sales that come with time, are looked at.
 KEEP_FLAT_INTERVAL_SECONDS = 1.0
 
+# Positions managed and open, in trading hours, and nothing from the stream for this long: they are checked
+# through Saxo's REST API every STREAM_WATCH_INTERVAL_SECONDS, and past STREAM_SILENT_ALERT_SECONDS it is said.
+STREAM_WATCH_INTERVAL_SECONDS = 5.0
+STREAM_SILENT_FALLBACK_SECONDS = 15
+STREAM_SILENT_ALERT_SECONDS = 60
+
+# The outside watcher's address (a dead-man's switch: it alerts by itself when the pings stop), pinged
+# while the monitor hears from Saxo. Never logged: it is a secret of its own.
+HEARTBEAT_URL_ENV = "WATA_HEARTBEAT_URL"
+HEARTBEAT_URL_INTERVAL_SECONDS = 60
+HEARTBEAT_URL_HEALTHY_SECONDS = 120
+
 
 # ─────────────────────────────────────────────────────
 #  Streaming callback
@@ -111,6 +127,10 @@ class StreamPositionHandler:
         self._last_position_ids: set[str] = set()
         # The last snapshot of the stream, for the sales tried between its updates; None before the first.
         self._latest_positions: dict[str, dict] | None = None
+        # When the stream last brought positions, and since when they are checked by REST instead.
+        self.last_update_at: float | None = None
+        self.rest_fallback_since: float | None = None
+        self._stream_silence_said = False
         self._reconcile_requested = False
         self._pending_reconcile: asyncio.Task | None = None
 
@@ -121,6 +141,7 @@ class StreamPositionHandler:
             self._reconcile_soon()
         self._last_position_ids = position_ids
         self._latest_positions = positions
+        self.last_update_at = time.time()
         try:
             # Bookkeeping for the admin interface: it must never stand in the way of the checks below.
             self.performance_monitor.forget_live_values_except(position_ids)
@@ -202,9 +223,89 @@ class StreamPositionHandler:
             except Exception as e:
                 logger.error("Keeping positions flat failed: %s", e, exc_info=True)
 
+    async def watch_stream_periodically(self, stream_client, in_trading_hours,
+                                        interval_seconds: float = STREAM_WATCH_INTERVAL_SECONDS):
+        """Every ``interval_seconds``: positions left without a price by a silent stream are checked by REST."""
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await self.check_stream(stream_client, in_trading_hours())
+            except Exception as e:
+                logger.error("Watching the position stream failed: %s", e, exc_info=True)
+
+    async def check_stream(self, stream_client, in_trading_hours: bool, now: float | None = None):
+        """
+        Managed positions open at Saxo, in trading hours, and nothing from the
+        stream for STREAM_SILENT_FALLBACK_SECONDS: their exits are checked
+        through Saxo's REST API (``check_all_positions_performance``) until it
+        brings positions again. Said once it lasts a minute, and when it ends.
+        """
+        now = time.time() if now is None else now
+        silent_for = None if self.last_update_at is None else now - self.last_update_at
+        held = False
+        if in_trading_hours and self._latest_positions and silent_for is not None and silent_for >= STREAM_SILENT_FALLBACK_SECONDS:
+            managed = await self.performance_monitor.managed_position_ids()
+            held = any(position_id in self._latest_positions for position_id in managed)
+        if not held:
+            if self._stream_silence_said:
+                await self.telegram.send("The position stream brings prices again: the REST checks stop.")
+            self.rest_fallback_since, self._stream_silence_said = None, False
+            return
+        if self.rest_fallback_since is None:
+            self.rest_fallback_since = now
+            logger.warning("Position stream silent for %.0f s: checking the positions through REST.", silent_for)
+        await self.performance_monitor.check_all_positions_performance()
+        if not self._stream_silence_said and silent_for >= STREAM_SILENT_ALERT_SECONDS:
+            self._stream_silence_said = True
+            connected = "connected" if stream_client.connected else "NOT connected"
+            await self.telegram.send(
+                f"The position stream ({connected}) has brought nothing for {int(silent_for)} s while positions are "
+                f"open: WATA checks their exits through Saxo's REST API every {int(STREAM_WATCH_INTERVAL_SECONDS)} s."
+            )
+
+    def figures(self, stream_client) -> dict:
+        """What the position monitor says of itself in its heartbeat."""
+        return {
+            "stream_connected": stream_client.connected,
+            "last_message_at": moment(stream_client.last_message_at),
+            "last_update_at": moment(self.last_update_at),
+            "positions_listed": len(self._latest_positions or {}),
+            "rest_fallback_since": moment(self.rest_fallback_since),
+            "close_intents": [
+                {"position_id": intent.position_id, "reason": intent.reason, "since": moment(intent.since),
+                 "attempts": intent.attempts, "last_error": intent.last_error}
+                for intent in self.performance_monitor.close_intents.all()
+            ],
+        }
+
     def stop(self):
         if self._pending_reconcile is not None and not self._pending_reconcile.done():
             self._pending_reconcile.cancel()
+
+
+async def ping_heartbeat_url_periodically(url: str, healthy, interval_seconds: float = HEARTBEAT_URL_INTERVAL_SECONDS):
+    """
+    GET ``url`` every ``interval_seconds`` while ``healthy()``: the outside
+    watcher alerts when the pings stop, which nothing on this server can do
+    once the server, its network or its RabbitMQ is down. Never raises.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            if not healthy():
+                continue
+            try:
+                await client.get(url)
+            except Exception as e:
+                # Not the address: it is the secret that lets anyone ping in WATA's name.
+                logger.warning("The heartbeat ping failed: %s", type(e).__name__)
+
+
+def stream_heard_lately(stream_client, now: float | None = None) -> bool:
+    """Whether the monitor heard from Saxo's stream lately: what the outside watcher is told."""
+    now = time.time() if now is None else now
+    heard = stream_client.last_message_at
+    return stream_client.connected and heard is not None and now - heard < HEARTBEAT_URL_HEALTHY_SECONDS
 
 
 async def publish_live_values_periodically(
@@ -394,6 +495,9 @@ async def main():
     reconcile_task = None
     live_value_task = None
     keep_flat_task = None
+    watch_stream_task = None
+    heartbeat_task = None
+    heartbeat_url_task = None
 
     try:
         # PostgreSQL
@@ -500,6 +604,17 @@ async def main():
 
         reconcile_task = asyncio.create_task(stream_handler.reconcile_periodically(reconcile_interval_seconds))
         keep_flat_task = asyncio.create_task(stream_handler.keep_flat_periodically())
+        watch_stream_task = asyncio.create_task(
+            stream_handler.watch_stream_periodically(stream_client, trading_rule.in_trading_hours)
+        )
+        heartbeat_task = asyncio.create_task(beat_periodically(
+            AsyncDbHeartbeatManager(pg), "position_monitor", APP_VERSION, lambda: stream_handler.figures(stream_client),
+        ))
+        heartbeat_url = os.getenv(HEARTBEAT_URL_ENV, "").strip()
+        if heartbeat_url:
+            heartbeat_url_task = asyncio.create_task(
+                ping_heartbeat_url_periodically(heartbeat_url, lambda: stream_heard_lately(stream_client))
+            )
         if live_value_interval_seconds > 0:
             live_value_task = asyncio.create_task(
                 publish_live_values_periodically(performance_monitor, db_live_value_manager, live_value_interval_seconds)
@@ -521,8 +636,9 @@ async def main():
             reconcile_task.cancel()
         if live_value_task is not None:
             live_value_task.cancel()
-        if keep_flat_task is not None:
-            keep_flat_task.cancel()
+        for task in (keep_flat_task, watch_stream_task, heartbeat_task, heartbeat_url_task):
+            if task is not None:
+                task.cancel()
         if stream_handler is not None:
             stream_handler.stop()
         if stream_client:

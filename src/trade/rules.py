@@ -127,6 +127,19 @@ class TradingRule:
                 f"Breaking trading rule: The signal is refused due to risky market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is refused due to risky market hours.")
 
+    def in_trading_hours(self, now: datetime | None = None) -> bool:
+        """
+        Whether ``now`` is in the trading hours of a weekday that is not a closed
+        date, as ``check_market_hours`` reads them, without its log line: what
+        the watches of the trader and the position monitor ask every few seconds.
+        """
+        now = (now or datetime.now(pytz.utc)).astimezone(pytz.timezone(self.timezone))
+        return (
+            now.weekday() < 5
+            and now.strftime("%d/%m/%Y") not in self.market_closed_dates_list
+            and self.market_hours_config["trading_start_hour"] <= now.hour < self.market_hours_config["trading_end_hour"]
+        )
+
     def check_macro_news(self, now: datetime | None = None):
         """
         Refuses an entry in the window around a US release the macro_news rule

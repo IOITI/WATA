@@ -202,6 +202,7 @@ class FakeQueries:
         # test adds some), what it wrote of itself, and what its tables hold.
         self.capital_rows = []
         self.capital_state = None
+        self.heartbeats = {}
         self.capital_bar_rows = []
         self.capital_series_rows = []
         self.capital_coverage_rows = []
@@ -380,6 +381,10 @@ class FakeQueries:
     async def capital_feed_state(self):
         self._check()
         return self.capital_state
+
+    async def service_heartbeats(self):
+        self._check()
+        return self.heartbeats
 
     async def ta_signals(self, start=None, end=None, rule_id=None, limit=500):
         self._check()
@@ -1093,6 +1098,62 @@ def test_health_reads_the_trader_state_from_its_log(client, ctx):
 
     trader = next(s for s in client.get("/api/system/health").json()["services"] if s["id"] == "trader")
     assert trader["status"] == "down"
+
+
+def _beat(age_seconds=5, **figures):
+    return {"beat_at": datetime.now(timezone.utc) - timedelta(seconds=age_seconds), "started_at": None,
+            "version": "0.35.0", "figures": figures}
+
+
+def test_health_reads_the_trader_and_the_position_monitor_from_their_heartbeats(client, ctx):
+    ctx.queries.heartbeats = {
+        "trader": _beat(last_signal_at="2026-10-26T09:12:00+00:00", saxo_login={},
+                        saxo_session={"trade_level": "OrdersOnly"}),
+        "position_monitor": _beat(stream_connected=True, positions_listed=0, close_intents=[
+            {"position_id": "p1", "reason": "Explicit Close (End of day)", "since": "2026-10-26T20:56:01+00:00",
+             "attempts": 3, "last_error": "Saxo says it cannot be closed now"},
+        ]),
+    }
+
+    services = {s["id"]: s for s in client.get("/api/system/health").json()["services"]}
+
+    assert services["trader"] == {"id": "trader", "name": "Trader", "status": "ok",
+                                  "detail": "Polling the web server, last signal 10:12; Saxo session at OrdersOnly"}
+    assert services["position_monitor"]["status"] == "warning"
+    assert services["position_monitor"]["detail"] == (
+        "Selling position p1 since 21:56 (3 failed attempts: Saxo says it cannot be closed now)"
+    )
+
+
+def test_a_heartbeat_that_stopped_is_a_service_down(client, ctx):
+    ctx.queries.heartbeats = {"trader": _beat(age_seconds=600), "position_monitor": _beat(age_seconds=95)}
+
+    services = {s["id"]: s for s in client.get("/api/system/health").json()["services"]}
+
+    assert (services["trader"]["status"], services["trader"]["detail"]) == ("down", "No heartbeat for 10 min")
+    assert (services["position_monitor"]["status"], services["position_monitor"]["detail"]) == (
+        "down", "No heartbeat for 1 min",
+    )
+
+
+def test_health_says_what_keeps_the_trader_from_trading(client, ctx):
+    login = {"renewal_failing_since": "2026-10-23T18:05:00+00:00", "error": "Saxo answered 401: invalid_grant"}
+    ctx.queries.heartbeats = {"trader": _beat(saxo_login=login)}
+
+    trader = next(s for s in client.get("/api/system/health").json()["services"] if s["id"] == "trader")
+
+    assert trader["status"] == "warning"
+    assert trader["detail"] == "Saxo refuses to renew the login since 20:05 (Saxo answered 401: invalid_grant): no new position"
+
+
+def test_the_overview_says_saxo_refusing_to_renew_the_login(client, ctx):
+    assert client.get("/api/overview").json()["saxo_login"] is None
+    login = {"renewal_failing_since": "2026-10-23T18:05:00+00:00", "error": "Saxo answered 401", "lapses_at": None}
+    ctx.queries.heartbeats = {"trader": _beat(saxo_login=login)}
+
+    assert client.get("/api/overview").json()["saxo_login"] == login
+    ctx.queries.heartbeats = {"trader": _beat(age_seconds=600, saxo_login=login)}
+    assert client.get("/api/overview").json()["saxo_login"] is None
 
 
 def test_log_tail_is_filtered_by_level_and_text(client, ctx):

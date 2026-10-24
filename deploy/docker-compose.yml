@@ -247,6 +247,7 @@ services:
     container_name: 'position_monitor1'
     environment:
       - WATA_APP_ROLE=position_monitor
+      - WATA_HEARTBEAT_URL=${WATA_HEARTBEAT_URL:-}
     volumes:
       - ../../var/log:/app/var/log/
       - ../../var/lib:/app/var/lib/

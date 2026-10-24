@@ -395,3 +395,52 @@ def test_a_position_open_in_wata_but_not_at_saxo_is_not_called_nothing_to_close(
     _, _, outcome, reason = journal_signal.call_args.args
     assert outcome == trader.IGNORED
     assert reason == "Open in WATA's records but not at Saxo: p1 (left to the reconciliation)"
+
+
+def test_no_new_position_is_taken_while_saxo_refuses_to_renew_the_login():
+    calls, orchestrator, monitor, trading_rule, db_position_manager, telegram = _handler_dependencies(0)
+    watch = MagicMock()
+    watch.login_refusal.return_value = "Breaking trading rule: Saxo refuses to renew WATA's login since 20:05: ..."
+
+    with patch.object(trader, "TelegramMessageComposer"), patch.object(trader, "journal_signal") as journal_signal:
+        asyncio.run(handle_trading_signal(
+            _signal("uuid-1", action="short"), orchestrator, monitor, trading_rule, db_position_manager, "exchange1",
+            telegram, watch=watch,
+        ))
+
+    # Refused before anything is closed or bought, as the operator's pause is.
+    assert calls.mock_calls == []
+    _, _, outcome, reason = journal_signal.call_args.args
+    assert (outcome, reason) == (trader.REFUSED, watch.login_refusal.return_value)
+
+
+def test_the_polling_loop_tells_the_watch_what_it_polled_and_received():
+    from src.trader import poll_and_dispatch_signals
+
+    signals = [[{"signal_uuid": "u1", "action": "long", "indice": "us100"},
+                {"signal_uuid": "u2", "action": "close-position", "indice": "n/a"}]]
+    client = MagicMock()
+    client.interval_ms = 1
+    client.long_poll_wait_ms = 1
+    client.startup_replay_max_age_seconds = 3600
+
+    async def get_new_signals():
+        if signals:
+            return signals.pop()
+        raise asyncio.CancelledError
+
+    client.get_new_signals = get_new_signals
+    watch = MagicMock()
+    watch.polled = AsyncMock()
+    dispatch = AsyncMock()
+
+    with patch.object(trader, "_received_before_startup_window", return_value=False):
+        try:
+            asyncio.run(poll_and_dispatch_signals(client, dispatch, watch=watch))
+        except asyncio.CancelledError:
+            pass
+
+    watch.polled.assert_awaited_with(True)
+    # The scheduler's close (indice n/a) says nothing of TradingView's alerts.
+    watch.signal_received.assert_called_once_with()
+    assert dispatch.await_count == 2

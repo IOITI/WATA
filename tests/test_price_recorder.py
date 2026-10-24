@@ -547,7 +547,7 @@ def test_the_real_stream_client_feeds_the_recorder_snapshot_then_changes():
         on_info_price_subscription_update=on_quotes,
     )
     stream._context_id = "ctx-1"
-    stream._sync_api_token = MagicMock()
+    stream._sync_api_token = AsyncMock()
     requests = []
 
     async def request(endpoint):
@@ -857,7 +857,7 @@ def test_through_the_real_stream_client_a_volume_alone_is_kept_and_changes_no_ba
         on_info_price_subscription_update=on_quotes,
     )
     stream._context_id = "ctx-1"
-    stream._sync_api_token = MagicMock()
+    stream._sync_api_token = AsyncMock()
     requests = []
 
     async def request(endpoint):

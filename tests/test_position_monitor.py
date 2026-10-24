@@ -415,3 +415,123 @@ def test_position_checks_still_run_when_the_live_value_bookkeeping_fails():
     asyncio.run(handler.on_positions_update(_snapshot("p1")))
 
     performance_monitor.check_positions_from_stream.assert_awaited_once()
+
+
+# ── a stream that brings nothing ──
+
+
+def _watched_handler(managed=("p1",)):
+    handler, performance_monitor, _, telegram = _handler()
+    performance_monitor.managed_position_ids = AsyncMock(return_value=set(managed))
+    performance_monitor.check_all_positions_performance = AsyncMock(
+        return_value={"closed_positions_processed": [], "db_updates": [], "errors": 0}
+    )
+    stream = MagicMock(connected=True, last_message_at=None)
+    return handler, performance_monitor, telegram, stream
+
+
+def test_positions_left_without_a_price_by_a_silent_stream_are_checked_by_rest():
+    handler, performance_monitor, telegram, stream = _watched_handler()
+
+    async def scenario():
+        await handler.on_positions_update(_snapshot("p1"))
+        start = handler.last_update_at
+        await handler.check_stream(stream, True, now=start + position_monitor.STREAM_SILENT_FALLBACK_SECONDS - 1)
+        quiet = performance_monitor.check_all_positions_performance.await_count
+        await handler.check_stream(stream, True, now=start + position_monitor.STREAM_SILENT_FALLBACK_SECONDS)
+        await handler.check_stream(stream, True, now=start + position_monitor.STREAM_SILENT_ALERT_SECONDS)
+        await handler.check_stream(stream, True, now=start + position_monitor.STREAM_SILENT_ALERT_SECONDS + 5)
+        said_while_silent = [call.args[0] for call in telegram.send.await_args_list]
+        await handler.on_positions_update(_snapshot("p1"))
+        await handler.check_stream(stream, True)
+        return quiet, said_while_silent
+
+    quiet, said_while_silent = asyncio.run(scenario())
+
+    assert quiet == 0
+    assert performance_monitor.check_all_positions_performance.await_count == 3
+    assert said_while_silent == [
+        "The position stream (connected) has brought nothing for 60 s while positions are open: "
+        "WATA checks their exits through Saxo's REST API every 5 s."
+    ]
+    assert telegram.send.await_args.args[0] == "The position stream brings prices again: the REST checks stop."
+    assert handler.rest_fallback_since is None
+
+
+def test_a_silent_stream_outside_trading_hours_or_without_managed_positions_is_left_alone():
+    handler, performance_monitor, telegram, stream = _watched_handler(managed=())
+
+    async def scenario():
+        await handler.on_positions_update(_snapshot("p9"))  # bought by hand: not WATA's
+        await handler.check_stream(stream, True, now=handler.last_update_at + 120)
+        handler.performance_monitor.managed_position_ids = AsyncMock(return_value={"p9"})
+        await handler.check_stream(stream, False, now=handler.last_update_at + 120)
+
+    asyncio.run(scenario())
+
+    performance_monitor.check_all_positions_performance.assert_not_awaited()
+    telegram.send.assert_not_awaited()
+
+
+def test_the_heartbeat_says_the_stream_and_the_sales_waiting():
+    from src.trade.close_intents import CloseIntents
+
+    handler, performance_monitor, _, _ = _handler()
+    intents = CloseIntents()
+    intents.want("p1", "Explicit Close (End of day)", now=1_760_000_000.0)
+    intents.failed("p1", "Saxo says it cannot be closed now", now=1_760_000_001.0)
+    performance_monitor.close_intents = intents
+    stream = MagicMock(connected=False, last_message_at=1_760_000_000.0)
+
+    figures = handler.figures(stream)
+
+    assert figures["stream_connected"] is False
+    assert figures["last_message_at"].startswith("2025-10-09T")
+    assert figures["close_intents"] == [{
+        "position_id": "p1", "reason": "Explicit Close (End of day)", "since": figures["close_intents"][0]["since"],
+        "attempts": 1, "last_error": "Saxo says it cannot be closed now",
+    }]
+
+
+def test_the_outside_watcher_is_pinged_only_while_saxo_is_heard():
+    heard = MagicMock(connected=True, last_message_at=1000.0)
+
+    assert position_monitor.stream_heard_lately(heard, now=1000.0 + position_monitor.HEARTBEAT_URL_HEALTHY_SECONDS - 1)
+    assert not position_monitor.stream_heard_lately(heard, now=1000.0 + position_monitor.HEARTBEAT_URL_HEALTHY_SECONDS)
+    assert not position_monitor.stream_heard_lately(MagicMock(connected=False, last_message_at=1000.0), now=1000.0)
+
+
+def test_the_outside_ping_never_says_its_secret_address(caplog):
+    secret = "https://hc-ping.example/5f2c-secret"
+    pinged = []
+
+    class Client:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def get(self, url):
+            pinged.append(url)
+            if len(pinged) == 2:
+                raise ConnectionError(f"cannot reach {url}")
+            if len(pinged) == 3:
+                raise asyncio.CancelledError
+
+    async def scenario():
+        with patch.object(position_monitor.httpx, "AsyncClient", Client):
+            try:
+                await position_monitor.ping_heartbeat_url_periodically(secret, lambda: True, interval_seconds=0)
+            except asyncio.CancelledError:
+                pass
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(scenario())
+
+    assert pinged == [secret] * 3
+    assert "The heartbeat ping failed: ConnectionError" in caplog.text
+    assert secret not in caplog.text

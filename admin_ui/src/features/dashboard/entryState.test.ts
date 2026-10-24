@@ -15,6 +15,7 @@ function overview(changes: {
   closedToday?: boolean
   open?: string[]
   news?: Overview['news']
+  saxoLogin?: Overview['saxo_login']
 } = {}): Overview {
   return {
     date: '2026-10-12',
@@ -46,6 +47,7 @@ function overview(changes: {
     cooldown: { last_loss_at: null, ends_at: null, active: false, ...changes.cooldown },
     entries_paused_since: changes.paused ?? null,
     news: changes.news ?? null,
+    saxo_login: changes.saxoLogin ?? null,
     open_positions: (changes.open ?? []).map((action, index) => ({ action, position_id: String(index) }) as Position),
     recent_days: [],
   }
@@ -63,6 +65,18 @@ describe('what holds a new entry back', () => {
 
     expect(blockers.map((blocker) => blocker.code)).toEqual(['paused', 'trade_limit'])
     expect(blockers[0].reason).toBe('Paused by the operator')
+  })
+
+  it('is Saxo refusing to renew the login, as the trader refuses then', () => {
+    const blockers = entryBlockers(
+      overview({ saxoLogin: { renewal_failing_since: '2026-10-12T13:05:00Z', error: 'Saxo answered 401', lapses_at: null } }),
+      NOW,
+    )
+
+    expect(blockers).toEqual([
+      { code: 'saxo_login', reason: "Saxo refuses to renew WATA's login since 15:05: no new position until it is renewed" },
+    ])
+    expect(codes(overview({ saxoLogin: { renewal_failing_since: null, error: null, lapses_at: null } }))).toEqual([])
   })
 
   it('is a closed date, whatever the hour', () => {

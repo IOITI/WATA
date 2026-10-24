@@ -130,3 +130,54 @@ def test_token_file_is_replaced_in_one_step(saxo_auth):
     assert saxo_auth._load_token_data()["access_token"] == "new"
     # No temporary file left behind
     assert sorted(os.listdir(os.path.dirname(saxo_auth.token_file_path))) == [".key_salt", "persist_token.json"]
+
+
+def _refusal(status: int, body: dict | None = None, text: str = ""):
+    response = MagicMock(status_code=status, text=text)
+    if body is None:
+        response.json.side_effect = ValueError("not JSON")
+    else:
+        response.json.return_value = body
+    return response
+
+
+def test_a_refused_renewal_keeps_what_saxo_said_without_its_tokens(saxo_auth):
+    # On 2026-10-23 the login lapsed at 20:05 Paris, and nothing said why: Saxo's answer was dropped.
+    _store(saxo_auth, _token_data("expired", age_seconds=1500))
+    refused = _refusal(400, {"error": "invalid_grant", "error_description": "refresh-for-expired is not valid"})
+
+    with patch("src.saxo_authen.requests.post", return_value=refused) as mock_post, patch("src.saxo_authen.time.sleep"):
+        with pytest.raises(Exception, match="Failed to renew token"):
+            saxo_auth.get_token()
+
+    # The token itself refused: not tried again.
+    mock_post.assert_called_once()
+    assert saxo_auth.last_refresh_error == "Saxo answered 400: invalid_grant … is not valid"
+
+
+def test_a_renewal_saxo_could_not_answer_is_tried_again_then_succeeds(saxo_auth):
+    _store(saxo_auth, _token_data("expired", age_seconds=1500))
+    answers = [_refusal(503, text="Service Unavailable"), _refusal(429, {"error": "too_many_requests"}),
+               _refresh_response("renewed")]
+
+    with patch("src.saxo_authen.requests.post", side_effect=answers) as mock_post, \
+            patch("src.saxo_authen.time.sleep") as slept:
+        token = saxo_auth.get_token()
+
+    assert token == "renewed"
+    assert mock_post.call_count == 3
+    assert [call.args[0] for call in slept.call_args_list] == [1.0, 2.0]
+    assert saxo_auth.last_refresh_error is None
+
+
+def test_a_renewal_without_an_answer_is_said_as_such(saxo_auth):
+    import requests
+
+    _store(saxo_auth, _token_data("expired", age_seconds=1500))
+
+    with patch("src.saxo_authen.requests.post", side_effect=requests.exceptions.ConnectTimeout("timed out")), \
+            patch("src.saxo_authen.time.sleep"):
+        with pytest.raises(Exception, match="Failed to renew token"):
+            saxo_auth.get_token()
+
+    assert saxo_auth.last_refresh_error == "no answer from Saxo's token endpoint (ConnectTimeout)"

@@ -132,6 +132,17 @@ def test_the_capital_com_login_is_handed_to_the_feed_alone_and_never_written_in_
         assert f"# {name}=" in example
 
 
+def test_the_outside_watchers_address_is_handed_to_the_position_monitor_alone(compose_services):
+    assert compose_services["position_monitor1"]["environment"] == [
+        "WATA_APP_ROLE=position_monitor", "WATA_HEARTBEAT_URL=${WATA_HEARTBEAT_URL:-}",
+    ]
+    for name, service in compose_services.items():
+        if name == "position_monitor1":
+            continue
+        assert not any("WATA_HEARTBEAT_URL" in str(variable) for variable in service.get("environment") or []), name
+    assert "# WATA_HEARTBEAT_URL=" in open("deploy/.env.example", encoding="utf-8").read()
+
+
 def test_the_capital_com_feed_mounts_only_what_it_uses(compose_services):
     modes = _mount_modes(compose_services["capital_feed1"])
 

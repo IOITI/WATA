@@ -54,6 +54,7 @@ export function overview(changes: Partial<Overview> = {}): Overview {
     cooldown: { last_loss_at: null, ends_at: null, active: false },
     entries_paused_since: null,
     news: null,
+    saxo_login: null,
     open_positions: [],
     recent_days: [closedDay('2026-10-21', 12.4), closedDay('2026-10-22', -5)],
     ...changes,

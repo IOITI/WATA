@@ -145,6 +145,8 @@ class SaxoStreamClient:
         # Set by the receive loop when the cache changes. The callback runs in its
         # own task, so a slow callback never holds up reading the socket.
         self._positions_changed = asyncio.Event()
+        # When Saxo was last heard from (any frame, heartbeats included): the position monitor's heartbeat says it.
+        self.last_message_at: float | None = None
         self._positions_delivery_task: asyncio.Task | None = None
         self._desired_info_price_subscriptions: dict[str, dict] = {}
         self._active_info_price_subscriptions: dict[str, dict] = {}
@@ -193,6 +195,11 @@ class SaxoStreamClient:
         if self._has_connection():
             await self._ws.close()
             logger.info("WebSocket closed gracefully.")
+
+    @property
+    def connected(self) -> bool:
+        """Whether a WebSocket to Saxo is open now."""
+        return self._has_connection()
 
     @property
     def positions(self) -> dict[str, dict]:
@@ -246,7 +253,7 @@ class SaxoStreamClient:
             self._pos_ref_id = _short_id("pos")
 
         # 2. Build WS URL
-        token = self._current_token()
+        token = await self._current_token()
         ws_url = self._build_ws_url(token)
 
         # 3. Open WebSocket
@@ -277,7 +284,7 @@ class SaxoStreamClient:
 
     async def _create_position_subscription(self):
         """Create a position list subscription via REST and seed the cache."""
-        self._sync_api_token()
+        await self._sync_api_token()
 
         data = {
             "Arguments": {
@@ -321,7 +328,7 @@ class SaxoStreamClient:
         if not definition.get("uics"):
             return
 
-        self._sync_api_token()
+        await self._sync_api_token()
 
         request_data = {
             "Arguments": {
@@ -391,7 +398,7 @@ class SaxoStreamClient:
             return
         if self._active_info_price_subscriptions:
             try:
-                self._sync_api_token()
+                await self._sync_api_token()
                 req = tr.infoprices.RemoveInfoPriceSubscriptionsByTag(ContextId=self._context_id)
                 await self._request(req)
                 logger.info("InfoPrice subscriptions for context %s removed.", self._context_id)
@@ -401,7 +408,7 @@ class SaxoStreamClient:
                 self._active_info_price_subscriptions.clear()
         try:
             if self._subscription_ready:
-                self._sync_api_token()
+                await self._sync_api_token()
                 req = pf.positions.PositionSubscriptionRemoveMultiple(
                     ContextId=self._context_id
                 )
@@ -420,6 +427,7 @@ class SaxoStreamClient:
         async for raw in self._ws:
             if not self._running:
                 break
+            self.last_message_at = time.time()
 
             if isinstance(raw, str):
                 # Saxo should always send binary, but handle text just in case
@@ -622,7 +630,7 @@ class SaxoStreamClient:
             logger.warning("Resetting position subscription (requested by server).")
             # Delete old subscription, create new one
             try:
-                self._sync_api_token()
+                await self._sync_api_token()
                 old_ref = self._pos_ref_id
                 self._pos_ref_id = _short_id("pos")
                 self._subscription_ready = False
@@ -666,7 +674,7 @@ class SaxoStreamClient:
             if not self._running:
                 break
             try:
-                token = self._current_token()
+                token = await self._current_token()
                 url = self._build_reauth_url()
                 headers = {"Authorization": f"Bearer {token}"}
 
@@ -723,16 +731,18 @@ class SaxoStreamClient:
             return f"{base}/{prefix}/oapi/streaming/ws/authorize?contextid={self._context_id}"
         return f"{base}/oapi/streaming/ws/authorize?contextid={self._context_id}"
 
-    def _current_token(self) -> str:
-        token = self._get_token() if self._get_token else self._rest_client_access_token
+    async def _current_token(self) -> str:
+        # In a thread: a token renewed is a request to Saxo, and a lapsed login waits for its code (SaxoAuth),
+        # while this loop is the position monitor's, whose stops must not wait for either.
+        token = await asyncio.to_thread(self._get_token) if self._get_token else self._rest_client_access_token
         if token and token != self._rest_client_access_token:
             self._update_rest_client_token(token)
             logger.info("Updated Saxo streaming REST client with refreshed access token.")
         return token
 
-    def _sync_api_token(self) -> str:
+    async def _sync_api_token(self) -> str:
         """Ensure the underlying AsyncAPI client uses the freshest access token."""
-        return self._current_token()
+        return await self._current_token()
 
     async def _request(self, endpoint):
         """Dispatch a REST request through the configured async API client/wrapper."""

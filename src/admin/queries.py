@@ -847,6 +847,18 @@ class AdminQueries:
         rows = await self._fetch_optional("SELECT opening_hours FROM capital_instrument WHERE epic = $1", epic)
         return _json_value(rows[0]["opening_hours"]) if rows else None
 
+    async def service_heartbeats(self) -> dict[str, dict]:
+        """What the trader and the position monitor last said of themselves, by service; none before they ran."""
+        rows = await self._fetch_optional(
+            "SELECT service, beat_at, started_at, version, figures FROM service_heartbeat"
+        )
+        beats = {}
+        for row in rows:
+            beat = dict(row)
+            beat["figures"] = _json_value(beat.get("figures")) or {}
+            beats[beat.pop("service")] = beat
+        return beats
+
     async def capital_feed_state(self) -> dict | None:
         """What the feed last wrote of itself; None when it never ran."""
         rows = await self._fetch_optional(
