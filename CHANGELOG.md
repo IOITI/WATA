@@ -14,6 +14,57 @@ The last of four releases on what WATA lacked to trade reliably (v0.34.0 to v0.3
 - 1,047 interface tests pass, 3 of them new (a rule not ready waits for "Go live anyway", which the server is told; a refusal the page did not foresee offers it; what the server holds back, check by check); lint and type checks are clean.
 - Not seen: the confirmation in a browser, and a rule taken live on the server.
 
+## v0.36.0 - Calendar and operations
+
+**Release date:** not released yet
+
+- **The US market's holidays and early closes are a file** (`src/trade/data/us_market_calendar.csv`, from NYSE's announcement of 23 December 2025 for 2026 and 2027; `src/trade/market_calendar.py`). The trader takes no entry on a US holiday (WATA traded Labor Day 2026) and none late on a day that closes early, and the day's close comes that much earlier (scheduler and position monitor alike). The backtests and the dashboard's tile do the same, parity tested. From 30 days before its last day, the scheduler's morning message and health say it needs its next year. `market_closed_dates` still applies.
+- **`market_hours.timezone`** (optional, `America/New_York` for instance): the trading hours, the risky minutes and the day's close are then New York's, which keeps them right in the weeks Europe and the US change clocks apart (25 October to 1 November 2026).
+- **The risky minutes run from their hour and minute to the end of the day.** Counting the minute alone in each hour left holes in a window of more than an hour.
+- **The database is dumped each night** (`pg_backup1`, `deploy/pg_backup.sh`, at 02:17 UTC, without the bars except on Sundays). 14 nights and 4 Sundays are kept and `lab/sync.sh` pulls them to the Mac. `pg_backup.sh check` restores the newest into a scratch database and counts the trading tables. Health shows the last dump.
+- **A deploy is refused while WATA holds a position or the market is open by its hours** (`-e force=true` deploys anyway).
+- **Out of memory, the kernel kills the admin and the backups before the trading path** (`oom_score_adj`).
+- An optional number on the Configuration page may stay empty: it no longer holds the form back.
+
+**Verification status:**
+- `pg_backup.sh now`, then `check`, run against a PostgreSQL 16 (pgserver): dumped, restored, the trading tables counted. The compose file and the playbook are held by `tests/test_deploy_compose.py`.
+- The Configuration page's optional numbers checked in a browser against the dev server.
+- Not seen: a dump on the server, a deploy refused, an early close.
+
+## v0.35.0 - Know when WATA is blind
+
+**Release date:** not released yet
+
+- **The trader and the position monitor beat every 15 s** (`service_heartbeat`, `src/heartbeat.py`). The admin's health judges them by it, not by a log line or a queue consumer, and lists the sales the monitor is still trying to make.
+- **The trader watches itself** (`src/trade/trader_watch.py`): a web server it cannot poll, no signal for `reporting.signal_silence_minutes` in trading hours (off unless set; on the Configuration page), Saxo refusing to renew the login, the level Saxo serves the session at. No new position while Saxo refuses the renewal, and the dashboard's tile says so.
+- **Saxo's answer to a refused renewal is kept and said**: on 23 October the login lapsed at 20:05 and nothing said why. A 429, a 5xx or no answer is tried again twice.
+- **No turbo is bought on a quote Saxo says is delayed.**
+- **A silent position stream with positions open is replaced by REST checks every 5 s**, and the stream client takes its token in a thread: a renewal no longer freezes the monitor's loop.
+- **Telegram is reached directly when RabbitMQ refuses a message**, and `WATA_HEARTBEAT_URL` (in `.env`, the position monitor's alone) pings an outside dead-man's switch each minute while it is healthy.
+
+**Verification status:**
+- The heartbeat's write run against a PostgreSQL 16 (pgserver); the stream client's tests against a local WebSocket server (`LocalSaxoStream`) pass with the token taken in a thread.
+- Not seen against Saxo: a refused renewal's answer, the session's level, a delayed quote, a silent stream replaced by REST checks. The dead-man's switch and the Telegram fallback were not tried.
+
+## v0.34.0 - Never hold what WATA cannot sell
+
+**Release date:** not released yet
+
+From the record of 25 July to 24 October: a long held through the CPI of 14 October (its turbo unquoted for 250 s) sold at −30 %, two Friday positions held over the weekend, 43 of 245 closes labelled "SaxoAPI" though WATA sold them.
+
+- **A sale is kept until Saxo no longer lists the position** (`src/trade/close_intents.py`): tried again with growing waits and said on Telegram less and less often. A sale already working at Saxo is waited for. The position monitor tries every second, whether the stream brings prices or not.
+- **The trader hands what it could not sell to the position monitor** (`src/trade/ops_queue.py`, a `close_position` ops message with its reason). A close says what it could not sell and why, where it said "No open position to close".
+- **With a cash reserve, an entry that failed still sells the other side**, as the classic mode does (the simulator too).
+- **Nothing is held after the day's close**: the monitor sells what is left a minute after `close_position_time`. With the `macro_news` rule's new `flatten_minutes_before`, nothing is held into a US release either (mirrored, parity tested; on the Configuration page). The scheduler's close is tried three times, and its failure said on Telegram.
+- **Every order request has its own `x-request-id`** (the id it is kept under): Saxo refuses an identical order request within 15 s.
+- **A position WATA bought but lost (no row) is recorded again and managed**; one bought by hand is named once and left alone.
+- **The reconciliation keeps WATA's own sale reason**: "SaxoAPI" only for what WATA did not sell.
+- `src/trade/macro_calendar.py` is part of the backtests' code digest.
+
+**Verification status:**
+- The new reads of the order requests (WATA's sale reasons, its purchases) and the row of an adopted position run against a PostgreSQL 16 (pgserver).
+- Not seen against Saxo: a sale kept until the position is gone, the `x-request-id`, a position adopted, a close handed over by the trader.
+
 ## v0.33.0 - Admin: a close followed to its sale, live lines, funnels, trend tiles, Claude's trace, an Undo, previews, a map of the services, clocks, a live pill
 
 **Release date:** 2026-10-23, with v0.30.0, v0.31.0 and v0.32.0
