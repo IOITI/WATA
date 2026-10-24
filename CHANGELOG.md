@@ -2,7 +2,7 @@
 
 ## v0.38.0 - A position judged from Saxo's next quote, and backtests priced at it
 
-**Release date:** not released yet
+**Release date:** 2026-10-24, with v0.34.0, v0.35.0, v0.36.0 and v0.37.0
 
 From the record. Saxo sends the turbos WATA trades a new quote about every 30 seconds (40 at the 95th percentile on the turbos recorded from 13 to 20 October), while it fills an order at the live price. On 19 October a long was bought at 10:38:37 for 5.055 while Saxo still quoted the turbo at 4.627, its quote of 10:38:10, from before the index rose 25 points. The monitor set the one against the other, saw −8.47 % and sold; the sale filled at +0.51 %. From July to October, six daily profit targets were "met" 1 to 6 seconds after a purchase, on gains of +0.7 to +4.2 % that filled at −0.07 to −1.96 %. The backtests made the opposite mistake: they bought at the quote standing at the fill, on average 0.48 % under what WATA paid (8.3 % that day).
 
@@ -23,7 +23,7 @@ After deploying: make a rule's reference run again before reading its days on pa
 
 ## v0.37.0 - Going live held to its readiness, and sweeps of the signals' delay
 
-**Release date:** not released yet
+**Release date:** 2026-10-24, with v0.38.0
 
 The last of four releases on what WATA lacked to trade reliably (v0.34.0 to v0.37.0). Its changes to trading were to be measured first, and none was built. A replay of the journal's signals 0.5, 15, 30 and 60 s after WATA received them (experiment 439d40, the 9 recorded days of 13 to 23 October) ended at +4.67 %, −40.0 %, −44.2 % and −35.7 %. All of the difference is two days, and neither is a cost of seconds: on 21 October the day's first trade met the day's +0.5 % target in 24 s at 0.5 s and missed it at 15 s, after which the day lost −26.9 % over 21 trades; on 19 October the 0.5 s replay was saved by one trade bought at a bad recorded quote. Past 15 s, more delay costs nothing more. Inconclusive. Set beside WATA's real positions, the replay at 0.5 s with fixed fills makes +0.67 points a trade more than WATA did (the median), and with 15 or 30 s added it comes out like WATA's. The other measurements planned (a pause after losing days, exits in index points, fewer flips) wait for 20 recorded days: on a strategy without a measured edge, a rule that trades less looks better for that alone.
 
@@ -37,7 +37,7 @@ The last of four releases on what WATA lacked to trade reliably (v0.34.0 to v0.3
 
 ## v0.36.0 - Calendar and operations
 
-**Release date:** not released yet
+**Release date:** 2026-10-24, with v0.38.0
 
 - **The US market's holidays and early closes are a file** (`src/trade/data/us_market_calendar.csv`, from NYSE's announcement of 23 December 2025 for 2026 and 2027; `src/trade/market_calendar.py`). The trader takes no entry on a US holiday (WATA traded Labor Day 2026) and none late on a day that closes early, and the day's close comes that much earlier (scheduler and position monitor alike). The backtests and the dashboard's tile do the same, parity tested. From 30 days before its last day, the scheduler's morning message and health say it needs its next year. `market_closed_dates` still applies.
 - **`market_hours.timezone`** (optional, `America/New_York` for instance): the trading hours, the risky minutes and the day's close are then New York's, which keeps them right in the weeks Europe and the US change clocks apart (25 October to 1 November 2026).
@@ -54,7 +54,7 @@ The last of four releases on what WATA lacked to trade reliably (v0.34.0 to v0.3
 
 ## v0.35.0 - Know when WATA is blind
 
-**Release date:** not released yet
+**Release date:** 2026-10-24, with v0.38.0
 
 - **The trader and the position monitor beat every 15 s** (`service_heartbeat`, `src/heartbeat.py`). The admin's health judges them by it, not by a log line or a queue consumer, and lists the sales the monitor is still trying to make.
 - **The trader watches itself** (`src/trade/trader_watch.py`): a web server it cannot poll, no signal for `reporting.signal_silence_minutes` in trading hours (off unless set; on the Configuration page), Saxo refusing to renew the login, the level Saxo serves the session at. No new position while Saxo refuses the renewal, and the dashboard's tile says so.
@@ -69,7 +69,7 @@ The last of four releases on what WATA lacked to trade reliably (v0.34.0 to v0.3
 
 ## v0.34.0 - Never hold what WATA cannot sell
 
-**Release date:** not released yet
+**Release date:** 2026-10-24, with v0.38.0
 
 From the record of 25 July to 24 October: a long held through the CPI of 14 October (its turbo unquoted for 250 s) sold at −30 %, two Friday positions held over the weekend, 43 of 245 closes labelled "SaxoAPI" though WATA sold them.
 
