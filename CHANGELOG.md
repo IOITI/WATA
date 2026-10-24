@@ -2,7 +2,7 @@
 
 ## v0.44.0 - Saxo's login in PostgreSQL, authorised from the admin
 
-**Release date:** unreleased
+**Release date:** 2026-10-24, with v0.40.0, v0.41.0, v0.42.0 and v0.43.0
 
 Until now Saxo's login was an encrypted file in `var/lib/saxo_auth`, its app in `config.json` (mounted into every container), and a lapsed login was handed back over SSH or by pasting a code the admin wrote into that folder. Each service that found the login lapsed said so on Telegram in turn, every five minutes, and held the lock between them while it waited.
 
@@ -27,7 +27,7 @@ Until now Saxo's login was an encrypted file in `var/lib/saxo_auth`, its app in 
 
 ## v0.43.0 - Credentials sealed in PostgreSQL, set from the Configuration page
 
-**Release date:** unreleased
+**Release date:** 2026-10-24, with v0.44.0
 
 Until now WATA's credentials were in five places: `config.json`, mounted into every container, with its twenty backups in clear; `.env`; two encrypted files; the MCP tokens' file. The admin could change none of them.
 
@@ -57,7 +57,7 @@ Until now WATA's credentials were in five places: `config.json`, mounted into ev
 
 ## v0.42.0 - Services restarted from the admin to apply a change
 
-**Release date:** unreleased
+**Release date:** 2026-10-24, with v0.44.0
 
 A service reads `config.json` when it starts. Until now a change saved from the Configuration page waited for someone to restart the services on the server, and the admin, which has no access to Docker, could only guess which ones still ran without it, from its own start.
 
@@ -88,7 +88,7 @@ A service reads `config.json` when it starts. Until now a change saved from the 
 
 ## v0.41.0 - Every parameter of the configuration on its page, with what it changes
 
-**Release date:** unreleased
+**Release date:** 2026-10-24, with v0.44.0
 
 Until now the Configuration page had fields for about forty keys of `config.json`. The rest of `trade.config` (the trading timezone, streaming, polling, the watchlist manager, the TA engine) was reachable only as JSON, and the `admin`, credentials and infrastructure sections only as the whole file.
 
@@ -138,7 +138,7 @@ Until now the Configuration page had fields for about forty keys of `config.json
 
 ## v0.40.0 - Services that stop cleanly, and secrets kept out of the logs
 
-**Release date:** unreleased
+**Release date:** 2026-10-24, with v0.44.0
 
 The first step of the configuration's rework (every parameter on the page, the credentials in PostgreSQL, services restarted from the admin): a restart from the admin is only safe once a service can be stopped without being cut off, and secrets must not be left in the logs the admin shows.
 
