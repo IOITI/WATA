@@ -18,6 +18,13 @@ A quote is read at the first ten-second boundary at or after the moment it is
 needed (src/backtest/clock.py). Inside ten seconds the bid is taken to go from
 its open to its low and its high, the nearer to its close last (the range
 bars' rule), and the monitor looks at each of the four.
+
+Saxo quotes a turbo about every 30 seconds, and fills an order at the live
+price. With ``fill_price`` "next" an order is priced at the turbo's next quote
+after the one standing at its fill, nearer to what WATA paid than the standing
+one. With ``wait_for_fresh_quote`` a position is judged only once its bid has
+changed after its purchase, as the position monitor judges it
+(src/trade/fresh_quote.py).
 """
 
 from dataclasses import dataclass, field
@@ -27,7 +34,7 @@ from functools import lru_cache
 from src.admin.analysis import exit_group
 from src.backtest.clock import BAR_SECONDS, TradingClock, ceil10, utc_iso
 from src.backtest.data import DayData, TurboSeries
-from src.backtest.execution import FixedFills
+from src.backtest.execution import FIXED, FixedFills
 from src.backtest.rules import (
     STOP_LOSS,
     TRAILING,
@@ -39,7 +46,8 @@ from src.backtest.rules import (
     units_for,
 )
 from src.backtest.selection import NotSelected, select_turbo
-from src.backtest.settings import BacktestSettings
+from src.backtest.settings import NEXT, BacktestSettings
+from src.trade.fresh_quote import FreshQuotes
 from src.trade.macro_calendar import Calendar, flat_reason, flat_window_at, read_calendar
 from src.trade.market_calendar import MarketCalendar, read_market_calendar
 
@@ -67,6 +75,8 @@ KNOCKED_OUT = "SaxoAPI"
 # Sold before a US release (the macro_news rule's flatten_minutes_before), as the position monitor does.
 FLAT_BEFORE_RELEASE = "flat_before_release"
 NO_QUOTE = "End of data (no quote)"
+# A fill priced at the turbo's next quote this far from the one standing then is said in the trade's notes.
+NOTED_REQUOTE_SHARE = 0.01
 
 
 @dataclass(frozen=True)
@@ -135,6 +145,8 @@ class Simulator:
         self.market_calendar = market_calendar if market_calendar is not None else us_market_calendar()
         self.cash = float(settings.capital)
         self.positions: list[Position] = []
+        # The positions whose bid is still the one standing at their purchase, by trade id.
+        self.fresh_quotes = FreshQuotes(enabled=settings.wait_for_fresh_quote)
         self.last_loss_at: float | None = None
         self.trader_free_at = 0.0
         self.trades: list[dict] = []
@@ -155,6 +167,7 @@ class Simulator:
     def run_day(self, day: DayData, events: list[SignalEvent]) -> dict:
         self._day = day
         self.fills.start_day(day.day.isoformat())
+        self.fresh_quotes.forget_except(position.trade_id for position in self.positions)
         self._day_percents = []
         self._entries_today = 0
         first_trade = len(self.trades)
@@ -290,11 +303,16 @@ class Simulator:
             self.trader_free_at = max(fill_at, self.trader_free_at)
             return
         bid, ask = quote
-        # Fixed: the quote at the fill, a slippage worse; measured: the quote when the order left, a drawn slippage worse.
-        price = round(self.fills.purchase(choice.ask, ask), 6)
+        later = self._next_quote(choice.series, fill_boundary)
+        fill_ask = later[1] if later is not None and later[1] is not None else ask
+        # Fixed: the ask at the fill (or the next one Saxo sent), a slippage worse; measured: the quote when the order
+        # left, a drawn slippage worse.
+        price = round(self.fills.purchase(choice.ask, fill_ask), 6)
         cost = units * price
         commission = self._commission(cost)
         notes = []
+        if ask > 0 and abs(fill_ask / ask - 1) >= NOTED_REQUOTE_SHARE:
+            notes.append(f"Priced at the turbo's next quote, {fill_ask:g}: the ask standing at the fill was {ask:g}")
         if cost + commission > self.cash + 1e-9:
             # The live sizing leaves one turbo aside and counts neither commission nor slippage.
             notes.append(
@@ -417,20 +435,24 @@ class Simulator:
                   (start + BAR_SECONDS, middle[1], False), (start + BAR_SECONDS, close, False))
         for moment, bid, at_open in points:
             perf = performance(position.open_price, bid)
+            # A bid still the one standing at the purchase is not judged, as the monitor does not (src/trade/fresh_quote.py).
+            judged = self.fresh_quotes.judged(position.trade_id, bid, position.opened_at, moment)
             decision = exit_decision(
                 self.settings, open_price=position.open_price, perf=perf, best_before=position.best,
                 day_percent=self.day_percent(),
-            )
+            ) if judged else None
             if decision is None:
                 flat = self._flat_window(moment)
                 if flat is not None:
                     # The monitor's last check (``_evaluate_positions``, ``keep_flat``): at the bid of that moment.
                     delay = self.fills.exit_seconds()
-                    self._sell(position, moment + delay if delay else moment, bid,
+                    later = self._next_quote(series, ceil10(moment))
+                    self._sell(position, moment + delay if delay else moment, later[0] if later is not None else bid,
                                f"Performance ({flat_reason(flat, self.settings.timezone)})", kind=FLAT_BEFORE_RELEASE)
                     return
-                position.best = max(position.best, perf)
-                position.worst = perf if position.worst is None else min(position.worst, perf)
+                if judged:
+                    position.best = max(position.best, perf)
+                    position.worst = perf if position.worst is None else min(position.worst, perf)
                 continue
             if at_open:
                 price = bid
@@ -488,7 +510,11 @@ class Simulator:
         quote = series.quote_at(boundary)
         if quote is not None:
             left = series.quote_at(ceil10(departed)) if departed is not None else None
-            self._sell(position, moment, quote[0], reason, kind="explicit", signal_id=signal_id,
+            later = self._next_quote(series, boundary)
+            bid = later[0] if later is not None else quote[0]
+            if quote[0] > 0 and abs(bid / quote[0] - 1) >= NOTED_REQUOTE_SHARE:
+                position.notes.append(f"Sold at the turbo's next quote, {bid:g}: the bid standing at the fill was {quote[0]:g}")
+            self._sell(position, moment, bid, reason, kind="explicit", signal_id=signal_id,
                        departure=left[0] if left is not None else None)
             return position.trade_id
         later = series.first_from(boundary)
@@ -499,6 +525,16 @@ class Simulator:
             self._sell(position, series.ts[later], series.bid_open[later], reason, kind="explicit", signal_id=signal_id)
             return position.trade_id
         return self._close_at_last(position, moment, NO_QUOTE, signal_id=signal_id)
+
+    def _next_quote(self, series: TurboSeries, boundary: int) -> tuple[float, float | None] | None:
+        """
+        The turbo's next quote after the one standing at ``boundary``, when orders
+        are priced at it (``fill_price``): not with measured fills, which price an
+        order at the quote when it left, as their measure compares.
+        """
+        if self.settings.fill_price != NEXT or self.settings.execution != FIXED:
+            return None
+        return series.next_quote(boundary)
 
     def _close_at_last(self, position: Position, moment: float, reason: str, *, signal_id: int | None = None) -> int:
         series = position.series

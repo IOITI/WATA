@@ -91,7 +91,8 @@ export function TextField({ label, path, hint, placeholder }: FieldProps & { pla
   )
 }
 
-export function SwitchField({ label, path, hint }: FieldProps) {
+/** A switch of the configuration. ``whenAbsent``: what the services do while the key is not there (off unless said). */
+export function SwitchField({ label, path, hint, whenAbsent = false }: FieldProps & { whenAbsent?: boolean }) {
   const { draft, update, disabled } = useDraft()
   const current = path ? getAt(draft, path) : undefined
 
@@ -99,7 +100,7 @@ export function SwitchField({ label, path, hint }: FieldProps) {
     <StretchSwitch
       label={label}
       description={hint}
-      checked={current === true}
+      checked={current === undefined || current === null ? whenAbsent : current === true}
       disabled={disabled || !path}
       onChange={(checked) => path && update(path, checked)}
     />

@@ -73,6 +73,24 @@ def test_a_change_that_cannot_be_made_is_refused_saying_why(changes, message):
         with_changes(from_config(EXAMPLE), changes)
 
 
+def test_a_new_run_waits_for_a_fresh_quote_and_is_priced_at_the_next_one_while_a_run_made_before_keeps_what_it_had():
+    live = from_config(EXAMPLE)
+    switched_off = json.loads(json.dumps(EXAMPLE))
+    switched_off["trade"]["config"]["position_management"]["wait_for_fresh_quote"] = False
+    # A run's settings.json of before: neither key.
+    before = {name: value for name, value in live.to_dict().items() if name not in ("wait_for_fresh_quote", "fill_price")}
+
+    assert (live.wait_for_fresh_quote, live.fill_price) == (True, "next")
+    assert from_config(switched_off).wait_for_fresh_quote is False
+    assert (BacktestSettings.from_dict(before).wait_for_fresh_quote, BacktestSettings.from_dict(before).fill_price) == (
+        False, "standing",
+    )
+    changed, _, _ = with_changes(live, {"fill_price": "standing", "wait_for_fresh_quote": False})
+    assert (changed.fill_price, changed.wait_for_fresh_quote) == ("standing", False)
+    with pytest.raises(InvalidSettings, match="one of standing, next"):
+        with_changes(live, {"fill_price": "later"})
+
+
 def test_a_run_keeps_its_settings_and_reads_them_back():
     settings = from_config(EXAMPLE, capital=12_345)
 

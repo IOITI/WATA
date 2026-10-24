@@ -417,6 +417,13 @@ class ConfigurationManager:
                         logger.error(error_msg)
                         raise ValueError(error_msg)
 
+            # Exits wait for a turbo's first quote after its purchase (src/trade/fresh_quote.py): on unless false
+            fresh_quote = self.get_config_value("trade.config.position_management.wait_for_fresh_quote")
+            if fresh_quote is not None and not isinstance(fresh_quote, bool):
+                error_msg = "Config field 'trade.config.position_management.wait_for_fresh_quote' must be a boolean"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
             watchlist_config = self.get_config_value("trade.config.watchlist_manager")
             if watchlist_config:
                 watchlist_numeric_validations = {

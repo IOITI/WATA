@@ -141,3 +141,44 @@ def test_a_day_from_the_database_is_read_by_instrument_and_period_only():
     assert [args[0] for _, args in bar_queries] == [3, 4, 5]
     assert coverage_query[1] == (datetime.fromtimestamp(start, timezone.utc), datetime.fromtimestamp(end, timezone.utc))
     assert db.closed
+
+
+def _turbo(bars) -> "TurboSeries":
+    from src.backtest.data import TurboRef, TurboSeries
+
+    turbo = TurboSeries(TurboRef(1, 61025835, "WarrantOpenEndKnockOut", "T1", "NASDAQ 100 TurboXL Long 29041.6342 Saxo",
+                                 "Saxo", 29_041.634, "long"))
+    for stamp, bid_open, bid_high, bid_low, bid_close, ask_open, ask_close in bars:
+        turbo.append(stamp, bid_open, bid_high, bid_low, bid_close, ask_open, ask_close)
+    return turbo
+
+
+def test_a_quote_change_is_read_from_the_bars_prices():
+    turbo = _turbo([
+        (0, 4.627, 4.627, 4.627, 4.627, 4.636, 4.636),     # nothing new
+        (10, 4.627, 5.083, 4.627, 5.083, 4.636, 5.092),    # a new quote
+        (20, 5.083, 5.083, 5.083, 5.083, 5.092, 5.095),    # the ask alone
+        (30, 5.083, 5.083, 5.083, 5.083, 5.095, 5.095),
+        (60, 5.2, 5.2, 5.2, 5.2, 5.209, 5.209),            # after a gap, on another quote
+        (70, 5.2, 5.2, 5.2, 5.2, 5.209, None),             # its ask gone
+    ])
+
+    assert [turbo.changed_inside(index) for index in range(6)] == [False, True, True, False, False, True]
+    assert [turbo.changed(index) for index in range(6)] == [False, True, True, False, True, True]
+
+
+def test_the_next_quote_is_the_first_saxo_sent_after_the_boundary_within_its_time():
+    turbo = _turbo([
+        (0, 4.627, 4.627, 4.627, 4.627, 4.636, 4.636),
+        (10, 4.627, 4.627, 4.627, 4.627, 4.636, 4.636),
+        (20, 4.627, 5.083, 4.627, 5.083, 4.636, 5.092),
+        (30, 5.083, 5.083, 5.083, 5.083, 5.092, 5.092),
+        (200, 5.3, 5.3, 5.3, 5.3, 5.309, 5.309),
+    ])
+
+    assert turbo.next_quote(0) == (5.083, 5.092)
+    assert turbo.next_quote(20) == (5.083, 5.092)
+    # The bar after a gap opened on a new quote, but its own open is what stands at its boundary.
+    assert turbo.next_quote(200) is None
+    assert turbo.next_quote(30) is None
+    assert turbo.next_quote(30, within=200) == (5.3, 5.309)

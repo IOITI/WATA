@@ -34,6 +34,7 @@ from src.trade.exceptions import InsufficientFundsException  # noqa: E402
 from src.trade.rules import TradingRule  # noqa: E402
 from src.trade.macro_calendar import flat_reason, read_calendar  # noqa: E402
 from src.backtest.simulator import Simulator  # noqa: E402
+from src.trade.fresh_quote import FreshQuotes  # noqa: E402
 from src.trade.exceptions import NoTurbosAvailableException  # noqa: E402
 
 with open("etc/config_example.json", encoding="utf-8") as config_file:
@@ -286,8 +287,9 @@ class OpenPosition:
         return None
 
 
-def live_exits(config: dict, open_price: float, bids: list[float], day_percent: float, log_path: str) -> list[str | None]:
-    """What the live monitor decides at each bid, until it sells."""
+def live_exits(config: dict, open_price: float, bids: list[float], day_percent: float, log_path: str,
+               *, bought_at: float | None = None) -> list[str | None]:
+    """What the live monitor decides at each bid, until it sells; ``bought_at``: a purchase a second before the first."""
     trading_rule = MagicMock()
     trading_rule.get_rule_config.side_effect = lambda rule_type: next(
         rule["rule_config"] for rule in config["trade"]["rules"] if rule["rule_type"] == rule_type
@@ -304,13 +306,17 @@ def live_exits(config: dict, open_price: float, bids: list[float], day_percent: 
     monitor._send_close_order = send_close_order
     monitor._record_closed_position_in_background = MagicMock()
 
+    base = {"OpenPrice": open_price, "CanBeClosed": True}
+    if bought_at is not None:
+        base["ExecutionTimeOpen"] = datetime.fromtimestamp(bought_at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     async def ticks():
         decided = []
-        for bid in bids:
+        for number, bid in enumerate(bids):
+            if bought_at is not None:
+                monitor._now = lambda number=number: bought_at + 1 + number
             before = len(sent)
-            await monitor._evaluate_positions({"p1": {
-                "PositionBase": {"OpenPrice": open_price, "CanBeClosed": True}, "PositionView": {"Bid": bid},
-            }})
+            await monitor._evaluate_positions({"p1": {"PositionBase": base, "PositionView": {"Bid": bid}}})
             decided.append(sent[-1] if len(sent) > before else None)
             if sent:
                 break
@@ -320,11 +326,17 @@ def live_exits(config: dict, open_price: float, bids: list[float], day_percent: 
     return asyncio.run(ticks())
 
 
-def mirrored_exits(config: dict, open_price: float, bids: list[float], day_percent: float) -> list[str | None]:
+def mirrored_exits(config: dict, open_price: float, bids: list[float], day_percent: float,
+                   *, bought_at: float | None = None) -> list[str | None]:
+    """What the simulator's monitor decides at each bid (``_look_at_bar``), its position bought at ``bought_at``."""
     settings = from_config(config)
+    fresh = FreshQuotes(enabled=settings.wait_for_fresh_quote)
     best = 0.0
     decided = []
-    for bid in bids:
+    for number, bid in enumerate(bids):
+        if bought_at is not None and not fresh.judged(1, bid, bought_at, bought_at + 1 + number):
+            decided.append(None)
+            continue
         perf = performance(open_price, bid)
         decision = exit_decision(settings, open_price=open_price, perf=perf, best_before=best, day_percent=day_percent)
         decided.append(None if decision is None else f"Performance ({decision.reason})")
@@ -363,6 +375,31 @@ def test_the_trailing_stop_switched_off_is_never_the_reason(tmp_path):
 
     assert decided == live_exits(config, 5.0, bids, 0.0, str(tmp_path))
     assert decided[-1].startswith("Performance (Stoploss")
+
+
+# ── a quote older than the purchase ──
+
+
+@pytest.mark.parametrize("wait, open_price, bids, day_percent", [
+    # 19 October 2026: bought at 5.055, Saxo's quote still 4.627, its next one 5.083.
+    (None, 5.055, [4.627, 4.627, 5.083, 4.6], 0.0),
+    (False, 5.055, [4.627, 4.627, 5.083], 0.0),
+    # A daily target met on a quote from before a fall, and once the quote moved.
+    (None, 5.0, [5.3, 5.3, 4.95, 5.4], 0.0),
+    (False, 5.0, [5.3, 4.95], 0.0),
+])
+def test_a_position_just_bought_is_judged_from_the_same_quote_as_live(wait, open_price, bids, day_percent, tmp_path):
+    config = config_with(day_trading={"percent_profit_wanted_per_days": 5})
+    config["trade"]["config"]["position_management"]["performance_thresholds"]["stoploss_percent"] = -7
+    if wait is not None:
+        config["trade"]["config"]["position_management"]["wait_for_fresh_quote"] = wait
+    bought = paris("10:38:37").timestamp()
+
+    live = live_exits(config, open_price, bids, day_percent, str(tmp_path), bought_at=bought)
+
+    assert mirrored_exits(config, open_price, bids, day_percent, bought_at=bought) == live
+    # Waiting, nothing is sold before the quote changed; the monitor of before sold on the first bid.
+    assert (live[0] is None) is (wait is not False)
 
 
 # ── sold before a US release ──

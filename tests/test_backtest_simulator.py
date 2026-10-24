@@ -27,10 +27,12 @@ DAY = date(2026, 10, 14)
 with open("etc/config_example.json", encoding="utf-8") as config_file:
     LIVE = from_config(json.load(config_file))
 
-# The live rules, without what makes the arithmetic of a test long: no scaling, no trailing stop, no cooldown.
+# The live rules, without what makes the arithmetic of a test long: no scaling, no trailing stop, no cooldown, and
+# the quote standing at a fill taken for the price and judged at once (the tests of the next quote say otherwise).
 PLAIN = replace(
     LIVE, time_scaling_enabled=False, confidence_enabled=False, trailing_enabled=False, cooldown_after_loss_minutes=0,
     max_trades_per_day=0, day_profit_target=50.0, no_entry_above_day_profit=50.0, capital=10_000.0,
+    fill_price="standing", wait_for_fresh_quote=False,
 )
 
 
@@ -461,3 +463,72 @@ def test_without_the_sale_before_a_release_a_position_is_held_through_it_as_befo
 
     (trade,) = simulator.trades
     assert trade["exit"]["reason"] == "Explicit Close (All)"
+
+
+# ── Saxo's next quote ──
+
+
+# 19 October 2026 (here on the test's day): Saxo quoted the turbo every 30 s or so, at 4.627 from 10:38:10 UTC
+# while the index rose, and at 5.083 from 10:38:40. WATA bought at 10:38:37 and paid 5.055.
+def requoted_turbo() -> TurboSeries:
+    bars = flat(4.638, 1) + [(4.638, 4.638, 4.627, 4.627)] + flat(4.627, 0.5) + [(4.627, 5.083, 4.627, 5.083)]
+    bars += flat(5.083, 0.5) + [(5.083, 5.292, 5.083, 5.292)] + flat(5.292, 600)
+    return series(2, "long", 29_041.634, bars, start="12:37:00", spread=0.009, issuer="Saxo")
+
+
+NEXT_QUOTE = replace(PLAIN, fill_price="next", wait_for_fresh_quote=True, stoploss_percent=-7)
+
+
+def test_an_order_is_priced_at_the_turbos_next_quote_and_judged_from_it():
+    simulator = run(day_of(requoted_turbo()), [signal(1, "long", "12:38:36"), close_of_day()], NEXT_QUOTE)
+
+    (trade,) = simulator.trades
+    assert trade["entry"]["price"] == pytest.approx(5.092)
+    assert (trade["entry"]["ask"], trade["entry"]["bid"]) == (pytest.approx(4.636), 4.627)
+    assert trade["notes"][0] == "Priced at the turbo's next quote, 5.092: the ask standing at the fill was 4.636"
+    # The bid standing at the purchase was never set against the price paid: no stop, no worst of -9 %.
+    assert trade["exit"]["reason"] == "Explicit Close (All)"
+    assert trade["min_performance_percent"] == pytest.approx(-0.18)
+
+
+def test_without_the_wait_the_quote_standing_at_the_purchase_sells_as_the_monitor_of_before_did():
+    simulator = run(day_of(requoted_turbo()), [signal(1, "long", "12:38:36"), close_of_day()],
+                    replace(NEXT_QUOTE, wait_for_fresh_quote=False))
+
+    (trade,) = simulator.trades
+    assert trade["exit"]["reason"] == "Performance (Stoploss (-7%) hit at -9.13%)"
+    assert trade["exit"]["bid"] == 4.627
+
+
+def test_a_run_made_before_keeps_the_quote_standing_at_the_fill():
+    simulator = run(day_of(requoted_turbo()), [signal(1, "long", "12:38:36"), close_of_day()], replace(PLAIN, stoploss_percent=-7))
+
+    (trade,) = simulator.trades
+    assert trade["entry"]["price"] == pytest.approx(4.636)
+    assert trade["notes"] == []
+
+
+def test_a_sale_is_priced_at_the_turbos_next_quote_too():
+    simulator = run(day_of(requoted_turbo()), [signal(1, "long", "12:38:36"), signal(2, "close-position", "12:39:05")],
+                    NEXT_QUOTE)
+
+    (trade,) = simulator.trades
+    assert trade["exit"]["bid"] == 5.292
+    assert trade["notes"][-1] == "Sold at the turbo's next quote, 5.292: the bid standing at the fill was 5.083"
+
+
+def test_a_turbo_saxo_did_not_quote_again_is_priced_at_its_standing_quote():
+    simulator = run(day_of(series(2, "long", 24_800, flat(5.0, 840))), [signal(1, "long", "09:00"), close_of_day()], NEXT_QUOTE)
+
+    (trade,) = simulator.trades
+    assert trade["entry"]["price"] == pytest.approx(5.05)
+    assert trade["exit"]["bid"] == 5.0
+
+
+def test_measured_fills_keep_the_quote_their_measure_compares():
+    turbo = requoted_turbo()
+    boundary = ceil10(at("12:38:37"))
+
+    assert Simulator(NEXT_QUOTE, CLOCK)._next_quote(turbo, boundary) == (5.083, pytest.approx(5.092))
+    assert Simulator(replace(NEXT_QUOTE, execution="measured"), CLOCK)._next_quote(turbo, boundary) is None
+    assert Simulator(replace(NEXT_QUOTE, fill_price="standing"), CLOCK)._next_quote(turbo, boundary) is None

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.38.0 - A position judged from Saxo's next quote, and backtests priced at it
+
+**Release date:** not released yet
+
+From the record. Saxo sends the turbos WATA trades a new quote about every 30 seconds (40 at the 95th percentile on the turbos recorded from 13 to 20 October), while it fills an order at the live price. On 19 October a long was bought at 10:38:37 for 5.055 while Saxo still quoted the turbo at 4.627, its quote of 10:38:10, from before the index rose 25 points. The monitor set the one against the other, saw −8.47 % and sold; the sale filled at +0.51 %. From July to October, six daily profit targets were "met" 1 to 6 seconds after a purchase, on gains of +0.7 to +4.2 % that filled at −0.07 to −1.96 %. The backtests made the opposite mistake: they bought at the quote standing at the fill, on average 0.48 % under what WATA paid (8.3 % that day).
+
+- **A position just bought is judged from Saxo's next quote** (`src/trade/fresh_quote.py`). Seen within two minutes of its opening, it is not judged on its bid until that bid changes: no stop, take-profit, trailing stop or daily target, and its best result is not raised. A quote that does not change says nothing new, so waiting for it costs no information. The day's close and the sale before a US release are not held back. On unless `position_management.wait_for_fresh_quote` is false: a switch on the Configuration page, shown on while the key is absent.
+- **Backtests price an order at the turbo's next quote**: the first quote Saxo sent after the one standing at the fill, within two minutes, for a purchase and for a sale by a signal, by the day's close or before a release; an exit of the monitor still sells at the bid that decided it. On WATA's 31 purchases of 13 to 20 October, the next quote is 0.04 % from the price paid on average and the standing one 0.48 % (median error 0.21 % against 0.34 %, the largest 1.46 % against 8.3 %).
+  - A new run is priced at the next quote and judged as the monitor judges; both are settings of the form.
+  - A run made before keeps the standing quote, and is marked as made with other code.
+  - With the next quote and the wait switched off, a run replays the monitor of before, its false exits included.
+  - Measured fills keep pricing from the quote when the order left, which is what their measure compares.
+  - A fill 1 % or more from the standing quote is said in the trade's notes.
+
+After deploying: make a rule's reference run again before reading its days on paper beside it, so that both are priced alike.
+
+**Verification status:**
+- 2,532 Python tests pass, 38 of them new: the module, the monitor on the record's cases (the stop of 19 October not taken, a target not met on a quote from before a fall, a stop after the next quote taken at once, a position held since before a restart judged at once, the sale before a release still made), parity with the backtest with the wait on and off, the next quote read from a turbo's bars, the 19 October trade replayed on a test day (bought at the next quote 5.092 where WATA paid 5.055; without the wait, sold at −9.13 % as the monitor of before sold at −8.47 %), the settings of new and older runs, the configuration's check.
+- 1,048 interface tests pass, 1 of them new (a switch shown on while its key is absent); lint and type checks are clean.
+- Not seen: against Saxo, nor a backtest of the server's days (they run the deployed code).
+
 ## v0.37.0 - Going live held to its readiness, and sweeps of the signals' delay
 
 **Release date:** not released yet

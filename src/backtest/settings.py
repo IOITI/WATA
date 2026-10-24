@@ -17,12 +17,20 @@ from dataclasses import asdict, dataclass, fields, replace
 
 from src.backtest.execution import EXECUTIONS, FIXED
 from src.ta_engine.settings import TaEngineSettings
+from src.trade.fresh_quote import wait_for_fresh_quote
 from src.trade.macro_calendar import NewsRule
 
 _TIME_OF_DAY = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
 # How a run's fills are taken: at the bid that crossed a stop, or at the stop's own price.
 STOP_FILLS = ("worst", "level")
+# The quote an order is priced at: the one standing when it is filled, or the next one Saxo sends the turbo.
+# Saxo quotes a turbo about every 30 s, and fills an order at the live price: of WATA's 31 purchases of
+# 13-20 October 2026, the standing ask was 0.48 % under the price paid on average (8.3 % on 19 Oct), the next
+# one 0.04 % (src/backtest/data.py ``next_quote``). With measured fills, an order is priced at the quote when
+# it left plus a drawn slippage, as the measure compares, whatever this says.
+STANDING, NEXT = "standing", "next"
+FILL_PRICES = (STANDING, NEXT)
 
 # The account every run starts with unless it says another: one that pays for a turbo at
 # each entry. The live balance, which may not (21.82 € paid for none of 34 entries on
@@ -111,6 +119,9 @@ FIELDS = (
     # Sold before a US release (the macro_news rule's flatten_minutes_before): 0 keeps what is held, as before.
     Field("news_flatten_minutes_before", "exits", "integer", "Sell what is held from this long before a release", 0, 120,
           unit="min", source="trade.rules.macro_news.flatten_minutes_before"),
+    # Exits wait for the turbo's first quote after the purchase (src/trade/fresh_quote.py): off, the monitor of before.
+    Field("wait_for_fresh_quote", "exits", "boolean", "Exits wait for the turbo's first quote after the purchase",
+          source="trade.config.position_management.wait_for_fresh_quote"),
     # ── the turbo bought ──
     Field("turbo_min_price", "turbo", "number", "Turbos priced from", 0.01, 10_000,
           source="trade.config.turbo_preference.price_range.min"),
@@ -135,6 +146,8 @@ FIELDS = (
     Field("order_seconds", "execution", "number", "From an order to its fill", 0, 600, unit="s"),
     Field("close_wait_seconds", "execution", "number", "From a sale to the next purchase", 0, 600, unit="s"),
     Field("stop_fill", "execution", "choice", "A stop crossed inside ten seconds sells at", choices=STOP_FILLS),
+    Field("fill_price", "execution", "choice", "An order is priced at the turbo's quote standing then, or at its next",
+          choices=FILL_PRICES),
     Field("slippage", "execution", "number", "Worse price per turbo on each fill", 0, 1000),
     Field("commission_per_order", "execution", "number", "Commission per order", 0, 1000, unit="€"),
     Field("commission_percent", "execution", "number", "Commission on the amount of each order", 0, 10, unit="%"),
@@ -200,6 +213,8 @@ class BacktestSettings:
     trailing_enabled: bool = False
     trailing_activation_percent: float = 5
     trailing_drawdown_percent: float = 8
+    # Off for the runs made before it existed; a new run takes the live configuration's (on unless false).
+    wait_for_fresh_quote: bool = False
     # The turbo.
     turbo_min_price: float = 4
     turbo_max_price: float = 15
@@ -220,6 +235,8 @@ class BacktestSettings:
     order_seconds: float = 1.0
     close_wait_seconds: float = 0.5
     stop_fill: str = "worst"
+    # The standing quote for the runs made before it existed; a new run is priced at the next one (from_config).
+    fill_price: str = STANDING
     slippage: float = 0.0
     commission_per_order: float = 0.0
     commission_percent: float = 0.0
@@ -292,6 +309,8 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
     """
     The live rules and settings, read where and as the trader, the position
     monitor, the scheduler and the TA engine read them, with their defaults.
+    Of the backtest's own, a new run starts with ``DEFAULT_CAPITAL`` and is
+    priced at the turbo's next quote, which WATA's real fills are nearer to.
     """
     general = _section(config, "trade", "config", "general")
     day_trading = _rule(config, "day_trading") or {}
@@ -300,6 +319,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
     risk = _rule(config, "risk_management") or {}
     closed = (_rule(config, "market_closed_dates") or {}).get("market_closed_dates") or []
     indices = ((_rule(config, "allowed_indices") or {}).get("indice_ids") or {}).keys()
+    position_management = _section(config, "trade", "config", "position_management")
     thresholds = _section(config, "trade", "config", "position_management", "performance_thresholds")
     trailing = thresholds.get("trailing_stop") or {}
     price_range = _section(config, "trade", "config", "turbo_preference", "price_range")
@@ -350,6 +370,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         trailing_enabled=bool(trailing.get("enabled", False)),
         trailing_activation_percent=trailing.get("activation_percent", defaults.trailing_activation_percent),
         trailing_drawdown_percent=trailing.get("drawdown_percent", defaults.trailing_drawdown_percent),
+        wait_for_fresh_quote=wait_for_fresh_quote(position_management),
         turbo_min_price=price_range.get("min", defaults.turbo_min_price),
         turbo_max_price=price_range.get("max", defaults.turbo_max_price),
         funds_percent=buying.get("max_account_funds_to_use_percentage", 100),
@@ -375,6 +396,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
             for band in confidence.get("scaling_rules", [])
         ),
         capital=DEFAULT_CAPITAL if capital is None else float(capital),
+        fill_price=NEXT,
         history_days=engine.history_days,
         restart_time=engine.restart_time,
     )

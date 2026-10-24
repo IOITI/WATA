@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { JsonObject } from '@/lib/types'
 
 import { getAt, setAt } from './configModel'
-import { DraftProvider, NumberField } from './fields'
+import { DraftProvider, NumberField, SwitchField } from './fields'
 import { RowsField } from './listFields'
 
 const PATH = ['trade', 'rules', 0, 'max_trades_per_day'] as const
@@ -163,5 +163,45 @@ describe('an optional number of the configuration', () => {
     expect(getAt(draft, ['reporting', 'signal_silence_minutes'])).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
     expect([...reported.values()].filter(Boolean)).toEqual([])
+  })
+})
+
+function SwitchForm({ onDraft }: { onDraft: (draft: JsonObject) => void }) {
+  // position_management.wait_for_fresh_quote: on while the configuration does not have it.
+  const [draft, setDraft] = useState<JsonObject>({ trade: { config: { position_management: {} } } })
+  onDraft(draft)
+  return (
+    <DraftProvider
+      value={{
+        draft,
+        disabled: false,
+        reportInvalid: () => {},
+        update: (path, value) => setDraft((current) => setAt(current, path, value) as JsonObject),
+      }}
+    >
+      <SwitchField
+        label="Wait for a quote newer than the purchase"
+        path={['trade', 'config', 'position_management', 'wait_for_fresh_quote']}
+        whenAbsent
+      />
+      <SwitchField label="Broker-side protective stop" path={['trade', 'config', 'position_management', 'protective_stop', 'enabled']} />
+    </DraftProvider>
+  )
+}
+
+describe('a switch of the configuration', () => {
+  it('shows what the services do while its key is not there, and writes it once switched', async () => {
+    const user = userEvent.setup()
+    let draft: JsonObject = {}
+    render(<SwitchForm onDraft={(next) => (draft = next)} />)
+    const fresh = screen.getByRole('switch', { name: 'Wait for a quote newer than the purchase' })
+
+    expect(fresh).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('switch', { name: 'Broker-side protective stop' })).toHaveAttribute('aria-checked', 'false')
+    expect(getAt(draft, ['trade', 'config', 'position_management', 'wait_for_fresh_quote'])).toBeUndefined()
+
+    await user.click(fresh)
+    expect(getAt(draft, ['trade', 'config', 'position_management', 'wait_for_fresh_quote'])).toBe(false)
+    expect(fresh).toHaveAttribute('aria-checked', 'false')
   })
 })

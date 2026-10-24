@@ -105,6 +105,21 @@ class TestProtectiveStopValidation:
             ConfigurationManager(path)
 
 
+@pytest.mark.parametrize("value, accepted", [(True, True), (False, True), ("yes", False), (1, False)])
+def test_waiting_for_a_fresh_quote_is_switched_by_a_boolean(tmp_path, value, accepted):
+    with open("tests/test_config.json") as config_file:
+        config = json.load(config_file)
+    config["trade"]["config"]["position_management"]["wait_for_fresh_quote"] = value
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+
+    if accepted:
+        assert ConfigurationManager(str(path)).get_config_value("trade.config.position_management.wait_for_fresh_quote") is value
+    else:
+        with pytest.raises(ValueError, match="wait_for_fresh_quote' must be a boolean"):
+            ConfigurationManager(str(path))
+
+
 def _config_with_market_timezone(tmp_path, timezone_name):
     with open("etc/config_example.json", encoding="utf-8") as config_file:
         config = json.load(config_file)

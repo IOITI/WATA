@@ -41,12 +41,12 @@ def paris(*moment) -> float:
 
 
 def listed(position_id="p1", *, bid=10.0, can_be_closed=True, source_order="buy-1", uic=101) -> dict:
-    """A position as the stream gives it."""
+    """A position as the stream gives it, opened before any clock of these tests: judged on its first bid."""
     return {position_id: {
         "PositionId": position_id,
         "PositionBase": {
             "Amount": 10, "Uic": uic, "AssetType": "WarrantKnockOut", "CanBeClosed": can_be_closed, "Status": "Open",
-            "OpenPrice": 10.0, "SourceOrderId": source_order, "ExecutionTimeOpen": "2026-10-14T12:26:48Z",
+            "OpenPrice": 10.0, "SourceOrderId": source_order, "ExecutionTimeOpen": "1970-01-01T00:00:00Z",
             "RelatedOpenOrders": [],
         },
         "PositionView": {"Bid": bid},

@@ -247,6 +247,12 @@ function SettingsForm({ draft }: { draft: JsonObject }) {
             />
           </FieldGrid>
           <SwitchField
+            label="Wait for a quote newer than the purchase"
+            hint="Saxo quotes a turbo about every 30 s: a position just bought is judged from its next quote, not the one standing before its purchase"
+            path={[...POSITION_MANAGEMENT, 'wait_for_fresh_quote']}
+            whenAbsent
+          />
+          <SwitchField
             label="Broker-side protective stop"
             hint="A stop order placed at Saxo with each position. Not yet tested against Saxo"
             path={[...POSITION_MANAGEMENT, 'protective_stop', 'enabled']}

@@ -54,6 +54,7 @@ from .exceptions import (
     saxo_error_parts,
 )
 from .close_intents import CloseIntent, CloseIntents
+from .fresh_quote import FreshQuotes, opened_at, wait_for_fresh_quote
 from .macro_calendar import Calendar, NewsRule, flat_reason, flat_window_at
 from .order_tracker import (
     CANCEL,
@@ -1672,6 +1673,8 @@ class AsyncPerformanceMonitor:
         self.trading_start_hour = start_hour if isinstance(start_hour, int) and not isinstance(start_hour, bool) else None
         # What is to be sold, kept until Saxo no longer lists it (src/trade/close_intents.py).
         self.close_intents = CloseIntents()
+        # The positions just bought whose quote is older than their purchase, not judged on it yet (src/trade/fresh_quote.py).
+        self.fresh_quotes = FreshQuotes(enabled=wait_for_fresh_quote(self.perf_config))
         # Since when each managed position has been without a price, and those already said.
         self._missing_price_since: dict[str, float] = {}
         self._missing_price_said: set[str] = set()
@@ -1843,6 +1846,7 @@ class AsyncPerformanceMonitor:
                 if pid not in managed_ids:
                     del known[pid]
         self._missing_price_said &= managed_ids
+        self.fresh_quotes.forget_except(managed_ids)
 
         if not db_positions:
             logger.info("No open positions to check.")
@@ -1867,6 +1871,23 @@ class AsyncPerformanceMonitor:
             self._live_values[pid] = (current_bid, perf_pct, datetime.now(pytz.utc))
 
             self._log_performance_detail(pid, api_pos, perf_pct)
+
+            waiting = self.fresh_quotes.waiting.get(pid)
+            if not self.fresh_quotes.judged(pid, current_bid, opened_at(api_pos), now):
+                # Its bid may be older than its purchase: not judged on it, its best not raised. What comes with time still sells.
+                if waiting is None:
+                    logger.info("Pos %s: bid %.4f may be older than the purchase at %.4f: its exits wait for Saxo's next quote.",
+                                pid, current_bid, open_price)
+                if pid in self.close_intents:
+                    self.close_intents.quoted(pid, current_bid, now)
+                    continue
+                flat = self._flat_reason(now)
+                if flat:
+                    self.close_intents.want(pid, f"Performance ({flat})", now, action=db_pos.get("action"), urgent=True)
+                continue
+            if waiting is not None:
+                logger.info("Pos %s: Saxo's first quote after the purchase, %.0f s after the position was seen: bid %.4f.",
+                            pid, now - waiting.since, current_bid)
 
             max_perf = await self._get_max_perf(pid)
             if max_perf is not None and perf_pct > max_perf:

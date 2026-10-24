@@ -29,6 +29,9 @@ from src.backtest.clock import BAR_SECONDS
 
 NAN = float("nan")
 LONG, SHORT = "long", "short"
+# How long the next quote of a turbo is looked for (Saxo's came every 30 s, 80 s apart at most on 19 October
+# 2026): without one by then, the quote standing is the price.
+NEXT_QUOTE_SECONDS = 120
 # Buckets of the recorder's coverage for a day that has no row of its own: told by the bars themselves.
 UNKNOWN_COVERAGE = None
 
@@ -108,6 +111,38 @@ class TurboSeries:
             return None
         ask = self.ask_open[index]
         return self.bid_open[index], None if math.isnan(ask) else ask
+
+    def changed_inside(self, index: int) -> bool:
+        """
+        Whether Saxo sent the turbo a new quote during the bar ``index``, as its
+        prices tell it: they agree with the recorder's count of updates in
+        99.8 % of the bars of October 2026.
+        """
+        if self.bid_high[index] != self.bid_low[index] or self.bid_open[index] != self.bid_close[index]:
+            return True
+        ask_open, ask_close = self.ask_open[index], self.ask_close[index]
+        return math.isnan(ask_open) != math.isnan(ask_close) or (not math.isnan(ask_open) and ask_open != ask_close)
+
+    def changed(self, index: int) -> bool:
+        """A new quote during the bar ``index``, or one it opened on after a gap (not the close of the bar before)."""
+        return self.changed_inside(index) or (index > 0 and self.bid_open[index] != self.bid_close[index - 1])
+
+    def next_quote(self, boundary: int, within: int = NEXT_QUOTE_SECONDS) -> tuple[float, float | None] | None:
+        """
+        The quote Saxo sent the turbo after the one standing at ``boundary``: the
+        bid and ask at the end of the first bar from there in which it changed,
+        within ``within`` seconds; None when it did not change in that time.
+        The first bar's open is the quote standing at ``boundary``: only what
+        changed during it counts.
+        """
+        first = self.first_from(boundary)
+        index = first
+        while index < len(self.ts) and self.ts[index] < boundary + within:
+            if self.changed_inside(index) if index == first else self.changed(index):
+                ask = self.ask_close[index]
+                return self.bid_close[index], None if math.isnan(ask) else ask
+            index += 1
+        return None
 
     def alive_at(self, boundary: int) -> bool:
         """Recorded around ``boundary``: its first bar is not after it, its last not before it."""

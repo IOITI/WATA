@@ -152,6 +152,7 @@ flowchart TD
    - Evaluate stop-loss, take-profit, and trailing-stop rules; receive scheduled operational events through `trading-ops`
    - Each price update is checked on its own task, always on the latest prices; a slow check or a closure in progress never delays reading the stream
    - Stop-loss checks keep working from the last known state if PostgreSQL is slow or unreachable
+   - A position just bought is judged from Saxo's next quote of its turbo: Saxo quotes a turbo about every 30 s and fills an order at the live price, so the quote standing when a position appears is often older than its purchase, and set against the price paid shows a gain or a loss that never was (`position_management.wait_for_fresh_quote`, on unless set to false). The day's close and the sale before a US release are not held back
    - The database is reconciled with Saxo when a position leaves the stream and every `reconcile_interval_seconds` (30 s by default), not on every update
    - Optionally, a wider sell stop is left at the broker for each new position (`protective_stop`, off by default) so that a Position Monitor outage is survivable
 
@@ -908,8 +909,9 @@ What it does on the server:
 
   A refused entry closes nothing. With a cash reserve, an entry that failed (no turbo, not enough cash, not quoted when its order arrived) still sells what is held, as the trader does. The trader takes one signal at a time: a signal is decided once the orders of the one before are filled.
 - **The turbo bought** is chosen by the trader's own code among the turbos recorded and quoted at that moment: the twenty closest to their knock-out level, then the lowest bid in the price range. Its size is the trader's: the share of the account an order may use, scaled by the time of day and by the confidence, in whole turbos with one left unbought.
-- **The Position Monitor's exits**, checked on the turbo's bid at every ten seconds: stop-loss, take-profit, trailing stop, then the day's target, then the sale before a US release when the `macro_news` rule gives `flatten_minutes_before`. Then come the closing signals and the close of the day. A turbo whose quotes stopped for good while the recorder listened, its bid fallen under a quarter of the day's high, is taken for knocked out, at nothing.
+- **The Position Monitor's exits**, checked on the turbo's bid at every ten seconds: stop-loss, take-profit, trailing stop, then the day's target, then the sale before a US release when the `macro_news` rule gives `flatten_minutes_before`. A position just bought is judged once its bid has changed after the purchase, as the monitor judges it (`wait_for_fresh_quote`, from the live configuration). Then come the closing signals and the close of the day. A turbo whose quotes stopped for good while the recorder listened, its bid fallen under a quarter of the day's high, is taken for knocked out, at nothing.
 - **A price at a moment** is the first ten-second bar recorded at or after it: at most ten seconds late, never early. Inside ten seconds the bid is taken to go from the open to the low, then the high, then the close (the high first when it closed lower).
+- **An order is priced at the turbo's next quote**: Saxo sends a turbo a new quote about every 30 s and fills an order at the live price, which the quote standing then has not caught up with. Of WATA's 31 purchases of 13 to 20 October 2026, the standing ask was on average 0.48 % under the price paid (8.3 % on 19 October), the next quote 0.04 %. Runs made before this kept the standing quote, and are marked made with other code.
 
 | Assumption (step 4) | Default | Meaning |
 |---|---|---|
@@ -918,6 +920,7 @@ What it does on the server:
 | From an order to its fill | 1 s | The fill is the quote of the next ten seconds after that |
 | From a sale to the next purchase | 0.5 s | When the trader sells before it buys |
 | A stop crossed inside ten seconds sells at | the worst bid | `worst`: the bid that crossed it; `level`: the stop's own price, or the first tick under it |
+| An order is priced at | the next quote | `next`: the turbo's first quote after the one standing at the fill (within two minutes); `standing`: the one standing then, as runs did before. Measured fills price from the quote when the order left, whatever this says |
 | Slippage, commissions | 0 | Taken from each fill; Saxo's commissions are not known here |
 | Order times and prices | fixed | `fixed`: the values above for every order; `measured`: each order's time to its fill and its price against the quote when it left, drawn from WATA's own orders of the last three months (10 of each at least), the same draws each time the run is made |
 
