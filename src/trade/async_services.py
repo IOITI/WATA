@@ -18,6 +18,7 @@ import math
 import os
 import re
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
@@ -52,6 +53,8 @@ from .exceptions import (
     OrderPlacementError,
     saxo_error_parts,
 )
+from .close_intents import CloseIntent, CloseIntents
+from .macro_calendar import Calendar, NewsRule, flat_reason, flat_window_at
 from .order_tracker import (
     CANCEL,
     CLOSE,
@@ -88,11 +91,56 @@ CLOSED_POSITION_STATUSES = ("Closed", "Closing")
 # and it leaves the DB alone for a while instead of paying that wait on each check.
 MANAGED_STATE_DB_TIMEOUT_SECONDS = 1.0
 DB_RETRY_AFTER_FAILURE_SECONDS = 5.0
+# A managed position without a price for this long is said: no exit can be decided for it.
+MISSING_PRICE_ALERT_SECONDS = 30.0
+# How long after the scheduler's close of the day the monitor sells what is still held.
+END_OF_DAY_GRACE_SECONDS = 60
+END_OF_DAY_REASON = "Explicit Close (End of day)"
+# How long a position Saxo lists has to be without a row before it is taken for one WATA lost: the
+# trader looks for the position of its order for about 11 s before giving up, then writes its row.
+ADOPT_AFTER_SECONDS = 60.0
 
 
 # ──────────────────────────────────────────────
 #  Utilities
 # ──────────────────────────────────────────────
+
+def clock_time(value):
+    """A time of day written "21:55", or None for anything else."""
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except (TypeError, ValueError):
+        return None
+
+
+def lost_position_row(pos: dict, action: str | None) -> dict:
+    """The row of a position Saxo lists, as the trader writes one for a position it bought (execute_trade_signal)."""
+    pos_base = pos.get("PositionBase") or {}
+    display = pos.get("DisplayAndFormat") or {}
+    amount = pos_base.get("Amount") or 0
+    open_price = pos_base.get("OpenPrice") or 0
+    if action not in ("long", "short"):
+        words = f" {(display.get('Description') or '').lower()} "
+        action = "short" if " short " in words else "long" if " long " in words else None
+    return {
+        "action": action,
+        "position_id": pos.get("PositionId"),
+        "position_amount": amount,
+        "position_open_price": open_price,
+        "position_total_open_price": amount * open_price,
+        "position_status": "Open",
+        "position_kind": "main",
+        "execution_time_open": pos_base.get("ExecutionTimeOpen"),
+        "order_id": pos_base.get("SourceOrderId"),
+        "related_order_id": [
+            str(related["OrderId"]) for related in pos_base.get("RelatedOpenOrders") or [] if related.get("OrderId")
+        ],
+        "instrument_name": display.get("Description"),
+        "instrument_symbol": display.get("Symbol"),
+        "instrument_uic": pos_base.get("Uic"),
+        "instrument_currency": display.get("Currency"),
+    }
+
 
 def backoff_gaps(total_seconds: float, first_gap: float = 0.1, max_gap: float = 1.0) -> list[float]:
     """Doubling waits (capped at ``max_gap``) that add up to ``total_seconds``."""
@@ -831,6 +879,22 @@ class AsyncInstrumentService:
 #  Async OrderService
 # ──────────────────────────────────────────────
 
+def with_request_id(endpoint, request) -> None:
+    """
+    Give a request to the order endpoint an ``x-request-id`` of its own: Saxo
+    refuses an order request identical to one of the last 15 seconds (409)
+    unless each carries its own, and a sale tried again after a refusal is
+    identical. The id is the one the request is kept under (``order_request``);
+    the client sends the same one again when Saxo asked it to wait (429).
+    Never raises: it is on the way to the sale.
+    """
+    try:
+        request_id = request.request_id if request is not None else str(uuid.uuid4())
+        endpoint.HEADERS = {**(getattr(endpoint, "HEADERS", None) or {}), "x-request-id": request_id}
+    except Exception as e:
+        logger.warning("Could not give an order request its id: %r", e)
+
+
 class AsyncOrderService:
     """
     Everything WATA asks of Saxo's order endpoint goes through here, and each
@@ -853,6 +917,7 @@ class AsyncOrderService:
         final_payload = tie_account_to_order(self.account_key, pre_order)
         req = tr.orders.Order(data=final_payload)
         request = start_request(PLACE, final_payload, context)
+        with_request_id(req, request)
 
         try:
             result = await self.api_client.request(req)
@@ -910,8 +975,10 @@ class AsyncOrderService:
         }
         final_payload = tie_account_to_order(self.account_key, {"PositionId": position_id, "Orders": [stop_order]})
         request = start_request(PLACE, final_payload, context)
+        req = tr.orders.Order(data=final_payload)
+        with_request_id(req, request)
         try:
-            result = await self.api_client.request(tr.orders.Order(data=final_payload)) or {}
+            result = await self.api_client.request(req) or {}
         except BaseException as e:
             request_failed(self.order_tracker, request, e)
             raise
@@ -940,6 +1007,7 @@ class AsyncOrderService:
         logger.info("Cancelling order: %s", order_id)
         req = tr.orders.CancelOrders(OrderIds=order_id, params={"AccountKey": self.account_key})
         request = start_request(CANCEL, {"OrderIds": order_id}, context, order_ids=order_id)
+        with_request_id(req, request)
         try:
             result = await self.api_client.request(req)
             request_accepted(self.order_tracker, request, response=result)
@@ -986,6 +1054,12 @@ class AsyncPositionService:
         elif not response:
             return {"__count": 0, "Data": []}
         return response
+
+    async def get_open_orders(self) -> list[dict]:
+        """The orders still working on the account: a sale accepted but not filled yet is one of them."""
+        req = pf.orders.GetOpenOrdersMe(params={"ClientKey": self.client_key, "FieldGroups": "DisplayAndFormat"})
+        response = await self.api_client.request(req)
+        return (response or {}).get("Data") or []
 
     async def get_closed_positions(self, top: int | None = None, skip: int = 0) -> dict:
         if top is None:
@@ -1526,6 +1600,7 @@ class AsyncPerformanceMonitor:
         send_telegram_fn,  # async callable(message: str) -> None
         trigger_daily_stats_fn=None,  # optional async callable() -> None
         order_tracker=None,
+        order_requests=None,  # what WATA asked of Saxo's order endpoint (AsyncDbOrderRequestManager), read
     ):
         self.position_service = position_service
         self.order_service = order_service
@@ -1536,6 +1611,11 @@ class AsyncPerformanceMonitor:
         self.trigger_daily_stats = trigger_daily_stats_fn
         # Keeps what became of each sell order for the admin interface, in the background.
         self.order_tracker = order_tracker
+        # Read to tell WATA's sales from others and to find positions WATA bought but lost.
+        self.order_requests = order_requests
+        # Positions at Saxo without a row: since when each was seen so, and those found not to be WATA's.
+        self._unrecorded_since: dict[str, float] = {}
+        self._not_wata_positions: set[str] = set()
         self._last_daily_stats_trigger_date = None
         # Positions with a sell order sent whose closure isn't recorded in the DB
         # yet; they still read as open there and must not be sold a second time.
@@ -1564,6 +1644,22 @@ class AsyncPerformanceMonitor:
             self.percent_profit_wanted = day_cfg.get("percent_profit_wanted_per_days", 1.0)
         except Exception:
             self.percent_profit_wanted = 1.0
+            day_cfg = None
+        # When nothing is to be held any more: after the scheduler's close, until the next day's start (keep_flat).
+        self.close_position_time = clock_time(day_cfg.get("close_position_time")) if isinstance(day_cfg, dict) else None
+        market_hours = getattr(self.trading_rule, "market_hours_config", None)
+        start_hour = market_hours.get("trading_start_hour") if isinstance(market_hours, dict) else None
+        self.trading_start_hour = start_hour if isinstance(start_hour, int) and not isinstance(start_hour, bool) else None
+        # What is to be sold, kept until Saxo no longer lists it (src/trade/close_intents.py).
+        self.close_intents = CloseIntents()
+        # Since when each managed position has been without a price, and those already said.
+        self._missing_price_since: dict[str, float] = {}
+        self._missing_price_said: set[str] = set()
+
+    @staticmethod
+    def _now() -> float:
+        """The time of a decision, in epoch seconds (tests give their own)."""
+        return time.time()
 
     async def check_positions_from_stream(self, streamed_positions: dict[str, dict]) -> dict:
         """
@@ -1704,27 +1800,28 @@ class AsyncPerformanceMonitor:
         """
         Shared evaluation logic used by both REST-polled and stream-fed paths.
 
-        Sell orders for positions that hit a threshold are sent before this
-        returns; recording those closures in the DB happens in the background.
+        A position that hits a threshold is to be sold (``close_intents``), and
+        the sales due are attempted before this returns; recording those
+        closures in the DB happens in the background.
 
         Parameters
         ----------
         api_dict : dict[str, dict]
             ``{PositionId: position_dict}`` — from either API response or stream cache.
         """
+        now = self._now()
+        self._end_intents_of_sold(api_dict)
         db_positions, today_pct = await self._load_managed_state()
         managed_ids = {db_pos["position_id"] for db_pos in db_positions}
-        for known in (self._max_perf_by_position, self._max_perf_pending_save, self._live_values):
+        for known in (self._max_perf_by_position, self._max_perf_pending_save, self._live_values, self._missing_price_since):
             for pid in list(known):
                 if pid not in managed_ids:
                     del known[pid]
+        self._missing_price_said &= managed_ids
 
         if not db_positions:
             logger.info("No open positions to check.")
             return {"closed_positions_processed": [], "db_updates": [], "errors": 0}
-
-        positions_to_close = []
-        errors = 0
 
         for db_pos in db_positions:
             pid = db_pos["position_id"]
@@ -1735,7 +1832,10 @@ class AsyncPerformanceMonitor:
             open_price = api_pos.get("PositionBase", {}).get("OpenPrice")
             current_bid = api_pos.get("PositionView", {}).get("Bid")
             if not open_price or not current_bid or open_price == 0:
+                self._note_missing_price(pid, now)
                 continue
+            self._missing_price_since.pop(pid, None)
+            self._missing_price_said.discard(pid)
 
             perf_pct = round(((current_bid * 100) / open_price) - 100, 2)
             logger.info("Pos %s: Open=%.4f, Bid=%.4f, Perf=%.2f%%", pid, open_price, current_bid, perf_pct)
@@ -1747,6 +1847,11 @@ class AsyncPerformanceMonitor:
             if max_perf is not None and perf_pct > max_perf:
                 self._max_perf_by_position[pid] = perf_pct
                 self._max_perf_pending_save[pid] = perf_pct
+
+            if pid in self.close_intents:
+                # Already to be sold: its intent is tried below, with its own reason, soon once quoted again.
+                self.close_intents.quoted(pid, current_bid, now)
+                continue
 
             close_reason = None
 
@@ -1776,51 +1881,15 @@ class AsyncPerformanceMonitor:
                 if potential >= self.percent_profit_wanted:
                     close_reason = f"Daily profit target ({self.percent_profit_wanted}%) potentially met ({potential}%)"
 
+            # Nothing held through a US release, when the macro_news rule says so
+            if not close_reason:
+                close_reason = self._flat_reason(now)
+
             if close_reason:
-                positions_to_close.append({
-                    "position_id": pid, "api_details": api_pos, "reason": close_reason,
-                    "action": db_pos.get("action"),
-                })
+                # Urgent: nothing is asked of Saxo before this sale (see _attempt_close).
+                self.close_intents.want(pid, f"Performance ({close_reason})", now, action=db_pos.get("action"), urgent=True)
 
-        # Execute closures concurrently (bounded)
-        processed = []
-        sem = asyncio.Semaphore(3)  # Max 3 concurrent closures
-
-        async def _close_one(pos_info):
-            nonlocal errors
-            async with sem:
-                pid = pos_info["position_id"]
-                api_pos = pos_info["api_details"]
-                reason = pos_info["reason"]
-
-                if not api_pos.get("PositionBase", {}).get("CanBeClosed", False):
-                    processed.append({"id": pid, "status": "Skipped (Cannot Be Closed)"})
-                    return
-                # Checked again here: another position check may have started
-                # closing it while this one was deciding.
-                if pid in self._closing_position_ids:
-                    return
-
-                self._closing_position_ids.add(pid)
-                closure_reason = f"Performance ({reason})"
-                try:
-                    trace = await self._send_close_order(
-                        api_pos, position_id=pid, action=pos_info.get("action"), reason=closure_reason,
-                    )
-                except Exception as e:
-                    self._closing_position_ids.discard(pid)
-                    logger.error("Failed to close %s: %s", pid, e, exc_info=True)
-                    await self.send_telegram(f"ERROR closing {pid}: {e}")
-                    errors += 1
-                    processed.append({"id": pid, "status": f"Failed: {e}"})
-                    return
-
-                # Not awaited: the next price update must not wait for Saxo to
-                # list this closure before the other positions are checked again.
-                self._record_closed_position_in_background(pid, closure_reason, trace=trace)
-                processed.append({"id": pid, "status": "Close order sent"})
-
-        await asyncio.gather(*[_close_one(p) for p in positions_to_close])
+        processed, errors = await self._attempt_due_closes(api_dict, now)
 
         # Apply max-perf DB updates
         db_updates, save_errors = await self._save_pending_max_perf()
@@ -1828,6 +1897,191 @@ class AsyncPerformanceMonitor:
 
         logger.debug("Perf check done. Closed=%d, MaxPerf updates=%d, Errors=%d", len(processed), len(db_updates), errors)
         return {"closed_positions_processed": processed, "db_updates": db_updates, "errors": errors}
+
+    def _flat_reason(self, now: float) -> str | None:
+        """Why nothing is to be held at ``now``: a US release ahead, when the macro_news rule sells before it."""
+        rule = getattr(self.trading_rule, "news_rule", None)
+        calendar = getattr(self.trading_rule, "news_calendar", None)
+        if not isinstance(rule, NewsRule) or not isinstance(calendar, Calendar):
+            return None
+        window = flat_window_at(calendar, rule, now)
+        return None if window is None else flat_reason(window, self.timezone)
+
+    def _after_the_close(self, now: float) -> bool:
+        """Whether ``now`` is past the day's close (and its grace), before the next day's start."""
+        if self.close_position_time is None:
+            return False
+        local = datetime.fromtimestamp(now, pytz.timezone(self.timezone))
+        close_at = local.replace(
+            hour=self.close_position_time.hour, minute=self.close_position_time.minute, second=0, microsecond=0,
+        )
+        if (local - close_at).total_seconds() >= END_OF_DAY_GRACE_SECONDS:
+            return True
+        return self.trading_start_hour is not None and local.hour < self.trading_start_hour
+
+    async def keep_flat(self, streamed_positions: dict[str, dict]) -> dict:
+        """
+        The sales that come with time rather than with a price, and the sales
+        due: what is held after the day's close, what is held into a US
+        release. Run by the position monitor every second, whether the stream
+        brings prices or not (an issuer that stops quoting brings none).
+        """
+        now = self._now()
+        self._end_intents_of_sold(streamed_positions)
+        reason = END_OF_DAY_REASON if self._after_the_close(now) else self._flat_reason(now)
+        # Nothing listed at Saxo, nothing to read: the night's checks cost no query.
+        if reason is not None and streamed_positions:
+            try:
+                db_positions, _ = await self._load_managed_state()
+            except Exception as e:
+                logger.warning("Could not read the managed positions to keep them flat: %r", e)
+                db_positions = []
+            for db_pos in db_positions:
+                pid = db_pos["position_id"]
+                if pid not in streamed_positions or pid in self.close_intents:
+                    continue
+                if reason == END_OF_DAY_REASON:
+                    self.close_intents.want(pid, reason, now, action=db_pos.get("action"))
+                    self._run_in_background(self.send_telegram(
+                        f"Position {pid} was still open after the day's close "
+                        f"({self.close_position_time.strftime('%H:%M')}): WATA sells it."
+                    ))
+                else:
+                    self.close_intents.want(pid, f"Performance ({reason})", now, action=db_pos.get("action"))
+        if not len(self.close_intents):
+            return {"closed_positions_processed": [], "errors": 0}
+        processed, errors = await self._attempt_due_closes(streamed_positions, now)
+        return {"closed_positions_processed": processed, "errors": errors}
+
+    async def request_close(self, position_id, reason: str) -> dict:
+        """
+        Sell one managed position, and go on until Saxo no longer lists it:
+        what the operator asks from the admin interface, and what the trader
+        hands over when its own sale did not go through.
+        """
+        position_id = str(position_id)
+        none = {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": [], "pending": False}
+        db_positions = await self.db_position_manager.get_open_positions_ids_actions()
+        db_pos = next((pos for pos in db_positions if str(pos["position_id"]) == position_id), None)
+        if db_pos is None:
+            return none
+        api_resp = await self.position_service.get_open_positions()
+        api_dict = {str(pos["PositionId"]): pos for pos in api_resp.get("Data", [])}
+        if position_id not in api_dict:
+            return none
+        now = self._now()
+        intent = self.close_intents.want(position_id, reason, now, action=db_pos.get("action"))
+        if position_id in self._closing_position_ids or not intent.is_due(now):
+            # A sale of it is on its way, or waits for its next try.
+            return {**none, "pending": True}
+        outcome = await self._attempt_close(intent, api_dict[position_id], now)
+        if outcome is not None and outcome.get("status") == "Close order sent":
+            return {**none, "closed_initiated_count": 1, "closed_position_ids": [position_id]}
+        return {**none, "errors_count": 1, "pending": True}
+
+    async def _attempt_due_closes(self, positions: dict[str, dict], now: float) -> tuple[list[dict], int]:
+        """Try the sales due now, three at a time; what each did, and how many failed."""
+        due = [
+            intent for intent in self.close_intents.due(now, positions)
+            if intent.position_id not in self._closing_position_ids
+        ]
+        if not due:
+            return [], 0
+        sem = asyncio.Semaphore(3)  # Max 3 concurrent closures
+
+        async def _one(intent: CloseIntent) -> dict:
+            async with sem:
+                return await self._attempt_close(intent, positions[intent.position_id], now)
+
+        processed = [outcome for outcome in await asyncio.gather(*[_one(intent) for intent in due]) if outcome is not None]
+        return processed, sum(1 for outcome in processed if outcome.get("error"))
+
+    async def _attempt_close(self, intent: CloseIntent, api_pos: dict, now: float) -> dict | None:
+        """
+        One attempt at the sale ``intent`` wants. A first, urgent attempt (a
+        threshold just hit) asks nothing of Saxo before its sale; any other
+        first looks for a sale already working at Saxo, which a new one would
+        only compete with (SellOrdersAlreadyExistForOwnedContracts).
+        """
+        pid = intent.position_id
+        # Checked again here: another check may have started selling it while this one was deciding.
+        if pid in self._closing_position_ids:
+            return None
+        pos_base = api_pos.get("PositionBase", {})
+        if not pos_base.get("CanBeClosed", False):
+            self._close_failed(intent, "Saxo says it cannot be closed now", now)
+            return {"id": pid, "status": "Skipped (Cannot Be Closed)", "error": True}
+
+        self._closing_position_ids.add(pid)
+        try:
+            if intent.attempts or intent.sell_accepted_at is not None or not intent.urgent:
+                working = await self._working_sales(pos_base)
+                if working:
+                    self._closing_position_ids.discard(pid)
+                    self._close_failed(
+                        intent, f"A sale is still working at Saxo (order {', '.join(working)}): waiting for it to be filled", now,
+                    )
+                    return {"id": pid, "status": "Waiting for a working sale"}
+            trace = await self._send_close_order(api_pos, position_id=pid, action=intent.action, reason=intent.reason)
+        except Exception as e:
+            self._closing_position_ids.discard(pid)
+            logger.error("Failed to close %s: %s", pid, e, exc_info=True)
+            self._close_failed(intent, f"{type(e).__name__}: {e}", now)
+            return {"id": pid, "status": f"Failed: {e}", "error": True}
+
+        self.close_intents.accepted(pid, now)
+        # Not awaited: the next price update must not wait for Saxo to
+        # list this closure before the other positions are checked again.
+        self._record_closed_position_in_background(pid, intent.reason, trace=trace)
+        return {"id": pid, "status": "Close order sent"}
+
+    async def _working_sales(self, pos_base: dict) -> list[str]:
+        """The orders working at Saxo that sell this position's turbo; none when Saxo cannot say."""
+        try:
+            orders = await self.position_service.get_open_orders()
+        except Exception as e:
+            logger.warning("Could not list the orders working at Saxo: %r", e)
+            return []
+        side = direction_invert(direction_from_amount(pos_base.get("Amount") or 0))
+        return [
+            str(order.get("OrderId"))
+            for order in orders
+            if order.get("Uic") == pos_base.get("Uic") and order.get("BuySell") == side and order.get("OrderId")
+        ]
+
+    def _close_failed(self, intent: CloseIntent, error: str, now: float) -> None:
+        """An attempt did not sell: said on its first failure, then less and less often (``close_intents``)."""
+        if not self.close_intents.failed(intent.position_id, error, now):
+            return
+        if intent.attempts == 1:
+            message = (f"Could not sell position {intent.position_id} ({intent.reason}): {error}. "
+                       "WATA keeps trying until Saxo no longer lists it.")
+        else:
+            since = datetime.fromtimestamp(intent.since, pytz.timezone(self.timezone)).strftime("%H:%M:%S")
+            message = (f"Position {intent.position_id} still not sold after {intent.attempts} attempts since {since} "
+                       f"({intent.reason}). Last: {error}")
+        # Not awaited: the other sales due must not wait for the message.
+        self._run_in_background(self.send_telegram(message))
+
+    def _end_intents_of_sold(self, positions: dict[str, dict]) -> None:
+        """Forget the intents of positions Saxo no longer lists; say the end of those that had failed."""
+        for intent in self.close_intents.gone(positions):
+            if intent.attempts:
+                self._run_in_background(self.send_telegram(
+                    f"Position {intent.position_id} is no longer open at Saxo, after {intent.attempts} "
+                    f"failed attempt(s) to sell it ({intent.reason})."
+                ))
+
+    def _note_missing_price(self, position_id: str, now: float) -> None:
+        """A managed position without a price: said once it lasts, since no exit can be decided for it."""
+        since = self._missing_price_since.setdefault(position_id, now)
+        if now - since < MISSING_PRICE_ALERT_SECONDS or position_id in self._missing_price_said:
+            return
+        self._missing_price_said.add(position_id)
+        at = datetime.fromtimestamp(since, pytz.timezone(self.timezone)).strftime("%H:%M:%S")
+        self._run_in_background(self.send_telegram(
+            f"No price for position {position_id} since {at}: no exit can be decided until Saxo quotes it again."
+        ))
 
     async def sync_db_positions_with_api(self, open_position_ids: set[str] | None = None) -> dict:
         """
@@ -1869,6 +2123,10 @@ class AsyncPerformanceMonitor:
             logger.error("Failed to get API closed positions: %s", e)
             return {"updates_for_db": []}
 
+        # The reason of WATA's own sale, for a position whose sale was recorded by no one yet (its bookkeeping
+        # may take longer than this reconciliation waits, or give up): "SaxoAPI" only for the others.
+        sold_by_wata = await self._sale_reasons([pid for pid in potentially_closed if pid in closed_map])
+
         updates = []
         for pid in potentially_closed:
             if pid in closed_map:
@@ -1886,7 +2144,7 @@ class AsyncPerformanceMonitor:
                     "position_total_close_price": total_close,
                     "position_status": "Closed",
                     "position_total_performance_percent": perf,
-                    "position_close_reason": "SaxoAPI",
+                    "position_close_reason": sold_by_wata.get(pid) or "SaxoAPI",
                     "execution_time_close": cp.get("ExecutionTimeClose"),
                 }
                 updates.append((pid, update))
@@ -1896,11 +2154,90 @@ class AsyncPerformanceMonitor:
                         await self.trading_rule.record_loss()
                     except Exception:
                         pass
-                await self.send_telegram(f"SYNC CLOSE: {pid} ({dp.get('Description','N/A')})\nPerf: {perf}%")
+                if pid not in sold_by_wata:
+                    await self.send_telegram(f"SYNC CLOSE: {pid} ({dp.get('Description','N/A')})\nPerf: {perf}%")
             else:
                 logger.warning("ANOMALY: %s open in DB, not in API open or closed.", pid)
 
         return {"updates_for_db": updates}
+
+    async def _sale_reasons(self, position_ids: list[str]) -> dict[str, str]:
+        """Why WATA sold each of these positions, when it did; nothing when it cannot be read in time."""
+        if not position_ids or self.order_requests is None:
+            return {}
+        try:
+            return await asyncio.wait_for(self.order_requests.sale_reasons(position_ids), MANAGED_STATE_DB_TIMEOUT_SECONDS)
+        except Exception as e:
+            logger.warning("Could not read WATA's sales of %s: %r", position_ids, e)
+            return {}
+
+    async def adopt_lost_positions(self, open_positions: dict[str, dict] | None = None) -> list[str]:
+        """
+        The positions Saxo lists that WATA bought but has no row of (a position
+        listed after the trader gave up looking for it, a service stopped between
+        the order and its row) are given one, so that they are stopped and
+        closed at night like the others. A position not bought by WATA is named
+        once and left alone. Returns the positions adopted.
+        """
+        if self.order_requests is None:
+            return []
+        if open_positions is None:
+            api_resp = await self.position_service.get_open_positions()
+            open_positions = {str(pos["PositionId"]): pos for pos in api_resp.get("Data", [])}
+        now = self._now()
+        recorded = {str(pid) for pid in await self.db_position_manager.get_open_positions_ids()}
+        unrecorded = {
+            str(pid): pos for pid, pos in open_positions.items()
+            if str(pid) not in recorded and str(pid) not in self._closing_position_ids
+            and str(pid) not in self._not_wata_positions
+        }
+        for pid in list(self._unrecorded_since):
+            if pid not in unrecorded:
+                del self._unrecorded_since[pid]
+        lasting = {}
+        for pid, pos in unrecorded.items():
+            since = self._unrecorded_since.setdefault(pid, now)
+            if now - since >= ADOPT_AFTER_SECONDS:
+                lasting[pid] = pos
+        if not lasting:
+            return []
+
+        by_order = {}
+        for pid, pos in lasting.items():
+            order_id = (pos.get("PositionBase") or {}).get("SourceOrderId")
+            if order_id:
+                by_order[str(order_id)] = pid
+            else:
+                self._leave_alone(pid, pos)
+        purchases = await self.order_requests.purchases(list(by_order)) if by_order else {}
+
+        adopted = []
+        for order_id, pid in by_order.items():
+            pos = lasting[pid]
+            purchase = purchases.get(order_id)
+            if purchase is None:
+                self._leave_alone(pid, pos)
+                continue
+            await self.db_position_manager.insert_turbo_open_position_data(lost_position_row(pos, purchase.get("action")))
+            self._unrecorded_since.pop(pid, None)
+            adopted.append(pid)
+            description = (pos.get("DisplayAndFormat") or {}).get("Description", "N/A")
+            logger.warning("Adopted position %s (order %s), which had no row.", pid, order_id)
+            await self.send_telegram(
+                f"Position {pid} ({description}), bought by WATA (order {order_id}), had no record: "
+                "WATA manages it again (stops, the day's close)."
+            )
+        return adopted
+
+    def _leave_alone(self, position_id: str, pos: dict) -> None:
+        """A position WATA did not buy: said once, never managed."""
+        self._not_wata_positions.add(position_id)
+        self._unrecorded_since.pop(position_id, None)
+        description = (pos.get("DisplayAndFormat") or {}).get("Description", "N/A")
+        logger.info("Position %s at Saxo was not bought by WATA: left alone.", position_id)
+        self._run_in_background(self.send_telegram(
+            f"Position {position_id} ({description}) at Saxo was not bought by WATA: WATA leaves it alone."
+        ))
 
     async def close_managed_positions_by_criteria(
         self,
@@ -1916,6 +2253,12 @@ class AsyncPerformanceMonitor:
         With ``defer_bookkeeping`` this returns as soon as the sell orders are
         accepted: looking up the closed positions, updating the DB and notifying
         run in the background, so the caller's next order isn't held up by them.
+
+        What it could not sell is said, never skipped in silence: ``not_closed``
+        (refused, failed, or Saxo saying it cannot be closed now), each with its
+        reason, for the position monitor to take over (``request_close``), and
+        ``not_listed``, open in WATA's records but not at Saxo, which the
+        reconciliation settles.
         """
         logger.info(
             "--- Closing positions (filter=%s, exclude=%s, only=%s) ---",
@@ -1925,7 +2268,7 @@ class AsyncPerformanceMonitor:
 
         db_positions = await self.db_position_manager.get_open_positions_ids_actions()
         if not db_positions:
-            return {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": []}
+            return {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": [], "not_closed": [], "not_listed": []}
 
         try:
             api_resp = await self.position_service.get_open_positions()
@@ -1937,6 +2280,8 @@ class AsyncPerformanceMonitor:
         closed_count = 0
         error_count = 0
         closed_position_ids = []
+        not_closed = []
+        not_listed = []
         sem = asyncio.Semaphore(3)
 
         async def _close_one(db_pos):
@@ -1952,17 +2297,20 @@ class AsyncPerformanceMonitor:
                 if only_position_id and str(pid) != str(only_position_id):
                     return
                 if pid not in api_dict:
+                    not_listed.append(pid)
                     return
                 if pid in self._closing_position_ids:
                     return
 
                 api_pos = api_dict[pid]
                 pos_base = api_pos.get("PositionBase", {})
+                reason = f"Explicit Close ({close_scope})"
                 if not pos_base.get("CanBeClosed", False):
+                    not_closed.append({"position_id": pid, "action": action, "reason": reason,
+                                       "why": "Saxo says it cannot be closed now"})
                     return
 
                 self._closing_position_ids.add(pid)
-                reason = f"Explicit Close ({close_scope})"
                 try:
                     trace = await self._send_close_order(api_pos, position_id=pid, action=action, reason=reason)
                     closed_count += 1
@@ -1976,13 +2324,18 @@ class AsyncPerformanceMonitor:
                     logger.error("Failed closing %s: %s", pid, e)
                     await self.send_telegram(f"ERROR closing {pid}: {e}")
                     error_count += 1
+                    not_closed.append({"position_id": pid, "action": action, "reason": reason,
+                                       "why": f"{type(e).__name__}: {e}"})
 
         await asyncio.gather(*[_close_one(p) for p in db_positions])
-        logger.info("Closure done. Initiated=%d, Errors=%d", closed_count, error_count)
+        logger.info("Closure done. Initiated=%d, Errors=%d, Not closed=%d, Not listed=%d",
+                    closed_count, error_count, len(not_closed), len(not_listed))
         return {
             "closed_initiated_count": closed_count,
             "errors_count": error_count,
             "closed_position_ids": closed_position_ids,
+            "not_closed": not_closed,
+            "not_listed": not_listed,
         }
 
     async def _send_close_order(

@@ -32,7 +32,9 @@ from src.backtest.settings import DictConfig, from_config  # noqa: E402
 from src.trade.async_services import AsyncPerformanceMonitor, AsyncTradingOrchestrator  # noqa: E402
 from src.trade.exceptions import InsufficientFundsException  # noqa: E402
 from src.trade.rules import TradingRule  # noqa: E402
-from src.trade.macro_calendar import read_calendar  # noqa: E402
+from src.trade.macro_calendar import flat_reason, read_calendar  # noqa: E402
+from src.backtest.simulator import Simulator  # noqa: E402
+from src.trade.exceptions import NoTurbosAvailableException  # noqa: E402
 
 with open("etc/config_example.json", encoding="utf-8") as config_file:
     EXAMPLE = json.load(config_file)
@@ -361,3 +363,100 @@ def test_the_trailing_stop_switched_off_is_never_the_reason(tmp_path):
 
     assert decided == live_exits(config, 5.0, bids, 0.0, str(tmp_path))
     assert decided[-1].startswith("Performance (Stoploss")
+
+
+# ── sold before a US release ──
+
+
+@pytest.mark.parametrize("flatten, clock_time, sold", [
+    # CPI of 14 October 2026, 14:30 in Paris.
+    (10, "14:19:59", False),
+    (10, "14:20:00", True),
+    (10, "14:44:59", True),
+    (10, "14:45:00", False),
+    (0, "14:29:00", False),
+])
+def test_a_position_is_sold_before_a_us_release_at_the_same_moment_and_for_the_same_reason_as_live(
+    flatten, clock_time, sold, tmp_path,
+):
+    config = config_with()
+    config["trade"]["rules"].append(
+        {"rule_name": "No entry around US releases", "rule_type": "macro_news", "rule_config": {"flatten_minutes_before": flatten}},
+    )
+    moment = paris(clock_time).timestamp()
+
+    rule = TradingRule(Config(config), Positions(), RiskState(None))
+    monitor = AsyncPerformanceMonitor(
+        MagicMock(), MagicMock(), Config(config, str(tmp_path)), OpenPosition(0.0), rule, AsyncMock(),
+    )
+    sent = []
+
+    async def send_close_order(api_pos, *, position_id, action, reason):
+        sent.append(reason)
+
+    monitor._send_close_order = send_close_order
+    monitor._record_closed_position_in_background = MagicMock()
+    monitor.position_service.get_open_orders = AsyncMock(return_value=[])
+    monitor._now = lambda: moment
+    asyncio.run(monitor.keep_flat({"p1": {
+        "PositionBase": {"OpenPrice": 5.0, "CanBeClosed": True, "Amount": 10, "Uic": 1}, "PositionView": {"Bid": 5.0},
+    }}))
+
+    simulator = Simulator(from_config(config), CLOCK)
+    window = simulator._flat_window(moment)
+    mirrored = [] if window is None else [f"Performance ({flat_reason(window, simulator.settings.timezone)})"]
+    assert sent == mirrored
+    assert bool(sent) is sold
+
+
+# ── an entry that failed, with a cash reserve ──
+
+
+def test_with_a_cash_reserve_an_entry_that_finds_no_turbo_sells_the_other_side_as_live():
+    from src.backtest.clock import TradingClock as Clock
+    from src.backtest.data import DayData, TurboRef, TurboSeries, sort_turbos
+    from src.backtest.simulator import SignalEvent
+
+    config = config_with()
+    config["trade"]["config"]["buying_power"]["reserve_cash_percent"] = 20
+
+    # Live: the long held is sold though the short found no turbo.
+    orchestrator = MagicMock()
+    orchestrator.reserve_cash_percent = 20
+    orchestrator.execute_trade_signal = AsyncMock(side_effect=NoTurbosAvailableException("No turbos in price range 4-15."))
+    monitor = MagicMock()
+    monitor.close_managed_positions_by_criteria = AsyncMock(return_value={
+        "closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p0"], "not_closed": [], "not_listed": [],
+    })
+    telegram = MagicMock()
+    telegram.send = AsyncMock()
+    now = paris("09:30")
+    signal = {
+        "action": "short", "indice": "us100", "signal_uuid": "u2",
+        "signal_timestamp": now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "alert_timestamp": now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    rule = TradingRule(Config(config), Positions(), RiskState(None))
+    with patch.object(live_rules, "datetime", frozen_at(now)), patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(trader.handle_trading_signal(signal, orchestrator, monitor, rule, Positions(), "exchange", telegram))
+    live_sold = monitor.close_managed_positions_by_criteria.await_count == 1
+
+    # The backtest: a long held, a short signal with no short turbo recorded.
+    clock = Clock("Europe/Paris")
+    day = paris("08:00").date()
+    turbo = TurboSeries(TurboRef(instrument_id=2, uic=40_000_002, asset_type="WarrantOpenEndKnockOut", symbol="T2",
+                                 description="NASDAQ 100 Turbo Long 24800 SG", issuer="SG", barrier=24_800,
+                                 direction="long", currency="EUR"))
+    for step in range(6 * 60 * 6):
+        moment = int(clock.epoch(day, "08:00")) + 10 * step
+        turbo.append(moment, 5.0, 5.0, 5.0, 5.0, 5.05, 5.05)
+    start, end = clock.day_bounds(day)
+    data = DayData(day=day, start=start, end=end, indice="us100", turbos=sort_turbos({"long": [turbo]}))
+    simulator = Simulator(from_config(config), clock)
+    simulator.run_day(data, [
+        SignalEvent(1, "pine", "long", arrived_at=clock.epoch(day, "08:30"), alert_at=clock.epoch(day, "08:30"), indice="us100"),
+        SignalEvent(2, "pine", "short", arrived_at=clock.epoch(day, "09:30"), alert_at=clock.epoch(day, "09:30"), indice="us100"),
+    ])
+    mirrored_sold = simulator.trades[0]["exit"]["reason"] == "Explicit Close (All)" and simulator.signals[1]["closed_trade_ids"]
+
+    assert live_sold and bool(mirrored_sold)

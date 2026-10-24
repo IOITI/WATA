@@ -299,3 +299,99 @@ def test_no_protective_stop_section_when_the_feature_is_off():
     _, sections = _run_handler(reserve_cash_percent=0, protective_stop=None)
 
     assert "Protective Stop" not in sections
+
+
+# ── what the trader could not sell ──
+
+
+def test_with_a_cash_reserve_an_entry_that_fails_still_sells_the_other_side():
+    # 14 October 2026: the short after CPI found 4.86 EUR for a turbo of 8.63, and the long it was to replace was kept.
+    calls, orchestrator, monitor, trading_rule, db_position_manager, telegram = _handler_dependencies(20)
+    orchestrator.execute_trade_signal = AsyncMock(side_effect=trader.InsufficientFundsException("Insufficient funds @ 8.633"))
+    calls.attach_mock(orchestrator.execute_trade_signal, "execute")
+
+    with patch.object(trader, "TelegramMessageComposer") as composer_cls, patch.object(trader, "journal_signal") as journal_signal:
+        asyncio.run(handle_trading_signal(
+            _signal("uuid-1", action="short"), orchestrator, monitor, trading_rule, db_position_manager, "exchange1",
+            telegram,
+        ))
+
+    assert [call[0] for call in calls.mock_calls] == ["execute", "close", "invalidate_balance"]
+    assert calls.close.await_args.kwargs == {"action_filter": None, "defer_bookkeeping": True}
+    sections = {call.args[0]: call.args[1] for call in composer_cls.return_value.add_text_section.call_args_list}
+    assert sections["Closure Without Entry"] == "Closed existing positions. Initiated: 1, Errors: 0"
+    # The entry is still the signal's outcome.
+    _, _, outcome, reason = journal_signal.call_args.args
+    assert (outcome, reason) == (trader.FAILED, "InsufficientFundsException: Insufficient funds @ 8.633")
+    telegram.send.assert_awaited_once()
+
+
+def test_what_a_flip_could_not_sell_is_handed_to_the_position_monitor():
+    calls, orchestrator, monitor, trading_rule, db_position_manager, telegram = _handler_dependencies(0)
+    monitor.close_managed_positions_by_criteria = AsyncMock(return_value={
+        "closed_initiated_count": 0, "errors_count": 1, "closed_position_ids": [],
+        "not_closed": [{"position_id": "old-position", "action": "long", "reason": "Explicit Close (All)",
+                        "why": "OrderPlacementError: no quote"}],
+        "not_listed": [],
+    })
+    handed = []
+
+    async def hand_over(position_id, reason):
+        handed.append((position_id, reason))
+        return True
+
+    with patch.object(trader, "TelegramMessageComposer") as composer_cls:
+        asyncio.run(handle_trading_signal(
+            _signal("uuid-1", action="short"), orchestrator, monitor, trading_rule, db_position_manager, "exchange1",
+            telegram, hand_over=hand_over,
+        ))
+
+    assert handed == [("old-position", "Explicit Close (All)")]
+    sections = {call.args[0]: call.args[1] for call in composer_cls.return_value.add_text_section.call_args_list}
+    assert sections["Pre-Trade Closure"].endswith(
+        "\nNot sold: old-position (OrderPlacementError: no quote), handed to the position monitor."
+    )
+
+
+def _close_monitor(result):
+    monitor = MagicMock()
+    monitor.close_managed_positions_by_criteria = AsyncMock(return_value={
+        "closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": [], "not_closed": [], "not_listed": [],
+        **result,
+    })
+    telegram = MagicMock()
+    telegram.send = AsyncMock()
+    return monitor, telegram
+
+
+def test_a_close_signal_that_could_not_sell_is_failed_with_why_and_handed_over():
+    monitor, telegram = _close_monitor({"not_closed": [{
+        "position_id": "p1", "action": "long", "reason": "Explicit Close (All)", "why": "Saxo says it cannot be closed now",
+    }]})
+    handed = []
+
+    async def hand_over(position_id, reason):
+        handed.append(position_id)
+        return False
+
+    with patch.object(trader, "journal_signal") as journal_signal:
+        asyncio.run(trader.handle_close_signal(
+            {"action": "close-position", "indice": "n/a"}, monitor, telegram, hand_over=hand_over,
+        ))
+
+    assert handed == ["p1"]
+    _, _, outcome, reason = journal_signal.call_args.args
+    assert outcome == trader.FAILED
+    assert reason == "Closed 0 position(s). Not sold: p1 (Saxo says it cannot be closed now), NOT handed to the position monitor."
+    telegram.send.assert_awaited_once()
+
+
+def test_a_position_open_in_wata_but_not_at_saxo_is_not_called_nothing_to_close():
+    monitor, telegram = _close_monitor({"not_listed": ["p1"]})
+
+    with patch.object(trader, "journal_signal") as journal_signal:
+        asyncio.run(trader.handle_close_signal({"action": "close-position", "indice": "n/a"}, monitor, telegram))
+
+    _, _, outcome, reason = journal_signal.call_args.args
+    assert outcome == trader.IGNORED
+    assert reason == "Open in WATA's records but not at Saxo: p1 (left to the reconciliation)"

@@ -101,6 +101,9 @@ FIELDS = (
           source="trade.config.position_management.performance_thresholds.trailing_stop.activation_percent"),
     Field("trailing_drawdown_percent", "exits", "number", "Fall from the best that sells", 0.1, 1000, unit="%",
           source="trade.config.position_management.performance_thresholds.trailing_stop.drawdown_percent"),
+    # Sold before a US release (the macro_news rule's flatten_minutes_before): 0 keeps what is held, as before.
+    Field("news_flatten_minutes_before", "exits", "integer", "Sell what is held from this long before a release", 0, 120,
+          unit="min", source="trade.rules.macro_news.flatten_minutes_before"),
     # ── the turbo bought ──
     Field("turbo_min_price", "turbo", "number", "Turbos priced from", 0.01, 10_000,
           source="trade.config.turbo_preference.price_range.min"),
@@ -177,6 +180,7 @@ class BacktestSettings:
     news_cpi: bool = True
     news_nfp: bool = True
     news_pce: bool = True
+    news_flatten_minutes_before: int = NewsRule.flatten_minutes_before
     # The day.
     no_entry_above_day_profit: float = 1.25
     max_day_loss: float = -25.0
@@ -224,7 +228,10 @@ class BacktestSettings:
             return None
         events = tuple(event for event, on in (("FOMC", self.news_fomc), ("CPI", self.news_cpi), ("NFP", self.news_nfp),
                                                ("PCE", self.news_pce)) if on)
-        return NewsRule(events, self.news_minutes_before, self.news_minutes_after, self.news_minutes_after_fomc) if events else None
+        return NewsRule(
+            events, self.news_minutes_before, self.news_minutes_after, self.news_minutes_after_fomc,
+            self.news_flatten_minutes_before,
+        ) if events else None
 
     @classmethod
     def from_dict(cls, values: dict) -> "BacktestSettings":
@@ -318,6 +325,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         news_cpi="CPI" in (news or NewsRule()).events,
         news_nfp="NFP" in (news or NewsRule()).events,
         news_pce="PCE" in (news or NewsRule()).events,
+        news_flatten_minutes_before=(news or NewsRule()).flatten_minutes_before,
         no_entry_above_day_profit=day_trading.get(
             "dont_enter_trade_if_day_profit_is_more_than", defaults.no_entry_above_day_profit,
         ),

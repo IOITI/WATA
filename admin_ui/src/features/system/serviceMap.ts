@@ -50,6 +50,7 @@ export const MAP_LINKS: TraceConnection[] = [
   { from: 'trader', to: 'saxo', label: 'orders' },
   { from: 'trader', to: 'watchlist_manager', label: 'turbos' },
   { from: 'trader', to: 'postgres', label: 'trades, journal' },
+  { from: 'trader', to: 'rabbitmq', label: 'closes handed over' },
   { from: 'position_monitor', to: 'saxo', label: 'stream, sells' },
   { from: 'position_monitor', to: 'rabbitmq', label: 'trading-ops' },
   { from: 'position_monitor', to: 'postgres', label: 'positions' },

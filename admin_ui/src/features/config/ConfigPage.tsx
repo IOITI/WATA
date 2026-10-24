@@ -77,7 +77,13 @@ const NEWS_EVENTS = [
 const NEWS_RULE = {
   rule_name: 'No entry around US releases',
   rule_type: 'macro_news',
-  rule_config: { events: NEWS_EVENTS.map((entry) => entry.event), minutes_before: 5, minutes_after: 15, minutes_after_fomc: 45 },
+  rule_config: {
+    events: NEWS_EVENTS.map((entry) => entry.event),
+    minutes_before: 5,
+    minutes_after: 15,
+    minutes_after_fomc: 45,
+    flatten_minutes_before: 0,
+  },
 }
 
 function prettyJson(value: JsonValue): string {
@@ -107,7 +113,7 @@ function NewsSection({ draft }: { draft: JsonObject }) {
     <div className="space-y-5">
       <StretchSwitch
         label="No entry around US releases"
-        description="The trader refuses new entries from shortly before to shortly after each release of the calendar kept with WATA (New York's hours, whatever the clocks). Positions already open are left alone."
+        description="The trader refuses new entries from shortly before to shortly after each release of the calendar kept with WATA (New York's hours, whatever the clocks). Positions already open are kept, unless the position monitor is to sell them before the release (below)."
         checked={path !== null}
         disabled={disabled}
         onChange={(on) => update(['trade', 'rules'], on ? withRule(draft, NEWS_RULE) : withoutRule(draft, 'macro_news'))}
@@ -121,6 +127,12 @@ function NewsSection({ draft }: { draft: JsonObject }) {
             unit="min"
             path={[...path, 'minutes_after_fomc']}
             hint="Its press conference starts 30 minutes later"
+          />
+          <NumberField
+            label="Sell what is held, from before a release"
+            unit="min"
+            path={[...path, 'flatten_minutes_before']}
+            hint="0 keeps open positions. Around a release Saxo can stop quoting a turbo for minutes, when no stop can be sold"
           />
           {NEWS_EVENTS.map((entry) => (
             <StretchSwitch

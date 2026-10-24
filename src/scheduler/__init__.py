@@ -13,6 +13,7 @@ import os
 from src.logging_helper import setup_logging
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
 from src.trade.macro_calendar import upkeep
+from src.delivery import deliver
 from src.trade.rules import TradingRule
 
 
@@ -138,7 +139,7 @@ def send_signal_to_web_server(message):
     request_timeout_seconds = signal_polling_config.get("request_timeout_seconds", 2)
     token = WebServerToken(config_manager).get_token()
 
-    try:
+    def send():
         response = httpx.post(
             f"{service_url}/internal/signal",
             json=message,
@@ -146,9 +147,17 @@ def send_signal_to_web_server(message):
             timeout=request_timeout_seconds,
         )
         response.raise_for_status()
+
+    # Tried three times: a web server restarting must not leave the day's positions open, unsaid.
+    error = deliver(send)
+    if error is None:
         logging.info(f"Sent internal signal to web_server: {message}")
-    except httpx.HTTPError as e:
-        logging.error(f"Failed to send internal signal to web_server: {e}")
+        return
+    logging.error(f"Failed to send internal signal to web_server: {error}")
+    send_message_to_telegram(
+        f"The scheduler could not send {message.get('action')} to the web server: {error}. "
+        "The position monitor sells what is still held once the day's close is past."
+    )
 
 
 def rabbit_connection():

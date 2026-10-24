@@ -399,3 +399,65 @@ def test_the_day_says_what_its_signals_became_and_what_was_recorded():
     assert (record["entries"], record["trades"], record["recorded"]["long"], record["recorded"]["short"]) == (1, 1, 1, 1)
     assert record["recorded"]["first"] == "2026-10-14T06:00:00Z"
     assert record["equity"] == pytest.approx(simulator.cash)
+
+
+# ── what the trader and the monitor do so as not to hold what cannot be sold ──
+
+
+def test_with_a_cash_reserve_an_entry_that_finds_no_turbo_still_sells_the_other_side():
+    # As the trader does (handle_trading_signal): the signal turned the other way.
+    reserve = replace(PLAIN, reserve_cash_percent=20)
+    day = day_of(series(2, "long", 24_800, flat(5.0, 840)))
+
+    simulator = run(day, [signal(1, "long", "08:30"), signal(2, "short", "09:30"), close_of_day()], reserve)
+
+    (long_trade,) = simulator.trades
+    assert long_trade["exit"]["reason"] == "Explicit Close (All)"
+    # Nothing was bought: the sale leaves when the selection found nothing, filled an order's time later.
+    assert long_trade["exit"]["filled_at"] == "2026-10-14T07:30:01Z"
+    assert simulator.signals[1]["fate"] != "executed"
+    assert simulator.signals[1]["closed_trade_ids"] == [long_trade["id"]]
+
+
+def test_without_a_cash_reserve_the_sale_comes_first_as_before():
+    day = day_of(series(2, "long", 24_800, flat(5.0, 840)))
+
+    simulator = run(day, [signal(1, "long", "08:30"), signal(2, "short", "09:30"), close_of_day()])
+
+    (long_trade,) = simulator.trades
+    assert long_trade["exit"]["reason"] == "Explicit Close (All)"
+    assert simulator.signals[1]["closed_trade_ids"] == [long_trade["id"]]
+
+
+def _with_news(flatten_minutes_before: int):
+    return replace(PLAIN, news_window=True, news_flatten_minutes_before=flatten_minutes_before)
+
+
+def test_what_is_held_is_sold_before_a_us_release_when_the_rule_says_so():
+    # CPI of 14 October 2026 at 14:30 in Paris; the turbo held through it was not quoted for 250 s that day.
+    day = day_of(series(2, "long", 24_800, flat(5.0, 840)))
+
+    simulator = run(day, [signal(1, "long", "14:00"), close_of_day()], _with_news(10))
+
+    (trade,) = simulator.trades
+    assert trade["exit"]["reason"] == "Performance (Flat before CPI (14:30))"
+    assert trade["exit"]["filled_at"] == "2026-10-14T12:20:00Z"
+    assert trade["exit"]["group"] == "Before a US release"
+
+
+def test_no_entry_is_taken_that_would_be_sold_at_once():
+    day = day_of(series(2, "long", 24_800, flat(5.0, 840)))
+
+    simulator = run(day, [signal(1, "long", "14:21"), close_of_day()], _with_news(10))
+
+    assert simulator.trades == []
+    assert simulator.signals[0]["reason"] == "Breaking trading rule: no entry around CPI (14:30) from 14:20 to 14:45."
+
+
+def test_without_the_sale_before_a_release_a_position_is_held_through_it_as_before():
+    day = day_of(series(2, "long", 24_800, flat(5.0, 840)))
+
+    simulator = run(day, [signal(1, "long", "14:00"), close_of_day()], _with_news(0))
+
+    (trade,) = simulator.trades
+    assert trade["exit"]["reason"] == "Explicit Close (All)"

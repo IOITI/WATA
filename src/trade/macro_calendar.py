@@ -5,9 +5,12 @@ them. Each row is a release's day and New York time, and the official page it
 was read from.
 
 The trader keeps entries out of a window around each release when the
-``macro_news`` rule of ``trade.rules`` says so (``NewsRule``, ``window_at``);
-the backtests read the same calendar to know each day's news and to repeat
-the trader. The file is not code: a backtest notes its digest, and it must be
+``macro_news`` rule of ``trade.rules`` says so (``NewsRule``, ``window_at``),
+and the position monitor sells what is held from ``flatten_minutes_before``
+a release when the rule gives it (``flat_window_at``): around a release the
+issuer may stop quoting its turbos for minutes, when no stop can be sold. The
+backtests read the same calendar to know each day's news and to repeat
+the trader and the monitor. The file is not code: a backtest notes its digest, and it must be
 kept ahead (``python -m lab calendar check``). Past its last day nothing is
 known, so no window is found there: the trader goes on trading, and says the
 calendar needs updating.
@@ -91,13 +94,16 @@ class NewsRule:
     minutes_before: int = 5
     minutes_after: int = 15
     minutes_after_fomc: int = 45
+    # From how long before a release the monitor sells what is held; 0 keeps open positions, as before.
+    flatten_minutes_before: int = 0
 
     @classmethod
     def from_config(cls, rule_config) -> "NewsRule":
         """The rule as its ``rule_config`` says it; ValueError, saying what is wrong, otherwise."""
         if not isinstance(rule_config, dict):
             raise ValueError("macro_news: rule_config must be an object")
-        unknown = set(rule_config) - {"events", "minutes_before", "minutes_after", "minutes_after_fomc"}
+        unknown = set(rule_config) - {"events", "minutes_before", "minutes_after", "minutes_after_fomc",
+                                      "flatten_minutes_before"}
         if unknown:
             raise ValueError(f"macro_news: unknown field(s) {', '.join(sorted(unknown))}")
         events = rule_config.get("events", list(MACRO_EVENTS))
@@ -105,7 +111,7 @@ class NewsRule:
             raise ValueError(f"macro_news: events is a list of some of {', '.join(MACRO_EVENTS)}")
         values = {}
         for name, highest in (("minutes_before", MAX_MINUTES), ("minutes_after", MAX_MINUTES),
-                              ("minutes_after_fomc", MAX_MINUTES_AFTER_FOMC)):
+                              ("minutes_after_fomc", MAX_MINUTES_AFTER_FOMC), ("flatten_minutes_before", MAX_MINUTES)):
             value = rule_config.get(name, getattr(cls, name))
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= highest:
                 raise ValueError(f"macro_news: {name} is a whole number of minutes from 0 to {highest}")
@@ -113,9 +119,11 @@ class NewsRule:
         return cls(events=tuple(event for event in MACRO_EVENTS if event in events), **values)
 
     def window(self, event: MacroEvent) -> NewsWindow:
+        """No entry from the earlier of the entries' and the sales' starts: a position bought then would be sold at once."""
         released = event.moment()
         after = self.minutes_after_fomc if event.event == "FOMC" else self.minutes_after
-        return NewsWindow(event, released - self.minutes_before * 60, released + after * 60)
+        before = max(self.minutes_before, self.flatten_minutes_before)
+        return NewsWindow(event, released - before * 60, released + after * 60)
 
 
 def windows_near(calendar: Calendar, rule: NewsRule, moment: float) -> list[NewsWindow]:
@@ -132,6 +140,29 @@ def windows_near(calendar: Calendar, rule: NewsRule, moment: float) -> list[News
 def window_at(calendar: Calendar, rule: NewsRule, moment: float) -> NewsWindow | None:
     """The window ``moment`` is in, if any: from its start included to its end excluded."""
     return next((window for window in windows_near(calendar, rule, moment) if window.start <= moment < window.end), None)
+
+
+def flat_window_at(calendar: Calendar, rule: NewsRule, moment: float) -> NewsWindow | None:
+    """
+    The window of the release whose position is to be sold at ``moment``: from
+    ``flatten_minutes_before`` the release until the window's end. None when the
+    rule keeps open positions.
+    """
+    if rule.flatten_minutes_before <= 0:
+        return None
+    return next(
+        (
+            window for window in windows_near(calendar, rule, moment)
+            if window.event.moment() - rule.flatten_minutes_before * 60 <= moment < window.end
+        ),
+        None,
+    )
+
+
+def flat_reason(window: NewsWindow, timezone: str) -> str:
+    """Why the monitor sold a position before a release, in the trading timezone; the backtests say the same."""
+    released = datetime.fromtimestamp(window.event.moment(), pytz.timezone(timezone)).strftime("%H:%M")
+    return f"Flat before {window.event.event} ({released})"
 
 
 def next_window(calendar: Calendar, rule: NewsRule, moment: float) -> NewsWindow | None:

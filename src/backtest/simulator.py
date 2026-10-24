@@ -40,7 +40,7 @@ from src.backtest.rules import (
 )
 from src.backtest.selection import NotSelected, select_turbo
 from src.backtest.settings import BacktestSettings
-from src.trade.macro_calendar import Calendar, read_calendar
+from src.trade.macro_calendar import Calendar, flat_reason, flat_window_at, read_calendar
 
 LONG, SHORT = "long", "short"
 ENTRY_ACTIONS = (LONG, SHORT)
@@ -63,6 +63,8 @@ ORDER_REJECTED = "order_rejected"
 # its best of the day, is taken for knocked out (the rule of src/admin/prices.py ``availability``).
 KNOCKED_OUT_SHARE = 0.25
 KNOCKED_OUT = "SaxoAPI"
+# Sold before a US release (the macro_news rule's flatten_minutes_before), as the position monitor does.
+FLAT_BEFORE_RELEASE = "flat_before_release"
 NO_QUOTE = "End of data (no quote)"
 
 
@@ -246,33 +248,36 @@ class Simulator:
         boundary = ceil10(selection_at)
         choice = select_turbo(self._day, event.action, boundary, settings.turbo_min_price, settings.turbo_max_price)
         if isinstance(choice, NotSelected):
+            closed += self._sell_after_failed_entry(event, selection_at)
             self._signal(
                 event, decided, choice.fate, choice.rule, choice.reason, closed_trade_ids=closed,
                 candidates=_counted(choice.candidates), selection=choice.candidates,
             )
-            self.trader_free_at = selection_at
+            self.trader_free_at = max(selection_at, self.trader_free_at)
             return
 
         scale = position_scale(settings, self.clock.minute_of_day(selection_at), event.confidence)
         units = units_for(settings, self.cash, choice.ask, scale)
         counted = _counted(choice.candidates)
         if units <= 0:
+            closed += self._sell_after_failed_entry(event, selection_at)
             self._signal(
                 event, decided, FAILED, INSUFFICIENT_FUNDS, f"InsufficientFundsException: Insufficient funds @ {choice.ask}",
                 closed_trade_ids=closed, candidates=counted, selection=choice.candidates,
             )
-            self.trader_free_at = selection_at
+            self.trader_free_at = max(selection_at, self.trader_free_at)
             return
 
         fill_at = selection_at + self.fills.order_seconds()
         fill_boundary = ceil10(fill_at)
         quote = choice.series.quote_at(fill_boundary)
         if quote is None or quote[1] is None:
+            closed += self._sell_after_failed_entry(event, fill_at)
             self._signal(
                 event, decided, FAILED, ORDER_REJECTED, "Order rejected: the turbo was not quoted when the order arrived",
                 closed_trade_ids=closed, candidates=counted, selection=choice.candidates,
             )
-            self.trader_free_at = fill_at
+            self.trader_free_at = max(fill_at, self.trader_free_at)
             return
         bid, ask = quote
         # Fixed: the quote at the fill, a slippage worse; measured: the quote when the order left, a drawn slippage worse.
@@ -334,6 +339,24 @@ class Simulator:
                     )
                 self.trader_free_at = sale_at
 
+    def _sell_after_failed_entry(self, event: SignalEvent, failed_at: float) -> list[int]:
+        """
+        With a cash reserve, an entry that failed still sells what is held, as
+        the trader does (``handle_trading_signal``): the signal turned the other way.
+        """
+        if self.settings.reserve_cash_percent <= 0 or not self.positions:
+            return []
+        sale_at = failed_at + self.fills.order_seconds()
+        # The monitor goes on until the orders leave: it may have sold first.
+        self._monitor_until(ceil10(sale_at))
+        sold = [
+            self._close(position, sale_at, "Explicit Close (All)", signal_id=event.id, departed=failed_at)
+            for position in list(self.positions)
+        ]
+        if sold:
+            self.trader_free_at = sale_at
+        return sold
+
     def _close_signal(self, event: SignalEvent, decided: float) -> None:
         side = CLOSE_ACTIONS[event.action]
         sale_at = decided + self.fills.order_seconds()
@@ -389,6 +412,13 @@ class Simulator:
                 day_percent=self.day_percent(),
             )
             if decision is None:
+                flat = self._flat_window(moment)
+                if flat is not None:
+                    # The monitor's last check (``_evaluate_positions``, ``keep_flat``): at the bid of that moment.
+                    delay = self.fills.exit_seconds()
+                    self._sell(position, moment + delay if delay else moment, bid,
+                               f"Performance ({flat_reason(flat, self.settings.timezone)})", kind=FLAT_BEFORE_RELEASE)
+                    return
                 position.best = max(position.best, perf)
                 position.worst = perf if position.worst is None else min(position.worst, perf)
                 continue
@@ -405,6 +435,13 @@ class Simulator:
             delay = self.fills.exit_seconds()
             self._sell(position, moment + delay if delay else moment, price, f"Performance ({decision.reason})", kind=decision.kind)
             return
+
+    def _flat_window(self, moment: float):
+        """The release nothing is to be held into at ``moment``, when the macro_news rule sells before it."""
+        news = self.settings.news_rule()
+        if news is None or self.calendar is None:
+            return None
+        return flat_window_at(self.calendar, news, moment)
 
     def _note_gap(self, position: Position, first_missing: int, resumed: int) -> None:
         day = self._day

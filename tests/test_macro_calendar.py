@@ -16,7 +16,9 @@ from src.admin.health import OK, WARNING, macro_calendar_entry
 from src.configuration import ConfigurationManager
 from src.trade import rules as trade_rules
 from src.trade.exceptions import TradingRuleViolation
-from src.trade.macro_calendar import NewsRule, next_window, read_calendar, refusal_text, upkeep, window_at
+from src.trade.macro_calendar import (
+    NewsRule, flat_reason, flat_window_at, next_window, read_calendar, refusal_text, upkeep, window_at,
+)
 from src.trade.rules import TradingRule
 
 PARIS = pytz.timezone("Europe/Paris")
@@ -71,7 +73,42 @@ def test_the_rule_says_its_defaults_and_what_it_was_given():
         NewsRule(("FOMC", "CPI"), 0, 30, 60)
 
 
+# ── sold before a release ──
+
+
+def test_by_default_what_is_held_is_kept_through_a_release():
+    assert NewsRule.from_config({}).flatten_minutes_before == 0
+    assert flat_window_at(CALENDAR, RULE, paris(2026, 10, 14, 14, 29)) is None
+
+
+def test_what_is_held_is_sold_from_the_minutes_the_rule_gives_until_the_window_ends():
+    # CPI of 14 October 2026, 14:30 in Paris: on that day the turbo held through it was not quoted for 250 s.
+    rule = NewsRule.from_config({"flatten_minutes_before": 10})
+
+    assert flat_window_at(CALENDAR, rule, paris(2026, 10, 14, 14, 19, 59)) is None
+    window = flat_window_at(CALENDAR, rule, paris(2026, 10, 14, 14, 20))
+    assert (window.event.event, window.end) == ("CPI", paris(2026, 10, 14, 14, 45))
+    assert flat_window_at(CALENDAR, rule, paris(2026, 10, 14, 14, 44, 59)) is not None
+    assert flat_window_at(CALENDAR, rule, paris(2026, 10, 14, 14, 45)) is None
+    assert flat_reason(window, "Europe/Paris") == "Flat before CPI (14:30)"
+
+
+def test_no_entry_is_made_that_would_be_sold_at_once():
+    # Sold from 10 minutes before, entries refused from 5: entries are refused from 10 too.
+    rule = NewsRule.from_config({"minutes_before": 5, "flatten_minutes_before": 10})
+
+    assert window_at(CALENDAR, rule, paris(2026, 10, 14, 14, 20)).start == paris(2026, 10, 14, 14, 20)
+    assert said(paris(2026, 10, 14, 14, 21), rule) == "Breaking trading rule: no entry around CPI (14:30) from 14:20 to 14:45."
+    # Entries refused from longer before than sales start: the entries' window stays.
+    longer = NewsRule.from_config({"minutes_before": 15, "flatten_minutes_before": 5})
+    assert window_at(CALENDAR, longer, paris(2026, 10, 14, 14, 15)) is not None
+    assert flat_window_at(CALENDAR, longer, paris(2026, 10, 14, 14, 24, 59)) is None
+    assert flat_window_at(CALENDAR, longer, paris(2026, 10, 14, 14, 25)) is not None
+
+
 @pytest.mark.parametrize("config, refusal", [
+    ({"flatten_minutes_before": -1}, "flatten_minutes_before is a whole number of minutes from 0 to 120"),
+    ({"flatten_minutes_before": 5.5}, "flatten_minutes_before is a whole number"),
     ({"events": ["CPI", "GDP"]}, "events is a list of some of FOMC, CPI, NFP, PCE"),
     ({"events": []}, "events is a list"),
     ({"minutes_before": -1}, "minutes_before is a whole number of minutes from 0 to 120"),

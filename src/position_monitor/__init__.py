@@ -5,9 +5,13 @@ Uses Saxo's WebSocket Streaming API for instant position monitoring
 (replaces the 7-second polling approach).  Still consumes ``trading-ops``
 for time-triggered events like ``daily_stats``.
 
-Each streamed position update is checked against the exit rules. Reconciling
-the DB with Saxo is separate and rarer: it runs when a position leaves the
-stream and on a timer.
+Each streamed position update is checked against the exit rules. A position to
+be sold is kept to be sold until Saxo no longer lists it (``close_intents``):
+its sales are tried again every second, whether prices come or not, with the
+sales that come with time (after the day's close, before a US release).
+Reconciling the DB with Saxo is separate and rarer: it runs when a position
+leaves the stream and on a timer, and gives a row back to a position WATA
+bought but lost.
 
 Runs as a separate Docker container (WATA_APP_ROLE=position_monitor).
 """
@@ -75,6 +79,9 @@ CLOSE_REQUEST_MAX_AGE_SECONDS = 60
 
 LIVE_VALUE_DB_TIMEOUT_SECONDS = 5.0
 
+# How often the sales due, and the sales that come with time, are looked at.
+KEEP_FLAT_INTERVAL_SECONDS = 1.0
+
 
 # ─────────────────────────────────────────────────────
 #  Streaming callback
@@ -102,6 +109,8 @@ class StreamPositionHandler:
         self.telegram = telegram
         self.reconcile_settle_seconds = reconcile_settle_seconds
         self._last_position_ids: set[str] = set()
+        # The last snapshot of the stream, for the sales tried between its updates; None before the first.
+        self._latest_positions: dict[str, dict] | None = None
         self._reconcile_requested = False
         self._pending_reconcile: asyncio.Task | None = None
 
@@ -111,6 +120,7 @@ class StreamPositionHandler:
         if self._last_position_ids - position_ids:
             self._reconcile_soon()
         self._last_position_ids = position_ids
+        self._latest_positions = positions
         try:
             # Bookkeeping for the admin interface: it must never stand in the way of the checks below.
             self.performance_monitor.forget_live_values_except(position_ids)
@@ -145,7 +155,14 @@ class StreamPositionHandler:
             await self.reconcile(open_position_ids=self._last_position_ids)
 
     async def reconcile(self, open_position_ids: set[str] | None = None):
-        """Mark as closed in the DB the positions that were closed at Saxo behind WATA's back."""
+        """
+        Mark as closed in the DB the positions that were closed at Saxo behind
+        WATA's back, and give a row back to those WATA bought but lost.
+        """
+        try:
+            await self.performance_monitor.adopt_lost_positions(self._latest_positions)
+        except Exception as e:
+            logger.error("Looking for positions WATA lost failed: %s", e, exc_info=True)
         try:
             sync_result = await self.performance_monitor.sync_db_positions_with_api(open_position_ids)
         except Exception as e:
@@ -168,6 +185,22 @@ class StreamPositionHandler:
         while True:
             await self.reconcile()
             await asyncio.sleep(interval_seconds)
+
+    async def keep_flat_periodically(self, interval_seconds: float = KEEP_FLAT_INTERVAL_SECONDS):
+        """
+        Every ``interval_seconds``, on the stream's last snapshot: the sales due
+        again, what is held after the day's close or into a US release. An
+        issuer that stops quoting brings no update to the stream: the sales do
+        not wait for one.
+        """
+        while True:
+            await asyncio.sleep(interval_seconds)
+            if self._latest_positions is None:
+                continue
+            try:
+                await self.performance_monitor.keep_flat(self._latest_positions)
+            except Exception as e:
+                logger.error("Keeping positions flat failed: %s", e, exc_info=True)
 
     def stop(self):
         if self._pending_reconcile is not None and not self._pending_reconcile.done():
@@ -207,7 +240,11 @@ async def handle_close_position_request(
     performance_monitor: AsyncPerformanceMonitor,
     telegram: AsyncTelegramSender,
 ):
-    """Close one position at the operator's request (sent by the admin interface)."""
+    """
+    Close one position at the operator's request (sent by the admin interface),
+    or because the trader's own sale of it did not go through: kept to be sold
+    until Saxo no longer lists it.
+    """
     position_id = body.get("position_id")
     if not position_id:
         logger.error("Close request without a position_id: %s", body)
@@ -226,15 +263,15 @@ async def handle_close_position_request(
         )
         return
 
-    result = await performance_monitor.close_managed_positions_by_criteria(
-        only_position_id=str(position_id),
-        defer_bookkeeping=True,
-    )
-    logger.info("Close of position %s requested from the admin: %s", position_id, result)
-    if result["closed_initiated_count"] == 0 and result["errors_count"] == 0:
+    # The admin's request, or the trader's hand-over of a sale that did not go through (with its reason).
+    reason = body.get("reason") or f"Explicit Close (position {position_id})"
+    requested_by = "the trader" if body.get("reason") else "the admin"
+    result = await performance_monitor.request_close(str(position_id), reason)
+    logger.info("Close of position %s requested by %s: %s", position_id, requested_by, result)
+    if result["closed_initiated_count"] == 0 and not result.get("pending"):
         await telegram.send(
-            f"Close of position {position_id} requested from the admin: nothing done, "
-            f"it is not open or cannot be closed."
+            f"Close of position {position_id} requested by {requested_by}: nothing done, "
+            f"it is not open."
         )
 
 
@@ -356,6 +393,7 @@ async def main():
     stream_handler = None
     reconcile_task = None
     live_value_task = None
+    keep_flat_task = None
 
     try:
         # PostgreSQL
@@ -403,6 +441,7 @@ async def main():
             db_position_manager, trading_rule, telegram.send,
             trigger_daily_stats_fn=_trigger_daily_stats,
             order_tracker=order_tracker,
+            order_requests=AsyncDbOrderRequestManager(pg),
         )
 
         # ── Streaming configuration ──
@@ -460,6 +499,7 @@ async def main():
         )
 
         reconcile_task = asyncio.create_task(stream_handler.reconcile_periodically(reconcile_interval_seconds))
+        keep_flat_task = asyncio.create_task(stream_handler.keep_flat_periodically())
         if live_value_interval_seconds > 0:
             live_value_task = asyncio.create_task(
                 publish_live_values_periodically(performance_monitor, db_live_value_manager, live_value_interval_seconds)
@@ -481,6 +521,8 @@ async def main():
             reconcile_task.cancel()
         if live_value_task is not None:
             live_value_task.cancel()
+        if keep_flat_task is not None:
+            keep_flat_task.cancel()
         if stream_handler is not None:
             stream_handler.stop()
         if stream_client:

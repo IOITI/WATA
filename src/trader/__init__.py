@@ -58,6 +58,7 @@ from src.trade.signal_journal import (
     IGNORED,
 )
 from src.trade.order_tracker import OrderTracker
+from src.trade.ops_queue import AsyncOpsPublisher
 from src.schema import SchemaLoader
 from src.message_helper import (
     TelegramMessageComposer,
@@ -137,6 +138,33 @@ def _delta_ms_from_epoch(start_dt: datetime | None, end_epoch: float | None) -> 
 
 
 # ─────────────────────────────────────────────────────
+#  Sales that did not go through
+# ─────────────────────────────────────────────────────
+
+async def hand_over_unsold(close_result: dict, hand_over) -> str | None:
+    """
+    Give the position monitor what a close could not sell (``not_closed``):
+    it keeps those positions to be sold until Saxo no longer lists them, which
+    the trader, one signal after the other, cannot wait for. What to say of
+    them; None when everything was sold.
+    """
+    unsold = close_result.get("not_closed") or []
+    if not unsold:
+        return None
+    said = []
+    for entry in unsold:
+        handed = hand_over is not None and await hand_over(entry["position_id"], entry["reason"])
+        said.append(f"{entry['position_id']} ({entry['why']}), "
+                    + ("handed to the position monitor" if handed else "NOT handed to the position monitor"))
+    return "Not sold: " + "; ".join(said) + "."
+
+
+def closure_summary(close_result: dict, unsold: str | None) -> str:
+    summary = f"Closed existing positions. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}"
+    return summary if unsold is None else f"{summary}\n{unsold}"
+
+
+# ─────────────────────────────────────────────────────
 #  Signal handler (long / short)
 # ─────────────────────────────────────────────────────
 
@@ -149,8 +177,12 @@ async def handle_trading_signal(
     trade_turbo_exchange_id: str,
     telegram: AsyncTelegramSender,
     journal: SignalJournal | None = None,
+    hand_over=None,
 ):
-    """Process a long/short signal end-to-end."""
+    """
+    Process a long/short signal end-to-end. ``hand_over(position_id, reason)``
+    gives the position monitor a sale that did not go through.
+    """
     action = data["action"]
     indice = data["indice"]
     confidence = data.get("confidence")
@@ -189,23 +221,37 @@ async def handle_trading_signal(
         # 2. Execute based on mode
         if reserve_cash_pct > 0:
             # Decoupled: new trade first, then close old positions
-            result = await trading_orchestrator.execute_trade_signal(
-                exchange_id=trade_turbo_exchange_id,
-                underlying_uics=indice_id,
-                keywords=action,
-                confidence=confidence,
-                signal_uuid=data.get("signal_uuid"),
-            )
+            try:
+                result = await trading_orchestrator.execute_trade_signal(
+                    exchange_id=trade_turbo_exchange_id,
+                    underlying_uics=indice_id,
+                    keywords=action,
+                    confidence=confidence,
+                    signal_uuid=data.get("signal_uuid"),
+                )
+            except Exception:
+                # The signal turned the other way: what is held is sold though nothing could be bought,
+                # as the classic mode sells it before buying.
+                try:
+                    close_result = await performance_monitor.close_managed_positions_by_criteria(
+                        action_filter=None,
+                        defer_bookkeeping=True,
+                    )
+                    trading_orchestrator.invalidate_spending_power()
+                    unsold = await hand_over_unsold(close_result, hand_over)
+                    composer.add_text_section("Closure Without Entry", closure_summary(close_result, unsold))
+                except Exception as close_error:
+                    logger.error("The positions held could not be sold after the entry failed: %s", close_error)
+                    composer.add_text_section("Closure Without Entry", f"FAILED: {type(close_error).__name__}: {close_error}")
+                raise
             close_result = await performance_monitor.close_managed_positions_by_criteria(
                 action_filter=None,
                 exclude_position_id=result["position_details"]["position_id"],
                 defer_bookkeeping=True,
             )
             trading_orchestrator.invalidate_spending_power()
-            composer.add_text_section(
-                "Post-Trade Closure",
-                f"Closed existing positions. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}",
-            )
+            unsold = await hand_over_unsold(close_result, hand_over)
+            composer.add_text_section("Post-Trade Closure", closure_summary(close_result, unsold))
         else:
             # Classic: close old first, then open new
             close_result = await performance_monitor.close_managed_positions_by_criteria(
@@ -215,10 +261,8 @@ async def handle_trading_signal(
             # The new order is sized on the proceeds of what was just sold.
             await performance_monitor.wait_for_positions_closed(close_result["closed_position_ids"])
             trading_orchestrator.invalidate_spending_power()
-            composer.add_text_section(
-                "Pre-Trade Closure",
-                f"Closed existing positions. Initiated: {close_result['closed_initiated_count']}, Errors: {close_result['errors_count']}",
-            )
+            unsold = await hand_over_unsold(close_result, hand_over)
+            composer.add_text_section("Pre-Trade Closure", closure_summary(close_result, unsold))
             result = await trading_orchestrator.execute_trade_signal(
                 exchange_id=trade_turbo_exchange_id,
                 underlying_uics=indice_id,
@@ -316,7 +360,13 @@ async def handle_close_signal(
     performance_monitor: AsyncPerformanceMonitor,
     telegram: AsyncTelegramSender,
     journal: SignalJournal | None = None,
+    hand_over=None,
 ):
+    """
+    Close the positions a close signal names. What could not be sold is said
+    (FAILED, with why) and handed to the position monitor, never journaled as
+    "No open position to close".
+    """
     action = data["action"]
     action_filter = None
     if action == "close-long":
@@ -327,12 +377,21 @@ async def handle_close_signal(
     result = await performance_monitor.close_managed_positions_by_criteria(action_filter=action_filter)
     closed = result["closed_initiated_count"]
     errors = result["errors_count"]
-    logger.info("Close action '%s': closed=%d, errors=%d", action, closed, errors)
-    if closed > 0:
+    unsold = await hand_over_unsold(result, hand_over)
+    not_listed = result.get("not_listed") or []
+    logger.info("Close action '%s': closed=%d, errors=%d, not sold=%d, not listed=%d",
+                action, closed, errors, len(result.get("not_closed") or []), len(not_listed))
+    if unsold is not None:
+        journal_signal(journal, data, FAILED, f"Closed {closed} position(s). {unsold}")
+        await telegram.send(f"{action.upper()}: Closed {closed} position(s). {unsold}")
+    elif closed > 0:
         journal_signal(journal, data, CLOSED, f"Closed {closed} position(s). Errors: {errors}")
         await telegram.send(f"{action.upper()}: Closed {closed} position(s). Errors: {errors}")
     elif errors > 0:
         journal_signal(journal, data, FAILED, f"No position closed. Errors: {errors}")
+    elif not_listed:
+        journal_signal(journal, data, IGNORED,
+                       f"Open in WATA's records but not at Saxo: {', '.join(map(str, not_listed))} (left to the reconciliation)")
     else:
         journal_signal(journal, data, IGNORED, "No open position to close")
 
@@ -408,6 +467,7 @@ async def dispatch_message(
     milestones_eur: list[float],
     journal: SignalJournal | None = None,
     db_balance_manager: AsyncDbBalanceHistoryManager | None = None,
+    hand_over=None,
 ):
     # Validate schema
     try:
@@ -429,9 +489,10 @@ async def dispatch_message(
                 trading_rule, db_position_manager,
                 trade_turbo_exchange_id, telegram,
                 journal=journal,
+                hand_over=hand_over,
             )
         elif action in CLOSE_ACTIONS:
-            await handle_close_signal(body, performance_monitor, telegram, journal=journal)
+            await handle_close_signal(body, performance_monitor, telegram, journal=journal, hand_over=hand_over)
             trading_orchestrator.invalidate_spending_power()
         elif action == "daily_stats":
             uuid = body.get("signal_uuid")
@@ -642,6 +703,7 @@ async def main():
     performance_monitor = None
     journal = None
     order_tracker = None
+    ops_publisher = None
 
     try:
         # 3. PostgreSQL
@@ -716,7 +778,10 @@ async def main():
                 keep_saxo_session_warm(trading_orchestrator, keep_warm_interval_seconds)
             )
 
-        # 9. Signal polling client (replaces the RabbitMQ trading-signals consumer)
+        # 9. The position monitor takes over the sales that did not go through
+        ops_publisher = AsyncOpsPublisher(config_manager)
+
+        # 10. Signal polling client (replaces the RabbitMQ trading-signals consumer)
         signal_client = SignalPollingClient(config_manager)
         await signal_client.start()
 
@@ -745,6 +810,7 @@ async def main():
                 milestones_eur=milestones_eur,
                 journal=journal,
                 db_balance_manager=db_balance_manager,
+                hand_over=ops_publisher.hand_over,
             )
 
         # Keep polling forever
@@ -775,6 +841,8 @@ async def main():
             await order_tracker.wait_for_pending()
         if watchlist_client is not None:
             await watchlist_client.close()
+        if ops_publisher is not None:
+            await ops_publisher.close()
         if api_client is not None:
             await api_client.close()
         if pg is not None:

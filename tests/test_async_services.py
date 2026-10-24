@@ -828,9 +828,9 @@ def test_deferred_close_returns_before_bookkeeping_and_never_sells_twice():
 
     monitor, first, second, db_updates_when_returned = asyncio.run(scenario())
 
-    assert first == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"]}
+    assert first == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"], "not_closed": [], "not_listed": []}
     assert db_updates_when_returned == 0
-    assert second == {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": []}
+    assert second == {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": [], "not_closed": [], "not_listed": []}
     monitor.order_service.place_market_order.assert_awaited_once()
 
     monitor.db_position_manager.update_turbo_position_data.assert_awaited_once()
@@ -1530,7 +1530,7 @@ def test_closing_one_position_leaves_the_others_open():
 
     monitor, result = asyncio.run(scenario())
 
-    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p2"]}
+    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p2"], "not_closed": [], "not_listed": []}
     monitor.order_service.place_market_order.assert_awaited_once()
     assert monitor.order_service.place_market_order.await_args.kwargs["uic"] == 202
 
@@ -1540,7 +1540,7 @@ def test_closing_a_position_that_is_not_open_does_nothing():
 
     result = asyncio.run(monitor.close_managed_positions_by_criteria(only_position_id="unknown"))
 
-    assert result == {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": []}
+    assert result == {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": [], "not_closed": [], "not_listed": []}
     monitor.order_service.place_market_order.assert_not_awaited()
 
 
@@ -1843,7 +1843,7 @@ def test_a_failing_tracker_never_makes_a_sell_look_failed():
     with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
         result = asyncio.run(monitor.close_managed_positions_by_criteria())
 
-    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"]}
+    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"], "not_closed": [], "not_listed": []}
     monitor.order_service.place_market_order.assert_awaited_once()
     monitor.db_position_manager.update_turbo_position_data.assert_awaited_once()
     assert monitor._closing_position_ids == set()
@@ -1874,7 +1874,7 @@ def test_a_sell_order_that_cannot_be_described_is_still_a_sell_that_went_through
     with patch("src.trade.async_services.asyncio.sleep", new_callable=AsyncMock):
         result = asyncio.run(monitor.close_managed_positions_by_criteria())
 
-    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"]}
+    assert result == {"closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p1"], "not_closed": [], "not_listed": []}
     monitor.order_service.place_market_order.assert_awaited_once()
     assert monitor._closing_position_ids == set()
     # The order could not be written, what became of it still is.

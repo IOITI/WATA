@@ -925,6 +925,39 @@ class AsyncDbOrderRequestManager:
             *(entry.get(column) for column in ORDER_REQUEST_COLUMNS),
         )
 
+    # The purposes and outcome below are src/trade/order_tracker.py's CLOSE, OPEN and ACCEPTED.
+
+    async def sale_reasons(self, position_ids) -> dict[str, str]:
+        """For each position, why WATA sold it: the reason of its last sale Saxo accepted."""
+        position_ids = [str(position_id) for position_id in position_ids]
+        if not position_ids:
+            return {}
+        rows = await self.db.fetch(
+            """
+            SELECT DISTINCT ON (position_id) position_id, reason
+            FROM order_request
+            WHERE purpose = 'close' AND outcome = 'accepted' AND position_id = ANY($1::text[])
+            ORDER BY position_id, requested_at DESC
+            """,
+            position_ids,
+        )
+        return {row["position_id"]: row["reason"] for row in rows if row["reason"]}
+
+    async def purchases(self, order_ids) -> dict[str, dict]:
+        """WATA's buy orders Saxo accepted, by order id: what a position Saxo lists for one was bought for."""
+        order_ids = [str(order_id) for order_id in order_ids]
+        if not order_ids:
+            return {}
+        rows = await self.db.fetch(
+            """
+            SELECT order_id, action, signal_uuid, requested_at
+            FROM order_request
+            WHERE purpose = 'open' AND outcome = 'accepted' AND order_id = ANY($1::text[])
+            """,
+            order_ids,
+        )
+        return {row["order_id"]: dict(row) for row in rows}
+
 
 class AsyncDbBalanceHistoryManager:
     """Total account value over time (see account_balance_history)."""

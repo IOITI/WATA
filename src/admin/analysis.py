@@ -13,6 +13,7 @@ _EXIT_GROUPS = (
     ("Take-profit", "Takeprofit"),
     ("Trailing stop", "Trailing Stop"),
     ("Daily profit target", "Daily profit target"),
+    ("Before a US release", "Flat before"),
     ("Operator (one position)", "Explicit Close (position"),
     ("Signal or end of day", "Explicit Close"),
     ("Closed at Saxo", "SaxoAPI"),

@@ -261,11 +261,12 @@ def _close_request(age_seconds=1, **overrides):
     }
 
 
-def _close_dependencies(closed=1):
+def _close_dependencies(closed=1, pending=False):
     performance_monitor = MagicMock()
-    performance_monitor.close_managed_positions_by_criteria = AsyncMock(
-        return_value={"closed_initiated_count": closed, "errors_count": 0, "closed_position_ids": ["p1"] * closed}
-    )
+    performance_monitor.request_close = AsyncMock(return_value={
+        "closed_initiated_count": closed, "errors_count": 0 if closed or not pending else 1,
+        "closed_position_ids": ["p1"] * closed, "pending": pending,
+    })
     telegram = MagicMock()
     telegram.send = AsyncMock()
     return performance_monitor, telegram
@@ -276,9 +277,27 @@ def test_fresh_close_request_closes_that_position_only():
 
     asyncio.run(handle_close_position_request(_close_request(), performance_monitor, telegram))
 
-    performance_monitor.close_managed_positions_by_criteria.assert_awaited_once_with(
-        only_position_id="p1", defer_bookkeeping=True,
-    )
+    performance_monitor.request_close.assert_awaited_once_with("p1", "Explicit Close (position p1)")
+    telegram.send.assert_not_awaited()
+
+
+def test_a_sale_the_trader_hands_over_keeps_its_reason():
+    performance_monitor, telegram = _close_dependencies()
+
+    asyncio.run(handle_close_position_request(
+        _close_request(reason="Explicit Close (All)"), performance_monitor, telegram,
+    ))
+
+    performance_monitor.request_close.assert_awaited_once_with("p1", "Explicit Close (All)")
+    telegram.send.assert_not_awaited()
+
+
+def test_a_close_that_could_not_sell_yet_is_left_to_its_intent():
+    # The intent says its own failures, once and then less and less often: nothing more here.
+    performance_monitor, telegram = _close_dependencies(closed=0, pending=True)
+
+    asyncio.run(handle_close_position_request(_close_request(), performance_monitor, telegram))
+
     telegram.send.assert_not_awaited()
 
 
@@ -288,7 +307,7 @@ def test_close_request_that_waited_in_the_queue_is_ignored_and_reported():
 
     asyncio.run(handle_close_position_request(stale, performance_monitor, telegram))
 
-    performance_monitor.close_managed_positions_by_criteria.assert_not_awaited()
+    performance_monitor.request_close.assert_not_awaited()
     assert "IGNORED" in telegram.send.await_args.args[0]
 
 
@@ -302,7 +321,7 @@ def test_close_request_without_a_readable_time_or_from_the_future_is_ignored():
 
         asyncio.run(handle_close_position_request(request, performance_monitor, telegram))
 
-        performance_monitor.close_managed_positions_by_criteria.assert_not_awaited()
+        performance_monitor.request_close.assert_not_awaited()
 
 
 def test_close_request_without_a_position_does_nothing():
@@ -310,7 +329,7 @@ def test_close_request_without_a_position_does_nothing():
 
     asyncio.run(handle_close_position_request(_close_request(position_id=None), performance_monitor, telegram))
 
-    performance_monitor.close_managed_positions_by_criteria.assert_not_awaited()
+    performance_monitor.request_close.assert_not_awaited()
     telegram.send.assert_not_awaited()
 
 
@@ -346,7 +365,7 @@ def test_close_request_arrives_through_the_ops_queue():
         _Message(_close_request()), performance_monitor, MagicMock(), MagicMock(), telegram, MagicMock(), [],
     ))
 
-    performance_monitor.close_managed_positions_by_criteria.assert_awaited_once()
+    performance_monitor.request_close.assert_awaited_once()
 
 
 def _daily_stats_dependencies(balance):
