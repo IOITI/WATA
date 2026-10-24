@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth/auth-context'
 import { HistoryPanel } from '@/features/data/HistoryPanel'
 import { GapsPanel } from '@/features/prices/GapsPanel'
+import { RestartAction } from '@/features/system/RestartViews'
 import { api } from '@/lib/api'
 import { formatBytes, formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { CapitalProviderDetails, DataProvider, DukascopyProviderDetails, SaxoProviderDetails } from '@/lib/types'
@@ -93,7 +94,10 @@ function SaxoProvider({ provider }: { provider: SaxoProviderDetails }) {
       {provider.restart_required && (
         <Alert tone="warning">
           <AlertDescription>
-            The configuration changed since the services started: the recorder applies its settings at its next start.
+            <div className="space-y-2">
+              <p>The recorder runs without settings saved since it started: it applies them at its next start.</p>
+              <RestartAction ids={['price_recorder']} />
+            </div>
           </AlertDescription>
         </Alert>
       )}
@@ -101,8 +105,8 @@ function SaxoProvider({ provider }: { provider: SaxoProviderDetails }) {
         <Alert tone="danger" role="alert">
           <AlertDescription>
             Switched on in the configuration, and not recording. On the server, <code>recorder</code> must be in{' '}
-            <code>COMPOSE_PROFILES</code> (then <code>watastop</code>, <code>watastart</code>), or the recorder restarted:{' '}
-            <code>docker restart price_recorder1</code>.
+            <code>COMPOSE_PROFILES</code> (then <code>watastop</code>, <code>watastart</code>), or the recorder restarted,
+            from the <Link className="underline underline-offset-2" to="/system">System</Link> page&apos;s containers.
           </AlertDescription>
         </Alert>
       )}
@@ -259,28 +263,25 @@ function milliseconds(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : `${formatNumber(Math.round(value))} ms`
 }
 
-/** How to give the feed its login and start it: what is done on the server, never here. */
-function SettingUp({ variables }: { variables: string[] }) {
+/** How to give the feed its login and start it: the login sealed for the feed, the profile on the server. */
+function SettingUp() {
   return (
-    <Panel title="Setting it up" description="Done once, on the server: the admin never holds the key.">
+    <Panel title="Setting it up" description="Done once: the admin seals the key for the feed and cannot read it back.">
       <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
         <li>
           In Capital.com, <em>Settings › API integrations</em> (two-factor authentication must be on): make a key and
           choose its password. The demo account is enough.
         </li>
         <li>
-          In <code>/app/wata/.env</code>, three lines (a value with a <code>$</code> in single quotes):{' '}
-          {variables.map((name, index) => (
-            <span key={name}>
-              <code>{name}=…</code>
-              {index < variables.length - 1 ? ', ' : ''}
-            </span>
-          ))}
-          . Only the feed&rsquo;s container receives them.
+          In{' '}
+          <Link className="underline underline-offset-2" to="/config/credentials">
+            Configuration, Credentials
+          </Link>
+          , Capital.com login: the key, the account&rsquo;s email and the key&rsquo;s password.
         </li>
         <li>
-          Add <code>capital</code> to <code>COMPOSE_PROFILES</code> in the same file, switch the feed on here, then{' '}
-          <code>watastop</code> and <code>watastart</code>.
+          On the server, add <code>capital</code> to <code>COMPOSE_PROFILES</code> in <code>/app/wata/.env</code>, switch
+          the feed on here, then <code>watastop</code> and <code>watastart</code>.
         </li>
         <li>
           To see what Capital.com gives the key: <code>docker exec capital_feed1 python -m src.capital_feed.probe --epic US100</code>{' '}
@@ -320,7 +321,10 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
       {provider.restart_required && (
         <Alert tone="warning">
           <AlertDescription>
-            The configuration changed since the services started: the feed applies its settings at its next start.
+            <div className="space-y-2">
+              <p>The feed runs without settings saved since it started: it applies them at its next start.</p>
+              <RestartAction ids={['capital_feed']} />
+            </div>
           </AlertDescription>
         </Alert>
       )}
@@ -329,14 +333,22 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
           <AlertDescription>
             {needsLogin ? (
               <>
-                {provider.detail}. On the server, the three <code>CAPITAL_*</code> lines of <code>.env</code> give its
-                login; then <code>docker restart capital_feed1</code>.
+                {provider.detail}. Set it in{' '}
+                <Link className="underline underline-offset-2" to="/config/credentials">
+                  Configuration, Credentials
+                </Link>
+                , then restart the feed from the{' '}
+                <Link className="underline underline-offset-2" to="/system">
+                  System
+                </Link>{' '}
+                page&apos;s containers.
               </>
             ) : (
               <>
                 Switched on in the configuration, and not recording. On the server, <code>capital</code> must be in{' '}
                 <code>COMPOSE_PROFILES</code> (then <code>watastop</code>, <code>watastart</code>), or the feed
-                restarted: <code>docker restart capital_feed1</code>.
+                restarted, from the <Link className="underline underline-offset-2" to="/system">System</Link> page&apos;s
+                containers.
               </>
             )}
           </AlertDescription>
@@ -491,7 +503,7 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
         )}
       </Panel>
 
-      <SettingUp variables={provider.credential_variables} />
+      <SettingUp />
 
       <CapitalSettingsDialog open={editing !== null} start={editing ?? 'edit'} onClose={() => setEditing(null)} />
     </>

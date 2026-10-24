@@ -39,6 +39,7 @@ import shutil
 import signal
 import sys
 import tempfile
+import time
 import types
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -70,6 +71,10 @@ from src.admin.mcp_server.calls import CallLog
 from src.admin.mcp_server.pause import McpPause
 from src.admin.mcp_server.tokens import TokenStore
 from src.admin.order_requests import refusal_runs, requests_by_order
+from src.admin.service_control import RestartRefused
+from src.admin.vault import AdminVault
+from src.vault import keys
+from src.admin.service_restart import ORDER, RestartPlans, situation_of
 from src.admin.queries import (
     _ORDER_POSITION_COLUMNS,
     _ORDER_SIGNAL_COLUMNS,
@@ -1111,6 +1116,103 @@ def seeded_mcp_calls(calls: CallLog) -> CallLog:
     return calls
 
 
+class FakeControl:
+    """
+    The control service, as if Docker ran WATA's containers here: started
+    with the heartbeats' services, a restart taking a few seconds. The admin's
+    own restart is only said: it would stop this server.
+    """
+
+    available = True
+    RESTART_SECONDS = 4
+
+    def __init__(self, started: datetime):
+        self.states = {
+            service: {
+                "service": service, "container": f"{service}1", "state": "running", "running": True,
+                "started_at": started.isoformat(), "finished_at": None, "exit_code": 0, "oom_killed": False,
+                "restart_count": 0, "image": "wata-base:dev", "restarting": False, "last_restart": None,
+            }
+            for service in ORDER
+        }
+        self._until: dict[str, tuple[float, str]] = {}
+
+    async def services(self, max_age=0):
+        now = time.monotonic()
+        for service, (until, requested_at) in list(self._until.items()):
+            if now >= until:
+                state = self.states[service]
+                state.update(
+                    state="running", running=True, restarting=False, started_at=datetime.now(timezone.utc).isoformat(),
+                    restart_count=state["restart_count"] + 1,
+                    last_restart={"requested_at": requested_at, "done_at": datetime.now(timezone.utc).isoformat(), "ok": True, "detail": None},
+                )
+                del self._until[service]
+        return [dict(state) for state in self.states.values()]
+
+    async def restart(self, service):
+        if self._until:
+            raise RestartRefused(409, f"{', '.join(self._until)} is being restarted: one at a time")
+        requested_at = datetime.now(timezone.utc).isoformat()
+        if service == "admin":
+            print("[fake] The admin would restart now")
+        else:
+            self._until[service] = (time.monotonic() + self.RESTART_SECONDS, requested_at)
+            self.states[service].update(state="restarting", running=False, restarting=True)
+        return {"service": service, "container": f"{service}1", "requested_at": requested_at}
+
+    async def close(self):
+        pass
+
+
+class FakeCredentialTable:
+    """The tables credential and credential_check in memory, for the admin's vault (src/admin/vault.py)."""
+
+    def __init__(self):
+        self.rows: dict[str, dict] = {}
+        self.checks: dict[tuple[str, str], dict] = {}
+
+    async def fetch(self, query, *args):
+        if "FROM credential WHERE name = ANY" in query:
+            return [{"name": name, **row} for name, row in self.rows.items() if name in args[0]]
+        if "FROM credential ORDER BY" in query:
+            return [{"name": name, **row} for name, row in sorted(self.rows.items())]
+        if "FROM credential_check" in query:
+            return list(self.checks.values())
+        return []
+
+    async def execute(self, query, *args):
+        query = " ".join(query.split())
+        if query.startswith("INSERT INTO credential ("):
+            name, public, sealed, readers, fingerprint, set_at, by = args
+            if "DO NOTHING" in query and name in self.rows:
+                return "INSERT 0 0"
+            self.rows[name] = {"public": json.loads(public), "sealed": json.loads(sealed), "readers": readers,
+                               "fingerprint": fingerprint, "set_at": set_at, "set_by": by}
+            return "INSERT 0 1"
+        if query.startswith("INSERT INTO credential_check"):
+            name, role, checked_at, ok, detail = args
+            self.checks[(name, role)] = {"name": name, "role": role, "checked_at": checked_at, "ok": ok, "detail": detail}
+            return "INSERT 0 1"
+        if query.startswith("DELETE FROM credential WHERE"):
+            return "DELETE 1" if self.rows.pop(args[0], None) is not None else "DELETE 0"
+        if query.startswith("DELETE FROM credential_check"):
+            for key in [key for key in self.checks if key[0] == args[0]]:
+                del self.checks[key]
+            return "DELETE"
+        return "OK"
+
+
+class FakeReadiness:
+    """A service running again is at work at once, here."""
+
+    async def before(self, service):
+        return None
+
+    async def ready(self, service, started_at, before):
+        return True, "At work again (made up)"
+
+
 class FakeSaxo:
     def __init__(self):
         self.expired = os.getenv("FAKE_SAXO_EXPIRED") == "1"
@@ -1125,12 +1227,26 @@ class FakeSaxo:
             "refresh_token_expires_at": (saved_at + timedelta(minutes=-5 if self.expired else 60)).isoformat(),
             "access_token_expired": self.expired,
             "refresh_token_expired": self.expired,
-            "authorization_url": "https://live.logonvalidation.net/authorize?response_type=code&client_id=example",
+            "needs_authorization_since": saved_at.isoformat() if self.expired else None,
+            "last_refusal": None,
+            "environment": "live",
+            "where": "database",
+            "saved_by": "position_monitor",
+            "redirect_url": "https://admin.example.com/api/saxo/callback",
+            "callback": True,
+            "apps": {"live": {"set": True, "app_key": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", "fingerprint": "f00d"},
+                     "simulation": {"set": False, "app_key": None, "fingerprint": None}},
+            "authorization_url": None,
         }
 
-    def save_auth_code(self, code):
+    async def authorize(self, environment=None):
+        # Saxo's page is not opened in development: the link leads straight to the admin's callback.
+        return "/api/saxo/callback?code=fake-code-0123456789&state=fake-state"
+
+    async def hand_over(self, code, *, state=None, environment=None, by=None):
         print(f"[fake] Saxo authorization code received ({len(code)} characters)")
         self.expired = False
+        return environment or "live"
 
 
 def write_sample_logs(log_path: str) -> None:
@@ -1207,6 +1323,9 @@ def build_dev_context(work_dir: str) -> AdminContext:
     os.makedirs(os.path.dirname(config_path))
     with open(config_path, "w") as config_file:
         json.dump(config, config_file, indent=2)
+    # Written before the containers started (FakeControl): what is saved from now on is what they do not run with.
+    written = (datetime.now(timezone.utc) - timedelta(hours=4)).timestamp()
+    os.utime(config_path, (written, written))
 
     config_manager = ConfigurationManager(config_path)
     settings = AdminSettings.from_config(config_manager)
@@ -1256,7 +1375,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         closers.append(studies.close)
         token, _ = mcp_tokens.create("dev")
         print(f"Claude's MCP endpoint on http://{HOST}:{PORT}/mcp, token: {token}")
-    return AdminContext(
+    ctx = AdminContext(
         config_manager=config_manager,
         settings=settings,
         credentials=credentials,
@@ -1279,11 +1398,27 @@ def build_dev_context(work_dir: str) -> AdminContext:
         mcp_calls=seeded_mcp_calls(CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl"))),
         mcp_pause=McpPause(os.path.join(work_dir, "lib", "admin", "mcp_pause.json")),
         studies=studies,
+        # The containers, as the heartbeats say: started three hours ago.
+        service_control=FakeControl(datetime.now(timezone.utc) - timedelta(hours=3)),
         events=events,
         notifier=notifier,
         version="dev",
         closers=closers,
     )
+    ctx.restarts = RestartPlans(ctx.service_control, FakeReadiness(), lambda: situation_of(ctx), events, poll_seconds=1)
+    # The credentials, sealed with keys made for this run: the admin's own and every public one, as the
+    # compose file mounts them. FAKE_NO_KEYS=1 shows the page of an admin without them (the lab).
+    keys_root = os.path.join(work_dir, "keys")
+    view = os.path.join(work_dir, "admin-keys")
+    if os.getenv("FAKE_NO_KEYS") != "1":
+        keys.generate(keys_root)
+        os.makedirs(os.path.join(view, "own"))
+        shutil.copy(os.path.join(keys_root, "admin", "private.key"), os.path.join(view, "own", "private.key"))
+        os.symlink(os.path.join(keys_root, "public"), os.path.join(view, "public"))
+    table = FakeCredentialTable()
+    ctx.vault = AdminVault(reader=table, writer=table, config_manager=config_manager, keys_dir=view,
+                           feed_state=queries.capital_feed_state)
+    return ctx
 
 
 def _exit_normally(*_):

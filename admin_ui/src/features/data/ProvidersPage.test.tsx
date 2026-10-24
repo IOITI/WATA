@@ -245,7 +245,7 @@ describe('the providers', () => {
     // Set up on its own page: a link, which can be opened in another tab.
     expect(within(entry('Dukascopy')).getByRole('link', { name: 'Set up' })).toHaveAttribute('href', '/data/providers/dukascopy')
     expect(within(entry('Capital.com')).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
-    expect(within(entry('Capital.com')).getByText(/three/)).toHaveTextContent('CAPITAL_*')
+    expect(within(entry('Capital.com')).getByText(/Its login is set in/)).toHaveTextContent('Configuration, Credentials')
   })
 
   it('switch Capital.com on from the catalog, through its settings', async () => {
@@ -398,11 +398,13 @@ describe('the Saxo provider’s page', () => {
     expect(trail().getByText('Saxo Bank').closest('[aria-current="page"]')).not.toBeNull()
   })
 
-  it('says that a recorder switched on and silent must be started on the server', async () => {
+  it('says that a recorder switched on and silent must be started on the server, or restarted', async () => {
     serve({ saxoDetails: saxo({ status: 'down', detail: 'No sign of it for 12 min' }) })
     renderPage('/data/providers/saxo')
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('docker restart price_recorder1')
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('COMPOSE_PROFILES')
+    expect(within(alert).getByRole('link', { name: 'System' })).toHaveAttribute('href', '/system')
   })
 
   it('adds an instrument in the settings dialog, which waits for its UIC', async () => {
@@ -482,23 +484,24 @@ describe('the Capital.com provider’s page', () => {
     expect(screen.getByText(/Market open/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'View asset' })).toHaveAttribute('href', '/data/assets/capital/US100')
     expect(screen.getByText(/3 days, 08 Oct 2026 to 10 Oct 2026/)).toBeInTheDocument()
-    // The names of the login's variables: the page never has their values.
-    for (const name of ['CAPITAL_API_KEY', 'CAPITAL_IDENTIFIER', 'CAPITAL_PASSWORD']) {
-      expect(screen.getByText(`${name}=…`)).toBeInTheDocument()
-    }
+    // Its login is a credential sealed for the feed: the page leads there.
+    const setUp = screen.getByText('Setting it up').closest('section')!
+    expect(within(setUp).getByRole('link', { name: 'Configuration, Credentials' })).toHaveAttribute('href', '/config/credentials')
   })
 
-  it('says what to do on the server when the feed has no login', async () => {
+  it('says where to set the login when the feed has none, and where to restart it', async () => {
     serve({
       capitalDetails: capital({
-        status: 'down', detail: 'No Capital.com login: CAPITAL_API_KEY missing in .env.',
-        feed: { ...capital().feed!, state: 'no_credentials', detail: 'No Capital.com login: CAPITAL_API_KEY missing in .env.', figures: {} },
+        status: 'down', detail: "No Capital.com login: set it from the admin's Credentials",
+        feed: { ...capital().feed!, state: 'no_credentials', detail: "No Capital.com login: set it from the admin's Credentials", figures: {} },
       }),
     })
     renderPage('/data/providers/capital')
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('No Capital.com login: CAPITAL_API_KEY missing in .env.')
-    expect(screen.getByRole('alert')).toHaveTextContent('docker restart capital_feed1')
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent("No Capital.com login: set it from the admin's Credentials")
+    expect(within(alert).getByRole('link', { name: 'Configuration, Credentials' })).toHaveAttribute('href', '/config/credentials')
+    expect(within(alert).getByRole('link', { name: 'System' })).toHaveAttribute('href', '/system')
   })
 
   it('refuses an instrument that is not an epic before anything is sent, and warns of the live account', async () => {

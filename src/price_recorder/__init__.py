@@ -47,6 +47,7 @@ async def main():
     from src.saxo_authen import SaxoAuth
     from src.saxo_streaming.client import SaxoStreamClient
     from src.trade.async_services import AsyncInstrumentService, AsyncSaxoApiClient
+    from src.vault import loader as vault
     from src.trader import get_account_info_async
     from src.watchlist_manager.manager import load_allowed_indices
 
@@ -83,6 +84,8 @@ async def main():
         await pg.connect()
         await init_price_history_schema(pg)
         history = AsyncDbPriceHistoryManager(pg)
+        # Its credential (Telegram's bot, for the sender's direct fallback), sealed for it in PostgreSQL.
+        await vault.load(config_manager, "price_recorder", db=pg)
 
         saxo_auth = SaxoAuth(config_manager)
         api_client = AsyncSaxoApiClient(config_manager, saxo_auth)

@@ -1,5 +1,188 @@
 # Changelog
 
+## v0.44.0 - Saxo's login in PostgreSQL, authorised from the admin
+
+**Release date:** unreleased
+
+Until now Saxo's login was an encrypted file in `var/lib/saxo_auth`, its app in `config.json` (mounted into every container), and a lapsed login was handed back over SSH or by pasting a code the admin wrote into that folder. Each service that found the login lapsed said so on Telegram in turn, every five minutes, and held the lock between them while it waited.
+
+- **Saxo's login is kept in PostgreSQL**, sealed for the four services that log in to Saxo: the trader, the position monitor, the watchlist manager and the price recorder.
+  - They renew it in turn, one at a time under the lock they already shared in `var/lib/saxo_auth`, and a renewal is written only if no other service renewed it meanwhile: a refresh token is used once, and Saxo refuses it the second time.
+  - While PostgreSQL cannot be written, a renewed token waits beside the lock, sealed, and the next service to renew writes it: Saxo's login does not depend on the database.
+- **Two apps, live and simulation**, each set on the Configuration page's Credentials: its App Key and App Secret, or the app object copied from Saxo's developer portal, which is checked against the account (an app of the other environment, a grant type other than Code, redirect addresses without this server's) and whose addresses are never kept. Saxo's login and token addresses are WATA's own, one pair per account. The services log in with the app of the account `saxo_auth.env` names, which stays a setting of the server: switching it would mix the two accounts' positions in one history.
+- **A lapsed login is authorised from the admin**, System page, Saxo connection:
+  - "Open Saxo's login" opens Saxo's page with a link made for this login alone, its state kept hashed for ten minutes and used once;
+  - with `SAXO_REDIRECT_URL` (`deploy/.env`) set to the admin's `/api/saxo/callback` and registered in the app, Saxo sends the browser back to the admin, which hands the code over by itself and says what came of it; otherwise the address Saxo redirected to is pasted, its state checked;
+  - the code is sealed for the four services, and one of them takes it (one only) and exchanges it. `watasaxoauth` does the same on the server.
+- **Said once**: Telegram says a lapse once, then every half hour until a login comes, and says when it is back. A service waiting for a code no longer holds the lock: it looks for one every five seconds for five minutes, then asks again at its next need.
+- **The admin no longer mounts Saxo's token folder.** It reads when the login was saved and by which service, when it ends, since when it is wanted and what Saxo last answered, never a token.
+- **Moving it in**: at the deploy, with the services stopped, the migration of v0.43.0 also takes the app from `config.json` and moves the token file in under the services' lock, then puts the file aside, so that the login goes on without a new one. `export-saxo`, in the trader's container, writes it back for a return to v0.43 (README, Credentials).
+
+**Verification status:**
+- 2,868 Python tests pass on Python 3.12 and 3.14, 22 more than v0.43.0: Saxo's login in its row (a fresh token used without asking Saxo, an expired one renewed once under the lock and written as the next generation, one renewed meanwhile by another service used, a refusal said in the row), a lapse (a code handed over exchanged, said once, awaited without the lock, a second service silent), the file of before read while it is there, a renewal kept beside the lock while PostgreSQL cannot be written and read back, the admin's link and its state (hashed, ten minutes, used once), the callback, `watasaxoauth`, the token file moved in and written back for a return (after the purge too), where the admin says each app is read now.
+- The new SQL run on a real PostgreSQL 16 (`pgserver`, the live tests of `tests/test_infrastructure_live.py`): two services renewing an expired login at once renew it once, the second reading the first's; a code handed over taken once, a lapse said once. 15 live tests pass, RabbitMQ's left out (none here).
+- 1,117 interface tests pass, 12 of them new: the Saxo panel (the login and who saved it, a link opened for this login, an address pasted with its state and a code alone, the callback's outcome, no row yet, no app set and no redirect), the state read from a pasted address, the app object read and checked, a Saxo app filled from it and sealed.
+- **Seen in the browser pane on the fake admin**: the login lapsed, its link followed back through the callback to the System page's notice, the login then shown with who saved it; a refused callback; the live app set from a made-up app object of the simulation account, its three warnings, then sealed with its readers' restart offered; desktop dark, phone width light.
+- **Not run against Saxo nor on the server**: the exchange of a real code, Saxo's acceptance of the admin's callback as a redirect, the move of the server's token file, the four services sharing the row.
+
+## v0.43.0 - Credentials sealed in PostgreSQL, set from the Configuration page
+
+**Release date:** unreleased
+
+Until now WATA's credentials were in five places: `config.json`, mounted into every container, with its twenty backups in clear; `.env`; two encrypted files; the MCP tokens' file. The admin could change none of them.
+
+- **The credentials are kept in PostgreSQL, each sealed for the services that read it**:
+  - the Telegram bot (its token and chat), read by the telegram service and each service that sends to Telegram itself when RabbitMQ does not take a message;
+  - TradingView's webhook token, read by the web server and the admin;
+  - a new internal token, which the trader, the scheduler, the TA engine and the admin send the web server. Until now they sent TradingView's token: an alert's address seen by someone opened the internal endpoints too;
+  - the Capital.com login, read by the feed alone;
+  - the outside watcher's address, read by the position monitor alone.
+- **Sealed**: a value is encrypted once, its key wrapped for each reader with that service's public key; only a reader's private key opens it, and a row moved under another name opens no more. Each service has its key pair, made by the install script in `/app/wata/keys` and mounted into its own container alone. The keys are in no dump nor export: a copy of the database is ciphertext. Keep a copy of `/app/wata/keys`.
+- **The Configuration page's Credentials group** shows each one: where the services read it now, when it was set and from where, its last four characters, and what each service last saw when it used it (a message sent, a ping answered, the feed's login). Each has how to obtain it, step by step, and a dialog to set or replace it, checked by the server before anything is written. The admin cannot read back what it seals, except what it uses itself.
+- **The tokens are rotated** from the page or `watawebtoken --new`: the one before stays accepted for an hour for TradingView's, the time to change the alerts, and fifteen minutes for the internal one. TradingView's address is shown on request, audited. The Telegram bot can be tried with a test message.
+- **A change applies at the next start** of the services that read it, which the card offers to restart.
+- **Claude's tokens are in PostgreSQL too**, made from the System page (shown once) or `watamcptoken`. The file of before is moved in when the admin first starts.
+- **A service never reads a credential elsewhere than its row** when it has one. One that cannot open it does without it and says so: the web server refuses, the trader's watch says it cannot poll, the feed idles, the telegram service leaves the messages in the queue. Nothing stops and starts again in a loop. One whose row is absent reads its old place, said once in its log.
+- **The web server never makes a token up any more**: with none, it refuses every request and says so.
+- **Moving them in**: at the deploy, with the services stopped, `docker compose --profile tools run --rm vault_tools migrate --dry-run`, then without `--dry-run` (README, Credentials). The old places stay as they are, so that going back to v0.42 works. `--purge-old`, at your word after a day, clears them.
+- **The telegram service keeps the messages Telegram refuses for a wrong bot or chat** (401, 403, 404, "chat not found") in the queue for when they are set right. It dropped them, as it drops a message refused for itself.
+- The telegram service and the scheduler now wait for PostgreSQL at their start, where their credentials are.
+
+**Verification status:**
+- 2,846 Python tests pass on Python 3.12 and 3.14, 72 of them new: sealing (each reader opens, no other key, any byte changed, a value moved under another name), the keys made once and never replaced, each credential's checks without its value in a refusal, the loader (its rows laid over the configuration and hidden in the logs, an absent row read at its old place, one that cannot be opened never read elsewhere, the database waited for, given up, and the stop heard), the web server's two tokens and the one before a rotation, the admin's list, sealing for the readers alone, rotation, the audit without a value, the webhook's address, the bot tried, the tables it writes, Claude's tokens in the table, the migration and the purge, the keys in the compose file and the install script.
+- The new SQL run on a real PostgreSQL 16 (`pgserver`, the live tests of `tests/test_infrastructure_live.py`): a credential set by the admin, replaced, checked, opened by the feed through the admin's read-only pool, not by the trader, removed; Claude's tokens made, used, revoked.
+- 1,105 interface tests pass, 9 of them new: what is said of each credential, a bot set and its readers' restart offered, a token rotated and its address shown, the bot tried, nothing set without the keys, a Claude token made and shown once.
+- **Seen in the browser pane on the fake admin**, with keys made for it: the Credentials group, a token made and its address shown, the Telegram bot set with the restart of its seven readers offered; desktop dark, phone width light.
+- **Not run on the server**: the keys made by the install script, the migration on the server's own files, the services reading their rows.
+
+## v0.42.0 - Services restarted from the admin to apply a change
+
+**Release date:** unreleased
+
+A service reads `config.json` when it starts. Until now a change saved from the Configuration page waited for someone to restart the services on the server, and the admin, which has no access to Docker, could only guess which ones still ran without it, from its own start.
+
+- **A control service** (`service_control1`, started with the admin's profile) holds Docker's socket in place of the admin.
+  - It makes two calls of Docker's API: what a container is doing, and its restart, at the version of the API the daemon says it serves.
+  - It acts only on WATA's ten containers, each checked by its compose label and its image: never PostgreSQL, RabbitMQ, Traefik, the backups or itself.
+  - The admin alone reaches it, on a network of their own with no way out, with a token both are given as a secret, made by the install script at the first install.
+  - It restarts one container at a time, and a service of the trading path at most once in five minutes and three times an hour, whatever asks it.
+- **The System page lists the containers**: running since when, how often restarted, stopped for lack of memory, and the saved changes each does not run with yet. Those are worked out from the journal of saves against each container's start: a change undone since is none, and a change made on the server by hand is said as such. The top bar's "Restart needed" names the services, and the provider pages and the Configuration page's card after a save offer the restart of those concerned.
+- **A restart is held back while it could cost a trade**, unless asked anyway (recorded in the audit trail):
+  - the trading path while a position is open, in the database or as Saxo lists it to the position monitor, or while the market is open by WATA's hours, as for a deploy;
+  - the position monitor while it is still trying to sell a position;
+  - the scheduler within two minutes of one of its jobs, which it schedules at its start (a restart just after its time skips the day's);
+  - the TA engine while a live rule runs and the market is open;
+  - the admin while a backtest or one of Claude's studies runs.
+
+  Those held back can be left out and the others restarted at once.
+- **Several services are restarted one after the other**, the admin last, each once the one before is at work again: a heartbeat of its new start, a consumer on its queue, an answer, a state row or a bar of its new start, its log's line. The guards are read again before each one, and the plan stops at the first that does not start again. Its progress is shown as it goes, said on the bell when it ends, and on Telegram when it stopped: whoever asked may have left the page.
+- **Restarts are operator actions**, switched off with `admin.actions_enabled`, audited and announced on Telegram, and never within reach of Claude's endpoint. A change of `.env` or of `COMPOSE_PROFILES` still needs `watastop` and `watastart` on the server, which the pages say.
+- **The market's hours were read three ways** by the downloads, the research export and the paper days. One function now decides it for them and for the restarts, as the deploy does.
+- **The compose file's setup step rewrote `config.json` at each start**, even when the password it writes was already there. It leaves the file as it is then.
+
+**Verification status:**
+- 2,774 Python tests pass on Python 3.12 and 3.14, 59 of them new: the Docker client and the calls it refuses, against a fake Docker on a Unix socket too; the control service's token, its list of containers held to the compose file and the catalog, one restart at a time and the trading path's pace; who holds the socket, the network and the token in the compose file; the guards; the changes a service does not run with; a plan's order, readiness, guards read again, failures and their message; the routes, the audit, the top bar.
+- 1,096 interface tests pass, 17 of them new: what the pages say of the containers and of a plan, the restart asked, asked anyway, the held ones left out, and the event of a plan's end.
+- **Seen in the browser pane on the fake admin**, with a made-up control service: a save, its card's restart, the confirmation with the services held back by an open position, those left out, the others restarted one after the other; desktop dark, phone width light.
+- **Not seen on a real Docker here** (none on this Mac): CI runs the control service on the runner's Docker, restarts a container named like WATA's through it, and checks that it then reads a file bind-mounted alone and replaced since, as the editor replaces `config.json`. Not run against the server.
+
+## v0.41.0 - Every parameter of the configuration on its page, with what it changes
+
+**Release date:** unreleased
+
+Until now the Configuration page had fields for about forty keys of `config.json`. The rest of `trade.config` (the trading timezone, streaming, polling, the watchlist manager, the TA engine) was reachable only as JSON, and the `admin`, credentials and infrastructure sections only as the whole file.
+
+- **A catalog of every key** (`src/admin/config_catalog/`). For each of the file's parameters it holds:
+  - what the parameter does and what else it changes;
+  - which parameters it works with;
+  - what to watch for: a bound only the code holds (60 turbos asked at most), a timezone that is not the one expected (the TA engine's restart is in UTC, the sizing periods follow the trading timezone);
+  - which services read it at their start, so which a change restarts, and what else reads it (the dashboard's limits, new backtests, paper days, the research export);
+  - its bounds and its default;
+  - whether the page may change it, and if not, why and how it is changed on the server.
+
+  A test holds the catalog to the code:
+  - every key of the example file, every setting the sections check themselves and every path the code reads has an entry;
+  - no entry describes a key nothing reads;
+  - the bounds offered are accepted by the validators, and refused beyond them where the services check them;
+  - what the page may change is what the editor takes.
+- **The Configuration page is built from it.**
+  - An overview leads to fourteen groups and searches every parameter.
+  - Each group has a page of its own, with a field for each parameter, what it changes, the parameters it works with as links, and a reset to its default.
+  - An hour of the market is shown as it is that day in New York, Paris and UTC, and the page says when the clocks are changed apart.
+  - Optional rules (risk limits, US releases) are switched on and off from their group.
+  - Read-only keys (credentials masked, infrastructure, the admin's switches and addresses) are shown with why.
+  - A key of the file WATA does not know, a typo or a leftover, is listed with the key it resembles: nothing reads it.
+  - A draft is kept from group to group, and leaving the page with changes unsaved is asked about.
+- **Before a save, the review says** what each parameter becomes, which services apply it at their next start, what else reads it, and what works against what: a close of the day after the end of trading, a trailing stop that arms above the take-profit, the TA engine on with the Capital.com feed off, exits judged on stale quotes. The server checks the change as a save would, the admin's own section included (`AdminSettings`, and bounds for the limits the page now changes).
+- **After a save:**
+  - the keys changed are written down beside the file, values masked;
+  - the Previous versions tab shows what each save changed;
+  - the audit entry and Telegram name the keys and the services to restart;
+  - the page gives the restart command of the services named. Restarting them from the page comes with the next version.
+- **The admin's limits can be changed from the page**: session times, backtests, Claude's endpoint and its limits. Its switches (`actions_enabled`, `config_edit_enabled`), the proxies it believes, its address and its folders stay the server's.
+- **Keys nothing reads no longer have to be in the file**: `general.position_check`, `general.websocket`, `api_limits.top_positions`, `retry_config.retry_sleep_seconds`. The page says so.
+- **The admin takes the watchlist manager as on unless switched off**, as the trader does; it took it as off.
+- **The Capital.com provider page said `docker restart capital_feed1` after a change of the login in `.env`.** A restart keeps the environment the container was created with: it now says `watastart`.
+
+**Verification status:**
+- 2,715 Python tests pass on Python 3.12 and 3.14, 143 of them new: the catalog against the code and the files (138), the preview, the change journal and history, the audit's detail, and the keys nothing reads taken out of the file.
+- 1,079 interface tests pass, 31 of them new: the catalog's model, the timezones, and the page.
+  - The overview and its search.
+  - A group with who reads each parameter and what it changes.
+  - An optional rule switched on and the draft kept through another group.
+  - A value out of bounds refused before anything is sent.
+  - A group that does not exist.
+  - The review and the save with its restart command.
+  - Leaving the page asked about, moving between its views not.
+- **Seen in the browser pane on the fake admin:** desktop dark and light, phone width light.
+
+## v0.40.0 - Services that stop cleanly, and secrets kept out of the logs
+
+**Release date:** unreleased
+
+The first step of the configuration's rework (every parameter on the page, the credentials in PostgreSQL, services restarted from the admin): a restart from the admin is only safe once a service can be stopped without being cut off, and secrets must not be left in the logs the admin shows.
+
+Until now no WATA service ever received Docker's stop. The image starts each role through a shell script, which never passes SIGTERM on to Python. Docker waited 10 seconds and killed the service, so no stopping code ever ran: not the trader's, not the monitor's, nor the handlers the recorder, the feed and the TA engine already had.
+
+- **Each service now stops cleanly**, at a deploy as at any restart.
+  - The start script hands its place to Python (`exec`), and the compose file runs tini as PID 1 (`init: true`), which hands it the signal.
+  - **The trader** finishes the signal it is handling, then polls no more (`stop_grace_period` 60 s). An order cut off between Saxo taking it and WATA writing it down would leave a position with no row, which nothing manages or adopts.
+  - **The position monitor** starts no new sale and waits for the one it has sent to Saxo (15 s at most), then stops its stream and its loops (`stop_grace_period` 45 s). What was still to be sold is decided again at its next start.
+  - **The scheduler** leaves its loop between two jobs.
+  - The others stop at once.
+- **No secret in a log line.**
+  - Every line a service writes is cleaned:
+    - by shape: a token in an address, a Bearer header, Saxo's stream address and account keys, Telegram's bot address, a password in an address;
+    - by value: the secrets of `config.json`, the webhook token, Saxo's tokens, the Capital.com login and the outside watcher's address.
+  - uvicorn's access log is cleaned too; it wrote TradingView's webhook token with each request.
+  - The HTTP and WebSocket libraries stay at `WARNING` whatever `logging.level` says. At `INFO`, httpx wrote:
+    - the outside watcher's address every minute;
+    - Telegram's address with the bot's token, each time a message was sent directly;
+    - Saxo's account keys with every request.
+  - The admin's Logs page shows and searches the older lines cleaned the same way.
+- **The Telegram service no longer crash-loops on a message Telegram refuses.**
+  - Its request has a time limit.
+  - Its errors no longer name the address, which holds the token.
+  - A message refused for what it is (400 to 499 but 429) is dropped with a log line instead of stopping the service again and again.
+  - One Telegram could not take for now goes back to the queue after 5 s.
+- **The deploy's own "Stop the application" step works.** It ran a `cd … &&` without a shell and always failed, leaving the install script's stop as the only one. It now stops the version running at the time, every container included.
+- `python -m src.saxo_authen` no longer prints the access token.
+
+**Verification status:**
+- 2,572 Python tests pass on Python 3.12 and 3.14. The new ones cover:
+  - the shapes and registered values masked;
+  - a plain word not taken for a secret;
+  - an exception's text cleaned;
+  - uvicorn's access log keeping its five arguments;
+  - a service's log file holding no secret, its libraries kept quiet;
+  - the admin's Logs page;
+  - the Telegram service's answers;
+  - the trader's wait for signals cut off at once while the signal in hand is finished;
+  - the monitor starting no sale once stopping and waiting for the one under way;
+  - the compose file, the start script, CI's check and the deploy's stop;
+  - the monitor's stop kept out of the code every backtest's digest holds, so no run is marked as made with other code.
+- **Not yet seen:** a service stopped by real Docker. CI's image job does it (it stops the scheduler's container and reads its line).
+
 ## v0.39.0 - Real-time prices from Saxo, and New York's hours read as such everywhere
 
 **Release date:** 2026-10-24

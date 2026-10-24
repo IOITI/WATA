@@ -102,6 +102,26 @@ def trading_hours(config: dict) -> tuple[str, int, int]:
     raise KeyError("market_hours")
 
 
+def within_hours(hours: tuple[str, int, int], now: float) -> bool:
+    """Whether ``now`` falls in ``(timezone, start hour, end hour)`` on a weekday."""
+    zone, start_hour, end_hour = hours
+    local = datetime.fromtimestamp(now, pytz.timezone(zone))
+    return local.weekday() < 5 and start_hour <= local.hour < end_hour
+
+
+def market_is_open(config: dict, now: float) -> bool:
+    """
+    Whether WATA may be trading at ``now``, as the deploy judges it: its hours
+    (``market_hours``, in their timezone) on a weekday. Unknown counts as open.
+    The downloads, the research export, the paper days and the restarts of the
+    trading path wait for it to be closed.
+    """
+    try:
+        return within_hours(trading_hours(config), now)
+    except (ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
+        return True
+
+
 def config_hours(config_path: str) -> Callable[[], tuple[str, int, int]]:
     """Read again each time: the configuration may have been edited since the admin started."""
 
@@ -355,11 +375,9 @@ class HistoryDownloads:
         if self._hours is None:
             return True
         try:
-            zone, start_hour, end_hour = self._hours()
-            local = datetime.fromtimestamp(now, pytz.timezone(zone))
+            return within_hours(self._hours(), now)
         except (OSError, ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
             return True
-        return local.weekday() < 5 and start_hour <= local.hour < end_hour
 
     def _days_to_keep(self, now: float, days: int) -> list[date]:
         """The days of the last ``days`` that are not whole yet, oldest first. Today is left to tomorrow."""

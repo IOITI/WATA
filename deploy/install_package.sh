@@ -56,6 +56,8 @@ mkdir -p "$APP_BASE_DIR/var/log/wata-admin"
 mkdir -p "$APP_BASE_DIR/var/log/wata-price-recorder"
 mkdir -p "$APP_BASE_DIR/var/log/wata-capital-feed"
 mkdir -p "$APP_BASE_DIR/var/log/wata-ta-engine"
+mkdir -p "$APP_BASE_DIR/var/log/wata-service-control"
+mkdir -p "$APP_BASE_DIR/var/lib/service_control"
 
 # Ensure docker service is enabled
 echo "Ensuring Docker service is enabled..."
@@ -93,10 +95,19 @@ sudo ufw --force enable
 # Reload UFW to apply changes
 sudo ufw reload
 
+# The token the admin opens the control service with (a compose secret of both): made at the
+# first install, never overwritten, owner-only (the playbook loosens /app/wata at each deploy).
+CONTROL_TOKEN="$APP_BASE_DIR/var/lib/service_control/token"
+if [ ! -s "$CONTROL_TOKEN" ]; then
+    (umask 077 && openssl rand -hex 32 > "$CONTROL_TOKEN")
+    echo "Made the control service's token."
+fi
+
 # Set permissions
 echo "Setting permissions..."
 chmod 755 "$VERSION_DIR/docker_build.sh"
 chmod 700 -R "$APP_BASE_DIR/var/lib/"
+chmod 600 "$CONTROL_TOKEN"
 
 # Build the docker image
 echo "Building Docker image..."
@@ -106,6 +117,16 @@ else
     echo "Error: Docker build script not found at $VERSION_DIR/docker_build.sh" >&2
     exit 1
 fi
+
+# The services' key pairs, which seal the credentials kept in PostgreSQL (src/vault/): the missing ones
+# made by the image just built, none ever replaced (what is sealed for a key opens with it alone). Kept
+# apart from var/lib, which five services mount whole, and owner-only: the playbook loosened /app/wata.
+# Keep a copy of /app/wata/keys: without it, every credential must be entered again.
+mkdir -p "$APP_BASE_DIR/keys"
+docker run --rm -v "$APP_BASE_DIR/keys:/keys" wata-base:latest python -m src.vault keygen --root /keys
+chmod 700 "$APP_BASE_DIR/keys" "$APP_BASE_DIR/keys"/*
+find "$APP_BASE_DIR/keys" -name private.key -exec chmod 600 {} +
+find "$APP_BASE_DIR/keys/public" -name '*.pub' -exec chmod 644 {} +
 
 
 # Create command wrappers
@@ -354,8 +375,8 @@ echo "  - watastop:    Stop the application"
 echo "  - watastatus:  Show the status of application containers"
 echo "  - watalogs:    Tail the application logs"
 echo ""
-echo "To authenticate with Saxo:"
-echo "  - watasaxoauth <AUTH_CODE>"
+echo "To authenticate with Saxo (or from the admin's System page):"
+echo "  - watasaxoauth"
 echo ""
 echo "To manage the WebServer token:"
 echo "  - watawebtoken [--new]"

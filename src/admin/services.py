@@ -4,6 +4,7 @@ already expose: web_server's internal HTTP endpoints, the watchlist manager's
 health endpoint, RabbitMQ, and the Saxo token files.
 """
 
+import asyncio
 import json
 import logging
 
@@ -29,7 +30,8 @@ class WataServices:
         signal_polling_config = config_manager.get_config_value("trade.config.signal_polling", {})
         self._web_server_url = signal_polling_config.get("service_url", "http://web_server1:80").rstrip("/")
         watchlist_config = config_manager.get_config_value("trade.config.watchlist_manager", {})
-        self._watchlist_enabled = watchlist_config.get("enabled", False)
+        # On unless false, as the trader reads it (src/trade/watchlist_client.py).
+        self._watchlist_enabled = watchlist_config.get("enabled", True)
         self._watchlist_url = watchlist_config.get("service_url", "http://watchlist_manager1:8081").rstrip("/")
 
     # ── web_server ──
@@ -39,7 +41,10 @@ class WataServices:
         try:
             for attempt in range(2):
                 if self._web_server_token is None:
-                    self._web_server_token = await run_in_threadpool(self._web_server_token_getter)
+                    if asyncio.iscoroutinefunction(self._web_server_token_getter):
+                        self._web_server_token = await self._web_server_token_getter()
+                    else:
+                        self._web_server_token = await run_in_threadpool(self._web_server_token_getter)
                 response = await self._http.request(
                     method,
                     f"{self._web_server_url}{path}",
@@ -161,30 +166,3 @@ class WataServices:
         except Exception as e:
             raise ServiceUnavailable(f"rabbitmq: {e}") from e
         logger.info(f"Send message to channel {OPS_QUEUE}, message {message}")
-
-
-class SaxoAccess:
-    """Saxo token status and the manual authorization-code hand-off."""
-
-    def __init__(self, config_manager):
-        self._config_manager = config_manager
-        self._saxo_auth = None
-
-    def _auth(self):
-        if self._saxo_auth is None:
-            from src.saxo_authen import SaxoAuth
-
-            self._saxo_auth = SaxoAuth(self._config_manager)
-        return self._saxo_auth
-
-    def status(self) -> dict:
-        saxo_auth = self._auth()
-        return {
-            **saxo_auth.get_token_status(),
-            "authorization_url": saxo_auth.get_authorization_url(),
-        }
-
-    def save_auth_code(self, code: str) -> None:
-        from src.saxo_authen.cli import save_auth_code
-
-        save_auth_code(code, self._config_manager)

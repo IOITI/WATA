@@ -535,3 +535,79 @@ def test_the_outside_ping_never_says_its_secret_address(caplog):
     assert pinged == [secret] * 3
     assert "The heartbeat ping failed: ConnectionError" in caplog.text
     assert secret not in caplog.text
+
+
+def test_a_stop_lets_the_sale_under_way_through_then_ends_the_stream():
+    calls = []
+    performance_monitor = MagicMock()
+    performance_monitor.begin_shutdown = MagicMock(side_effect=lambda: calls.append("no new sale"))
+
+    async def wait_for_sales_under_way(timeout):
+        calls.append(f"waited {timeout}s at most")
+        return True
+
+    performance_monitor.wait_for_sales_under_way = wait_for_sales_under_way
+    stream_client = MagicMock()
+    stream_client.stop = AsyncMock(side_effect=lambda: calls.append("stream stopped"))
+
+    async def scenario():
+        stopping = asyncio.Event()
+        task = asyncio.create_task(position_monitor.stop_when_asked(stopping, performance_monitor, stream_client, settle_seconds=3))
+        await asyncio.sleep(0)
+        assert calls == []
+        stopping.set()
+        await asyncio.wait_for(task, 1)
+
+    asyncio.run(scenario())
+
+    assert calls == ["no new sale", "waited 3s at most", "stream stopped"]
+
+
+def test_a_monitor_asked_to_stop_starts_no_sale(tmp_path):
+    from tests.test_keeping_flat import listed, monitor_for
+
+    monitor, _ = monitor_for(tmp_path, monitor_class=position_monitor.StoppableMonitor)
+    monitor.begin_shutdown()
+
+    asyncio.run(monitor.check_positions_from_stream(listed(bid=9.0)))  # -10 %: past the stop
+
+    # Decided again at the next start, rather than cut off between Saxo taking it and WATA writing it down.
+    monitor.order_service.place_market_order.assert_not_awaited()
+
+
+def test_a_stop_waits_for_the_sale_under_way_to_have_saxos_answer(tmp_path):
+    from tests.test_keeping_flat import listed, monitor_for
+
+    monitor, _ = monitor_for(tmp_path, monitor_class=position_monitor.StoppableMonitor)
+    answered = asyncio.Event()
+
+    async def place_market_order(**kwargs):
+        await answered.wait()
+        return {"OrderId": "sell-1"}
+
+    monitor.order_service.place_market_order = AsyncMock(side_effect=place_market_order)
+
+    async def scenario():
+        check = asyncio.create_task(monitor.check_positions_from_stream(listed(bid=9.0)))
+        while monitor._sales_under_way == 0:
+            await asyncio.sleep(0)
+        monitor.begin_shutdown()
+        too_soon = await monitor.wait_for_sales_under_way(0.05, poll_seconds=0.01)
+        answered.set()
+        settled = await monitor.wait_for_sales_under_way(1, poll_seconds=0.01)
+        await check
+        return too_soon, settled
+
+    too_soon, settled = asyncio.run(scenario())
+
+    assert (too_soon, settled) == (False, True)
+    monitor.order_service.place_market_order.assert_awaited_once()
+    assert monitor._sales_under_way == 0
+
+
+def test_the_stop_logic_stays_out_of_the_code_every_backtest_digest_holds():
+    from src.backtest.figures import _CODE
+
+    # A change to the monitor's stop must not mark every backtest run as made with other code.
+    assert "src/position_monitor" not in " ".join(_CODE)
+    assert "begin_shutdown" not in open("src/trade/async_services.py").read()

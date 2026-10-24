@@ -87,6 +87,13 @@ function serve() {
         state = { ...state, paused: { paused: (body as { paused: boolean }).paused, changed_at: '2026-10-20T09:05:00Z' } }
         return json(state.paused)
       }
+      if (path === '/api/mcp/tokens' && method === 'POST') {
+        const asked = body as { name: string; days: number }
+        const entry = { id: '11223344', name: asked.name, created_at: '2026-10-24T08:00:00Z', expires_at: '2027-01-22T08:00:00Z',
+          revoked_at: null, state: 'active' as const, last_used_at: null }
+        state = { ...state, tokens: [...state.tokens, entry] }
+        return json({ token: `wata_mcp_11223344_${'s'.repeat(43)}`, entry })
+      }
       const revoke = /^\/api\/mcp\/tokens\/([^/]+)\/revoke$/.exec(path)
       if (revoke) {
         state = { ...state, tokens: state.tokens.map((token) => (token.id === revoke[1] ? { ...token, state: 'revoked' as const } : token)) }
@@ -193,6 +200,24 @@ describe('the Claude panel', () => {
 
     await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/mcp/tokens/0a1b2c3d/revoke')).toBe(true))
     expect(await screen.findAllByText('Revoked')).toHaveLength(1)
+  })
+
+  it('makes a token for a machine and shows it this once', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+
+    await user.click(await screen.findByRole('button', { name: 'Make a token' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Make a token for Claude' })
+    const name = within(dialog).getByLabelText('Name')
+    await user.clear(name)
+    await user.type(name, 'studio-mac')
+    await user.click(within(dialog).getByRole('button', { name: 'Make it' }))
+
+    expect(await within(dialog).findByText(`wata_mcp_11223344_${'s'.repeat(43)}`)).toBeInTheDocument()
+    expect(sent.find((request) => request.path === '/api/mcp/tokens')!.body).toEqual({ name: 'studio-mac', days: 90 })
+    await user.click(within(dialog).getByRole('button', { name: 'I have kept it' }))
+    await waitFor(() => expect(screen.queryByText(`wata_mcp_11223344_${'s'.repeat(43)}`)).toBeNull())
+    expect(await screen.findByText('studio-mac')).toBeInTheDocument()
   })
 
   it('says the endpoint is off when the configuration has it off, with no switch to pause it', async () => {

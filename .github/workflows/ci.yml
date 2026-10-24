@@ -84,12 +84,86 @@ jobs:
         docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
           python -W error::SyntaxWarning -m compileall -q /app/src
         docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
-          python -c "import importlib; [importlib.import_module(name) for name in ('src.web_server', 'src.trader', 'src.position_monitor', 'src.watchlist_manager', 'src.price_recorder', 'src.admin', 'src.mq_telegram', 'src.saxo_authen', 'src.price_history.dukascopy', 'src.backtest.run', 'src.ta_engine', 'src.ta_engine.engine', 'src.ta_engine.replay', 'schedule', 'duckdb', 'uvloop', 'httptools')]"
+          python -c "import importlib; [importlib.import_module(name) for name in ('src.web_server', 'src.trader', 'src.position_monitor', 'src.watchlist_manager', 'src.price_recorder', 'src.admin', 'src.mq_telegram', 'src.saxo_authen', 'src.price_history.dukascopy', 'src.backtest.run', 'src.ta_engine', 'src.ta_engine.engine', 'src.ta_engine.replay', 'src.vault.migrate', 'src.admin.vault', 'src.service_control.app', 'schedule', 'duckdb', 'uvloop', 'httptools')]"
 
     - name: The TA engine's Pine runner runs in it, confined
       run: |
         docker run --rm wata-base:ci node --version | grep -F "v$(cat admin_ui/.nvmrc)."
         docker run --rm wata-base:ci python -m src.ta_engine.runner
+
+    # As the compose file starts a service (init: true): tini hands Docker's stop to Python, which the start
+    # script exec'd. The scheduler then leaves its loop and says so; a shell left in between would have kept
+    # the signal from it, and Docker killed it after the time allowed, its stopping code never run.
+    - name: A service stops at once and cleanly on Docker's stop
+      run: |
+        docker run -d --init --name stopping -e WATA_APP_ROLE=scheduler \
+          -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci
+        sleep 5
+        test "$(docker inspect -f '{{.State.Running}}' stopping)" = true
+        started=$(date +%s)
+        docker stop -t 30 stopping
+        took=$(( $(date +%s) - started ))
+        echo "Stopped in ${took}s"
+        test "$took" -lt 5
+        test "$(docker inspect -f '{{.State.ExitCode}}' stopping)" = 0
+        docker cp stopping:/tmp/logs/wata-scheduler/wata-scheduler.log scheduler.log
+        grep -F "WATA scheduler stopped" scheduler.log
+        docker rm stopping
+
+    # The control service on this runner's Docker, as the compose file starts it: it restarts a container
+    # named and labelled as one of WATA's, which then reads the file bind-mounted into it alone even though
+    # that file was replaced (as the config editor replaces config.json); it refuses what is not WATA's.
+    - name: The control service restarts WATA's containers and nothing else
+      run: |
+        (umask 077 && openssl rand -hex 32 > control_token)
+        cp tests/test_config.json watched.json
+        docker run -d --init --name scheduler1 --label com.docker.compose.service=scheduler1 \
+          -v "$PWD/watched.json:/app/etc/config.json:ro" wata-base:ci sleep 3600
+        docker run -d --name trader1 alpine:3.20 sleep 3600
+        docker run -d --init --name service_control1 -e WATA_APP_ROLE=service_control -p 127.0.0.1:8090:8090 \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "$PWD/control_token:/run/secrets/service_control_token:ro" wata-base:ci
+        for attempt in $(seq 30); do curl -sf http://127.0.0.1:8090/health && break; sleep 1; done
+        auth="Authorization: Bearer $(cat control_token)"
+        test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/services)" = 401
+        curl -sf -H "$auth" http://127.0.0.1:8090/services | python3 -c "
+        import json, sys
+        found = {entry['service']: entry for entry in json.load(sys.stdin)['services']}
+        assert found['scheduler']['running'] is True, found['scheduler']
+        assert found['ta_engine']['state'] == 'absent', found['ta_engine']
+        "
+        python3 -c "
+        import json, os
+        config = json.load(open('watched.json'))
+        config['marker'] = 'replaced'
+        json.dump(config, open('watched.tmp', 'w'))
+        os.replace('watched.tmp', 'watched.json')
+        "
+        docker exec scheduler1 grep -qF replaced /app/etc/config.json \
+          && echo "Running, the container already reads the new file" \
+          || echo "Running, the container still reads the file it started with"
+        before=$(docker inspect -f '{{.State.StartedAt}}' scheduler1)
+        test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" http://127.0.0.1:8090/services/scheduler/restart)" = 202
+        for attempt in $(seq 60); do
+          test "$(docker inspect -f '{{.State.StartedAt}}' scheduler1)" != "$before" \
+            && test "$(docker inspect -f '{{.State.Running}}' scheduler1)" = true && break
+          sleep 1
+        done
+        test "$(docker inspect -f '{{.State.StartedAt}}' scheduler1)" != "$before"
+        docker exec scheduler1 grep -qF replaced /app/etc/config.json
+        for attempt in $(seq 30); do
+          curl -sf -H "$auth" http://127.0.0.1:8090/services | python3 -c "
+        import json, sys
+        found = {entry['service']: entry for entry in json.load(sys.stdin)['services']}
+        sys.exit(0 if not found['scheduler']['restarting'] and found['scheduler']['last_restart']['ok'] else 1)
+        " && break
+          sleep 1
+        done
+        # Not one of its services, or a container named like one of WATA's that is not of its compose file.
+        curl -s -X POST -H "$auth" http://127.0.0.1:8090/services/postgres/restart | grep -F "not one of WATA's services"
+        curl -s -X POST -H "$auth" http://127.0.0.1:8090/services/trader/restart | grep -F "not the container of WATA's compose file"
+        docker logs service_control1
+        docker rm -f scheduler1 trader1 service_control1
 
   # The image exactly as the server builds it: no Python asked for.
   image-as-deployed:

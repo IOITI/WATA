@@ -11,6 +11,7 @@ if __name__ == "__main__":
     from src.admin.context import build_context
     from src.configuration import ConfigurationManager
     from src.logging_helper import setup_logging
+    from src.logging_helper.redaction import uvicorn_log_config
 
     config_path = os.getenv("WATA_CONFIG_PATH")
     if not config_path:
@@ -29,4 +30,5 @@ if __name__ == "__main__":
         host=ctx.settings.api_host,
         port=ctx.settings.api_port,
         timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+        log_config=uvicorn_log_config(),
     )

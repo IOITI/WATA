@@ -12,9 +12,9 @@ import asyncio
 import logging
 import time
 
-from starlette.concurrency import run_in_threadpool
 
 from src.admin.health import SAXO_SERVICE_ID, collect_health, needs_saxo_authorisation
+from src.admin.saxo import called
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ class StateWatcher:
         self._service_statuses = statuses
 
     async def _watch_saxo(self) -> None:
-        status = await run_in_threadpool(self._ctx.saxo.status)
+        status = await called(self._ctx.saxo.status)
         needs_authorisation = needs_saxo_authorisation(status)
         if self._saxo_needs_authorisation is not None and needs_authorisation != self._saxo_needs_authorisation:
             self._hub.publish("saxo_authorisation_required" if needs_authorisation else "saxo_authorised")

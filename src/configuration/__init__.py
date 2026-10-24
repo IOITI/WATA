@@ -39,11 +39,11 @@ class ConfigurationManager:
         Validates that all required configuration sections and fields are present.
         """
         # Basic required sections
+        # Saxo's app and webserver.app_secret are no longer required: the apps are credentials sealed in
+        # PostgreSQL (src/vault/), and config.json's app object and secret are only their old places.
         required_sections = [
-            "authentication.saxo",
             "authentication.persistant.token_path",
             "webserver.persistant.token_path",
-            "webserver.app_secret",
             "logging.persistant.log_path",
             "logging.level",
             "rabbitmq.hostname",
@@ -67,28 +67,18 @@ class ConfigurationManager:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Validate authentication.saxo structure
-        saxo_config = self.get_config_value("authentication.saxo")
-        required_saxo_fields = [
-            "app_config_object.AppName",
-            "app_config_object.AppKey",
-            "app_config_object.AuthorizationEndpoint",
-            "app_config_object.TokenEndpoint",
-            "app_config_object.GrantType",
-            "app_config_object.OpenApiBaseUrl",
-            "app_config_object.RedirectUrls",
-            "app_config_object.AppSecret"
-        ]
-        
-        missing_saxo_fields = []
-        for field in required_saxo_fields:
-            if self.get_config_value(f"authentication.saxo.{field}") is None:
-                missing_saxo_fields.append(field)
-        
-        if missing_saxo_fields:
-            error_msg = f"Missing required Saxo authentication fields: {', '.join(missing_saxo_fields)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        # Saxo's app object, where it is still kept (its old place): its key and secret together.
+        saxo_app = self.get_config_value("authentication.saxo.app_config_object")
+        if saxo_app is not None:
+            if not isinstance(saxo_app, dict):
+                error_msg = "Config field 'authentication.saxo.app_config_object' must be an object"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            missing_saxo_fields = [field for field in ("AppKey", "AppSecret") if not saxo_app.get(field)]
+            if missing_saxo_fields:
+                error_msg = f"Missing required Saxo authentication fields: {', '.join(missing_saxo_fields)}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
         # Validate webserver.app_secret
         app_secret = self.get_config_value("webserver.app_secret")
@@ -312,13 +302,8 @@ class ConfigurationManager:
                 ],
                 "general": [
                     "api_limits.top_instruments",
-                    "api_limits.top_positions",
                     "api_limits.top_closed_positions",
                     "retry_config.max_retries",
-                    "retry_config.retry_sleep_seconds",
-                    "position_check.check_interval_seconds",
-                    "position_check.timeout_seconds",
-                    "websocket.refresh_rate_ms"
                 ]
             }
             
@@ -351,8 +336,19 @@ class ConfigurationManager:
                 "buying_power.max_account_funds_to_use_percentage": (int, 1, 100) # percentage between 1 and 100
             }
 
+            # Read by nothing any more (the Configuration page says so): checked only when still there.
+            unused_fields = {
+                "general.api_limits.top_positions",
+                "general.retry_config.retry_sleep_seconds",
+                "general.position_check.check_interval_seconds",
+                "general.position_check.timeout_seconds",
+                "general.websocket.refresh_rate_ms",
+            }
+
             for field, (field_type, min_val, max_val) in numeric_validations.items():
                 value = self.get_config_value(f"trade.config.{field}")
+                if value is None and field in unused_fields:
+                    continue
                 if not isinstance(value, (int, float)):
                     # Allow int for float types
                     if field_type is float and isinstance(value, int):
@@ -509,18 +505,31 @@ class ConfigurationManager:
                         logger.error(error_msg)
                         raise ValueError(error_msg)
 
-        # Validate telegram configuration if present
+        # The Telegram bot's token and chat id are a credential: kept in PostgreSQL, laid over this
+        # file in memory by the services that read it (apply_credentials), and no longer required here.
         telegram_config = self.get_config_value("telegram")
-        if telegram_config:
-            required_telegram_fields = ["bot_token", "chat_id", "bot_name"]
-            missing_telegram_fields = [field for field in required_telegram_fields 
-                                    if field not in telegram_config]
-            if missing_telegram_fields:
-                error_msg = f"Missing required telegram fields: {', '.join(missing_telegram_fields)}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
+        if telegram_config is not None and not isinstance(telegram_config, dict):
+            error_msg = "Config field 'telegram' must be an object"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
         logger.info("Configuration validation successful")
+
+    def apply_credentials(self, values: dict) -> None:
+        """
+        Lays credentials read from PostgreSQL (src/vault/loader.py) over the
+        file's values, in memory only: the code that reads them by their path
+        reads them as before, and nothing is written to the file.
+        """
+        for path, value in values.items():
+            node = self.config_data
+            *parents, last = path.split(".")
+            for key in parents:
+                child = node.get(key)
+                if not isinstance(child, dict):
+                    child = node[key] = {}
+                node = child
+            node[last] = value
 
     def get_config_value(self, key, default=None):
         """

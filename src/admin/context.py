@@ -150,6 +150,12 @@ class AdminContext:
     mcp_pause: Any = None
     # Claude's Pine studies, child processes one at a time (src/admin/studies.py): with the endpoint on.
     studies: Any = None
+    # The control service, which restarts WATA's containers for the admin (src/admin/service_control.py),
+    # and the restarts asked of it, one plan at a time (src/admin/service_restart.py).
+    service_control: Any = None
+    restarts: Any = None
+    # The credentials sealed in PostgreSQL (src/admin/vault.py): listed, set, rotated; never read back.
+    vault: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -199,16 +205,19 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.live_prices import LivePrices, rabbitmq_source
     from src.admin.mcp_server.calls import CallLog
     from src.admin.mcp_server.pause import McpPause
-    from src.admin.mcp_server.tokens import TokenStore
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.paper import PaperTrading
     from src.admin.research_export import ResearchExport
+    from src.admin.errors import ServiceUnavailable
+    from src.admin.mcp_token_store import DbTokenStore
+    from src.admin.service_control import ServiceControl
+    from src.admin.vault import AdminVault
     from src.admin.ta_rules import RuleStore
-    from src.admin.services import SaxoAccess, WataServices
+    from src.admin.saxo import AdminSaxo
+    from src.admin.services import WataServices
     from src.admin.ta_scripts import ScriptStore
     from src.database.postgres import AsyncDbRiskStateManager, PostgresConnectionManager
     from src.mq_telegram.async_tools import AsyncTelegramSender
-    from src.web_server_token import WebServerToken
 
     settings = AdminSettings.from_config(config_manager)
     events = EventHub()
@@ -256,6 +265,17 @@ def build_context(config_manager) -> AdminContext:
 
     queries = AdminQueries(database, settings.timezone)
     version = read_version()
+    service_control = ServiceControl()
+    vault = AdminVault(reader=database, writer=pause_database, config_manager=config_manager,
+                       feed_state=queries.capital_feed_state)
+    mcp_tokens = DbTokenStore(reader=database, writer=pause_database, legacy_path=settings.mcp_tokens_path)
+
+    async def internal_token() -> str:
+        # Opened again at the first signal sent from the pages and after a refusal: rotated since.
+        value = await vault.open("internal.token")
+        if not value:
+            raise ServiceUnavailable("web_server: no internal token is set (Credentials)")
+        return value["token"]
     studies = None
     if settings.mcp_enabled:
         from src.admin.backtests import SIGNAL_CACHE_FOLDER
@@ -283,9 +303,9 @@ def build_context(config_manager) -> AdminContext:
         services=WataServices(
             config_manager,
             http_client,
-            web_server_token_getter=lambda: WebServerToken(config_manager).get_token(),
+            web_server_token_getter=internal_token,
         ),
-        saxo=SaxoAccess(config_manager),
+        saxo=AdminSaxo(reader=database, writer=pause_database, config_manager=config_manager),
         config_editor=ConfigEditor(settings.config_path),
         risk_state=AsyncDbRiskStateManager(pause_database),
         audit_log=AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl")),
@@ -301,14 +321,16 @@ def build_context(config_manager) -> AdminContext:
         history=PriceHistory(settings.price_history_path),
         live_prices=LivePrices(rabbitmq_source(rabbitmq_url)),
         ta_scripts=ta_scripts,
-        mcp_tokens=TokenStore(settings.mcp_tokens_path),
+        mcp_tokens=mcp_tokens,
         mcp_calls=CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl")),
         mcp_pause=McpPause(os.path.join(os.path.dirname(settings.mcp_tokens_path), "mcp_pause.json")),
         studies=studies,
+        service_control=service_control,
+        vault=vault,
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,
         version=version,
         closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
-                 *([studies.close] if studies is not None else [])],
+                 service_control.close, *([studies.close] if studies is not None else [])],
     )

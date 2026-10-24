@@ -8,9 +8,18 @@ SERVICES_USING_THE_WEB_SERVER_TOKEN = ["web_server1", "trader1", "scheduler1"]
 
 
 @pytest.fixture(scope="module")
-def compose_services():
+def compose():
     with open("deploy/docker-compose.yml") as compose_file:
-        return yaml.safe_load(compose_file)["services"]
+        return yaml.safe_load(compose_file)
+
+
+@pytest.fixture(scope="module")
+def compose_services(compose):
+    return compose["services"]
+
+
+# Each service's own key and every service's public one (src/vault/), both read-only.
+KEYS = {"/app/keys/own": "ro", "/app/keys/public": "ro"}
 
 
 def _container_paths(service):
@@ -38,9 +47,9 @@ def test_admin_is_only_started_on_request(compose_services):
 def test_admin_mounts_the_token_directories_it_reads_but_not_all_of_var_lib(compose_services):
     container_paths = _container_paths(compose_services["admin1"])
 
-    # It calls web_server with its token and reads the Saxo token status.
+    # It reads the web server's token file of before; Saxo's login it reads from PostgreSQL.
     assert "/app/var/lib/web_server" in container_paths
-    assert "/app/var/lib/saxo_auth" in container_paths
+    assert "/app/var/lib/saxo_auth" not in container_paths
     assert "/app/var/lib/admin" in container_paths
     # var/lib also holds the PostgreSQL data files.
     assert "/app/var/lib" not in container_paths
@@ -73,7 +82,6 @@ def test_admin_writes_nowhere_else(compose_services):
         # Backtests: their results, and the prices fetched for them.
         "/app/var/lib/backtests",
         "/app/var/lib/price_history",
-        "/app/var/lib/saxo_auth",
         "/app/var/lib/web_server",
         "/app/var/log/wata-admin",
     ]
@@ -83,7 +91,7 @@ def test_price_recorder_is_only_started_on_request_and_reachable_by_nothing(comp
     recorder = compose_services["price_recorder1"]
 
     assert recorder["profiles"] == ["recorder"]
-    assert recorder["environment"] == ["WATA_APP_ROLE=price_recorder"]
+    assert recorder["environment"] == ["WATA_APP_ROLE=price_recorder", "SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}"]
     # It serves nothing: no port, no route.
     assert "ports" not in recorder and "expose" not in recorder and "labels" not in recorder
 
@@ -97,6 +105,7 @@ def test_price_recorder_mounts_only_what_it_uses(compose_services):
         "/app/var/lib/saxo_auth": "rw",
         "/app/var/lib/price_export": "rw",
         "/app/etc/config.json": "ro",
+        **KEYS,
     }
     assert not any("docker.sock" in volume for volume in compose_services["price_recorder1"]["volumes"])
 
@@ -134,7 +143,8 @@ def test_the_capital_com_login_is_handed_to_the_feed_alone_and_never_written_in_
 
 def test_the_outside_watchers_address_is_handed_to_the_position_monitor_alone(compose_services):
     assert compose_services["position_monitor1"]["environment"] == [
-        "WATA_APP_ROLE=position_monitor", "WATA_HEARTBEAT_URL=${WATA_HEARTBEAT_URL:-}",
+        "WATA_APP_ROLE=position_monitor", "SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}",
+        "WATA_HEARTBEAT_URL=${WATA_HEARTBEAT_URL:-}",
     ]
     for name, service in compose_services.items():
         if name == "position_monitor1":
@@ -151,6 +161,7 @@ def test_the_capital_com_feed_mounts_only_what_it_uses(compose_services):
         # Its day files, which the admin reads through its own mount of the history of prices.
         "/app/var/lib/price_history/capital": "rw",
         "/app/etc/config.json": "ro",
+        **KEYS,
     }
     assert not any("docker.sock" in volume for volume in compose_services["capital_feed1"]["volumes"])
 
@@ -186,9 +197,10 @@ def test_the_ta_engine_writes_only_its_log_and_reads_only_what_it_runs(compose_s
         "/app/var/log/wata-ta-engine": "rw",
         # The rules and scripts the admin keeps: not the rest of the admin's folder, its credentials.
         "/app/var/lib/ta": "ro",
-        # The web server's token, to send the signals of live rules with.
+        # The web server's token file of before, read until the internal token has its row.
         "/app/var/lib/web_server": "ro",
         "/app/etc/config.json": "ro",
+        **KEYS,
     }
     hosts = {volume.split(":")[0] for volume in compose_services["ta_engine1"]["volumes"]}
     assert "../../var/lib/admin/ta" in hosts and "../../var/lib/admin" not in hosts
@@ -220,6 +232,48 @@ def test_the_mcp_tokens_stay_in_the_admins_folder_out_of_the_ta_engines_reach(co
     assert "/app/var/lib/admin" not in _mount_modes(compose_services["ta_engine1"])
 
 
+def test_every_wata_service_is_handed_dockers_stop(compose_services):
+    services = {
+        name: service for name, service in compose_services.items()
+        if service.get("image") == "wata-base:latest" and service.get("profiles") != ["tools"]
+    }
+
+    assert len(services) == 11
+    for name, service in services.items():
+        # tini as PID 1 hands SIGTERM to Python. Without it, a Python with no handler would ignore the
+        # signal (PID 1 is spared what it does not handle) and Docker kill it once the time allowed is up.
+        assert service.get("init") is True, name
+    # The signal in hand (trader) and the sale under way (position monitor) are finished first.
+    assert compose_services["trader1"]["stop_grace_period"] == "60s"
+    assert compose_services["position_monitor1"]["stop_grace_period"] == "45s"
+
+
+def test_the_start_script_hands_its_place_to_python():
+    script = open("src/start_python_script.sh").read()
+    starts = [line.strip() for line in script.splitlines() if "python -u" in line and not line.strip().startswith("#")]
+
+    # A shell left in between would never pass Docker's stop on to Python.
+    assert len(starts) == 11
+    assert all(line.startswith("exec python -u ") for line in starts)
+
+
+def test_ci_sees_a_service_stop_at_once_and_cleanly(ci_jobs):
+    check = next(step["run"] for step in ci_jobs["image"]["steps"]
+                 if step.get("name") == "A service stops at once and cleanly on Docker's stop")
+
+    assert "--init" in check and "docker stop" in check and "WATA scheduler stopped" in check
+
+
+def test_the_deploy_stops_the_version_running_now():
+    with open("deploy/tools/ansible/playbooks/deploy_app.yml") as playbook:
+        tasks = yaml.safe_load(playbook)[0]["tasks"]
+    stop = next(task for task in tasks if task.get("name") == "Stop the application")
+
+    # A shell, for its cd: `command` runs none, and the stop failed every time.
+    assert "command" not in stop
+    assert 'cd "/app/wata/$(cat /app/wata/VERSION)/deploy" && docker compose down' in stop["ansible.builtin.shell"]
+
+
 def test_the_start_script_knows_every_role_of_the_compose_file(compose_services):
     script = open("src/start_python_script.sh").read()
     roles = {
@@ -232,6 +286,141 @@ def test_the_start_script_knows_every_role_of_the_compose_file(compose_services)
     assert "price_recorder" in roles
     for role in roles:
         assert f'"{role}")' in script, role
+
+
+# ── The credentials' keys ──
+
+
+def _role(service) -> str | None:
+    for variable in service.get("environment") or []:
+        if isinstance(variable, str) and variable.startswith("WATA_APP_ROLE="):
+            return variable.split("=", 1)[1]
+    return None
+
+
+def test_each_service_is_given_its_own_key_and_no_other(compose_services):
+    from src.vault.keys import ROLES
+
+    given = {}
+    for name, service in compose_services.items():
+        private = [volume for volume in service.get("volumes") or [] if volume.startswith("../../keys/") and "/public" not in volume]
+        if _role(service) in ROLES:
+            assert private == [f"../../keys/{_role(service)}:/app/keys/own:ro"], name
+            assert "../../keys/public:/app/keys/public:ro" in service["volumes"], name
+            given[_role(service)] = name
+        else:
+            # The control service, PostgreSQL, RabbitMQ, Traefik, the backups and the tools: no private key.
+            assert private == [], name
+    assert sorted(given) == sorted(ROLES)
+    # The keys are nowhere else: not under var/lib, which five services mount whole, nor etc.
+    for name, service in compose_services.items():
+        for volume in service.get("volumes") or []:
+            assert not volume.startswith(("../../var/lib/keys", "../../etc/keys")), name
+
+
+def test_the_services_that_read_no_database_before_wait_for_it_now(compose_services):
+    for name in ("telegram1", "scheduler1", "watchlist_manager1"):
+        assert compose_services[name]["depends_on"]["postgres1"] == {"condition": "service_healthy"}, name
+
+
+def test_the_credentials_are_moved_by_a_tool_run_by_hand_that_holds_no_private_key(compose_services):
+    tools = compose_services["vault_tools"]
+
+    assert tools["profiles"] == ["tools"]
+    assert tools["entrypoint"] == ["python", "-m", "src.vault"] and tools["command"] == ["migrate", "--dry-run"]
+    modes = _mount_modes(tools)
+    # .env is read as lines, never run, and never written.
+    assert modes["/app/wata.env"] == "ro" and modes["/app/keys/public"] == "ro"
+    assert "/app/keys/own" not in modes
+    assert "ports" not in tools and "labels" not in tools
+
+
+def test_the_install_script_makes_the_keys_once_for_root_alone():
+    script = open("deploy/install_package.sh").read()
+
+    keygen = 'docker run --rm -v "$APP_BASE_DIR/keys:/keys" wata-base:latest python -m src.vault keygen --root /keys'
+    assert keygen in script
+    # After the image it runs in is built, and after the playbook loosened /app/wata.
+    assert script.index("docker_build.sh\"\nelse") < script.index(keygen)
+    assert 'find "$APP_BASE_DIR/keys" -name private.key -exec chmod 600 {} +' in script
+    assert 'chmod 700 "$APP_BASE_DIR/keys" "$APP_BASE_DIR/keys"/*' in script
+
+
+def test_the_saxo_redirect_is_the_servers_given_to_who_logs_in_and_to_the_admin(compose_services):
+    told = sorted(
+        name for name, service in compose_services.items()
+        if "SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}" in (service.get("environment") or [])
+    )
+
+    assert told == ["admin1", "position_monitor1", "price_recorder1", "trader1", "watchlist_manager1"]
+    assert "# SAXO_REDIRECT_URL=" in open("deploy/.env.example", encoding="utf-8").read()
+
+
+def test_the_admin_is_told_the_api_domain_for_the_webhooks_address(compose_services):
+    assert "WATA_API_DOMAIN=${API_DOMAIN:-}" in compose_services["admin1"]["environment"]
+
+
+# ── The control service ──
+
+
+def test_only_traefik_and_the_control_service_hold_dockers_socket(compose_services):
+    holders = sorted(
+        name for name, service in compose_services.items()
+        if any("docker.sock" in volume for volume in service.get("volumes") or [])
+    )
+
+    # Read-only or not, the socket answers anything: the control service's code is what limits it.
+    assert holders == ["service_control1", "traefik"]
+
+
+def test_the_control_service_is_reached_by_the_admin_alone(compose, compose_services):
+    control = compose_services["service_control1"]
+    on_control_net = sorted(name for name, service in compose_services.items() if "control-net" in (service.get("networks") or []))
+
+    assert on_control_net == ["admin1", "service_control1"]
+    # No route out of that network, and nothing published or routed by Traefik.
+    assert compose["networks"]["control-net"] == {"internal": True}
+    assert control["networks"] == ["control-net"]
+    assert "ports" not in control and "expose" not in control and "labels" not in control
+    # Started with the admin, which is what it serves.
+    assert control["profiles"] == ["admin"]
+    assert control["environment"] == ["WATA_APP_ROLE=service_control"]
+    assert control["init"] is True
+
+
+def test_the_control_service_writes_only_its_log(compose_services):
+    assert _mount_modes(compose_services["service_control1"]) == {
+        "/var/run/docker.sock": "rw",
+        "/app/var/log/wata-service-control": "rw",
+    }
+
+
+def test_the_control_services_token_is_handed_to_it_and_the_admin_alone(compose, compose_services):
+    holders = sorted(name for name, service in compose_services.items() if "service_control_token" in (service.get("secrets") or []))
+
+    assert holders == ["admin1", "service_control1"]
+    assert compose["secrets"]["service_control_token"] == {"file": "../../var/lib/service_control/token"}
+    # Its folder is no container's: the token reaches the two only as a secret, read-only.
+    for name, service in compose_services.items():
+        assert not any("var/lib/service_control" in volume for volume in service.get("volumes") or []), name
+
+
+def test_traefik_reaches_the_admin_on_trade_net_alone(compose_services):
+    admin = compose_services["admin1"]
+
+    assert admin["networks"] == ["trade-net", "control-net"]
+    # On two networks, Traefik would otherwise route to whichever address it finds first.
+    assert "traefik.docker.network=${COMPOSE_PROJECT_NAME:-deploy}_trade-net" in admin["labels"]
+
+
+def test_the_install_script_makes_the_control_services_token_once_for_root_alone():
+    script = open("deploy/install_package.sh").read()
+
+    assert 'mkdir -p "$APP_BASE_DIR/var/lib/service_control"' in script
+    assert 'mkdir -p "$APP_BASE_DIR/var/log/wata-service-control"' in script
+    assert 'if [ ! -s "$CONTROL_TOKEN" ]; then' in script
+    assert '(umask 077 && openssl rand -hex 32 > "$CONTROL_TOKEN")' in script
+    assert 'chmod 600 "$CONTROL_TOKEN"' in script
 
 
 def test_admin_is_routed_on_its_own_domain_behind_its_own_allowlist(compose_services):

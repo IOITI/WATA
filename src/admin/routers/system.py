@@ -11,6 +11,7 @@ from src.admin.auth import require_session, session_cookie_name
 from src.admin.errors import ServiceUnavailable
 from src.admin.health import collect_health
 from src.admin.logs import LEVELS, LOG_SERVICES, MAX_LINES, read_log
+from src.admin.saxo import called
 from src.admin.timing import read_execution_timings
 
 # How long the event stream stays silent before a comment line keeps the connection open.
@@ -34,8 +35,7 @@ async def health(request: Request):
 
 @router.get("/system/saxo")
 async def saxo_status(request: Request):
-    # Reads and decrypts the token file: off the event loop.
-    return await run_in_threadpool(request.app.state.ctx.saxo.status)
+    return await called(request.app.state.ctx.saxo.status)
 
 
 def _allowed_indices(config_manager) -> list[str]:

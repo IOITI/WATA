@@ -13,6 +13,7 @@ import os
 import sys
 from collections import OrderedDict
 from datetime import date, datetime, timedelta
+from signal import SIGTERM
 
 import jsonschema
 import pytz
@@ -47,6 +48,7 @@ from src.database.postgres import (
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
+from src.vault import loader as vault
 from src.saxo_authen import SaxoAuth
 from src.trade.rules import TradingRule
 from src.trade.signal_journal import (
@@ -604,37 +606,68 @@ def select_signals_to_dispatch(
     return to_dispatch
 
 
+# What _unless_stopped returns when the stop came first.
+_STOPPED = object()
+
+
+async def _unless_stopped(awaitable, stopping: asyncio.Event):
+    """``awaitable``'s result, or ``_STOPPED`` once ``stopping`` is set first (``awaitable`` is then cancelled)."""
+    task = asyncio.ensure_future(awaitable)
+    stop = asyncio.ensure_future(stopping.wait())
+    try:
+        done, _ = await asyncio.wait({task, stop}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        stop.cancel()
+    if task in done:
+        return task.result()
+    task.cancel()
+    try:
+        await task
+    except BaseException:
+        pass
+    return _STOPPED
+
+
 async def poll_and_dispatch_signals(
     signal_client: SignalPollingClient,
     dispatch,
     journal: SignalJournal | None = None,
     watch: TraderWatch | None = None,
+    stopping: asyncio.Event | None = None,
 ) -> None:
     """
-    Poll the web_server forever, handing each new signal to ``dispatch`` once.
+    Poll the web_server until ``stopping`` is set, handing each new signal to ``dispatch`` once.
 
     Each cycle waits for the previous one to fully finish before fetching again,
     and signals within a cycle are handled sequentially (one indice's close/open
     doesn't run concurrently with another's).
+
+    A stop cuts off the wait for the next signals at once, but never the
+    handling of those already fetched: cut off between Saxo taking an order and
+    WATA writing it down, a position would be left without the row by which it
+    is managed, and found again by nothing.
     """
+    stopping = stopping or asyncio.Event()
     poll_interval_seconds = signal_client.interval_ms / 1000
     first_poll = True
 
-    while True:
+    while not stopping.is_set():
         # Re-read every cycle: the client turns long-polling off by itself when
         # the web_server doesn't support it.
         long_polling = signal_client.long_poll_wait_ms > 0
         try:
             if long_polling:
-                signals = await signal_client.get_new_signals()
+                signals = await _unless_stopped(signal_client.get_new_signals(), stopping)
             else:
-                signals = await signal_client.get_latest_signals()
+                signals = await _unless_stopped(signal_client.get_latest_signals(), stopping)
         except Exception as e:
             logger.error("Error polling for latest signals: %s", e, exc_info=True)
             if watch is not None:
                 await watch.polled(False, e)
-            await asyncio.sleep(poll_interval_seconds)
+            await _unless_stopped(asyncio.sleep(poll_interval_seconds), stopping)
             continue
+        if signals is _STOPPED:
+            break
         if watch is not None:
             await watch.polled(True)
 
@@ -654,7 +687,7 @@ async def poll_and_dispatch_signals(
         first_poll = False
 
         if not long_polling:
-            await asyncio.sleep(poll_interval_seconds)
+            await _unless_stopped(asyncio.sleep(poll_interval_seconds), stopping)
 
 
 async def keep_saxo_session_warm(
@@ -739,6 +772,9 @@ async def main():
         pg = PostgresConnectionManager.from_config(config_manager)
         await pg.connect()
         await init_schema(pg)
+        # Its credentials (the web server's internal token, Telegram's bot for the direct fallback of the
+        # sender connected above), sealed for it in PostgreSQL.
+        await vault.load(config_manager, "trader", db=pg)
 
         db_order_manager = AsyncDbOrderManager(pg)
         db_position_manager = AsyncDbPositionManager(pg)
@@ -856,9 +892,11 @@ async def main():
                 watch=watch,
             )
 
-        # Keep polling forever
+        # Keep polling until Docker's stop (SIGTERM): the signal in hand is finished, then the cleanup below.
+        stopping = asyncio.Event()
+        asyncio.get_running_loop().add_signal_handler(SIGTERM, stopping.set)
         try:
-            await poll_and_dispatch_signals(signal_client, _dispatch, journal=journal, watch=watch)
+            await poll_and_dispatch_signals(signal_client, _dispatch, journal=journal, watch=watch, stopping=stopping)
         except asyncio.CancelledError:
             pass
 

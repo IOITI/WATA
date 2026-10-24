@@ -61,6 +61,11 @@ async def lifespan(_: FastAPI):
     environment = config_manager.get_config_value("saxo_auth.env", "live")
     streaming_config = config_manager.get_config_value("trade.config.general.streaming", {})
 
+    # The Saxo app it logs in with, sealed for it in PostgreSQL (src/vault/): waited for while the database
+    # cannot be read, the trader searching Saxo itself meanwhile.
+    from src.vault import loader as vault
+
+    await vault.load_waiting(config_manager, "watchlist_manager")
     saxo_auth = SaxoAuth(config_manager)
     api_client = AsyncSaxoApiClient(config_manager, saxo_auth)
     await api_client.ensure_ready()
@@ -159,6 +164,8 @@ def get_server_bind() -> tuple[str, int]:
 if __name__ == "__main__":
     import uvicorn
 
+    from src.logging_helper.redaction import uvicorn_log_config
+
     host, port = get_server_bind()
     # uvicorn runs on uvloop by itself when it is installed.
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, log_config=uvicorn_log_config())

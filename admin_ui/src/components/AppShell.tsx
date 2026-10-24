@@ -46,6 +46,7 @@ import { EventsBell } from '@/features/live/EventsBell'
 import { FollowProvider } from '@/features/live/FollowProvider'
 import { recordLiveValues } from '@/features/positions/liveSamples'
 import { useLiveEvents } from '@/features/live/useLiveEvents'
+import { restartNeededHint } from '@/features/system/restarts'
 import { api } from '@/lib/api'
 import { SAXO_SERVICE_ID } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -227,11 +228,11 @@ function Shell() {
             )}
             {session.restart_required && (
               <StateChip
-                to="/config"
+                to={session.restart_services ? '/system' : '/config'}
                 tone="warning"
                 icon={<RotateCw className="size-3.5" aria-hidden />}
                 label="Restart needed"
-                hint="The configuration changed since the services started: they apply it at their next start."
+                hint={restartNeededHint(session)}
               />
             )}
           </div>

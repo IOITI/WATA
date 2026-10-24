@@ -174,7 +174,10 @@ def test_entrypoint_starts_the_server_on_the_configured_address(tmp_path, monkey
 
     run.assert_called_once()
     # The wait for requests in progress is bounded: a page left open must not keep the container from stopping.
+    log_config = run.call_args.kwargs.pop("log_config")
     assert run.call_args.kwargs == {"host": "127.0.0.1", "port": 9000, "timeout_graceful_shutdown": 5}
+    # uvicorn's own lines (its access log among them) are cleaned of secrets too.
+    assert set(log_config["filters"]) == {"redact", "redact_access"}
     app = run.call_args.args[0]
     assert any(route.path == "/api/session" for route in app.routes)
     assert os.path.exists(tmp_path / "log" / "wata-admin" / "wata-admin.log")

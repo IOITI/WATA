@@ -4,19 +4,22 @@ Claude's research on the server, as the operator watches it: the MCP endpoint
 calls Claude made and what its share of the server holds; the experiments of
 the journal Claude keeps, and the lock box.
 
-Pausing the endpoint and revoking a token are operator actions: recorded in
-the audit trail and announced on Telegram. A token is made on the server
-alone (watamcptoken), where it is printed once. Moving or clearing the lock
-box is the operator's own research and changes nothing that trades: no audit.
+Pausing the endpoint, making a token and revoking one are operator actions:
+recorded in the audit trail and announced on Telegram. A token made here or on
+the server (watamcptoken) is shown once and never again: PostgreSQL keeps its
+sha256. Moving or clearing the lock box is the operator's own research and
+changes nothing that trades: no audit.
 """
 
+import inspect
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import require_session
+from src.admin.routers.actions import require_actions_enabled
 from src.admin.mcp_server.facade import CLAUDE, journal_of
 from src.admin.mcp_server.tokens import TokenError
 from src.admin.ta_rules import LIVE, RuleStore
@@ -60,6 +63,33 @@ async def mcp_state(request: Request):
     }
 
 
+async def _tokens_call(tokens, method: str, *args):
+    """A method of the token store: awaited when it is PostgreSQL's, in a thread when it is the file's."""
+    found = getattr(tokens, method)
+    if inspect.iscoroutinefunction(found):
+        return await found(*args)
+    return await run_in_threadpool(found, *args)
+
+
+class NewToken(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    days: int = Field(90, ge=1, le=365)
+
+
+@router.post("/mcp/tokens", dependencies=[Depends(require_actions_enabled)])
+async def create_token(body: NewToken, request: Request):
+    """A token for Claude on a machine, shown in this answer once: only its sha256 is kept."""
+    ctx = request.app.state.ctx
+    if ctx.mcp_tokens is None:
+        raise HTTPException(status_code=503, detail="The MCP endpoint's tokens are not available")
+    try:
+        token, entry = await _tokens_call(ctx.mcp_tokens, "create", body.name, body.days)
+    except TokenError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    ctx.audit(request, "MCP token created", f"name={entry['name']} id={entry['id']} until {entry['expires_at']}")
+    return {"token": token, "entry": entry}
+
+
 @router.post("/mcp/tokens/{token_id}/revoke")
 async def revoke_token(token_id: str, request: Request):
     ctx = request.app.state.ctx
@@ -70,7 +100,7 @@ async def revoke_token(token_id: str, request: Request):
         # By id only: a name could revoke several tokens at once.
         raise HTTPException(status_code=404, detail="No such token")
     try:
-        revoked = await run_in_threadpool(ctx.mcp_tokens.revoke, token_id)
+        revoked = await _tokens_call(ctx.mcp_tokens, "revoke", token_id)
     except TokenError as e:
         raise HTTPException(status_code=409, detail=str(e)) from None
     ctx.audit(request, "MCP token revoked", f"name={known[token_id]['name']} id={token_id}")

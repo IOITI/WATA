@@ -1,7 +1,9 @@
+import hmac
+
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from src.web_server_token import WebServerToken
+from src.web_server_token import INTERNAL, WEBHOOK, WebServerToken
 from src.web_server.signal_store import SignalStore
 import logging
 from src.configuration import ConfigurationManager
@@ -25,8 +27,10 @@ logging.info("WATA Web-server API is running")
 
 app = FastAPI()
 
+# TradingView's token (the webhook's ?token=) and the Bearer of the other services, apart since v0.43.0:
+# a TradingView alert's address, seen by someone, opens no internal endpoint. Read from PostgreSQL at the
+# start (``__main__``); a service with neither refuses every request, and says so.
 web_server_token = WebServerToken(config_manager)
-SECRET_TOKEN = web_server_token.get_token()
 
 # In-memory "latest signal per indice" store, polled by the async trader and fed
 # by both the public /webhook and the internal /internal/signal endpoints.
@@ -85,16 +89,17 @@ async def check_ip(request: Request, call_next):
 bearer_scheme = HTTPBearer()
 
 
-async def verify_token(token: str):
-    # Assuming SECRET_TOKEN is the expected token value
-    if token != SECRET_TOKEN:
+async def verify_token(token: str, name: str = WEBHOOK):
+    """``token`` against the tokens accepted for ``name`` (the webhook's unless said), in constant time."""
+    given = (token or "").encode()
+    if not any(hmac.compare_digest(given, accepted.encode()) for accepted in web_server_token.accepted(name)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return token
 
 
 async def verify_bearer_token(credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)):
     """Auth dependency for internal-only endpoints (trader polling, scheduler EOD close)."""
-    await verify_token(credentials.credentials)
+    await verify_token(credentials.credentials, INTERNAL)
 
 
 def _format_timestamp_ms(dt: datetime) -> str:
@@ -198,4 +203,12 @@ async def latest_signals(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=80)
+    from src.logging_helper.redaction import uvicorn_log_config
+    from src.vault import loader as vault
+
+    vault.load_blocking(config_manager, "web_server")
+    for name, label in ((WEBHOOK, "TradingView's webhook"), (INTERNAL, "the other services")):
+        if not web_server_token.accepted(name):
+            logging.error(f"No token for {label}: every request of theirs is refused until one is set (admin's Credentials)")
+    # Its access log names each path, and TradingView's carries the token in its query.
+    uvicorn.run(app, host="0.0.0.0", port=80, log_config=uvicorn_log_config())

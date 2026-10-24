@@ -173,6 +173,66 @@ def test_dispatch_error_does_not_stop_the_loop():
     assert _dispatched_uuids(dispatch) == ["uuid-1", "uuid-2"]
 
 
+def test_a_stop_cuts_off_the_wait_for_signals_at_once():
+    async def scenario():
+        stopping = asyncio.Event()
+        waiting = asyncio.Event()
+        cancelled = []
+
+        async def long_poll():
+            waiting.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+
+        client = MagicMock(interval_ms=0, long_poll_wait_ms=1000, startup_replay_max_age_seconds=10)
+        client.get_new_signals = long_poll
+        dispatch = AsyncMock()
+        loop_task = asyncio.create_task(poll_and_dispatch_signals(client, dispatch, stopping=stopping))
+        await waiting.wait()
+        stopping.set()
+        await asyncio.wait_for(loop_task, 1)
+        return cancelled, dispatch
+
+    cancelled, dispatch = asyncio.run(scenario())
+
+    assert cancelled == [True]
+    dispatch.assert_not_awaited()
+
+
+def test_a_stop_never_cuts_off_the_signal_in_hand_and_no_poll_follows_it():
+    async def scenario():
+        stopping = asyncio.Event()
+        order_sent = asyncio.Event()
+        finished = []
+        polls = []
+
+        async def poll():
+            polls.append(True)
+            return [_signal("uuid-1")]
+
+        async def dispatch(signal):
+            order_sent.set()
+            # Saxo answering the order, while the stop is asked.
+            await asyncio.sleep(0.05)
+            finished.append(signal["signal_uuid"])
+
+        client = MagicMock(interval_ms=0, long_poll_wait_ms=1000, startup_replay_max_age_seconds=10)
+        client.get_new_signals = poll
+        loop_task = asyncio.create_task(poll_and_dispatch_signals(client, dispatch, stopping=stopping))
+        await order_sent.wait()
+        stopping.set()
+        await asyncio.wait_for(loop_task, 1)
+        return finished, polls
+
+    finished, polls = asyncio.run(scenario())
+
+    assert finished == ["uuid-1"]
+    assert polls == [True]
+
+
 # ── keep_saxo_session_warm ──
 
 def test_keep_warm_keeps_calling_saxo_after_a_failed_call():

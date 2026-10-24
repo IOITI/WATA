@@ -25,7 +25,12 @@ import type {
   CapitalProviderDetails,
   CapitalVolume,
   ConfigBackup,
+  CredentialSaved,
+  Credentials,
+  ConfigCatalog,
   ConfigDocument,
+  ConfigHistoryEntry,
+  ConfigPreview,
   ConfigRestored,
   ConfigSaved,
   DataAssets,
@@ -60,8 +65,10 @@ import type {
   Report,
   ResearchFiles,
   ResearchLockbox,
+  RestartPlan,
   SaxoProviderDetails,
   SaxoStatus,
+  ServicesState,
   Session,
   Signal,
   SignalSent,
@@ -279,6 +286,18 @@ export const api = {
 
   signals: () => request<{ items: Signal[] }>('GET', '/api/signals'),
   health: () => request<Health>('GET', '/api/system/health'),
+  services: () => request<ServicesState>('GET', '/api/system/services'),
+  credentials: () => request<Credentials>('GET', '/api/credentials'),
+  setCredential: (name: string, parts: Record<string, string>) =>
+    request<CredentialSaved>('PUT', `/api/credentials/${encodeURIComponent(name)}`, { body: { parts } }),
+  rotateCredential: (name: string) =>
+    request<CredentialSaved>('POST', `/api/credentials/${encodeURIComponent(name)}/rotate`),
+  removeCredential: (name: string) =>
+    request<{ name: string; services: string[] }>('DELETE', `/api/credentials/${encodeURIComponent(name)}`),
+  showWebhook: () => request<{ token: string; url: string | null; path: string }>('POST', '/api/credentials/webhook.token/show'),
+  testTelegram: () => request<{ ok: boolean; detail: string }>('POST', '/api/credentials/telegram.bot/test'),
+  restartServices: (services: string[], force = false) =>
+    request<{ plan: RestartPlan }>('POST', '/api/system/services/restart', { body: { services, force } }),
   saxo: () => request<SaxoStatus>('GET', '/api/system/saxo'),
   logServices: () => request<LogServices>('GET', '/api/logs'),
   logTail: (service: string, params: { lines: number; level?: string | null; q?: string | null }) =>
@@ -293,8 +312,10 @@ export const api = {
     request<{ status: string; position_id: string }>('POST', '/api/actions/close-position', {
       body: { position_id: positionId },
     }),
-  submitSaxoAuthCode: (code: string) =>
-    request<void>('POST', '/api/system/saxo/auth-code', { body: { code } }),
+  submitSaxoAuthCode: (code: string, state: string | null = null) =>
+    request<void>('POST', '/api/system/saxo/auth-code', { body: { code, state } }),
+  authorizeSaxo: (environment?: string) =>
+    request<{ url: string }>('POST', '/api/system/saxo/authorize', { body: { environment: environment ?? null } }),
 
   // ── backtests on the recorded turbos ──
   backtestOptions: () => request<BacktestOptions>('GET', '/api/backtests/options'),
@@ -400,6 +421,8 @@ export const api = {
   // ── Claude's research through the MCP endpoint: watched, paused, its tokens revoked ──
   mcp: () => request<McpState>('GET', '/api/mcp'),
   /** An operator action, audited: the token opens the endpoint no more. */
+  createMcpToken: (name: string, days: number) =>
+    request<{ token: string; entry: McpToken }>('POST', '/api/mcp/tokens', { body: { name, days } }),
   revokeMcpToken: (id: string) =>
     request<{ revoked: McpToken[] }>('POST', `/api/mcp/tokens/${encodeURIComponent(id)}/revoke`),
   /** Paused, every call of Claude's is refused until it is resumed; audited. */
@@ -410,8 +433,11 @@ export const api = {
     request<{ lockbox: ResearchLockbox | null }>('PUT', '/api/research/lockbox', { body: period }),
 
   config: () => request<ConfigDocument>('GET', '/api/config'),
-  validateConfig: (config: JsonObject) =>
-    request<{ valid: boolean }>('POST', '/api/config/validate', { body: { config } }),
+  /** Every parameter of config.json, fixed for a version of WATA. */
+  configCatalog: () => request<ConfigCatalog>('GET', '/api/config/catalog'),
+  configHistory: () => request<{ items: ConfigHistoryEntry[] }>('GET', '/api/config/history'),
+  /** Checked as a save would be; nothing is written. */
+  validateConfig: (config: JsonObject) => request<ConfigPreview>('POST', '/api/config/validate', { body: { config } }),
   saveConfig: (config: JsonObject, revision: string) =>
     request<ConfigSaved>('PUT', '/api/config', { body: { config, revision } }),
   configBackups: () => request<{ items: ConfigBackup[] }>('GET', '/api/config/backups'),

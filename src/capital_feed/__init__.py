@@ -4,10 +4,11 @@ from Capital.com, recorded as ten-second bars, sent live to the admin's charts,
 and kept as one file a day for backtests.
 
 Opt-in (compose profile ``capital`` and ``trade.config.capital_feed.enabled``)
-and on its own: no trading service calls it or waits for it. Its login comes
-from the environment of its container (``CAPITAL_API_KEY``,
-``CAPITAL_IDENTIFIER``, ``CAPITAL_PASSWORD`` in ``.env``), never from the
-configuration file.
+and on its own: no trading service calls it or waits for it. Its login is the
+credential ``capital.login``, sealed for this service alone in PostgreSQL
+(src/vault/), read at its start; until it has its row, the environment of its
+container (``CAPITAL_API_KEY``, ``CAPITAL_IDENTIFIER``, ``CAPITAL_PASSWORD``
+in ``.env``). Never the configuration file.
 """
 
 import asyncio
@@ -68,6 +69,7 @@ async def main():
     from src.database.postgres import AsyncDbCapitalManager, PostgresConnectionManager, init_capital_schema
     from src.logging_helper import setup_logging
     from src.mq_telegram.async_tools import AsyncTelegramSender
+    from src.vault import loader as vault
 
     config_path = os.getenv("WATA_CONFIG_PATH")
     if not config_path:
@@ -102,10 +104,14 @@ async def main():
         if not settings.enabled:
             await _idle(store, version, settings.environment, "disabled", f"The Capital.com feed is switched off ({SECTION}.enabled).")
             return
-        credentials = Credentials.from_environment()
+        await vault.load(config_manager, "capital_feed", db=pg)
+        credentials = Credentials.from_value(vault.credential("capital.login"))
         if credentials is None:
-            missing = ", ".join(Credentials.missing())
-            await _idle(store, version, settings.environment, "no_credentials", f"No Capital.com login: {missing} missing in .env.")
+            why = (
+                "its row in PostgreSQL cannot be opened by this service (see its log)"
+                if vault.source("capital.login") == vault.UNREADABLE else "set it from the admin's Credentials"
+            )
+            await _idle(store, version, settings.environment, "no_credentials", f"No Capital.com login: {why}.")
             return
 
         telegram = AsyncTelegramSender(config_manager)

@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import getpass
 import logging
 import os
@@ -7,7 +8,7 @@ import sys
 from src.admin.audit import AuditLog
 from src.admin.auth import MIN_PASSWORD_LENGTH, CredentialStore, totp_uri
 from src.admin.context import AdminSettings
-from src.admin.mcp_server.tokens import DEFAULT_DAYS, TokenError, TokenStore
+from src.admin.mcp_server.tokens import DEFAULT_DAYS, TokenError
 from src.configuration import ConfigurationManager
 
 logging.basicConfig(level=logging.INFO)
@@ -64,14 +65,37 @@ def enable_totp(credentials: CredentialStore):
     print("Open sessions are closed.")
 
 
-def mcp_token(settings: AdminSettings, words: list[str], days: int):
-    """Make, list or revoke a token of the MCP endpoint. A token is shown once, here, and never again."""
-    tokens = TokenStore(settings.mcp_tokens_path)
+def mcp_token(settings: AdminSettings, words: list[str], days: int, dsn: str | None = None, connect=None):
+    """
+    Make, list or revoke a token of the MCP endpoint, kept in PostgreSQL. A
+    token is shown once, here, and never again.
+    """
+
+    async def run():
+        from src.admin.mcp_token_store import DbTokenStore
+
+        if connect is None:
+            import asyncpg
+
+            connection = await asyncpg.connect(dsn, timeout=10)
+        else:
+            connection = await connect()
+        try:
+            tokens = DbTokenStore(reader=connection, writer=connection, legacy_path=settings.mcp_tokens_path)
+            await tokens.refresh()
+            await _mcp_token(tokens, settings, words, days)
+        finally:
+            await connection.close()
+
+    asyncio.run(run())
+
+
+async def _mcp_token(tokens, settings: AdminSettings, words: list[str], days: int):
     audit = AuditLog(os.path.join(settings.log_path, "wata-admin", "audit.jsonl"))
     action, names = words[0], words[1:]
     try:
         if action == "create" and len(names) == 1:
-            token, entry = tokens.create(names[0], days)
+            token, entry = await tokens.create(names[0], days)
             audit.append("console", "MCP token created", f"{entry['name']} ({entry['id']}), until {entry['expires_at']}")
             print(f"Token {entry['name']} ({entry['id']}), valid until {entry['expires_at']}:")
             print(f"  {token}")
@@ -79,13 +103,13 @@ def mcp_token(settings: AdminSettings, words: list[str], days: int):
             if not settings.mcp_enabled:
                 print("The endpoint is off: it answers once admin.mcp_enabled is true in config.json and the admin restarted.")
         elif action == "revoke" and len(names) == 1:
-            for entry in tokens.revoke(names[0]):
+            for entry in await tokens.revoke(names[0]):
                 audit.append("console", "MCP token revoked", f"{entry['name']} ({entry['id']})")
                 print(f"Token {entry['name']} ({entry['id']}) revoked: it no longer opens the endpoint.")
         elif action == "list" and not names:
             listed = tokens.entries()
             if not tokens.readable():
-                print(f"{settings.mcp_tokens_path} cannot be read: no token is accepted.")
+                print("The tokens cannot be read from PostgreSQL: no token is accepted.")
             for entry in listed:
                 print(f"{entry['name']:<20} {entry['id']}  {entry['state']:<8} created {entry['created_at']}  expires {entry['expires_at']}")
             if not listed:
@@ -114,7 +138,7 @@ def main():
         credentials = CredentialStore(settings.credentials_path)
 
         if args.mcp_token:
-            mcp_token(settings, args.mcp_token, args.days)
+            mcp_token(settings, args.mcp_token, args.days, dsn=config_manager.get_config_value("postgresql.dsn"))
         elif args.set_password:
             set_password(credentials)
         elif args.enable_totp:

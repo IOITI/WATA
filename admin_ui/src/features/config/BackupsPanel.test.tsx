@@ -22,6 +22,7 @@ const CONFIG_DOC: ConfigDocument = {
   revision: 'r1',
   editable_paths: ['trade.rules', 'trade.config', 'reporting', 'logging.level'],
   protected_paths: [],
+  unknown: [],
   editable: true,
   restart_required: false,
   modified_at: '2026-10-23T12:05:00Z',

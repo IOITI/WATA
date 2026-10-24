@@ -95,6 +95,29 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done', automatic: false })).not.toBeNull()
   })
 
+  it('says a plan of restarts once, when it ends, its services named', () => {
+    const plan = {
+      services: ['telegram', 'trader'],
+      forced: false,
+      by: null,
+      started_at: '2026-10-24T09:00:00+00:00',
+      names: { telegram: 'Telegram', trader: 'Trader' },
+      steps: [
+        { service: 'telegram', state: 'ready', detail: null },
+        { service: 'trader', state: 'failed', detail: 'Not running again 180 s after the restart' },
+      ],
+    }
+
+    expect(describeEvent({ type: 'restart_plan', plan: { ...plan, done: false } })).toBeNull()
+    expect(describeEvent({ type: 'restart_plan', plan: { ...plan, done: true } })).toEqual({
+      title: 'Restart stopped',
+      body: 'Telegram is at work again; Trader: Not running again 180 s after the restart.',
+      variant: 'warning',
+    })
+    expect(eventLink({ type: 'restart_plan' })).toBe('/system')
+    expect(staleQueries({ type: 'restart_plan' })).toEqual(['services', 'session', 'health', 'config', 'data-provider'])
+  })
+
   it('stays silent for what the dashboard already shows, and for events it does not know', () => {
     expect(describeEvent({ type: 'entries_paused' })).toBeNull()
     expect(describeEvent({ type: 'entries_resumed' })).toBeNull()

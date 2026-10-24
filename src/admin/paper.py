@@ -18,7 +18,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from src.admin.downloads import trading_hours, trading_timezone
+from src.admin.downloads import market_is_open, trading_timezone
 from src.admin.errors import NotPossible
 from src.backtest.clock import TradingClock
 
@@ -46,9 +46,7 @@ class PaperTrading:
             return json.load(config_file)
 
     def _market_is_open(self, now: float) -> bool:
-        zone, start_hour, end_hour = trading_hours(self._config())
-        local = datetime.fromtimestamp(now, timezone.utc).astimezone(TradingClock(zone).zone)
-        return local.weekday() < 5 and start_hour <= local.hour < end_hour
+        return market_is_open(self._config(), now)
 
     def due(self, now: float | None = None) -> list[tuple[dict, date]]:
         """The rules in shadow and the finished days of theirs not traded on paper yet."""

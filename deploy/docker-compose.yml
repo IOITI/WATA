@@ -160,6 +160,9 @@ services:
 
   web_server1:
     image: wata-base:latest
+    # tini as PID 1 hands Docker's stop (SIGTERM) to the service, started with exec by
+    # src/start_python_script.sh, which then stops cleanly. So on every WATA service below.
+    init: true
     hostname: web_server1
     container_name: 'web_server1'
     oom_score_adj: -500
@@ -169,6 +172,10 @@ services:
         - ../../var/log:/app/var/log/
         - ../../var/lib:/app/var/lib/
         - ../../etc/config.json:/app/etc/config.json
+        # Its own key, read-only, and every service's public key: the credentials sealed for it in
+        # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+        - ../../keys/web_server:/app/keys/own:ro
+        - ../../keys/public:/app/keys/public:ro
     labels:
       - "traefik.enable=true"
       # Define the domain name for the application
@@ -205,6 +212,7 @@ services:
         condition: service_healthy
   telegram1:
     image: wata-base:latest
+    init: true
     hostname: telegram1
     container_name: 'telegram1'
     oom_score_adj: -500
@@ -213,6 +221,10 @@ services:
     volumes:
       - ../../var/log:/app/var/log/
       - ../../etc/config.json:/app/etc/config.json
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/telegram:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -228,9 +240,13 @@ services:
     depends_on:
       rabbitmq1:
         condition: service_healthy
+      # Its credentials are read from PostgreSQL at its start.
+      postgres1:
+        condition: service_healthy
 
   scheduler1:
     image: wata-base:latest
+    init: true
     hostname: scheduler1
     container_name: 'scheduler1'
     oom_score_adj: -500
@@ -240,6 +256,10 @@ services:
       - ../../var/log:/app/var/log/
       - ../../var/lib:/app/var/lib/
       - ../../etc/config.json:/app/etc/config.json
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/scheduler:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -255,18 +275,31 @@ services:
     depends_on:
       rabbitmq1:
         condition: service_healthy
+      # Its credentials are read from PostgreSQL at its start.
+      postgres1:
+        condition: service_healthy
 
   trader1:
     image: wata-base:latest
+    init: true
+    # A signal in hand is finished before the trader stops: a sale, a buy, the position looked
+    # up (up to 11 s), each request to Saxo allowed 30 s.
+    stop_grace_period: 60s
     hostname: trader1
     container_name: 'trader1'
     oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=trader
+      # Where Saxo sends the browser back with a login's code: registered in the app (src/saxo_authen/endpoints.py).
+      - SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}
     volumes:
       - ../../var/log:/app/var/log/
       - ../../var/lib:/app/var/lib/
       - ../../etc/config.json:/app/etc/config.json
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/trader:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -284,16 +317,25 @@ services:
 
   position_monitor1:
     image: wata-base:latest
+    init: true
+    # A sale sent to Saxo is waited for (15 s at most), then the closures being recorded.
+    stop_grace_period: 45s
     hostname: position_monitor1
     container_name: 'position_monitor1'
     oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=position_monitor
+      # Where Saxo sends the browser back with a login's code: registered in the app (src/saxo_authen/endpoints.py).
+      - SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}
       - WATA_HEARTBEAT_URL=${WATA_HEARTBEAT_URL:-}
     volumes:
       - ../../var/log:/app/var/log/
       - ../../var/lib:/app/var/lib/
       - ../../etc/config.json:/app/etc/config.json
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/position_monitor:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -314,16 +356,23 @@ services:
 
   watchlist_manager1:
     image: wata-base:latest
+    init: true
     hostname: watchlist_manager1
     container_name: 'watchlist_manager1'
     environment:
       - WATA_APP_ROLE=watchlist_manager
+      # Where Saxo sends the browser back with a login's code: registered in the app (src/saxo_authen/endpoints.py).
+      - SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}
     expose:
       - '8081'
     volumes:
       - ../../var/log:/app/var/log/
       - ../../var/lib:/app/var/lib/
       - ../../etc/config.json:/app/etc/config.json
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/watchlist_manager:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -336,18 +385,27 @@ services:
       resources:
         limits:
           memory: 1024M
+    depends_on:
+      # Its Saxo app is read from PostgreSQL at its start.
+      postgres1:
+        condition: service_healthy
 
   # Administrative web interface. Not started unless the "admin" profile is
   # enabled (COMPOSE_PROFILES=admin in .env, with ADMIN_DOMAIN and ADMIN_ALLOWED_IPS,
   # and ADMIN_ENTRYPOINT and ADMIN_PORT when it has no domain of its own).
   admin1:
     image: wata-base:latest
+    init: true
     hostname: admin1
     container_name: 'admin1'
     oom_score_adj: 500
     profiles: ["admin"]
     environment:
       - WATA_APP_ROLE=admin
+      # Where Saxo sends the browser back with a login's code: registered in the app (src/saxo_authen/endpoints.py).
+      - SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}
+      # The address of TradingView's webhook, shown on request with its token (Credentials).
+      - WATA_API_DOMAIN=${API_DOMAIN:-}
     expose:
       - '8082'
     volumes:
@@ -355,9 +413,8 @@ services:
       # audit trail) is the one place under var/log it writes to.
       - ../../var/log:/app/var/log/:ro
       - ../../var/log/wata-admin:/app/var/log/wata-admin
-      # Only what the admin needs from var/lib (which also holds the PostgreSQL data files):
-      # the Saxo token and authorization code, the web server token, its own password hash.
-      - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
+      # Only what the admin needs from var/lib (which also holds the PostgreSQL data files): the web
+      # server's token file of before, its own password hash. Saxo's login is read from PostgreSQL.
       - ../../var/lib/web_server:/app/var/lib/web_server
       - ../../var/lib/admin:/app/var/lib/admin
       # Backtests asked for from the interface: the prices they run on, and their results.
@@ -369,6 +426,10 @@ services:
       # The RabbitMQ configuration kept beside it is not the admin's to change.
       - ../../etc:/app/etc
       - ../../etc/rabbitmq:/app/etc/rabbitmq:ro
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/admin:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.admin.rule=Host(`${ADMIN_DOMAIN:-admin.invalid}`)"
@@ -384,8 +445,14 @@ services:
       - "traefik.http.middlewares.admin-ip-allowlist.ipallowlist.sourcerange=${ADMIN_ALLOWED_IPS:-127.0.0.1/32}"
       - "traefik.http.middlewares.admin-headers.headers.stsSeconds=31536000"
       - "traefik.http.routers.admin.middlewares=admin-ip-allowlist,admin-headers"
+      # The admin is on two networks: Traefik reaches it on trade-net, never on control-net.
+      - "traefik.docker.network=${COMPOSE_PROJECT_NAME:-deploy}_trade-net"
     networks:
       - trade-net
+      - control-net
+    # The token it opens the control service with (service_control1).
+    secrets:
+      - service_control_token
     deploy:
       mode: replicated
       replicas: 1
@@ -410,17 +477,50 @@ services:
       traefik:
         condition: service_healthy
 
+  # The control service: the one container that holds Docker's socket, so that the admin can
+  # restart WATA's own services (src/service_control/containers.py) without holding it. Mounted
+  # read-only or not, the socket answers anything: its code makes two calls, nothing else. Only
+  # the admin reaches it (control-net, internal), with the token both are given.
+  service_control1:
+    image: wata-base:latest
+    init: true
+    hostname: service_control1
+    container_name: 'service_control1'
+    profiles: ["admin"]
+    environment:
+      - WATA_APP_ROLE=service_control
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../../var/log/wata-service-control:/app/var/log/wata-service-control
+    secrets:
+      - service_control_token
+    networks:
+      - control-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 128M
+
   # Price recorder: ten-second bars of the turbos and their index, kept for
   # backtesting. Not started unless the "recorder" profile is enabled
   # (COMPOSE_PROFILES=recorder in .env, or admin,recorder for both) and
   # trade.config.price_recorder.enabled is true. No trading service uses it.
   price_recorder1:
     image: wata-base:latest
+    init: true
     hostname: price_recorder1
     container_name: 'price_recorder1'
     profiles: ["recorder"]
     environment:
       - WATA_APP_ROLE=price_recorder
+      # Where Saxo sends the browser back with a login's code: registered in the app (src/saxo_authen/endpoints.py).
+      - SAXO_REDIRECT_URL=${SAXO_REDIRECT_URL:-}
     volumes:
       # Only what it needs: its own log, the Saxo token it shares with the other
       # services, and the directory its exports are written to.
@@ -428,6 +528,10 @@ services:
       - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
       - ../../var/lib/price_export:/app/var/lib/price_export
       - ../../etc/config.json:/app/etc/config.json:ro
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/price_recorder:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -455,6 +559,7 @@ services:
   # can only read prices. No trading service uses it.
   capital_feed1:
     image: wata-base:latest
+    init: true
     hostname: capital_feed1
     container_name: 'capital_feed1'
     profiles: ["capital"]
@@ -469,6 +574,10 @@ services:
       - ../../var/log/wata-capital-feed:/app/var/log/wata-capital-feed
       - ../../var/lib/price_history/capital:/app/var/lib/price_history/capital
       - ../../etc/config.json:/app/etc/config.json:ro
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/capital_feed:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -495,6 +604,7 @@ services:
   # and like them it keeps every processor: a rule runs its script on each bar.
   ta_engine1:
     image: wata-base:latest
+    init: true
     hostname: ta_engine1
     container_name: 'ta_engine1'
     profiles: ["ta"]
@@ -508,6 +618,10 @@ services:
       - ../../var/lib/admin/ta:/app/var/lib/ta:ro
       - ../../var/lib/web_server:/app/var/lib/web_server:ro
       - ../../etc/config.json:/app/etc/config.json:ro
+      # Its own key, read-only, and every service's public key: the credentials sealed for it in
+      # PostgreSQL open with the first; what it writes is sealed with the others (src/vault/).
+      - ../../keys/ta_engine:/app/keys/own:ro
+      - ../../keys/public:/app/keys/public:ro
     networks:
       - trade-net
     deploy:
@@ -531,5 +645,35 @@ services:
       postgres1:
         condition: service_healthy
 
+  # The credentials moved into PostgreSQL once, at the deploy of v0.43.0, and their old places cleared
+  # later at the operator's word (src/vault/migrate.py). Never started by up:
+  #   docker compose --profile tools run --rm vault_tools migrate --dry-run
+  vault_tools:
+    image: wata-base:latest
+    profiles: ["tools"]
+    environment:
+      - WATA_ENV_FILE=/app/wata.env
+    volumes:
+      - ../../etc:/app/etc
+      - ../../var/lib/web_server:/app/var/lib/web_server
+      - ../../var/lib/admin:/app/var/lib/admin
+      # Saxo's token file, moved in under the services' lock and renamed .imported.
+      - ../../var/lib/saxo_auth:/app/var/lib/saxo_auth
+      - ../../keys/public:/app/keys/public:ro
+      # Read as lines of NAME=value, never run.
+      - ../../.env:/app/wata.env:ro
+    networks:
+      - trade-net
+    entrypoint: ["python", "-m", "src.vault"]
+    command: ["migrate", "--dry-run"]
+
 networks:
   trade-net:
+  # Between the admin and the control service alone: no route out, no other container on it.
+  control-net:
+    internal: true
+
+secrets:
+  # Made by install_package.sh at the first install, never overwritten.
+  service_control_token:
+    file: ../../var/lib/service_control/token

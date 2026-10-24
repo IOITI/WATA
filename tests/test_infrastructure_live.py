@@ -688,6 +688,182 @@ def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_old
     assert removed == 2 and left["kept_since"] == started["tick_at"] and left["rules"][0]["loads"] == 0
 
 
+def test_a_credential_written_by_the_admin_is_opened_by_its_service_alone(in_a_database_of_its_own, tmp_path):
+    from src.admin.vault import AdminVault
+    from src.configuration import ConfigurationManager
+    from src.vault import keys, loader, store
+
+    keys.generate(str(tmp_path / "keys"))
+    for role in ("admin", "capital_feed", "trader"):
+        view = tmp_path / f"view-{role}"
+        (view / "own").mkdir(parents=True)
+        (view / "own" / "private.key").write_bytes((tmp_path / "keys" / role / "private.key").read_bytes())
+        (view / "public").symlink_to(tmp_path / "keys" / "public")
+    config = ConfigurationManager("tests/test_config.json")
+    login = {"api_key": "capitalkey1234567890", "identifier": "me@example.com", "password": "pass word 1"}
+
+    async def scenario(writer, reader):
+        from src.admin.queries import LazyDatabase
+
+        # As the admin reaches them: the read-only pool and its one writable connection, connected on first use.
+        reader = LazyDatabase(reader)
+        vault = AdminVault(reader=reader, writer=writer, config_manager=config, keys_dir=str(tmp_path / "view-admin"))
+        await vault.set("capital.login", login, by="10.0.0.1")
+        await vault.set("capital.login", {**login, "password": "another one"}, by="10.0.0.2")
+        await store.record_check(writer, "capital.login", "capital_feed", True, "streaming")
+        listed = await vault.listed()
+        loader.forget()
+        feed = await loader.load(config, "capital_feed", db=reader, keys_dir=str(tmp_path / "view-capital_feed"))
+        trader = await loader.load(config, "trader", db=reader, keys_dir=str(tmp_path / "view-trader"))
+        removed = await vault.remove("capital.login")
+        return listed, feed, trader, removed, await store.listed(reader), await store.checks(reader)
+
+    listed, feed, trader, removed, after, checks = in_a_database_of_its_own(scenario)
+
+    [capital] = [item for item in listed["items"] if item["name"] == "capital.login"]
+    assert capital["where"] == "database" and capital["set_by"] == "10.0.0.2" and capital["public"] == {"identifier": "me@example.com"}
+    assert capital["checks"][0]["detail"] == "streaming"
+    assert feed["capital.login"]["password"] == "another one"
+    assert "capital.login" not in trader
+    assert removed["services"] == ["capital_feed"] and after == [] and checks == []
+
+
+def test_the_mcp_tokens_kept_in_postgresql_open_the_endpoint_until_revoked(in_a_database_of_its_own):
+    from src.admin.mcp_token_store import DbTokenStore
+
+    async def scenario(writer, reader):
+        from src.admin.queries import LazyDatabase
+
+        reader = LazyDatabase(reader)
+        store = DbTokenStore(reader=reader, writer=writer)
+        await store.refresh()
+        token, entry = await store.create("claude-mac", 30)
+        opened = store.verify(token)
+        await asyncio.sleep(0.05)
+        used = await reader.fetchval("SELECT last_used_at FROM mcp_token WHERE id = $1", entry["id"])
+        revoked = await store.revoke("claude-mac")
+        return opened, used, revoked, store.verify(token), store.entries()
+
+    opened, used, revoked, after, entries = in_a_database_of_its_own(scenario)
+
+    assert opened.name == "claude-mac" and used is not None
+    assert [entry["name"] for entry in revoked] == ["claude-mac"] and after is None
+    assert entries[0]["state"] == "revoked"
+
+
+def _saxo_services(tmp_path, schema, roles):
+    """SaxoAuth of each role over the test's schema, its key and the shared token folder, as in production."""
+    from unittest.mock import MagicMock
+
+    import asyncpg
+
+    from src.saxo_authen import SaxoAuth
+    from src.saxo_authen.token_store import DatabaseThread, DbTokenStore
+    from src.vault import keys
+
+    root = tmp_path / "keys"
+    if not root.exists():
+        keys.generate(str(root))
+    folder = tmp_path / "saxo_auth"
+    folder.mkdir(exist_ok=True)
+    config = MagicMock()
+    values = {
+        "authentication.saxo.app_config_object": {"AppKey": "k" * 32, "AppSecret": "s" * 32},
+        "authentication.persistant.token_path": str(folder / "persist_token.json"),
+        "saxo_auth.env": "live",
+    }
+    config.get_config_value.side_effect = lambda key, default=None: values.get(key, default)
+    services = []
+    for role in roles:
+        view = tmp_path / f"view-{role}"
+        if not view.exists():
+            (view / "own").mkdir(parents=True)
+            (view / "own" / "private.key").write_bytes((root / role / "private.key").read_bytes())
+            (view / "public").symlink_to(root / "public")
+
+        async def connect():
+            return await asyncpg.connect(POSTGRES_DSN, server_settings={"search_path": schema})
+
+        store = DbTokenStore(DatabaseThread(connect), "live", role, str(folder), keys_dir=str(view))
+        services.append(SaxoAuth(config, token_store=store, environ={
+            "WATA_APP_ROLE": role, "SAXO_REDIRECT_URL": "https://admin.example.com/api/saxo/callback",
+        }))
+    return services
+
+
+def _expired_tokens():
+    return {"access_token": "old", "refresh_token": "refresh-old", "expires_in": 1200, "refresh_token_expires_in": 3600,
+            "date_saved": (datetime.now() - timedelta(seconds=1500)).isoformat()}
+
+
+def test_two_services_renewing_saxos_token_at_once_renew_it_once(in_a_database_of_its_own, tmp_path):
+    import threading
+    import time
+    from unittest.mock import MagicMock, patch
+
+    asked = []
+    asking = threading.Lock()
+
+    def saxo_answers(url, data, timeout):
+        with asking:
+            asked.append(data["refresh_token"])
+        time.sleep(0.3)
+        response = MagicMock(status_code=201)
+        response.json.return_value = {"access_token": "renewed", "refresh_token": "refresh-renewed", "expires_in": 1200,
+                                      "refresh_token_expires_in": 3600}
+        return response
+
+    async def scenario(writer, reader):
+        schema = writer._server_settings["search_path"]
+        trader, monitor = _saxo_services(tmp_path, schema, ["trader", "position_monitor"])
+        await asyncio.to_thread(trader.store.save, _expired_tokens(), 0, "migration")
+        with patch("src.saxo_authen.requests.post", side_effect=saxo_answers):
+            tokens = await asyncio.gather(asyncio.to_thread(trader.get_token), asyncio.to_thread(monitor.get_token))
+        row = await writer.fetchrow("SELECT generation, saved_by, access_expires_at > now() AS fresh FROM saxo_token")
+        return tokens, dict(row), await asyncio.to_thread(monitor.get_token_status)
+
+    tokens, row, status = in_a_database_of_its_own(scenario)
+
+    # One renewal: a refresh token is used once, and the second service read what the first wrote.
+    assert asked == ["refresh-old"] and tokens == ["renewed", "renewed"]
+    assert row["generation"] == 2 and row["saved_by"] in ("trader", "position_monitor") and row["fresh"]
+    assert status["has_token"] and not status["access_token_expired"]
+
+
+def test_a_saxo_code_is_taken_once_and_a_lapse_said_once(in_a_database_of_its_own, tmp_path):
+    import urllib.parse
+
+    from src.admin.queries import LazyDatabase
+    from src.admin.saxo import AdminSaxo
+    from src.configuration import ConfigurationManager
+
+    async def scenario(writer, reader):
+        schema = writer._server_settings["search_path"]
+        trader, recorder = _saxo_services(tmp_path, schema, ["trader", "price_recorder"])
+        firsts = [await asyncio.to_thread(service.store.needs_authorization, "lapsed") for service in (trader, recorder)]
+        await writer.execute("UPDATE saxo_token SET needs_authorization_since = now() - interval '2 hours'")
+        reminders = [await asyncio.to_thread(service.store.reminder_due, 3600) for service in (trader, recorder)]
+        admin = AdminSaxo(reader=LazyDatabase(reader), writer=writer, config_manager=ConfigurationManager("tests/test_config.json"),
+                          keys_dir=str(tmp_path / "keys"), environ={"SAXO_REDIRECT_URL": "https://admin.example.com/api/saxo/callback"})
+        await writer.execute(
+            "INSERT INTO credential (name, public, sealed, readers, set_at) VALUES ('saxo.live.app', '{\"app_key\": \"%s\"}', '{}', '{}', now())"
+            % ("a" * 32)
+        )
+        state = urllib.parse.parse_qs(urllib.parse.urlsplit(await admin.authorize("live")).query)["state"][0]
+        await admin.hand_over("the-code", state=state, by="10.77.0.2")
+        claims = await asyncio.gather(asyncio.to_thread(trader.store.claim_code), asyncio.to_thread(recorder.store.claim_code))
+        status = await admin.status()
+        return firsts, reminders, claims, status
+
+    firsts, reminders, claims, status = in_a_database_of_its_own(scenario)
+
+    assert firsts == [True, False]
+    assert reminders == [True, False]
+    assert sorted(claim is None for claim in claims) == [False, True]
+    assert [claim for claim in claims if claim] == [{"code": "the-code"}]
+    assert status["needs_authorization_since"] is not None and status["apps"]["live"]["app_key"] == "a" * 32
+
+
 # ── RabbitMQ, through what the services publish and consume with ──
 
 

@@ -15,8 +15,9 @@ import { formatDateTime, formatNumber } from '@/lib/format'
 import type { Health } from '@/lib/types'
 
 import { ClaudePanel } from './ClaudePanel'
+import { ContainersPanel } from './ContainersPanel'
 import { LicencesPanel } from './LicencesPanel'
-import { SaxoPanel } from './SaxoPanel'
+import { SaxoCallbackOutcome, SaxoPanel } from './SaxoPanel'
 import { MAP_HEIGHT, MAP_LINKS, MAP_WIDTH, serviceMap } from './serviceMap'
 
 // The page that says more of a service, where there is one.
@@ -172,12 +173,14 @@ export function SystemPage() {
         }
       />
 
+      <SaxoCallbackOutcome />
+
       <QueryState isPending={healthQuery.isPending} error={healthQuery.error} hasData={!!health}>
         {health && (
           <>
             <Panel
               title="Services"
-              description="The admin cannot see the containers themselves. Each state comes from what the service answers, from what the trader and the position monitor say of themselves every fifteen seconds, from the consumers on its queue, or from the start and stop lines of its log."
+              description="Whether each service does its work: what it answers, what the trader and the position monitor say of themselves every fifteen seconds, the consumers on its queue, or the start and stop lines of its log. What Docker says of the containers is below."
               bodyClassName="pt-2"
             >
               {/* The services as a map, where there is room for it; the table says the same, line by line. */}
@@ -192,6 +195,8 @@ export function SystemPage() {
               />
               <ServicesTable health={health} />
             </Panel>
+
+            <ContainersPanel timeZone={timezone} />
 
             <div className="grid gap-4 lg:grid-cols-2">
               <Panel title="Queues" bodyClassName="pt-2">

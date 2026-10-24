@@ -23,6 +23,7 @@ import os
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+from signal import SIGTERM
 
 import aio_pika
 import httpx
@@ -30,6 +31,7 @@ import httpx
 from src import event_loop
 from src.configuration import ConfigurationManager
 from src.logging_helper import setup_logging
+from src.logging_helper.redaction import register_secret
 from src.trade.async_services import (
     AsyncSaxoApiClient,
     AsyncOrderService,
@@ -50,6 +52,8 @@ from src.database.postgres import (
     init_schema,
 )
 from src.mq_telegram.async_tools import AsyncTelegramSender
+from src.vault import loader as vault
+from src.vault import store as vault_store
 from src.saxo_authen import SaxoAuth
 from src.saxo_streaming.client import SaxoStreamClient
 from src.trade.rules import TradingRule
@@ -93,10 +97,57 @@ STREAM_SILENT_FALLBACK_SECONDS = 15
 STREAM_SILENT_ALERT_SECONDS = 60
 
 # The outside watcher's address (a dead-man's switch: it alerts by itself when the pings stop), pinged
-# while the monitor hears from Saxo. Never logged: it is a secret of its own.
-HEARTBEAT_URL_ENV = "WATA_HEARTBEAT_URL"
+# while the monitor hears from Saxo: the credential heartbeat.url (WATA_HEARTBEAT_URL of .env before
+# it has its row). Never logged: it is a secret of its own.
+# At a stop, how long a sale sent to Saxo is waited for: Saxo answers an order within seconds, and Docker
+# allows the monitor 45 s in all (stop_grace_period) for this and its cleanup.
+STOP_SETTLE_SECONDS = 15
 HEARTBEAT_URL_INTERVAL_SECONDS = 60
 HEARTBEAT_URL_HEALTHY_SECONDS = 120
+
+
+# ─────────────────────────────────────────────────────
+#  A monitor that can be stopped
+# ─────────────────────────────────────────────────────
+
+class StoppableMonitor(AsyncPerformanceMonitor):
+    """
+    The position monitor's checks, which can be told that the service is
+    stopping: from then on they start no sale, and a sale under way is counted
+    until Saxo answers it. A sale cut off between Saxo taking it and WATA
+    writing it down would leave a closure nobody records, under the wrong
+    reason; what was still to be sold is decided again at the next start.
+
+    Here and not in src/trade/async_services.py, whose code every backtest's
+    digest holds: a change there would mark every run as made with other code.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._stopping = False
+        self._sales_under_way = 0
+
+    def begin_shutdown(self) -> None:
+        self._stopping = True
+
+    async def _attempt_close(self, intent, api_pos: dict, now: float) -> dict | None:
+        if self._stopping:
+            return None
+        return await super()._attempt_close(intent, api_pos, now)
+
+    async def _send_close_order(self, *args, **kwargs):
+        self._sales_under_way += 1
+        try:
+            return await super()._send_close_order(*args, **kwargs)
+        finally:
+            self._sales_under_way -= 1
+
+    async def wait_for_sales_under_way(self, timeout: float, poll_seconds: float = 0.1) -> bool:
+        """Wait until no sale awaits Saxo's answer, ``timeout`` seconds at most. Returns whether none does."""
+        deadline = time.monotonic() + timeout
+        while self._sales_under_way > 0 and time.monotonic() < deadline:
+            await asyncio.sleep(poll_seconds)
+        return self._sales_under_way == 0
 
 
 # ─────────────────────────────────────────────────────
@@ -283,11 +334,14 @@ class StreamPositionHandler:
             self._pending_reconcile.cancel()
 
 
-async def ping_heartbeat_url_periodically(url: str, healthy, interval_seconds: float = HEARTBEAT_URL_INTERVAL_SECONDS):
+async def ping_heartbeat_url_periodically(url: str, healthy, interval_seconds: float = HEARTBEAT_URL_INTERVAL_SECONDS,
+                                         report=None):
     """
     GET ``url`` every ``interval_seconds`` while ``healthy()``: the outside
     watcher alerts when the pings stop, which nothing on this server can do
     once the server, its network or its RabbitMQ is down. Never raises.
+    ``report(name, ok, detail)`` hears how each ping went (the admin's
+    Credentials say it).
     """
     async with httpx.AsyncClient(timeout=10) as client:
         while True:
@@ -295,10 +349,30 @@ async def ping_heartbeat_url_periodically(url: str, healthy, interval_seconds: f
             if not healthy():
                 continue
             try:
-                await client.get(url)
+                response = await client.get(url)
+                if report is not None:
+                    report("heartbeat.url", response.status_code < 400, f"Answered {response.status_code}")
             except Exception as e:
                 # Not the address: it is the secret that lets anyone ping in WATA's name.
                 logger.warning("The heartbeat ping failed: %s", type(e).__name__)
+                if report is not None:
+                    report("heartbeat.url", False, f"No answer ({type(e).__name__})")
+
+
+async def stop_when_asked(stopping: asyncio.Event, performance_monitor, stream_client,
+                          settle_seconds: float = STOP_SETTLE_SECONDS) -> None:
+    """
+    Once ``stopping`` is set (Docker's stop): no sale is started any more, the
+    one under way is let through to Saxo's answer (``settle_seconds`` at most),
+    then the stream stops, which ends the monitor's run and leads to its
+    cleanup. Its loops are only cancelled then, when they can start no sale.
+    """
+    await stopping.wait()
+    logger.info("Stopping: no new sale from now on")
+    performance_monitor.begin_shutdown()
+    if not await performance_monitor.wait_for_sales_under_way(settle_seconds):
+        logger.warning("Stopping with a sale still awaiting Saxo's answer after %ss", settle_seconds)
+    await stream_client.stop()
 
 
 def stream_heard_lately(stream_client, now: float | None = None) -> bool:
@@ -498,12 +572,17 @@ async def main():
     watch_stream_task = None
     heartbeat_task = None
     heartbeat_url_task = None
+    stop_task = None
 
     try:
         # PostgreSQL
         pg = PostgresConnectionManager.from_config(config_manager)
         await pg.connect()
         await init_schema(pg)
+        # Its credentials (Telegram's bot for the sender's direct fallback, the outside watcher's
+        # address), sealed for it in PostgreSQL.
+        await vault.load(config_manager, "position_monitor", db=pg)
+        checks = vault.CheckReporter(lambda *check: vault_store.record_check(pg, *check), "position_monitor")
         db_position_manager = AsyncDbPositionManager(pg)
         db_perf_manager = AsyncDbTradePerformanceManager(pg)
         db_risk_state_manager = AsyncDbRiskStateManager(pg)
@@ -540,7 +619,7 @@ async def main():
                 db_balance_manager=db_balance_manager,
             )
 
-        performance_monitor = AsyncPerformanceMonitor(
+        performance_monitor = StoppableMonitor(
             position_service, order_service, config_manager,
             db_position_manager, trading_rule, telegram.send,
             trigger_daily_stats_fn=_trigger_daily_stats,
@@ -610,15 +689,21 @@ async def main():
         heartbeat_task = asyncio.create_task(beat_periodically(
             AsyncDbHeartbeatManager(pg), "position_monitor", APP_VERSION, lambda: stream_handler.figures(stream_client),
         ))
-        heartbeat_url = os.getenv(HEARTBEAT_URL_ENV, "").strip()
+        heartbeat_url = (vault.credential("heartbeat.url") or {}).get("url", "")
+        register_secret("heartbeat.url", heartbeat_url)
         if heartbeat_url:
-            heartbeat_url_task = asyncio.create_task(
-                ping_heartbeat_url_periodically(heartbeat_url, lambda: stream_heard_lately(stream_client))
-            )
+            heartbeat_url_task = asyncio.create_task(ping_heartbeat_url_periodically(
+                heartbeat_url, lambda: stream_heard_lately(stream_client), report=checks.report,
+            ))
         if live_value_interval_seconds > 0:
             live_value_task = asyncio.create_task(
                 publish_live_values_periodically(performance_monitor, db_live_value_manager, live_value_interval_seconds)
             )
+
+        # Docker's stop (SIGTERM) ends the run below once the sale under way, if any, has Saxo's answer.
+        stopping = asyncio.Event()
+        asyncio.get_running_loop().add_signal_handler(SIGTERM, stopping.set)
+        stop_task = asyncio.create_task(stop_when_asked(stopping, performance_monitor, stream_client))
 
         # Run the streaming client (blocks until stop() or fatal error)
         await stream_client.start()
@@ -632,6 +717,8 @@ async def main():
         sys.exit(1)
     finally:
         logger.info("--- Shutting down WATA Position Monitor ---")
+        if stop_task is not None and not stop_task.done():
+            stop_task.cancel()
         if reconcile_task is not None:
             reconcile_task.cancel()
         if live_value_task is not None:

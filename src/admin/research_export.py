@@ -48,7 +48,7 @@ from typing import Awaitable, Callable
 import pytz
 
 from src.admin.config_editor import PROTECTED_PATHS, mask_secrets
-from src.admin.downloads import trading_hours, trading_timezone
+from src.admin.downloads import market_is_open, trading_timezone
 from src.admin.errors import InvalidRequest
 from src.admin.processes import folder_bytes, read_json, utc, write_json
 from src.backtest.clock import TradingClock
@@ -234,11 +234,6 @@ class ResearchExport:
         with open(self._config_path, encoding="utf-8") as config_file:
             return json.load(config_file)
 
-    def _clock_and_hours(self) -> tuple[TradingClock, int, int]:
-        """The clock of the trading hours (in their own timezone) and those hours."""
-        zone, start_hour, end_hour = trading_hours(self._config())
-        return TradingClock(zone), start_hour, end_hour
-
     def _day_clock(self) -> TradingClock:
         """The clock days are counted on: the trading timezone's, whatever the hours are written in."""
         return TradingClock(trading_timezone(self._config()))
@@ -246,11 +241,10 @@ class ResearchExport:
     def _market_is_open(self, now: float) -> bool:
         """Whether WATA may be trading: its hours on a weekday. Unknown counts as open."""
         try:
-            clock, start_hour, end_hour = self._clock_and_hours()
-        except (OSError, ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
+            config = self._config()
+        except (OSError, ValueError):
             return True
-        local = clock.local(now)
-        return local.weekday() < 5 and start_hour <= local.hour < end_hour
+        return market_is_open(config, now)
 
     def due_days(self, now: float | None = None) -> list[date]:
         """The finished days of the last ``keep_days`` not written yet, oldest first. Today is left to tomorrow."""

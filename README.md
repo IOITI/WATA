@@ -177,21 +177,18 @@ PostgreSQL 16 is the primary runtime database. The application uses an `asyncpg`
 
 ### Saxo Bank API Authentication
 
-WATA uses OAuth 2.0 for Saxo Bank API integration:
+WATA logs in to Saxo with OAuth 2.0 (the authorisation code grant), with the app of the account it trades on: `saxo_auth.env` in `config.json`, `live` unless it says `simulation`, set on the server. Each account's app (its App Key and App Secret) is set on the admin's Configuration page, Credentials, where the app object copied from Saxo's developer portal is enough. Saxo's login and token addresses are WATA's own, one pair per account (`src/saxo_authen/endpoints.py`), never read from a file or a database row.
 
-1. When authenticating, the application send you a URL via Telegram (or logs of container)
-2. Open this URL in your browser and log in with your Saxo credentials, and do all the steps to authorize the application (2FA, risk warning, etc.)
-3. After authorization, you'll be redirected to a page with a URL containing a `code` parameter
-4. Copy the code and run `watasaxoauth` on your server (you will be prompted to enter the code securely)
-5. The application completes authentication using this code
+**The login is kept in PostgreSQL** (`saxo_token`), sealed for the four services that log in to Saxo: the trader, the position monitor, the watchlist manager and the price recorder. They renew it in turn, one at a time under a lock in `var/lib/saxo_auth`, and a renewal is written only when no other service renewed it meanwhile: a refresh token is used once, and Saxo refuses it the second time. While PostgreSQL cannot be written, a renewed token waits beside the lock, sealed, and the next service to renew writes it.
 
-**Command Reference**:
-- `watasaxoauth`: Run this command and you'll be prompted to enter the authorization code securely (the code won't be visible when typing)
-- The authorization code is valid only for a short time (typically a few minutes)
+**When the login lapses** (Saxo refused to renew it, or no service renewed it before its refresh token ended, the services being stopped for one), nothing can be bought or sold:
 
-**Troubleshooting**:
-- If you receive an invalid/expired code error, repeat the process
-- A "Timeout waiting for authorization code" error means the application waited for 5 minutes without receiving the code
+1. Telegram says so once, then every half hour until a login comes; the admin's top bar shows "Saxo: authorise".
+2. On the admin's System page, Saxo connection, "Open Saxo's login" opens Saxo's page for the account. The link is made for this login alone: its `state` is kept hashed for ten minutes and used once. Sign in and accept (two-factor, risk warnings...).
+3. With `SAXO_REDIRECT_URL` in `deploy/.env` set to the admin's own `/api/saxo/callback`, and that address registered in the app, Saxo sends the browser back to the admin, which hands the code over by itself and comes back to the System page. Otherwise Saxo sends it to the app's own redirect address, which usually shows an error page: paste that page's whole address on the System page.
+4. The code is sealed for the four services, and the first of them that needs a login takes it (only one can) and exchanges it, then Telegram says the login is back. A service waiting for a code looks for one every five seconds for five minutes, without holding the lock, then asks again at its next need.
+
+**Without the admin**, `watasaxoauth` on the server does the same: it prints a link to Saxo's login page, made the same way, then asks for the address Saxo redirected to (or the code alone), which is not shown while typed. A code is valid for a few minutes: Saxo refuses an old one, which the System page and Telegram say.
 
 Please refer to the [dedicated docs pages for Saxo Authentication](https://ioiti.github.io/wata-docs/docs/saxo-authentication) for more details.
 
@@ -202,20 +199,25 @@ Please refer to the [dedicated docs pages for Saxo Authentication](https://ioiti
 WATA uses token-based authentication to secure webhook endpoints:
 
 1. Each webhook request must include a valid token in the URL (e.g., `/webhook?token=YOUR_TOKEN`)
-2. This token is securely generated and stored with strong encryption
-3. Manage your webhook token with the `watawebtoken` command
+2. The token is a credential sealed in PostgreSQL ([Credentials](#credentials)), shown and rotated from the admin's Configuration page, Credentials
+3. The other WATA services call the web server with a token of their own (the internal token): TradingView's token opens the webhook alone, so an alert's address seen by someone opens nothing else
 
 **Command Reference**:
 - `watawebtoken`: View your current webhook token
-- `watawebtoken --new`: Generate a new webhook token
+- `watawebtoken --new`: Rotate it; the one before is still accepted for an hour, the time to change TradingView's alerts
 - The command provides instructions on how to use the token in your webhook URL
-
-**Security Features**:
-- All tokens are encrypted before storage
-- File permissions are restricted to the owner only
 - The deployed Traefik route applies an IP allowlist for TradingView webhook traffic
 
 In the Docker Compose deployment, Traefik redirects HTTP to HTTPS and obtains certificates through Let's Encrypt. Configure `API_DOMAIN` and `ACME_EMAIL` in `deploy/.env`, point the domain at the server, and allow inbound ports 80 and 443. HTTPS and the IP allowlist supplement the webhook token; they do not replace it.
+
+### Secrets in the logs
+
+No service writes a secret in its log: every line is cleaned before it is written.
+- **By shape:** a token in an address (the webhook's `?token=`), a Bearer header, Saxo's stream address, Telegram's bot address, Saxo's `AccountKey`/`ClientKey`, a password in an `amqp://` or `postgresql://` address.
+- **By value:** the secrets of `config.json`, the webhook token, Saxo's tokens, the Capital.com login and the outside watcher's address.
+- uvicorn's own output (the web server's access log) is cleaned the same way.
+- The HTTP and WebSocket libraries, which name whole addresses, stay at `WARNING` whatever `logging.level` says.
+- The admin's Logs page shows, and searches, the lines written before this cleaned as well.
 
 ### Other ports than 80 and 443
 
@@ -293,7 +295,7 @@ For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.githu
    - `watastop`: Stop the application
    - `watalogs`: View application logs
    - `watastatus`: Check application status
-   - `watasaxoauth`: Launch the secure authorization code submission process
+   - `watasaxoauth`: Hand Saxo's login code over (the admin's System page does the same from the browser)
    - `watawebtoken`: View your webhook authentication token
    - `watawebtoken --new`: Generate a new webhook token
 
@@ -334,37 +336,7 @@ After deployment, you need to set up your configuration:
 3. **Update Configuration**
    Edit `/app/etc/config.json` with your specific settings:
 
-   - **Saxo Bank Authentication**
-     ```json
-     "authentication": {
-       "saxo": {
-         "app_config_object": {
-           "AppName": "your_app_name",
-           "AppKey": "your_app_key",
-           "AppSecret": "your_app_secret"
-         }
-       }
-     }
-     ```
-
-   - **WebServer Security**
-     ```json
-     "webserver": {
-       "persistant": {
-         "token_path": "/app/var/lib/web_server/persist_token.json"
-       },
-       "app_secret": "YOUR_STRONG_SECRET_KEY"
-     }
-     ```
-
-   - **Telegram Notifications**
-     ```json
-     "telegram": {
-       "bot_token": "your_bot_token",
-       "chat_id": "your_chat_id",
-       "bot_name": "your_bot_name"
-     }
-     ```
+   - **Credentials** (Saxo's apps, Telegram, Capital.com, the outside watcher, TradingView's token) are not written in `config.json`: they are set on the admin's Configuration page, Credentials, sealed in PostgreSQL (see [Credentials](#credentials)), then Saxo's login is authorised from the System page (see [Saxo Bank API Authentication](#saxo-bank-api-authentication)). Without the admin, a credential is read from its place of before while PostgreSQL has none: Saxo's app in `authentication.saxo.app_config_object` (`AppKey`, `AppSecret`), the bot in `telegram.bot_token` and `telegram.chat_id`, Capital.com and the watcher in `.env`; the migration below moves them in.
 
    - **Trading Rules**
      - `allowed_indices`: Configure allowed trading indices
@@ -386,7 +358,7 @@ After deployment, you need to set up your configuration:
      - Saxo streaming refresh, reconnect and reconciliation settings (`trade.config.general.streaming`)
      - Optional broker-side protective stop (`trade.config.position_management.protective_stop`): `percent` must be wider than `stoploss_percent`; verify it in Saxo's simulation environment before enabling it live
      - Optional `reporting.signal_silence_minutes`: Telegram says when no signal came for that long in trading hours (TradingView's alerts can stop without a word); the admin's Configuration page has it under Market hours and signals
-     - Optional `WATA_HEARTBEAT_URL` in `.env`: an outside watcher (a dead-man's switch such as healthchecks.io) the position monitor pings every minute while it hears from Saxo; when the server, its network or its RabbitMQ is down, the watcher alerts by itself
+     - Optional outside watcher (a dead-man's switch such as healthchecks.io), set in the admin's Credentials: the position monitor pings it every minute while it hears from Saxo; when the server, its network or its RabbitMQ is down, the watcher alerts by itself
      - Cached candidate settings (`trade.config.watchlist_manager`)
      - Signal polling endpoint, long-poll wait (`long_poll_wait_ms`, `0` falls back to polling every `interval_ms`) and startup replay window (`trade.config.signal_polling`)
      - Saxo keep-warm call between signals (`trade.config.general.keep_warm_interval_seconds`, `0` disables it)
@@ -401,6 +373,9 @@ After deployment, you need to set up your configuration:
    watastop
    watastart
    ```
+   Each service stops cleanly when Docker stops it: the trader finishes the signal it is handling (60 s at most), the position monitor waits for the sale it has sent to Saxo (45 s at most), and the others stop at once.
+
+   A change of `config.json` alone (not of `.env` nor of `COMPOSE_PROFILES`) can also be applied from the admin, on the System page's Containers or right after a save on the Configuration page: each service that reads a changed parameter is restarted, one after the other, each once the one before is at work again. See [Restarts from the admin](#restarts-from-the-admin).
 
 ### Usage
 
@@ -446,8 +421,12 @@ An optional web interface for the operator, served on its own domain or on a por
   - **An asset's page** draws its prices as candles from ten seconds to one hour or as range bars (TradingView's "60R"), with WATA's own entries and exits, the signals received and the index under a turbo, the times that were not recorded, and the bars exported to CSV. Its other tabs give each day summed up (open, high, low, close, range, quote changes, share of the trading time covered, volume) and the spread through the day, what is missing from its data, WATA's positions on it, and everything stored about it. Addresses of the former Prices page lead there.
 - **Backtests**: a strategy replayed on prices of the past with WATA's own rules, asked for and read from the browser: see the [Strategy Backtester](#-strategy-backtester).
 - **Technical Analysis**: Pine Script indicators written, checked and tested in the browser, drawn on WATA's own assets in the Vela charts, and signal rules that let WATA make its own signals from them: see [Technical Analysis](#-technical-analysis).
-- **Operator actions**: pause and resume new entries, close one position, hand over the Saxo authorization code from the browser (instead of `watasaxoauth` over SSH), send a manual `long` / `short` / close signal, request the daily report. Each one asks for an explicit confirmation, is kept in an audit trail and announced on Telegram.
-- **Configuration**: view `config.json` with secrets masked and edit the trading parameters (`trade.rules`, `trade.config`, `reporting`, `logging.level`). A change is checked with the same validator the services use, the previous file is kept as `config.json.bak-<date>` and its trading parameters can be restored, and it takes effect the next time each service starts (run `watastop` then `watastart`).
+- **Operator actions**: pause and resume new entries, close one position, authorise Saxo's login from the browser (instead of `watasaxoauth` over SSH), send a manual `long` / `short` / close signal, request the daily report. Each one asks for an explicit confirmation, is kept in an audit trail and announced on Telegram.
+- **Configuration**: every parameter of `config.json`, in groups (day targets, market hours, exits, size, signals, the watchlist, Saxo, each recorder and the TA engine, reporting, the admin and Claude, infrastructure, credentials).
+  - **Each parameter says what it does**, what else it changes, which parameters it works with (links to them), what to watch for, which services read it, and what the services use when it is absent. Hours are also shown as they are in New York, Paris and UTC that day.
+  - **What the page may change**: the trading parameters (`trade.rules`, `trade.config`, `reporting`, `logging.level`) and the admin's limits (sessions, backtests, Claude's endpoint and its limits). The rest is shown read-only, with why and how to change it on the server: credentials (masked), infrastructure, service addresses, the admin's own switches. A key of the file that WATA does not know, a typo or a leftover, is listed apart, with the key it resembles.
+  - **Before a save**, the change is checked as a save would be, and the review says what each parameter becomes, which services apply it at their next start, what else reads it, and what works against what (a close of the day after the end of trading, a trailing stop that never arms).
+  - **After a save**: the previous file is kept as `config.json.bak-<date>`; the keys changed are written down beside it (the Previous versions tab, the audit trail and Telegram); and the page gives the restart command of the services named.
 - **Logs**: the end of each service's log file, filtered by level and text.
 - **Light and dark**: the interface follows the system setting of the computer or phone, and a button in the top bar (also on the login page) sets it to always light or always dark; the choice is remembered in that browser.
 
@@ -536,11 +515,62 @@ The WireGuard app (iPhone, Mac, Android, Windows) reads the code that `qrencode`
 
 - Its own Traefik route with HTTPS and its own IP allowlist, on its own domain or on a second port of the API domain, then a password login and, when enabled, a one-time code. Repeated failed logins lock the address out for 15 minutes. Changing the password or the second factor closes open sessions.
 - The address used for that lockout and in the audit trail is the one Traefik reports. `admin.trusted_proxy_hosts` (`["traefik"]` by default) names the proxies believed for it; anything else that reaches the admin port is known by its own address.
-- The container reads PostgreSQL through connections set to read-only, so that a mistake in a query cannot write anything. This is a safeguard, not a separate database account: it connects as the same user as the trading services. The pause of new entries is the one thing it writes, through a separate connection.
-- It mounts only the token directories it needs, the other services' logs read-only, and has no access to Docker: it cannot start, stop or restart anything.
-- The configuration editor only ever writes the trading parameters, when saving and when restoring a previous version alike: credentials, infrastructure settings and the `admin` section always stay as they are on the server. Inside the trading sections, the addresses the services connect to and listen on (`trade.config.signal_polling.service_url`, `trade.config.watchlist_manager.service_url`, `api_host` and `api_port`) are refused too.
+- The container reads PostgreSQL through connections set to read-only, so that a mistake in a query cannot write anything. This is a safeguard, not a separate database account: it connects as the same user as the trading services. What it writes, through a separate connection: the pause of new entries, the credentials the operator sets (sealed: it cannot read back those it does not use itself), the MCP endpoint's tokens, and Saxo's login: the `state` of a login it asks for, then the code Saxo gives, sealed for the four services that log in to Saxo. It reads no Saxo token: only when the login was saved, when it ends and since when it is wanted.
+- It mounts only the folders it needs (not Saxo's: the login is in PostgreSQL), the other services' logs read-only, and holds no Docker socket. It asks for restarts of WATA's own services from a small control service (below), which holds the socket instead and can do nothing else.
+- The configuration editor only ever writes the trading parameters and the admin's limits (sessions, backtests, Claude's endpoint), when saving and when restoring a previous version alike: credentials, infrastructure settings and the rest of the `admin` section (its switches, the proxies it believes, its address and folders) always stay as they are on the server. Inside the trading sections, the addresses the services connect to and listen on (`trade.config.signal_polling.service_url`, `trade.config.watchlist_manager.service_url`, `api_host` and `api_port`) are refused too.
 - Manual signals go through the Web Server like a webhook, so the Trader applies its usual rules to them. A single position is closed by the Position Monitor, on a request that expires after a minute.
 - `admin.actions_enabled` and `admin.config_edit_enabled` in `config.json` (both `true` by default) switch the operator actions and the configuration editor off. These two settings cannot be changed from the interface itself.
+
+### Restarts from the admin
+
+A service reads `config.json` when it starts. The System page lists WATA's containers, what Docker says of each (running since when, restarts, stopped for lack of memory) and the saved changes each does not run with yet, worked out from the configuration's journal of saves: a change undone since is none, and a change made on the server by hand is said as such. The top bar's "Restart needed" names the services.
+
+- **The control service** (`service_control1`, started with the admin's `admin` profile) holds Docker's socket so that the admin does not. It is reached by the admin alone, on a network of their own with no way out (`control-net`), with a token both are given as a compose secret: `var/lib/service_control/token`, made by the install script at the first install, root's alone. Its code makes two calls of Docker's API, on the ten containers of WATA's compose file (checked by their compose label and their image): what a container is doing, and its restart. Never PostgreSQL, RabbitMQ, Traefik, the backups or itself. The socket answers anything to whoever holds it, read-only or not: these two calls are all that limits it.
+- **A restart is held back** while it could cost a trade, unless "Restart anyway" is ticked, which the audit trail records:
+  - the trading path (web server, trader, position monitor, scheduler, watchlist manager) while a position is open, in the database or as Saxo lists it to the position monitor, or while the market is open by WATA's hours, as a deploy is;
+  - the position monitor while it is still trying to sell a position (the restart drops that);
+  - the scheduler within two minutes of one of its jobs (it works out its schedule at its start);
+  - the TA engine while a live rule runs and the market is open;
+  - the admin while a backtest or one of Claude's studies runs (they stop with it).
+
+  Those held back can be left out, the others restarted at once.
+- **Several services are restarted one after the other**, the admin last, each once the one before is at work again: a heartbeat of its new start (trader, position monitor), a consumer on its queue (position monitor, Telegram), an answer (web server, watchlist manager), a state row of its new start (Capital.com feed, TA engine), a bar recorded since (price recorder), its log's line (scheduler). The guards are read again before each one; the plan stops at the first that does not start again. The control service itself restarts one container at a time, and a service of the trading path at most once in five minutes and three times an hour, whatever asks it.
+- **What a restart does not apply**: a change of `.env` or of `COMPOSE_PROFILES`. A container keeps the environment it was created with, and one whose profile is off is not created: `watastop`, then `watastart`, on the server.
+- Restarts are operator actions: switched off with `admin.actions_enabled`, audited and announced on Telegram, where a plan that stopped is said too. Without the control service (an admin started alone, the lab on a Mac), the page says the services' changes since the admin's own start, and restarts are made on the server.
+
+### Credentials
+
+The credentials the services use are kept in PostgreSQL, each sealed for the services that read it, and set from the Configuration page's Credentials group, each with how to obtain it:
+
+| Credential | Read by |
+|---|---|
+| Telegram bot (its token and chat) | the telegram service, and each service that sends to Telegram itself when RabbitMQ does not take a message: trader, position monitor, price recorder, Capital.com feed, TA engine, admin |
+| TradingView webhook token | web server, admin (to show the alerts' address) |
+| Internal token | web server, and the services that call it: trader, scheduler, TA engine, admin |
+| Capital.com login | the Capital.com feed alone |
+| Outside watcher's address | the position monitor alone |
+| Saxo live app, Saxo simulation app (App Key, App Secret) | trader, position monitor, watchlist manager, price recorder |
+| Saxo's login (its tokens, renewed by those four in turn; authorised on the System page) | trader, position monitor, watchlist manager, price recorder |
+
+- **Sealed**: a value is encrypted once (AES-256-GCM) and its key wrapped for each reader (X25519): only a reader's private key opens it, and the credential's name is bound in, so that a row moved under another name opens no more. Each service has its key pair, made by the install script in `/app/wata/keys` (`python -m src.vault keygen`, never replacing one) and mounted into its own container alone, the public keys into every one. The keys are in no dump and no export: a copy of the database is ciphertext. **Keep a copy of `/app/wata/keys`**: without it, every credential must be entered again.
+- **Never read back**: the admin seals what you enter with the readers' public keys and shows only its last four characters, when it was set and from where, and what each service last saw when it used it (a message sent, a ping answered, the feed's login). It opens only what it uses itself: the internal token (signals sent from the pages), the Telegram bot (its own fallback, and "Send a test message") and the webhook token, shown on request and audited.
+- **Applied at the next start** of the services that read it: the card offers to restart them (see above). A token rotated stays accepted for a while (an hour for TradingView's, fifteen minutes for the internal one), the time to change the alerts or restart the services.
+- **Not in PostgreSQL**: what is needed to reach it (the database's password, RabbitMQ's), the keys, the control service's token, Traefik's certificates, and your own sign-in (`wataadminpasswd`, `wataadmintotp`).
+- **Saxo's two apps** are kept apart, live and simulation: the services log in with the one of the account `saxo_auth.env` names, which stays a setting of the server (a switch would mix the two accounts' positions in one history). Only the App Key and App Secret are kept: Saxo's addresses are WATA's own, and the redirect is the server's (`SAXO_REDIRECT_URL`). Another app needs a new login; the same app with another secret does not.
+- A service that finds a credential's row reads nothing else; one that cannot open it does without it and says so (the web server refuses, the trader's watch says it cannot poll, the feed idles). One whose row is absent reads its old place, said once in its log.
+
+**Moving them in, at the deploy of v0.43.0**, every service stopped: the playbook's stop, then on the server
+
+```bash
+cd /app/wata/$(cat /app/wata/VERSION)/deploy
+docker compose --profile tools run --rm vault_tools migrate --dry-run   # what would be written, and from where
+docker compose --profile tools run --rm vault_tools migrate             # written: only what has no row yet
+watastart
+```
+
+It takes the Telegram bot from `config.json`, the webhook token from its file, the Capital.com login and the watcher's address from `.env` (read as lines, never run), and makes the internal token new. The old places are left as they are, so that going back to v0.42 works. After a day of the services reading PostgreSQL, `docker compose --profile tools run --rm vault_tools migrate --purge-old` clears them: the bot from `config.json` and its backups, the token files, the MCP tokens' file; it prints the `.env` lines to delete by hand. It refuses while a credential has no row.
+
+**Saxo's login, at the deploy of v0.44.0**: the same two commands, every service stopped. They also take Saxo's app from `config.json` (as the app of the account `saxo_auth.env` names) and move Saxo's token file in, under the services' lock: the login goes on without a new one. The file is then renamed `persist_token.json.imported`, so that no service of before uses a refresh token the new ones renewed. Before the first start, set `SAXO_REDIRECT_URL` in `deploy/.env` to the admin's `/api/saxo/callback` and add that address to the app's redirect addresses in Saxo's developer portal (both optional: without them, the address Saxo redirects to is pasted). To go back to v0.43, every service stopped, `docker compose run --rm trader1 python -m src.vault export-saxo` (in the trader's container: it can open the login, `vault_tools` cannot) writes the login of PostgreSQL back as the token file of before; when `config.json` no longer holds the app the login belongs to (after the purge), it says to put that app's AppKey and AppSecret back first. The purge also removes Saxo's AppKey and AppSecret from `config.json` and its backups, and the token file put aside with its salt; it refuses while Saxo's login has no row.
 
 ### Pausing new entries
 
@@ -670,13 +700,8 @@ It is a separate service: no trading service uses it, and it cannot slow one dow
 ### Enabling it
 
 1. In Capital.com, turn two-factor authentication on, then **Settings › API integrations**: make a key and choose a password for it. The demo account is enough.
-2. In `/app/wata/.env`, the key, the email of the account and the key's password. Only the feed's container receives them, never the admin. Put a value in single quotes if it contains a `$`:
-   ```
-   CAPITAL_API_KEY=...
-   CAPITAL_IDENTIFIER=you@example.com
-   CAPITAL_PASSWORD='...'
-   ```
-3. In the same file, add `capital` to the profiles: `COMPOSE_PROFILES=admin,capital` (or `admin,recorder,capital`).
+2. In the admin's Configuration page, Credentials, Capital.com login: the key, the email of the account and the key's password. It is sealed for the feed alone: the admin cannot read it back. (Before v0.43.0 these were `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER` and `CAPITAL_PASSWORD` in `/app/wata/.env`, still read while the credential has no row.)
+3. In `/app/wata/.env`, add `capital` to the profiles: `COMPOSE_PROFILES=admin,capital` (or `admin,recorder,capital`).
 4. Switch it on: `trade.config.capital_feed.enabled`. In the admin interface: Providers, "Add provider", Capital.com.
 5. `watastop`, then `watastart`.
 
@@ -687,7 +712,7 @@ docker exec capital_feed1 python -m src.capital_feed.probe --epic US100 --minute
 docker exec capital_feed1 python -m src.capital_feed.probe --search "US Tech 100"
 ```
 
-It prints the instrument with its opening hours, the quotes per second and how late they arrive. Minute by minute, it sets the quotes received and the price changes counted beside Capital.com's volume of the same minute. Capital.com does not say what its volume counts: this says which of the two it matches, if either. It reads the three variables of the environment, so it also runs on any machine they are exported in.
+It prints the instrument with its opening hours, the quotes per second and how late they arrive. Minute by minute, it sets the quotes received and the price changes counted beside Capital.com's volume of the same minute. Capital.com does not say what its volume counts: this says which of the two it matches, if either. In the feed's container it reads the login sealed for the feed; anywhere else, the three variables of the environment (`CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_PASSWORD`) when they are exported.
 
 When nothing is recorded for five minutes while the market is open, a Telegram message says so, and another when it resumes. A refused login is said once, with what to check. With the admin interface, "Capital.com feed" is listed with the services, and its provider page shows the stream: quotes in the last minute, delays, the connection, what was sent to the charts, and Capital.com's minutes.
 
@@ -1020,7 +1045,7 @@ Thirty-nine tools, in groups: `status`; the data (`data_assets`, `data_coverage`
 ### Enabling it, on the server
 
 1. `admin.mcp_enabled: true` (Configuration page), then restart the admin (`watastop`, `watastart`). The endpoint is `/mcp` on the admin's address and port, so it is reached over WireGuard only.
-2. A token, printed once: `watamcptoken create claude-mac` (90 days; `--days N` up to 365). `watamcptoken list` shows them, `watamcptoken revoke <name>` revokes one. The file keeps only each token's sha256 (`var/lib/admin/mcp_tokens.json`).
+2. A token, shown once: "Make a token" in the System page's Claude panel, or `watamcptoken create claude-mac` on the server (90 days; `--days N` up to 365). `watamcptoken list` shows them, `watamcptoken revoke <name>` revokes one (or the panel). PostgreSQL keeps only each token's sha256 (table `mcp_token`; the file of before, `var/lib/admin/mcp_tokens.json`, is moved in the first time the admin starts, then renamed `.imported`).
 3. Later, after watching the TA engine for a day with its two runners: `admin.mcp.shadow_rules: true` lets Claude keep shadow rules of its own.
 
 | Setting (`admin.mcp`) | Default | Meaning |

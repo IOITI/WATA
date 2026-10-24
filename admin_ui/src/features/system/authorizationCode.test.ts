@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractAuthorizationCode } from './authorizationCode'
+import { extractAuthorizationCode, extractAuthorizationState } from './authorizationCode'
 
 describe('extractAuthorizationCode', () => {
   it('takes the code from the address Saxo redirected to', () => {
@@ -20,5 +20,14 @@ describe('extractAuthorizationCode', () => {
     expect(extractAuthorizationCode('https://localhost/?error=access_denied')).toBe('')
     expect(extractAuthorizationCode('https://localhost')).toBe('')
     expect(extractAuthorizationCode('   ')).toBe('')
+  })
+})
+
+describe('the state of the link', () => {
+  it('is taken from the address pasted, and is none for a bare code', () => {
+    expect(extractAuthorizationState('https://admin.example.com/api/saxo/callback?code=abc&state=xyz')).toBe('xyz')
+    expect(extractAuthorizationState('code=abc&state=xyz')).toBe('xyz')
+    expect(extractAuthorizationState('abc-123')).toBeNull()
+    expect(extractAuthorizationState('https://localhost/?code=abc')).toBeNull()
   })
 })

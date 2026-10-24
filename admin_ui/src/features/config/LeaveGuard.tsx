@@ -9,17 +9,20 @@ interface LeaveGuardProps {
   dirty: boolean
   /** What would be lost, as a sentence. */
   summary: string
+  /** The addresses that keep the work (the views of one page): leaving them only is asked about. */
+  within?: string
 }
 
 /**
  * Asks before unsaved work is lost: when moving to another page of the
  * interface, and (in the browser's own words) on a reload or a closed tab.
  */
-export function LeaveGuard({ dirty, summary }: LeaveGuardProps) {
+export function LeaveGuard({ dirty, summary, within }: LeaveGuardProps) {
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
       dirty &&
       nextLocation.pathname !== currentLocation.pathname &&
+      !(within && (nextLocation.pathname === within || nextLocation.pathname.startsWith(`${within}/`))) &&
       // A session that ended sends the page to the login: nothing could be saved by staying.
       nextLocation.pathname !== '/login',
   )

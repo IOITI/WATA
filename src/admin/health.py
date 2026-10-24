@@ -1,13 +1,16 @@
 """
 Health of the WATA services, as far as it can be observed from outside them.
 
-The admin has no access to Docker. What it reports comes from talking to each
-service where there is something to talk to, from RabbitMQ's consumer counts
-(position_monitor and telegram are the consumers of their queues), from what
-the trader and the position monitor say of themselves every fifteen seconds
-(``service_heartbeat``: the position stream, the polling of signals, Saxo's
-login, the sales waiting), and, for the scheduler and a trader of before the
-heartbeat, from the start/stop lines of their logs.
+The admin does not hold Docker's socket: what Docker says of each container
+(running, since when, restarts) is the control service's, on the System page's
+services table (src/admin/routers/services.py). What it reports here comes
+from talking to each service where there is something to talk to, from
+RabbitMQ's consumer counts (position_monitor and telegram are the consumers of
+their queues), from what the trader and the position monitor say of
+themselves every fifteen seconds (``service_heartbeat``: the position stream,
+the polling of signals, Saxo's login, the sales waiting), and, for the
+scheduler and a trader of before the heartbeat, from the start/stop lines of
+their logs.
 """
 
 import asyncio
@@ -23,6 +26,7 @@ from src.admin.data import DISABLED as PROVIDER_DISABLED
 from src.admin.data import capital_provider_state
 from src.admin.errors import DatabaseUnavailable, ServiceUnavailable
 from src.admin.logs import last_lifecycle_event
+from src.admin.saxo import called
 from src.admin.services import OPS_QUEUE, TELEGRAM_QUEUE
 from src.admin.ta_monitor import TICK_SECONDS, WINDOW_MINUTES, checks, health_warning, rules_by_id
 from src.capital_feed.settings import CapitalSettings
@@ -56,6 +60,7 @@ LOG_OBSERVED_SERVICES = {
         "markers": {
             "ready": "WATA scheduler is running",
             "starting": "Started wata-scheduler application",
+            "stopped": "WATA scheduler stopped",
         },
     },
 }
@@ -77,7 +82,12 @@ def _count(number: int, noun: str) -> str:
 
 
 def needs_saxo_authorisation(status: dict) -> bool:
-    """Whether the services can no longer renew their Saxo token by themselves."""
+    """
+    Whether the services can no longer renew their Saxo token by themselves. Not
+    known while the login has no row in PostgreSQL (the token file of before).
+    """
+    if status.get("where") == "none":
+        return False
     return not status.get("has_token") or bool(status.get("refresh_token_expired"))
 
 
@@ -86,9 +96,12 @@ async def _saxo(ctx) -> list[dict]:
     # nothing can be traded: it belongs where the operator looks first.
     name = "Saxo connection"
     try:
-        status = await run_in_threadpool(ctx.saxo.status)
+        status = await called(ctx.saxo.status)
     except Exception as e:
         return [_entry(SAXO_SERVICE_ID, name, UNKNOWN, f"Token status unreadable: {e}")]
+    if status.get("where") == "none":
+        return [_entry(SAXO_SERVICE_ID, name, UNKNOWN,
+                       "Saxo's login is not in PostgreSQL yet: the services read its file of before (migration)")]
     if needs_saxo_authorisation(status):
         return [_entry(SAXO_SERVICE_ID, name, DOWN, "Authorisation required: nothing can be traded until it is renewed")]
     return [_entry(SAXO_SERVICE_ID, name, OK, "Authorised")]

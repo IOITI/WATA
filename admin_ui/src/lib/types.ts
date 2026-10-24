@@ -12,6 +12,8 @@ export interface Session {
   backtests_enabled: boolean
   totp_enabled: boolean
   restart_required: boolean
+  /** The services that run without a change saved since they started; null when the control service cannot say. */
+  restart_services?: { id: string; name: string }[] | null
 }
 
 export interface Position {
@@ -406,6 +408,12 @@ export interface Health {
   config_modified_at: string
 }
 
+export interface SaxoApp {
+  set: boolean
+  app_key: string | null
+  fingerprint: string | null
+}
+
 export interface SaxoStatus {
   has_token: boolean
   saved_at: string | null
@@ -413,7 +421,21 @@ export interface SaxoStatus {
   refresh_token_expires_at: string | null
   access_token_expired: boolean
   refresh_token_expired: boolean
-  authorization_url: string
+  /** Since when the services wait for a login; null while they renew it by themselves. */
+  needs_authorization_since?: string | null
+  /** What Saxo said when it last refused to renew, or a code. */
+  last_refusal?: string | null
+  environment?: 'live' | 'simulation'
+  /** database: the row of PostgreSQL; none: no row yet (the services may still read the token file of before). */
+  where?: 'database' | 'none'
+  saved_by?: string | null
+  /** Where Saxo sends the browser back: to be registered in the app. */
+  redirect_url?: string | null
+  /** Whether that is the admin's own callback, which takes the code by itself. */
+  callback?: boolean
+  apps?: Record<'live' | 'simulation', SaxoApp>
+  /** Made on request (authorize), with a state of its own. */
+  authorization_url: string | null
 }
 
 export interface LogServices {
@@ -444,15 +466,135 @@ export interface ConfigDocument {
   editable_paths: string[]
   /** Inside the editable sections, but only changed on the server (where the services connect). */
   protected_paths: string[]
+  /** Keys of the file the catalog does not know (a typo, a leftover): nothing reads them. */
+  unknown: { path: string; nearest: string | null }[]
   editable: boolean
   restart_required: boolean
   modified_at: string
+}
+
+/** One key changed between two versions of config.json, by the catalog's path (values masked). */
+export interface CatalogChange {
+  path: string
+  before: JsonValue | null
+  after: JsonValue | null
+  added: boolean
+  removed: boolean
+}
+
+export type ParamRisk = 'trading' | 'service' | 'none'
+
+/** What changes reach (src/admin/config_catalog): the services to start again, what else reads them. */
+export interface ConfigImpact {
+  services: string[]
+  consumers: string[]
+  risk: ParamRisk
+  unknown: string[]
+}
+
+export interface ConfigWarning {
+  path: string
+  message: string
+}
+
+/** A configuration checked as a save would be, and what saving it would change. */
+export interface ConfigPreview {
+  valid: boolean
+  changes: CatalogChange[]
+  impact: ConfigImpact
+  warnings: ConfigWarning[]
 }
 
 export interface ConfigSaved {
   revision: string
   backup: string
   restart_required: boolean
+  changes?: CatalogChange[]
+  impact?: ConfigImpact
+}
+
+/** A save written down in the journal beside config.json. */
+export interface ConfigHistoryEntry {
+  at: string
+  action: string
+  by: string | null
+  revision_before: string
+  revision_after: string
+  changes: CatalogChange[]
+}
+
+export type ParamKind =
+  | 'int' | 'number' | 'bool' | 'text' | 'enum' | 'time' | 'timezone' | 'dates' | 'map' | 'rows' | 'strings'
+  | 'numbers' | 'rule' | 'json' | 'secret'
+
+export type ParamAccess = 'editable' | 'server' | 'credential' | 'unused'
+
+export interface CatalogColumn {
+  key: string
+  label: string
+  kind: string
+  help: string
+  unit: string | null
+  minimum: number | null
+  maximum: number | null
+  choices: string[]
+  optional: boolean
+}
+
+/** A parameter of config.json, as the catalog of src/admin/config_catalog/ describes it. */
+export interface CatalogParam {
+  path: string
+  group: string
+  label: string
+  kind: ParamKind
+  help: string
+  access: ParamAccess
+  reason: string | null
+  how: string | null
+  readers: string[]
+  consumers: string[]
+  risk: ParamRisk
+  effects: string[]
+  related: string[]
+  caveats: string[]
+  also_needs: string[]
+  unit: string | null
+  minimum: number | null
+  maximum: number | null
+  choices: string[]
+  optional: boolean
+  default: JsonValue | null
+  columns: CatalogColumn[]
+  key_label: string | null
+  value_label: string | null
+  rule_default: JsonObject | null
+}
+
+export interface CatalogService {
+  id: string
+  name: string
+  container: string
+  profile: string | null
+}
+
+export interface CatalogConsumer {
+  id: string
+  name: string
+  /** Reads the file again each time (true), or what the admin read at its start (false). */
+  live: boolean
+}
+
+export interface CatalogGroup {
+  id: string
+  title: string
+  summary: string
+}
+
+export interface ConfigCatalog {
+  services: CatalogService[]
+  consumers: CatalogConsumer[]
+  groups: CatalogGroup[]
+  params: CatalogParam[]
 }
 
 export interface SignalSent {
@@ -614,12 +756,134 @@ export interface ConfigRestored {
   backup: string
   restored: string
   restart_required: boolean
+  changes?: CatalogChange[]
+  impact?: ConfigImpact
 }
 
 /** What the server announces on /api/events. */
 export interface LiveEvent {
   type: string
   [key: string]: unknown
+}
+
+// ── credentials sealed in PostgreSQL (src/admin/routers/credentials.py) ──
+
+export interface CredentialPart {
+  key: string
+  label: string
+  secret: boolean
+  /** What is expected, said when a value is refused. */
+  expected: string
+}
+
+export interface CredentialCheck {
+  role: string
+  checked_at: string | null
+  ok: boolean
+  detail: string | null
+}
+
+export interface Credential {
+  name: string
+  label: string
+  /** The services it is sealed for, which apply a change at their next start. */
+  readers: string[]
+  parts: CredentialPart[]
+  /** Made by WATA (a token): rotated, never typed. */
+  generated: boolean
+  old_place: string
+  /** database; old place (read there until it has its row); missing; unknown (in another container's .env, maybe). */
+  where: 'database' | 'old place' | 'missing' | 'unknown'
+  public: Record<string, string>
+  fingerprint: string | null
+  set_at: string | null
+  set_by: string | null
+  checks: CredentialCheck[]
+  /** How long the token before a rotation is still accepted. */
+  grace_seconds: number | null
+}
+
+export interface Credentials {
+  /** Why nothing can be sealed here (no keys), or null. */
+  keys: string | null
+  items: Credential[]
+}
+
+export interface CredentialSaved {
+  name: string
+  fingerprint: string | null
+  services: string[]
+  previous_accepted_seconds?: number | null
+}
+
+// ── WATA's containers and their restarts (src/admin/routers/services.py) ──
+
+/** The saved changes a service does not run with: the keys it reads, or the file changed on the server. */
+export interface ServicePending {
+  paths: string[]
+  outside: boolean
+}
+
+export interface ServiceLastRestart {
+  requested_at: string
+  done_at: string
+  ok: boolean
+  detail: string | null
+}
+
+export interface WataService {
+  id: string
+  name: string
+  trading_path: boolean
+  // What Docker says of its container, through the control service; null without it.
+  container: string | null
+  /** running, exited, restarting... or absent: not created, its compose profile off. */
+  state: string | null
+  running: boolean | null
+  started_at: string | null
+  finished_at: string | null
+  exit_code: number | null
+  oom_killed: boolean | null
+  restart_count: number | null
+  image: string | null
+  restarting: boolean | null
+  last_restart: ServiceLastRestart | null
+  pending: ServicePending
+  /** What holds its restart back now; null when nothing does. */
+  refusal: string | null
+  /** What a restart costs it. */
+  cost: string
+}
+
+export type RestartStepState = 'waiting' | 'restarting' | 'starting' | 'ready' | 'failed' | 'held' | 'skipped'
+
+export interface RestartStep {
+  service: string
+  state: RestartStepState
+  detail: string | null
+  started_at?: string
+}
+
+export interface RestartPlan {
+  services: string[]
+  forced: boolean
+  by: string | null
+  started_at: string
+  steps: RestartStep[]
+  done: boolean
+  /** Each service's name, by its id. */
+  names?: Record<string, string>
+}
+
+export interface ServicesState {
+  /** Whether the control service answers: without it, nothing is restarted from here. */
+  available: boolean
+  error: string | null
+  /** Whether each service's start is known; otherwise the changes are counted from the admin's own start. */
+  starts_known: boolean
+  actions_enabled: boolean
+  services: WataService[]
+  plan: RestartPlan | null
 }
 
 // ── stored prices (src/admin/routers/data.py) ──

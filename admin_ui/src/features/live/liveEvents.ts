@@ -1,7 +1,8 @@
 import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { formatMoney, formatPercent } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
-import type { LiveEvent } from '@/lib/types'
+import { planOutcome, planSucceeded } from '@/features/system/restarts'
+import type { LiveEvent, RestartPlan } from '@/lib/types'
 
 /** The event types the server sends on /api/events (src/admin/events.py). */
 export const LIVE_EVENT_TYPES = [
@@ -16,6 +17,7 @@ export const LIVE_EVENT_TYPES = [
   'saxo_authorised',
   'backtest_finished',
   'prices_fetch_finished',
+  'restart_plan',
 ] as const
 
 export interface EventNotice {
@@ -135,6 +137,16 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         variant: state === 'done' ? 'success' : 'warning',
       }
     }
+    case 'restart_plan': {
+      // Said once, when it ends: the page that asked for it shows it as it goes.
+      const plan = event.plan as RestartPlan | undefined
+      if (!plan?.done) return null
+      return {
+        title: planSucceeded(plan) ? 'Restart done' : 'Restart stopped',
+        body: planOutcome(plan, plan.names ?? {}),
+        variant: planSucceeded(plan) ? 'success' : 'warning',
+      }
+    }
     default:
       // Pauses are shown by the dashboard itself, to whoever caused them and to everyone else.
       return null
@@ -169,6 +181,8 @@ export function eventLink(event: LiveEvent): string | null {
     }
     case 'prices_fetch_finished':
       return '/data/providers/dukascopy'
+    case 'restart_plan':
+      return '/system'
     default:
       return null
   }
@@ -200,6 +214,9 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
       return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']
+    case 'restart_plan':
+      // A service started again runs with the file as it is: its changes are no longer waiting.
+      return ['services', 'session', 'health', 'config', 'data-provider']
     default:
       return []
   }

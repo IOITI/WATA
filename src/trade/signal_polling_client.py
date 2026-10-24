@@ -14,7 +14,7 @@ import time
 import httpx
 
 from src.configuration import ConfigurationManager
-from src.web_server_token import WebServerToken
+from src.web_server_token import NoWebServerToken, WebServerToken
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,12 @@ class SignalPollingClient:
         self.long_poll_wait_ms = config.get("long_poll_wait_ms", 1000)
         # On trader startup, signals received longer ago than this are not replayed.
         self.startup_replay_max_age_seconds = config.get("startup_replay_max_age_seconds", 10)
-        self._token = WebServerToken(config_manager).get_token()
+        try:
+            self._token = WebServerToken(config_manager).get_token()
+        except NoWebServerToken as e:
+            # Polled all the same, and refused: the trader's watch says on Telegram that it cannot poll.
+            logger.error("%s: the web server will refuse every poll", e)
+            self._token = None
         self._client: httpx.AsyncClient | None = None
         # ``seq`` of the newest signal seen so far (see SignalStore).
         self._cursor = 0
@@ -43,7 +48,7 @@ class SignalPollingClient:
             self._client = httpx.AsyncClient(
                 # A long-poll request legitimately stays open for long_poll_wait_ms.
                 timeout=self.request_timeout_seconds + self.long_poll_wait_ms / 1000,
-                headers={"Authorization": f"Bearer {self._token}"},
+                headers={"Authorization": f"Bearer {self._token}"} if self._token else {},
             )
 
     async def get_latest_signals(self) -> list[dict]:

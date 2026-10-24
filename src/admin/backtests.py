@@ -703,6 +703,11 @@ class BacktestService:
         """What runs now, and what waits in the order it will start."""
         return {"running": list(self._running), "waiting": self._in_turn()}
 
+    @property
+    def under_way(self) -> int:
+        """How many children run now (runs, a measure of the turbos): a restart of the admin stops them."""
+        return len(self._running) + (1 if self._measuring is not None else 0)
+
     def waiting_of(self, made_by: str) -> int:
         """How many runs asked for by ``made_by`` wait their turn."""
         return sum(1 for run_id in self._waiting if self._owners.get(run_id) == made_by)

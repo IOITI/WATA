@@ -11,9 +11,8 @@ import jsonschema
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from starlette.concurrency import run_in_threadpool
 
-from src.admin.auth import require_session
+from src.admin.auth import client_ip, require_session
 from src.admin.errors import DatabaseUnavailable
 from src.admin.services import OPS_QUEUE
 from src.schema import SchemaLoader
@@ -42,6 +41,12 @@ class SignalRequest(BaseModel):
 
 class SaxoAuthCodeRequest(BaseModel):
     code: str = Field(min_length=1, max_length=2048)
+    # The state of the link the code came back from, taken from the address pasted: checked when given.
+    state: str | None = Field(None, max_length=256)
+
+
+class SaxoAuthorizeRequest(BaseModel):
+    environment: str | None = Field(None, max_length=16)
 
 
 class ClosePositionRequest(BaseModel):
@@ -166,13 +171,21 @@ async def trigger_daily_stats(request: Request):
     return {"status": "queued"}
 
 
+@router.post("/system/saxo/authorize")
+async def authorize_saxo(body: SaxoAuthorizeRequest, request: Request):
+    """Saxo's login page, with a state of its own kept hashed for ten minutes: opened by the operator."""
+    url = await request.app.state.ctx.saxo.authorize(body.environment)
+    return {"url": url}
+
+
 @router.post("/system/saxo/auth-code", status_code=204)
 async def submit_saxo_auth_code(body: SaxoAuthCodeRequest, request: Request):
     """
-    Hand the Saxo authorization code to the service waiting for it (what the
-    watasaxoauth command does over SSH).
+    Hand the Saxo authorization code over, sealed for the services that log in
+    to Saxo, one of which takes it within seconds (what watasaxoauth does on the
+    server). With its state, from the address pasted, the state is checked.
     """
     ctx = request.app.state.ctx
-    await run_in_threadpool(ctx.saxo.save_auth_code, body.code.strip())
-    ctx.audit(request, "Saxo authorization code submitted")
+    environment = await ctx.saxo.hand_over(body.code, state=body.state, by=client_ip(request, ctx.trusted_proxies))
+    ctx.audit(request, "Saxo authorization code submitted", f"{environment} account")
     return Response(status_code=204)

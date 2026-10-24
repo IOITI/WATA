@@ -15,6 +15,13 @@ import { NewBacktestPage } from '@/features/backtests/NewBacktestPage'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { RequireAuth } from '@/features/auth/RequireAuth'
 import { ConfigPage } from '@/features/config/ConfigPage'
+import {
+  ConfigFileView,
+  ConfigGroupPage,
+  ConfigJsonView,
+  ConfigOverview,
+  ConfigVersionsView,
+} from '@/features/config/ConfigViews'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { legacyPricesTarget } from '@/features/data/assets'
 import { ProviderPage } from '@/features/data/ProviderPage'
@@ -244,7 +251,13 @@ const router = createBrowserRouter(
         <Route path="audit" element={<AuditPage />} />
         <Route path="system" element={<SystemPage />} />
         <Route path="logs" element={<LogsPage />} />
-        <Route path="config" element={<ConfigPage />} />
+        <Route path="config" element={<ConfigPage />}>
+          <Route index element={<ConfigOverview />} />
+          <Route path="json" element={<ConfigJsonView />} />
+          <Route path="file" element={<ConfigFileView />} />
+          <Route path="versions" element={<ConfigVersionsView />} />
+          <Route path=":group" element={<ConfigGroupPage />} />
+        </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Route>,

@@ -1,11 +1,12 @@
 from schedule import every, repeat, run_pending
 from src.configuration import ConfigurationManager
-from src.web_server_token import WebServerToken
+from src.web_server_token import NoWebServerToken, WebServerToken
 import httpx
 import pika
 from pika.exceptions import AMQPConnectionError
 import time
 import logging
+import signal
 import json
 from datetime import datetime, timedelta
 import pytz
@@ -16,6 +17,7 @@ from src.trade.macro_calendar import upkeep
 from src.trade.market_calendar import new_york_day, upkeep as market_upkeep
 from src.delivery import deliver
 from src.trade.rules import TradingRule
+from src.vault import loader as vault
 
 
 config_path = os.getenv("WATA_CONFIG_PATH")
@@ -173,7 +175,15 @@ def send_signal_to_web_server(message):
     signal_polling_config = config_manager.get_config_value("trade.config.signal_polling", {})
     service_url = signal_polling_config.get("service_url", "http://web_server1:80").rstrip("/")
     request_timeout_seconds = signal_polling_config.get("request_timeout_seconds", 2)
-    token = WebServerToken(config_manager).get_token()
+    try:
+        token = WebServerToken(config_manager).get_token()
+    except NoWebServerToken as e:
+        logging.error(f"Not sent to the web server ({message.get('action')}): {e}")
+        send_message_to_telegram(
+            f"The scheduler could not send {message.get('action')} to the web server: {e}. "
+            "The position monitor sells what is still held once the day's close is past."
+        )
+        return
 
     def send():
         response = httpx.post(
@@ -250,10 +260,28 @@ last_action_persistant_file = config_manager.get_config_value(
     "trade.persistant.last_action_file"
 )
 
+# Docker's stop (SIGTERM) ends the loop between two jobs: one in progress (the close of the day, the
+# daily report) is finished rather than cut off.
+stopping = False
+
+
+def _stop(signum, frame):
+    global stopping
+    stopping = True
+
+
+signal.signal(signal.SIGTERM, _stop)
+
+# Its credential (the web server's internal token), sealed for it in PostgreSQL: waited for two minutes
+# at most, the schedule going on without it (a close then refused is said on Telegram).
+vault.load_blocking(config_manager, "scheduler", give_up_after=120, stopped=lambda: stopping)
+
 logging.info("WATA scheduler is running")
 
 print("-------------------------------- Started scheduler application")
+
 # Keep the script running
-while True:
+while not stopping:
     run_pending()
     time.sleep(1)
+logging.info("WATA scheduler stopped")

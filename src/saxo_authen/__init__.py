@@ -16,7 +16,16 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import stat
 
 from src.configuration import ConfigurationManager
+from src.logging_helper.redaction import register_secret
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
+from src.saxo_authen import endpoints
+from src.saxo_authen.token_store import (
+    DatabaseThread,
+    DbTokenStore,
+    FileTokenStore,
+    Tokens,
+    TokenStoreUnavailable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +35,15 @@ TOKEN_REQUEST_TIMEOUT_SECONDS = 10
 # the refusal of the token itself (400, 401) is not.
 REFRESH_RETRY_WAITS_SECONDS = (1.0, 2.0)
 TRANSIENT_REFRESH_STATUSES = {429, 500, 502, 503, 504}
+# A lapsed login: how long a call waits for a code to be handed over (the lock released meanwhile),
+# how often it looks, and how often Telegram is reminded while nobody logs in.
+AUTHORIZATION_WAIT_SECONDS = 300
+CODE_POLL_SECONDS = 5
+REMINDER_EVERY_SECONDS = 1800
+
+
+class AuthorizationRequired(Exception):
+    """Saxo's login lapsed and no code was handed over in time: nothing can be traded until one is."""
 
 
 def describe_token_refusal(response, secret: str | None = None) -> str:
@@ -41,18 +59,24 @@ def describe_token_refusal(response, secret: str | None = None) -> str:
     return f"Saxo answered {response.status_code}" + (f": {said}" if said else "")
 
 
+def _register_tokens(token_data: dict) -> None:
+    """The tokens in hand, never to be written in a log line (a renewal replaces the ones before)."""
+    register_secret("saxo.access_token", token_data.get("access_token"))
+    register_secret("saxo.refresh_token", token_data.get("refresh_token"))
+
+
 class SaxoAuth:
     """
     Handles authentication and token management for Saxo.
     """
 
-    def __init__(self, config_manager, rabbit_connection=None):
+    def __init__(self, config_manager, rabbit_connection=None, token_store=None, environ=None):
         self.state = secrets.token_hex(16)
         self.config_manager = config_manager
         self.rabbit_connection = rabbit_connection
-        self.app_data = self.config_manager.get_config_value(
-            "authentication.saxo.app_config_object"
-        )
+        self.environ = os.environ if environ is None else environ
+        self.role = self.environ.get("WATA_APP_ROLE", "")
+        self.environment = config_manager.get_config_value("saxo_auth.env", "live")
         self.token_file_path = self.config_manager.get_config_value(
             "authentication.persistant.token_path"
         )
@@ -63,9 +87,53 @@ class SaxoAuth:
 
         # Ensure token directory exists
         os.makedirs(os.path.dirname(self.token_file_path), exist_ok=True)
-        
-        # Initialize the encryption key
-        self._initialize_encryption()
+
+        # The token file of before, until the migration moved it into PostgreSQL (and renamed it); then the
+        # environment's row, when this service has its key. The lab and the tests keep the file.
+        self.store = token_store or self._chosen_store()
+        self.app_data = self._app_data()
+        # The tokens last read from the row: asked again once they are near their end.
+        self._cached: Tokens | None = None
+        if self.store.kind == "file":
+            # Initialize the encryption key
+            self._initialize_encryption()
+            self.store = token_store or FileTokenStore(self.token_file_path, self.cipher)
+
+    def _chosen_store(self):
+        from src.vault import keys
+
+        if os.path.exists(self.token_file_path) or not keys.has_private_key():
+            return FileTokenStore(self.token_file_path, None)
+        dsn = self.config_manager.get_config_value("postgresql.dsn")
+
+        async def connect():
+            import asyncpg
+
+            return await asyncpg.connect(dsn, timeout=10)
+
+        return DbTokenStore(DatabaseThread(connect), self.environment, self.role, os.path.dirname(self.token_file_path))
+
+    def _app_data(self) -> dict:
+        """
+        The app this service logs in with: the environment's, sealed in PostgreSQL, else config.json's
+        object (its old place). In PostgreSQL's case, Saxo's addresses are the environment's constants
+        and the redirect the server's (endpoints.py): never what a row says.
+        """
+        from src.vault import loader as vault
+
+        config_app = self.config_manager.get_config_value("authentication.saxo.app_config_object") or {}
+        stored = vault.credential(f"saxo.{self.environment}.app")
+        if self.store.kind == "file" and not stored:
+            return config_app
+        found = dict(endpoints.ENDPOINTS.get(self.environment) or {})
+        redirect = endpoints.redirect_url(self.config_manager, self.environ)
+        return {
+            "AppKey": (stored or {}).get("app_key") or config_app.get("AppKey"),
+            "AppSecret": (stored or {}).get("app_secret") or config_app.get("AppSecret"),
+            "AuthorizationEndpoint": found.get("authorize") or config_app.get("AuthorizationEndpoint"),
+            "TokenEndpoint": found.get("token") or config_app.get("TokenEndpoint"),
+            "RedirectUrls": [redirect] if redirect else list(config_app.get("RedirectUrls") or []),
+        }
 
     def _initialize_encryption(self):
         """
@@ -73,6 +141,8 @@ class SaxoAuth:
         The key is derived from APP_SECRET plus a salt stored in a separate file.
         """
         key_file_path = os.path.join(os.path.dirname(self.token_file_path), ".key_salt")
+        # The file was encrypted with config.json's app: its secret, whatever app is sealed in PostgreSQL.
+        app_secret = (self.config_manager.get_config_value("authentication.saxo.app_config_object") or {})["AppSecret"]
         
         # Create or load salt
         if os.path.exists(key_file_path):
@@ -87,7 +157,7 @@ class SaxoAuth:
             os.chmod(key_file_path, stat.S_IRUSR | stat.S_IWUSR)
         
         # Derive key from app secret and salt
-        password = self.app_data["AppSecret"].encode()
+        password = app_secret.encode()
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -136,6 +206,7 @@ class SaxoAuth:
             return {}
         token_data = self._decrypt_data(encrypted_data) or {}
         logger.debug("Token data retrieved from encrypted file")
+        _register_tokens(token_data)
         return token_data
 
     @contextmanager
@@ -370,7 +441,8 @@ class SaxoAuth:
         Save token data to the configured file in encrypted format.
         """
         token_data["date_saved"] = datetime.datetime.now().isoformat()
-        
+        _register_tokens(token_data)
+
         # Encrypt the token data
         encrypted_data = self._encrypt_data(token_data)
 
@@ -419,8 +491,10 @@ class SaxoAuth:
 
     def get_token_status(self):
         """
-        Describe the stored token without exposing it (used by the admin interface).
+        Describe the stored token without exposing it (the trader's watch; the admin before v0.44.0).
         """
+        if self.store.kind != "file":
+            return self.store.status()
         token_data = self._load_token_data()
         date_saved = None
         if token_data.get("date_saved"):
@@ -448,6 +522,8 @@ class SaxoAuth:
         """
         Get a valid access token, either by refreshing an existing token or obtaining a new one.
         """
+        if self.store.kind != "file":
+            return self._get_token_from_database()
         try:
             token_data = self._load_token_data()
 
@@ -485,6 +561,103 @@ class SaxoAuth:
             logger.error(f"Error getting token: {e}")
             raise
 
+    # ── the tokens in PostgreSQL ──
+
+    def _fresh(self, tokens: Tokens | None) -> bool:
+        return tokens is not None and bool(tokens.data.get("access_token")) and not self.is_token_expired(tokens.data)
+
+    def _kept(self, data: dict, expected_generation: int) -> str:
+        """Renewed or obtained tokens stamped, written as the next generation, kept in memory."""
+        data["date_saved"] = datetime.datetime.now().isoformat()
+        _register_tokens(data)
+        generation = self.store.save(data, expected_generation, by=self.role or "saxo")
+        self._cached = Tokens(data, generation)
+        return data["access_token"]
+
+    def _exchanged(self, code: dict, tokens: Tokens | None) -> str | None:
+        """A code handed over, turned into tokens with the server's redirect, kept; None when Saxo refuses it."""
+        if not self.app_data.get("RedirectUrls"):
+            self.store.note_refusal("No redirect address to exchange the code with: SAXO_REDIRECT_URL in .env")
+            logger.error("A code was handed over, but no redirect address is set (SAXO_REDIRECT_URL in .env)")
+            return None
+        token_response = self.exchange_code_for_token(code["code"])
+        if not token_response:
+            self.store.note_refusal("Saxo refused the code handed over: ask for another login")
+            return None
+        logger.info("Saxo's login renewed with the code handed over")
+        self.last_refresh_error = None
+        token = self._kept(token_response, tokens.generation if tokens else 0)
+        self._send_telegram_notification(f"✅ Saxo's login renewed ({self.environment} account): trading can go on.")
+        return token
+
+    def _say_lapse(self, first: bool) -> None:
+        if first:
+            message = (
+                f"🔐 Saxo's login has lapsed ({self.environment} account): nothing can be bought or sold until "
+                "someone logs in again. Authorise from the admin (System, Saxo), or run watasaxoauth on the server."
+            )
+        elif self.store.reminder_due(REMINDER_EVERY_SECONDS):
+            message = f"🔐 Still no Saxo login ({self.environment} account): nothing can be traded meanwhile."
+        else:
+            return
+        if not self._send_telegram_notification(message):
+            logger.warning("Could not say on Telegram that Saxo's login lapsed")
+
+    def _get_token_from_database(self) -> str:
+        """
+        The access token of the environment's row: kept in memory until near its
+        end, renewed under the lock (one renewal for all the services: a refresh
+        token is used once), or, once the login lapsed, obtained from a code
+        handed over (the admin's page, watasaxoauth). Waiting for that code, the
+        lock is released: said once on Telegram, then every half hour.
+        """
+        if self._fresh(self._cached):
+            return self._cached.data["access_token"]
+        tokens = self.store.load()
+        if self._fresh(tokens):
+            self._cached = tokens
+            return tokens.data["access_token"]
+        with self._token_refresh_lock():
+            try:
+                self.store.flush_spool()
+            except TokenStoreUnavailable:
+                pass
+            # Another service may have renewed it while this one waited for the lock.
+            tokens = self.store.load()
+            if self._fresh(tokens):
+                self._cached = tokens
+                return tokens.data["access_token"]
+            if tokens is not None and tokens.data.get("refresh_token") and not self.is_refresh_token_expired(tokens.data):
+                renewed = self.refresh_token(tokens.data["refresh_token"])
+                if renewed:
+                    return self._kept(renewed, tokens.generation)
+                self.store.note_refusal(self.last_refresh_error or "Saxo refused to renew the login")
+                logger.error("Failed to renew token")
+                raise Exception("Failed to renew token")
+            code = self.store.claim_code()
+            if code:
+                token = self._exchanged(code, tokens)
+                if token:
+                    return token
+            first = self.store.needs_authorization(self.last_refresh_error)
+        self._say_lapse(first)
+        deadline = time.time() + AUTHORIZATION_WAIT_SECONDS
+        while time.time() < deadline:
+            time.sleep(CODE_POLL_SECONDS)
+            with self._token_refresh_lock():
+                tokens = self.store.load()
+                if self._fresh(tokens):
+                    self._cached = tokens
+                    return tokens.data["access_token"]
+                code = self.store.claim_code()
+                if code:
+                    token = self._exchanged(code, tokens)
+                    if token:
+                        return token
+        raise AuthorizationRequired(
+            f"No Saxo login for the {self.environment} account: authorise from the admin (System, Saxo) or watasaxoauth"
+        )
+
 
 if __name__ == "__main__":
     try:
@@ -495,7 +668,8 @@ if __name__ == "__main__":
         config_manager = ConfigurationManager(config_path)
 
         saxo_auth = SaxoAuth(config_manager)
-        token = saxo_auth.get_token()
-        print(f"Access Token: {token}")
+        saxo_auth.get_token()
+        # Never the token itself: whoever reads a terminal or a log could trade with it.
+        print(f"Token status: {saxo_auth.get_token_status()}")
     except Exception as e:
         logger.error(f"Unhandled exception: {e}")

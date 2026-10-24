@@ -22,6 +22,7 @@ With ``--epic``, it says:
 
 import argparse
 import asyncio
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -196,10 +197,26 @@ def parse_arguments(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+async def _stored_login() -> Credentials | None:
+    """The login sealed for the feed in PostgreSQL, when this runs in its container (which holds its key)."""
+    config_path = os.getenv("WATA_CONFIG_PATH")
+    if not config_path or not os.path.exists(config_path):
+        return None
+    from src.configuration import ConfigurationManager
+    from src.vault import loader as vault
+
+    try:
+        await vault.load(ConfigurationManager(config_path), "capital_feed", names={"capital.login"})
+    except Exception:
+        return None
+    return Credentials.from_value(vault.credential("capital.login"))
+
+
 async def run(arguments: argparse.Namespace) -> int:
-    credentials = Credentials.from_environment()
+    credentials = Credentials.from_environment() or await _stored_login()
     if credentials is None:
-        print(f"Set {', '.join(Credentials.missing())} in the environment first.", file=sys.stderr)
+        print(f"No login: set the Capital.com login in the admin's Credentials (read in the feed's container), "
+              f"or {', '.join(Credentials.missing())} in the environment.", file=sys.stderr)
         return 2
     rest = CapitalRest(REST_URLS[arguments.environment], credentials)
     try:

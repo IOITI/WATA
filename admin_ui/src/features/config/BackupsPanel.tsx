@@ -68,6 +68,7 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['config'] }),
         queryClient.invalidateQueries({ queryKey: ['config-backups'] }),
+        queryClient.invalidateQueries({ queryKey: ['config-history'] }),
         queryClient.invalidateQueries({ queryKey: ['session'] }),
       ])
     },

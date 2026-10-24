@@ -164,7 +164,72 @@ class PostgresConnectionManager:
 #  Schema Initialization
 # ──────────────────────────────────────────────
 
-SCHEMA_SQL = """
+# The credentials' tables, part of the schema; the admin creates them too before its first write of one.
+VAULT_SCHEMA_SQL = """
+-- Credentials, each sealed for the services that read it (src/vault/): only the
+-- admin writes them, each service opens its own at its start. The database
+-- holds no key: a copy of it is ciphertext.
+CREATE TABLE IF NOT EXISTS credential (
+    name         VARCHAR(64) PRIMARY KEY,
+    public       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sealed       JSONB NOT NULL,
+    readers      TEXT[] NOT NULL,
+    fingerprint  VARCHAR(8),
+    set_at       TIMESTAMPTZ NOT NULL,
+    set_by       VARCHAR(64)
+);
+
+-- What each service last saw when it used a credential: a login, a message, a ping.
+CREATE TABLE IF NOT EXISTS credential_check (
+    name        VARCHAR(64) NOT NULL,
+    role        VARCHAR(32) NOT NULL,
+    checked_at  TIMESTAMPTZ NOT NULL,
+    ok          BOOLEAN NOT NULL,
+    detail      TEXT,
+    PRIMARY KEY (name, role)
+);
+
+-- Saxo's tokens for each environment, sealed for the services that log in to Saxo (src/saxo_authen/),
+-- written with a compare-and-set on generation; and since when its login lapsed, said once.
+CREATE TABLE IF NOT EXISTS saxo_token (
+    environment                VARCHAR(16) PRIMARY KEY,
+    sealed                     JSONB,
+    generation                 BIGINT NOT NULL DEFAULT 0,
+    saved_at                   TIMESTAMPTZ,
+    access_expires_at          TIMESTAMPTZ,
+    refresh_expires_at         TIMESTAMPTZ,
+    saved_by                   VARCHAR(64),
+    needs_authorization_since  TIMESTAMPTZ,
+    reminded_at                TIMESTAMPTZ,
+    last_refusal               TEXT
+);
+
+-- The code of a Saxo login handed over (the admin's page, watasaxoauth), sealed for the same services and
+-- taken once; the state the admin's link was made with, hashed and short-lived.
+CREATE TABLE IF NOT EXISTS saxo_auth_code (
+    environment       VARCHAR(16) PRIMARY KEY,
+    state_sha256      CHAR(64),
+    state_expires_at  TIMESTAMPTZ,
+    sealed            JSONB,
+    submitted_at      TIMESTAMPTZ,
+    submitted_by      VARCHAR(64),
+    consumed_at       TIMESTAMPTZ,
+    consumed_by       VARCHAR(32)
+);
+
+-- The tokens Claude's MCP endpoint is opened with: their sha256, never a token.
+CREATE TABLE IF NOT EXISTS mcp_token (
+    id            VARCHAR(8) PRIMARY KEY,
+    name          VARCHAR(40) NOT NULL,
+    sha256        CHAR(64) NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    revoked_at    TIMESTAMPTZ,
+    last_used_at  TIMESTAMPTZ
+);
+"""
+
+SCHEMA_SQL = VAULT_SCHEMA_SQL + """
 -- Orders table
 CREATE TABLE IF NOT EXISTS turbo_data_order (
     action           VARCHAR(16),

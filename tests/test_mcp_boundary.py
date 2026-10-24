@@ -24,7 +24,7 @@ from tests.test_mcp_tools_read import FakeQueries
 
 FORBIDDEN_CONTEXT = (
     "services", "saxo", "config_editor", "risk_state", "notifier", "audit_log", "live_prices", "credentials",
-    "sessions", "throttle", "config_manager", "downloads", "paper",
+    "sessions", "throttle", "config_manager", "downloads", "paper", "service_control", "restarts", "vault",
 )
 
 # What the MCP endpoint's code and the research method may import of WATA's own.
@@ -42,7 +42,8 @@ NEVER = (
     "src.admin.routers", "src.admin.services", "src.admin.config_editor", "src.admin.live_prices", "src.admin.queries",
     "src.admin.context", "src.admin.actions", "src.trade", "src.trader", "src.web_server", "src.mq_telegram",
     "src.saxo_openapi", "src.saxo_authen", "src.saxo_streaming", "src.position_monitor", "src.scheduler",
-    "src.capital_feed", "src.database", "src.watchlist_manager",
+    "src.capital_feed", "src.database", "src.watchlist_manager", "src.service_control", "src.admin.service_control",
+    "src.admin.service_restart", "src.vault", "src.admin.vault", "src.admin.mcp_token_store", "src.admin.saxo",
 )
 
 

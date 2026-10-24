@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
+import { Link } from 'react-router'
 
 import { QueryState } from '@/components/status'
 import { useToast } from '@/components/toast-context'
@@ -72,8 +73,8 @@ interface CapitalSettingsDialogProps {
 /**
  * The Capital.com feed's settings (trade.config.capital_feed), edited on its
  * provider. Reviewed, then saved by a slide through the configuration editor's
- * own save, as the price recorder's are. Its login is not here: it is in
- * .env on the server, which only the feed's container receives.
+ * own save, as the price recorder's are. Its login is not here: it is a
+ * credential sealed for the feed alone (Configuration, Credentials).
  */
 export function CapitalSettingsDialog({ open, start = 'edit', onClose }: CapitalSettingsDialogProps) {
   const configQuery = useQuery({
@@ -158,10 +159,10 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
           </Alert>
         ))}
         <p className="text-xs text-muted-foreground">
-          The feed reads its settings when it starts: on the server, <code>docker restart capital_feed1</code> applies
-          them without stopping the trading services. Switching it on for the first time also needs <code>capital</code>{' '}
-          in <code>COMPOSE_PROFILES</code> and its login in <code>.env</code>, then <code>watastop</code> and{' '}
-          <code>watastart</code>.
+          The feed reads its settings when it starts: once saved, its page offers to restart it, which leaves the
+          trading services as they are. Switching it on for the first time also needs its login (Configuration,
+          Credentials) and <code>capital</code> in <code>COMPOSE_PROFILES</code>, then <code>watastop</code> and{' '}
+          <code>watastart</code> on the server: a container not created cannot be restarted.
         </p>
         {save.error && (
           <Alert tone="danger" role="alert">
@@ -248,9 +249,11 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
 
       <Alert tone="neutral">
         <AlertDescription>
-          The login is not set here: <code>CAPITAL_API_KEY</code>, <code>CAPITAL_IDENTIFIER</code> and{' '}
-          <code>CAPITAL_PASSWORD</code> go in <code>.env</code> on the server, read by the feed alone. Capital.com has
-          no key that can only read prices.
+          The login is not set here: it is in{' '}
+          <Link className="underline underline-offset-2" to="/config/credentials">
+            Configuration, Credentials
+          </Link>
+          , sealed for the feed alone. Capital.com has no key that can only read prices.
         </AlertDescription>
       </Alert>
 

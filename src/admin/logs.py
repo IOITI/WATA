@@ -7,6 +7,8 @@ import os
 import re
 from datetime import datetime, timezone
 
+from src.logging_helper.redaction import redact
+
 # app_name passed to setup_logging by each service -> label shown in the interface.
 LOG_SERVICES = {
     "wata-api": "Web server",
@@ -74,7 +76,8 @@ def read_log(log_path: str, service: str, lines: int = 200, level: str | None = 
     if not os.path.exists(path):
         return {"service": service, "exists": False, "modified_at": None, "entries": []}
 
-    entries = parse_entries(read_tail(path))
+    # Lines written before the services cleaned their own may hold a secret: never shown, nor found by a search.
+    entries = parse_entries(redact(read_tail(path)))
     if level in LEVELS:
         minimum = LEVELS.index(level)
         entries = [

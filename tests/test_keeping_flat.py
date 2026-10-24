@@ -83,7 +83,7 @@ class Rows:
 
 
 def monitor_for(tmp_path, *, rows=None, open_positions=(), sales=None, working=(), clock=None,
-                day_trading=None, news_rule=None, order_requests=None):
+                day_trading=None, news_rule=None, order_requests=None, monitor_class=AsyncPerformanceMonitor):
     config = {
         "trade.config.position_management": {"performance_thresholds": {"stoploss_percent": -7, "max_profit_percent": 60}},
     }
@@ -105,7 +105,7 @@ def monitor_for(tmp_path, *, rows=None, open_positions=(), sales=None, working=(
     trading_rule.news_calendar = read_calendar() if news_rule is not None else None
     trading_rule.record_loss = AsyncMock()
 
-    monitor = AsyncPerformanceMonitor(
+    monitor = monitor_class(
         position_service, order_service, config_manager, rows or Rows(("p1", "long")), trading_rule, AsyncMock(),
         order_requests=order_requests,
     )
@@ -384,3 +384,4 @@ def test_every_order_request_carries_its_own_id_the_one_it_is_kept_under():
     ids = [headers["x-request-id"] for headers in sent]
     assert len(set(ids)) == 3
     assert ids == [request.request_id for request in tracker.requests]
+

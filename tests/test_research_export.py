@@ -118,6 +118,8 @@ def test_what_saxo_was_sent_and_answered_never_leaves_the_server():
     # The tokens and the trading services' own state are never among the tables, nor what the TA engine
     # measures of itself (the Engine monitor's, kept a week on the server): no research reads it.
     assert not {"tokens", "trade_risk_state", "position_live_value", "ta_engine_tick", "ta_rule_run"} & {table.name for table in TABLES}
+    # Nor the credentials, sealed or not, nor the MCP endpoint's tokens: the Mac gets no ciphertext either.
+    assert not {"credential", "credential_check", "mcp_token"} & {table.name for table in TABLES}
 
 
 def test_the_configuration_written_holds_no_address_of_a_service_and_no_secret():

@@ -130,9 +130,10 @@ function RecorderForm({ config, start, onClose }: { config: RecorderConfig; star
           </Alert>
         ))}
         <p className="text-xs text-muted-foreground">
-          The recorder reads its settings when it starts: on the server, <code>docker restart price_recorder1</code>{' '}
-          applies them without stopping the trading services. Switching it on for the first time also needs{' '}
-          <code>recorder</code> in <code>COMPOSE_PROFILES</code>, then <code>watastop</code> and <code>watastart</code>.
+          The recorder reads its settings when it starts: once saved, its page offers to restart it, which leaves the
+          trading services as they are. Switching it on for the first time also needs <code>recorder</code> in{' '}
+          <code>COMPOSE_PROFILES</code>, then <code>watastop</code> and <code>watastart</code> on the server: a container
+          not created cannot be restarted.
         </p>
         {save.error && (
           <Alert tone="danger" role="alert">

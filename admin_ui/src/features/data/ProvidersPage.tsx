@@ -192,9 +192,9 @@ function CatalogDialog({
             )}
             {item.state === 'available' && item.entry.id === 'capital' && (
               <p className="mt-2 text-xs text-muted-foreground">
-                Switches the feed on in the configuration. On the server, its login goes in <code>.env</code> (three{' '}
-                <code>CAPITAL_*</code> lines: a key made in Capital.com&rsquo;s settings, a demo account is enough),{' '}
-                <code>capital</code> is added to <code>COMPOSE_PROFILES</code>, and the application is stopped and started.
+                Switches the feed on in the configuration. Its login is set in Configuration, Credentials (a key made
+                in Capital.com&rsquo;s settings, a demo account is enough); on the server, <code>capital</code> is added to{' '}
+                <code>COMPOSE_PROFILES</code>, and the application is stopped and started.
               </p>
             )}
             {item.state === 'available' && item.entry.id === 'dukascopy' && (

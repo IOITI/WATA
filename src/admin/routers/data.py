@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin import asset_bars, data
-from src.admin.auth import require_session, session_cookie_name
+from src.admin.auth import client_ip, require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
 from src.admin.downloads import KEEP_DEFAULT_DAYS
 from src.admin.data import (
@@ -83,7 +83,7 @@ from src.admin.prices import (
     recording_gaps,
     sample_at,
 )
-from src.admin.routers.config import require_config_edit_enabled
+from src.admin.routers.config import changes_said, require_config_edit_enabled
 from src.admin.routers.session import restart_required
 from src.capital_feed import day_files as capital_day_files
 from src.capital_feed.hours import parse_opening_hours
@@ -375,7 +375,7 @@ async def _saxo_details(ctx) -> dict:
         **provider,
         "settings": {**_recorder_defaults(), **{key: value for key, value in section.items() if key in RECORDER_KEYS}},
         "gaps_today": gaps,
-        "restart_required": restart_required(ctx),
+        "restart_required": await restart_required(ctx, "price_recorder"),
     }
 
 
@@ -453,7 +453,7 @@ async def _capital_details(ctx) -> dict:
         "day_files": await run_in_threadpool(_capital_day_files, ctx.settings.price_history_path, labels),
         # Where the login is given: its names, never anything of its values.
         "credential_variables": list(CREDENTIAL_VARIABLES),
-        "restart_required": restart_required(ctx),
+        "restart_required": await restart_required(ctx, "capital_feed"),
     }
 
 
@@ -512,7 +512,10 @@ async def save_recorder_config(body: RecorderConfigRequest, request: Request):
     ctx = request.app.state.ctx
     _checked_instruments(body.section)
     try:
-        saved = await run_in_threadpool(ctx.config_editor.save_section, RECORDER_SECTION, body.section, body.revision)
+        saved = await run_in_threadpool(
+            ctx.config_editor.save_section, RECORDER_SECTION, body.section, body.revision,
+            client_ip(request, ctx.trusted_proxies),
+        )
     except ConfigInvalid as e:
         raise HTTPException(status_code=422, detail=str(e))
     except ConfigConflict as e:
@@ -520,7 +523,7 @@ async def save_recorder_config(body: RecorderConfigRequest, request: Request):
     ctx.audit(
         request,
         "price recorder configuration saved",
-        f"Previous version kept as {saved['backup']}. Takes effect at the recorder's next start.",
+        f"{changes_said(saved)} Previous version kept as {saved['backup']}.",
     )
     return {**saved, "restart_required": True}
 
@@ -564,7 +567,10 @@ async def save_capital_config(body: RecorderConfigRequest, request: Request):
     ctx = request.app.state.ctx
     _checked_capital_instruments(body.section)
     try:
-        saved = await run_in_threadpool(ctx.config_editor.save_section, CAPITAL_SECTION, body.section, body.revision)
+        saved = await run_in_threadpool(
+            ctx.config_editor.save_section, CAPITAL_SECTION, body.section, body.revision,
+            client_ip(request, ctx.trusted_proxies),
+        )
     except ConfigInvalid as e:
         raise HTTPException(status_code=422, detail=str(e))
     except ConfigConflict as e:
@@ -572,7 +578,7 @@ async def save_capital_config(body: RecorderConfigRequest, request: Request):
     ctx.audit(
         request,
         "Capital.com feed configuration saved",
-        f"Previous version kept as {saved['backup']}. Takes effect at the feed's next start.",
+        f"{changes_said(saved)} Previous version kept as {saved['backup']}.",
     )
     return {**saved, "restart_required": True}
 

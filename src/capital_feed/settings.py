@@ -15,6 +15,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from src.logging_helper.redaction import register_secret
+
 SECTION = "trade.config.capital_feed"
 
 # Where Capital.com's REST API is, for each kind of account. Not a setting:
@@ -158,13 +160,27 @@ class Credentials:
     password: str
 
     @classmethod
+    def from_value(cls, value: dict | None) -> "Credentials | None":
+        """The login as the credential ``capital.login`` holds it (src/vault/); None when it has none."""
+        values = [((value or {}).get(key) or "").strip() for key in ("api_key", "identifier", "password")]
+        if not all(values):
+            return None
+        credentials = cls(*values)
+        register_secret("capital.api_key", credentials.api_key)
+        register_secret("capital.password", credentials.password)
+        return credentials
+
+    @classmethod
     def from_environment(cls, environ=None) -> "Credentials | None":
         """The three values of ``.env``; None when any is missing or blank."""
         environ = os.environ if environ is None else environ
         values = [(environ.get(name) or "").strip() for name in CREDENTIAL_VARIABLES]
         if not all(values):
             return None
-        return cls(*values)
+        credentials = cls(*values)
+        register_secret("capital.api_key", credentials.api_key)
+        register_secret("capital.password", credentials.password)
+        return credentials
 
     @staticmethod
     def missing(environ=None) -> list[str]:

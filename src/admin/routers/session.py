@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import check_same_origin, client_ip, require_session, session_cookie_name
+from src.admin.service_control import RECENT_SECONDS
+from src.admin.service_restart import ORDER, SERVICE_NAMES, pending_by_service
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +20,26 @@ class LoginRequest(BaseModel):
     code: str | None = None
 
 
-def restart_required(ctx) -> bool:
+async def restarts_needed(ctx) -> list[str] | None:
     """
-    Whether config.json was saved after the services last started. They all
-    start together (docker compose up), so the admin's own start time stands for
-    theirs.
+    The services that run without a change saved since they started, by the
+    containers' starts the control service gives; None when it cannot say.
     """
+    pending = await pending_by_service(ctx, max_age=RECENT_SECONDS)
+    if pending is None:
+        return None
+    return [service for service in ORDER if pending.get(service, {}).get("paths") or pending.get(service, {}).get("outside")]
+
+
+async def restart_required(ctx, service: str | None = None) -> bool:
+    """
+    Whether config.json was saved after the services (or ``service``) last
+    started. Without the control service to say when each did, the admin's
+    own start stands for theirs: they all start together (docker compose up).
+    """
+    needed = await restarts_needed(ctx)
+    if needed is not None:
+        return bool(needed) if service is None else service in needed
     try:
         return ctx.config_editor.modified_at() > ctx.started_at
     except OSError:
@@ -80,6 +96,7 @@ async def login(body: LoginRequest, request: Request):
 @router.get("", dependencies=[Depends(require_session)])
 async def session_info(request: Request):
     ctx = request.app.state.ctx
+    needed = await restarts_needed(ctx)
     return {
         "authenticated": True,
         "version": ctx.version,
@@ -89,7 +106,9 @@ async def session_info(request: Request):
         # The switch of the backtests and of the downloads of history alike.
         "backtests_enabled": ctx.settings.backtests_enabled and (ctx.backtests is not None or ctx.downloads is not None),
         "totp_enabled": ctx.credentials.totp_enabled(),
-        "restart_required": restart_required(ctx),
+        "restart_required": bool(needed) if needed is not None else await restart_required(ctx),
+        # Which services, when the control service says when each started; None otherwise.
+        "restart_services": None if needed is None else [{"id": service, "name": SERVICE_NAMES[service]} for service in needed],
     }
 
 

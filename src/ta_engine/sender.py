@@ -23,7 +23,9 @@ class Sent:
 
 
 class SignalSender:
-    def __init__(self, service_url: str, token_getter: Callable[[], str], http: httpx.AsyncClient, timeout_seconds: float):
+    # token_getter: a function, run in a thread (the token file of before is slow to decrypt), or a
+    # coroutine function, awaited (the token read again from PostgreSQL).
+    def __init__(self, service_url: str, token_getter: Callable, http: httpx.AsyncClient, timeout_seconds: float):
         self._url = f"{service_url.rstrip('/')}/internal/signal"
         self._token_getter = token_getter
         self._http = http
@@ -34,7 +36,10 @@ class SignalSender:
         for attempt in range(2):
             if self._token is None:
                 try:
-                    self._token = await asyncio.to_thread(self._token_getter)
+                    if asyncio.iscoroutinefunction(self._token_getter):
+                        self._token = await self._token_getter()
+                    else:
+                        self._token = await asyncio.to_thread(self._token_getter)
                 except Exception as e:
                     return Sent(False, error=f"The web server's token could not be read: {type(e).__name__}")
             try:

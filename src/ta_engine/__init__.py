@@ -65,6 +65,7 @@ async def main():
     from src.ta_engine.sender import SignalSender
     from src.ta_engine.settings import SECTION, TaEngineSettings
     from src.ta_engine.source import CapitalTables
+    from src.vault import loader as vault
     from src.web_server_token import WebServerToken
 
     config_path = os.getenv("WATA_CONFIG_PATH")
@@ -107,10 +108,18 @@ async def main():
             await _idle(journal, version, "no_runner", f"No {missing} in this image: nothing can run.")
             return
 
+        # Its credentials (the web server's internal token, Telegram's bot for the sender's direct
+        # fallback), sealed for it in PostgreSQL.
+        await vault.load(config_manager, "ta_engine", db=pg)
         telegram = AsyncTelegramSender(config_manager)
         http = httpx.AsyncClient()
-        token = WebServerToken(config_manager)
-        sender = SignalSender(settings.service_url, token.get_token, http, settings.request_timeout_seconds)
+
+        async def internal_token() -> str:
+            # Read again from PostgreSQL at the first signal and after a refusal: rotated since the start.
+            await vault.load(config_manager, "ta_engine", names={"internal.token"}, db=pg)
+            return WebServerToken(config_manager).get_token()
+
+        sender = SignalSender(settings.service_url, internal_token, http, settings.request_timeout_seconds)
         rules_file = RulesFile(settings.rules_path)
         engine: Engine | None = None
 

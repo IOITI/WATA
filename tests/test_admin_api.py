@@ -62,6 +62,17 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/events"),
     ("GET", "/api/system/health"),
     ("GET", "/api/system/saxo"),
+    ("GET", "/api/system/services"),
+    ("POST", "/api/system/services/restart"),
+    ("POST", "/api/system/services/wata-api/restart"),
+    ("GET", "/api/credentials"),
+    ("PUT", "/api/credentials/config.json.bak-20260101-000000"),
+    ("DELETE", "/api/credentials/config.json.bak-20260101-000000"),
+    ("POST", "/api/credentials/config.json.bak-20260101-000000/rotate"),
+    ("POST", "/api/credentials/webhook.token/show"),
+    ("POST", "/api/credentials/telegram.bot/test"),
+    ("POST", "/api/mcp/tokens"),
+    ("POST", "/api/system/saxo/authorize"),
     ("GET", "/api/logs"),
     ("GET", "/api/logs/wata-api"),
     ("POST", "/api/actions/signal"),
@@ -93,6 +104,8 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/data/providers/capital/config"),
     ("PUT", "/api/data/providers/capital/config"),
     ("GET", "/api/config"),
+    ("GET", "/api/config/catalog"),
+    ("GET", "/api/config/history"),
     ("POST", "/api/config/validate"),
     ("PUT", "/api/config"),
     ("GET", "/api/config/backups"),
@@ -559,8 +572,12 @@ class FakeSaxo:
             "authorization_url": "https://saxo.test/authorize",
         }
 
-    def save_auth_code(self, code):
-        self.codes.append(code)
+    async def hand_over(self, code, *, state=None, environment=None, by=None):
+        self.codes.append(code.strip())
+        return environment or "live"
+
+    async def authorize(self, environment=None):
+        return "https://saxo.test/authorize?state=fresh"
 
 
 @pytest.fixture
@@ -643,7 +660,8 @@ def test_every_route_requires_a_session(anonymous, method, path):
 
 def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
     app = create_app(ctx, static_dir=str(tmp_path / "no-interface"))
-    public = {("POST", "/api/session"), ("GET", "/api/healthz")}
+    # Saxo sends the browser back there from its own site: the state admits it (src/admin/routers/saxo.py).
+    public = {("POST", "/api/session"), ("GET", "/api/healthz"), ("GET", "/api/saxo/callback")}
     declared = {
         (
             method,
@@ -1386,7 +1404,54 @@ def test_valid_config_passes_validation(client):
 
     response = client.post("/api/config/validate", json={"config": loaded["config"]}, headers=SAME_ORIGIN)
 
-    assert response.json() == {"valid": True}
+    assert response.json()["valid"] is True
+    assert response.json()["changes"] == []
+    assert response.json()["impact"]["services"] == []
+
+
+def test_a_change_is_previewed_with_the_services_it_reaches_and_nothing_is_written(client, config_path):
+    before = open(config_path).read()
+    loaded = client.get("/api/config").json()
+    for rule in loaded["config"]["trade"]["rules"]:
+        if rule["rule_type"] == "market_hours":
+            rule["rule_config"]["trading_start_hour"] = 9
+
+    preview = client.post("/api/config/validate", json={"config": loaded["config"]}, headers=SAME_ORIGIN).json()
+
+    assert [change["path"] for change in preview["changes"]] == [
+        "trade.rules[market_hours].rule_config.trading_start_hour"
+    ]
+    assert {"trader", "position_monitor", "scheduler"} <= set(preview["impact"]["services"])
+    assert preview["impact"]["risk"] == "trading"
+    assert open(config_path).read() == before
+
+
+def test_a_save_is_written_down_key_by_key_and_said_in_the_audit(client, ctx, config_path):
+    loaded = client.get("/api/config").json()
+    loaded["config"]["logging"]["level"] = "DEBUG"
+
+    saved = client.put("/api/config", json={"config": loaded["config"], "revision": loaded["revision"]},
+                       headers=SAME_ORIGIN).json()
+    history = client.get("/api/config/history").json()["items"]
+
+    assert [change["path"] for change in saved["changes"]] == ["logging.level"]
+    assert history[0]["changes"][0] == {"path": "logging.level", "before": "INFO", "after": "DEBUG",
+                                        "added": False, "removed": False}
+    assert history[0]["action"] == "saved" and history[0]["by"]
+    audit = next(entry for entry in ctx.audit_log.read() if entry["action"] == "configuration saved")
+    # What changed and where it applies, said in the audit trail and on Telegram.
+    assert "Changed logging.level." in audit["detail"]
+    assert "Applies at the next start of: Web server, Trader" in audit["detail"]
+
+
+def test_the_catalog_is_served_and_the_unknown_keys_said(client):
+    catalog = client.get("/api/config/catalog").json()
+    loaded = client.get("/api/config").json()
+
+    paths = {param["path"] for param in catalog["params"]}
+    assert "trade.rules[market_hours].rule_config.trading_start_hour" in paths
+    assert {group["id"] for group in catalog["groups"]} >= {"day", "hours", "exits", "credentials"}
+    assert isinstance(loaded["unknown"], list)
 
 
 def test_stale_config_revision_is_a_conflict(client):

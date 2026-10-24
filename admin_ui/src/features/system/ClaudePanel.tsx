@@ -9,6 +9,7 @@ import { AIAgentActivity } from '@/components/ui/ai-agent-activity'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { FormDescription, FormItem, FormLabel, Input } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
@@ -38,7 +39,7 @@ function Tokens({ tokens, onRevoke }: { tokens: McpToken[]; onRevoke: (token: Mc
   if (tokens.length === 0) {
     return (
       <p className="py-3 text-sm text-muted-foreground">
-        No token yet. On the server, <code>watamcptoken create claude-mac</code> makes one, printed once.
+        No token yet: make one for the Mac Claude Code runs on, shown once.
       </p>
     )
   }
@@ -119,12 +120,98 @@ function Calls({ calls, timeZone }: { calls: McpCall[]; timeZone: string }) {
   )
 }
 
+/** A token made for a machine, shown in its answer once: PostgreSQL keeps its sha256 alone. */
+function NewTokenDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const [name, setName] = useState('claude-mac')
+  const [days, setDays] = useState('90')
+  const [copied, setCopied] = useState(false)
+  const mutation = useMutation({
+    mutationFn: () => api.createMcpToken(name.trim(), Number(days)),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['mcp'] }),
+  })
+  const close = () => {
+    mutation.reset()
+    setCopied(false)
+    onClose()
+  }
+  const made = mutation.data
+  return (
+    <SettleModal
+      open={open}
+      onClose={mutation.isPending ? () => {} : close}
+      title={made ? `Token ${made.entry.name}` : 'Make a token for Claude'}
+      size="md"
+      footer={
+        made ? (
+          <Button size="sm" onClick={close}>
+            I have kept it
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" size="sm" onClick={close} disabled={mutation.isPending}>
+              Cancel
+            </Button>
+            <Button size="sm" isLoading={mutation.isPending} disabled={!name.trim()} onClick={() => mutation.mutate()}>
+              Make it
+            </Button>
+          </>
+        )
+      }
+    >
+      {made ? (
+        <div className="space-y-3 text-sm">
+          <p className="text-text-secondary">
+            Shown this once: keep it in the Mac&apos;s Keychain (README, Claude on the server). Valid until{' '}
+            {made.entry.expires_at}.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="break-all rounded-md border border-border bg-surface-raised/60 px-2 py-1 text-xs">{made.token}</code>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void navigator.clipboard?.writeText(made.token).then(() => setCopied(true))}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (name.trim()) mutation.mutate()
+          }}
+        >
+          <FormItem>
+            <FormLabel htmlFor="mcp-token-name">Name</FormLabel>
+            <Input id="mcp-token-name" value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" />
+            <FormDescription>The machine it is for: lowercase letters, digits and dashes.</FormDescription>
+          </FormItem>
+          <FormItem>
+            <FormLabel htmlFor="mcp-token-days">Days</FormLabel>
+            <Input id="mcp-token-days" type="number" min={1} max={365} value={days} onChange={(event) => setDays(event.target.value)} />
+            <FormDescription>1 to 365.</FormDescription>
+          </FormItem>
+          {mutation.error && (
+            <Alert tone="danger" role="alert">
+              <AlertDescription>{mutation.error.message}</AlertDescription>
+            </Alert>
+          )}
+        </form>
+      )}
+    </SettleModal>
+  )
+}
+
 /** Claude's research through the admin's MCP endpoint, as the operator watches and stops it. */
 export function ClaudePanel() {
-  const { timezone } = useSession()
+  const { timezone, actions_enabled: actionsEnabled } = useSession()
   const toast = useToast()
   const queryClient = useQueryClient()
   const [revoking, setRevoking] = useState<McpToken | null>(null)
+  const [making, setMaking] = useState(false)
   const mcpQuery = useQuery({ queryKey: ['mcp'], queryFn: api.mcp, refetchInterval: 15_000 })
   const state = mcpQuery.data
 
@@ -196,7 +283,12 @@ export function ClaudePanel() {
                 : 'Its shadow rules are switched off (admin.mcp.shadow_rules in config.json).'}
             </p>
             <div>
-              <h3 className="text-xs font-semibold">Tokens</h3>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-xs font-semibold">Tokens</h3>
+                <Button variant="outline" size="sm" disabled={!actionsEnabled} onClick={() => setMaking(true)}>
+                  Make a token
+                </Button>
+              </div>
               <Tokens tokens={state.tokens} onRevoke={(token) => {
                 revokeMutation.reset()
                 setRevoking(token)
@@ -207,6 +299,7 @@ export function ClaudePanel() {
         )}
       </QueryState>
 
+      <NewTokenDialog open={making} onClose={() => setMaking(false)} />
       <SettleModal
         open={revoking !== null}
         onClose={() => setRevoking(null)}
@@ -229,8 +322,7 @@ export function ClaudePanel() {
         }
       >
         <p className="text-sm leading-relaxed text-text-secondary">
-          The token opens the endpoint no more, from its next call. What Claude made stays. A new token is made on the
-          server: <code>watamcptoken create &lt;name&gt;</code>.
+          The token opens the endpoint no more, within seconds. What Claude made stays. A new one can be made here.
         </p>
         {revokeMutation.error && (
           <p role="alert" className="mt-2 text-sm text-negative">

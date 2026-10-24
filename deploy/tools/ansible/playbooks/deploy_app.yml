@@ -68,7 +68,11 @@
         dest: /tmp/{{ package_name }}
 
     - name: Stop the application
-      command: cd /app/wata/{{ version }}/deploy/ && docker compose down && echo "The application is stopped"
+      # The version running now, named by VERSION before the package replaces it, with its .env link, so
+      # that every container stops (the profiled ones too). `command` runs no shell, so a `cd ... &&`
+      # there always failed and the install script's own stop was the only one. That one stays, for a
+      # first install with nothing running yet.
+      ansible.builtin.shell: cd "/app/wata/$(cat /app/wata/VERSION)/deploy" && docker compose down && echo "The application is stopped"
       ignore_errors: yes
 
     - name: Unzip the application package

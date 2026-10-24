@@ -29,6 +29,20 @@ export function isNumberText(text: string): boolean {
   return text.trim() !== '' && Number.isFinite(Number(text))
 }
 
+/** What is wrong with ``text`` as the value of a number field, or null. */
+export function numberProblem(
+  text: string,
+  { optional = false, minimum = null, maximum = null, integer = false }: { optional?: boolean; minimum?: number | null; maximum?: number | null; integer?: boolean },
+): string | null {
+  if (text.trim() === '') return optional ? null : 'A number is needed here.'
+  if (!isNumberText(text)) return 'Not a number.'
+  const value = Number(text)
+  if (integer && !Number.isInteger(value)) return 'A whole number is needed here.'
+  if (minimum !== null && value < minimum) return `At least ${minimum}.`
+  if (maximum !== null && value > maximum) return `At most ${maximum}.`
+  return null
+}
+
 /** Keeps the form informed of a field's validity, for as long as the field is on screen. */
 export function useReportInvalid(invalid: boolean): void {
   const { reportInvalid } = useDraft()

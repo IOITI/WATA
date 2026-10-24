@@ -68,6 +68,11 @@ class StudyService:
             said.append(f"the kernel's OOM killer stopped {kills_after - kills_before} process(es) meanwhile")
         return ", ".join(said)
 
+    @property
+    def busy(self) -> bool:
+        """Whether a study is running or waiting for the one running: an admin restart would stop it."""
+        return self._one.locked()
+
     def spent_seconds(self) -> float:
         hour_ago = self._clock() - 3600
         while self._spent and self._spent[0][0] <= hour_ago:

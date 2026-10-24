@@ -20,7 +20,9 @@ from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
-from src.admin.routers import actions, backtests, config, data, research, session, system, ta, trading
+from src.admin.routers import (
+    actions, backtests, config, credentials, data, research, saxo, services, session, system, ta, trading,
+)
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,17 @@ def _mount_interface(app: FastAPI, static_dir: str) -> None:
         return FileResponse(index_path)
 
 
+async def _load_own_credentials(ctx: AdminContext) -> None:
+    """In the background: the admin starts, and answers, while PostgreSQL is down."""
+    from src.vault import loader as vault
+
+    try:
+        await vault.load_waiting(ctx.config_manager, "admin", names={"telegram.bot"}, db=ctx.vault.reader,
+                                 keys_dir=ctx.vault.keys_dir)
+    except Exception as e:
+        logger.warning("The admin's own credentials could not be read: %r", e)
+
+
 def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
     mcp = None
     if ctx.settings.mcp_enabled and ctx.mcp_tokens is not None:
@@ -157,6 +170,12 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.paper is not None and ctx.settings.backtests_enabled:
             # Trades each shadow rule's finished days on paper, the market closed.
             background.append(asyncio.create_task(ctx.paper.keep()))
+        if ctx.mcp_tokens is not None and hasattr(ctx.mcp_tokens, "keep_fresh"):
+            # The MCP endpoint's tokens, read again from PostgreSQL every few seconds for the gate.
+            background.append(asyncio.create_task(ctx.mcp_tokens.keep_fresh()))
+        if ctx.vault is not None:
+            # Its own credentials laid over its configuration: the Telegram bot of its direct fallback.
+            background.append(asyncio.create_task(_load_own_credentials(ctx)))
         try:
             async with AsyncExitStack() as running:
                 if mcp is not None:
@@ -220,7 +239,7 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, trading, system, actions, config, data, backtests, ta, research):
+    for module in (session, saxo, trading, system, services, actions, config, credentials, data, backtests, ta, research):
         app.include_router(module.router)
 
     if mcp is not None:
