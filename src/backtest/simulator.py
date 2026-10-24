@@ -41,6 +41,7 @@ from src.backtest.rules import (
 from src.backtest.selection import NotSelected, select_turbo
 from src.backtest.settings import BacktestSettings
 from src.trade.macro_calendar import Calendar, flat_reason, flat_window_at, read_calendar
+from src.trade.market_calendar import MarketCalendar, read_market_calendar
 
 LONG, SHORT = "long", "short"
 ENTRY_ACTIONS = (LONG, SHORT)
@@ -113,17 +114,25 @@ def news_calendar() -> Calendar:
     return read_calendar()
 
 
+@lru_cache(maxsize=1)
+def us_market_calendar() -> MarketCalendar:
+    """The US holidays and early closes the trader reads, read once for every simulator of a run."""
+    return read_market_calendar()
+
+
 class Simulator:
     """One account traded day after day. ``run_day`` once per day, in order."""
 
     def __init__(self, settings: BacktestSettings, clock: TradingClock, *, asset_label: str | None = None,
-                 calendar: Calendar | None = None, fills=None):
+                 calendar: Calendar | None = None, fills=None, market_calendar: MarketCalendar | None = None):
         self.settings = settings
         self.clock = clock
         # How its orders are filled: the settings' values, or drawn from WATA's own orders.
         self.fills = fills or FixedFills(settings)
         # The US releases, read only when no entry is to be made around them.
         self.calendar = calendar if calendar is not None or settings.news_rule() is None else news_calendar()
+        # The US holidays and early closes, as the trader keeps them whatever the configuration.
+        self.market_calendar = market_calendar if market_calendar is not None else us_market_calendar()
         self.cash = float(settings.capital)
         self.positions: list[Position] = []
         self.last_loss_at: float | None = None
@@ -229,6 +238,7 @@ class Simulator:
             open_directions=[position.direction for position in self.positions],
             day_percent=self.day_percent(), last_loss_at=self.last_loss_at,
             entries_today=self._entries_today, confidence=event.confidence, calendar=self.calendar,
+            market_calendar=self.market_calendar,
         )
         if refusal is not None:
             self._signal(event, decided, REFUSED, refusal.rule, refusal.reason)

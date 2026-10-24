@@ -18,6 +18,7 @@ from datetime import date, datetime, timezone
 
 from src.backtest.clock import TradingClock, utc_iso
 from src.backtest.settings import BacktestSettings
+from src.trade.market_calendar import sale_moment
 from src.backtest.simulator import CLOSE_ACTIONS, ENTRY_ACTIONS, SignalEvent
 from src.ta_engine.replay import AssetRows, ReplaySession, engine_windows, restart_minute_of
 from src.ta_engine.rules import EngineRule
@@ -206,11 +207,17 @@ def raised_signals(rows: list[dict], indice: str, settings: BacktestSettings, st
     return events
 
 
-def closing_signals(days: list[date], settings: BacktestSettings, clock: TradingClock, *, first_id: int) -> list[SignalEvent]:
-    """The scheduler's ``close-position`` at the close of each day, a moment after its minute begins."""
+def closing_signals(days: list[date], settings: BacktestSettings, clock: TradingClock, *, first_id: int,
+                    market_calendar=None) -> list[SignalEvent]:
+    """
+    The scheduler's ``close-position`` at the close of each day, a moment after
+    its minute begins: ``close_position_time`` in the timezone of the trading
+    hours, earlier on a day the US market closes early (``sale_moment``).
+    """
     events = []
     for offset, day in enumerate(days):
-        moment = clock.epoch(day, settings.close_position_time) + 0.5
+        moment = sale_moment(day, settings.close_position_time, settings.market_zone(), market_calendar,
+                             settings.trading_end_hour) + 0.5
         events.append(SignalEvent(
             id=first_id + offset, source="schedule", action="close-position", arrived_at=moment, alert_at=moment,
             indice="n/a",

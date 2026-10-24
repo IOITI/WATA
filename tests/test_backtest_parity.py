@@ -460,3 +460,69 @@ def test_with_a_cash_reserve_an_entry_that_finds_no_turbo_sells_the_other_side_a
     mirrored_sold = simulator.trades[0]["exit"]["reason"] == "Explicit Close (All)" and simulator.signals[1]["closed_trade_ids"]
 
     assert live_sold and bool(mirrored_sold)
+
+
+# ── the US market's days, and hours in another timezone ──
+
+NEW_YORK_HOURS = {"market_hours": {"timezone": "America/New_York", "trading_start_hour": 10, "trading_end_hour": 16,
+                                   "risky_trading_start_hour": 15, "risky_trading_start_minute": 54},
+                  "day_trading": {"close_position_time": "15:55"}}
+LONG_RISKY_WINDOW = {"market_hours": {"risky_trading_start_hour": 20, "risky_trading_start_minute": 30}}
+
+MARKET_DAY_SCENARIOS = [
+    # (name, the moment in Paris, changes of the rules, taken)
+    ("Thanksgiving", (2026, 11, 26, 15, 0), {}, False),
+    ("the day after, before its early close's last entry", (2026, 11, 27, 18, 53, 59), {}, True),
+    ("the day after, from its early close less the risky minutes", (2026, 11, 27, 18, 54), {}, False),
+    ("Christmas Eve's morning", (2026, 12, 24, 10, 0), {}, True),
+    ("an ordinary day", (2026, 11, 25, 18, 54), {}, True),
+    ("New York's hours, before 10h there", (2026, 10, 14, 15, 59), NEW_YORK_HOURS, False),
+    ("New York's hours, from 10h there", (2026, 10, 14, 16, 0), NEW_YORK_HOURS, True),
+    ("New York's risky minutes", (2026, 10, 14, 21, 54), NEW_YORK_HOURS, False),
+    ("New York's hours the week the clocks differ", (2026, 10, 27, 15, 0), NEW_YORK_HOURS, True),
+    ("a risky window over an hour, after its first hour", (2026, 10, 14, 21, 10), LONG_RISKY_WINDOW, False),
+    ("just before such a window", (2026, 10, 14, 20, 29), LONG_RISKY_WINDOW, True),
+]
+
+
+@pytest.mark.parametrize("name, moment, changes, taken", MARKET_DAY_SCENARIOS, ids=[scenario[0] for scenario in MARKET_DAY_SCENARIOS])
+def test_the_us_markets_days_and_the_hours_refuse_an_entry_as_live(name, moment, changes, taken):
+    from src.backtest.simulator import us_market_calendar
+
+    config = config_with(**changes)
+    now = PARIS.localize(datetime(*moment))
+
+    live = live_outcome(config, now=now, action="long", indice="us100", alert_at=now - timedelta(seconds=1),
+                        positions=Positions(), last_loss=None, confidence=None)
+    refusal = entry_refusal(
+        from_config(config), CLOCK, action="long", indice="us100", decided_at=now.timestamp(),
+        alert_at=now.timestamp() - 1, open_directions=[], day_percent=0.0, last_loss_at=None, entries_today=0,
+        confidence=None, market_calendar=us_market_calendar(),
+    )
+
+    mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
+    assert mirrored == live and (live[0] == "executed") == taken
+
+
+@pytest.mark.parametrize("day, changes, sold_at", [
+    # 21:55 in Paris on an ordinary day; on the day after Thanksgiving, 5 minutes before 13:00 New York (19:00 Paris).
+    ((2026, 11, 25), {}, (2026, 11, 25, 21, 55)),
+    ((2026, 11, 27), {}, (2026, 11, 27, 18, 55)),
+    # In New York's hours: 15:55 there, whichever side changed its clocks.
+    ((2026, 10, 27), NEW_YORK_HOURS, (2026, 10, 27, 20, 55)),
+    ((2026, 11, 3), NEW_YORK_HOURS, (2026, 11, 3, 21, 55)),
+])
+def test_the_days_close_comes_when_the_scheduler_sends_it(day, changes, sold_at):
+    from src.backtest.signals import closing_signals
+    from src.backtest.simulator import us_market_calendar
+
+    config = config_with(**changes)
+    rule = TradingRule(Config(config), Positions(), RiskState(None))
+    noon = PARIS.localize(datetime(*day, 12, 0)).timestamp()
+
+    (event,) = closing_signals([datetime(*day).date()], from_config(config), CLOCK, first_id=1,
+                               market_calendar=us_market_calendar())
+
+    expected = PARIS.localize(datetime(*sold_at)).timestamp()
+    assert rule.sale_moment(noon) == expected
+    assert event.arrived_at == expected + 0.5

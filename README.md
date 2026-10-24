@@ -299,6 +299,8 @@ For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.githu
 
 The current stack is defined in `deploy/docker-compose.yml`; it does not use the old setup service or a separate Compose override. It includes Traefik, PostgreSQL, RabbitMQ, the Web Server, Trader, Scheduler, Telegram, Position Monitor, and Watchlist Manager.
 
+The database is dumped each night at 02:17 UTC by `pg_backup1` (without the rows of the recorded bars, whole on Sundays; 14 nights and 4 Sundays kept in `var/lib/backups`, which `lab/sync.sh` pulls to the Mac); the admin's health says the last dump. `docker exec pg_backup1 sh /pg_backup.sh check` restores the newest into a scratch database and counts the trading tables; `docker exec pg_backup1 sh /pg_backup.sh now` makes one at once. A deploy is refused while WATA holds a position or the market is open by its hours (`./deploy_app_to_your_server.sh -e force=true` deploys anyway).
+
 The Compose file uses health checks and service dependencies for PostgreSQL, RabbitMQ, and Traefik. Traefik is the public HTTPS ingress; the other application services communicate over the internal Compose network.
 
 The memory limits are sized for a server of 8 GB, of which WATA uses about 1.25 GB at rest. The two that are reached are the admin's 3 GB (backtests, their Pine runner and Claude's Pine studies, see below) and PostgreSQL's 1.5 GB, with `shared_buffers` 512 MB, `effective_cache_size` 1 GB, `work_mem` 16 MB and a `/dev/shm` of 256 MB, so that the price tables backtests read stay in memory. On a smaller server, lower both in `deploy/docker-compose.yml`. A change to PostgreSQL's restarts the database: make it while the market is closed.
@@ -363,7 +365,8 @@ After deployment, you need to set up your configuration:
 
    - **Trading Rules**
      - `allowed_indices`: Configure allowed trading indices
-     - `market_closed_dates`: Set market holidays
+     - `market_closed_dates`: Set market holidays, beside the US market's own (`src/trade/data/us_market_calendar.csv`, NYSE's days, which Nasdaq keeps): no entry on a US holiday, and on a day the US market closes early (the day after Thanksgiving, Christmas Eve) none from the early close less the risky minutes, and what is held is sold as long before it as `close_position_time` is before `trading_end_hour`
+     - `market_hours`: the trading hours and the risky minutes before their end; with `"timezone": "America/New_York"` these hours and `close_position_time` are New York's, so that the US session's hours hold the weeks Europe and the US change clocks apart (late March, late October)
      - `day_trading`: Define profit targets and limits
      - `macro_news` (optional, off unless it is there): no new entry around the US releases that move the Nasdaq. From `minutes_before` (5) a release to `minutes_after` (15) it, and to `minutes_after_fomc` (45) after an FOMC statement, whose press conference follows; `events` names which of FOMC, CPI, NFP and PCE. CPI, the jobs report and PCE come out at 08:30 in New York, 14:30 in Paris most of the year; WATA reads New York's hours whatever either side's clocks. With `flatten_minutes_before` (0 unless given), the position monitor also sells what is held from that long before a release until the window ends, and no entry is taken from then: around a release Saxo can stop quoting a turbo for minutes (250 s at the CPI of 14 October 2026), when no stop can be sold. The admin's Configuration page switches it on and off (US releases). The releases come from `src/trade/data/macro_calendar.csv`: past its last day nothing is known and the trader trades on, so from 30 days before it Telegram says so each morning and the admin's health warns; `python -m lab calendar check` says what to add, then deploy.
 

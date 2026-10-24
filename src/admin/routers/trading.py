@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from src.admin.auth import require_session
 from src.heartbeat import HEARTBEAT_STALE_SECONDS
 from src.trade.macro_calendar import NewsRule, next_window, read_calendar
+from src.trade.market_calendar import entries_end_moment, read_market_calendar, sale_moment
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 
@@ -35,6 +36,8 @@ def _limits(config_manager) -> dict:
         "trading_end_hour": market_hours.get("trading_end_hour"),
         "risky_trading_start_hour": market_hours.get("risky_trading_start_hour"),
         "risky_trading_start_minute": market_hours.get("risky_trading_start_minute"),
+        # The timezone of these hours and of close_position_time; None: the trading one.
+        "market_timezone": market_hours.get("timezone") or None,
     }
 
 
@@ -42,6 +45,36 @@ def _market_closed_on(config_manager, day: date) -> bool:
     """Whether ``day`` is one of the configured closed dates, written DD/MM/YYYY as the trader reads them."""
     closed_dates = _rule_config(config_manager, "market_closed_dates").get("market_closed_dates") or []
     return day.strftime("%d/%m/%Y") in closed_dates
+
+
+def _market_day(config_manager, trading_timezone: str, now: datetime) -> dict | None:
+    """
+    Today's US market day when it is not an ordinary one (src/trade/market_calendar.py),
+    as the trader reads it: closed, or closing early, with when entries end and
+    when what is held is sold. None on an ordinary day or without the calendar.
+    """
+    market_hours = _rule_config(config_manager, "market_hours")
+    day_trading = _rule_config(config_manager, "day_trading")
+    zone = market_hours.get("timezone") or trading_timezone
+    try:
+        calendar = read_market_calendar()
+    except (OSError, ValueError, KeyError):
+        return None
+    day = now.astimezone(pytz.timezone(zone)).date()
+    closed = calendar.closed_on(day)
+    if closed is not None:
+        return {"kind": "closed", "name": closed.name}
+    early = calendar.early_close_on(day)
+    if early is None:
+        return None
+    found = {"kind": "early_close", "name": early.name, "closes_at": _iso(early.close_moment())}
+    end_hour = market_hours.get("trading_end_hour")
+    risky = (market_hours.get("risky_trading_start_hour"), market_hours.get("risky_trading_start_minute"))
+    if isinstance(end_hour, int) and None not in risky:
+        found["entries_end_at"] = _iso(entries_end_moment(early, end_hour, risky))
+        if day_trading.get("close_position_time"):
+            found["sale_at"] = _iso(sale_moment(day, day_trading["close_position_time"], zone, calendar, end_hour))
+    return found
 
 
 def _iso(moment: float) -> str:
@@ -103,6 +136,7 @@ async def overview(request: Request):
     ctx = request.app.state.ctx
     today = datetime.now(pytz.timezone(ctx.settings.timezone)).date()
     limits = _limits(ctx.config_manager)
+    market_day = _market_day(ctx.config_manager, ctx.settings.timezone, datetime.now(pytz.utc))
     recent = await ctx.queries.performance(start=today - timedelta(days=RECENT_DAYS - 1))
     return {
         "date": today,
@@ -110,7 +144,9 @@ async def overview(request: Request):
         "trading_mode": ctx.config_manager.get_config_value("trade.config.trading_mode"),
         "day": await ctx.queries.day_overview(),
         "limits": limits,
-        "market_closed_today": _market_closed_on(ctx.config_manager, today),
+        "market_closed_today": _market_closed_on(ctx.config_manager, today) or (market_day or {}).get("kind") == "closed",
+        # Today's US market day when it is not an ordinary one: a holiday, an early close.
+        "market_day": market_day,
         "cooldown": _cooldown(await ctx.queries.last_loss_timestamp(), limits["cooldown_after_loss_minutes"]),
         # No entry around US releases (the macro_news rule); None while the rule is off.
         "news": _news(ctx.config_manager, datetime.now(pytz.utc)),

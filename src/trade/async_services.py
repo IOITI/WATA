@@ -1932,16 +1932,29 @@ class AsyncPerformanceMonitor:
         window = flat_window_at(calendar, rule, now)
         return None if window is None else flat_reason(window, self.timezone)
 
+    def _market_timezone(self) -> str:
+        zone = getattr(self.trading_rule, "market_timezone", None)
+        return zone if isinstance(zone, str) else self.timezone
+
+    def _day_sale_moment(self, now: float) -> float | None:
+        """When the day of ``now`` sells what is held: the trading rule's (an early close sells earlier)."""
+        if isinstance(getattr(self.trading_rule, "market_timezone", None), str):
+            return self.trading_rule.sale_moment(now)
+        if self.close_position_time is None:
+            return None
+        local = datetime.fromtimestamp(now, pytz.timezone(self.timezone))
+        return local.replace(
+            hour=self.close_position_time.hour, minute=self.close_position_time.minute, second=0, microsecond=0,
+        ).timestamp()
+
     def _after_the_close(self, now: float) -> bool:
         """Whether ``now`` is past the day's close (and its grace), before the next day's start."""
-        if self.close_position_time is None:
+        sale = self._day_sale_moment(now)
+        if sale is None:
             return False
-        local = datetime.fromtimestamp(now, pytz.timezone(self.timezone))
-        close_at = local.replace(
-            hour=self.close_position_time.hour, minute=self.close_position_time.minute, second=0, microsecond=0,
-        )
-        if (local - close_at).total_seconds() >= END_OF_DAY_GRACE_SECONDS:
+        if now - sale >= END_OF_DAY_GRACE_SECONDS:
             return True
+        local = datetime.fromtimestamp(now, pytz.timezone(self._market_timezone()))
         return self.trading_start_hour is not None and local.hour < self.trading_start_hour
 
     async def keep_flat(self, streamed_positions: dict[str, dict]) -> dict:
@@ -1967,9 +1980,9 @@ class AsyncPerformanceMonitor:
                     continue
                 if reason == END_OF_DAY_REASON:
                     self.close_intents.want(pid, reason, now, action=db_pos.get("action"))
+                    sale = datetime.fromtimestamp(self._day_sale_moment(now), pytz.timezone(self.timezone))
                     self._run_in_background(self.send_telegram(
-                        f"Position {pid} was still open after the day's close "
-                        f"({self.close_position_time.strftime('%H:%M')}): WATA sells it."
+                        f"Position {pid} was still open after the day's close ({sale.strftime('%H:%M')}): WATA sells it."
                     ))
                 else:
                     self.close_intents.want(pid, f"Performance ({reason})", now, action=db_pos.get("action"))

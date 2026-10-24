@@ -13,6 +13,7 @@ import os
 from src.logging_helper import setup_logging
 from src.mq_telegram.tools import send_message_to_mq_for_telegram
 from src.trade.macro_calendar import upkeep
+from src.trade.market_calendar import new_york_day, upkeep as market_upkeep
 from src.delivery import deliver
 from src.trade.rules import TradingRule
 
@@ -68,6 +69,17 @@ def job_macro_calendar_upkeep():
         send_message_to_telegram(f"⚠️ WATA: {said}.")
 
 
+@repeat(every().day.at(time_str="09:00", tz=timezone))
+def job_market_calendar_upkeep():
+    """Say once a day when the calendar of US market days (holidays, early closes) runs out."""
+    if trading_rule.market_calendar is None:
+        said = "The calendar of US market days cannot be read: no holiday nor early close is kept"
+    else:
+        said = market_upkeep(trading_rule.market_calendar, datetime.now(pytz.timezone(timezone)).date())
+    if said:
+        send_message_to_telegram(f"⚠️ WATA: {said}.")
+
+
 # @repeat(every().day.at(time_str="08:10", tz="Europe/Paris"))
 # def job_try_repeat_last_action_at_the_open():
 #     # Get the current time in UTC
@@ -113,8 +125,8 @@ def job_macro_calendar_upkeep():
 #         logging.warning(f"Do not replay the signal because Current time: {now_utc}, alert time: {alert_time}")
 
 
-# Function to send 'close-position' every day at configured time
-@repeat(every().day.at(time_str=trading_rule.get_rule_config("day_trading")["close_position_time"], tz=timezone))
+# Function to send 'close-position' every day at configured time, in the timezone of the trading hours
+@repeat(every().day.at(time_str=trading_rule.get_rule_config("day_trading")["close_position_time"], tz=trading_rule.market_timezone))
 def job_close_position():
     # Get the current time in UTC
     now_utc = datetime.now(pytz.utc)
@@ -126,6 +138,30 @@ def job_close_position():
         "alert_timestamp": now_str,
     }
     send_signal_to_web_server(message)
+
+
+# The day an early close was sent for, so that it is sent once.
+_early_close_sent_on = None
+
+
+@repeat(every().minute)
+def job_early_close():
+    """
+    On a day the US market closes early (src/trade/data/us_market_calendar.csv),
+    the day's close comes as long before the early close as close_position_time
+    is before the end of the trading hours (TradingRule.sale_moment).
+    """
+    global _early_close_sent_on
+    now = time.time()
+    calendar = trading_rule.market_calendar
+    day = new_york_day(now)
+    if calendar is None or calendar.early_close_on(day) is None or _early_close_sent_on == day:
+        return
+    sale = trading_rule.sale_moment(now)
+    if sale is not None and sale <= now < sale + 120:
+        _early_close_sent_on = day
+        logging.info(f"Early close of the US market today: closing positions ({calendar.early_close_on(day).name})")
+        job_close_position()
 
 
 def send_signal_to_web_server(message):

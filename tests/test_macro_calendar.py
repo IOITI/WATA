@@ -78,6 +78,8 @@ def test_the_rule_says_its_defaults_and_what_it_was_given():
 
 def test_by_default_what_is_held_is_kept_through_a_release():
     assert NewsRule.from_config({}).flatten_minutes_before == 0
+    # The admin's form saves an emptied field as null: the default.
+    assert NewsRule.from_config({"flatten_minutes_before": None, "minutes_before": None}) == NewsRule()
     assert flat_window_at(CALENDAR, RULE, paris(2026, 10, 14, 14, 29)) is None
 
 

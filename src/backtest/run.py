@@ -50,7 +50,7 @@ from src.backtest.data import AssetSeries, DatabaseData, FileData
 from src.backtest.execution import EXECUTION_FILE, MEASURED, fills_for
 from src.backtest.settings import BacktestSettings
 from src.backtest.signals import by_day, closing_signals, journal_signals, pine_signals, raised_signals
-from src.backtest.simulator import ENTRY_ACTIONS, Simulator
+from src.backtest.simulator import ENTRY_ACTIONS, Simulator, us_market_calendar
 from src.backtest.sweep import Axis, cell_inputs, cell_settings, cells_of, held_out_from, with_inputs
 from src.price_history.process import lower_priority
 from src.ta_engine.replay import AssetRows
@@ -302,7 +302,7 @@ async def run(arguments) -> int:
                 not_signals[inputs] = []
         next_id = 1 + max((event.id for events in signal_sets.values() for event in events), default=0)
         next_id = max(next_id, 1 + max((row["id"] for rows_ in not_signals.values() for row in rows_), default=0))
-        closing = closing_signals(days, settings, clock, first_id=next_id)
+        closing = closing_signals(days, settings, clock, first_id=next_id, market_calendar=us_market_calendar())
         closing_by_day = by_day(closing, clock)
 
         # ── 2. the days ──
@@ -388,8 +388,10 @@ async def run(arguments) -> int:
             "version": _version(),
             "code": figures.code_digest(),
             "engine": engine or None,
-            # Not part of the code: the news a day was known by.
+            # Not part of the code: the news a day was known by, and the US market's holidays and early closes.
             "calendar": {"digest": calendar.digest, "until": known_until.isoformat() if known_until else None},
+            "market_calendar": {"digest": us_market_calendar().digest, "until": us_market_calendar().until.isoformat()
+                                if us_market_calendar().until else None},
             # How its orders were filled: the settings' values, or drawn from WATA's own orders of a period.
             "execution": {"kind": settings.execution} if settings.execution != MEASURED or execution is None else {
                 "kind": MEASURED, "from": execution.get("from"), "to": execution.get("to"),

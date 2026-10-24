@@ -55,6 +55,9 @@ services:
     image: postgres:16-alpine
     hostname: postgres1
     container_name: 'postgres'
+    # When the server runs out of memory the kernel kills the highest score first: the trading path
+    # last, the admin (backtests, Claude's studies) and the backups first.
+    oom_score_adj: -500
     # Memory for the price tables that backtests and the Data pages read a day at a time: a third of
     # the container for PostgreSQL's own buffers, the planner told of the file cache beside them, and
     # more for each sort or hash of a query before it spills to disk.
@@ -92,10 +95,44 @@ services:
         limits:
           memory: 1536M
 
+  # The database's dumps (deploy/pg_backup.sh): each night at 02:17 UTC without the bars' rows,
+  # whole on Sundays, into var/lib/backups, which lab/sync.sh pulls to the Mac. Reaches only the
+  # database; nothing reaches it.
+  pg_backup1:
+    image: postgres:16-alpine
+    hostname: pg_backup1
+    container_name: 'pg_backup1'
+    oom_score_adj: 300
+    entrypoint: ["sh", "/pg_backup.sh"]
+    environment:
+      - PGHOST=postgres1
+      - PGUSER=wata
+      - PGPASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}
+      - PGDATABASE=wata
+    volumes:
+      - ./pg_backup.sh:/pg_backup.sh:ro
+      - ../../var/lib/backups:/backups
+    networks:
+      - trade-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: always
+        delay: 5s
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      postgres1:
+        condition: service_healthy
+
   rabbitmq1:
     image: rabbitmq:3-management
     hostname: rabbitmq1
     container_name: 'rabbitmq'
+    oom_score_adj: -500
     environment:
       - RABBITMQ_DEFAULT_USER=trade-app
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-pykvys-9nixqo-cuqvYt}
@@ -125,6 +162,7 @@ services:
     image: wata-base:latest
     hostname: web_server1
     container_name: 'web_server1'
+    oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=web_server
     volumes:
@@ -169,6 +207,7 @@ services:
     image: wata-base:latest
     hostname: telegram1
     container_name: 'telegram1'
+    oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=telegram
     volumes:
@@ -194,6 +233,7 @@ services:
     image: wata-base:latest
     hostname: scheduler1
     container_name: 'scheduler1'
+    oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=scheduler
     volumes:
@@ -220,6 +260,7 @@ services:
     image: wata-base:latest
     hostname: trader1
     container_name: 'trader1'
+    oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=trader
     volumes:
@@ -245,6 +286,7 @@ services:
     image: wata-base:latest
     hostname: position_monitor1
     container_name: 'position_monitor1'
+    oom_score_adj: -500
     environment:
       - WATA_APP_ROLE=position_monitor
       - WATA_HEARTBEAT_URL=${WATA_HEARTBEAT_URL:-}
@@ -302,6 +344,7 @@ services:
     image: wata-base:latest
     hostname: admin1
     container_name: 'admin1'
+    oom_score_adj: 500
     profiles: ["admin"]
     environment:
       - WATA_APP_ROLE=admin
@@ -320,6 +363,8 @@ services:
       # Backtests asked for from the interface: the prices they run on, and their results.
       - ../../var/lib/price_history:/app/var/lib/price_history
       - ../../var/lib/backtests:/app/var/lib/backtests
+      # The database's dumps, only read: health says the last one (pg_backup1).
+      - ../../var/lib/backups:/app/var/lib/backups:ro
       # The directory rather than the file: the config editor replaces config.json atomically.
       # The RabbitMQ configuration kept beside it is not the admin's to change.
       - ../../etc:/app/etc

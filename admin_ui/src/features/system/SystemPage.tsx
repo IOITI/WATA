@@ -177,7 +177,7 @@ export function SystemPage() {
           <>
             <Panel
               title="Services"
-              description="The admin cannot see the containers themselves. Each state comes from what the service answers, from the consumers on its queue, or from the start and stop lines of its log."
+              description="The admin cannot see the containers themselves. Each state comes from what the service answers, from what the trader and the position monitor say of themselves every fifteen seconds, from the consumers on its queue, or from the start and stop lines of its log."
               bodyClassName="pt-2"
             >
               {/* The services as a map, where there is room for it; the table says the same, line by line. */}

@@ -51,6 +51,10 @@ class Field:
     source: str = ""
 
 
+# "trading": the trading timezone (``timezone``); the others name one.
+TRADING_TIMEZONE = "trading"
+MARKET_TIMEZONES = (TRADING_TIMEZONE, "America/New_York", "Europe/Paris")
+
 FIELDS = (
     # ── which signals are taken ──
     Field("max_signal_age_seconds", "entries", "integer", "Signals older than this are refused", 1, 86_400, unit="s",
@@ -63,6 +67,9 @@ FIELDS = (
           source="trade.rules.market_hours.risky_trading_start_hour"),
     Field("risky_start_minute", "entries", "integer", "Risky from minute", 0, 59, unit="min",
           source="trade.rules.market_hours.risky_trading_start_minute"),
+    # The timezone of the hours above and of close_position_time: the trading one unless market_hours says another.
+    Field("market_timezone", "entries", "choice", "These hours and the close are of", choices=MARKET_TIMEZONES,
+          source="trade.rules.market_hours.timezone"),
     Field("cooldown_after_loss_minutes", "entries", "integer", "No entry after a losing trade for", 0, 1440, unit="min",
           source="trade.rules.risk_management.cooldown_after_loss_minutes"),
     Field("max_trades_per_day", "entries", "integer", "Entries per day at most (0: no limit)", 0, 1000,
@@ -160,6 +167,7 @@ class ConfidenceBand:
 @dataclass(frozen=True)
 class BacktestSettings:
     timezone: str = "Europe/Paris"
+    market_timezone: str = TRADING_TIMEZONE
     # Entries.
     max_signal_age_seconds: int = 3600
     trading_start_hour: int = 8
@@ -221,6 +229,10 @@ class BacktestSettings:
 
     def to_dict(self) -> dict:
         return json.loads(json.dumps(asdict(self)))
+
+    def market_zone(self) -> str:
+        """The timezone the trading hours and the close are read in."""
+        return self.timezone if self.market_timezone == TRADING_TIMEZONE else self.market_timezone
 
     def news_rule(self) -> NewsRule | None:
         """The window around US releases, as the trader keeps it; None while it is off."""
@@ -307,6 +319,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
     defaults = BacktestSettings()
     return BacktestSettings(
         timezone=general.get("timezone", defaults.timezone),
+        market_timezone=market_hours.get("timezone") if market_hours.get("timezone") in MARKET_TIMEZONES else TRADING_TIMEZONE,
         max_signal_age_seconds=validation.get("max_signal_age_seconds", defaults.max_signal_age_seconds),
         trading_start_hour=market_hours.get("trading_start_hour", defaults.trading_start_hour),
         trading_end_hour=market_hours.get("trading_end_hour", defaults.trading_end_hour),

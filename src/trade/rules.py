@@ -3,6 +3,9 @@ import pytz
 import logging
 from .exceptions import TradingRuleViolation
 from .macro_calendar import NewsRule, read_calendar, refusal_text, window_at
+from .market_calendar import (
+    closed_text, early_close_text, entries_end_moment, read_market_calendar, sale_moment,
+)
 
 class TradingRule:
     def __init__(self, config_manager, db_position_manager, db_risk_state_manager=None):
@@ -17,6 +20,15 @@ class TradingRule:
         self.signal_validation_config = self.get_rule_config("signal_validation")
         self.market_hours_config = self.get_rule_config("market_hours")
         self.timezone = self.config_manager.get_config_value("trade.config.general.timezone", "Europe/Paris")
+        # The hours of market_hours and close_position_time are of this timezone: the trading one unless it says
+        # another (America/New_York: the US session's hours whichever side changed its clocks).
+        self.market_timezone = self.market_hours_config.get("timezone") or self.timezone
+        # The US market's holidays and early closes (src/trade/market_calendar.py); unreadable, none are kept.
+        try:
+            self.market_calendar = read_market_calendar()
+        except (OSError, ValueError, KeyError) as e:
+            self.market_calendar = None
+            logging.error(f"The calendar of US market days cannot be read, no holiday nor early close is kept: {e}")
         # Risk management config (optional rule)
         self.risk_management_config = self.get_rule_config_safe("risk_management")
         self.cooldown_after_loss_minutes = self.risk_management_config.get("cooldown_after_loss_minutes", 0) if self.risk_management_config else 0
@@ -95,13 +107,16 @@ class TradingRule:
             logging.error(f"Breaking trading rule : Indice '{indice}' does not exist in the provided dictionary.")
             raise TradingRuleViolation(f"Breaking trading rule : Indice '{indice}' does not exist in the provided dictionary.")
 
+    def risky_start(self) -> tuple[int, int]:
+        return self.market_hours_config["risky_trading_start_hour"], self.market_hours_config["risky_trading_start_minute"]
+
     def check_market_hours(self, signal_timestamp):
         # Parse the signal_timestamp string into a datetime object
         signal_time = datetime.strptime(signal_timestamp, "%Y-%m-%dT%H:%M:%SZ")
         signal_time = signal_time.replace(tzinfo=pytz.UTC)  # Ensure it's in UTC
 
-        # Get the current time in configured timezone
-        current_time = datetime.now(pytz.timezone(self.timezone))
+        # Get the current time in the timezone of the market hours
+        current_time = datetime.now(pytz.timezone(self.market_timezone))
 
         # Format the current date to match the format of the list
         today_date_string = current_time.strftime("%d/%m/%Y")
@@ -109,6 +124,13 @@ class TradingRule:
         if today_date_string in self.market_closed_dates_list:
             message = f"Breaking trading rule : Today, {current_time}, is a market closed date."
             logging.error(message)
+            raise TradingRuleViolation(message)
+
+        # A US holiday of the market calendar
+        closed = self.market_calendar.closed_on(current_time.date()) if self.market_calendar else None
+        if closed is not None:
+            message = closed_text(closed)
+            logging.info(message)
             raise TradingRuleViolation(message)
 
         # Check if the current time is within the allowed range
@@ -119,13 +141,34 @@ class TradingRule:
                 f"Breaking trading rule : The signal is outside of market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is outside of market hours.")
 
-        # Check if the current time is within the refused range
-        risky_start_hour = self.market_hours_config["risky_trading_start_hour"]
-        risky_start_minute = self.market_hours_config["risky_trading_start_minute"]
-        if risky_start_hour <= current_time.hour < trading_end_hour and current_time.minute >= risky_start_minute:
+        # Check if the current time is within the refused range: from its hour and minute to the end of the day
+        if (current_time.hour, current_time.minute) >= self.risky_start():
             logging.error(
                 f"Breaking trading rule: The signal is refused due to risky market hours. Current time: {current_time}, Signal time: {signal_time}")
             raise TradingRuleViolation("Signal is refused due to risky market hours.")
+
+        # A day the US market closes early: no entry as long before its close as the risky minutes before a normal end
+        early = self.market_calendar.early_close_on(current_time.date()) if self.market_calendar else None
+        if early is not None:
+            entries_end = entries_end_moment(early, trading_end_hour, self.risky_start())
+            if current_time.timestamp() >= entries_end:
+                message = early_close_text(early, entries_end, self.timezone)
+                logging.info(message)
+                raise TradingRuleViolation(message)
+
+    def sale_moment(self, moment: float | None = None) -> float | None:
+        """
+        When what is held is sold on the day of ``moment`` (the scheduler's close):
+        ``close_position_time``, earlier on a day the US market closes early.
+        None without a ``close_position_time``.
+        """
+        close_time = self.get_rule_config_safe("day_trading") or {}
+        close_time = close_time.get("close_position_time")
+        if not close_time:
+            return None
+        day = datetime.fromtimestamp(moment or datetime.now(pytz.utc).timestamp(), pytz.timezone(self.market_timezone)).date()
+        return sale_moment(day, close_time, self.market_timezone, self.market_calendar,
+                           self.market_hours_config["trading_end_hour"])
 
     def in_trading_hours(self, now: datetime | None = None) -> bool:
         """
@@ -133,10 +176,11 @@ class TradingRule:
         date, as ``check_market_hours`` reads them, without its log line: what
         the watches of the trader and the position monitor ask every few seconds.
         """
-        now = (now or datetime.now(pytz.utc)).astimezone(pytz.timezone(self.timezone))
+        now = (now or datetime.now(pytz.utc)).astimezone(pytz.timezone(self.market_timezone))
         return (
             now.weekday() < 5
             and now.strftime("%d/%m/%Y") not in self.market_closed_dates_list
+            and (self.market_calendar is None or self.market_calendar.closed_on(now.date()) is None)
             and self.market_hours_config["trading_start_hour"] <= now.hour < self.market_hours_config["trading_end_hour"]
         )
 

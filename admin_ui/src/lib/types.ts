@@ -306,9 +306,13 @@ export interface Overview {
     trading_end_hour: number | null
     risky_trading_start_hour: number | null
     risky_trading_start_minute: number | null
+    /** The timezone of these hours and of the close; null or absent: the trading one. */
+    market_timezone?: string | null
   }
-  /** Today is one of the configured closed dates: the trader refuses every signal. */
+  /** Today is a closed date, configured or a US holiday: the trader refuses every signal. */
   market_closed_today: boolean
+  /** Today's US market day when it is not an ordinary one; null or absent otherwise. */
+  market_day?: OverviewMarketDay | null
   cooldown: {
     last_loss_at: string | null
     ends_at: string | null
@@ -322,6 +326,16 @@ export interface Overview {
   saxo_login?: OverviewSaxoLogin | null
   open_positions: Position[]
   recent_days: DailyPerformance[]
+}
+
+export interface OverviewMarketDay {
+  kind: 'closed' | 'early_close'
+  /** The holiday, or what the early close is for ("The day after Thanksgiving"). */
+  name: string
+  /** An early close: when the US market closes, when entries end, when what is held is sold. */
+  closes_at?: string
+  entries_end_at?: string
+  sale_at?: string
 }
 
 export interface OverviewSaxoLogin {

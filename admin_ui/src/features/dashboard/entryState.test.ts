@@ -16,6 +16,7 @@ function overview(changes: {
   open?: string[]
   news?: Overview['news']
   saxoLogin?: Overview['saxo_login']
+  marketDay?: Overview['market_day']
 } = {}): Overview {
   return {
     date: '2026-10-12',
@@ -44,6 +45,7 @@ function overview(changes: {
       ...changes.limits,
     },
     market_closed_today: changes.closedToday ?? false,
+    market_day: changes.marketDay ?? null,
     cooldown: { last_loss_at: null, ends_at: null, active: false, ...changes.cooldown },
     entries_paused_since: changes.paused ?? null,
     news: changes.news ?? null,
@@ -77,6 +79,52 @@ describe('what holds a new entry back', () => {
       { code: 'saxo_login', reason: "Saxo refuses to renew WATA's login since 15:05: no new position until it is renewed" },
     ])
     expect(codes(overview({ saxoLogin: { renewal_failing_since: null, error: null, lapses_at: null } }))).toEqual([])
+  })
+
+  it('is a US holiday, said by its name', () => {
+    const blockers = entryBlockers(
+      overview({ closedToday: true, marketDay: { kind: 'closed', name: 'Thanksgiving Day' } }),
+      NOW,
+    )
+
+    expect(blockers).toEqual([{ code: 'closed_date', reason: 'The US market is closed today (Thanksgiving Day)' }])
+  })
+
+  it('is an early close of the US market, from the end of its entries', () => {
+    const marketDay = {
+      kind: 'early_close' as const,
+      name: 'The day after Thanksgiving',
+      closes_at: '2026-10-12T17:00:00Z',
+      entries_end_at: '2026-10-12T16:54:00Z',
+      sale_at: '2026-10-12T16:55:00Z',
+    }
+
+    expect(codes(overview({ marketDay }), Date.parse('2026-10-12T16:53:59Z'))).toEqual([])
+    expect(entryBlockers(overview({ marketDay }), Date.parse('2026-10-12T16:54:00Z'))).toEqual([
+      {
+        code: 'risky_hours',
+        reason: 'The US market closes early today (The day after Thanksgiving, 19:00): no entry from 18:54',
+      },
+    ])
+  })
+
+  it('is the risky minutes from their hour and minute to the end of the day, as the trader counts them', () => {
+    // From 20:30: at 21:10 too, which counting the minute alone in each hour let through.
+    const limits = { risky_trading_start_hour: 20, risky_trading_start_minute: 30 }
+
+    expect(codes(overview({ limits }), Date.parse('2026-10-12T18:29:00Z'))).toEqual([])
+    expect(codes(overview({ limits }), Date.parse('2026-10-12T18:30:00Z'))).toEqual(['risky_hours'])
+    expect(codes(overview({ limits }), Date.parse('2026-10-12T19:10:00Z'))).toEqual(['risky_hours'])
+  })
+
+  it('is the hours of the market timezone when market_hours names one', () => {
+    // 15:20 in Paris is 09:20 in New York.
+    const limits = { market_timezone: 'America/New_York', trading_start_hour: 10, trading_end_hour: 16 }
+
+    expect(entryBlockers(overview({ limits }), NOW)).toEqual([
+      { code: 'hours', reason: 'Outside trading hours (10h to 16h New York)' },
+    ])
+    expect(codes(overview({ limits: { ...limits, trading_start_hour: 9 } }), NOW)).toEqual([])
   })
 
   it('is a closed date, whatever the hour', () => {

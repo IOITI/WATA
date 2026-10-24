@@ -126,3 +126,42 @@ describe('number fields of the configuration', () => {
     expect([...reported.values()].filter(Boolean)).toHaveLength(0)
   })
 })
+
+function OptionalForm({ onInvalid, onDraft }: { onInvalid: (id: string, invalid: boolean) => void; onDraft: (draft: JsonObject) => void }) {
+  // A key the configuration may not have (reporting.signal_silence_minutes, a rule's flatten_minutes_before).
+  const [draft, setDraft] = useState<JsonObject>({ reporting: { milestones_eur: [100000] } })
+  onDraft(draft)
+  return (
+    <DraftProvider
+      value={{
+        draft,
+        disabled: false,
+        reportInvalid: onInvalid,
+        update: (path, value) => setDraft((current) => setAt(current, path, value) as JsonObject),
+      }}
+    >
+      <NumberField label="Say when no signal came for" path={['reporting', 'signal_silence_minutes']} optional />
+    </DraftProvider>
+  )
+}
+
+describe('an optional number of the configuration', () => {
+  it('may stay empty without holding the form back, and once emptied is saved as not set', async () => {
+    const user = userEvent.setup()
+    const reported = new Map<string, boolean>()
+    let draft: JsonObject = {}
+    render(<OptionalForm onInvalid={(id, invalid) => reported.set(id, invalid)} onDraft={(next) => (draft = next)} />)
+    const field = screen.getByLabelText('Say when no signal came for')
+
+    expect([...reported.values()].filter(Boolean)).toEqual([])
+    expect(getAt(draft, ['reporting', 'signal_silence_minutes'])).toBeUndefined()
+
+    await user.type(field, '45')
+    expect(getAt(draft, ['reporting', 'signal_silence_minutes'])).toBe(45)
+
+    await user.clear(field)
+    expect(getAt(draft, ['reporting', 'signal_silence_minutes'])).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect([...reported.values()].filter(Boolean)).toEqual([])
+  })
+})

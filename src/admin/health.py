@@ -11,6 +11,7 @@ heartbeat, from the start/stop lines of their logs.
 """
 
 import asyncio
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +30,7 @@ from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
 from src.ta_engine.settings import TaEngineSettings
 from src.trade.macro_calendar import read_calendar, upkeep
+from src.trade.market_calendar import read_market_calendar, upkeep as market_upkeep
 from src.heartbeat import HEARTBEAT_STALE_SECONDS
 
 OK = "ok"
@@ -290,6 +292,63 @@ def _macro_calendar(ctx) -> list[dict]:
     return macro_calendar_entry(True, calendar, today)
 
 
+def market_calendar_entry(calendar, today) -> list[dict]:
+    """
+    The calendar of US market days (holidays, early closes), which the trader
+    always keeps: a warning from WARN_DAYS before it runs out. Past it, the days
+    are traded as ordinary ones.
+    """
+    name = "US market days calendar"
+    if calendar is None:
+        return [_entry("market_calendar", name, WARNING, "Cannot be read: no holiday nor early close is kept")]
+    said = market_upkeep(calendar, today)
+    if said is not None:
+        return [_entry("market_calendar", name, WARNING, said)]
+    return [_entry("market_calendar", name, OK, f"Known until {calendar.until.isoformat()}")]
+
+
+def _market_calendar(ctx) -> list[dict]:
+    try:
+        calendar = read_market_calendar()
+    except (OSError, ValueError, KeyError):
+        calendar = None
+    return market_calendar_entry(calendar, datetime.now(pytz.timezone(ctx.settings.timezone)).date())
+
+
+# The dumps are made each night (pg_backup1): past this, the last one is too old.
+BACKUP_STALE_HOURS = 30
+
+
+def backups_entry(last: dict | None, now: datetime, timezone_name: str) -> list[dict]:
+    """What the last night of pg_backup1 did (its last.json): said by health, a warning when it failed or is old."""
+    name = "Database backups"
+    if last is None:
+        return [_entry("backups", name, UNKNOWN, "No dump made yet: the first comes at 02:17 UTC")]
+    try:
+        at = datetime.fromisoformat(str(last["at"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        return [_entry("backups", name, WARNING, "Its last report cannot be read")]
+    when = at.astimezone(pytz.timezone(timezone_name)).strftime("%d/%m %H:%M")
+    if not last.get("ok"):
+        return [_entry("backups", name, WARNING, f"The dump of {when} failed: {last.get('detail')}")]
+    if (now - at).total_seconds() > BACKUP_STALE_HOURS * 3600:
+        return [_entry("backups", name, WARNING, f"No dump since {when}")]
+    size = (last.get("bytes") or 0) / 1_000_000
+    return [_entry("backups", name, OK, f"Last dump {when}, {size:.0f} MB ({last.get('file')})")]
+
+
+def _backups(ctx) -> list[dict]:
+    path = os.path.join(ctx.settings.backups_path, "last.json")
+    try:
+        with open(path, encoding="utf-8") as report:
+            last = json.load(report)
+    except FileNotFoundError:
+        last = None
+    except (OSError, ValueError):
+        last = {}
+    return backups_entry(last, datetime.now(timezone.utc), ctx.settings.timezone)
+
+
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:
     if queue["consumers"] > 0:
         return _entry(service_id, name, OK, f"Consuming {queue['name']}")
@@ -419,7 +478,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed, ta_engine, macro_calendar, beats,
+        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -431,11 +490,13 @@ async def collect_health(ctx) -> dict:
         _capital_feed(ctx),
         _ta_engine(ctx),
         run_in_threadpool(_macro_calendar, ctx),
+        run_in_threadpool(_market_calendar, ctx),
+        run_in_threadpool(_backups, ctx),
         _heartbeats(ctx),
     )
     services = with_heartbeats([
         *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
-        *macro_calendar, *postgres, rabbitmq[0],
+        *macro_calendar, *market_calendar, *postgres, *backups, rabbitmq[0],
     ], beats, datetime.now(timezone.utc), ctx.settings.timezone)
     return {
         "version": ctx.version,

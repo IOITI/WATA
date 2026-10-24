@@ -61,6 +61,8 @@ class AdminSettings:
     # The Pine runner's answers kept for the runs asked again (_signal_cache): pruned, oldest first, past this.
     backtests_signal_cache_mb: int = 1024
     price_history_path: str = "/app/var/lib/price_history"
+    # The database's dumps (pg_backup1), only read: health says the last one.
+    backups_path: str = "/app/var/lib/backups"
     # The Pine scripts and chart layouts of the Technical Analysis pages, inside the
     # admin's own folder: the signal engine mounts this subfolder alone, read-only.
     ta_path: str = "/app/var/lib/admin/ta"
@@ -98,6 +100,7 @@ class AdminSettings:
             backtests_signal_cache_mb=int(admin_config.get("backtests_signal_cache_mb", cls.backtests_signal_cache_mb)),
             backtests_path=admin_config.get("persistant", {}).get("backtests_path", cls.backtests_path),
             price_history_path=admin_config.get("persistant", {}).get("price_history_path", cls.price_history_path),
+            backups_path=admin_config.get("persistant", {}).get("backups_path", cls.backups_path),
             ta_path=admin_config.get("persistant", {}).get("ta_path", cls.ta_path),
             session_idle_minutes=admin_config.get("session_idle_minutes", cls.session_idle_minutes),
             session_max_age_minutes=admin_config.get("session_max_age_minutes", cls.session_max_age_minutes),

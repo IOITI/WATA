@@ -586,6 +586,7 @@ def make_ctx(config_path, tmp_path, **settings_overrides):
     config_manager = ConfigurationManager(config_path)
     settings = AdminSettings.from_config(config_manager)
     settings.credentials_path = str(tmp_path / "admin" / "credentials.json")
+    settings.backups_path = str(tmp_path / "backups")
     for name, value in settings_overrides.items():
         setattr(settings, name, value)
     credentials = CredentialStore(settings.credentials_path)
@@ -859,6 +860,25 @@ def test_overview_gives_what_decides_whether_a_signal_would_be_traded(config_pat
 
 def test_overview_says_the_market_is_open_on_an_ordinary_day(client):
     assert client.get("/api/overview").json()["market_closed_today"] is False
+
+
+def test_overview_says_a_us_holiday_and_an_early_close_as_the_trader_reads_them(client):
+    from unittest.mock import patch
+
+    from src.admin.routers import trading
+
+    with patch.object(trading, "datetime") as clock:
+        clock.now.side_effect = lambda tz=None: datetime(2026, 11, 26, 14, 0, tzinfo=timezone.utc).astimezone(tz)
+        clock.fromtimestamp.side_effect = datetime.fromtimestamp
+        thanksgiving = client.get("/api/overview").json()
+        clock.now.side_effect = lambda tz=None: datetime(2026, 11, 27, 14, 0, tzinfo=timezone.utc).astimezone(tz)
+        day_after = client.get("/api/overview").json()
+
+    assert thanksgiving["market_closed_today"] is True
+    assert thanksgiving["market_day"] == {"kind": "closed", "name": "Thanksgiving Day"}
+    assert day_after["market_closed_today"] is False
+    assert day_after["market_day"]["kind"] == "early_close"
+    assert day_after["market_day"]["closes_at"] == "2026-11-27T18:00:00+00:00"
 
 
 def test_cooldown_is_over_once_the_delay_has_passed(client, ctx):
@@ -1154,6 +1174,29 @@ def test_the_overview_says_saxo_refusing_to_renew_the_login(client, ctx):
     assert client.get("/api/overview").json()["saxo_login"] == login
     ctx.queries.heartbeats = {"trader": _beat(age_seconds=600, saxo_login=login)}
     assert client.get("/api/overview").json()["saxo_login"] is None
+
+
+def test_health_says_the_last_backup_and_when_it_failed_or_is_old(client, ctx):
+    from src.admin.health import backups_entry
+
+    now = datetime(2026, 10, 27, 9, 0, tzinfo=timezone.utc)
+    good = {"at": "2026-10-27T02:17:03Z", "file": "wata-2026-10-27.dump", "bytes": 48_000_000, "ok": True, "detail": "dumped"}
+
+    assert backups_entry(good, now, "Europe/Paris") == [{
+        "id": "backups", "name": "Database backups", "status": "ok",
+        "detail": "Last dump 27/10 03:17, 48 MB (wata-2026-10-27.dump)",
+    }]
+    assert backups_entry({**good, "ok": False, "detail": "pg_dump failed"}, now, "Europe/Paris")[0]["detail"] == (
+        "The dump of 27/10 03:17 failed: pg_dump failed"
+    )
+    assert backups_entry(good, now + timedelta(hours=31), "Europe/Paris")[0]["status"] == "warning"
+    assert backups_entry(None, now, "Europe/Paris")[0]["status"] == "unknown"
+
+    os.makedirs(ctx.settings.backups_path, exist_ok=True)
+    with open(os.path.join(ctx.settings.backups_path, "last.json"), "w") as report:
+        json.dump({**good, "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}, report)
+    backups = next(s for s in client.get("/api/system/health").json()["services"] if s["id"] == "backups")
+    assert backups["status"] == "ok"
 
 
 def test_log_tail_is_filtered_by_level_and_text(client, ctx):

@@ -112,7 +112,9 @@ class NewsRule:
         values = {}
         for name, highest in (("minutes_before", MAX_MINUTES), ("minutes_after", MAX_MINUTES),
                               ("minutes_after_fomc", MAX_MINUTES_AFTER_FOMC), ("flatten_minutes_before", MAX_MINUTES)):
-            value = rule_config.get(name, getattr(cls, name))
+            # Absent or null: the default (the admin's form saves an emptied field as null).
+            value = rule_config.get(name)
+            value = getattr(cls, name) if value is None else value
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= highest:
                 raise ValueError(f"macro_news: {name} is a whole number of minutes from 0 to {highest}")
             values[name] = value

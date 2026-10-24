@@ -10,6 +10,7 @@ fi
 
 echo "Send WATA version $VERSION to server"
 
-ansible-playbook ansible/playbooks/deploy_app.yml -i "$INVENTORY_FILE"
+# Refused while WATA holds a position or the market is open by its hours: "$0 -e force=true" deploys anyway.
+ansible-playbook ansible/playbooks/deploy_app.yml -i "$INVENTORY_FILE" "$@"
 
 echo "WATA version $VERSION can be started on the server"

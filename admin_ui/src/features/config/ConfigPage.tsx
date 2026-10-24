@@ -132,7 +132,8 @@ function NewsSection({ draft }: { draft: JsonObject }) {
             label="Sell what is held, from before a release"
             unit="min"
             path={[...path, 'flatten_minutes_before']}
-            hint="0 keeps open positions. Around a release Saxo can stop quoting a turbo for minutes, when no stop can be sold"
+            optional
+            hint="Empty or 0 keeps open positions. Around a release Saxo can stop quoting a turbo for minutes, when no stop can be sold"
           />
           {NEWS_EVENTS.map((entry) => (
             <StretchSwitch
@@ -357,6 +358,12 @@ function SettingsForm({ draft }: { draft: JsonObject }) {
                 <NumberField label="Trading ends" unit="hour" path={[...path, 'trading_end_hour']} />
                 <NumberField label="Risky period from" unit="hour" path={[...path, 'risky_trading_start_hour']} />
                 <NumberField label="Risky period from" unit="minute" path={[...path, 'risky_trading_start_minute']} />
+                <TextField
+                  label="These hours are of"
+                  path={[...path, 'timezone']}
+                  placeholder="The trading timezone"
+                  hint="Empty: the trading timezone. America/New_York: the US session's hours whichever side changed its clocks, the day's close too"
+                />
               </>
             )}
           </RuleSection>
@@ -375,6 +382,7 @@ function SettingsForm({ draft }: { draft: JsonObject }) {
               label="Say when no signal came for"
               unit="min"
               path={['reporting', 'signal_silence_minutes']}
+              optional
               hint="On Telegram, in trading hours. Empty or 0: never. TradingView's alerts can stop without a word"
             />
           </FieldGrid>

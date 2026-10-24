@@ -62,22 +62,33 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
     })
   }
 
+  const marketDay = overview.market_day ?? null
   if (overview.market_closed_today) {
-    blockers.push({ code: 'closed_date', reason: 'Today is a closed date' })
+    blockers.push({
+      code: 'closed_date',
+      reason: marketDay?.kind === 'closed' ? `The US market is closed today (${marketDay.name})` : 'Today is a closed date',
+    })
   } else if (limits.trading_start_hour !== null && limits.trading_end_hour !== null) {
-    const [hour, minute] = hourAndMinute(now, overview.timezone)
+    // The hours of market_hours, in the timezone it names (the trading one otherwise).
+    const zone = limits.market_timezone || overview.timezone
+    const [hour, minute] = hourAndMinute(now, zone)
+    const inZone = zone === overview.timezone ? '' : ` ${zone.split('/').pop()?.replace('_', ' ')}`
     if (!(limits.trading_start_hour <= hour && hour < limits.trading_end_hour)) {
       blockers.push({
         code: 'hours',
-        reason: `Outside trading hours (${limits.trading_start_hour}h to ${limits.trading_end_hour}h)`,
+        reason: `Outside trading hours (${limits.trading_start_hour}h to ${limits.trading_end_hour}h${inZone})`,
       })
     } else if (
       limits.risky_trading_start_hour !== null &&
       limits.risky_trading_start_minute !== null &&
-      limits.risky_trading_start_hour <= hour &&
-      minute >= limits.risky_trading_start_minute
+      hour * 60 + minute >= limits.risky_trading_start_hour * 60 + limits.risky_trading_start_minute
     ) {
       blockers.push({ code: 'risky_hours', reason: 'Too close to the end of the trading day' })
+    } else if (marketDay?.kind === 'early_close' && marketDay.entries_end_at && Date.parse(marketDay.entries_end_at) <= now) {
+      blockers.push({
+        code: 'risky_hours',
+        reason: `The US market closes early today (${marketDay.name}, ${clock(marketDay.closes_at ?? marketDay.entries_end_at, overview.timezone)}): no entry from ${clock(marketDay.entries_end_at, overview.timezone)}`,
+      })
     }
   }
 

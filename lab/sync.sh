@@ -49,6 +49,11 @@ rsync -az --partial --stats \
   --exclude '*' \
   "$server:$REMOTE_ROOT/var/lib/price_history/" "$LAB_ROOT/price_history/" | summary
 
+echo "Pulling the database's dumps (the server keeps 14 nights and 4 Sundays; so does this machine)"
+mkdir -p "$LAB_ROOT/backups"
+rsync -az --partial --stats --delete --exclude '*.part' \
+  "$server:$REMOTE_ROOT/var/lib/backups/" "$LAB_ROOT/backups/" | summary
+
 echo "Pulling the Pine scripts and the signal rules"
 rsync -az --partial --stats "$server:$REMOTE_ROOT/var/lib/admin/ta/" "$LAB_ROOT/server_ta/" | summary
 

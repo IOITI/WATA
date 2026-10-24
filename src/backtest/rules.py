@@ -13,10 +13,12 @@ them on the same inputs: a change to one of those must be made here too.
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 from src.backtest.clock import TradingClock
 from src.backtest.settings import BacktestSettings
 from src.trade.macro_calendar import Calendar, refusal_text, window_at
+from src.trade.market_calendar import MarketCalendar, closed_text, early_close_text, entries_end_moment
 
 # Stable names of what refused an entry, for tallies; the text beside each is the live one.
 SIGNAL_AGE = "signal_age"
@@ -62,6 +64,17 @@ def compounded(percents) -> float:
     return round((value - 1) * 100, 2)
 
 
+def market_clock(settings: BacktestSettings, clock: TradingClock) -> TradingClock:
+    """The clock of the trading hours: the trading one, or the timezone market_hours names."""
+    zone = settings.market_zone()
+    return clock if zone == clock.name else _clock_of(zone)
+
+
+@lru_cache(maxsize=4)
+def _clock_of(zone: str) -> TradingClock:
+    return TradingClock(zone)
+
+
 def entry_refusal(
     settings: BacktestSettings,
     clock: TradingClock,
@@ -76,27 +89,35 @@ def entry_refusal(
     entries_today: int,
     confidence: float | None,
     calendar: Calendar | None = None,
+    market_calendar: MarketCalendar | None = None,
 ) -> Refusal | None:
     """
     What refuses an entry, in the trader's order, or None. Nothing is closed
-    when an entry is refused. The operator's pause is not part of a backtest.
-    The window around US releases needs the ``calendar`` they are read from.
+    when an entry is refused. The operator's pause is not part of a backtest,
+    nor Saxo's login. The window around US releases needs the ``calendar``
+    they are read from, the US holidays and early closes ``market_calendar``.
     """
     # 1. The signal's age, by the clock of the decision (``check_signal_timestamp``).
     if decided_at - int(alert_at) > settings.max_signal_age_seconds:
         return Refusal(SIGNAL_AGE, "Signal timestamp is too old")
 
-    # 2. The market, by the clock of the decision, not the signal's time (``check_market_hours``).
-    local = clock.local(decided_at)
+    # 2. The market, by the clock of the decision, not the signal's time (``check_market_hours``), in the
+    #    timezone of its hours.
+    local = market_clock(settings, clock).local(decided_at)
     if local.strftime("%d/%m/%Y") in settings.closed_dates:
         return Refusal(CLOSED_DATE, f"Breaking trading rule : Today, {local}, is a market closed date.")
+    closed = market_calendar.closed_on(local.date()) if market_calendar is not None else None
+    if closed is not None:
+        return Refusal(CLOSED_DATE, closed_text(closed))
     if not (settings.trading_start_hour <= local.hour < settings.trading_end_hour):
         return Refusal(MARKET_HOURS, "Signal is outside of market hours.")
-    if (
-        settings.risky_start_hour <= local.hour < settings.trading_end_hour
-        and local.minute >= settings.risky_start_minute
-    ):
+    if (local.hour, local.minute) >= (settings.risky_start_hour, settings.risky_start_minute):
         return Refusal(RISKY_HOURS, "Signal is refused due to risky market hours.")
+    early = market_calendar.early_close_on(local.date()) if market_calendar is not None else None
+    if early is not None:
+        entries_end = entries_end_moment(early, settings.trading_end_hour, (settings.risky_start_hour, settings.risky_start_minute))
+        if decided_at >= entries_end:
+            return Refusal(RISKY_HOURS, early_close_text(early, entries_end, settings.timezone))
 
     # 2b. The window around a US release (``check_macro_news``), by the clock of the decision.
     news = settings.news_rule()

@@ -2,6 +2,8 @@ import json
 import os
 import logging
 
+import pytz
+
 from src.trade.macro_calendar import NewsRule
 
 logger = logging.getLogger(__name__)
@@ -252,6 +254,18 @@ class ConfigurationManager:
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
+                # Optional: the timezone of these hours (and of close_position_time), the trading one otherwise.
+                market_timezone = rule_config.get("timezone")
+                if market_timezone not in (None, ""):
+                    try:
+                        if not isinstance(market_timezone, str):
+                            raise ValueError
+                        pytz.timezone(market_timezone)
+                    except (ValueError, pytz.UnknownTimeZoneError):
+                        error_msg = f"Rule {rule_name}: timezone must be a timezone name such as America/New_York"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg) from None
+
             elif rule_type == "macro_news":
                 # Optional: no entry around the US releases it names (src/trade/macro_calendar.py).
                 try:
@@ -268,7 +282,6 @@ class ConfigurationManager:
             timezone = self.get_config_value("trade.config.general.timezone")
             if timezone:
                 try:
-                    import pytz
                     pytz.timezone(timezone)
                 except pytz.exceptions.UnknownTimeZoneError:
                     error_msg = f"Invalid timezone '{timezone}' in trade.config.general.timezone"

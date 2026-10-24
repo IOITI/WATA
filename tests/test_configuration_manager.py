@@ -103,3 +103,25 @@ class TestProtectiveStopValidation:
 
         with pytest.raises(ValueError, match="protective_stop.order_type"):
             ConfigurationManager(path)
+
+
+def _config_with_market_timezone(tmp_path, timezone_name):
+    with open("etc/config_example.json", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    for rule in config["trade"]["rules"]:
+        if rule["rule_type"] == "market_hours":
+            rule["rule_config"]["timezone"] = timezone_name
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    return str(path)
+
+
+@pytest.mark.parametrize("timezone_name", ["America/New_York", "Europe/Paris", ""])
+def test_the_market_hours_may_name_their_timezone(tmp_path, timezone_name):
+    ConfigurationManager(_config_with_market_timezone(tmp_path, timezone_name))
+
+
+@pytest.mark.parametrize("timezone_name", ["New York", "UTC+1", 5])
+def test_a_timezone_the_trader_could_not_read_is_refused(tmp_path, timezone_name):
+    with pytest.raises(ValueError, match="timezone must be a timezone name such as America/New_York"):
+        ConfigurationManager(_config_with_market_timezone(tmp_path, timezone_name))

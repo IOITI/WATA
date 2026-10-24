@@ -20,13 +20,18 @@ interface FieldProps {
   hint?: string
 }
 
-export function NumberField({ label, path, hint, unit }: FieldProps & { unit?: string }) {
+/**
+ * A number of the configuration. ``optional``: left empty, it is not set (saved as null, which the
+ * services read as the setting's default), and an empty field does not hold the form back.
+ */
+export function NumberField({ label, path, hint, unit, optional = false }: FieldProps & { unit?: string; optional?: boolean }) {
   const { draft, update, disabled } = useDraft()
   const id = useId()
   const current = path ? getAt(draft, path) : undefined
   // What is being typed, which is not always a number yet ("-", "1.").
   const [text, setText] = useState(typeof current === 'number' ? String(current) : '')
-  const invalid = !!path && !isNumberText(text)
+  const unset = optional && text.trim() === ''
+  const invalid = !!path && !unset && !isNumberText(text)
   useReportInvalid(invalid)
 
   return (
@@ -47,7 +52,8 @@ export function NumberField({ label, path, hint, unit }: FieldProps & { unit?: s
           onChange={(event) => {
             const next = event.target.value
             setText(next)
-            if (path && isNumberText(next)) update(path, Number(next))
+            if (path && optional && next.trim() === '') update(path, null)
+            else if (path && isNumberText(next)) update(path, Number(next))
           }}
         />
       </FormControl>

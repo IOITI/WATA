@@ -8,6 +8,7 @@ class Settings:
     log_path = "/nonexistent"
     config_path = __file__
     timezone = "Europe/Paris"
+    backups_path = "/nonexistent"
 
 
 class Queries:

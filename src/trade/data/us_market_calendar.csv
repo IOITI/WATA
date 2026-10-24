@@ -1,0 +1,28 @@
+# The days the US stock market is closed or closes early, in New York's hours. Nasdaq, where the
+# Nasdaq 100 is listed, keeps the same days as NYSE. Read on 2026-10-24 from NYSE Group's announcement
+# of 23 December 2025 (its 2028 days are not kept here yet). The file holds whole years: it is known
+# to the 31 December of its last row's year, and must be kept ahead (the scheduler says so 30 days before).
+date,kind,close_new_york,name,source
+2026-01-01,closed,,New Year's Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-01-19,closed,,"Martin Luther King, Jr. Day",ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-02-16,closed,,Washington's Birthday,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-04-03,closed,,Good Friday,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-05-25,closed,,Memorial Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-06-19,closed,,Juneteenth National Independence Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-07-03,closed,,Independence Day (observed),ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-09-07,closed,,Labor Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-11-26,closed,,Thanksgiving Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-11-27,early_close,13:00,The day after Thanksgiving,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-12-24,early_close,13:00,Christmas Eve,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2026-12-25,closed,,Christmas Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-01-01,closed,,New Year's Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-01-18,closed,,"Martin Luther King, Jr. Day",ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-02-15,closed,,Washington's Birthday,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-03-26,closed,,Good Friday,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-05-31,closed,,Memorial Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-06-18,closed,,Juneteenth National Independence Day (observed),ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-07-05,closed,,Independence Day (observed),ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-09-06,closed,,Labor Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-11-25,closed,,Thanksgiving Day,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-11-26,early_close,13:00,The day after Thanksgiving,ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/
+2027-12-24,closed,,Christmas Day (observed),ir.theice.com/press/news-details/2025/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar/

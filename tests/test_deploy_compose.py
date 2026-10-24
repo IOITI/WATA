@@ -476,3 +476,67 @@ def test_the_documents_name_the_python_of_the_image(dockerfile):
     project = open("AGENTS.md", encoding="utf-8").read().split("## Service map")[0]
 
     assert f"Python {_image_python(dockerfile)}," in project
+
+
+# ── What keeps the trading path alive ──
+
+
+def test_out_of_memory_the_kernel_kills_research_before_the_trading_path(compose_services):
+    trading = ("postgres1", "rabbitmq1", "web_server1", "telegram1", "scheduler1", "trader1", "position_monitor1")
+
+    for name in trading:
+        assert compose_services[name]["oom_score_adj"] == -500, name
+    assert compose_services["admin1"]["oom_score_adj"] == 500
+    assert compose_services["pg_backup1"]["oom_score_adj"] == 300
+    # The TA engine may run live rules and the recorders keep what cannot be fetched again: left as they are.
+    for name in ("ta_engine1", "price_recorder1", "capital_feed1", "watchlist_manager1"):
+        assert "oom_score_adj" not in compose_services[name], name
+
+
+def test_the_database_is_dumped_by_a_container_that_reaches_it_alone(compose_services):
+    backup = compose_services["pg_backup1"]
+
+    assert backup["image"] == compose_services["postgres1"]["image"]
+    assert backup["entrypoint"] == ["sh", "/pg_backup.sh"]
+    assert _mount_modes(backup) == {"/pg_backup.sh": "ro", "/backups": "rw"}
+    assert "PGPASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}" in backup["environment"]
+    assert "ports" not in backup and "expose" not in backup and "labels" not in backup
+    # The admin reads the dumps' report, never writes there.
+    assert _mount_modes(compose_services["admin1"])["/app/var/lib/backups"] == "ro"
+
+
+def test_the_package_carries_the_backup_script_and_the_server_makes_its_folder():
+    assert "cp ./deploy/pg_backup.sh _tmp_package/wata/$VERSION/deploy/" in open("package.sh").read()
+    assert 'mkdir -p "$APP_BASE_DIR/var/lib/backups"' in open("deploy/install_package.sh").read()
+
+
+def test_a_deploy_is_refused_while_a_position_or_the_market_is_open():
+    with open("deploy/tools/ansible/playbooks/deploy_app.yml") as playbook:
+        tasks = yaml.safe_load(playbook)[0]["tasks"]
+    names = [task.get("name", "") for task in tasks]
+
+    refusal = names.index("Refuse to deploy while a position is open or the market is open")
+    assert refusal < names.index("Transfer the application package") < names.index("Stop the application")
+    when = tasks[refusal]["when"]
+    assert when[0] == "not (force | default(false) | bool)"
+    assert '"$@"' in open("deploy/tools/deploy_app_to_your_server.sh").read()
+
+
+@pytest.mark.parametrize("weekday_hour, said", [((2026, 10, 26, 10), "open"), ((2026, 10, 24, 10), "closed"),
+                                                 ((2026, 10, 26, 23), "closed")])
+def test_the_deploys_market_check_reads_the_hours_of_the_configuration(tmp_path, weekday_hour, said):
+    import subprocess
+    import sys
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    with open("deploy/tools/ansible/playbooks/deploy_app.yml") as playbook:
+        tasks = yaml.safe_load(playbook)[0]["tasks"]
+    check = next(task for task in tasks if task.get("name") == "Say whether the market is open by WATA's hours")
+    script = check["ansible.builtin.command"]["argv"][2].replace("/app/wata/etc/config.json", "etc/config_example.json")
+    frozen = datetime(*weekday_hour, tzinfo=ZoneInfo("Europe/Paris"))
+    script = script.replace("now = datetime.now(ZoneInfo(zone))", f"now = datetime.fromisoformat({frozen.isoformat()!r}).astimezone(ZoneInfo(zone))")
+
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+
+    assert done.stdout.strip() == said
