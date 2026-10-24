@@ -96,8 +96,18 @@ jobs:
     # the signal from it, and Docker killed it after the time allowed, its stopping code never run.
     - name: A service stops at once and cleanly on Docker's stop
       run: |
-        docker run -d --init --name stopping -e WATA_APP_ROLE=scheduler \
-          -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci
+        # A whole configuration (the tests' has no day_trading rule, without which the scheduler stops at its
+        # start), its logs in /tmp/logs, its database on a closed port: refused at once, it waits for its
+        # credentials, which the stop must cut short.
+        python3 -c "
+        import json
+        config = json.load(open('etc/config_example.json'))
+        config['logging']['persistant']['log_path'] = '/tmp/logs'
+        config['postgresql']['dsn'] = 'postgresql://wata:wata@127.0.0.1:9/wata'
+        json.dump(config, open('stopping.json', 'w'))
+        "
+        docker run -d --init --network none --name stopping -e WATA_APP_ROLE=scheduler \
+          -v "$PWD/stopping.json:/app/etc/config.json:ro" wata-base:ci
         sleep 5
         test "$(docker inspect -f '{{.State.Running}}' stopping)" = true
         started=$(date +%s)
