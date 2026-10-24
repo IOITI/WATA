@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.37.0 - Going live held to its readiness, and sweeps of the signals' delay
+
+**Release date:** not released yet
+
+The last of four releases on what WATA lacked to trade reliably (v0.34.0 to v0.37.0). Its changes to trading were to be measured first, and none was built. A replay of the journal's signals 0.5, 15, 30 and 60 s after WATA received them (experiment 439d40, the 9 recorded days of 13 to 23 October) ended at +4.67 %, −40.0 %, −44.2 % and −35.7 %. All of the difference is two days, and neither is a cost of seconds: on 21 October the day's first trade met the day's +0.5 % target in 24 s at 0.5 s and missed it at 15 s, after which the day lost −26.9 % over 21 trades; on 19 October the 0.5 s replay was saved by one trade bought at a bad recorded quote. Past 15 s, more delay costs nothing more. Inconclusive. Set beside WATA's real positions, the replay at 0.5 s with fixed fills makes +0.67 points a trade more than WATA did (the median), and with 15 or 30 s added it comes out like WATA's. The other measurements planned (a pause after losing days, exits in index points, fewer flips) wait for 20 recorded days: on a strategy without a measured edge, a rule that trades less looks better for that alone.
+
+- **A signal rule goes live only once it is ready** (`src/admin/ta_readiness.py`): a week of weekdays in shadow, a signal journaled, no day on paper outside the range of its reference run, the engine running it without fault. Until now the confirmation said these check by check and left the switch to the operator. Short of one, the server now refuses the switch unless the operator ticks "Go live anyway", and the audit trail says what was missing. The script's latest version is still only said.
+- **A sweep of the signals' delay measures it**: each combination's signals arrive its own delay after WATA received them, where every combination had the run's and the sweep gave one result five times. A combination that closes the day at another time gets its own closes.
+
+**Verification status:**
+- 2,494 Python tests pass (v0.34.0 to v0.37.0 together, the live PostgreSQL and RabbitMQ tests not run), 7 of them new (a rule short of its readiness refused, then taken live anyway and so audited; each check of the readiness; a sweep of the delay and one of the close time), with Node 24 for the Pine runner's own, its bundle built again first (the one kept here predated v0.30.0).
+- 1,047 interface tests pass, 3 of them new (a rule not ready waits for "Go live anyway", which the server is told; a refusal the page did not foresee offers it; what the server holds back, check by check); lint and type checks are clean.
+- Not seen: the confirmation in a browser, and a rule taken live on the server.
+
 ## v0.33.0 - Admin: a close followed to its sale, live lines, funnels, trend tiles, Claude's trace, an Undo, previews, a map of the services, clocks, a live pill
 
 **Release date:** 2026-10-23, with v0.30.0, v0.31.0 and v0.32.0

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { BacktestPaper, TaRule, TaRuleState } from '@/lib/types'
 
-import { liveReadiness, weekdaysBetween } from './readiness'
+import { holdingBack, liveReadiness, weekdaysBetween } from './readiness'
 
 const ZONE = 'Europe/Paris'
 
@@ -78,5 +78,23 @@ describe('whether a rule is ready to go live', () => {
     expect(detail(checks, 'engine')).toBe('Failing: Undeclared identifier (script, line 4).')
     expect(detail(checks, 'paper')).toBe('1 of 1 day on paper fell outside the range of its reference run.')
     expect(detail(checks, 'script')).toBe('Version 6 of its script is saved: it runs version 5.')
+    // All but the script's version hold it back, as the server's unmet_readiness does.
+    expect(holdingBack(checks).map((check) => check.id)).toEqual(['shadow', 'signals', 'paper', 'engine'])
+  })
+
+  it('holds back what the server holds back: a week in shadow until it has passed, the others once they failed', () => {
+    const fresh = liveReadiness(rule(), state(), undefined, Date.parse('2026-10-22T07:03:21+02:00'), ZONE)
+    expect(holdingBack(fresh).map((check) => check.id)).toEqual(['shadow', 'signals'])
+
+    // A week in shadow, a signal journaled, nothing on paper yet, a newer script saved: nothing held.
+    const ready = liveReadiness(
+      rule({ latest: { script: 6, libraries: {} } }),
+      state({ last_alert_at: '2026-10-28T14:00:00Z' }),
+      undefined,
+      Date.parse('2026-10-29T09:00:00Z'),
+      ZONE,
+    )
+    expect(states(ready)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'open', engine: 'pass', script: 'open' })
+    expect(holdingBack(ready)).toEqual([])
   })
 })

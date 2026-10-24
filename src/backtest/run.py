@@ -35,6 +35,7 @@ import sys
 import time
 import traceback
 from collections import Counter
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 from src.backtest import figures, regimes, robustness
@@ -192,6 +193,23 @@ async def _asset_series(rows: AssetRows, chart: dict | None, start: int, end: in
     return series
 
 
+def delayed(events: list, shift_seconds: float) -> list:
+    """
+    A sweep's signals as a cell whose ``signal_delay_seconds`` differs from the
+    run's would get them: each arriving ``shift_seconds`` later. The signals are
+    made once for every cell; without this, a sweep of the delay measured nothing.
+    """
+    if not shift_seconds:
+        return events
+    return [replace(event, arrived_at=event.arrived_at + shift_seconds) for event in events]
+
+
+def same_close(cell_rules, settings) -> bool:
+    """Whether a cell closes its days when the run does (else its own close is made, as for the delay)."""
+    return all(getattr(cell_rules, name) == getattr(settings, name)
+               for name in ("close_position_time", "market_timezone", "trading_end_hour", "timezone"))
+
+
 def _day_status(record: dict, *, pine: bool, strategy_bars: int, weekend: bool) -> str:
     recorded = record["recorded"]
     if recorded[ENTRY_ACTIONS[0]] + recorded[ENTRY_ACTIONS[1]] == 0:
@@ -316,9 +334,14 @@ async def run(arguments) -> int:
                 cells = []
                 for values in cells_of(axes):
                     cell_rules = cell_settings(settings, axes, values)
-                    events = signal_sets[cell_inputs(axes, values)]
+                    events = delayed(signal_sets[cell_inputs(axes, values)], cell_rules.signal_delay_seconds - settings.signal_delay_seconds)
                     simulator = Simulator(cell_rules, clock, fills=fills_for(cell_rules, samples, f"{seed}:run", base=settings))
-                    cells.append({"values": list(values), "simulator": simulator, "events": by_day(events, clock)})
+                    cells.append({
+                        "values": list(values), "simulator": simulator, "events": by_day(events, clock),
+                        "closing": closing_by_day if same_close(cell_rules, settings) else by_day(
+                            closing_signals(days, cell_rules, clock, first_id=next_id, market_calendar=us_market_calendar()), clock,
+                        ),
+                    })
                 main, baseline = None, None
             else:
                 events = signal_sets[()]
@@ -360,7 +383,7 @@ async def run(arguments) -> int:
             key = day.isoformat()
             closing_today = closing_by_day.get(key, [])
             for number, cell in enumerate(cells):
-                record = cell["simulator"].run_day(recorded, cell["events"].get(key, []) + closing_today)
+                record = cell["simulator"].run_day(recorded, cell["events"].get(key, []) + cell.get("closing", closing_by_day).get(key, []))
                 record["status"] = _day_status(record, pine=pine, strategy_bars=strategy_bars.get(key, 0),
                                                weekend=day.weekday() >= 5)
                 record["strategy_bars"] = strategy_bars.get(key, 0) if pine else None

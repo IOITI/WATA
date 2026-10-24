@@ -23,6 +23,8 @@ interface ConfirmLiveActionProps {
   /** Shown on the slider once it is done ("Saved", "Sent"...). */
   doneLabel?: string
   pending?: boolean
+  /** The gesture waits for something the description asks first (a box ticked). */
+  blocked?: boolean
   error?: string | null
   onConfirm: () => void
   onClose: () => void
@@ -43,6 +45,7 @@ export function ConfirmLiveAction({
   gesture = 'slide',
   doneLabel = 'Done',
   pending = false,
+  blocked = false,
   error,
   onConfirm,
   onClose,
@@ -61,7 +64,7 @@ export function ConfirmLiveAction({
             Cancel
           </Button>
           {gesture === 'button' && (
-            <Button size="sm" isLoading={pending} onClick={onConfirm}>
+            <Button size="sm" isLoading={pending} disabled={blocked} onClick={onConfirm}>
               {confirmLabel}
             </Button>
           )}
@@ -87,7 +90,7 @@ export function ConfirmLiveAction({
             variant="warning"
             autoResetDelay={0}
             haptic={false}
-            disabled={pending}
+            disabled={pending || blocked}
             onConfirm={onConfirm}
           />
         )}

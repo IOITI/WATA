@@ -377,9 +377,14 @@ export const api = {
     request<TaRuleSaved>('POST', '/api/ta/rules', { body }),
   saveTaRule: (id: string, body: TaRuleFields & { revision: string; refresh_libraries?: boolean }) =>
     request<TaRuleSaved>('PUT', `/api/ta/rules/${encodeURIComponent(id)}`, { body }),
-  /** Live is an operator action: refused (403) while actions are disabled. */
-  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string) =>
-    request<TaRuleSaved>('POST', `/api/ta/rules/${encodeURIComponent(id)}/mode`, { body: { mode, revision } }),
+  /**
+   * Live is an operator action: refused (403) while actions are disabled, and (409) while the rule is not ready
+   * unless `force` goes live anyway, which the audit trail records with what was missing.
+   */
+  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string, force = false) =>
+    request<TaRuleSaved>('POST', `/api/ta/rules/${encodeURIComponent(id)}/mode`, {
+      body: force ? { mode, revision, force } : { mode, revision },
+    }),
   deleteTaRule: (id: string, revision: string) =>
     request<void>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}${query({ revision })}`),
   taSignals: (params: DateRangeParams & { rule?: string } = {}) =>

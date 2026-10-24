@@ -811,7 +811,7 @@ npx pinets-cli run Envelope.prepared.pine --data CAPITAL_US100-1-2026-10-19.json
 
 ### What to keep in mind
 
-- **Shadow first.** Run a rule in shadow beside TradingView for some days and read the comparison on its page before switching it to live, then switch TradingView's alerts for that indice off.
+- **Shadow first.** Run a rule in shadow beside TradingView for some days and read the comparison on its page before switching it to live, then switch TradingView's alerts for that indice off. The switch holds a rule to it: a week of weekdays in shadow, a signal journaled, no day on paper outside the range of its reference run, the engine running it without fault. A rule short of one goes live only if you tick "Go live anyway", and the audit trail records what was missing.
 - **PineTS is not TradingView.** It runs most of Pine v5 and v6, but not all of it, and not always exactly as TradingView does. Things that differ:
   - `request.security` reads WATA's assets only, and live only Capital.com's;
   - a symbol has no exchange time zone, so PineTS's days are UTC days;
@@ -872,7 +872,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 - the signals that bought it and sold it.
 
 **A sweep** tries one or two settings or script inputs, with several values each:
-- every combination is traded on the same days and signals, with its own account;
+- every combination is traded on the same days and signals, with its own account (a combination of another signal delay gets them that much later, one of another close time its own closes);
 - the last days (30 % unless said otherwise) are held out. The grid shows every combination on the days a value may be chosen on, and on the days held out, and says in words what became of the best one there;
 - "Would choosing have worked": a walk-forward when asked for (the best combination chosen again every few days on the days before, kept on the days after), the probability that choosing the best was fitting, and the deflated Sharpe ratio, every combination tried counted;
 - a click makes a combination a run of its own.

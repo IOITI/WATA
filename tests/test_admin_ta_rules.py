@@ -461,13 +461,21 @@ def test_a_rule_that_cannot_run_is_refused_by_the_route(api, cross):
     assert born_live.status_code == 422
 
 
+@pytest.fixture
+def ready(monkeypatch):
+    """A rule taken for ready to go live: what is tested is the switch, not the readiness (tests/test_ta_readiness.py)."""
+    import src.admin.routers.ta as ta_router
+
+    monkeypatch.setattr(ta_router, "unmet_readiness", lambda *args, **kwargs: [])
+
+
 def _new_rule(client, script, /, **changes):
     revision = client.get("/api/ta/rules").json()["revision"]
     answer = client.post("/api/ta/rules", json=body(script, revision, **changes), headers=SAME_ORIGIN).json()
     return answer["rule"], answer["revision"]
 
 
-def test_going_live_is_an_operator_action_said_in_the_audit_trail(api, cross):
+def test_going_live_is_an_operator_action_said_in_the_audit_trail(api, cross, ready):
     client, ctx = api
     rule, revision = _new_rule(client, cross)
 
@@ -480,7 +488,7 @@ def test_going_live_is_an_operator_action_said_in_the_audit_trail(api, cross):
     assert "asset=capital/US100 bid bars=1 script='Cross' v1" in entry["detail"]
 
 
-def test_leaving_live_is_said_too_and_allowed_when_actions_are_not(api, cross):
+def test_leaving_live_is_said_too_and_allowed_when_actions_are_not(api, cross, ready):
     client, ctx = api
     rule, revision = _new_rule(client, cross)
     revision = client.post(
@@ -492,6 +500,26 @@ def test_leaving_live_is_said_too_and_allowed_when_actions_are_not(api, cross):
 
     assert response.status_code == 200 and response.json()["rule"]["mode"] == "shadow"
     assert ctx.audit_log.read(1)[0]["action"] == "signal rule no longer live (shadow)"
+
+
+def test_a_rule_not_ready_does_not_go_live_unless_the_operator_goes_live_anyway(api, cross):
+    client, ctx = api
+    rule, revision = _new_rule(client, cross)
+
+    refused = client.post(f"/api/ta/rules/{rule['id']}/mode", json={"mode": "live", "revision": revision}, headers=SAME_ORIGIN)
+    anyway = client.post(
+        f"/api/ta/rules/{rule['id']}/mode", json={"mode": "live", "revision": revision, "force": True}, headers=SAME_ORIGIN,
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == (
+        "Not ready to go live: 0 weekday(s) in shadow of 5; no signal journaled yet. "
+        "Go live anyway to switch it all the same: that is recorded"
+    )
+    assert anyway.status_code == 200 and anyway.json()["rule"]["mode"] == "live"
+    assert ctx.audit_log.read(1)[0]["action"] == (
+        "signal rule live WITHOUT its readiness (0 weekday(s) in shadow of 5; no signal journaled yet)"
+    )
 
 
 def test_off_and_shadow_are_not_operator_actions(api, cross):
@@ -542,7 +570,7 @@ def test_no_rule_goes_live_while_the_capital_com_feed_is_off(ctx, tmp_path, scri
     assert response.status_code == 409 and "feed is off" in response.json()["detail"]
 
 
-def test_a_live_rule_changes_only_as_an_operator_action(api, cross):
+def test_a_live_rule_changes_only_as_an_operator_action(api, cross, ready):
     client, ctx = api
     rule, revision = _new_rule(client, cross)
     revision = client.post(

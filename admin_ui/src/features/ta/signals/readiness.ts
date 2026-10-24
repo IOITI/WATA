@@ -1,7 +1,10 @@
 // Whether a rule is ready to go live, check by check, from what the Signal rules
 // page knows of it: how long it has been in shadow, its signals, its days traded on
 // paper, how the engine runs it, the script version it pins. Said in the
-// confirmation; it never stops the switch, which stays the operator's. Pure.
+// confirmation. The server holds the same checks but the script's version
+// (src/admin/ta_readiness.py: a change to one is made in the other): a rule short of
+// one goes live only if the operator goes live anyway, which the audit trail
+// records with what was missing. The switch stays the operator's. Pure.
 
 import type { Check } from '@/lib/checks'
 import { formatDateTime, formatDay } from '@/lib/format'
@@ -10,7 +13,7 @@ import type { BacktestPaper, TaRule, TaRuleState } from '@/lib/types'
 import { addDays, dayIn } from '../data/wataBars'
 import { updatesOf } from './ruleModel'
 
-/** Weekdays in shadow before going live is advised: a week of the engine's signals. */
+/** Weekdays in shadow before a rule goes live: a week of the engine's signals (SHADOW_DAYS of ta_readiness.py). */
 export const SHADOW_DAYS = 5
 
 /** The weekdays after ``from`` up to ``to`` included (days as YYYY-MM-DD). */
@@ -97,4 +100,12 @@ export function liveReadiness(
           : `It runs version ${rule.script.version}, the latest.`,
   })
   return checks
+}
+
+/**
+ * The checks the server holds before a rule goes live (`unmet_readiness`): a week in shadow until it has
+ * passed, the others once they failed, the script's version never.
+ */
+export function holdingBack(checks: Check[]): Check[] {
+  return checks.filter((check) => (check.id === 'shadow' ? check.state !== 'pass' : check.id !== 'script' && check.state === 'fail'))
 }

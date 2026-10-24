@@ -44,6 +44,7 @@ from src.admin.ta_rules import (
     RuleStore,
     bars_label,
 )
+from src.admin.ta_readiness import unmet_readiness
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
 from src.capital_feed.settings import CapitalSettings
 from src.ta_engine.settings import TaEngineSettings
@@ -146,6 +147,8 @@ class RuleUpdate(RuleFields):
 class RuleMode(BaseModel):
     revision: str = Field(max_length=64)
     mode: Literal["off", "shadow", "live"]
+    # Go live though the rule is not ready (src/admin/ta_readiness.py): recorded with what was missing.
+    force: bool = False
 
 
 # What the audit trail says changed in a live rule.
@@ -347,6 +350,19 @@ def _check_can_go_live(request: Request, rule: dict) -> None:
         raise RuleConflict(f"The Capital.com feed does not record {rule['asset']['key']}: a live rule would have no bars")
 
 
+async def _unmet_readiness(request: Request, rule: dict) -> list[str]:
+    """What keeps ``rule`` from being ready to go live, read where the Signal rules page reads it."""
+    ctx = request.app.state.ctx
+    states = await ctx.queries.ta_rule_states()
+    paper = None
+    if getattr(ctx, "backtests", None) is not None:
+        try:
+            paper = (await run_in_threadpool(ctx.backtests.paper))["rules"].get(rule["id"])
+        except Exception:
+            paper = None
+    return unmet_readiness(rule, states.get(rule["id"]), paper, datetime.now(timezone.utc), ctx.settings.timezone)
+
+
 @router.post("/rules/{rule_id}/mode")
 async def set_rule_mode(
     rule_id: str,
@@ -360,13 +376,21 @@ async def set_rule_mode(
     live is always allowed (it stops signals), and recorded as one.
     """
     current = await run_in_threadpool(rule_store.rule, rule_id)
+    unmet = []
     if body.mode == LIVE and current["mode"] != LIVE:
         _check_can_go_live(request, current)
+        unmet = await _unmet_readiness(request, current)
+        if unmet and not body.force:
+            raise RuleConflict(
+                f"Not ready to go live: {'; '.join(unmet)}. Go live anyway to switch it all the same: that is recorded"
+            )
     result = await run_in_threadpool(rule_store.set_mode, rule_id, body.mode, body.revision)
     rule, before = result["rule"], result["before"]
     answer = await _answer(result, store)
     if rule["mode"] != before["mode"] and LIVE in (rule["mode"], before["mode"]):
         action = "signal rule live" if rule["mode"] == LIVE else f"signal rule no longer live ({rule['mode']})"
+        if rule["mode"] == LIVE and unmet:
+            action += f" WITHOUT its readiness ({'; '.join(unmet)})"
         request.app.state.ctx.audit(request, action, _rule_line(rule, answer["rule"]["script_name"]))
     return answer
 

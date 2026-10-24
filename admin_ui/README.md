@@ -437,7 +437,8 @@ which is the source the AGPL asks to offer.
   alerts and plots of a script, for a rule), `data/wataBars.ts`, `editor/diagnostics.ts`, `editor/testChart.ts`
   (what the test draws: its day, the plots near the prices, an oscillator listed apart, the alerts on their
   bars), `signals/ruleModel.ts` (with `ruleDraftOfRun`: a backtest made a rule, its range in the feed's tick),
-  `signals/readiness.ts` (whether a rule is ready to go live, said in the confirmation, never stopping it) and
+  `signals/readiness.ts` (whether a rule is ready to go live, said in the confirmation; `holdingBack` is what the
+  server holds, and a rule short of it goes live only once the operator ticks "Go live anyway") and
   `monitor/monitorModel.ts` (the monitor's address, its tiles against their limits, the gaps of its charts, the bars
   of the delivery steps, the results beside the days on paper). The editor itself (CodeMirror) and the charts are replaced in page tests, and
   checked in a browser against `npm run dev:api`.

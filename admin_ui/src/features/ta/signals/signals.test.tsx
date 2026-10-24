@@ -291,10 +291,54 @@ describe('the Signal rules page', () => {
     const ready = within(dialog).getByRole('list', { name: 'Is it ready?' })
     expect(within(ready).getByText('Failing: The script does not run: Undeclared identifier (script, line 4).')).toBeInTheDocument()
     expect(within(ready).getByText('None yet: what it would send is not known.')).toBeInTheDocument()
-    // Told, never stopped: the slide is there all the same.
-    expect(within(dialog).getByRole('slider')).toBeInTheDocument()
+    // Not ready, as the server holds it: the slide waits until the operator asks to go live anyway.
+    const slider = within(dialog).getByRole('slider')
+    slider.focus()
+    fireEvent.keyDown(slider, { key: 'Enter' })
+    expect(within(dialog).getByRole('checkbox', { name: 'Go live anyway' })).not.toBeChecked()
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(sent.filter((request) => request.method === 'POST')).toEqual([])
+  })
+
+  it('takes a rule not ready live only once the operator goes live anyway, and tells the server so', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Mode of Cross on US100' }), 'live')
+    const dialog = await screen.findByRole('dialog', { name: 'Switch Cross on US100 to live' })
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Go live anyway' }))
+    const slider = within(dialog).getByRole('slider')
+    slider.focus()
+    fireEvent.keyDown(slider, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(sent.find((request) => request.path.endsWith('/mode'))?.body).toEqual({ mode: 'live', revision: 'r1', force: true }),
+    )
+    expect(await screen.findByText(/Gone live without its readiness/)).toBeInTheDocument()
+  })
+
+  it('asks nothing more of a rule the page finds ready, and offers to go live anyway if the server finds it is not', async () => {
+    const state = ENGINE.rules.aaaaaaaaaaaa
+    ENGINE.rules.aaaaaaaaaaaa = { ...state, state: 'running', detail: null, last_alert_at: '2026-10-19T09:32:01Z' }
+    rules = [rule({ mode_changed_at: '2026-09-01T10:00:00+00:00' })]
+    serve({ modeError: { status: 409, detail: 'Not ready to go live: the engine fails to run it (no more said). Go live anyway to switch it all the same: that is recorded' } })
+    try {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.selectOptions(await screen.findByRole('combobox', { name: 'Mode of Cross on US100' }), 'live')
+      const dialog = await screen.findByRole('dialog', { name: 'Switch Cross on US100 to live' })
+      expect(within(dialog).queryByRole('checkbox', { name: 'Go live anyway' })).not.toBeInTheDocument()
+      const slider = within(dialog).getByRole('slider')
+      slider.focus()
+      fireEvent.keyDown(slider, { key: 'Enter' })
+
+      expect(await within(dialog).findByText(/^Not ready to go live: the engine fails to run it/)).toBeInTheDocument()
+      expect(sent.find((request) => request.path.endsWith('/mode'))?.body).toEqual({ mode: 'live', revision: 'r1' })
+      expect(within(dialog).getByRole('checkbox', { name: 'Go live anyway' })).not.toBeChecked()
+    } finally {
+      ENGINE.rules.aaaaaaaaaaaa = state
+    }
   })
 
   it('says why a rule did not go live', async () => {
@@ -304,6 +348,7 @@ describe('the Signal rules page', () => {
 
     await user.selectOptions(await screen.findByRole('combobox', { name: 'Mode of Cross on US100' }), 'live')
     const dialog = await screen.findByRole('dialog', { name: 'Switch Cross on US100 to live' })
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Go live anyway' }))
     const slider = within(dialog).getByRole('slider')
     slider.focus()
     fireEvent.keyDown(slider, { key: 'Enter' })

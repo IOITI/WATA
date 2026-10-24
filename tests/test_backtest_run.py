@@ -300,6 +300,46 @@ def test_a_sweep_trades_each_combination_and_holds_the_last_days_out(tmp_path, r
     assert summary["pbo"] is None and summary["deflated_sharpe"] is None
 
 
+def test_a_sweep_of_the_signals_delay_delays_each_cells_signals(tmp_path, recorded):
+    # The signals are made once for every cell: a sweep of the delay measured nothing (2026-10-24).
+    journal = [
+        {"signal_uuid": "a", "action": "long", "indice": "us100", "confidence": 0.9,
+         "signal_timestamp": "2026-10-13T06:59:00Z", "received_timestamp": "2026-10-13T07:00:01Z",
+         "decided_at": "2026-10-13T07:00:02Z", "outcome": "executed", "reason": None},
+    ]
+    folder = prepare(tmp_path, {
+        "kind": "sweep", "source": {"kind": "journal", "signals": len(journal)},
+        "sweep": {"axes": [{"kind": "setting", "name": "signal_delay_seconds", "values": [0.5, 600]}], "held_out": 0.5},
+    }, {"signal_delay_seconds": 0.5, "max_signal_age_seconds": 300}, journal=journal)
+
+    assert run_command(tmp_path, folder, recorded) == 0
+
+    cells = read(folder, "sweep.json")["cells"]
+    # At 0.5 s the long is taken; ten minutes later it is too old for the trader.
+    assert [cell["values"] for cell in cells] == [[0.5], [600]]
+    assert [cell["whole"]["trades"] for cell in cells] == [1, 0]
+
+
+def test_a_sweep_of_the_close_time_closes_each_cells_days_at_its_own(tmp_path, recorded):
+    # A long held to the day's close: sold at 21:55 in one cell, at 12:01 in the other (the fixture's
+    # prices come round every 70 s, and 12:00 would be at the same point of the round as 21:55).
+    journal = [
+        {"signal_uuid": "a", "action": "long", "indice": "us100", "confidence": 0.9,
+         "signal_timestamp": "2026-10-13T06:59:00Z", "received_timestamp": "2026-10-13T07:00:01Z",
+         "decided_at": "2026-10-13T07:00:02Z", "outcome": "executed", "reason": None},
+    ]
+    folder = prepare(tmp_path, {
+        "kind": "sweep", "source": {"kind": "journal", "signals": len(journal)},
+        "sweep": {"axes": [{"kind": "setting", "name": "close_position_time", "values": ["21:55", "12:01"]}], "held_out": 0.5},
+    }, {"signal_delay_seconds": 0.5}, journal=journal)
+
+    assert run_command(tmp_path, folder, recorded) == 0
+
+    cells = read(folder, "sweep.json")["cells"]
+    assert [cell["whole"]["trades"] for cell in cells] == [1, 1]
+    assert cells[0]["whole"]["total_percent"] != cells[1]["whole"]["total_percent"]
+
+
 def test_a_stress_sweep_chooses_nothing_so_nothing_is_said_of_a_choice(tmp_path, recorded):
     folder = prepare(tmp_path, {
         "kind": "sweep", "source": {"kind": "pine", "rule": rule_on()}, "stress_of": "20261020-101010-abcdef",

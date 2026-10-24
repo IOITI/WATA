@@ -21,7 +21,7 @@ import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Select } from '@/components/ui/form'
+import { Checkbox, Select } from '@/components/ui/form'
 import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
@@ -36,7 +36,7 @@ import type { RuleDialogStart } from './RuleDialog'
 import { barsLabel, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, updatesOf } from './ruleModel'
 import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
-import { liveReadiness } from './readiness'
+import { holdingBack, liveReadiness } from './readiness'
 import { SignalJournal } from './SignalJournal'
 
 const STATE_LABEL: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
@@ -100,7 +100,13 @@ function EnginePanel({ engine, timeZone }: { engine: TaEngine; timeZone: string 
 interface ModeChange {
   rule: TaRule
   mode: TaRuleMode
+  /** Live although the server's readiness checks are not all met: recorded so in the audit trail. */
+  force?: boolean
 }
+
+/** The server's refusal of a rule not ready, which the page may not have seen coming (its view is 10 s old at most). */
+const notReadyRefusal = (error: Error | null) =>
+  error instanceof ApiError && error.status === 409 && error.message.startsWith('Not ready to go live')
 
 /** What the selection basket does to the rules selected: never live, which is one rule at a time. */
 type BulkAction = 'off' | 'shadow' | 'delete'
@@ -174,6 +180,8 @@ export function SignalRulesPage() {
     if (askedScript || askedRun) setParams({}, { replace: true })
   }
   const [changing, setChanging] = useState<ModeChange | null>(null)
+  // "Go live anyway", ticked in the confirmation of a rule not ready.
+  const [anyway, setAnyway] = useState(false)
   const [deleting, setDeleting] = useState<TaRule | null>(null)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   // The rules the deletion of several is about, while it is asked.
@@ -188,14 +196,14 @@ export function SignalRulesPage() {
         : error?.message ?? null
 
   const modeMutation = useMutation({
-    mutationFn: ({ rule, mode }: ModeChange) => api.setTaRuleMode(rule.id, mode, rules!.revision),
-    onSuccess: async (saved) => {
+    mutationFn: ({ rule, mode, force }: ModeChange) => api.setTaRuleMode(rule.id, mode, rules!.revision, force),
+    onSuccess: async (saved, { force }) => {
       setChanging(null)
       toast({
         title: `${saved.rule.name}: ${MODE_LABEL[saved.rule.mode].toLowerCase()}`,
         description:
           saved.rule.mode === 'live'
-            ? 'Its signals go to the trader from its next bar.'
+            ? `Its signals go to the trader from its next bar.${force ? ' Gone live without its readiness, as the audit trail records.' : ''}`
             : saved.rule.mode === 'shadow'
               ? 'Its signals are journaled, never sent.'
               : 'The engine stops running it.',
@@ -267,6 +275,7 @@ export function SignalRulesPage() {
     if (mode !== 'live' && rule.mode !== 'live') modeMutation.mutate({ rule, mode })
     else {
       modeMutation.reset()
+      setAnyway(false)
       setChanging({ rule, mode })
     }
   }
@@ -457,6 +466,9 @@ export function SignalRulesPage() {
   const runnable = scripts.filter((script) => script.kind !== 'library')
   const change = changing
   const goingLive = change?.mode === 'live'
+  const readiness =
+    change && goingLive ? liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone) : []
+  const notReady = goingLive && (holdingBack(readiness).length > 0 || notReadyRefusal(modeMutation.error))
 
   return (
     <div className="flex flex-col gap-6">
@@ -560,6 +572,7 @@ export function SignalRulesPage() {
         confirmLabel={goingLive ? 'Slide to go live' : `Switch to ${change ? MODE_LABEL[change.mode].toLowerCase() : ''}`}
         doneLabel={goingLive ? 'Live' : 'Done'}
         pending={modeMutation.isPending}
+        blocked={notReady && !anyway}
         error={conflictText(modeMutation.error)}
         warning={
           goingLive
@@ -582,11 +595,18 @@ export function SignalRulesPage() {
               <p>The trader applies its usual rules to each of them. The switch is recorded in the audit trail.</p>
               <div className="space-y-2 pt-2">
                 <p className="font-medium">Is it ready?</p>
-                <CheckList
-                  checks={liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone)}
-                  label="Is it ready?"
-                />
-                <p className="text-xs text-muted-foreground">What this page knows of it. Nothing here stops the switch: it is yours.</p>
+                <CheckList checks={readiness} label="Is it ready?" />
+                {notReady ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Not ready: the server checks the same, all but the script’s version, and refuses the switch unless you
+                      go live anyway. The audit trail then records what was missing.
+                    </p>
+                    <Checkbox label="Go live anyway" checked={anyway} onChange={(event) => setAnyway(event.target.checked)} />
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">What this page knows of it; the server checks the same before the switch.</p>
+                )}
               </div>
             </div>
           ) : (
@@ -595,7 +615,7 @@ export function SignalRulesPage() {
             </p>
           ))
         }
-        onConfirm={() => change && modeMutation.mutate(change)}
+        onConfirm={() => change && modeMutation.mutate({ ...change, force: notReady && anyway })}
         onClose={() => setChanging(null)}
       />
 
