@@ -642,7 +642,7 @@ With the [Admin Interface](#️-admin-interface), the **Assets View** (Data sect
 For anything else, three tables in PostgreSQL, created by the recorder:
 
 - `price_instrument`: one row per instrument, with `uic`, `asset_type`, `role` (`turbo` or `underlying`), `indice`, `direction`, `barrier` (the knock-out level) and `issuer`.
-- `price_bar_10s`: `ts` (start of the ten seconds, UTC), `instrument_id`, `bid_open/high/low/close`, `ask_open/high/low/close`, `updates` and `delayed_minutes`. One partition per month.
+- `price_bar_10s`: `ts` (start of the ten seconds, UTC), `instrument_id`, `bid_open/high/low/close`, `ask_open/high/low/close`, `updates` and `delayed_minutes`. One partition per month, keyed by instrument and time; a BRIN index on `ts` finds the bars of a period across instruments.
 - `price_recorder_coverage`: one row per ten seconds the recorder was running, with `feed_ok`.
 - `price_volume`: `instrument_id`, `ts`, `day_volume`: Saxo's total of the day for an instrument, one row each time it changes. Empty unless `record_volume` is on.
 

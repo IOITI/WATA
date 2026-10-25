@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.46.0 - The recorded bars found by their time
+
+**Release date:** not released yet
+
+- **The bars of a period across every instrument are found by their time** (`price_bar_10s`, a BRIN index on `ts`, `idx_price_bar_10s_ts`). Until now they were found through the key, which starts with the instrument: a day's read went through the whole month. On a month in the server's shape (42 turbos, 860 minutes a day, 4.8 million bars), a day is now 3,206 pages read against 68,144:
+  - the research export's day;
+  - the Availability page for today alone, 173 ms against 186;
+  - each page of `wataprices export`, about 40 ms against 121;
+  - the lab's reload of a day, 50 ms against 215.
+
+  The index weighs 32 kB a month, and the price recorder builds it at its first start, in 0.5 s for a month. Writing a bucket of 42 bars stays at 0.43 ms (0.42 before).
+
+  On the server, without the index, a day's read went through all of October's 1.65 million bars so far: 25,598 pages, 177 ms (2026-10-25).
+- **One read is slower when everything is in memory: the Availability page's week**, 860 ms against 708, although it reads four times fewer pages. PostgreSQL now sorts the week in one process, where before it scanned the month in three.
+
+**Verification status:**
+- Measured on a real PostgreSQL 16 (pgserver) with the server's memory settings, over a month made up in the server's shape, through WATA's own queries (`DatabaseData`, `AdminQueries`, the research export, `export_bars`). Per-instrument reads keep their plans and pages: a backtest's day, the charts, the list of assets.
+- The recorder's own `init_price_history_schema` builds the index over a recorded month in 0.47 s, and costs nothing at the next start.
+- 2,879 Python tests pass on Python 3.12 (35 skipped), one of them new: the schema holds the index. The lab's round trip runs it on two real databases.
+- The server's database was read before the index, read-only (sizes, settings, two query plans). The index itself is not on the server yet.
+
 ## v0.45.0 - The Configuration page by section, and a purge the services survive
 
 **Release date:** 2026-10-25

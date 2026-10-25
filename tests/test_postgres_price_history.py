@@ -52,6 +52,15 @@ def test_the_price_tables_are_not_part_of_what_every_service_creates():
     assert "DROP " not in PRICE_HISTORY_SCHEMA_SQL
 
 
+def test_the_bars_of_a_period_are_found_by_a_brin_index_on_their_time():
+    statement = " ".join(PRICE_HISTORY_SCHEMA_SQL.split())
+
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_price_bar_10s_ts ON price_bar_10s USING brin (ts) WITH (autosummarize = on)"
+        in statement
+    )
+
+
 def test_the_schema_is_created_in_one_call():
     db = FakeDb()
 

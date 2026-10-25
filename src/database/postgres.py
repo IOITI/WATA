@@ -1131,6 +1131,13 @@ CREATE TABLE IF NOT EXISTS price_bar_10s (
     PRIMARY KEY (instrument_id, ts)
 ) PARTITION BY RANGE (ts);
 
+-- The bars of a period across instruments (the research export's day, the
+-- Availability page, wataprices export, the lab's reload of a day) are found by
+-- their time, which the key does not start with. The bars are written in time
+-- order, so a BRIN index on ts reads only the blocks of that period, for 32 kB a
+-- month; autosummarize sums a range up once it is full.
+CREATE INDEX IF NOT EXISTS idx_price_bar_10s_ts ON price_bar_10s USING brin (ts) WITH (autosummarize = on);
+
 -- One row per bucket the recorder lived through: whether quotes were arriving,
 -- and how much it wrote. A bucket with no row here was not recorded at all.
 CREATE TABLE IF NOT EXISTS price_recorder_coverage (
