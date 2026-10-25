@@ -1011,6 +1011,8 @@ export interface PriceRangeBars {
   size: number
   /** The range was chosen by the server for the period. */
   auto: boolean
+  /** Asked for the newest bars: the period's last day alone made more than are given, its newest are. */
+  cut?: boolean
   columns: string[]
   bars: PriceRangeRow[]
 }

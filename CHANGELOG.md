@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.47.0 - Range bars answered faster, read live a bar at a time, and the Charts page's scripts continued on the bars that are over
+
+**Release date:** not released yet
+
+- **A range-bar answer takes half the time, and a sixth of the bytes** (`GET /api/data/assets/{provider}/{key}/range-bars`):
+  - The bars are built in a thread (`_range_answer`), the rows still read on the request loop. A month's build no longer holds up the admin's other requests, its event streams and live prices among them.
+  - Their rows are written by `pydantic_core.to_json`, the rest of the answer as FastAPI writes it (`_with_rows`, which the `/bars` route uses too). FastAPI's own encoder took 58 ms of a day of R60's 113; now it is 3.4.
+  - `price_decimals` reads each distinct price once: a day of US100's ten-second bars holds 6,720 distinct prices among 34,080. It was 381 ms of a month of R600's 914.
+  - The admin's answers of 4 kB or more go out gzipped, at level 5 (`CompressedAnswers` in `src/admin/app.py`). A day of R60 is 0.13 MB instead of 0.82, compressed in 12 ms. A request that accepts `text/event-stream`, and `/mcp`, go around it: Starlette's compressing middleware holds an answer's headers back until its first bytes.
+
+  A day of R60 (9,601 bars) is now 52 ms of Python instead of 113, and a month of R600 526 ms instead of 914. Measured on the Mac: the route's steps over a made-up US100 shaped on a real day.
+- **A live range chart reads only its new bars.** `range-bars` takes two new parameters:
+  - `after`: the bars from a moment on, still built from `from`, their volumes counted over all of them;
+  - `newest`: the bars built from the first day of the period from which they fit in 12,000. That day is said in `from`, rather than a refusal.
+
+  The Charts page asks for `newest` once. Before, it asked for three days, then two, then one when they were too many. Then, at each closed ten seconds, it asks for the bars from its last one on: about 1 kB, where each read was the whole series again (0.8 MB a day of R60). Its live stream starts from the newest bar the chart was given, not from a whole read for its last two bars. The asset pages and the Data section read as before: no `after`, no `newest`, the refusal kept.
+- **The Charts page's scripts run on the bars that are over**, as the TA engine runs a rule's: a bar of time 10 s after its end, a range bar once the server says it is complete. The bar still growing shows its prices, and the script's values once it is over. A script runs again when one more bar is over, not at each quote: on a chart of time, that was every second.
+- **Their runs continue with the new bars, in Vela-pinets' worker** (`admin_ui/vite/velaContinuedRuns.ts`). It is patched at build time like the time-zone formatters and Vela's seconds, and the build stops if a piece of the worker's code is not found exactly once.
+  - The new bars are appended to the PineTS of the last whole run and run on its context, as the TA engine continues a rule's run (`Runner.continueRun`).
+  - A script that reads what a whole run gives otherwise (`barstate.*`, `request.*`, a strategy…) runs whole each time, as before. That check is `wholeBecause`, now `engine/wholeRuns.ts`, shared with the runner.
+  - A whole run is made at the start, on a change of inputs, of the visible range or of history, when bars before the new ones changed, and every 10 minutes.
+
+  Measured on the user's Kernel VWAP script (light v5, with its library), over Dukascopy's US100 of 15–17 Sep 2026:
+
+  | Bars | New bars, 1 to 20 at a time | A whole run |
+  |---|---|---|
+  | 2,670 bars of one minute | 41–62 ms | 3.8 s |
+  | 4,344 range bars of 6 points | 73–152 ms | 20.5 s |
+
+  The models and alerts are a whole run's, but for the labels' numbers: PineTS numbers labels with a counter of the whole worker, which every whole run moves on.
+
+**On the live path**: nothing. Only the admin and its interface change. `RangeBarBuilder` and the files of the backtests' code digest are unchanged, so no run is marked stale.
+
+**Verification status:**
+- 2,952 Python tests pass on Python 3.12 (3.14 not run here) and 20 are skipped. 7 of them are new:
+  - the decimals equal to a price-by-price reading's, on 25 random series;
+  - `after` equal to the tail of a whole answer;
+  - `newest` cut to the newest bars rather than refused;
+  - `newest` built from the first day whose bars fit, said in `from`;
+  - the rows' JSON parsed equal to FastAPI's;
+  - gzip on a big answer and not on a small one;
+  - an event stream and `/mcp` never compressed.
+- 1,147 interface tests pass, 14 of them new:
+  - the bars that are over: time, 45 s, the last ones, range;
+  - a run only when one more bar is over, a timer when the market closes, history, the throttle of range charts;
+  - WataBars: one request from the first day that fits, a cut answer not widened, older days and too many bars read anew;
+  - the live stream started from the newest bar given;
+  - the patched worker run in a Node `vm`: continued models and alerts equal to whole runs' (a script with `var` and `ta.*`), and whole runs for a script not marked or when the bars before changed.
+
+  Lint and types are clean, and the build holds the patched worker.
+- The user's script was compared in the patched worker, as above.
+- **Seen in the browser pane on the fake admin**, its made-up market opened on a Sunday:
+  - A live R60 chart of US100 with the EMA cross script made one `newest` read of 570 kB (111 kB sent), then one `after` read of about 0.9 kB each ten seconds.
+  - The scripts were handed the bars up to the last one over, and each new one once. A new bar's run took 1 to 7 ms, against 26 to 36 ms for a whole run of about 500 bars.
+  - On bars of one minute, a run came when a minute was over plus ten seconds, and none in between.
+- **Not run on the server**: the answers' timings on its database, and the Charts page on the real Capital.com feed.
+
 ## v0.46.1 - undici 8.12.3 under the interface's tests
 
 **Release date:** 2026-10-25

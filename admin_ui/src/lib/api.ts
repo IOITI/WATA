@@ -259,12 +259,21 @@ export const api = {
   /**
    * Range bars of one side: of `size` (a price), or of `ticks` steps of the instrument's
    * price (TradingView's R); without either the server chooses. `under` is the recorded
-   * index shown under a turbo.
+   * index shown under a turbo. `after` (epoch seconds) gives only the bars placed from it
+   * on, built from the period's first day all the same; `newest` gives the bars of the
+   * first day of the period from which they fit, rather than a refusal.
    */
   assetRangeBars: (
     ref: string,
     period: PricePeriod,
-    options: { side: 'bid' | 'ask'; size: number | null; under: number | null; ticks?: number | null },
+    options: {
+      side: 'bid' | 'ask'
+      size: number | null
+      under: number | null
+      ticks?: number | null
+      after?: number | null
+      newest?: boolean
+    },
   ) =>
     request<PriceRangeBars>(
       'GET',
@@ -274,6 +283,8 @@ export const api = {
         size: options.size,
         ticks: options.ticks,
         under: options.under,
+        after: options.after,
+        newest: options.newest ? 'true' : null,
       })}`,
     ),
   assetContext: (ref: string, period: PricePeriod) =>

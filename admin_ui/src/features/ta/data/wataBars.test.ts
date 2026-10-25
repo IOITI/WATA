@@ -18,8 +18,15 @@ function ticker(text: string): WataTicker {
   return parsed
 }
 
-/** A made-up API: one bar an hour, every day from `first` to `last`, recording each request. */
-function fakeClient(first: string, last: string, options: { capPerRequestDays?: number; status?: AssetStatus } = {}) {
+/**
+ * A made-up API: one bar an hour, every day from `first` to `last`, recording each request. Asked for the
+ * newest range bars, it says it built them from `rangeFrom` when given (the first day they fit from).
+ */
+function fakeClient(
+  first: string,
+  last: string,
+  options: { capPerRequestDays?: number; status?: AssetStatus; rangeFrom?: string; rangeCut?: boolean } = {},
+) {
   const requests: string[] = []
   const hourly = (from: string, to: string): PriceBarRow[] => {
     const rows: PriceBarRow[] = []
@@ -46,11 +53,16 @@ function fakeClient(first: string, last: string, options: { capPerRequestDays?: 
       return { bars: hourly(period.from, period.to), interval } as unknown as PriceBars
     },
     assetRangeBars: async (ref, period, rangeOptions) => {
-      requests.push(`range ${ref} ${period.from}..${period.to} ${rangeOptions.side} ${rangeOptions.ticks}`)
-      const rows: PriceRangeRow[] = hourly(period.from, period.to).map((row) => [
-        row[0], row[1], row[2], row[3], row[4], row[0], row[0] + 3600, true, false, null, 7,
-      ])
-      return { bars: rows } as unknown as PriceRangeBars
+      const asked = [
+        rangeOptions.after !== undefined ? `after ${rangeOptions.after}` : '',
+        rangeOptions.newest ? 'newest' : '',
+      ].filter(Boolean)
+      requests.push(`range ${ref} ${period.from}..${period.to} ${rangeOptions.side} ${rangeOptions.ticks}${asked.map((word) => ` ${word}`).join('')}`)
+      const from = rangeOptions.newest && options.rangeFrom ? options.rangeFrom : period.from
+      const rows: PriceRangeRow[] = hourly(from, period.to)
+        .filter((row) => rangeOptions.after === undefined || row[0] >= rangeOptions.after)
+        .map((row) => [row[0], row[1], row[2], row[3], row[4], row[0], row[0] + 3600, true, false, null, 7])
+      return { from, cut: rangeOptions.newest ? options.rangeCut === true : false, bars: rows } as unknown as PriceRangeBars
     },
   }
   return { client, requests }
@@ -172,17 +184,20 @@ describe('range bars', () => {
     const range = ticker('CAPITAL_US100.R60')
 
     const first = await bars.bars(range, 60, { limit: 10 })
-    const tail = await bars.bars(range, 60, { from: first[first.length - 1].time })
+    const last = first[first.length - 1].time
+    const tail = await bars.bars(range, 60, { from: last })
 
+    // A live chart's read asks only for the bars from its last one on.
     expect(requests).toEqual([
-      'range capital/US100 2026-10-13..2026-10-15 bid 60',
-      'range capital/US100 2026-10-13..2026-10-15 bid 60',
+      'range capital/US100 2026-10-13..2026-10-15 bid 60 newest',
+      `range capital/US100 2026-10-13..2026-10-15 bid 60 after ${last / 1000}`,
     ])
     expect(first).toHaveLength(10)
     expect(first[0].volume).toBe(7)
     // A range bar ends when its last ten seconds did, not a fixed time after it began.
     expect(first[0].closeTime - first[0].time).toBe(3_600_000)
     expect(tail[0]).toEqual(first[first.length - 1])
+    expect(tail.every((bar) => bar.time >= last && bar.time <= NOW)).toBe(true)
   })
 
   it('read more days, up to the API\'s month, when more bars are wanted', async () => {
@@ -193,10 +208,66 @@ describe('range bars', () => {
 
     expect(found).toHaveLength(200)
     expect(requests).toEqual([
-      'range capital/US100 2026-10-13..2026-10-15 ask 60',
-      'range capital/US100 2026-10-10..2026-10-15 ask 60',
-      'range capital/US100 2026-10-04..2026-10-15 ask 60',
+      'range capital/US100 2026-10-13..2026-10-15 ask 60 newest',
+      'range capital/US100 2026-10-10..2026-10-15 ask 60 newest',
+      'range capital/US100 2026-10-04..2026-10-15 ask 60 newest',
     ])
+  })
+
+  it('are read in one request from the first day they fit from, and read again from that day', async () => {
+    // The server says the bars of three days are too many: it built them from the 14th.
+    const { client, requests } = fakeClient('2026-09-01', '2026-10-15', { rangeFrom: '2026-10-14' })
+    const bars = new WataBars(client, () => NOW)
+    const range = ticker('CAPITAL_US100.R60')
+
+    // More are wanted than it gave: no earlier day would give more.
+    const first = await bars.bars(range, 60, { limit: 200 })
+    const last = first[first.length - 1].time
+    await bars.bars(range, 60, { from: last })
+
+    expect(requests).toEqual([
+      'range capital/US100 2026-10-13..2026-10-15 bid 60 newest',
+      `range capital/US100 2026-10-14..2026-10-15 bid 60 after ${last / 1000}`,
+    ])
+  })
+
+  it('cut to the newest by the server are not read from more days', async () => {
+    const { client, requests } = fakeClient('2026-09-01', '2026-10-15', { rangeCut: true })
+
+    await new WataBars(client, () => NOW).bars(ticker('CAPITAL_US100.R60'), 60, { limit: 200 })
+
+    expect(requests).toEqual(['range capital/US100 2026-10-13..2026-10-15 bid 60 newest'])
+  })
+
+  it('older than the day the series was read from are read anew from their own day', async () => {
+    const { client, requests } = fakeClient('2026-09-01', '2026-10-15')
+    const bars = new WataBars(client, () => NOW)
+    const range = ticker('CAPITAL_US100.R60')
+
+    await bars.bars(range, 60, { limit: 10 })
+    await bars.bars(range, 60, { from: Date.UTC(2026, 9, 11, 12, 0) })
+
+    expect(requests[1]).toBe('range capital/US100 2026-10-11..2026-10-15 bid 60 newest')
+  })
+
+  it('read anew when the server builds too many from the day they were read from', async () => {
+    const { client, requests } = fakeClient('2026-09-01', '2026-10-15')
+    const bars = new WataBars(client, () => NOW)
+    const range = ticker('CAPITAL_US100.R60')
+    const first = await bars.bars(range, 60, { limit: 10 })
+    const read = client.assetRangeBars
+    client.assetRangeBars = async (ref, period, rangeOptions) => {
+      if (rangeOptions.after !== undefined) {
+        requests.push('refused')
+        throw new ApiError(422, 'More than 120000 range bars in this period: choose a larger range or a shorter period')
+      }
+      return read(ref, period, rangeOptions)
+    }
+
+    const tail = await bars.bars(range, 60, { from: first[first.length - 1].time })
+
+    expect(requests.slice(1)).toEqual(['refused', 'range capital/US100 2026-10-15..2026-10-15 bid 60 newest'])
+    expect(tail[0]).toEqual(first[first.length - 1])
   })
 })
 

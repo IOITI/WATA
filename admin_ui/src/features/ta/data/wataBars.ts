@@ -8,7 +8,9 @@
 // Range bars depend on where they start: the same prices read from another day
 // make other bars. A range series is therefore always read from the day it was
 // first read from, so that a later read gives the same bars again with the new
-// ones after them.
+// ones after them. The first read asks for the newest bars, which the server
+// builds from the first day they fit from, and says which; a live chart's later
+// reads ask only for the bars from its last one on, built from that same day.
 
 import { api, ApiError } from '@/lib/api'
 import type { AssetDetails, PriceBarRow, PriceBars, PriceRangeBars, PriceRangeRow } from '@/lib/types'
@@ -49,7 +51,7 @@ export interface BarsClient {
   assetRangeBars: (
     ref: string,
     period: { from: string; to: string },
-    options: { side: 'bid' | 'ask'; size: null; under: null; ticks: number },
+    options: { side: 'bid' | 'ask'; size: null; under: null; ticks: number; after?: number; newest?: boolean },
   ) => Promise<PriceRangeBars>
 }
 
@@ -132,6 +134,8 @@ interface Span {
 export class WataBars {
   private readonly spans = new Map<string, Promise<Span>>()
   private readonly rangeStarts = new Map<string, string>()
+  /** The open time of each range series' bar still in progress, as last read. */
+  private readonly growing = new Map<string, number>()
   private readonly client: BarsClient
   private readonly now: () => number
 
@@ -160,6 +164,22 @@ export class WataBars {
   /** Forget what was learnt of the assets: their days may have grown. */
   refresh(): void {
     this.spans.clear()
+  }
+
+  /**
+   * The open time (epoch ms) of the range bar of `ticker` still in progress, as last read: the
+   * last of its series, which the server says has not reached its range. Null when none is.
+   */
+  growingBar(ticker: WataTicker): number | null {
+    return this.growing.get(tickerText(ticker)) ?? null
+  }
+
+  /** What the last of a range series read says: still in progress, or not. */
+  private noteGrowing(key: string, rows: PriceRangeRow[]): void {
+    const last = rows[rows.length - 1]
+    if (!last) return
+    if (last[7] === false) this.growing.set(key, last[0] * 1000)
+    else this.growing.delete(key)
   }
 
   /** The bars of `ticker` in `window`: of `seconds` each, or range bars when the ticker says so. */
@@ -229,22 +249,41 @@ export class WataBars {
     now: number,
   ): Promise<OhlcvBar[]> {
     const key = tickerText(ticker)
+    const options = { side: ticker.side, size: null, under: null, ticks: ticker.rangeTicks ?? 1 }
     const anchored = this.rangeStarts.get(key)
+    // What a live chart lacks: the bars from a time on, up to now, built from where the series was first read.
+    const since = window.from !== undefined && window.to === undefined ? window.from : null
+    if (
+      anchored && since !== null && dayIn(since, span.timeZone) >= anchored &&
+      addDays(anchored, RANGE_MAX_DAYS - 1) >= lastDay
+    ) {
+      try {
+        const answer = await this.client.assetRangeBars(
+          refOf(ticker),
+          { from: anchored, to: lastDay },
+          { ...options, after: Math.floor(since / 1000) },
+        )
+        this.noteGrowing(key, answer.bars)
+        return windowed(answer.bars.map(rangeBar), window, now)
+      } catch (error) {
+        if (!tooMany(error)) throw error
+        // More bars from that day than the server builds at once: the series is read anew.
+        this.rangeStarts.delete(key)
+      }
+    }
     // Read from the day the series was first read from, unless older bars are wanted.
-    let start = anchored && anchored <= firstDay ? anchored : null
+    const kept = this.rangeStarts.get(key)
+    let start = kept && kept <= firstDay ? kept : null
     if (start === null) {
       start = window.from !== undefined ? firstDay : later(addDays(lastDay, -(FIRST_RANGE_DAYS - 1)), span.first)
     }
     if (addDays(start, RANGE_MAX_DAYS - 1) < lastDay) start = addDays(lastDay, -(RANGE_MAX_DAYS - 1))
     let found: OhlcvBar[] = []
     for (let request = 0; request < MAX_REQUESTS; request += 1) {
+      const asked: string = start
       let answer: PriceRangeBars
       try {
-        answer = await this.client.assetRangeBars(
-          refOf(ticker),
-          { from: start, to: lastDay },
-          { side: ticker.side, size: null, under: null, ticks: ticker.rangeTicks ?? 1 },
-        )
+        answer = await this.client.assetRangeBars(refOf(ticker), { from: asked, to: lastDay }, { ...options, newest: true })
       } catch (error) {
         if (tooMany(error) && start < lastDay) {
           start = addDays(start, Math.ceil((dayCount(start, lastDay) - 1) / 2))
@@ -253,7 +292,13 @@ export class WataBars {
         throw error
       }
       found = answer.bars.map(rangeBar)
+      this.noteGrowing(key, answer.bars)
+      // The server built them from the first day they fit from: the one they stay the same bars from.
+      if (answer.from) start = answer.from
+      // Built from a later day than asked, or cut to the newest: no earlier day gives more.
+      const full = start > asked || answer.cut === true
       const wantMore =
+        !full &&
         window.from === undefined &&
         window.limit !== undefined &&
         found.length < window.limit &&

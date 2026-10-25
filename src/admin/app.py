@@ -14,7 +14,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.middleware.gzip import GZipMiddleware
 
 from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
@@ -58,6 +59,11 @@ WORKER_CONTENT_SECURITY_POLICY = "; ".join([
 ])
 WORKER_PATH = re.compile(r"^/assets/(?:vela-)?pine-worker-[A-Za-z0-9_-]+\.js$")
 
+# Answers this big or more go out compressed when the browser accepts it: a day of range bars is 0.8 MB of
+# JSON, a sixth of that compressed. The smaller ones (the sign-in, a credential) go out as they are.
+COMPRESS_FROM_BYTES = 4096
+COMPRESS_LEVEL = 5
+
 
 class SecurityHeadersMiddleware:
     """
@@ -96,6 +102,34 @@ class SecurityHeadersMiddleware:
             await not_found(scope, receive, send_with_headers)
             return
         await self.app(scope, receive, send_with_headers)
+
+
+def _streamed(scope) -> bool:
+    """A stream of events (asked for as such), or the MCP endpoint, whose answers can be streams."""
+    path = scope["path"]
+    if path == "/mcp" or path.startswith("/mcp/"):
+        return True
+    return "text/event-stream" in Headers(scope=scope).get("accept", "")
+
+
+class CompressedAnswers:
+    """
+    gzip for the API's answers and the interface's files, when the browser
+    accepts it. Never for a stream: the compressing middleware holds an answer's
+    headers back until its first bytes, and a stream may say nothing for a
+    while. A plain ASGI middleware, as SecurityHeadersMiddleware, for the same
+    reason as it.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.compressing = GZipMiddleware(app, minimum_size=COMPRESS_FROM_BYTES, compresslevel=COMPRESS_LEVEL)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or _streamed(scope):
+            await self.app(scope, receive, send)
+            return
+        await self.compressing(scope, receive, send)
 
 
 def _not_the_interface(path: str) -> bool:
@@ -194,6 +228,7 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
     app.state.ctx = ctx
 
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(CompressedAnswers)
 
     @app.exception_handler(DatabaseUnavailable)
     async def database_unavailable(_: Request, __: DatabaseUnavailable):

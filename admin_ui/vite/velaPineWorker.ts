@@ -7,7 +7,9 @@
 //
 // The page gets the address from the virtual module and hands it to
 // `new PineWorkerEngine({ workerUrl })`. The worker carries a copy of PineTS, which
-// keeps a formatter per time zone there too (vite/pinetsZoneFormat.ts).
+// keeps a formatter per time zone there too (vite/pinetsZoneFormat.ts), and continues
+// a chart's run with its new bars rather than running it whole again
+// (vite/velaContinuedRuns.ts).
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -18,6 +20,7 @@ import { parse } from 'acorn'
 import type { Plugin } from 'vite'
 
 import { patchPinets } from './pinetsZoneFormat.ts'
+import { patchContinuedRuns } from './velaContinuedRuns.ts'
 
 export const VIRTUAL_ID = 'virtual:vela-pine-worker'
 const RESOLVED_ID = `\0${VIRTUAL_ID}`
@@ -84,7 +87,7 @@ export function velaPineWorker(bundlePath: string = velaPinetsBundlePath()): Plu
   let fileName = ''
   const load = () => {
     if (source === null) {
-      source = patchPinets(extractWorkerSource(readFileSync(bundlePath, 'utf8')))
+      source = patchContinuedRuns(patchPinets(extractWorkerSource(readFileSync(bundlePath, 'utf8'))))
       fileName = workerFileName(source)
     }
     return source

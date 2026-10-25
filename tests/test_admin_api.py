@@ -2234,6 +2234,118 @@ def test_a_period_with_more_recorded_bars_than_can_be_read_is_refused(client, ct
     assert "choose a shorter one" in response.json()["detail"]
 
 
+def test_range_bars_after_a_moment_are_those_of_a_whole_answer_from_it(client, ctx):
+    # A climb of 25 cents each ten seconds, each with its quote changes: two or three ten-cent bars in the same ten seconds.
+    ctx.queries.price_series_rows = {2: [
+        (RANGE_T0 + 10 * n, *([round(8.40 + 0.25 * n, 2)] * 4), n + 1) for n in range(30)
+    ]}
+    url = "/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10"
+    whole = client.get(url).json()["bars"]
+
+    for position in (1, 17, len(whole) - 1):
+        tail = client.get(f"{url}&after={whole[position][0]}").json()
+        # Their volumes too: ten seconds go to the first bar running at their start, which may come before.
+        assert tail["bars"] == whole[position:]
+        assert tail["cut"] is False
+    assert client.get(f"{url}&after={whole[-1][0] + 1}").json()["bars"] == []
+
+
+def test_newest_gives_the_last_bars_of_a_period_that_makes_too_many_rather_than_refusing_it(client, ctx, monkeypatch):
+    from src.admin.routers import data as data_router
+
+    monkeypatch.setattr(data_router, "MAX_BUCKETS", 5)
+    ctx.queries.price_series_rows = {2: flat_bars(*[round(8.40 + 0.11 * n, 2) for n in range(20)])}
+    url = "/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10"
+
+    assert client.get(url).status_code == 422
+    whole = client.get(f"{url}&after=0").json()["bars"]
+    newest = client.get(f"{url}&newest=true").json()
+    assert (newest["cut"], newest["bars"]) == (True, whole[-5:])
+    assert client.get(f"{url}&newest=true&after={whole[-2][0]}").json()["bars"] == whole[-2:]
+
+    # Built from the first day asked, a period is still refused past what is built at most.
+    monkeypatch.setattr(data_router, "BUILT_RANGE_BARS", 8)
+    refused = client.get(f"{url}&newest=true")
+    assert refused.status_code == 422 and refused.json()["detail"].startswith("More than 8 range bars")
+
+
+def test_newest_builds_the_bars_from_the_first_day_whose_bars_fit_and_says_which(client, ctx, monkeypatch):
+    from src.admin.routers import data as data_router
+
+    monkeypatch.setattr(data_router, "MAX_BUCKETS", 12)
+    # About twenty bars on Monday the 12th, ten on Tuesday the 13th: together more than are given.
+    climb = [round(8.40 + 0.11 * n, 2) for n in range(20)]
+    ctx.queries.price_series_rows = {2: flat_bars(*climb) + flat_bars(*climb[:10], start=RANGE_T0 + 86_400)}
+
+    both = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&to=2026-10-13&size=0.10&newest=true").json()
+
+    assert (both["from"], both["to"], both["cut"]) == ("2026-10-13", "2026-10-13", False)
+    # The bars of Tuesday alone, as a chart anchored there reads them again.
+    tuesday = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-13&size=0.10").json()
+    assert both["bars"] == tuesday["bars"] and len(both["bars"]) == 10
+    # The series is read once, the days tried on it.
+    assert len([call for call in ctx.queries.calls if call[0] == "price_series"]) == 2
+
+
+def test_an_answer_with_rows_is_the_json_fastapi_would_have_written():
+    from fastapi.encoders import jsonable_encoder
+
+    from src.admin.routers.data import _with_rows
+
+    answer = {
+        "instrument": {"id": 2, "name": "NASDAQ 100 Turbo Long", "first_seen_at": datetime(2026, 10, 12, 8, tzinfo=timezone.utc)},
+        "under": None,
+        "from": date(2026, 10, 12),
+        "tick": 0.01,
+        "auto": False,
+        "bars": [
+            [RANGE_T0, 8.4, 8.5, 8.4, 8.5, RANGE_T0, RANGE_T0 + 30, True, False, None, 0],
+            [RANGE_T0 + 20, 1e-07, 25012.25, -0.0, 3, 4, 5, False, True, 25009.0, 7],
+        ],
+    }
+
+    response = _with_rows(answer, "bars")
+
+    assert response.media_type == "application/json"
+    assert json.loads(response.body) == json.loads(json.dumps(jsonable_encoder(answer)))
+    # What is not a row is written as FastAPI writes it: a moment keeps its own form.
+    assert '"first_seen_at":"2026-10-12T08:00:00+00:00"' in response.body.decode()
+    assert json.loads(_with_rows({"bars": []}, "bars").body) == {"bars": []}
+
+
+def test_a_big_answer_goes_out_compressed_and_a_small_one_as_it_is(client, ctx):
+    # A climb of eleven cents each ten seconds: a bar of ten cents each time, some tens of kilobytes of them.
+    ctx.queries.price_series_rows = {2: flat_bars(*[round(8.40 + 0.11 * n, 2) for n in range(400)])}
+
+    big = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10", headers={"Accept-Encoding": "gzip"})
+
+    assert big.headers["content-encoding"] == "gzip"
+    assert len(big.json()["bars"]) > 300
+    ctx.queries.price_series_rows = {2: flat_bars(8.40, 8.44)}
+    small = client.get("/api/data/assets/saxo/2/range-bars?from=2026-10-12&size=0.10", headers={"Accept-Encoding": "gzip"})
+    assert "content-encoding" not in small.headers
+
+
+def test_a_stream_and_the_mcp_endpoint_are_never_compressed():
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    from src.admin.app import CompressedAnswers
+
+    async def big(_):
+        return PlainTextResponse("x" * 10_000)
+
+    app = Starlette(routes=[Route("/api/big", big), Route("/mcp", big)])
+    app.add_middleware(CompressedAnswers)
+    with TestClient(app) as bare:
+        assert bare.get("/api/big", headers={"Accept-Encoding": "gzip"}).headers.get("content-encoding") == "gzip"
+        # The compressing middleware holds an answer's headers back until its first bytes: a stream would wait.
+        as_stream = bare.get("/api/big", headers={"Accept-Encoding": "gzip", "Accept": "text/event-stream"})
+        assert "content-encoding" not in as_stream.headers
+        assert "content-encoding" not in bare.get("/mcp", headers={"Accept-Encoding": "gzip"}).headers
+
+
 def test_context_of_a_turbo_gives_its_trades_and_the_signals_of_its_indice(client, ctx):
     ctx.queries.journal = [
         {**JOURNAL_ENTRY, "signal_uuid": "b", "indice": "us100", "decided_at": "2026-10-12T09:00:00+00:00"},

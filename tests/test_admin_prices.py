@@ -882,6 +882,35 @@ def test_the_decimals_of_every_series_count():
     assert price_decimals([8.45], [8.455], [8.4]) == 3
 
 
+def _decimals_value_by_value(*series, minimum=2):
+    """price_decimals as it was, reading every value rather than each distinct one once."""
+    decimals = minimum
+    for values in series:
+        for value in values:
+            text = repr(float(value))
+            if "e" in text or "n" in text:
+                continue
+            decimals = max(decimals, len(text) - text.index(".") - 1)
+            if decimals >= 5:
+                return 5
+    return decimals
+
+
+@pytest.mark.parametrize("seed", range(25))
+def test_reading_each_distinct_price_once_gives_the_decimals_of_every_price(seed):
+    import random
+
+    rng = random.Random(seed)
+    places = rng.choice([0, 1, 2, 3, 4, 6])
+    series = [[round(rng.uniform(1, 30_000), places) for _ in range(rng.randint(0, 300))] for _ in range(4)]
+    # Repeated prices, as a quote that does not move gives, and values that say no decimals.
+    series[0] += series[0][:50]
+    series[rng.randrange(4)] += [float("nan"), 1e-07, float("inf"), -0.0][: rng.randint(0, 4)]
+
+    for minimum in (0, 2):
+        assert price_decimals(*series, minimum=minimum) == _decimals_value_by_value(*series, minimum=minimum)
+
+
 def test_a_range_is_counted_in_the_assets_own_tick():
     # Capital.com's US100 has one decimal, Dukascopy's three: R60 is 6 points on one, 0.06 on the other.
     assert (tick_of(1), range_points(60, 1)) == (0.1, 6.0)

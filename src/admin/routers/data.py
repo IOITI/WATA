@@ -18,14 +18,16 @@ import asyncio
 import json
 import time
 from array import array
+from bisect import bisect_left
 from dataclasses import fields
 from datetime import date, datetime, timedelta, timezone
 from itertools import batched
 
+import pydantic_core
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -114,6 +116,8 @@ LIVE_POLL_SECONDS = 1.0
 LIVE_KEEP_ALIVE_SECONDS = 15.0
 # Ten-second bars read at a time from the database, to build range bars or statistics.
 SERIES_PAGE = 20_000
+# Range bars built at most for an answer that keeps only the newest of them, or those after a moment.
+BUILT_RANGE_BARS = 10 * MAX_BUCKETS
 # What the history panel shows when it is not told a period.
 DEFAULT_COVERAGE_DAYS = 120
 
@@ -883,9 +887,23 @@ async def bars(
         )
     if checked_provider(provider) == DUKASCOPY:
         _history(ctx)
-    return await asset_bars.bars(
+    answer = await asset_bars.bars(
         ctx.queries, ctx.history, ctx.settings.timezone, provider, key, first_day, last_day, interval, today=_today(ctx),
     )
+    return _with_rows(answer, "bars")
+
+
+def _with_rows(answer: dict, key: str) -> Response:
+    """
+    ``answer`` as JSON, its rows (``key``) written by pydantic's serializer and
+    the rest as FastAPI writes it. FastAPI's own encoder took 58 ms for a day of
+    range bars of US100; this takes 3, for the same JSON. A value that is not a
+    number (none is) would be null rather than an invalid document.
+    """
+    rest = jsonable_encoder({name: value for name, value in answer.items() if name != key})
+    head = json.dumps(rest, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    rows = pydantic_core.to_json(answer[key], inf_nan_mode="null").decode()
+    return Response(f'{head[:-1]}{"," if rest else ""}{json.dumps(key)}:{rows}}}', media_type="application/json")
 
 
 class _Series:
@@ -951,6 +969,8 @@ async def range_bars_of(
     size: float | None = Query(None, gt=0),
     ticks: int | None = Query(None, ge=1),
     under: int | None = Query(None, ge=1),
+    after: int | None = Query(None, ge=0),
+    newest: bool = Query(False),
 ):
     """
     The prices of one side as range bars: a bar ends when the price has left a
@@ -960,18 +980,30 @@ async def range_bars_of(
     range that suits the period is chosen. ``under`` names the recorded index
     shown under a turbo: its bid at the end of each bar comes with the bar.
     Each bar comes with its quote changes, what stands for its volume.
+
+    Built from the first day asked, the bars depend on it. ``after`` (epoch
+    seconds) gives only those placed at or after it: what a live chart lacks,
+    the last bar it has included, which may have grown. ``newest`` gives the
+    newest MAX_BUCKETS bars of a period that makes more (``cut`` says so),
+    rather than refusing it.
     """
     ctx = request.app.state.ctx
     if side not in SIDES:
         raise HTTPException(status_code=422, detail=f"The side must be one of {', '.join(SIDES)}")
+    if size is not None and ticks is not None:
+        raise HTTPException(status_code=422, detail="Give the range as a size or as ticks, not both")
     provider = checked_provider(provider)
     first_day, last_day, start, end = _period(ctx, first_day, last_day)
     _at_most(first_day, last_day, RANGE_MAX_DAYS, f"Range bars are built for periods of {RANGE_MAX_DAYS} days at most")
     _history_period(provider, first_day, last_day)
     instrument = await _instrument(ctx, provider, key)
+    index_series = None
     if provider == SAXO:
         index_instrument = await asset_bars.saxo_instrument(ctx.queries, str(under)) if under is not None else None
         series = await _db_series(ctx.queries.price_series, instrument["id"], start, end, side)
+        if index_instrument is not None:
+            # The index has no spread to speak of: its bid is the level.
+            index_series = await _db_series(ctx.queries.price_series, index_instrument["id"], start, end, SIDES[0])
     elif provider == CAPITAL:
         # An index: nothing goes under it.
         index_instrument = None
@@ -981,10 +1013,33 @@ async def range_bars_of(
         index_instrument = None
         series = await run_in_threadpool(_history_series, _history(ctx), instrument["key"], start, end, side)
 
+    # Some tenths of a second of Python for a month of ten-second bars: away from the requests' loop.
+    return await run_in_threadpool(
+        _range_answer, instrument, index_instrument, series, index_series,
+        provider=provider, first_day=first_day, last_day=last_day, timezone_name=ctx.settings.timezone,
+        side=side, size=size, ticks=ticks, after=after, newest=newest,
+    )
+
+
+def _range_answer(
+    instrument: dict,
+    index_instrument: dict | None,
+    series: _Series,
+    index_series: _Series | None,
+    *,
+    provider: str,
+    first_day: date,
+    last_day: date,
+    timezone_name: str,
+    side: str,
+    size: float | None,
+    ticks: int | None,
+    after: int | None = None,
+    newest: bool = False,
+) -> Response:
+    """The answer of ``range_bars_of`` from the series it read."""
     decimals = price_decimals(series.opens, series.highs, series.lows, series.closes)
     tick = round(10 ** -decimals, decimals)
-    if size is not None and ticks is not None:
-        raise HTTPException(status_code=422, detail="Give the range as a size or as ticks, not both")
     if ticks is not None:
         step_decimals = instrument.get("decimals") if provider == CAPITAL else None
         step_decimals = decimals if step_decimals is None else min(int(step_decimals), decimals)
@@ -998,30 +1053,31 @@ async def range_bars_of(
         if ticks < 1:
             raise HTTPException(status_code=422, detail=f"The range is smaller than one step of these prices ({tick:.{decimals}f})")
 
-    try:
-        built = range_bars(
-            series.times, series.opens, series.highs, series.lows, series.closes,
-            ticks=ticks, decimals=decimals, limit=MAX_BUCKETS,
-        )
-    except TooManyBars:
-        raise HTTPException(
-            status_code=422,
-            detail=f"More than {MAX_BUCKETS} range bars in this period: choose a larger range or a shorter period",
-        ) from None
+    built_from, cut = first_day, False
+    if newest:
+        built, built_from, cut = _newest_bars(series, first_day, last_day, timezone_name, ticks, decimals)
+    else:
+        # With ``after``, the whole period is built, whatever part of it is given: up to more than a chart shows.
+        built = _built(series, 0, ticks, decimals, BUILT_RANGE_BARS if after is not None else MAX_BUCKETS)
+    # Counted over all the bars built: ten seconds go to the first bar running at their start, which can be one left out.
+    volumes = range_volumes(built, series.times, series.updates)
+    first = len(built) - MAX_BUCKETS if cut else 0
+    if after is not None:
+        first = max(first, bisect_left(built, after, key=lambda bar: bar.t))
+    built, volumes = built[first:], volumes[first:]
 
     index = None
-    if index_instrument is not None:
-        # The index has no spread to speak of: its bid is the level.
-        index_series = await _db_series(ctx.queries.price_series, index_instrument["id"], start, end, SIDES[0])
+    if index_series is not None:
         # ``ended`` is the end of the bar's last ten seconds: the index of those ten seconds is the one before it.
         index = sample_at(index_series.times, index_series.closes, [bar.ended - 1 for bar in built])
 
-    return {
+    return _with_rows({
         "instrument": instrument,
         "under": index_instrument,
-        "from": first_day,
+        # The day the bars were built from: a later one than asked when newest had to start later.
+        "from": built_from,
         "to": last_day,
-        "timezone": ctx.settings.timezone,
+        "timezone": timezone_name,
         "side": side,
         # One step of these prices, and the range in steps (TradingView's "R") and as a price.
         "tick": tick,
@@ -1029,9 +1085,50 @@ async def range_bars_of(
         "ticks": ticks,
         "size": round(ticks * tick, decimals),
         "auto": size is None,
+        # The last day alone made more bars than are given: only its newest are (newest).
+        "cut": cut,
         "columns": list(RANGE_COLUMNS),
-        "bars": range_rows(built, decimals, index, range_volumes(built, series.times, series.updates)),
-    }
+        "bars": range_rows(built, decimals, index, volumes),
+    }, "bars")
+
+
+def _built(series: _Series, begin: int, ticks: int, decimals: int, limit: int) -> list:
+    """The range bars of ``series`` from its row ``begin``; refused past ``limit`` of them."""
+    try:
+        return range_bars(
+            series.times[begin:], series.opens[begin:], series.highs[begin:], series.lows[begin:], series.closes[begin:],
+            ticks=ticks, decimals=decimals, limit=limit,
+        )
+    except TooManyBars:
+        raise HTTPException(
+            status_code=422,
+            detail=f"More than {limit} range bars in this period: choose a larger range or a shorter period",
+        ) from None
+
+
+def _newest_bars(series: _Series, first_day: date, last_day: date, timezone_name: str, ticks: int,
+                 decimals: int) -> tuple[list, date, bool]:
+    """
+    The bars of the earliest day of the period from which they are MAX_BUCKETS
+    at most: the first day, else the next, and so on, the rows read once (where
+    they start changes the bars). The last day alone making more, all of its
+    bars, to be cut to the newest. Returns them, the day they are built from,
+    and whether they are to be cut.
+    """
+    day = first_day
+    while True:
+        start, _ = day_bounds(day, day, timezone_name)
+        begin = bisect_left(series.times, int(start.timestamp()))
+        if day >= last_day:
+            built = _built(series, begin, ticks, decimals, BUILT_RANGE_BARS)
+            return built, day, len(built) > MAX_BUCKETS
+        try:
+            return range_bars(
+                series.times[begin:], series.opens[begin:], series.highs[begin:], series.lows[begin:],
+                series.closes[begin:], ticks=ticks, decimals=decimals, limit=MAX_BUCKETS,
+            ), day, False
+        except TooManyBars:
+            day += timedelta(days=1)
 
 
 def _recording_gaps(settings: RecorderSettings, coverage: list[dict], start: datetime, end: datetime) -> list[dict]:

@@ -344,10 +344,13 @@ def price_decimals(*series: Iterable[float], minimum: int = MIN_DECIMALS) -> int
     tick: the smallest step the price takes, and what "1R" is in TradingView.
     Never fewer than ``minimum``: two for Saxo's prices in cents, whose 9.0 is
     9.00; none for a feed whose prices carry all their decimals.
+
+    Each distinct price is read once: a day of US100's ten-second bars holds a
+    fifth as many prices as values, and a month far fewer.
     """
     decimals = minimum
     for values in series:
-        for value in values:
+        for value in set(values):
             text = repr(float(value))
             if "e" in text or "n" in text:      # 1e-07, nan, inf: no decimals to read
                 continue

@@ -212,6 +212,42 @@ describe('a WATA provider for Vela', () => {
     stopDukascopy?.()
   })
 
+  it('starts a live range chart from the newest bar it was given, rather than reading its series again', async () => {
+    const asked: object[] = []
+    const series = [bar(1000, 25000), bar(61_000, 25001)]
+    const { deps: fake, streams, timers } = deps({
+      bars: {
+        bars: vi.fn(async (_ticker: WataTicker, _seconds: number, window: { from?: number; to?: number }) => {
+          asked.push(window)
+          return series.filter((one) => one.time >= (window.from ?? 0) && one.time <= (window.to ?? Infinity))
+        }),
+      } as unknown as WataBars,
+    })
+    const provider = wataProvider('capital', fake)
+    const seen: number[] = []
+
+    // Nothing handed over yet for that ticker: the newest bars, as before.
+    provider.subscribe?.('CAPITAL_US100.ASK.R60', '1', () => undefined)
+    streams[0].send('bar', {})
+    await vi.waitFor(() => expect(asked).toEqual([{ limit: 2 }]))
+
+    // Vela loads a chart's bars, then subscribes. Older bars read meanwhile do not move where it starts.
+    await provider.getBars('CAPITAL_US100.R60', '1', { limit: 500 })
+    series.push(bar(121_000, 25002))
+    await provider.getBars('CAPITAL_US100.R60', '1', { to: 1000, limit: 500 })
+    provider.subscribe?.('CAPITAL_US100.R60', '1', (one) => seen.push(one.time))
+    streams[1].send('bar', {})
+    await vi.waitFor(() => expect(seen).toEqual([61_000, 121_000]))
+    expect(asked.slice(1)).toEqual([{ limit: 500 }, { to: 1000, limit: 500 }, { from: 61_000 }])
+
+    // A Saxo range chart, read again every ten seconds, starts the same way.
+    const saxo = wataProvider('saxo', fake)
+    await saxo.getBars('SAXO_2.R60', '1', { limit: 500 })
+    saxo.subscribe?.('SAXO_2.R60', '1', () => undefined)
+    timers.at(-1)?.()
+    await vi.waitFor(() => expect(asked.at(-1)).toEqual({ from: 121_000 }))
+  })
+
   it('reads the asset list once for the three providers', async () => {
     const read = vi.fn(async () => ({ items: ASSETS }))
     const assets = sharedAssets(read)

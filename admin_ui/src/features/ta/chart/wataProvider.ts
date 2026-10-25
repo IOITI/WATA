@@ -4,7 +4,8 @@
 // Bars come from the admin's API through WataBars. What moves them:
 // - Capital.com: the feed's live stream (/api/data/assets/capital/<epic>/live), folded
 //   into the bar of the chart's length by the asset pages' own rule (liveTail.ts);
-//   range bars are read again at each closed ten seconds;
+//   range bars are read again at each closed ten seconds, from the newest one the
+//   chart was given on (WataBars then asks the server for those alone);
 // - Saxo: the recorder writes ten-second bars, read again every ten seconds;
 // - Dukascopy: days downloaded, nothing live.
 //
@@ -106,11 +107,17 @@ export function wataProvider(provider: ProviderId, deps: ProviderDeps): DataProv
   const assetOf = async (ticker: WataTicker): Promise<DataAsset | undefined> =>
     (await deps.assets()).find((asset) => asset.provider === provider && asset.key === ticker.key)
 
+  // The newest range bar of each ticker handed over by a read up to now. Vela subscribes once a chart's
+  // bars are loaded: its stream starts from that bar, rather than from the series built again for its
+  // last two. A bar older than a chart's last is ignored by Vela, one of the same time replaces it.
+  const newestRange = new Map<string, number>()
+  const streamFrom = (ticker: WataTicker): number => (ticker.rangeTicks ? (newestRange.get(tickerText(ticker)) ?? 0) : 0)
+
   /** Reads the newest bars again every `ms`, and hands over those at or after the last one handed. */
   const poll = (ticker: WataTicker, seconds: number, onBar: (bar: OHLCV) => void, ms: number) => {
     let stopped = false
     let timer: unknown = null
-    let last = 0
+    let last = streamFrom(ticker)
     const read = async () => {
       try {
         const found = await deps.bars.bars(ticker, seconds, last ? { from: last } : { limit: 2 })
@@ -184,7 +191,7 @@ export function wataProvider(provider: ProviderId, deps: ProviderDeps): DataProv
   const rangeStream = (ticker: WataTicker, onBar: (bar: OHLCV) => void) => {
     let stopped = false
     let reading = false
-    let last = 0
+    let last = streamFrom(ticker)
     const read = async () => {
       if (reading || stopped) return
       reading = true
@@ -261,6 +268,8 @@ export function wataProvider(provider: ProviderId, deps: ProviderDeps): DataProv
         // faster than that, and the newest alone would leave a hole.
         limit: ticker.rangeTicks && range.from !== undefined ? undefined : range.limit,
       })
+      const newest = found[found.length - 1]
+      if (ticker.rangeTicks && range.to === undefined && newest) newestRange.set(tickerText(ticker), newest.time)
       return found.map(ohlcv)
     },
 

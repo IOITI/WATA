@@ -3,8 +3,8 @@
 // Pine engine in a worker of our own file (vite/velaPineWorker.ts).
 //
 // Live: Vela draws history alone unless told, and only a live chart asks the
-// providers for what moves its last bar. Its scripts are run in full all the same
-// (pineEngine.ts).
+// providers for what moves its last bar. Its scripts run on the bars that are
+// over, again when one more is (pineEngine.ts).
 //
 // Bars of time are of any length WATA makes, from ten seconds to a day: Vela's menu
 // offers the usual ones, the length field above the chart takes any other.
@@ -190,7 +190,10 @@ export function TaChart(props: TaChartProps) {
       timezone: timeZone,
       timeframes: TIMEFRAMES.map((length) => length.pine),
       providers,
-      engines: { pine: () => fullRunEngine(new PineWorkerEngine({ workerUrl: velaWorkerUrl })) },
+      engines: {
+        pine: () =>
+          fullRunEngine(new PineWorkerEngine({ workerUrl: velaWorkerUrl }), undefined, (ticker) => bars.growingBar(ticker)),
+      },
       indicators: async () => (await entries).entries.map((script) => script.entry),
       persist: LAYOUT_KEY,
       storage: layoutStorage(layout),
