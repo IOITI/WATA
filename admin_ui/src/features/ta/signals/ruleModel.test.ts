@@ -10,6 +10,7 @@ import {
   draftOfRule,
   draftProblems,
   historyLabel,
+  inputSections,
   inputValueOf,
   mappedAlerts,
   newDraft,
@@ -158,6 +159,41 @@ describe('a signal rule', () => {
     for (const typed of ['31', '1.5', '-1', 'two']) {
       expect(draftProblems({ ...own, historyDays: typed }, [])).toEqual([{ step: 'market', text: 'Its history is 0 to 30 days, or left empty for the engine’s.' }])
     }
+  })
+})
+
+describe('the inputs of a script', () => {
+  const input = (id: string, group?: string) => ({ id, group })
+  const shown = (inputs: { id: string; group?: string }[]) =>
+    inputSections(inputs).map((section) => [section.group, section.inputs.map((entry) => entry.id)])
+
+  it('are in one section when the script names no group', () => {
+    expect(shown([input('in_0'), input('in_1')])).toEqual([[null, ['in_0', 'in_1']]])
+    expect(shown([])).toEqual([])
+  })
+
+  it('are in the groups the script declares, each where its first input is, with all of its inputs', () => {
+    // As PineTS reads them: in declaration order, a group named by a constant read as its text.
+    const inputs = [
+      input('in_0', 'Main'), input('in_1'), input('in_2', 'Kernel settings'), input('in_3', 'Kernel settings'),
+      input('in_4', 'Main'), input('in_5', 'Display'), input('in_6'),
+    ]
+
+    expect(shown(inputs)).toEqual([
+      ['Main', ['in_0', 'in_4']],
+      [null, ['in_1']],
+      ['Kernel settings', ['in_2', 'in_3']],
+      ['Display', ['in_5']],
+      [null, ['in_6']],
+    ])
+  })
+
+  it('keep a group as it is written, an empty one being none', () => {
+    expect(shown([input('in_0', 'Kernel'), input('in_1', 'kernel'), input('in_2', ''), input('in_3')])).toEqual([
+      ['Kernel', ['in_0']],
+      ['kernel', ['in_1']],
+      [null, ['in_2', 'in_3']],
+    ])
   })
 })
 

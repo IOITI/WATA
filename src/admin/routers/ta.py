@@ -10,6 +10,7 @@ goes live, or a live rule changes, as an operator action does: allowed only
 when actions are, recorded in the audit trail and announced on Telegram.
 """
 
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
@@ -33,16 +34,23 @@ from src.admin.ta_monitor import (
     period_of,
     rules_by_id,
 )
+from src.admin.ta_history import DAY, HistoryCount, last_restart
 from src.admin.ta_rules import (
     LIVE,
     MAX_ALERTS,
     MAX_HISTORY_DAYS,
     MAX_INPUTS,
     MAX_TITLE_LENGTH,
+    RANGE_BARS,
     SHADOW,
+    SIDES,
+    TIME_BARS,
     RuleConflict,
     RuleStore,
     bars_label,
+    checked_asset,
+    checked_bars,
+    checked_history_days,
 )
 from src.admin.ta_readiness import unmet_readiness
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
@@ -50,6 +58,9 @@ from src.capital_feed.settings import CapitalSettings
 from src.ta_engine.settings import TaEngineSettings
 
 router = APIRouter(prefix="/api/ta", dependencies=[Depends(require_session)])
+
+# The Capital.com feed's ten-second rows a count of a rule's bars reads at a time (8,640 a day at most).
+HISTORY_PAGE = 20_000
 
 
 def scripts(request: Request):
@@ -266,29 +277,25 @@ def _feed_instruments(config_manager) -> list[dict]:
     return [{"epic": instrument.epic, "label": instrument.label} for instrument in feed.instruments]
 
 
-def _engine_history_days(config_manager) -> int:
-    """The engine's history_days: the days of bars before each day a rule without its own is given."""
-    try:
-        return TaEngineSettings.from_config(config_manager).history_days
-    except ValueError:
-        return TaEngineSettings.history_days
-
-
 @router.get("/rules")
 async def list_rules(request: Request, store=Depends(scripts), rule_store: RuleStore = Depends(rules)):
     """
     The rules, with what a rule can be made of: the indices the trader accepts,
-    the instruments the Capital.com feed records, and the engine's history_days.
+    the instruments the Capital.com feed records, the engine's history_days (the
+    days of bars before each day a rule without its own is given) and the time
+    (UTC) it starts every rule again.
     """
     loaded = await run_in_threadpool(rule_store.load)
     scripts_by_id = {meta["id"]: meta for meta in await run_in_threadpool(store.scripts)}
     config_manager = request.app.state.ctx.config_manager
+    engine = _engine_settings(config_manager)
     return {
         "revision": loaded["revision"],
         "rules": [_described(rule, scripts_by_id) for rule in loaded["rules"]],
         "indices": sorted(_allowed_indices(config_manager)),
         "instruments": _feed_instruments(config_manager),
-        "engine_history_days": _engine_history_days(config_manager),
+        "engine_history_days": engine.history_days,
+        "engine_restart_time": engine.restart_time,
     }
 
 
@@ -415,6 +422,72 @@ async def compare_rule(
         "day": day.isoformat(),
         "indice": rule["indice"],
         **compare(wata, others, tolerance if tolerance is not None else default_tolerance(rule["bars"])),
+    }
+
+
+def _moment(seconds: float) -> datetime:
+    return datetime.fromtimestamp(seconds, timezone.utc)
+
+
+def _now() -> float:
+    """Now, epoch seconds: what tests set."""
+    return time.time()
+
+
+@router.get("/history")
+async def history_bars(
+    request: Request,
+    epic: str = Query(max_length=64),
+    side: str = Query("bid", max_length=4),
+    timeframe: str | None = Query(None, max_length=8),
+    ticks: int | None = Query(None),
+    days: int | None = Query(None),
+):
+    """
+    How many bars the TA engine would run a rule's script on, given its asset, side and bars
+    (a timeframe, or range bars of ``ticks``) and its own days of history (the engine's
+    history_days without ``days``): those it was loaded with at the last restart_time, those
+    it would run on now, and those of each of the last engine days, restart to restart.
+    Made by the engine's own builders on the Capital.com feed's rows (src/admin/ta_history.py).
+    """
+    ctx = request.app.state.ctx
+    settings = _engine_settings(ctx.config_manager)
+    asset = checked_asset({"provider": "capital", "key": epic})
+    bars = checked_bars({"type": RANGE_BARS, "ticks": ticks} if ticks is not None else {"type": TIME_BARS, "timeframe": timeframe})
+    if side not in SIDES:
+        raise HTTPException(status_code=422, detail=f"The side is one of {', '.join(SIDES)}")
+    own_days = checked_history_days(days)
+    history_days = settings.history_days if own_days is None else own_days
+    instrument = await ctx.queries.capital_instrument(asset["key"])
+    if instrument is None:
+        raise HTTPException(status_code=404, detail=f"The Capital.com feed has not recorded {asset['key']}")
+
+    now = _now()
+    restart = last_restart(now, settings.restart_minute)
+    start = restart - history_days * DAY
+    count = HistoryCount(bars, side, instrument.get("decimals"), start=start, restart=restart, now=now)
+    page_start = count.first
+    while True:
+        rows = await ctx.queries.capital_engine_rows(instrument["id"], _moment(page_start), _moment(now), HISTORY_PAGE)
+        # A page of range bars is some tenths of a second of Python: away from the requests' loop.
+        await run_in_threadpool(count.add, rows)
+        if len(rows) < HISTORY_PAGE:
+            break
+        page_start = rows[-1][0] + 1
+    count.finish()
+    return {
+        "asset": asset,
+        "side": side,
+        "bars": bars,
+        "history_days": history_days,
+        "restart_time": settings.restart_time,
+        "restarted_at": _moment(restart),
+        "starts_at": _moment(start),
+        "at_restart": count.at_restart,
+        "now": count.loaded,
+        "engine_days": [
+            {"start": _moment(day["start"]), "end": _moment(day["end"]), "bars": day["bars"]} for day in count.engine_days()
+        ],
     }
 
 

@@ -6,7 +6,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
-import { Hint } from '@/components/Hint'
 import { useToast } from '@/components/toast-context'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -17,9 +16,10 @@ import { StepPanels, Stepper } from '@/components/ui/stepper'
 import { api, ApiError } from '@/lib/api'
 import type { TaRule, TaRules, TaScriptSummary } from '@/lib/types'
 
+import { HistoryDaysField } from './HistoryDaysField'
 import { BarsFields, ScriptChoice, ScriptSettings } from './RuleFields'
 import { useScriptInputs } from './useScriptInputs'
-import { draftOfRule, draftProblems, MAX_HISTORY_DAYS, newDraft, ruleChanges, ruleFields } from './ruleModel'
+import { draftOfRule, draftProblems, newDraft, ruleChanges, ruleFields } from './ruleModel'
 import type { RuleDraft, RuleStep } from './ruleModel'
 
 /** How the dialog opens on a rule: as it is, or on the newer versions of its script or libraries. */
@@ -214,23 +214,12 @@ function RuleForm({
                 options={rules.indices.map((indice) => ({ value: indice, label: indice }))}
               />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-text-secondary">Days of bars before each day</span>
-              <Hint
-                content="The script runs each day from the engine's restart on the bars of so many days before: fewer for a script that needs little warm-up (it runs faster at each bar), more for one that needs a long one. Empty: the engine's history_days."
-                className="flex w-full"
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={MAX_HISTORY_DAYS}
-                  step={1}
-                  value={draft.historyDays}
-                  placeholder={`The engine’s: ${rules.engine_history_days}`}
-                  onChange={(event) => update({ historyDays: event.target.value })}
-                />
-              </Hint>
-            </label>
+            <HistoryDaysField
+              draft={draft}
+              update={update}
+              engineHistoryDays={rules.engine_history_days}
+              restartTime={rules.engine_restart_time}
+            />
           </div>
           <StepProblems problems={problemsOf(1)} />
         </div>

@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 
 import { messageAction } from '../engine/outline'
 import { readTimeframe, TIMEFRAME_HINT, TIMEFRAMES, unevenNote } from '../engine/timeframes'
-import { ACTION_LABEL, ALERT_ACTIONS, inputValueOf } from './ruleModel'
+import { ACTION_LABEL, ALERT_ACTIONS, inputSections, inputValueOf } from './ruleModel'
 import type { InputValue, RuleDraft } from './ruleModel'
 import type { ScriptInputs } from './useScriptInputs'
 
@@ -231,7 +231,7 @@ export function BarsFields({
   )
 }
 
-/** The script's inputs, what each alert becomes, and the plot read as a confidence. */
+/** The script's inputs in the sections it declares them in, what each alert becomes, and the plot read as a confidence. */
 export function ScriptSettings({
   draft,
   update,
@@ -264,23 +264,38 @@ export function ScriptSettings({
         )}
         {meta && meta.length === 0 && <p className="text-xs text-muted-foreground">The script has no inputs.</p>}
         {meta && meta.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {meta.map((input) => (
-              <InputField
-                key={input.id}
-                input={input}
-                value={input.id in invalidInputs ? invalidInputs[input.id] : draft.inputs[input.id]}
-                onChange={(value, raw) => {
-                  setInvalidInputs(({ [input.id]: _dropped, ...others }) => (value === null ? { ...others, [input.id]: String(raw) } : others))
-                  if (value !== null) update({ inputs: { ...draft.inputs, [input.id]: value } })
-                }}
-                onReset={() => {
-                  const { [input.id]: _reset, ...kept } = draft.inputs
-                  setInvalidInputs(({ [input.id]: _dropped, ...others }) => others)
-                  update({ inputs: kept })
-                }}
-              />
-            ))}
+          // In the sections the script declares them in: each group in a box named after it.
+          <div className="space-y-3">
+            {inputSections(meta).map((section, index) => {
+              const fields = (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {section.inputs.map((input) => (
+                    <InputField
+                      key={input.id}
+                      input={input}
+                      value={input.id in invalidInputs ? invalidInputs[input.id] : draft.inputs[input.id]}
+                      onChange={(value, raw) => {
+                        setInvalidInputs(({ [input.id]: _dropped, ...others }) => (value === null ? { ...others, [input.id]: String(raw) } : others))
+                        if (value !== null) update({ inputs: { ...draft.inputs, [input.id]: value } })
+                      }}
+                      onReset={() => {
+                        const { [input.id]: _reset, ...kept } = draft.inputs
+                        setInvalidInputs(({ [input.id]: _dropped, ...others }) => others)
+                        update({ inputs: kept })
+                      }}
+                    />
+                  ))}
+                </div>
+              )
+              return section.group === null ? (
+                <div key={`none-${index}`}>{fields}</div>
+              ) : (
+                <fieldset key={`group-${section.group}`} className="min-w-0 rounded-lg border border-border/70 px-3 pt-1 pb-3">
+                  <legend className="px-1 text-xs font-semibold text-foreground">{section.group}</legend>
+                  {fields}
+                </fieldset>
+              )
+            })}
           </div>
         )}
       </section>

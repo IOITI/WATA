@@ -2429,6 +2429,28 @@ export interface TaRules {
   instruments: { epic: string; label: string }[]
   /** The engine's history_days: what a rule without its own is given. */
   engine_history_days: number
+  /** When (UTC, HH:MM) the engine starts every rule again, on its days of bars before. */
+  engine_restart_time: string
+}
+
+/**
+ * How many bars the TA engine would run a rule's script on (src/admin/ta_history.py): those loaded at its
+ * last restart, those it would run on now, and those of each of the week's engine days, restart to restart.
+ */
+export interface TaHistory {
+  asset: { provider: 'capital'; key: string }
+  side: 'bid' | 'ask'
+  bars: TaRuleBars
+  /** The days counted: the rule's own, or the engine's. */
+  history_days: number
+  restart_time: string
+  restarted_at: string
+  /** Where the rule's bars begin: its days before the last restart. */
+  starts_at: string
+  at_restart: number
+  now: number
+  /** The oldest first; each ends at a restart, the last at the last one. */
+  engine_days: { start: string; end: string; bars: number }[]
 }
 
 export interface TaRuleSaved {

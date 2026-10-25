@@ -156,6 +156,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/ta/workspaces/2"),
     ("PUT", "/api/ta/workspaces/2"),
     ("GET", "/api/ta/rules"),
+    ("GET", "/api/ta/history"),
     ("POST", "/api/ta/rules"),
     ("GET", "/api/ta/rules/0123456789ab"),
     ("PUT", "/api/ta/rules/0123456789ab"),
@@ -218,6 +219,8 @@ class FakeQueries:
         self.heartbeats = {}
         self.capital_bar_rows = []
         self.capital_series_rows = []
+        # Both sides of each ten seconds, as the TA engine reads them (src/ta_engine/source.py).
+        self.capital_engine_bar_rows = []
         self.capital_coverage_rows = []
         self.capital_volume_rows = []
         self.capital_volume_by_day = {}
@@ -453,6 +456,10 @@ class FakeQueries:
     async def capital_series(self, instrument_id, start, end, side, limit):
         self.calls.append(("capital_series", instrument_id, start, end, side, limit))
         return [row for row in self.capital_series_rows if start.timestamp() <= row[0] < end.timestamp()][:limit]
+
+    async def capital_engine_rows(self, instrument_id, start, end, limit):
+        self.calls.append(("capital_engine_rows", instrument_id, start, end, limit))
+        return [row for row in self.capital_engine_bar_rows if start.timestamp() <= row[0] < end.timestamp()][:limit]
 
     async def capital_volume(self, instrument_id, start, end, interval, limit):
         self.calls.append(("capital_volume", instrument_id, start, end, interval, limit))

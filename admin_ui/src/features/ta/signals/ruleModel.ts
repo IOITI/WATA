@@ -173,6 +173,41 @@ export function ruleDraftOfRun(
   }
 }
 
+/** A section of a script's inputs: those of one group, by its name, or those of no group declared together. */
+export interface InputSection<T> {
+  group: string | null
+  inputs: T[]
+}
+
+/**
+ * A script's inputs in the sections it declares them in (the `group` of its input calls, the sections of
+ * TradingView's Inputs tab): each group where its first input is declared, with all of its inputs in their
+ * order, and the inputs of no group where they are declared, between the groups.
+ */
+export function inputSections<T extends Pick<IPineInput, 'group'>>(inputs: readonly T[]): InputSection<T>[] {
+  const sections: InputSection<T>[] = []
+  const groups = new Map<string, InputSection<T>>()
+  for (const input of inputs) {
+    // Pine compares a group's name as it is written: "Kernel" and "kernel" are two.
+    const group = input.group ? input.group : null
+    const last = sections[sections.length - 1]
+    if (group === null) {
+      if (last?.group === null) last.inputs.push(input)
+      else sections.push({ group: null, inputs: [input] })
+      continue
+    }
+    const section = groups.get(group)
+    if (section) {
+      section.inputs.push(input)
+      continue
+    }
+    const added = { group, inputs: [input] }
+    groups.set(group, added)
+    sections.push(added)
+  }
+  return sections
+}
+
 /** A value typed for an input, as its type has it; null when it is not one. */
 export function inputValueOf(meta: Pick<IPineInput, 'type' | 'minval' | 'maxval'>, raw: string | boolean): InputValue | null {
   if (typeof raw === 'boolean') return meta.type === 'bool' ? raw : null

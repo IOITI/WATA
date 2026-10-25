@@ -26,6 +26,7 @@ from src.admin.prices import interval_served
 from src.admin.ta_monitor import DELIVERY_STEPS
 from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
+from src.ta_engine.source import ROW_COLUMNS as ENGINE_ROW_COLUMNS
 from src.database.postgres import ORDER_REQUEST_COLUMNS, TA_TICK_COLUMNS, AsyncDbPositionManager, AsyncDbRiskStateManager
 from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_report_payload
 
@@ -690,6 +691,25 @@ class AdminQueries:
     async def capital_series(self, instrument_id: int, start: datetime, end: datetime, side: str, limit: int) -> list[tuple]:
         """``price_series`` for an instrument of the Capital.com feed."""
         return await self._series("capital", instrument_id, start, end, side, limit)
+
+    async def capital_engine_rows(self, instrument_id: int, start: datetime, end: datetime, limit: int) -> list[tuple]:
+        """
+        The ten-second bars of an instrument of the Capital.com feed in [start, end), oldest first,
+        both sides, as the TA engine reads them (``ROW_COLUMNS``). Read a page at a time: pass the
+        moment after the last row as ``start`` for the next.
+        """
+        rows = await self._fetch_optional(
+            """
+            SELECT extract(epoch FROM ts)::bigint AS ts, bid_open, bid_high, bid_low, bid_close,
+                   ask_open, ask_high, ask_low, ask_close, updates
+            FROM capital_bar_10s
+            WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
+            ORDER BY ts
+            LIMIT $4
+            """,
+            instrument_id, start, end, limit,
+        )
+        return [tuple(row[name] for name in ENGINE_ROW_COLUMNS) for row in rows]
 
     async def price_coverage(self, start: datetime, end: datetime) -> list[dict]:
         """One row per ten seconds the recorder lived through in [start, end), in time order."""

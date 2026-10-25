@@ -74,6 +74,7 @@ import type {
   SignalSent,
   TaComparison,
   TaEngine,
+  TaHistory,
   TaMonitor,
   TaMonitorNow,
   TaRuleFields,
@@ -408,6 +409,9 @@ export const api = {
     }),
   deleteTaRule: (id: string, revision: string) =>
     request<void>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}${query({ revision })}`),
+  /** How many bars the TA engine would run a rule of this asset, side, bars and days of history on. */
+  taHistory: (params: { epic: string; side: 'bid' | 'ask'; timeframe?: string; ticks?: number; days?: number }) =>
+    request<TaHistory>('GET', `/api/ta/history${query(params)}`),
   taSignals: (params: DateRangeParams & { rule?: string } = {}) =>
     request<{ items: TaSignal[] }>('GET', `/api/ta/signals${query({ ...params, limit: 500 })}`),
   taEngine: () => request<TaEngine>('GET', '/api/ta/engine'),

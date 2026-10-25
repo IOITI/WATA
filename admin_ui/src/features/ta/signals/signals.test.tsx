@@ -7,22 +7,18 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { ToastProvider } from '@/components/ToastProvider'
 import { AuthContext } from '@/features/auth/auth-context'
-import type { BacktestPaper, Session, TaEngine, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
+import type { BacktestPaper, Session, TaEngine, TaHistory, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
 import { run as backtest } from '@/test/backtests'
 import { WithTrail } from '@/test/WithTrail'
 
 import { SignalRulesPage } from './SignalRulesPage'
 
 // The script's inputs, as PineTS reads them in the page's worker.
+const FAST = { id: 'in_0', name: 'Fast', title: 'Fast', varId: 'fast', type: 'int', defval: 9, minval: 1 }
+const worker = vi.hoisted(() => ({ inputs: [] as object[] }))
 vi.mock('../engine/pineWorkerClient', () => ({
   PineWorkerClient: class {
-    compile = async () => ({
-      id: 1,
-      ok: true,
-      op: 'compile',
-      declaration: 'indicator',
-      inputs: [{ id: 'in_0', name: 'Fast', title: 'Fast', varId: 'fast', type: 'int', defval: 9, minval: 1 }],
-    })
+    compile = async () => ({ id: 1, ok: true, op: 'compile', declaration: 'indicator', inputs: worker.inputs })
     terminate() {}
   },
 }))
@@ -109,6 +105,24 @@ const ENGINE: TaEngine = {
   },
 }
 
+/** What the server counts of one-minute bars of US100, a day before each restart: the week up to Thursday 22 October. */
+const HISTORY: TaHistory = {
+  asset: { provider: 'capital', key: 'US100' },
+  side: 'bid',
+  bars: { type: 'time', timeframe: '1' },
+  history_days: 1,
+  restart_time: '21:15',
+  restarted_at: '2026-10-22T21:15:00+00:00',
+  starts_at: '2026-10-21T21:15:00+00:00',
+  at_restart: 1374,
+  now: 1412,
+  engine_days: [1380, 45, 0, 1380, 1378, 1380, 1374].map((bars, index) => ({
+    start: new Date(Date.UTC(2026, 9, 15 + index, 21, 15)).toISOString(),
+    end: new Date(Date.UTC(2026, 9, 16 + index, 21, 15)).toISOString(),
+    bars,
+  })),
+}
+
 let rules: TaRule[] = []
 let paper: BacktestPaper = { rules: {} }
 let sent: { method: string; path: string; body: unknown }[] = []
@@ -126,8 +140,13 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
       sent.push({ method, path: `${url.pathname}${url.search}`, body })
       const listed = {
         revision: 'r1', rules, indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1,
+        engine_restart_time: '21:15',
       }
       if (url.pathname === '/api/ta/rules' && method === 'GET') return json(listed)
+      if (url.pathname === '/api/ta/history') {
+        const days = url.searchParams.get('days')
+        return json({ ...HISTORY, history_days: days === null ? 1 : Number(days) })
+      }
       if (url.pathname === '/api/ta/rules' && method === 'POST') {
         const made = rule({ ...(body as Partial<TaRule>), id: 'bbbbbbbbbbbb', mode: 'shadow' })
         return json({ rule: made, revision: 'r2' }, 201)
@@ -214,6 +233,7 @@ function renderPage(session: Session = SESSION, address = '/ta/signals') {
 beforeEach(() => {
   rules = [rule()]
   paper = { rules: {} }
+  worker.inputs = [FAST]
   serve()
 })
 afterEach(() => {
@@ -453,6 +473,75 @@ describe('the Signal rules page', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
     expect(within(dialog).getByRole('combobox', { name: 'Script' })).toHaveValue(CROSS.id)
     expect(within(dialog).getByRole('textbox', { name: 'Name' })).toHaveValue('Cross on US100')
+  })
+
+  it('says what the days of bars before each day are, and counts the bars the engine would run the script on', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'New rule' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    const days = await within(dialog).findByRole('spinbutton', { name: 'Days of bars before each day' })
+    // Said under the field, not on hover: the restart in the trading timezone of the day, and in UTC.
+    expect(days).toHaveAccessibleDescription(/^Each day at \d\d:\d\d \(21:15 UTC\) the engine starts the rule again on the bars of these days before/)
+    expect(within(dialog).getByText(/a weekend or a holiday counts, and brings no bar\..*Left empty: the engine’s history_days, 1 day\.$/)).toBeInTheDocument()
+
+    const count = await within(dialog).findByRole('region', { name: 'Its bars now' })
+    expect(
+      await within(count).findByText('The script was started on 1,374 bars at the last restart (Thu 22 Oct, 23:15), and would run on 1,412 bars now.'),
+    ).toBeInTheDocument()
+    expect(within(count).getByText('US100, bid, 1 min:')).toBeInTheDocument()
+    expect(within(count).getAllByRole('term').map((term) => term.textContent)).toEqual([
+      'Fri 16', 'Sat 17', 'Sun 18', 'Mon 19', 'Tue 20', 'Wed 21', 'Thu 22',
+    ])
+    expect(within(count).getAllByRole('definition').map((value) => value.textContent)).toEqual(['1,380', '45', '0', '1,380', '1,378', '1,380', '1,374'])
+    const asked = () =>
+      sent.filter((request) => request.path.startsWith('/api/ta/history')).map((request) => Object.fromEntries(new URL(request.path, 'http://admin.test').searchParams))
+    expect(asked()).toEqual([{ epic: 'US100', side: 'bid', timeframe: '1' }])
+
+    // Days of its own: counted again once typed.
+    await user.type(days, '3')
+    await waitFor(() => expect(asked().at(-1)).toEqual({ epic: 'US100', side: 'bid', days: '3', timeframe: '1' }))
+    expect(asked()).toHaveLength(2)
+  })
+
+  it('sets the script’s inputs out in the groups it declares them in', async () => {
+    // As PineTS reads them: in the order they are declared, each with the group of its input call.
+    worker.inputs = [
+      { ...FAST, group: 'Main' },
+      { id: 'in_1', name: 'Source', title: 'Source', varId: 'src', type: 'source', defval: 'close', options: ['open', 'close'] },
+      { id: 'in_2', name: 'Lookback', title: 'Lookback', varId: 'h', type: 'float', defval: 8, group: 'Kernel settings' },
+      { id: 'in_3', name: 'Weight', title: 'Weight', varId: 'r', type: 'float', defval: 1, group: 'Kernel settings' },
+      { id: 'in_4', name: 'Show', title: 'Show', varId: 'show', type: 'bool', defval: true, group: 'Main' },
+    ]
+    rules = []
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'New rule' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New signal rule' })
+    for (let step = 0; step < 2; step += 1) await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    const main = await within(dialog).findByRole('group', { name: 'Main' })
+    const kernel = within(dialog).getByRole('group', { name: 'Kernel settings' })
+    const source = within(dialog).getByRole('combobox', { name: 'Source' })
+    // A group where its first input is, with all of its inputs; an input of none where it is, outside them.
+    expect(within(main).getByRole('spinbutton', { name: 'Fast' })).toBeInTheDocument()
+    expect(within(main).getByRole('checkbox', { name: 'Show' })).toBeInTheDocument()
+    expect(within(kernel).getByRole('spinbutton', { name: 'Lookback' })).toBeInTheDocument()
+    expect(within(kernel).getByRole('spinbutton', { name: 'Weight' })).toBeInTheDocument()
+    expect(main).not.toContainElement(source)
+    expect(kernel).not.toContainElement(source)
+    expect(main.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(source.compareDocumentPosition(kernel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // An input of a group is changed as any other.
+    const lookback = within(kernel).getByRole('spinbutton', { name: 'Lookback' })
+    await user.clear(lookback)
+    await user.type(lookback, '10')
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(await within(dialog).findByText('Lookback = 10')).toBeInTheDocument()
   })
 })
 

@@ -712,6 +712,9 @@ class FakeQueries:
         rows = fake_capital.ten_second_bars(start, end, datetime.now(timezone.utc))[:limit]
         return [(row[0], row[first], row[first + 1], row[first + 2], row[first + 3], row[9]) for row in rows]
 
+    async def capital_engine_rows(self, instrument_id, start, end, limit):
+        return [tuple(row) for row in fake_capital.ten_second_bars(start, end, datetime.now(timezone.utc))[:limit]]
+
     async def capital_volume(self, instrument_id, start, end, interval, limit):
         return fake_capital.volume(start, end, interval, limit, datetime.now(timezone.utc))
 

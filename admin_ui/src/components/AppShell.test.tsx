@@ -360,7 +360,7 @@ describe('the bell', () => {
 describe('the palette (⌘K)', () => {
   const BODIES = {
     '/api/backtests': { items: [run()], storage: { runs: { count: 1, bytes: 1 }, former: { count: 0, bytes: 0 } } },
-    '/api/ta/rules': { revision: 'r1', rules: [], indices: [], instruments: [], engine_history_days: 1 },
+    '/api/ta/rules': { revision: 'r1', rules: [], indices: [], instruments: [], engine_history_days: 1, engine_restart_time: '21:15' },
     '/api/ta/scripts': { items: [] },
     '/api/data/assets?seen=all': { timezone: 'Europe/Paris', seen: 'all', items: [], truncated: false, max: 3000, saxo_error: null },
   }

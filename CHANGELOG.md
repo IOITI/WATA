@@ -1,9 +1,13 @@
 # Changelog
 
-## v0.46.0 - The recorded bars found by their time
+## v0.46.0 - A signal rule's days of bars, counted, its inputs in the script's groups, and the recorded bars found by their time
 
 **Release date:** not released yet
 
+- **"Days of bars before each day" says what it is, under the field rather than on hover, and counts what it makes.** It decides how many bars the TA engine runs the rule's script on: each day at its `restart_time` (21:15 UTC) the engine starts the rule again on the bars of those days before, runs the script over them once without sending anything, then adds each new bar, so that the script runs on those days of bars after the restart and on one day more by the next. A day is 24 hours counted back from the restart: a weekend or a holiday counts and brings no bar, so that on a Monday one day before Sunday evening's restart holds none.
+  - The Market step of the rule's dialog counts the bars for the asset, side and bars chosen, and the days typed: those the script was started on at the last restart, those it would run on now, and those of each engine day of the week (`GET /api/ta/history`, `src/admin/ta_history.py`). They are made by the engine's own builders on the Capital.com feed's rows, from the rule's own start: the tests hold the count to what the engine loads, on bars of minutes, 45 seconds, hours and range bars.
+  - The list of rules gives the engine's restart time beside its `history_days` (`engine_restart_time`), which the dialog says in the trading timezone of the day and in UTC.
+- **A script's inputs are set out in the groups it declares** (the `group` of its `input.*()` calls, a constant's value included, as PineTS reads them), the sections of TradingView's Inputs tab: each group in a box named after it, where its first input is declared, with all of its inputs in their order; the inputs of no group where they are declared, between the groups. In the rule's dialog and in the Backtests form, which share the fields.
 - **The bars of a period across every instrument are found by their time** (`price_bar_10s`, a BRIN index on `ts`, `idx_price_bar_10s_ts`). Until now they were found through the key, which starts with the instrument: a day's read went through the whole month. On a month in the server's shape (42 turbos, 860 minutes a day, 4.8 million bars), a day is now 3,206 pages read against 68,144:
   - the research export's day;
   - the Availability page for today alone, 173 ms against 186;
@@ -16,10 +20,14 @@
 - **One read is slower when everything is in memory: the Availability page's week**, 860 ms against 708, although it reads four times fewer pages. PostgreSQL now sorts the week in one process, where before it scanned the month in three.
 
 **Verification status:**
+- 2,920 Python tests pass on Python 3.12 (3.14 not run here), 28 of them new: the count equal to what the engine loads, on bars of one minute, 45 seconds and an hour and range bars, with none, one and two days of the rule's own; a day 24 hours back from the restart, a weekend bringing no bar (one day before a Monday's restart holds none, three reach Friday's session); the week counted whatever the rule's days; the route (the feed's rows read from the first engine day of the week, a page at a time, the engine's days and restart time without days of the rule's own, what it refuses, behind the session), the restart time in the list of rules; the schema holds the BRIN index on the bars' time. The lab's round trip runs it on two real databases.
+- The new SQL run on a real PostgreSQL 16 (`pgserver`): read a page at a time through a read-only pool, it gives the engine's own rows exactly (25,568 of them, the asks missing included).
 - Measured on a real PostgreSQL 16 (pgserver) with the server's memory settings, over a month made up in the server's shape, through WATA's own queries (`DatabaseData`, `AdminQueries`, the research export, `export_bars`). Per-instrument reads keep their plans and pages: a backtest's day, the charts, the list of assets.
 - The recorder's own `init_price_history_schema` builds the index over a recorded month in 0.47 s, and costs nothing at the next start.
-- 2,879 Python tests pass on Python 3.12 (35 skipped), one of them new: the schema holds the index. The lab's round trip runs it on two real databases.
-- The server's database was read before the index, read-only (sizes, settings, two query plans). The index itself is not on the server yet.
+- 1,133 interface tests pass, 9 of them new: a draft's request (a length typed as people write it, range bars, the days only when the rule has its own), the help in the trading timezone of the next restart (summer and winter time), the sentences (a weekend restart, no day before), the week's days, the inputs' sections (gathered, ungrouped between, names as written), the dialog's count asked again for typed days, the inputs in their groups and changed there.
+- **Seen in the browser pane on the fake admin**: the Market step's help and count on minutes, three days and range bars, on a Sunday whose last restart found only Friday's last minutes; the inputs of a script with groups (one named by a constant, an input of no group between them, a group's inputs gathered from further down) in the dialog and in the Backtests form; desktop light, phone width dark.
+- The server's database was read before the index, read-only (sizes, settings, two query plans).
+- **Not run on the server**: the count on the Capital.com feed's recorded rows; the BRIN index.
 
 ## v0.45.0 - The Configuration page by section, and a purge the services survive
 

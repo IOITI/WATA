@@ -274,7 +274,7 @@ function serve() {
       const version = /^\/api\/ta\/scripts\/([0-9a-f]+)\/versions\/(\d+)$/.exec(route)
       if (version) return json({ ...SCRIPT.versions[0], number: Number(version[2]), source: SOURCE })
       if (route === '/api/ta/rules') {
-        return json({ revision: 'r1', rules: [RULE], indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1 })
+        return json({ revision: 'r1', rules: [RULE], indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1, engine_restart_time: '21:15' })
       }
       if (route === '/api/data/assets') {
         return json({ timezone: 'Europe/Paris', seen: 'all', items: ASSETS, truncated: false, max: 3000, saxo_error: null })
