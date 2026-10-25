@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.46.1 - undici 8.12.3 under the interface's tests
+
+**Release date:** 2026-10-25
+
+- **undici 8.12.3** (from 8.11.2), for GitHub's high advisory GHSA-xjj6-f33q-929c (Dependabot alert 49 on `main`), along with two moderate ones (GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472):
+  - a response with too many content encodings could crash the process;
+  - an event stream could take unbounded memory;
+  - an integrity check could be passed with an algorithm written in capitals.
+- undici comes only with jsdom, the browser the interface's tests run in (`"dev": true` in the lock). jsdom asks for `^8.11.2`, so only the lock changes.
+
+**On the live path**: nothing. The built interface, the Pine runner and the checker hold no undici: their 71 files are byte for byte the same after the update. The server's package would differ only by its version, so this release is not deployed.
+
+**Verification status:**
+- 1,133 interface tests pass; lint and types are clean.
+- One whole run failed once, on `orders.test.tsx` ("open onto what happened…"), which checks a disclosure as visible right after its click. The same file then passed five times alone, and in two more whole runs.
+- OSV lists no advisory left for any package of `requirements.txt` or of the lock (348).
+
 ## v0.46.0 - A signal rule's days of bars, counted, its inputs in the script's groups, and the recorded bars found by their time
 
 **Release date:** 2026-10-25
