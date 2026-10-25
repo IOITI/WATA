@@ -1,43 +1,50 @@
 import { Search } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Link, useLocation, useParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
+import type { MenuSection } from '@/components/navigation'
 import { NotFoundState } from '@/components/NotFoundState'
 import { PageHeader, Panel } from '@/components/Panel'
 import { RouterLink } from '@/components/RouterLink'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AnimatedTabs } from '@/components/ui/animated-tabs'
 import { Badge } from '@/components/ui/badge'
-import { Input, Textarea } from '@/components/ui/form'
+import { Input } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { formatDateTime } from '@/lib/format'
-import type { CatalogParam, JsonValue } from '@/lib/types'
+import type { CatalogParam } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { ApplyCard } from './ApplyCard'
 import { BackupsPanel } from './BackupsPanel'
-import { groupCounts, hrefOf, lookup, searchParams, segmentsOf, shownValue } from './catalog'
-import { applyEditable, parseJsonObject, pickEditable } from './configModel'
+import {
+  blockAnchorOf,
+  blocksOf,
+  groupCounts,
+  hrefOf,
+  lookup,
+  searchParams,
+  sectionsOf,
+  segmentsOf,
+  shownValue,
+} from './catalog'
+import type { PlacedBlock } from './catalog'
+import { BlockMark, GroupIcon, SectionIcon } from './configIcons'
 import { CredentialsPanel } from './CredentialsPanel'
 import { useConfigEditor } from './editor-context'
 import { ParamRow, RuleBlock } from './ParamRow'
 
 const VIEWS = [
   { id: 'parameters', label: 'Parameters', href: '/config' },
-  { id: 'json', label: 'JSON', href: '/config/json' },
-  { id: 'file', label: 'Whole file', href: '/config/file' },
   { id: 'versions', label: 'Previous versions', href: '/config/versions' },
 ]
-
-function prettyJson(value: JsonValue): string {
-  return JSON.stringify(value, null, 2)
-}
 
 /** What every view of the page shows above itself: its title, the last save, the views. */
 function ConfigFrame({ title, description, view, children }: { title: string; description: ReactNode; view: string; children: ReactNode }) {
   const { catalog, doc, lastSaved, dismissSaved, disabled } = useConfigEditor()
   const { timezone } = useSession()
+  const navigate = useNavigate()
   return (
     <>
       <PageHeader title={title} description={description} />
@@ -51,11 +58,30 @@ function ConfigFrame({ title, description, view, children }: { title: string; de
         </Alert>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <AnimatedTabs tabs={VIEWS} activeTab={view} renderContent={false} linkComponent={RouterLink} />
+        <AnimatedTabs
+          tabs={VIEWS}
+          activeTab={view}
+          renderContent={false}
+          linkComponent={RouterLink}
+          // A plain click is the page's to follow; a click with a modifier opens the link where the browser says.
+          onChange={(id) => navigate(VIEWS.find((candidate) => candidate.id === id)?.href ?? '/config')}
+        />
         <p className="text-xs text-muted-foreground">File last written {formatDateTime(doc.modified_at, timezone)}</p>
       </div>
       {children}
     </>
+  )
+}
+
+/** A section of the menu, as the page heads the groups it holds. */
+function SectionHeading({ section, id }: { section: MenuSection; id?: string }) {
+  return (
+    <h2 id={id} className="flex items-center gap-2 text-sm font-semibold text-foreground">
+      <span className="flex size-7 items-center justify-center rounded-lg border border-border/70 bg-surface-raised/60">
+        <SectionIcon section={section} />
+      </span>
+      {section}
+    </h2>
   )
 }
 
@@ -117,29 +143,37 @@ export function ConfigOverview() {
         <SearchResults found={found} />
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {catalog.groups.map((group) => {
-              const params = catalog.params.filter((param) => param.group === group.id)
-              const counts = groupCounts(params, draft, unsaved)
-              return (
-                <Link
-                  key={group.id}
-                  to={`/config/${group.id}`}
-                  className="rounded-2xl border border-border/70 bg-surface/50 p-4 transition-colors hover:bg-surface-hover focus-ring dark:bg-surface/25"
-                >
-                  <p className="text-sm font-semibold">{group.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{group.summary}</p>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    <Badge variant="outline">{counts.total} parameters</Badge>
-                    {counts.unsaved > 0 && <Badge tone="warning">{counts.unsaved} unsaved</Badge>}
-                    {counts.changedFromDefault > 0 && <Badge>{counts.changedFromDefault} not the default</Badge>}
-                    {counts.serverOnly > 0 && <Badge variant="outline">{counts.serverOnly} set on the server</Badge>}
-                    {counts.unused > 0 && <Badge variant="outline">{counts.unused} read by nothing</Badge>}
-                  </div>
-                </Link>
-              )
-            })}
-          </div>
+          {sectionsOf(catalog).map(({ section, groups }) => (
+            <section key={section} aria-labelledby={`section-${section}`} className="space-y-3">
+              <SectionHeading section={section} id={`section-${section}`} />
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {groups.map((group) => {
+                  const params = catalog.params.filter((param) => param.group === group.id)
+                  const counts = groupCounts(params, draft, unsaved)
+                  return (
+                    <Link
+                      key={group.id}
+                      to={`/config/${group.id}`}
+                      className="rounded-2xl border border-border/70 bg-surface/50 p-4 transition-colors hover:bg-surface-hover focus-ring dark:bg-surface/25"
+                    >
+                      <p className="flex items-center gap-2 text-sm font-semibold">
+                        <GroupIcon group={group.id} className="text-text-secondary" />
+                        {group.title}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">{group.summary}</p>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        <Badge variant="outline">{counts.total} parameters</Badge>
+                        {counts.unsaved > 0 && <Badge tone="warning">{counts.unsaved} unsaved</Badge>}
+                        {counts.changedFromDefault > 0 && <Badge>{counts.changedFromDefault} not the default</Badge>}
+                        {counts.serverOnly > 0 && <Badge variant="outline">{counts.serverOnly} set on the server</Badge>}
+                        {counts.unused > 0 && <Badge variant="outline">{counts.unused} read by nothing</Badge>}
+                      </div>
+                    </Link>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
           {doc.unknown.length > 0 && (
             <Panel
               title="Keys WATA does not know"
@@ -200,10 +234,85 @@ function useScrollToParameter(): void {
   }, [hash])
 }
 
-/** One group of parameters, beside the list of groups. */
+/** The groups of parameters by section of the menu: down the side on a wide screen, across the top on a phone. */
+function GroupsNav({ current }: { current: string }) {
+  const { catalog, unsaved } = useConfigEditor()
+  const navRef = useRef<HTMLElement>(null)
+  // On a phone the list runs across: the group shown is brought into it.
+  useEffect(() => {
+    navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'center' })
+  }, [current])
+  return (
+    <nav
+      ref={navRef}
+      aria-label="Groups of parameters"
+      className="min-w-0 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-7rem)] lg:self-start lg:overflow-y-auto"
+    >
+      <div className="flex gap-3 overflow-x-auto pb-1 lg:block lg:space-y-4 lg:overflow-visible">
+        {sectionsOf(catalog).map(({ section, groups }) => (
+          <div key={section} className="flex shrink-0 items-center gap-1 lg:block">
+            <p className="flex shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground lg:mb-1 lg:px-3">
+              <SectionIcon section={section} className="size-3.5" />
+              {section}
+            </p>
+            <ul className="flex gap-1 lg:flex-col lg:gap-0.5">
+              {groups.map((candidate) => {
+                const waiting = catalog.params.filter((param) => param.group === candidate.id && unsaved.has(param.path)).length
+                return (
+                  <li key={candidate.id} className="shrink-0">
+                    <Link
+                      to={`/config/${candidate.id}`}
+                      aria-current={candidate.id === current ? 'page' : undefined}
+                      className={cn(
+                        'flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-surface-hover focus-ring',
+                        candidate.id === current ? 'bg-surface-hover font-medium text-foreground' : 'text-text-secondary',
+                      )}
+                    >
+                      <GroupIcon group={candidate.id} className="size-3.5" />
+                      <span className="whitespace-nowrap">{candidate.title}</span>
+                      {waiting > 0 && <Badge tone="warning">{waiting}</Badge>}
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </nav>
+  )
+}
+
+/** Parameters of a group that go together, under their heading. */
+function BlockView({ group, placed }: { group: string; placed: PlacedBlock }) {
+  const { block, params } = placed
+  const headingId = `${blockAnchorOf(block.id)}-title`
+  return (
+    <section id={blockAnchorOf(block.id)} aria-labelledby={headingId} className="scroll-mt-24 space-y-3 rounded-lg">
+      <header className="flex items-start gap-2 border-b border-border/60 pb-2">
+        <BlockMark group={group} block={block.id} className="mt-0.5" />
+        <div className="min-w-0">
+          <h2 id={headingId} className="text-sm font-semibold text-foreground">
+            {block.title}
+          </h2>
+          {block.summary && <p className="text-xs text-muted-foreground">{block.summary}</p>}
+        </div>
+      </header>
+      {segmentsOf(params).map((segment) =>
+        segment.rule ? (
+          <RuleBlock key={segment.rule} ruleType={segment.rule} params={segment.params} />
+        ) : (
+          segment.params.map((param) => <ParamRow key={param.path} param={param} />)
+        ),
+      )}
+    </section>
+  )
+}
+
+/** One group of parameters, beside the list of groups: its blocks, each under its heading. */
 export function ConfigGroupPage() {
   const { group: groupId } = useParams()
-  const { catalog, unsaved, formVersion } = useConfigEditor()
+  const { catalog, formVersion } = useConfigEditor()
   const group = catalog.groups.find((candidate) => candidate.id === groupId)
   useScrollToParameter()
 
@@ -216,107 +325,47 @@ export function ConfigGroupPage() {
       />
     )
   }
-  const params = catalog.params.filter((param) => param.group === group.id)
+  const blocks = blocksOf(catalog, group.id)
 
   return (
-    <ConfigFrame title={group.title} view="parameters" description={group.summary}>
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
-        <nav aria-label="Groups of parameters" className="min-w-0 lg:sticky lg:top-4 lg:self-start">
-          <ul className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
-            {catalog.groups.map((candidate) => {
-              const waiting = catalog.params.filter((param) => param.group === candidate.id && unsaved.has(param.path)).length
-              return (
-                <li key={candidate.id} className="shrink-0">
-                  <Link
-                    to={`/config/${candidate.id}`}
-                    aria-current={candidate.id === group.id ? 'page' : undefined}
-                    className={cn(
-                      'flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-surface-hover focus-ring',
-                      candidate.id === group.id ? 'bg-surface-hover font-medium text-foreground' : 'text-text-secondary',
-                    )}
-                  >
-                    <span className="whitespace-nowrap">{candidate.title}</span>
-                    {waiting > 0 && <Badge tone="warning">{waiting}</Badge>}
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
-        </nav>
-        <div key={formVersion} className="min-w-0 space-y-3">
+    <ConfigFrame
+      title={group.title}
+      view="parameters"
+      description={
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/70 px-2 py-0.5 text-[11px] font-medium text-text-secondary">
+            <SectionIcon section={group.section} className="size-3" />
+            {group.section}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <GroupIcon group={group.id} className="size-3.5" />
+            {group.summary}
+          </span>
+        </span>
+      }
+    >
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
+        <GroupsNav current={group.id} />
+        <div key={formVersion} className="min-w-0 space-y-6">
           {group.id === 'credentials' && <CredentialsPanel />}
-          {segmentsOf(params).map((segment) =>
-            segment.rule ? (
-              <RuleBlock key={segment.rule} ruleType={segment.rule} params={segment.params} />
-            ) : (
-              segment.params.map((param) => <ParamRow key={param.path} param={param} />)
-            ),
+          {blocks.length > 1 && (
+            <nav aria-label="In this group" className="flex flex-wrap gap-1.5">
+              {blocks.map(({ block }) => (
+                <Link
+                  key={block.id}
+                  to={`#${blockAnchorOf(block.id)}`}
+                  className="rounded-full border border-border/70 px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-hover focus-ring"
+                >
+                  {block.title}
+                </Link>
+              ))}
+            </nav>
           )}
+          {blocks.map((placed) => (
+            <BlockView key={placed.block.id} group={group.id} placed={placed} />
+          ))}
         </div>
       </div>
-    </ConfigFrame>
-  )
-}
-
-/** The editable sections as JSON: what the parameters do not show (a key nothing knows) can be edited here. */
-export function ConfigJsonView() {
-  const { doc, draft, replaceDraft, disabled } = useConfigEditor()
-  const [text, setText] = useState(() => prettyJson(pickEditable(draft, doc.editable_paths)))
-  const [error, setError] = useState<string | null>(null)
-
-  return (
-    <ConfigFrame title="Configuration as JSON" view="json" description="The sections this page may change, as JSON.">
-      <Panel
-        title="Editable sections"
-        description={`Only ${doc.editable_paths.join(', ')} can be changed here. Credentials and infrastructure settings are edited on the server.`}
-      >
-        {doc.protected_paths.length > 0 && (
-          <p className="mb-3 text-xs text-muted-foreground">
-            Inside these sections, where the services connect and listen is changed on the server as well. A save that
-            changes one of these is refused:{' '}
-            {doc.protected_paths.map((path, index) => (
-              <span key={path}>
-                {index > 0 && ', '}
-                <code>{path}</code>
-              </span>
-            ))}
-            .
-          </p>
-        )}
-        <Textarea
-          aria-label="Editable configuration as JSON"
-          className="min-h-[28rem] font-mono"
-          spellCheck={false}
-          value={text}
-          disabled={disabled}
-          error={!!error}
-          onChange={(event) => {
-            const next = event.target.value
-            setText(next)
-            const parsed = parseJsonObject(next)
-            if (parsed.ok) {
-              setError(null)
-              replaceDraft(applyEditable(doc.config, parsed.value, doc.editable_paths))
-            } else {
-              setError(parsed.error)
-            }
-          }}
-        />
-        {error && <p className="mt-2 text-xs text-negative">Not valid JSON yet: {error}. The parameters keep what was last valid.</p>}
-      </Panel>
-    </ConfigFrame>
-  )
-}
-
-export function ConfigFileView() {
-  const { doc } = useConfigEditor()
-  return (
-    <ConfigFrame title="The whole file" view="file" description="config.json as it is on the server, secrets masked.">
-      <Panel title="config.json" description="Unsaved changes are not shown here.">
-        <pre className="max-h-[36rem] overflow-auto rounded-lg border border-border bg-surface-raised/40 p-4 text-xs leading-relaxed">
-          {prettyJson(doc.config)}
-        </pre>
-      </Panel>
     </ConfigFrame>
   )
 }

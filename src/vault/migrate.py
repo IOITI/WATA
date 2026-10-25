@@ -222,10 +222,8 @@ PURGED_KEYS = (
 )
 
 
-def _purge_config(path: str) -> bool:
-    """The credentials' old places taken out of one configuration file; whether it had any."""
-    with open(path, encoding="utf-8") as config_file:
-        config = json.load(config_file)
+def _purged(config: dict) -> bool:
+    """The credentials' old places taken out of ``config`` (in place); whether it had any."""
     found = False
     for keys_path in PURGED_KEYS:
         node = config
@@ -234,7 +232,36 @@ def _purge_config(path: str) -> bool:
         if isinstance(node, dict) and keys_path[-1] in node:
             del node[keys_path[-1]]
             found = True
-    if not found:
+    return found
+
+
+def refusal_once_purged(config_path: str) -> str | None:
+    """
+    Why the services would refuse config.json once purged, None when they would
+    take it: checked by their own validator before anything is written, since
+    each service reads the file again at its next start.
+    """
+    import tempfile
+
+    with open(config_path, encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    _purged(config)
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "config.json")
+        with open(path, "w", encoding="utf-8") as purged_file:
+            json.dump(config, purged_file)
+        try:
+            ConfigurationManager(path)
+        except (ValueError, KeyError, TypeError) as e:
+            return str(e)
+    return None
+
+
+def _purge_config(path: str) -> bool:
+    """The credentials' old places taken out of one configuration file; whether it had any."""
+    with open(path, encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    if not _purged(config):
         return False
     temporary = f"{path}.purge"
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, os.stat(path).st_mode & 0o777)
@@ -267,6 +294,11 @@ async def purge(connection, config_manager, config_path: str) -> int:
         missing.append(f"saxo.{environment}.tokens")
     if missing:
         print(f"Not purged: {', '.join(missing)} not in PostgreSQL yet. The services would find no credential.")
+        return 1
+    refusal = refusal_once_purged(config_path)
+    if refusal:
+        print(f"Not purged: without its credentials, config.json would be refused by the services at their next start "
+              f"({refusal}). Nothing was changed.")
         return 1
     folder = os.path.dirname(os.path.abspath(config_path))
     for path in [config_path, *sorted(glob.glob(os.path.join(folder, "config.json.bak-*")))]:

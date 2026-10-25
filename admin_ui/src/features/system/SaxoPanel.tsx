@@ -3,6 +3,7 @@ import { Check, Copy, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
+import { BrandMark } from '@/components/BrandMark'
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -241,7 +242,12 @@ export function SaxoPanel() {
 
   return (
     <Panel
-      title="Saxo connection"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <BrandMark brand="saxo" />
+          Saxo connection
+        </span>
+      }
       description={`The login the services share${status?.environment ? `, on the ${ACCOUNT[status.environment]}` : ''}. They renew it by themselves until its refresh token ends.`}
       action={
         status &&

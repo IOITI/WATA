@@ -19,6 +19,7 @@ import type { DataProvider, DataProviders } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 import { assetsLink, PROVIDERS_PATH } from './assets'
+import { ProviderMark } from './ProviderMark'
 import { CapitalSettingsDialog } from './CapitalSettingsDialog'
 import type { CapitalDialogStart } from './CapitalSettingsDialog'
 import { HistorySettingsDialog } from './HistorySettingsDialog'
@@ -56,7 +57,10 @@ function providerColumns(timeZone: string, edit: (provider: DataProvider) => voi
             to={`${PROVIDERS_PATH}/${row.id}`}
             className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
           >
-            {row.name}
+            <span className="inline-flex items-center gap-1.5">
+              <ProviderMark id={row.id} />
+              {row.name}
+            </span>
           </Link>
           <p className="line-clamp-2 max-w-[18rem] whitespace-normal text-xs text-muted-foreground" title={row.description}>
             {row.description}
@@ -154,7 +158,8 @@ function CatalogDialog({
           <li key={item.entry.id} className="rounded-xl border border-border/60 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium">
+                <p className="flex items-center gap-1.5 text-sm font-medium">
+                  <ProviderMark id={item.entry.id} />
                   {item.entry.name} <span className="font-normal text-muted-foreground">· {KIND_LABELS[item.entry.kind]}</span>
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">{item.entry.description}</p>

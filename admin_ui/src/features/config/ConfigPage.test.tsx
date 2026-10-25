@@ -13,7 +13,7 @@ import { WithTrail } from '@/test/WithTrail'
 
 import { anchorOf } from './catalog'
 import { ConfigPage } from './ConfigPage'
-import { ConfigFileView, ConfigGroupPage, ConfigJsonView, ConfigOverview, ConfigVersionsView } from './ConfigViews'
+import { ConfigGroupPage, ConfigOverview, ConfigVersionsView } from './ConfigViews'
 
 const SESSION: Session = {
   authenticated: true,
@@ -74,8 +74,6 @@ function renderPage(at: string) {
         ),
         children: [
           { index: true, element: <ConfigOverview /> },
-          { path: 'json', element: <ConfigJsonView /> },
-          { path: 'file', element: <ConfigFileView /> },
           { path: 'versions', element: <ConfigVersionsView /> },
           { path: ':group', element: <ConfigGroupPage /> },
         ],
@@ -134,6 +132,30 @@ describe('the overview of the configuration', () => {
     )
   })
 
+  it('lists the groups under the sections of the menu', async () => {
+    renderPage('/config')
+
+    const trading = (await screen.findByRole('heading', { name: 'Trading' })).closest('section') as HTMLElement
+    expect(within(trading).getByRole('link', { name: /Market hours and calendar/ })).toBeInTheDocument()
+    expect(within(trading).getByRole('link', { name: /^Exits/ })).toBeInTheDocument()
+    const operations = screen.getByRole('heading', { name: 'Operations' }).closest('section') as HTMLElement
+    expect(within(operations).getByRole('link', { name: /Infrastructure/ })).toBeInTheDocument()
+    // A section without a group of its own is not shown.
+    expect(screen.queryByRole('heading', { name: 'Data' })).not.toBeInTheDocument()
+  })
+
+  it('opens the previous versions from their tab, and comes back', async () => {
+    const user = userEvent.setup()
+    const router = renderPage('/config')
+
+    await user.click(await screen.findByRole('link', { name: 'Previous versions' }))
+
+    expect(router.state.location.pathname).toBe('/config/versions')
+    expect(await screen.findByText('What each save changed')).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'Parameters' }))
+    expect(router.state.location.pathname).toBe('/config')
+  })
+
   it('finds a parameter by what it does, and leads to its row', async () => {
     const user = userEvent.setup()
     renderPage('/config')
@@ -160,6 +182,32 @@ describe('a group of parameters', () => {
     await user.click(within(row).getByRole('button', { name: 'What it changes' }))
     expect(row).toHaveTextContent('The trader takes entries from this hour.')
     expect(within(row).getByRole('link', { name: 'Trading ends at' })).toHaveAttribute('href', expect.stringContaining('/config/hours#'))
+  })
+
+  it('puts the parameters that go together under one heading, and leads to each from the top', async () => {
+    renderPage('/config/hours')
+
+    const news = (await screen.findByRole('heading', { name: 'US releases' })).closest('section') as HTMLElement
+    expect(news).toHaveAttribute('id', 'b-news')
+    expect(news).toHaveTextContent('No entry around them.')
+    expect(within(news).getByText('No entry around US releases')).toBeInTheDocument()
+    const day = screen.getByRole('heading', { name: 'The trading day' }).closest('section') as HTMLElement
+    expect(day.contains(document.getElementById(anchorOf(START)))).toBe(true)
+    const inGroup = screen.getByRole('navigation', { name: 'In this group' })
+    expect(within(inGroup).getByRole('link', { name: 'US releases' })).toHaveAttribute('href', '/config/hours#b-news')
+    // The groups beside it, by section.
+    const groups = screen.getByRole('navigation', { name: 'Groups of parameters' })
+    expect(groups).toHaveTextContent('Trading')
+    expect(groups).toHaveTextContent('Operations')
+    expect(within(groups).getByRole('link', { name: /Market hours and calendar/ })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('ends a group with the keys nothing reads, under their own heading', async () => {
+    renderPage('/config/infrastructure')
+
+    const unused = (await screen.findByRole('heading', { name: 'Read by nothing' })).closest('section') as HTMLElement
+    expect(unused).toHaveTextContent('DuckDB file')
+    expect(screen.getByRole('heading', { name: 'PostgreSQL' })).toBeInTheDocument()
   })
 
   it('switches an optional rule on with its settings, and keeps the change through another group', async () => {

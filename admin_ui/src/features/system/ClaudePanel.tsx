@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
+import { BrandMark } from '@/components/BrandMark'
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
 import { useToast } from '@/components/toast-context'
@@ -237,7 +238,12 @@ export function ClaudePanel() {
   const shown = state && endpointState(state)
   return (
     <Panel
-      title="Claude"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <BrandMark brand="claude" />
+          Claude
+        </span>
+      }
       description="Claude Code on your Mac researches strategies here through the admin's MCP endpoint: it reads the recorded data, runs Pine studies and backtests, and keeps its own scripts, experiments and shadow rules. It cannot trade, change the configuration, or take a rule live."
       action={
         state?.enabled && (

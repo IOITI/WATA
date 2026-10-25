@@ -97,3 +97,22 @@ TradingView Lightweight Charts(TM) (Apache License 2.0)
 React, React Router, TanStack Query, Recharts, Tailwind CSS, Framer Motion,
 Lucide and the EasyUI components are under the MIT licence (ISC for Lucide):
 see admin_ui/package.json and admin_ui/README.md in the repository.
+
+
+Marks of the services WATA connects to
+--------------------------------------
+Shown beside their names (src/components/BrandMark.tsx), to say which service
+a setting, a credential or a panel is about. Each is its owner's trademark;
+WATA is not affiliated with, sponsored by or endorsed by any of them.
+
+- Saxo: Saxo Bank A/S. The round mark of its site (home.saxo).
+- Capital.com: Capital Com SV Investments Ltd and its group. The icon of its
+  site (static.capital.com).
+- TradingView: TradingView, Inc.
+- Telegram: Telegram FZ-LLC.
+- PostgreSQL: the PostgreSQL Community Association of Canada.
+- RabbitMQ: Broadcom Inc.
+- Claude: Anthropic, PBC.
+
+The last five are drawn from Simple Icons 16.35.0 (CC0 1.0 Universal):
+https://simpleicons.org - https://github.com/simple-icons/simple-icons

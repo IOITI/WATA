@@ -122,10 +122,13 @@ def _mount_interface(app: FastAPI, static_dir: str) -> None:
             raise HTTPException(status_code=404, detail="Not found")
         # A file of the build (favicon...) is served as such; any other path is a
         # route of the single-page application.
+        # Asked again at each load: kept by a browser, a page of before would ask for the
+        # assets of its own build, which a deploy replaced. The assets' names change with their content.
+        fresh = {"Cache-Control": "no-cache"}
         candidate = os.path.realpath(os.path.join(static_root, path))
         if path and candidate.startswith(static_root + os.sep) and os.path.isfile(candidate):
-            return FileResponse(candidate)
-        return FileResponse(index_path)
+            return FileResponse(candidate, headers=fresh)
+        return FileResponse(index_path, headers=fresh)
 
 
 async def _load_own_credentials(ctx: AdminContext) -> None:

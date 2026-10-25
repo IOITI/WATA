@@ -127,6 +127,8 @@ def test_the_old_places_are_cleared_only_once_each_credential_has_its_row(server
     asyncio.run(migrate.migrate(db, manager, migrate.read_env(str(root / ".env")), dry_run=False, keys_dir=str(root / "keys")))
     assert asyncio.run(migrate.purge(db, manager, config_path)) == 0
 
+    # The services take the purged file at their next start.
+    ConfigurationManager(str(root / "etc" / "config.json"))
     for path in (root / "etc" / "config.json", root / "etc" / "config.json.bak-20261020-101010"):
         purged = json.loads(path.read_text())
         assert "bot_token" not in purged["telegram"] and "chat_id" not in purged["telegram"]
@@ -141,3 +143,23 @@ def test_the_old_places_are_cleared_only_once_each_credential_has_its_row(server
     assert not (root / "web_server" / ".webserver_key_salt").exists()
     assert not (root / "admin" / "mcp_tokens.json.imported").exists()
     assert "CAPITAL_API_KEY, CAPITAL_IDENTIFIER, CAPITAL_PASSWORD, WATA_HEARTBEAT_URL" in capsys.readouterr().out
+
+
+def test_nothing_is_purged_when_the_services_would_refuse_the_file_without_its_credentials(server, capsys, monkeypatch):
+    root, manager = server
+    config_path = str(root / "etc" / "config.json")
+    db = Database()
+    asyncio.run(migrate.migrate(db, manager, migrate.read_env(str(root / ".env")), dry_run=False, keys_dir=str(root / "keys")))
+    before = (root / "etc" / "config.json").read_text()
+
+    def refusing(path):
+        if "AppSecret" not in open(path).read():
+            raise ValueError("Missing required Saxo authentication fields: AppKey, AppSecret")
+        return manager
+
+    monkeypatch.setattr(migrate, "ConfigurationManager", refusing)
+
+    assert asyncio.run(migrate.purge(db, manager, config_path)) == 1
+    assert "would be refused by the services at their next start" in capsys.readouterr().out
+    assert (root / "etc" / "config.json").read_text() == before
+    assert (root / "saxo_auth" / "persist_token.json.imported").exists()

@@ -18,7 +18,7 @@ from src.admin.config_catalog import (
     unknown_paths,
 )
 from src.admin.config_catalog.checks import warnings
-from src.admin.config_catalog.model import CREDENTIAL, EDITABLE, SERVER, UNUSED
+from src.admin.config_catalog.model import CREDENTIAL, EDITABLE, SECTIONS, SERVER, UNUSED, UNUSED_BLOCK
 from src.admin.config_catalog.trading import CLOSE_TIME, END_HOUR, RISKY_HOUR, START_HOUR
 from src.admin.config_editor import EDITABLE_PATHS, PROTECTED_PATHS, SECRET_PATHS, check_admin_limits
 from src.admin.context import AdminSettings
@@ -126,6 +126,46 @@ def test_the_entries_are_well_formed():
     # Each group holds something, each service is read by something.
     assert {param.group for param in CATALOG.params} == groups
     assert {reader for param in CATALOG.params for reader in param.readers} == services
+
+
+def test_each_group_is_under_a_section_of_the_menu_in_its_order():
+    navigation = pathlib.Path("admin_ui/src/components/navigation.ts").read_text(encoding="utf-8")
+    menu = re.search(r"MENU_SECTIONS: MenuSection\[\] = \[([^\]]*)\]", navigation).group(1)
+
+    assert list(SECTIONS) == re.findall(r"'([^']+)'", menu)
+    assert {group.section for group in GROUPS} == set(SECTIONS)
+    # The groups of a section follow each other, so that the page lists them as the menu does.
+    order = [SECTIONS.index(group.section) for group in GROUPS]
+    assert order == sorted(order)
+
+
+def test_each_parameter_is_under_one_block_of_its_group_and_each_block_holds_some():
+    blocks = {(block.group, block.id): block for block in CATALOG.blocks}
+    groups = {group.id for group in GROUPS}
+
+    assert len(blocks) == len(CATALOG.blocks)
+    assert {block.group for block in CATALOG.blocks} <= groups
+    for param in CATALOG.params:
+        assert (param.group, param.block) in blocks, param.path
+        if param.access == UNUSED:
+            assert param.block == UNUSED_BLOCK, param.path
+        else:
+            # The first block of its group that holds its path: a later one never also claims it unseen.
+            holding = [block.id for block in CATALOG.blocks if block.group == param.group and block.holds(param.path)]
+            assert holding and holding[0] == param.block, param.path
+    used = {(param.group, param.block) for param in CATALOG.params}
+    assert set(blocks) == used
+    assert all(block.title for block in CATALOG.blocks)
+
+
+def test_the_page_gets_the_sections_and_blocks():
+    served = CATALOG.as_dict()
+
+    assert served["sections"] == list(SECTIONS)
+    assert {group["section"] for group in served["groups"]} == set(SECTIONS)
+    assert {(block["group"], block["id"]) for block in served["blocks"]} == {
+        (block.group, block.id) for block in CATALOG.blocks}
+    assert all(param["block"] for param in served["params"])
 
 
 def _plain(path: str) -> str:

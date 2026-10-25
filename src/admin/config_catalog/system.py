@@ -23,35 +23,38 @@ WHERE_FILES_ARE = "Where the admin keeps its files, inside the folders its conta
 
 REPORTING = (
     Param(
-        path="reporting.milestones_eur", group="reporting", label="Milestones", kind="numbers", unit="€",
+        path="reporting.milestones_eur", group="report", label="Milestones", kind="numbers", unit="€",
         optional=True, default=[100000, 500000, 1000000, 5000000, 10000000],
         help="The balances the daily report and the Report page project the account to reach.",
         readers=("trader", "position_monitor", ADMIN), risk=NONE,
     ),
     Param(
-        path="logging.level", group="reporting", label="Log level", kind="enum",
+        path="logging.level", group="logs", label="Log level", kind="enum",
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         help="What every service writes in its log: DEBUG writes the most.",
         readers=ALL_SERVICES, risk=NONE,
         caveats=("The HTTP and WebSocket libraries stay at WARNING whatever it says: they name whole addresses.",),
     ),
     Param(
-        path="logging.format", group="reporting", label="Log line format", kind="text", access=SERVER, optional=True,
+        path="logging.format", group="logs", label="Log line format", kind="text", access=SERVER, optional=True,
         default="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         reason="The admin's Logs page reads the lines in this format: another would show them as unknown.",
         how=ON_THE_SERVER, help="Python's format of each log line.", readers=ALL_SERVICES,
     ),
     Param(
-        path="logging.persistant.log_path", group="reporting", label="Folder of the logs", kind="text", access=SERVER,
+        path="logging.persistant.log_path", group="logs", label="Folder of the logs", kind="text", access=SERVER,
         reason="It is the folder the containers mount for their logs.", how=ON_THE_SERVER,
         help="Each service writes <folder>/<service>/<service>.log.", readers=ALL_SERVICES,
     ),
     Param(
-        path="telegram.bot_name", group="reporting", label="Bot's name", kind="text", access=UNUSED,
+        path="telegram.bot_name", group="logs", label="Bot's name", kind="text", access=UNUSED,
         reason="Required by the validator beside the bot's token, but nothing reads it.",
         help="The name of WATA's Telegram bot.",
     ),
 )
+
+# The admin's folders, each with the group of what it keeps.
+PERSISTANT_GROUPS = {"mcp_tokens_path": "claude", "backtests_path": "backtests", "price_history_path": "backtests"}
 
 ADMIN_PARAMS = (
     Param(
@@ -68,30 +71,30 @@ ADMIN_PARAMS = (
         related=("admin.session_idle_minutes",),
     ),
     Param(
-        path="admin.backtests_enabled", group="admin", label="Backtests", kind="bool", optional=True, default=True,
+        path="admin.backtests_enabled", group="backtests", label="Backtests", kind="bool", optional=True, default=True,
         help="Backtests, Dukascopy's downloads, the research export and paper days.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path="admin.backtests_max_queued", group="admin", label="Backtests waiting at most", kind="int", minimum=1,
+        path="admin.backtests_max_queued", group="backtests", label="Backtests waiting at most", kind="int", minimum=1,
         maximum=500, optional=True, default=10,
         help="Runs asked for beyond this are refused until one is done.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path="admin.backtests_max_period_days", group="admin", label="Days of a backtest at most", kind="int",
+        path="admin.backtests_max_period_days", group="backtests", label="Days of a backtest at most", kind="int",
         unit="days", minimum=1, maximum=731, optional=True, default=92,
         help="The longest period a run may cover (731 on made-up turbos).",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path="admin.backtests_signal_cache_mb", group="admin", label="Pine answers kept up to", kind="int", unit="MB",
+        path="admin.backtests_signal_cache_mb", group="backtests", label="Pine answers kept up to", kind="int", unit="MB",
         minimum=64, maximum=8192, optional=True, default=1024,
         help="The Pine runner's answers kept for runs asked again, pruned oldest first past this.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path="admin.mcp_enabled", group="admin", label="Claude's endpoint (MCP)", kind="bool", optional=True,
+        path="admin.mcp_enabled", group="claude", label="Claude's endpoint (MCP)", kind="bool", optional=True,
         default=False,
         help="Opens /mcp on the admin's address, for Claude Code on your Mac with a token.",
         readers=(ADMIN,), risk=NONE,
@@ -99,57 +102,57 @@ ADMIN_PARAMS = (
         also_needs=("A token (watamcptoken on the server).",),
     ),
     Param(
-        path=f"{MCP}.shadow_rules", group="admin", label="Claude's shadow rules", kind="bool", optional=True,
+        path=f"{MCP}.shadow_rules", group="claude", label="Claude's shadow rules", kind="bool", optional=True,
         default=False,
         help="Claude may keep signal rules in shadow: the TA engine runs them and journals their signals, never sends "
              "them.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.max_waiting_runs", group="admin", label="Claude's runs waiting at most", kind="int", minimum=1,
+        path=f"{MCP}.max_waiting_runs", group="claude", label="Claude's runs waiting at most", kind="int", minimum=1,
         maximum=10, optional=True, default=3,
         help="Your runs and the nightly paper runs always find room.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.runs_per_day", group="admin", label="Claude's runs a day", kind="int", minimum=1, maximum=1000,
+        path=f"{MCP}.runs_per_day", group="claude", label="Claude's runs a day", kind="int", minimum=1, maximum=1000,
         optional=True, default=60, help="Runs and sweeps Claude may start in a day (UTC).", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.max_day_simulations", group="admin", label="Days simulated by one of Claude's requests",
+        path=f"{MCP}.max_day_simulations", group="claude", label="Days simulated by one of Claude's requests",
         kind="int", minimum=100, maximum=1_000_000, optional=True, default=10_000,
         help="Days × the combinations of a sweep, or 1 + the random repetitions.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.study_minutes_per_hour", group="admin", label="Pine study minutes an hour", kind="int",
+        path=f"{MCP}.study_minutes_per_hour", group="claude", label="Pine study minutes an hour", kind="int",
         unit="min", minimum=1, maximum=60, optional=True, default=20,
         help="Minutes of Pine studies Claude may use in any hour.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.study_memory_mb", group="admin", label="A study's heap", kind="int", unit="MB", minimum=128,
+        path=f"{MCP}.study_memory_mb", group="claude", label="A study's heap", kind="int", unit="MB", minimum=128,
         maximum=1024, optional=True, default=768,
         help="The Node heap of one of Claude's Pine studies, beside a backtest in the admin's 3 GB.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.study_timeout_seconds", group="admin", label="A study may last", kind="int", unit="s", minimum=10,
+        path=f"{MCP}.study_timeout_seconds", group="claude", label="A study may last", kind="int", unit="s", minimum=10,
         maximum=300, optional=True, default=90, help="Longer, the study is stopped.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.max_scripts", group="admin", label="Claude's scripts at most", kind="int", minimum=1, maximum=500,
+        path=f"{MCP}.max_scripts", group="claude", label="Claude's scripts at most", kind="int", minimum=1, maximum=500,
         optional=True, default=100, help="Pine scripts Claude keeps at once.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.max_shadow_rules", group="admin", label="Claude's shadow rules at most", kind="int", minimum=0,
+        path=f"{MCP}.max_shadow_rules", group="claude", label="Claude's shadow rules at most", kind="int", minimum=0,
         maximum=10, optional=True, default=3, help="Shadow rules Claude keeps at once.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.shadow_day_ms", group="admin", label="Cost of a shadow rule's day at most", kind="int", unit="ms",
+        path=f"{MCP}.shadow_day_ms", group="claude", label="Cost of a shadow rule's day at most", kind="int", unit="ms",
         minimum=500, maximum=10_000, optional=True, default=2000,
         help="A rule of Claude's whose engine day costs more is refused: the engine runs it at each new bar.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
-        path=f"{MCP}.min_free_disk_gb", group="admin", label="Free disk needed", kind="int", unit="GB", minimum=1,
+        path=f"{MCP}.min_free_disk_gb", group="claude", label="Free disk needed", kind="int", unit="GB", minimum=1,
         maximum=1000, optional=True, default=5,
         help="Nothing of Claude's is started when the disk has less free.", readers=(ADMIN,), risk=NONE,
     ),
@@ -187,13 +190,14 @@ ADMIN_PARAMS = (
         help="The port the admin listens on in its container.", readers=(ADMIN,),
     ),
     Param(
-        path="admin.backtests_workers", group="admin", label="Backtests at once", kind="int", access=SERVER,
+        path="admin.backtests_workers", group="backtests", label="Backtests at once", kind="int", access=SERVER,
         optional=True, default=1, reason="Sized with the admin container's memory and processor (3 GB, one processor).",
         how=ON_THE_SERVER, help="Runs at the same time.", readers=(ADMIN,),
     ),
 ) + tuple(
     Param(
-        path=f"admin.persistant.{key}", group="admin", label=label, kind="text", access=SERVER, optional=True,
+        path=f"admin.persistant.{key}", group=PERSISTANT_GROUPS.get(key, "admin"), label=label, kind="text",
+        access=SERVER, optional=True,
         default=default, reason=WHERE_FILES_ARE, how=ON_THE_SERVER, help=help_text, readers=readers,
     )
     for key, label, default, help_text, readers in (

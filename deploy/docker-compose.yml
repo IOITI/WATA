@@ -664,6 +664,10 @@ services:
       - ../../.env:/app/wata.env:ro
     networks:
       - trade-net
+    # Run with every service stopped (a deploy): it starts the database it writes to.
+    depends_on:
+      postgres1:
+        condition: service_healthy
     entrypoint: ["python", "-m", "src.vault"]
     command: ["migrate", "--dry-run"]
 

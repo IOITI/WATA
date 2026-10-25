@@ -141,6 +141,30 @@ def test_the_full_level_of_saxos_session_is_switched_by_a_boolean(tmp_path, sect
             ConfigurationManager(str(path))
 
 
+@pytest.mark.parametrize("kept, refusal", [
+    (("AppKey", "AppSecret"), None),
+    # The purge took both out: the app is in PostgreSQL, its addresses stay in the file.
+    ((), None),
+    (("AppKey",), "Missing required Saxo authentication fields: AppSecret"),
+    (("AppSecret",), "Missing required Saxo authentication fields: AppKey"),
+])
+def test_saxos_app_in_the_file_is_its_key_and_secret_together_or_neither(tmp_path, kept, refusal):
+    with open("tests/test_config.json") as config_file:
+        config = json.load(config_file)
+    app = config["authentication"]["saxo"]["app_config_object"]
+    for field in ("AppKey", "AppSecret"):
+        if field not in kept:
+            del app[field]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+
+    if refusal is None:
+        ConfigurationManager(str(path))
+    else:
+        with pytest.raises(ValueError, match=refusal):
+            ConfigurationManager(str(path))
+
+
 def _config_with_market_timezone(tmp_path, timezone_name):
     with open("etc/config_example.json", encoding="utf-8") as config_file:
         config = json.load(config_file)

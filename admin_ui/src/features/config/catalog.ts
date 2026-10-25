@@ -6,7 +6,8 @@
  * change reaches (its preview); this only places and describes.
  */
 
-import type { CatalogParam, ConfigCatalog, JsonObject, JsonValue } from '@/lib/types'
+import type { MenuSection } from '@/components/navigation'
+import type { CatalogBlock, CatalogGroup, CatalogParam, ConfigCatalog, JsonObject, JsonValue } from '@/lib/types'
 
 import { getAt, setAt } from './configModel'
 import type { ConfigPath } from './configModel'
@@ -179,6 +180,48 @@ export function segmentsOf(params: CatalogParam[]): Segment[] {
     else segments.push({ rule, params: [param] })
   }
   return segments
+}
+
+export interface PlacedBlock {
+  block: CatalogBlock
+  params: CatalogParam[]
+}
+
+/**
+ * A group's blocks in the catalog's order, each with its parameters in the
+ * catalog's order; a block that holds none is left out, and a parameter whose
+ * block the catalog does not list comes last, under "Other".
+ */
+export function blocksOf(catalog: ConfigCatalog, groupId: string): PlacedBlock[] {
+  const params = catalog.params.filter((param) => param.group === groupId)
+  const placed: PlacedBlock[] = catalog.blocks
+    .filter((block) => block.group === groupId)
+    .map((block) => ({ block, params: params.filter((param) => param.block === block.id) }))
+  const known = new Set(placed.map(({ block }) => block.id))
+  const others = params.filter((param) => !known.has(param.block))
+  if (others.length > 0) {
+    placed.push({ block: { group: groupId, id: 'other', title: 'Other', summary: '', paths: [] }, params: others })
+  }
+  return placed.filter(({ params: held }) => held.length > 0)
+}
+
+export interface SectionGroups {
+  section: MenuSection
+  groups: CatalogGroup[]
+}
+
+/** The menu's sections that have groups, in the menu's order, each with its groups in the catalog's order. */
+export function sectionsOf(catalog: ConfigCatalog): SectionGroups[] {
+  const sections: MenuSection[] = [...catalog.sections]
+  for (const group of catalog.groups) if (!sections.includes(group.section)) sections.push(group.section)
+  return sections
+    .map((section) => ({ section, groups: catalog.groups.filter((group) => group.section === section) }))
+    .filter(({ groups }) => groups.length > 0)
+}
+
+/** The anchor of a block on its group's page. */
+export function blockAnchorOf(blockId: string): string {
+  return `b-${blockId}`
 }
 
 export interface GroupCounts {

@@ -67,7 +67,8 @@ class ConfigurationManager:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Saxo's app object, where it is still kept (its old place): its key and secret together.
+        # Saxo's app object, where it is still kept (its old place): its key and secret together, or neither
+        # once the purge took them out (python -m src.vault migrate --purge-old), its addresses staying.
         saxo_app = self.get_config_value("authentication.saxo.app_config_object")
         if saxo_app is not None:
             if not isinstance(saxo_app, dict):
@@ -75,7 +76,7 @@ class ConfigurationManager:
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             missing_saxo_fields = [field for field in ("AppKey", "AppSecret") if not saxo_app.get(field)]
-            if missing_saxo_fields:
+            if len(missing_saxo_fields) == 1:
                 error_msg = f"Missing required Saxo authentication fields: {', '.join(missing_saxo_fields)}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)

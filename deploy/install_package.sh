@@ -191,6 +191,24 @@ docker exec -it admin1 python -m src.admin.cli --mcp-token "$@"
 EOF
 chmod +x /usr/local/bin/watamcptoken
 
+# Create the watavault command wrapper (the credentials sealed in PostgreSQL, src/vault/)
+cat << 'EOF' > /usr/local/bin/watavault
+#!/bin/bash
+set -euo pipefail
+# watavault migrate --dry-run     what would be moved into PostgreSQL, and from where
+# watavault migrate               moved in, every service stopped: only what has no row yet
+# watavault migrate --purge-old   the old places cleared, once each credential has its row
+# watavault export-saxo           Saxo's login written back to its file, to go back to v0.43
+APP_BASE="/app/wata"
+cd "$APP_BASE/$(cat "$APP_BASE/VERSION")/deploy"
+if [ "${1:-}" == "export-saxo" ]; then
+    # In the trader's container: it can open Saxo's login, vault_tools cannot.
+    exec docker compose --env-file "$APP_BASE/.env" run --rm trader1 python -m src.vault export-saxo
+fi
+exec docker compose --env-file "$APP_BASE/.env" --profile tools run --rm vault_tools "$@"
+EOF
+chmod +x /usr/local/bin/watavault
+
 # Create the wataprices command wrapper (price recorder: export a period, or check an instrument)
 cat << 'EOF' > /usr/local/bin/wataprices
 #!/bin/bash
@@ -385,6 +403,8 @@ echo "To set the password of the admin web interface (when enabled in .env):"
 echo "  - wataadminpasswd"
 echo "To require a one-time code from an authenticator app as well:"
 echo "  - wataadmintotp [--disable]"
+echo "To move the credentials into PostgreSQL, or clear their old places once they are there:"
+echo "  - watavault migrate [--dry-run | --purge-old] | export-saxo"
 echo "To let Claude Code on your Mac use the admin's MCP endpoint (when admin.mcp_enabled is true):"
 echo "  - watamcptoken create <name> [--days N] | list | revoke <name>"
 echo "---------------------------------------------------------------------"

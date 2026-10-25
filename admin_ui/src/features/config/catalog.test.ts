@@ -4,6 +4,7 @@ import { CATALOG, configFile, END, FRESH, MARKET_ZONE, NEWS, NEWS_BEFORE, START,
 
 import {
   anchorOf,
+  blocksOf,
   boundsSaid,
   changedParams,
   configPathOf,
@@ -18,6 +19,7 @@ import {
   ruleOf,
   sameValue,
   searchParams,
+  sectionsOf,
   segmentsOf,
   shownValue,
   valueOf,
@@ -130,6 +132,35 @@ describe('finding a parameter', () => {
     expect(segmentsOf(hours).map((segment) => [segment.rule, segment.params.length])).toEqual([
       ['market_hours', 3],
       ['macro_news', 2],
+    ])
+  })
+})
+
+describe('how the page lays a group out', () => {
+  it("puts each parameter under its block, in the catalog's order of blocks and of parameters", () => {
+    const placed = blocksOf(CATALOG, 'hours')
+
+    expect(placed.map(({ block }) => block.id)).toEqual(['day', 'news'])
+    expect(placed[0].params.map((param) => param.path)).toEqual([START, END, MARKET_ZONE, 'trade.rules[*].rule_name'])
+    expect(placed[1].params.map((param) => param.path)).toEqual([NEWS, NEWS_BEFORE])
+  })
+
+  it('leaves out a block that holds nothing, and puts a parameter of an unknown block under Other', () => {
+    const catalog = {
+      ...CATALOG,
+      params: CATALOG.params.map((param) => (param.path === FRESH ? { ...param, block: 'gone' } : param)),
+    }
+
+    const placed = blocksOf(catalog, 'exits')
+
+    expect(placed.map(({ block }) => block.title)).toEqual(['Stop-loss, take-profit and trailing stop', 'Other'])
+    expect(placed[1].params.map((param) => param.path)).toEqual([FRESH])
+  })
+
+  it("lists the sections of the menu that have groups, in the menu's order", () => {
+    expect(sectionsOf(CATALOG).map(({ section, groups }) => [section, groups.map((group) => group.id)])).toEqual([
+      ['Trading', ['hours', 'exits']],
+      ['Operations', ['logs', 'infrastructure']],
     ])
   })
 })

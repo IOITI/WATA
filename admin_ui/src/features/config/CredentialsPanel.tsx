@@ -3,6 +3,7 @@ import { Check, Copy, KeyRound, RotateCw, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
+import { BrandMark } from '@/components/BrandMark'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { Panel } from '@/components/Panel'
 import { QueryState } from '@/components/status'
@@ -17,6 +18,7 @@ import { ApiError, api } from '@/lib/api'
 import type { Credential } from '@/lib/types'
 
 import {
+  CREDENTIAL_BRANDS,
   HELPERS,
   KEPT_ELSEWHERE,
   WHERE_LABEL,
@@ -242,7 +244,16 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
 
   return (
     <Panel
-      title={credential.label}
+      title={
+        <span className="inline-flex items-center gap-2">
+          {CREDENTIAL_BRANDS[credential.name] ? (
+            <BrandMark brand={CREDENTIAL_BRANDS[credential.name]} />
+          ) : (
+            <KeyRound aria-hidden className="size-4 text-muted-foreground" />
+          )}
+          {credential.label}
+        </span>
+      }
       description={whereSaid(credential, timeZone)}
       action={
         <Badge tone={where.tone} dot>
@@ -422,6 +433,9 @@ export function CredentialsPanel() {
         <ul className="space-y-1.5 text-xs">
           {KEPT_ELSEWHERE.map((entry) => (
             <li key={entry.what}>
+              {entry.brands?.map((brand) => (
+                <BrandMark key={brand} brand={brand} className="mr-1 size-3.5 align-[-2px]" />
+              ))}
               <span className="font-medium text-foreground">{entry.what}</span>
               <span className="text-text-secondary">: {entry.where}.</span>
             </li>

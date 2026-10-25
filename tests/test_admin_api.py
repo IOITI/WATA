@@ -1551,6 +1551,14 @@ def test_interface_is_served_with_a_fallback_to_the_application(ctx, built_inter
         assert client.get("/api").status_code == 404
 
 
+def test_the_page_is_asked_again_at_each_load_so_that_a_deploy_shows_at_once(ctx, built_interface):
+    with make_client(ctx, built_interface) as client:
+        for path in ("/", "/config/hours", "/theme.js"):
+            assert client.get(path).headers["cache-control"] == "no-cache", path
+        # The assets, named by their content, are left to the browser.
+        assert "cache-control" not in client.get("/assets/app.js").headers
+
+
 def test_the_script_that_sets_the_theme_is_served_as_a_script_the_browser_will_run(ctx, built_interface):
     # It is a file of the build's root, not an asset, loaded before the application.
     # With "nosniff", a browser only runs it if it is declared as JavaScript; and the

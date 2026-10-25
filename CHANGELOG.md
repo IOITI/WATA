@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.45.0 - The Configuration page by section, and a purge the services survive
+
+**Release date:** unreleased
+
+- **The purge of the credentials' old places would have stopped every service at its next start.** It takes Saxo's AppKey and AppSecret out of `config.json`, which v0.44.0's `ConfigurationManager` still required. It now takes an app object without both (its addresses stay, read while `SAXO_REDIRECT_URL` is not set) but still refuses one without either half. The purge also checks the purged file with that validator before it writes anything, and refuses otherwise: run it from this version on.
+- **`watavault`**, a command of the server made by the install script: `watavault migrate [--dry-run | --purge-old]` runs the compose file's `vault_tools` in the folder of the version installed, and `watavault export-saxo` runs in the trader's container. `vault_tools` starts PostgreSQL itself, so that it runs with every service stopped.
+- **The Configuration page's groups are under the sections of the menu**:
+  - Trading: day targets, market hours, signals, size, exits, the watchlist.
+  - Analysis: the daily report, backtests.
+  - Data: Saxo, the price recorder, Capital.com.
+  - Technical Analysis: the TA engine.
+  - Operations: the admin, Claude, logs, infrastructure, credentials.
+
+  Backtests, Claude and the daily report are groups of their own, taken out of "Admin and Claude" and "Reporting and logs". Each section and group has its icon, on the overview and in the list beside each group, which runs across the top on a phone, with the group shown brought into view.
+- **Inside a group, the parameters that go together are under one heading**, linked from the top of the page: the session, the stream and the calls to Saxo's API; buying power, size by time of day, size by confidence, which turbo. The keys nothing reads come last, under "Read by nothing". Every parameter is under one heading, which the catalog's tests hold.
+- **The services WATA connects to have their own marks**: Saxo, Capital.com, TradingView, Telegram, PostgreSQL, RabbitMQ and Claude. They appear on the groups, the credentials, the System page's Saxo and Claude panels and the Data providers, and each is listed in the third-party notices.
+- **The tabs JSON and Whole file are gone, and Previous versions opens again.** The tabs were links that waited for the page to follow them, and this page never did.
+- **The admin's page is sent with `Cache-Control: no-cache`.** A browser kept the page of before a deploy for a while, which asked for assets the deploy had replaced.
+
+**Verification status:**
+- 2,878 Python tests pass on Python 3.12 and 3.14, 10 of them new: Saxo's app in `config.json` with its key and secret or neither, a purged file taken by the services' validator, a purge refused (nothing written) when the validator would refuse it, the groups under the menu's sections in its order, each parameter under one block of its group, the page given both, `watavault` and `vault_tools` starting the database, the page sent with `no-cache`.
+- 1,124 interface tests pass, 7 of them new: the overview by section, the Previous versions tab followed and back, a group's headings and their links, the keys nothing reads under their own, the blocks and sections worked out from the catalog.
+- **Seen in the browser pane on the fake admin**: the overview by section with each group's icon and the Saxo, Capital.com and Claude marks; a group's list by section, its headings and links; the credentials with Telegram's and TradingView's marks; PostgreSQL's block; the Previous versions tab; desktop dark, phone width light.
+- **Not run on the server**: the purge itself (its check was run on the example configuration, purged and validated).
+
 ## v0.44.0 - Saxo's login in PostgreSQL, authorised from the admin
 
 **Release date:** 2026-10-24, with v0.40.0, v0.41.0, v0.42.0 and v0.43.0

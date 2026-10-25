@@ -1,5 +1,7 @@
 // Shapes of the admin API (src/admin/routers/*.py).
 
+import type { MenuSection } from '@/components/navigation'
+
 import type { Check } from './checks'
 
 export interface Session {
@@ -568,6 +570,8 @@ export interface CatalogParam {
   key_label: string | null
   value_label: string | null
   rule_default: JsonObject | null
+  /** The block of its group's page it is shown under. */
+  block: string
 }
 
 export interface CatalogService {
@@ -588,12 +592,25 @@ export interface CatalogGroup {
   id: string
   title: string
   summary: string
+  /** The section of the menu it is listed under (components/navigation.ts). */
+  section: MenuSection
+}
+
+/** Parameters of a group that go together, under one heading of its page. */
+export interface CatalogBlock {
+  group: string
+  id: string
+  title: string
+  summary: string
+  paths: string[]
 }
 
 export interface ConfigCatalog {
+  sections: MenuSection[]
   services: CatalogService[]
   consumers: CatalogConsumer[]
   groups: CatalogGroup[]
+  blocks: CatalogBlock[]
   params: CatalogParam[]
 }
 

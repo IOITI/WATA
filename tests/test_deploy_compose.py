@@ -333,6 +333,18 @@ def test_the_credentials_are_moved_by_a_tool_run_by_hand_that_holds_no_private_k
     assert modes["/app/wata.env"] == "ro" and modes["/app/keys/public"] == "ro"
     assert "/app/keys/own" not in modes
     assert "ports" not in tools and "labels" not in tools
+    # Run with every service stopped, at a deploy: it starts the database itself.
+    assert tools["depends_on"]["postgres1"] == {"condition": "service_healthy"}
+
+
+def test_the_install_script_gives_the_operator_the_command_that_moves_the_credentials():
+    script = open("deploy/install_package.sh").read()
+
+    assert "cat << 'EOF' > /usr/local/bin/watavault" in script
+    assert 'exec docker compose --env-file "$APP_BASE/.env" --profile tools run --rm vault_tools "$@"' in script
+    # Saxo's login is written back by a container that can open it.
+    assert "run --rm trader1 python -m src.vault export-saxo" in script
+    assert "chmod +x /usr/local/bin/watavault" in script
 
 
 def test_the_install_script_makes_the_keys_once_for_root_alone():

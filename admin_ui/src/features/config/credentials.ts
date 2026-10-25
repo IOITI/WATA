@@ -1,6 +1,7 @@
 // What the Credentials group says of each credential kept sealed in PostgreSQL (src/vault/,
 // src/admin/vault.py): where it is, what its services last saw, and how each is obtained. Pure.
 
+import type { Brand } from '@/components/BrandMark'
 import type { BadgeTone } from '@/components/ui/badge'
 import { formatDateTime } from '@/lib/format'
 import type { Credential, CredentialCheck } from '@/lib/types'
@@ -58,6 +59,15 @@ export function rotationSaid(credential: Credential): string {
     return `A new token is made. The one before is still accepted for ${minutes} minutes: change the address of every TradingView alert meanwhile, then restart the web server.`
   }
   return `A new token is made. The one before is still accepted for ${minutes} minutes: restart the web server, then the services that send it, meanwhile.`
+}
+
+/** The mark of the service a credential opens, beside its name. */
+export const CREDENTIAL_BRANDS: Record<string, Brand> = {
+  'telegram.bot': 'telegram',
+  'webhook.token': 'tradingview',
+  'capital.login': 'capital',
+  'saxo.live.app': 'saxo',
+  'saxo.simulation.app': 'saxo',
 }
 
 /** How each credential is obtained, step by step. */
@@ -165,15 +175,17 @@ export function fromSaxoAppObject(
 }
 
 /** The credentials that live elsewhere, and how each is changed. */
-export const KEPT_ELSEWHERE = [
+export const KEPT_ELSEWHERE: { what: string; where: string; brands?: Brand[] }[] = [
   {
     what: 'Saxo’s login',
+    brands: ['saxo'],
     where: 'In PostgreSQL, sealed for the four services that renew it in turn: its state, and a new login, on the System page (Saxo connection)',
   },
-  { what: 'Claude’s tokens', where: 'Made and revoked on the System page, Claude panel (PostgreSQL keeps their sha256)' },
+  { what: 'Claude’s tokens', brands: ['claude'], where: 'Made and revoked on the System page, Claude panel (PostgreSQL keeps their sha256)' },
   { what: 'Your sign-in', where: 'Your password’s hash and one-time code key in var/lib/admin (wataadminpasswd, wataadmintotp on the server)' },
   {
     what: 'The database’s and RabbitMQ’s passwords',
+    brands: ['postgresql', 'rabbitmq'],
     where: 'config.json and .env: PostgreSQL cannot keep what is needed to reach it',
   },
   {
