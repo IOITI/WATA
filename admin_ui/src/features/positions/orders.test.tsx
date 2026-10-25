@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
@@ -512,7 +512,8 @@ describe('orders Saxo did not take', () => {
     expect(screen.getByRole('link', { name: '5013' })).toHaveAttribute('href', '/orders?find=5013')
 
     await user.click(within(attempts).getAllByText('What was sent and received')[0])
-    expect(screen.getAllByText(/"OrderType": "Market"/)[0]).toBeVisible()
+    // The expanded row fades in from opacity 0: visible once its animation has begun, later on a busy machine.
+    await waitFor(() => expect(screen.getAllByText(/"OrderType": "Market"/)[0]).toBeVisible())
   })
 
   it('can be shown alone, and found with the sale by the position\'s id', async () => {
