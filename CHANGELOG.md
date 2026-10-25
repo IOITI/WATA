@@ -2,7 +2,7 @@
 
 ## v0.47.0 - Range bars answered faster, read live a bar at a time, and the Charts page's scripts continued on the bars that are over
 
-**Release date:** not released yet
+**Release date:** 2026-10-25
 
 - **A range-bar answer takes half the time, and a sixth of the bytes** (`GET /api/data/assets/{provider}/{key}/range-bars`):
   - The bars are built in a thread (`_range_answer`), the rows still read on the request loop. A month's build no longer holds up the admin's other requests, its event streams and live prices among them.
@@ -34,7 +34,7 @@
 **On the live path**: nothing. Only the admin and its interface change. `RangeBarBuilder` and the files of the backtests' code digest are unchanged, so no run is marked stale.
 
 **Verification status:**
-- 2,952 Python tests pass on Python 3.12 (3.14 not run here) and 20 are skipped. 7 of them are new:
+- 2,952 Python tests pass on Python 3.12, the Pine runner's included (3.14 not run here), and 20 are skipped. 7 of them are new:
   - the decimals equal to a price-by-price reading's, on 25 random series;
   - `after` equal to the tail of a whole answer;
   - `newest` cut to the newest bars rather than refused;
