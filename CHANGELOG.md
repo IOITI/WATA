@@ -2,7 +2,7 @@
 
 ## v0.45.0 - The Configuration page by section, and a purge the services survive
 
-**Release date:** unreleased
+**Release date:** 2026-10-25
 
 - **The purge of the credentials' old places would have stopped every service at its next start.** It takes Saxo's AppKey and AppSecret out of `config.json`, which v0.44.0's `ConfigurationManager` still required. It now takes an app object without both (its addresses stay, read while `SAXO_REDIRECT_URL` is not set) but still refuses one without either half. The purge also checks the purged file with that validator before it writes anything, and refuses otherwise: run it from this version on.
 - **`watavault`**, a command of the server made by the install script: `watavault migrate [--dry-run | --purge-old]` runs the compose file's `vault_tools` in the folder of the version installed, and `watavault export-saxo` runs in the trader's container. `vault_tools` starts PostgreSQL itself, so that it runs with every service stopped.
