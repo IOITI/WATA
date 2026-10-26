@@ -20,6 +20,7 @@ from src.backtest.clock import TradingClock
 from src.backtest.data import BAR_SECONDS, AssetSeries
 from src.trade.macro_calendar import (  # noqa: F401 (the backtests' names for them)
     CALENDAR_PATH,
+    DEFAULT_EVENTS,
     MACRO_EVENTS,
     NEW_YORK,
     Calendar,
@@ -50,7 +51,9 @@ GAP_LABELS = ("Gap down", "No gap", "Gap up")
 DAY_TYPES = ("Trend up", "Trend down", "Back and forth", "Mixed")
 OPEN_LABELS = ("Open fell", "Open flat", "Open rose")
 NO_NEWS = "No news"
-MACRO_LABELS = (*MACRO_EVENTS, NO_NEWS)
+# A day is known by the releases the calendar holds since 2024: the others, from late 2026 only, would split the
+# days of a run in two.
+MACRO_LABELS = (*DEFAULT_EVENTS, NO_NEWS)
 SESSION_PARTS = (
     "Before the US open", "Hour before the US open", "US open, first hour", "US midday", "US afternoon", "After the US close",
 )
@@ -98,7 +101,7 @@ def day_features(
     """A day's figures in the trading hours ``bounds``; without enough bars, only its weekday and news."""
     found = {
         "weekday": WEEKDAYS[day.weekday()],
-        "news": sorted({event.event for event in news}, key=lambda name: MACRO_EVENTS.index(name) if name in MACRO_EVENTS else 99),
+        "news": sorted({event.event for event in news if event.event in DEFAULT_EVENTS}, key=DEFAULT_EVENTS.index),
         "bars": 0, "gap_percent": None, "range_percent": None, "volatility_percent": None, "efficiency": None,
         "day_type": None, "us_open_move_percent": None,
     }

@@ -796,6 +796,7 @@ def _performance_monitor(
         return_value=[{"position_id": "p1", "action": "long"}]
     )
     db_position_manager.update_turbo_position_data = AsyncMock()
+    db_position_manager.lower_min_performance = AsyncMock()
     db_position_manager.get_max_position_percent = AsyncMock(return_value=12.0)
     db_position_manager.get_percent_of_the_day = AsyncMock(return_value=10.0)
 
@@ -1059,6 +1060,23 @@ def test_position_check_reads_the_db_once_per_check_and_max_performance_once_per
         ("p2", {"position_max_performance_percent": 0.8}),
     ]
     monitor.order_service.place_market_order.assert_not_awaited()
+
+
+def test_the_worst_result_is_kept_when_it_falls_and_never_for_a_position_that_only_rose(tmp_path):
+    falling, rising = _checking_monitor(tmp_path), _checking_monitor(tmp_path)
+
+    async def scenario():
+        # From an open of 10: -1 %, back up, -2 %, unchanged.
+        for bid in (9.9, 10.0, 9.8, 9.8):
+            await falling.check_positions_from_stream(_streamed(bid))
+        for bid in (10.02, 10.04):
+            await rising.check_positions_from_stream(_streamed(bid))
+
+    asyncio.run(scenario())
+
+    lowered = [call.args for call in falling.db_position_manager.lower_min_performance.await_args_list]
+    assert lowered == [("p1", -1.0), ("p1", -2.0)]
+    rising.db_position_manager.lower_min_performance.assert_not_awaited()
 
 
 def test_stop_loss_still_fires_when_the_db_stops_answering(tmp_path):

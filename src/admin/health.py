@@ -33,8 +33,9 @@ from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
 from src.ta_engine.settings import TaEngineSettings
-from src.trade.macro_calendar import read_calendar, upkeep
+from src.trade.macro_calendar import DEFAULT_EVENTS, NewsRule, read_calendar, upkeep
 from src.trade.market_calendar import read_market_calendar, upkeep as market_upkeep
+from src.trade.signal_sources import sources_from, unattended, unheard
 from src.heartbeat import HEARTBEAT_STALE_SECONDS
 
 OK = "ok"
@@ -115,12 +116,42 @@ async def _postgres(ctx) -> list[dict]:
     return [_entry("postgres", "PostgreSQL", OK, "Answering queries")]
 
 
+def web_server_entry(signal_count: int, webhook: dict | None, live_indices) -> list[dict]:
+    """
+    The web server, with what is wrong with the sources of the signals (src/trade/signal_sources.py): an
+    index set to the engine with no rule live on it, or a rule live on an index that takes TradingView's.
+    """
+    detail = f"{_count(signal_count, 'signal')} in store"
+    if webhook is None:
+        return [_entry("web_server", "Web server", OK, detail)]
+    sources = sources_from(webhook.get("sources"))
+    unattended_indices, unheard_indices = unattended(sources, live_indices), unheard(sources, live_indices)
+    if unattended_indices:
+        return [_entry("web_server", "Web server", WARNING, (
+            f"{', '.join(unattended_indices)} takes the TA engine's signals and no rule is live on it: nothing trades it"
+        ))]
+    if unheard_indices:
+        return [_entry("web_server", "Web server", WARNING, (
+            f"A rule is live on {', '.join(unheard_indices)}, which takes TradingView's signals: the engine sends it none"
+        ))]
+    ignored = [f"{indice} {counted.get('count', 0)}" for indice, counted in sorted((webhook.get("ignored") or {}).items())]
+    if ignored:
+        detail += f"; TradingView's alerts ignored since its start: {', '.join(ignored)}"
+    return [_entry("web_server", "Web server", OK, detail)]
+
+
 async def _web_server(ctx) -> list[dict]:
     try:
         signals = await ctx.services.latest_signals()
     except ServiceUnavailable as e:
         return [_entry("web_server", "Web server", DOWN, str(e))]
-    return [_entry("web_server", "Web server", OK, f"{_count(len(signals), 'signal')} in store")]
+    try:
+        webhook = await ctx.services.webhook_state()
+    except ServiceUnavailable:
+        webhook = None
+    rules = await run_in_threadpool(rules_by_id, getattr(ctx, "ta_scripts", None))
+    live_indices = [rule["indice"] for rule in rules.values() if rule.get("mode") == "live"]
+    return web_server_entry(len(signals), webhook, live_indices)
 
 
 async def _watchlist(ctx) -> tuple[list[dict], dict | None]:
@@ -276,33 +307,38 @@ async def _ta_engine(ctx) -> list[dict]:
     return [_entry("ta_engine", name, DOWN if status == DISABLED else status, detail)]
 
 
-def macro_calendar_entry(rule_on: bool, calendar, today) -> list[dict]:
+def macro_calendar_entry(rule_on: bool, calendar, today, events=DEFAULT_EVENTS) -> list[dict]:
     """
-    The calendar of US releases, while the trader keeps entries out of a window
-    around them (the macro_news rule): a warning from WARN_DAYS before it runs
-    out. Past it, the trader trades on without a window.
+    The calendar of the US releases the trader keeps entries out of a window
+    around (the macro_news rule's ``events``): a warning from WARN_DAYS before
+    it runs out. Past it, the trader trades on without a window.
     """
     if not rule_on:
         return []
     name = "US releases calendar"
     if calendar is None:
         return [_entry("macro_calendar", name, WARNING, "Cannot be read: no window is kept around the releases")]
-    said = upkeep(calendar, today)
+    said = upkeep(calendar, today, events)
     if said is not None:
         return [_entry("macro_calendar", name, WARNING, said)]
-    return [_entry("macro_calendar", name, OK, f"Known until {calendar.known_until().isoformat()}")]
+    return [_entry("macro_calendar", name, OK, f"Known until {calendar.known_until(events).isoformat()}")]
 
 
 def _macro_calendar(ctx) -> list[dict]:
     rules = ctx.config_manager.get_config_value("trade.rules", []) or []
-    if not any(isinstance(rule, dict) and rule.get("rule_type") == "macro_news" for rule in rules):
+    rule = next((rule for rule in rules if isinstance(rule, dict) and rule.get("rule_type") == "macro_news"), None)
+    if rule is None:
         return []
+    try:
+        events = NewsRule.from_config(rule.get("rule_config")).events
+    except ValueError:
+        events = DEFAULT_EVENTS
     try:
         calendar = read_calendar()
     except (OSError, ValueError, KeyError):
         calendar = None
     today = datetime.now(pytz.timezone(ctx.settings.timezone)).date()
-    return macro_calendar_entry(True, calendar, today)
+    return macro_calendar_entry(True, calendar, today, events)
 
 
 def market_calendar_entry(calendar, today) -> list[dict]:
@@ -330,6 +366,8 @@ def _market_calendar(ctx) -> list[dict]:
 
 # The dumps are made each night (pg_backup1): past this, the last one is too old.
 BACKUP_STALE_HOURS = 30
+# A copy off the server may fail a night (the bucket's provider down): two nights without one is a warning.
+OFFSITE_STALE_HOURS = 48
 
 
 def backups_entry(last: dict | None, now: datetime, timezone_name: str) -> list[dict]:
@@ -341,13 +379,28 @@ def backups_entry(last: dict | None, now: datetime, timezone_name: str) -> list[
         at = datetime.fromisoformat(str(last["at"]).replace("Z", "+00:00"))
     except (KeyError, ValueError):
         return [_entry("backups", name, WARNING, "Its last report cannot be read")]
-    when = at.astimezone(pytz.timezone(timezone_name)).strftime("%d/%m %H:%M")
+    zone = pytz.timezone(timezone_name)
+    when = at.astimezone(zone).strftime("%d/%m %H:%M")
     if not last.get("ok"):
         return [_entry("backups", name, WARNING, f"The dump of {when} failed: {last.get('detail')}")]
     if (now - at).total_seconds() > BACKUP_STALE_HOURS * 3600:
         return [_entry("backups", name, WARNING, f"No dump since {when}")]
     size = (last.get("bytes") or 0) / 1_000_000
-    return [_entry("backups", name, OK, f"Last dump {when}, {size:.0f} MB ({last.get('file')})")]
+    dumped = f"Last dump {when}, {size:.0f} MB ({last.get('file')})"
+    offsite = last.get("offsite")
+    if not isinstance(offsite, dict):
+        return [_entry("backups", name, OK, f"{dumped}; not sent off the server")]
+    try:
+        sent_at = datetime.fromisoformat(str(offsite["last_ok_at"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        sent_at = None
+    if sent_at is None or (now - sent_at).total_seconds() > OFFSITE_STALE_HOURS * 3600:
+        since = f"since {sent_at.astimezone(zone).strftime('%d/%m %H:%M')}" if sent_at else "yet"
+        return [_entry("backups", name, WARNING, f"No copy sent off the server {since}: {offsite.get('detail')}")]
+    if not offsite.get("ok"):
+        return [_entry("backups", name, OK, f"{dumped}; its copy off the server failed ({offsite.get('detail')}), "
+                                            f"the last one sent {sent_at.astimezone(zone).strftime('%d/%m %H:%M')}")]
+    return [_entry("backups", name, OK, f"{dumped}, sent off the server")]
 
 
 def _backups(ctx) -> list[dict]:
@@ -484,6 +537,31 @@ def with_heartbeats(services: list[dict], beats: dict[str, dict], now: datetime,
     return result
 
 
+def live_drift_entry(days: list[dict], warning: str | None, reference: dict | None) -> list[dict]:
+    """
+    The live settings against their reference (src/admin/live_drift.py): a warning once two days in a row
+    were outside its range; nothing while no reference is chosen.
+    """
+    if not reference:
+        return []
+    name = "Live against its reference"
+    if warning:
+        return [_entry("live_drift", name, WARNING, warning)]
+    judged = sum(1 for day in days if day["real_outside"] is not None or day["paper_outside"] is not None)
+    return [_entry("live_drift", name, OK, f"Within the range of {reference.get('name') or 'its reference'}: "
+                                           f"{_count(judged, 'day')} set beside it")]
+
+
+async def _live_drift(ctx) -> list[dict]:
+    paper = getattr(ctx, "paper", None)
+    if paper is None or not getattr(ctx.settings, "backtests_enabled", False):
+        return []
+    try:
+        return live_drift_entry(*await paper.drift())
+    except Exception as e:
+        return [_entry("live_drift", "Live against its reference", UNKNOWN, f"Not read: {e}")]
+
+
 def _overall(services: list[dict]) -> str:
     statuses = {service["status"] for service in services}
     for status in (DOWN, WARNING):
@@ -495,7 +573,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats,
+        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats, live_drift,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -510,10 +588,11 @@ async def collect_health(ctx) -> dict:
         run_in_threadpool(_market_calendar, ctx),
         run_in_threadpool(_backups, ctx),
         _heartbeats(ctx),
+        _live_drift(ctx),
     )
     services = with_heartbeats([
         *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
-        *macro_calendar, *market_calendar, *postgres, *backups, rabbitmq[0],
+        *macro_calendar, *market_calendar, *postgres, *backups, *live_drift, rabbitmq[0],
     ], beats, datetime.now(timezone.utc), ctx.settings.timezone)
     return {
         "version": ctx.version,

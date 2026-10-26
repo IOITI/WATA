@@ -54,6 +54,9 @@ class Services:
     async def latest_signals(self):
         return []
 
+    async def webhook_state(self):
+        return None
+
     async def queue_stats(self):
         return [
             {"name": "trading-ops", "declared": True, "messages": 0, "consumers": self.consumers},

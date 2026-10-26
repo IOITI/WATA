@@ -8,6 +8,7 @@ from src.admin.auth import client_ip, require_session
 from src.admin.config_catalog import CATALOG, SERVICES, unknown_paths
 from src.admin.config_editor import BackupNotFound, ConfigConflict, ConfigInvalid
 from src.admin.routers.session import restart_required
+from src.admin.ta_monitor import rules_by_id
 
 # Changed paths named in an audit entry (and so on Telegram) before the rest are counted.
 NAMED_CHANGES = 8
@@ -74,8 +75,11 @@ async def get_config(request: Request):
 @router.post("/validate", dependencies=[Depends(require_config_edit_enabled)])
 async def validate_config(body: ConfigRequest, request: Request):
     """Checked as a save would be; when it passes, what saving it would change and where (nothing is written)."""
+    ctx = request.app.state.ctx
+    rules = await run_in_threadpool(rules_by_id, getattr(ctx, "ta_scripts", None))
+    live_indices = sorted({rule["indice"] for rule in rules.values() if rule.get("mode") == "live"})
     try:
-        preview = await run_in_threadpool(request.app.state.ctx.config_editor.preview, body.config)
+        preview = await run_in_threadpool(ctx.config_editor.preview, body.config, live_indices)
     except ConfigInvalid as e:
         raise HTTPException(status_code=422, detail=str(e))
     return {"valid": True, **preview}

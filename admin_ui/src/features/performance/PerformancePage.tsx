@@ -19,6 +19,8 @@ import type { CsvColumn } from '@/lib/csv'
 import type { DailyPerformance, InstrumentPerformance, Performance } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
+import { LivePaperPanel } from './LivePaperPanel'
+
 const DAILY_COLUMNS: ColumnDef<DailyPerformance>[] = [
   {
     id: 'day',
@@ -167,7 +169,7 @@ function ByDirection({ performance }: { performance: Performance }) {
 }
 
 export function PerformancePage() {
-  const { timezone } = useSession()
+  const { timezone, backtests_enabled: backtestsEnabled } = useSession()
   const [range, setRange] = useState<DateRange>(() => lastDays(90))
   const params = rangeParams(range)
 
@@ -202,6 +204,8 @@ export function PerformancePage() {
           // A new range keeps the previous figures in place, dimmed, until its own arrive.
           <div className={cn('flex flex-col gap-6 transition-opacity', performanceQuery.isPlaceholderData && 'opacity-60')}>
             <Summary performance={performance} />
+
+            <LivePaperPanel enabled={backtestsEnabled} />
 
             {performance.daily.length === 0 ? (
               <Panel>

@@ -348,17 +348,27 @@ def regimes_summary(run: dict, days: list[dict], breakdowns: dict) -> str:
     return "\n".join(lines)
 
 
-def calendar_check(today: date, *, ahead_days: int = 30) -> tuple[bool, str]:
-    """Whether the macro calendar knows each kind of news far enough ahead, and what it holds."""
-    from src.trade.macro_calendar import read_calendar
+def calendar_check(today: date, *, ahead_days: int = 30, events=None) -> tuple[bool, str]:
+    """
+    Whether the macro calendar knows the news far enough ahead, and what it holds: each kind from its first
+    known day to its last. Judged on ``events``, else on the four a rule that names none takes; the others
+    are said short without failing the check.
+    """
+    from src.trade.macro_calendar import DEFAULT_EVENTS, MACRO_EVENTS, read_calendar
 
     calendar = read_calendar()
+    judged = tuple(events or DEFAULT_EVENTS)
     lines = [f"macro calendar {calendar.digest}: src/trade/data/macro_calendar.csv"]
     ok = True
-    for event, until in sorted(calendar.until.items()):
+    for event in [kind for kind in MACRO_EVENTS if kind in calendar.until]:
+        until = calendar.until[event]
         short = (until - today).days < ahead_days
-        ok = ok and not short
-        lines.append(f"{event:5} known until {until.isoformat()}{'  ← add the next dates from its source' if short else ''}")
+        ok = ok and not (short and event in judged)
+        mark = ("  ← add the next dates from its source" if event in judged else "  ← short, judged when named") if short else ""
+        lines.append(f"{event:6} known from {calendar.since[event].isoformat()} until {until.isoformat()}{mark}")
+    for event in [kind for kind in judged if kind not in calendar.until]:
+        ok = False
+        lines.append(f"{event:6} not in the calendar")
     if not ok:
         lines.append(f"Each source is named on the calendar's rows. Under {ahead_days} days ahead, days past the end have no news marked.")
     return ok, "\n".join(lines)

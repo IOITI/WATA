@@ -1,10 +1,12 @@
 """The trading rules and the trading settings of trade.config: what is bought, when, how much, and when it is sold."""
 
 from src.admin.config_catalog.model import SERVER, TRADING, UNUSED, Column, Param
+from src.trade.macro_calendar import DEFAULT_EVENTS, MACRO_EVENTS
+from src.trade.signal_sources import SOURCES
 
 # Services by the ids of their health entries.
-TRADER, MONITOR, SCHEDULER, WATCHLIST, RECORDER, ADMIN = (
-    "trader", "position_monitor", "scheduler", "watchlist_manager", "price_recorder", "admin",
+TRADER, MONITOR, SCHEDULER, WATCHLIST, RECORDER, ADMIN, TELEGRAM = (
+    "trader", "position_monitor", "scheduler", "watchlist_manager", "price_recorder", "admin", "telegram",
 )
 
 
@@ -87,10 +89,59 @@ DAY = (
     ),
     Param(
         path="trade.rules[risk_management]", group="day", label="Risk limits", kind="rule", optional=True,
-        help="A pause after a loss and a limit on the trades of a day. Absent, neither applies.",
+        help="A pause after a loss, a limit on the trades of a day, the day's breakers and the account guard. "
+             "Absent, none applies.",
         readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
         rule_default={"cooldown_after_loss_minutes": 0, "max_trades_per_day": 0},
-        effects=("The trader refuses entries during the pause, or once the day's trades are made.",),
+        effects=("The trader refuses entries during the pause, once the day's trades are made, after the losses or "
+                 "the fall the breakers allow, and pauses them when the account guard trips.",),
+    ),
+    Param(
+        path=rule("risk_management", "max_consecutive_losses"), group="day", label="Stop the day after losses in a row",
+        kind="int", minimum=0, optional=True, default=0,
+        help="Once this many of the day's trades lost one after the other, no new position until tomorrow. 0: off.",
+        readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        effects=("The trader reads the day's closed positions in the order they closed and refuses entries once "
+                 "the last ones lost that many times in a row.",),
+        related=(rule("risk_management", "max_drawdown_from_day_best_percent"), NO_ENTRY_BELOW),
+        caveats=(UTC_DAY, "A trade at exactly 0 % breaks the row, as a win does."),
+    ),
+    Param(
+        path=rule("risk_management", "max_drawdown_from_day_best_percent"), group="day",
+        label="Stop the day this far under its best", kind="number", unit="points", minimum=0, maximum=1000,
+        optional=True, default=0,
+        help="Once the day's result is this many points under the best it reached at a close (0 before the first), "
+             "no new position until tomorrow. 0: off.",
+        readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        effects=("The trader compounds the day's closed results as the day's result is counted, and refuses "
+                 "entries once it is that far under its best.",),
+        related=(NO_ENTRY_BELOW, rule("risk_management", "max_consecutive_losses")),
+        caveats=(UTC_DAY, "From the start of the day it works as a day loss limit: the day's best is 0 until a "
+                          "trade wins."),
+    ),
+    Param(
+        path=rule("risk_management", "pause_below_balance_eur"), group="day", label="Pause entries under",
+        kind="number", unit="€", minimum=0, optional=True, default=0,
+        help="Once the account is worth less than this, new entries are paused until you resume them. 0: off.",
+        readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        effects=("The trader reads the account's value with its balance (every 30 s and before an entry) and, under "
+                 "the floor, pauses new entries as the dashboard's pause does, said on Telegram.",),
+        related=(rule("risk_management", "pause_after_drawdown_percent"),),
+        caveats=("The pause stays until you resume entries from the dashboard: with the account still under the "
+                 "floor, the guard pauses them again at once.",),
+    ),
+    Param(
+        path=rule("risk_management", "pause_after_drawdown_percent"), group="day",
+        label="Pause entries this far under the account's highest", kind="number", unit="%", minimum=0, maximum=100,
+        optional=True, default=0,
+        help="Once the account is worth this much less than its highest since entries were last resumed, new entries "
+             "are paused until you resume them. 0: off.",
+        readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        effects=("The highest is the larger of the daily values the report records since the last resume and the "
+                 "values the trader read since its start.",),
+        related=(rule("risk_management", "pause_below_balance_eur"),),
+        caveats=("A deposit raises the highest; a withdrawal reads as a fall.",
+                 "Resuming entries starts the highest afresh."),
     ),
     Param(
         path=COOLDOWN, group="day", label="Pause after a loss", kind="int", unit="min", minimum=0, optional=True,
@@ -106,7 +157,7 @@ DAY = (
         path=rule("risk_management", "max_trades_per_day"), group="day", label="Trades a day at most", kind="int",
         minimum=0, optional=True, default=0,
         help="Once this many positions were opened today, no new one. 0: no limit.",
-        readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        readers=(TRADER, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
         effects=("The trader counts the positions opened today and refuses entries past the limit.",),
         caveats=(UTC_DAY,),
     ),
@@ -116,14 +167,14 @@ HOURS = (
     Param(
         path=TIMEZONE, group="hours", label="Trading timezone", kind="timezone", optional=True, default="Europe/Paris",
         help="The timezone of the days WATA counts and of the hours it keeps, unless the market hours name another.",
-        readers=(TRADER, MONITOR, SCHEDULER, RECORDER, "capital_feed", ADMIN),
+        readers=(TRADER, MONITOR, SCHEDULER, RECORDER, "capital_feed", TELEGRAM, ADMIN),
         consumers=("dashboard", "backtests", "paper", "research_export"), risk=TRADING,
         effects=(
             "The market hours below and the close time are read in it, unless they name a timezone of their own.",
             "The scheduler's daily report (22:00) and the calendar's morning check (09:00) are at its hours.",
             "The days of the recorder's and the feed's files, of the research export and of paper days are its days.",
             "The time-of-day sizing periods are read in it.",
-            "The admin shows times in it.",
+            "The admin shows times in it, and the bot's commands too.",
         ),
         related=(MARKET_TIMEZONE, f"{SIZING}.time_of_day_scaling.periods"),
     ),
@@ -213,43 +264,47 @@ HOURS = (
     Param(
         path="trade.rules[macro_news]", group="hours", label="No entry around US releases", kind="rule", optional=True,
         help="No new position from shortly before to shortly after each release of the calendar kept with WATA.",
-        readers=(TRADER, MONITOR, SCHEDULER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        readers=(TRADER, MONITOR, SCHEDULER, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
         rule_default={"events": ["FOMC", "CPI", "NFP", "PCE"], "minutes_before": 5, "minutes_after": 15,
                       "minutes_after_fomc": 45, "flatten_minutes_before": 0},
         effects=("The trader refuses entries in each window (New York's hours, whatever the clocks).",
                  "The scheduler says each morning when the calendar runs out within 30 days."),
-        caveats=("Past the calendar's last day nothing is known, and entries go on.",),
+        caveats=("Past the calendar's last day nothing is known, and entries go on.",
+                 "PPI, RETAIL, GDP and JOLTS are kept from late 2026 on: a backtest of earlier days that names them "
+                 "says so. ISM's manufacturing index is not kept: its dated calendar is for ISM's members."),
     ),
     Param(
         path=rule("macro_news", "events"), group="hours", label="Releases", kind="strings",
-        choices=("FOMC", "CPI", "NFP", "PCE"), optional=True, default=["FOMC", "CPI", "NFP", "PCE"],
-        help="Which releases have a window.",
-        readers=(TRADER, MONITOR, SCHEDULER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        choices=MACRO_EVENTS, optional=True, default=list(DEFAULT_EVENTS),
+        help="Which releases have a window: FOMC statements, CPI, the jobs report (NFP) and PCE unless it names others. "
+             "Producer prices (PPI), retail sales (RETAIL), the GDP's advance estimate (GDP) and job openings (JOLTS) "
+             "apply once named.",
+        readers=(TRADER, MONITOR, SCHEDULER, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
     ),
     Param(
         path=rule("macro_news", "minutes_before"), group="hours", label="From before a release", kind="int",
         unit="min", minimum=0, maximum=120, optional=True, default=5,
         help="No entry from this long before a release.",
-        readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        readers=(TRADER, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
     ),
     Param(
         path=rule("macro_news", "minutes_after"), group="hours", label="Until after it", kind="int", unit="min",
         minimum=0, maximum=120, optional=True, default=15,
         help="No entry until this long after a release.",
-        readers=(TRADER, MONITOR, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        readers=(TRADER, MONITOR, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
     ),
     Param(
         path=rule("macro_news", "minutes_after_fomc"), group="hours", label="Until after an FOMC statement",
         kind="int", unit="min", minimum=0, maximum=180, optional=True, default=45,
         help="The same after an FOMC statement, whose press conference starts 30 minutes later.",
-        readers=(TRADER, MONITOR, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        readers=(TRADER, MONITOR, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
     ),
     Param(
         path=rule("macro_news", "flatten_minutes_before"), group="hours", label="Sell what is held, from before",
         kind="int", unit="min", minimum=0, maximum=120, optional=True, default=0,
         help="From this long before a release until its window ends, the position monitor sells what is held. "
              "0 keeps open positions.",
-        readers=(TRADER, MONITOR, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
+        readers=(TRADER, MONITOR, TELEGRAM, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
         effects=("Entries are refused from the earlier of the two starts: a position bought then would be sold at once.",),
         caveats=("Around a release Saxo can stop quoting a turbo for minutes, when no stop can be sold: a long held "
                  "through the CPI of 14 October 2026, unquoted for 250 s, was sold at −30 %.",),
@@ -430,6 +485,16 @@ SIZE = (
         caveats=("It must be below the upper bound.",),
     ),
     Param(
+        path="trade.config.turbo_preference.max_spread_percent", group="sizing", label="Widest spread bought",
+        kind="number", unit="% of the ask", minimum=0, maximum=100, optional=True, default=None,
+        help="No turbo whose spread is wider than this share of its ask is bought. Empty or 0: no limit.",
+        readers=(TRADER, WATCHLIST), consumers=("backtests",), risk=TRADING,
+        effects=("Of the turbos in the price range, those with a wider spread are left out before the cheapest is "
+                 "chosen; with none left, the entry fails and says the narrowest spread seen.",),
+        related=("trade.config.turbo_preference.price_range.min", "trade.config.turbo_preference.price_range.max"),
+        caveats=("The cheapest turbo of the range, the one chosen, is also the one whose spread weighs most.",),
+    ),
+    Param(
         path="trade.config.turbo_preference.price_range.max", group="sizing", label="Turbo's price up to", kind="number",
         unit="€", minimum=0,
         help="Only turbos whose ask is within the range are bought.",
@@ -466,6 +531,27 @@ SIGNALS = (
             "A recorded or Capital.com instrument whose label is an indice's name is recorded as that index.",
         ),
         caveats=("The Uic is a number, kept as text.",),
+    ),
+    Param(
+        path="trade.config.signal_sources", group="signals", label="Where each index's signals come from",
+        kind="map", key_label="Indice", value_label="Source", choices=SOURCES, optional=True, default=None,
+        help="tradingview: TradingView's alerts, through the webhook (an indice absent takes them too). engine: the "
+             "TA engine's live signal rule, alone.",
+        readers=("web_server", "ta_engine"), risk=TRADING,
+        effects=(
+            "The web server answers a webhook for an indice set to the engine without storing it, and counts it for "
+            "the Signals page.",
+            "The TA engine sends a live rule's signals only for an indice set to the engine.",
+            "A signal rule goes live only on an indice the web server runs with set to the engine.",
+        ),
+        related=(rule("allowed_indices", "indice_ids"),),
+        caveats=(
+            "Both feed one store, which keeps the newest signal of each indice: TradingView's alerts and a live rule "
+            "on the same indice would close each other's positions.",
+            "Applies once the web server and the TA engine start again; set it while no rule is live and the market "
+            "is closed.",
+            "The scheduler's close of the day and the signals sent from the admin are taken whatever the source.",
+        ),
     ),
     required_rule("signal_validation", "signals", "Signal validation", "How old a signal may be.", (TRADER,)),
     Param(
@@ -604,7 +690,7 @@ SAXO = (
                "for each environment: decided on the server.",
         how=ON_THE_SERVER,
         help="Whether the services trade the live account or Saxo's simulation.",
-        readers=(TRADER, MONITOR, WATCHLIST, RECORDER), risk=TRADING,
+        readers=(TRADER, MONITOR, WATCHLIST, RECORDER, TELEGRAM), risk=TRADING,
     ),
     Param(
         path=f"{GENERAL}.streaming.refresh_rate_ms", group="saxo", label="Stream's refresh rate", kind="int", unit="ms",

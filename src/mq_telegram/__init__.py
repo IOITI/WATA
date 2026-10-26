@@ -161,6 +161,12 @@ if __name__ == "__main__":
         time.sleep(600)
     notes = CheckNotes(config_manager)
 
+    if config_manager.get_config_value("reporting.telegram_commands", False) is True:
+        # The bot's commands, which only read (src/mq_telegram/commands.py), in a thread beside the queue's consumer.
+        from src.mq_telegram.updates import start_commands
+
+        start_commands(config_manager, bot_token, user_chat_id)
+
     # Establish a connection to RabbitMQ with the provided credentials
     rabbit_connection = pika.BlockingConnection(
         pika.ConnectionParameters(

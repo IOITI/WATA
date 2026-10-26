@@ -15,6 +15,7 @@ sys.modules.setdefault("asyncpg", asyncpg_stub)
 sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
 
 import src.trader as trader
+from src.trade.account_guard import AccountGuard
 from src.trader import (
     handle_trading_signal,
     keep_saxo_session_warm,
@@ -288,6 +289,9 @@ def _handler_dependencies(reserve_cash_percent: float, protective_stop=None):
     trading_rule.check_cooldown_after_loss = AsyncMock()
     trading_rule.check_entries_paused = AsyncMock()
     trading_rule.check_max_trades_per_day = AsyncMock()
+    trading_rule.check_day_breakers = AsyncMock()
+    # Off, as in a configuration without its settings (src/trade/account_guard.py).
+    trading_rule.account_guard = AccountGuard()
 
     db_position_manager = MagicMock()
     db_position_manager.get_open_positions_ids_actions = AsyncMock(return_value=[])

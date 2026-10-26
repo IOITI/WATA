@@ -19,7 +19,9 @@ from src.trade.async_services import (
     INFO_PRICE_CANDIDATE_LIMIT,
     filter_items_in_price_range,
     filter_items_with_valid_bid,
+    filter_items_within_spread,
     filter_tradable_market_items,
+    no_turbo_within_spread,
     select_best_price_candidate,
     select_candidate_instruments,
 )
@@ -29,6 +31,7 @@ NO_RECORDED_TURBO = "no_recorded_turbo"
 RECORDING_GAP = "recording_gap"
 NO_MARKET = "no_market"
 NO_TURBO_IN_RANGE = "no_turbo_in_range"
+NO_TURBO_WITHIN_SPREAD = "no_turbo_within_spread"
 NO_ASK = "no_ask"
 
 
@@ -82,7 +85,8 @@ def _described(row: dict, low: float, high: float, chosen: dict | None) -> dict:
     }
 
 
-def select_turbo(day: DayData, direction: str, boundary: int, low: float, high: float) -> Selected | NotSelected:
+def select_turbo(day: DayData, direction: str, boundary: int, low: float, high: float,
+                 max_spread_percent: float | None = None) -> Selected | NotSelected:
     """The turbo bought at ``boundary`` (a ten-second boundary), or why there was none."""
     recorded = day.turbos.get(direction) or []
     if not recorded:
@@ -97,14 +101,19 @@ def select_turbo(day: DayData, direction: str, boundary: int, low: float, high: 
     valid = filter_items_with_valid_bid(top)
     tradable = filter_tradable_market_items(valid)
     in_range = filter_items_in_price_range(tradable, low, high)
-    chosen = select_best_price_candidate(in_range) if in_range else None
+    within_spread = filter_items_within_spread(in_range, max_spread_percent)
+    chosen = select_best_price_candidate(within_spread) if within_spread else None
     candidates = [_described(row, low, high, chosen) for row in top]
     if not valid:
         return NotSelected("failed", NO_MARKET, "NoMarketAvailableException: No instruments with Bid data after filtering.", candidates)
     if not tradable:
         return NotSelected("failed", NO_MARKET, f"NoMarketAvailableException: No markets available for {direction}.", candidates)
-    if chosen is None:
+    if not in_range:
         return NotSelected("failed", NO_TURBO_IN_RANGE, f"NoTurbosAvailableException: No turbos in price range {low}-{high}.", candidates)
+    if chosen is None:
+        return NotSelected("failed", NO_TURBO_WITHIN_SPREAD,
+                           f"NoTurbosAvailableException: {no_turbo_within_spread(in_range, max_spread_percent, low, high)}",
+                           candidates)
     ask = chosen["Quote"].get("Ask")
     if not ask or ask <= 0:
         return NotSelected("failed", NO_ASK, f"Invalid ask price: {ask}", candidates)

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 import yaml
 
@@ -665,9 +667,10 @@ def test_ci_builds_the_image_once_exactly_as_the_server_does(dockerfile, ci_jobs
     """The server asks for no Python: what it gets is the one the Dockerfile names."""
     steps = ci_jobs["image-as-deployed"]["steps"]
     build = next(step["run"] for step in steps if step.get("name") == "Build the image with the server's own command")
+    backup = next(step["run"] for step in steps if step.get("name") == "Build the backup image with the server's own command")
     on_the_server = [line.strip() for line in open("docker_build.sh") if line.startswith("docker build")]
 
-    assert on_the_server == [build]
+    assert on_the_server == [build, backup]
     assert "--build-arg" not in build
     check = next(step["run"] for step in steps if "python --version" in step.get("run", ""))
     assert "ARG PYTHON_VERSION=" in check and 'grep -F "Python $expected."' in check
@@ -694,10 +697,17 @@ def test_out_of_memory_the_kernel_kills_research_before_the_trading_path(compose
         assert "oom_score_adj" not in compose_services[name], name
 
 
+def _backup_image() -> list[str]:
+    with open("deploy/pg_backup.Dockerfile") as image_file:
+        return [line.strip() for line in image_file if line.strip() and not line.strip().startswith("#")]
+
+
 def test_the_database_is_dumped_by_a_container_that_reaches_it_alone(compose_services):
     backup = compose_services["pg_backup1"]
 
-    assert backup["image"] == compose_services["postgres1"]["image"]
+    # The database's own image, with age and rclone: pg_dump of the server's version.
+    assert backup["image"] == "wata-backup:latest"
+    assert _backup_image()[0] == f"FROM {compose_services['postgres1']['image']}"
     assert backup["entrypoint"] == ["sh", "/pg_backup.sh"]
     assert _mount_modes(backup) == {"/pg_backup.sh": "ro", "/backups": "rw"}
     assert "PGPASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}" in backup["environment"]
@@ -708,7 +718,61 @@ def test_the_database_is_dumped_by_a_container_that_reaches_it_alone(compose_ser
 
 def test_the_package_carries_the_backup_script_and_the_server_makes_its_folder():
     assert "cp ./deploy/pg_backup.sh _tmp_package/wata/$VERSION/deploy/" in open("package.sh").read()
+    assert "cp ./deploy/pg_backup.Dockerfile _tmp_package/wata/$VERSION/deploy/" in open("package.sh").read()
     assert 'mkdir -p "$APP_BASE_DIR/var/lib/backups"' in open("deploy/install_package.sh").read()
+
+
+def test_the_backup_image_takes_age_and_rclone_at_one_version_checked_by_its_sha256():
+    image = _backup_image()
+    arguments = dict(line[len("ARG "):].split("=", 1) for line in image if line.startswith("ARG "))
+
+    assert set(arguments) == {"AGE_VERSION", "AGE_SHA256", "RCLONE_VERSION", "RCLONE_SHA256"}
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", arguments["AGE_VERSION"]) and re.fullmatch(r"v\d+\.\d+\.\d+", arguments["RCLONE_VERSION"])
+    assert re.fullmatch(r"[0-9a-f]{64}", arguments["AGE_SHA256"]) and re.fullmatch(r"[0-9a-f]{64}", arguments["RCLONE_SHA256"])
+    commands = " ".join(image)
+    assert 'echo "${AGE_SHA256}  age.tar.gz" | sha256sum -c -' in commands
+    assert 'echo "${RCLONE_SHA256}  rclone.zip" | sha256sum -c -' in commands
+    assert "releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz" in commands
+    assert "downloads.rclone.org/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" in commands
+    # Built from the file alone: nothing of the server is sent to the build.
+    assert "docker build -t wata-backup --platform=linux/amd64 - < deploy/pg_backup.Dockerfile" in open("docker_build.sh").read()
+
+
+def test_no_key_that_opens_the_copies_off_the_server_is_ever_on_it(compose_services):
+    backup = compose_services["pg_backup1"]
+    script = open("deploy/pg_backup.sh").read()
+    names = [variable.split("=", 1)[0] for variable in backup["environment"]]
+
+    assert _mount_modes(backup) == {"/pg_backup.sh": "ro", "/backups": "rw"}
+    assert [name for name in names if "IDENTITY" in name or "PRIVATE" in name] == []
+    assert "BACKUP_AGE_RECIPIENT" in names
+    # The script encrypts, never decrypts, and sends only what it encrypted.
+    assert not re.search(r"\bage\b[^\n]*(\s-d\b|--decrypt|\s-i\b|--identity)", script)
+    assert 'copyto "$SEALED/$name.age"' in script and script.count(" copyto ") == 1
+    assert "nothing is sent unencrypted" in script
+
+
+def test_the_env_example_names_every_variable_of_the_backups():
+    compose = open("deploy/docker-compose.yml").read()
+    example = open("deploy/.env.example").read()
+    variables = sorted(set(re.findall(r"\$\{(BACKUP_[A-Z0-9_]+):-", compose)))
+
+    assert len(variables) >= 10
+    for variable in variables:
+        assert f"# {variable}=" in example, variable
+
+
+def test_ci_sends_a_dump_off_the_server_and_opens_it_with_the_key_kept_elsewhere(ci_jobs):
+    step = next(step for step in ci_jobs["image-as-deployed"]["steps"] if "/pg_backup.sh now" in step.get("run", ""))
+
+    assert "RCLONE_CONFIG_OFFSITE_TYPE=local" in step["run"] and "age-keygen" in step["run"]
+    assert "age -d -i /key/identity.txt" in step["run"] and "pg_restore --list" in step["run"]
+    # Read without the key, the step fails (a "!" would not fail it under bash -e).
+    assert 'pg_restore --list "/bucket/$sealed"; then' in step["run"] and "exit 1" in step["run"]
+
+
+def test_the_mac_does_not_pull_a_dump_being_encrypted():
+    assert "--exclude '.offsite/'" in open("lab/sync.sh").read()
 
 
 def test_a_deploy_is_refused_while_a_position_or_the_market_is_open():

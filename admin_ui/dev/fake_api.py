@@ -57,6 +57,7 @@ if "asyncpg" not in sys.modules:
 import uvicorn
 
 from src.admin.analysis import summarise_exits
+from src.admin.live_breakdowns import live_breakdowns
 from src.admin.app import SHUTDOWN_GRACE_SECONDS, create_app
 from src.admin.audit import AuditLog
 from src.admin.auth import CredentialStore, LoginThrottle, SessionStore
@@ -179,6 +180,8 @@ def build_history(today: date) -> tuple[list[dict], list[dict]]:
             open_price = round(rng.uniform(4.5, 14.0), 2)
             percent = round(rng.gauss(1.2, 6.5), 2)
             best = round(max(percent, 0) + abs(rng.gauss(0, 2.5)), 2)
+            # Made from the draws above, so that the rest of the made-up data stays as it was.
+            worst = round(min(percent, 0) - (best - max(percent, 0)) / 2, 2)
             close_price = round(open_price * (1 + percent / 100), 2)
             position_id = str(5_000_000 + len(positions))
             order_id = str(7_000_000 + 2 * len(positions))
@@ -197,6 +200,7 @@ def build_history(today: date) -> tuple[list[dict], list[dict]]:
                 "position_total_close_price": round(close_price * amount, 2),
                 "position_total_performance_percent": percent,
                 "position_max_performance_percent": best,
+                "position_min_performance_percent": worst,
                 "position_status": "Closed",
                 "position_kind": "main",
                 "execution_time_open": opened_at,
@@ -265,6 +269,7 @@ def build_history(today: date) -> tuple[list[dict], list[dict]]:
         "position_total_close_price": None,
         "position_total_performance_percent": None,
         "position_max_performance_percent": 3.1,
+        "position_min_performance_percent": -1.4,
         "position_status": "Open",
         "execution_time_open": opened_at,
         "execution_time_close": None,
@@ -570,6 +575,13 @@ class FakeQueries:
     async def entries_paused_since(self):
         return self.paused_since
 
+    async def entries_paused_by_guard(self):
+        # The fake's pause is always the operator's.
+        return None
+
+    async def today_closed_results(self):
+        return [-0.8, 0.6, -1.2]
+
     async def price_recorder_status(self):
         # As if the recorder had just written the bucket that ended.
         now = datetime.now(timezone.utc)
@@ -809,10 +821,21 @@ class FakeQueries:
                 "open_hour": (p["execution_time_open"].hour + 2) % 24,
                 "open_weekday": (p["execution_time_open"] + timedelta(hours=2)).isoweekday(),
                 "holding_seconds": (p["execution_time_close"] - p["execution_time_open"]).total_seconds(),
+                "open_price": p["position_open_price"],
+                "min_performance_percent": p.get("position_min_performance_percent"),
+                # Made from the position's own figures, so that the made-up data stays as it was.
+                "journaled": int(p["position_id"]) % 5 != 0,
+                "confidence": round((int(p["position_id"]) % 17) / 10, 1) if int(p["position_id"]) % 3 else None,
+                "signal_delay_seconds": float(int(p["position_id"]) % 47),
+                "rule_name": "EMA cross on US100" if int(p["position_id"]) % 4 == 0 else None,
             }
             for p in closed
         ]
-        return {**summarise_exits(trades), "by_weekday_hour": stats_by_weekday_hour(trades, opened_weekday_hour)}
+        return {
+            **summarise_exits(trades),
+            "by_weekday_hour": stats_by_weekday_hour(trades, opened_weekday_hour),
+            "breakdowns": live_breakdowns(trades),
+        }
 
     async def report(self, milestones_eur=None):
         closed = sorted(
@@ -889,6 +912,20 @@ class FakeQueries:
         rows = [p for p in rows if in_range(activity_time(p), start, end)]
         rows.sort(key=activity_time, reverse=True)
         return {"items": rows[:limit], "total": len(rows)}
+
+    async def position_chart(self, position_id):
+        position = next((p for p in self.positions if p["position_id"] == position_id), None)
+        if position is None:
+            return None
+        # The made-up positions' Uics are not the made-up recorder's: a recorded turbo of the same direction stands in.
+        turbo = next((instrument for instrument in fake_prices.INSTRUMENTS if instrument["direction"] == position["action"]), None)
+        signal = next((row for row in self.journal if row.get("position_id") == position_id), None)
+        return {
+            "price_instrument_id": turbo["id"] if turbo else None,
+            "opened_at": position["execution_time_open"], "closed_at": position["execution_time_close"],
+            "signal": {key: signal.get(key) for key in ("action", "signal_timestamp", "received_timestamp", "decided_at")}
+            if signal else None,
+        }
 
     async def get_position(self, position_id):
         position = next((p for p in self.positions if p["position_id"] == position_id), None)
@@ -1010,6 +1047,10 @@ class FakeServices:
 
     async def latest_signals(self):
         return list(self._signals.values())
+
+    async def webhook_state(self):
+        # As a web server of v0.48.0 whose indices all take TradingView's alerts.
+        return {"sources": {}, "ignored": {}}
 
     async def send_signal(self, payload):
         print(f"[fake] signal: {payload}")

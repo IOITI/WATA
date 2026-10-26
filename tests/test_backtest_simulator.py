@@ -136,6 +136,45 @@ def test_no_turbo_recorded_or_no_recorder_listening_is_no_price_not_a_trade():
         assert (choice.fate, choice.rule) == ("unpriced", rule)
 
 
+def test_with_a_spread_limit_the_cheapest_turbo_within_it_is_bought_or_none_and_the_narrowest_said():
+    day = day_of(
+        series(1, "long", 24_900, flat(4.2, 840), spread=0.10),   # 2.33 % of its ask: too wide at 2 %
+        series(2, "long", 24_800, flat(5.0, 840), spread=0.05),   # 0.99 %
+        series(3, "long", 24_700, flat(6.0, 840), spread=0.03),
+    )
+    nine = ceil10(at("09:00"))
+
+    assert select_turbo(day, "long", nine, 4, 15).series.ref.instrument_id == 1
+    assert select_turbo(day, "long", nine, 4, 15, max_spread_percent=2).series.ref.instrument_id == 2
+    refused = select_turbo(day, "long", nine, 4, 15, max_spread_percent=0.4)
+    assert (refused.fate, refused.rule) == ("failed", "no_turbo_within_spread")
+    assert refused.reason == (
+        "NoTurbosAvailableException: No turbo in price range 4-15 with a spread of 0.4 % or less; the narrowest was 0.50 %."
+    )
+
+
+def test_the_spread_limit_chooses_as_the_live_helpers_do():
+    from src.trade.async_services import build_selected_turbo_from_candidate_snapshots
+    from src.trade.exceptions import NoTurbosAvailableException
+
+    def snapshot(uic, bid, ask):
+        return {"Uic": uic, "Identifier": uic, "AssetType": "WarrantKnockOut", "DisplayAndFormat": {"Description": f"T{uic}"},
+                "Quote": {"Bid": bid, "Ask": ask, "PriceTypeAsk": "Tradable", "PriceTypeBid": "Tradable",
+                          "MarketState": "Open"}}
+
+    snapshots = [snapshot(1, 4.2, 4.3), snapshot(2, 5.0, 5.05), snapshot(3, 6.0, 6.03)]
+    chosen = build_selected_turbo_from_candidate_snapshots(
+        exchange_id="CATS_SAXO", underlying_uics="1909050", keywords="long", candidate_snapshots=snapshots,
+        selected_source_lookup={}, min_price=4, max_price=15, max_spread_percent=2,
+    )
+    assert chosen["selected_instrument"]["uic"] == 2
+    with pytest.raises(NoTurbosAvailableException, match="the narrowest was 0.50 %"):
+        build_selected_turbo_from_candidate_snapshots(
+            exchange_id="CATS_SAXO", underlying_uics="1909050", keywords="long", candidate_snapshots=snapshots,
+            selected_source_lookup={}, min_price=4, max_price=15, max_spread_percent=0.4,
+        )
+
+
 def test_turbos_quoted_out_of_range_fail_as_the_trader_fails():
     day = day_of(series(1, "long", 24_900, flat(2.5, 840)), series(2, "long", 24_000, flat(16.0, 840)))
 

@@ -143,7 +143,7 @@ def test_a_pine_script_is_traded_on_the_recorded_turbos_day_by_day(tmp_path, rec
     assert set(edge["by_day"]) == {"day_type", "gap", "news", "us_open", "volatility"}
     assert [row["group"] for row in edge["by_day"]["news"]] == ["CPI", "No news"]
     assert all(trade["session_part"] and isinstance(trade["minutes_after_open"], int) for trade in trades)
-    assert summary["made_with"]["calendar"]["until"] == "2026-12-23"
+    assert summary["made_with"]["calendar"]["until"] == "2027-12-03"
     baseline = read(folder, "baseline.json")
     assert len(baseline["totals"]) == 5 and baseline["seed"] == 3
     assert read(folder, "progress.json")["phase"] == "done"

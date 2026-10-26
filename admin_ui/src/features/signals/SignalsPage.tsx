@@ -18,6 +18,7 @@ import { actionLabel } from '@/lib/labels'
 import type { JsonObject } from '@/lib/types'
 
 import { JournalPanel } from './JournalPanel'
+import { sourceNotes } from './signalSources'
 
 const ACTION_OPTIONS = [
   { value: 'close-position', label: 'Close all positions', description: 'What the scheduler sends at the end of the day' },
@@ -177,6 +178,7 @@ export function SignalsPage() {
   const { timezone, actions_enabled: actionsEnabled } = useSession()
   const signalsQuery = useQuery({ queryKey: ['signals'], queryFn: api.signals, refetchInterval: 5_000 })
   const signals = signalsQuery.data?.items
+  const notes = sourceNotes(signalsQuery.data?.webhook, timezone)
 
   return (
     <>
@@ -186,6 +188,11 @@ export function SignalsPage() {
       />
 
       <Panel title="Latest signal per indice" description={`Times are in ${timezone}.`} bodyClassName="pt-2">
+        {notes.map((note) => (
+          <Alert key={note.indice} tone="neutral" className="mb-3">
+            <AlertDescription>{note.text}</AlertDescription>
+          </Alert>
+        ))}
         <QueryState isPending={signalsQuery.isPending} error={signalsQuery.error} hasData={!!signals}>
           {signals && signals.length === 0 && (
             <p className="py-6 text-center text-sm text-muted-foreground">No signal since the web server started.</p>

@@ -24,8 +24,14 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 
 @router.get("/signals")
 async def latest_signals(request: Request):
-    signals = await request.app.state.ctx.services.latest_signals()
-    return {"items": sorted(signals, key=lambda signal: signal.get("seq", 0), reverse=True)}
+    services = request.app.state.ctx.services
+    signals = await services.latest_signals()
+    try:
+        # Which source each index takes, and TradingView's alerts answered without being stored (v0.48.0).
+        webhook = await services.webhook_state()
+    except ServiceUnavailable:
+        webhook = None
+    return {"items": sorted(signals, key=lambda signal: signal.get("seq", 0), reverse=True), "webhook": webhook}
 
 
 @router.get("/system/health")

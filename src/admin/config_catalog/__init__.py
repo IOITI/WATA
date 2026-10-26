@@ -41,7 +41,8 @@ GROUPS = (
     Group("sizing", "Size and turbo", "How much is bought, and which turbo.", "Trading"),
     Group("exits", "Exits", "When the position monitor sells a position.", "Trading"),
     Group("watchlist", "Watchlist manager", "The turbos kept ready for the next entry.", "Trading"),
-    Group("report", "Daily report", "What the daily report and the Report page project the account to.", "Analysis"),
+    Group("report", "Reporting", "What the daily report and the Report page project the account to, and what the bot "
+          "answers.", "Analysis"),
     Group("backtests", "Backtests", "Strategies replayed from the admin: how many, how long, where they are kept.",
           "Analysis"),
     Group("saxo", "Saxo session and streaming", "How the services talk to Saxo.", "Data"),
@@ -74,8 +75,8 @@ _SAXO_APP = "authentication.saxo.app_config_object"
 BLOCKS = (
     Block("day", "result", "The day's result", ("trade.rules[day_trading]",),
           "When the day's result stops new entries."),
-    Block("day", "pace", "Pauses and number of trades", ("trade.rules[risk_management]",),
-          "How often WATA may enter, whatever the day's result."),
+    Block("day", "pace", "Pauses, trades and breakers", ("trade.rules[risk_management]",),
+          "How often WATA may enter, when the day stops after its losses, and when the account guard pauses entries."),
     Block("hours", "day", "The trading day", (
         "trade.config.general.timezone", "trade.rules[market_hours]", "trade.rules[day_trading].rule_config",
         "trade.rules[*].rule_name"), "When entries are taken, and when what is held is sold."),
@@ -85,8 +86,8 @@ BLOCKS = (
           "No entry around the releases that move the Nasdaq, and nothing held into them."),
     Block("signals", "traded", "What is traded", ("trade.rules[allowed_indices]", "trade.config.trading_mode")),
     Block("signals", "taken", "Which signals are taken", (
-        "trade.rules[signal_validation]", "reporting.signal_silence_minutes"),
-        "How old a signal may be, and when silence is said."),
+        "trade.config.signal_sources", "trade.rules[signal_validation]", "reporting.signal_silence_minutes"),
+        "Where each index's signals come from, how old one may be, and when silence is said."),
     Block("signals", "polling", "How the trader gets them", ("trade.config.signal_polling",),
           "The trader asks the web server for the newest signals."),
     Block("sizing", "power", "Buying power", ("trade.config.buying_power",), "How much of the account an order uses."),
@@ -108,6 +109,8 @@ BLOCKS = (
     Block("watchlist", "where", "Where it runs", (
         f"{_WATCHLIST}.service_url", f"{_WATCHLIST}.api_host", f"{_WATCHLIST}.api_port")),
     Block("report", "milestones", "Milestones", ("reporting.milestones_eur",)),
+    Block("report", "telegram", "Telegram commands", ("reporting.telegram_commands",),
+          "What WATA's bot answers when asked in its chat: it only reads."),
     Block("backtests", "runs", "Runs", (
         "admin.backtests_enabled", "admin.backtests_max_queued", "admin.backtests_max_period_days",
         "admin.backtests_workers"), "How many runs, how long each may be, how many at once."),

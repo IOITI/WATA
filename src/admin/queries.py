@@ -18,6 +18,7 @@ import pytz
 
 from src.admin.analysis import summarise_exits
 from src.admin.errors import DatabaseUnavailable
+from src.admin.live_breakdowns import live_breakdowns
 from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
 from src.admin.prices import INTERVALS as PRICE_INTERVALS
@@ -36,11 +37,18 @@ MAX_ROWS = 2000
 # What a backtest of real signals, or the measure of the turbo, may read at once: years of trading.
 MAX_REPLAYED_ROWS = 20000
 
-_POSITION_COLUMNS = """
+# The worst result a position reached, read beside it from position_worst (since v0.48.0): only in a query
+# FROM turbo_data_position without an alias.
+_WORST = (
+    "(SELECT worst_percent FROM position_worst WHERE position_worst.position_id = turbo_data_position.position_id)"
+    " AS position_min_performance_percent"
+)
+
+_POSITION_COLUMNS = f"""
     action, position_id, position_amount, position_open_price, position_close_price,
     position_close_reason, position_profit_loss, position_total_open_price,
     position_total_close_price, position_total_performance_percent,
-    position_max_performance_percent, position_status, position_kind,
+    position_max_performance_percent, {_WORST}, position_status, position_kind,
     execution_time_open, execution_time_close, order_id, related_order_id,
     instrument_name, instrument_symbol, instrument_uic, instrument_currency
 """
@@ -374,6 +382,14 @@ class AdminQueries:
 
     async def entries_paused_since(self):
         return await self._risk_state.get_entries_paused_since()
+
+    async def entries_paused_by_guard(self):
+        """When the account guard paused entries, while its pause holds (src/trade/account_guard.py)."""
+        return await self._risk_state.get_entries_paused_by_guard()
+
+    async def today_closed_results(self) -> list[float]:
+        """The day's closed results in the order they closed, as the trader counts its breakers."""
+        return await self._positions.get_today_closed_results()
 
     async def _fetch_optional(self, query: str, *args) -> list:
         """
@@ -1439,7 +1455,8 @@ class AdminQueries:
             f"""
             SELECT position_id, action, execution_time_open, execution_time_close,
                    position_open_price, position_close_price, position_total_performance_percent,
-                   position_max_performance_percent, position_close_reason, instrument_name, instrument_uic
+                   position_max_performance_percent, {_WORST}, position_close_reason,
+                   instrument_name, instrument_uic
             FROM turbo_data_position
             WHERE {' AND '.join(conditions)}
             ORDER BY execution_time_open ASC, position_id ASC
@@ -1496,6 +1513,35 @@ class AdminQueries:
             *args,
         )
         return {"items": [_clean_row(row) for row in rows], "total": total or 0}
+
+    async def position_chart(self, position_id: str) -> dict | None:
+        """
+        What a position is drawn on: the recorder's id of its turbo (by its Uic, the newest the recorder named), and
+        the signal that opened it (the journal's), with its moments. None for a position not recorded.
+        """
+        row = await self.db.fetchrow(
+            "SELECT instrument_uic, execution_time_open, execution_time_close FROM turbo_data_position WHERE position_id = $1",
+            position_id,
+        )
+        if row is None:
+            return None
+        instruments = await self._fetch_optional(
+            "SELECT id FROM price_instrument WHERE uic = $1 ORDER BY last_seen_at DESC NULLS LAST, id DESC LIMIT 1",
+            row["instrument_uic"],
+        ) if row["instrument_uic"] is not None else []
+        signals = await self._fetch_optional(
+            """
+            SELECT action, signal_timestamp, received_timestamp, decided_at FROM signal_journal
+            WHERE position_id = $1 ORDER BY decided_at ASC NULLS LAST LIMIT 1
+            """,
+            position_id,
+        )
+        return {
+            "price_instrument_id": instruments[0]["id"] if instruments else None,
+            "opened_at": row["execution_time_open"],
+            "closed_at": row["execution_time_close"],
+            "signal": _clean_row(signals[0]) if signals else None,
+        }
 
     async def get_position(self, position_id: str) -> dict | None:
         position = await self.db.fetchrow(
@@ -1680,11 +1726,13 @@ class AdminQueries:
         rows = await self.db.fetch(
             f"""
             SELECT
+                position_id,
                 action,
                 position_close_reason AS close_reason,
                 position_total_performance_percent AS performance_percent,
                 position_max_performance_percent AS max_performance_percent,
                 position_profit_loss AS profit_loss,
+                position_open_price AS open_price,
                 EXTRACT(HOUR FROM execution_time_open AT TIME ZONE $1)::int AS open_hour,
                 EXTRACT(ISODOW FROM execution_time_open AT TIME ZONE $1)::int AS open_weekday,
                 EXTRACT(EPOCH FROM (execution_time_close - execution_time_open))::float8 AS holding_seconds
@@ -1695,7 +1743,46 @@ class AdminQueries:
             *args,
         )
         trades = [_clean_row(row) for row in rows]
-        return {**summarise_exits(trades), "by_weekday_hour": stats_by_weekday_hour(trades, opened_weekday_hour)}
+        await self._with_signal_and_worst(trades)
+        return {
+            **summarise_exits(trades),
+            "by_weekday_hour": stats_by_weekday_hour(trades, opened_weekday_hour),
+            "breakdowns": live_breakdowns(trades),
+        }
+
+    async def _with_signal_and_worst(self, trades: list[dict]) -> None:
+        """
+        Each trade with what the journal says of its signal (confidence, its delay to the trader's decision, a
+        signal rule's when one sent it) and the worst it reached: each from a table of its own, read only if
+        it exists yet.
+        """
+        ids = [trade["position_id"] for trade in trades if trade.get("position_id")]
+        journal = await self._fetch_optional(
+            """
+            SELECT DISTINCT ON (position_id) position_id, confidence, signal_uuid,
+                   EXTRACT(EPOCH FROM (decided_at - signal_timestamp))::float8 AS signal_delay_seconds
+            FROM signal_journal WHERE position_id = ANY($1::text[])
+            ORDER BY position_id, decided_at ASC NULLS LAST
+            """,
+            ids,
+        ) if ids else []
+        by_position = {row["position_id"]: row for row in journal}
+        uuids = [row["signal_uuid"] for row in journal if row["signal_uuid"]]
+        rules = await self._fetch_optional(
+            "SELECT signal_uuid, rule_name FROM ta_signal WHERE signal_uuid = ANY($1::text[])", uuids,
+        ) if uuids else []
+        rule_of = {row["signal_uuid"]: row["rule_name"] for row in rules}
+        worsts = await self._fetch_optional(
+            "SELECT position_id, worst_percent FROM position_worst WHERE position_id = ANY($1::text[])", ids,
+        ) if ids else []
+        worst_of = {row["position_id"]: row["worst_percent"] for row in worsts}
+        for trade in trades:
+            signal = by_position.get(trade.get("position_id"))
+            trade["journaled"] = signal is not None
+            trade["confidence"] = signal["confidence"] if signal else None
+            trade["signal_delay_seconds"] = signal["signal_delay_seconds"] if signal else None
+            trade["rule_name"] = rule_of.get(signal["signal_uuid"]) if signal else None
+            trade["min_performance_percent"] = worst_of.get(trade.get("position_id"))
 
     async def report(self, milestones_eur: list[float] | None = None, today: date | None = None) -> dict:
         """

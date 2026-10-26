@@ -12,6 +12,8 @@ export type EntryBlockerCode =
   | 'day_stop'
   | 'trade_limit'
   | 'cooldown'
+  | 'loss_streak'
+  | 'day_drawdown'
 
 export interface EntryBlocker {
   code: EntryBlockerCode
@@ -50,7 +52,13 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
   const blockers: EntryBlocker[] = []
 
   if (overview.entries_paused_since !== null) {
-    blockers.push({ code: 'paused', reason: 'Paused by the operator' })
+    // The account guard pauses entries as the operator does: until the operator resumes them.
+    blockers.push({
+      code: 'paused',
+      reason: overview.entries_paused_by_account_guard
+        ? 'Paused by the account guard: resume entries once you have looked'
+        : 'Paused by the operator',
+    })
   }
 
   // The trader's own refusal while Saxo refuses to renew its login (its heartbeat, through the server).
@@ -121,6 +129,25 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
     const remaining = new Date(cooldown.ends_at).getTime() - now
     if (remaining > 0) {
       blockers.push({ code: 'cooldown', reason: `Cooldown after a loss: ${formatDuration(remaining)} left` })
+    }
+  }
+
+  // The day's breakers (src/trade/day_breakers.py), on the day's figures the server counts as the trader does.
+  const breakers = overview.breakers
+  const maxLosses = limits.max_consecutive_losses ?? 0
+  const maxDrawdown = limits.max_drawdown_from_day_best_percent ?? 0
+  if (breakers && maxLosses > 0 && breakers.losses_in_a_row >= maxLosses) {
+    blockers.push({
+      code: 'loss_streak',
+      reason: `${breakers.losses_in_a_row} losing trades in a row today (${maxLosses} at most): no new entry today`,
+    })
+  } else if (breakers && maxDrawdown > 0) {
+    const fall = Math.round((breakers.day_best_percent - breakers.day_percent) * 100) / 100
+    if (fall >= maxDrawdown) {
+      blockers.push({
+        code: 'day_drawdown',
+        reason: `The day is ${fall} points under its best (${formatPercent(breakers.day_best_percent, true)}): no new entry today`,
+      })
     }
   }
 

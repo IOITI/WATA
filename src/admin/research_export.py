@@ -119,6 +119,7 @@ TABLES = (
     ExportTable("signal_journal", "COALESCE(received_timestamp, decided_at, signal_timestamp)"),
     ExportTable("ta_signal", "COALESCE(raised_at, bar_closed_at)"),
     ExportTable("turbo_data_position", "execution_time_open"),
+    ExportTable("position_worst", "updated_at"),
     ExportTable("turbo_data_order", "order_time"),
     ExportTable("order_execution", "sent_at"),
     ExportTable("order_request", "requested_at", columns=ORDER_REQUEST_KEPT),

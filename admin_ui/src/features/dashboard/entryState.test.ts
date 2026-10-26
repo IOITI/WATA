@@ -17,6 +17,8 @@ function overview(changes: {
   news?: Overview['news']
   saxoLogin?: Overview['saxo_login']
   marketDay?: Overview['market_day']
+  pausedByGuard?: string | null
+  breakers?: Overview['breakers']
 } = {}): Overview {
   return {
     date: '2026-10-12',
@@ -48,6 +50,8 @@ function overview(changes: {
     market_day: changes.marketDay ?? null,
     cooldown: { last_loss_at: null, ends_at: null, active: false, ...changes.cooldown },
     entries_paused_since: changes.paused ?? null,
+    entries_paused_by_account_guard: changes.pausedByGuard ?? null,
+    breakers: changes.breakers ?? null,
     news: changes.news ?? null,
     saxo_login: changes.saxoLogin ?? null,
     open_positions: (changes.open ?? []).map((action, index) => ({ action, position_id: String(index) }) as Position),
@@ -223,5 +227,39 @@ describe('directions already open', () => {
   it('lists each once', () => {
     expect(openDirections(overview({ open: ['long', 'long', 'short'] }))).toEqual(['long', 'short'])
     expect(openDirections(overview())).toEqual([])
+  })
+})
+
+describe('the account guard and the day’s breakers', () => {
+  it('says a pause is the account guard’s own', () => {
+    const [paused] = entryBlockers(overview({ paused: '2026-10-12T12:00:00Z', pausedByGuard: '2026-10-12T12:00:00Z' }), NOW)
+    expect(paused).toEqual({ code: 'paused', reason: 'Paused by the account guard: resume entries once you have looked' })
+    expect(entryBlockers(overview({ paused: '2026-10-12T12:00:00Z' }), NOW)[0].reason).toBe('Paused by the operator')
+  })
+
+  it('refuses after that many losses in a row, as the trader counts them', () => {
+    const limits = { max_consecutive_losses: 3 }
+    const two = overview({ limits, breakers: { losses_in_a_row: 2, day_best_percent: 0.5, day_percent: -1.2 } })
+    const three = overview({ limits, breakers: { losses_in_a_row: 3, day_best_percent: 0.5, day_percent: -1.9 } })
+
+    expect(codes(two)).toEqual([])
+    expect(entryBlockers(three, NOW)).toEqual([
+      { code: 'loss_streak', reason: '3 losing trades in a row today (3 at most): no new entry today' },
+    ])
+  })
+
+  it('refuses once the day is that far under its best', () => {
+    const limits = { max_drawdown_from_day_best_percent: 5 }
+    const near = overview({ limits, breakers: { losses_in_a_row: 1, day_best_percent: 4, day_percent: -0.99 } })
+    const far = overview({ limits, breakers: { losses_in_a_row: 1, day_best_percent: 4, day_percent: -2.24 } })
+
+    expect(codes(near)).toEqual([])
+    expect(codes(far)).toEqual(['day_drawdown'])
+    expect(entryBlockers(far, NOW)[0].reason).toContain('6.24 points under its best')
+  })
+
+  it('refuses nothing while the breakers are off, whatever the day', () => {
+    const day = overview({ breakers: { losses_in_a_row: 9, day_best_percent: 10, day_percent: -20 } })
+    expect(codes(day)).toEqual([])
   })
 })

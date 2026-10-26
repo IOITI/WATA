@@ -17,7 +17,7 @@ RECORDER_PARAMS = (
         path=f"{RECORDER}.enabled", group="recorder", label="Record Saxo's prices", kind="bool", optional=True,
         default=False,
         help="Ten-second bars of the turbos of each indice traded and of their index, kept for backtests.",
-        readers=("price_recorder", ADMIN), risk=SERVICE,
+        readers=("price_recorder", "telegram", ADMIN), risk=SERVICE,
         effects=("The recorder subscribes to Saxo's prices with the services' login: it adds to what Saxo serves the "
                  "account.",),
         also_needs=(RECORDER_PROFILE,),
@@ -81,7 +81,7 @@ CAPITAL_PARAMS = (
         default=False,
         help="The Nasdaq 100 streamed from Capital.com, recorded every ten seconds, sent to the admin's live charts and "
              "kept as a file a day.",
-        readers=("capital_feed", ADMIN), consumers=("backtests",), risk=SERVICE,
+        readers=("capital_feed", "telegram", ADMIN), consumers=("backtests",), risk=SERVICE,
         effects=("The TA engine runs the signal rules on the bars it records: without it, no signal of WATA's own.",),
         also_needs=(CAPITAL_PROFILE, "The Capital.com login (CAPITAL_API_KEY, CAPITAL_IDENTIFIER, CAPITAL_PASSWORD in "
                                      "/app/wata/.env, until it moves to PostgreSQL)."),
@@ -135,7 +135,7 @@ TA_PARAMS = (
     Param(
         path=f"{TA}.enabled", group="ta", label="Run the signal rules", kind="bool", optional=True, default=False,
         help="WATA's own signals, from the Pine scripts of the signal rules run on Capital.com's bars.",
-        readers=("ta_engine", ADMIN), risk=TRADING,
+        readers=("ta_engine", "telegram", ADMIN), risk=TRADING,
         effects=("A live rule's signals go to the web server like TradingView's; a shadow rule's are only journaled.",),
         also_needs=(TA_PROFILE, "The Capital.com feed recording the rules' instruments."),
         caveats=(IDLE_ON_A_MISTAKE,),

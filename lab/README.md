@@ -32,6 +32,21 @@ journal and lock box. The lab stays the place for heavy analysis and long histor
    ```
 
    `lab/launchd/install.sh --remove` takes it away. Its output goes to `var/lib/lab/log/sync.log`.
+4. **The copies off the server** (optional). The server can also send each night's dump, encrypted
+   to a key of this Mac, to an S3-compatible bucket (the server's `.env`, "The database's dumps off
+   the server"). The key and the tools are made here:
+
+   ```bash
+   lab/backup_tools.sh
+   mkdir -p ~/.config/wata && .venv-lab/bin/age-keygen -o ~/.config/wata/backup-age.key
+   .venv-lab/bin/rclone config
+   ```
+
+   `lab/backup_tools.sh` puts age and rclone in `.venv-lab/bin`, the versions of the server's
+   image, each checked by its sha256. The key file's `# public key: age1…` line is the server's
+   `BACKUP_AGE_RECIPIENT`; the file itself never leaves this Mac, and nothing else opens the
+   copies: keep a copy of it with this Mac's own backups. `rclone config` makes the remote that
+   reads the bucket (`wata-offsite`, say), better with a key of the bucket that may only read.
 
 ## Using it
 
@@ -70,6 +85,17 @@ What a run is worth, beyond its total:
 .venv-lab/bin/python -m lab paper [<rule>]                # each shadow rule's days traded on paper
 .venv-lab/bin/python -m lab calendar check                # whether the macro calendar knows the news ahead
 ```
+
+A backup is only one once it was restored. Each check restores into a PostgreSQL of its own,
+deleted after, and counts the trading tables, as `pg_backup.sh check` does on the server:
+
+```bash
+.venv-lab/bin/python -m lab backup check                  # the newest dump lab/sync.sh pulled
+WATA_BACKUP_REMOTE=wata-offsite:wata-backups/wata .venv-lab/bin/python -m lab backup check --offsite
+```
+
+`--offsite` downloads the newest copy of the bucket and opens it with
+`~/.config/wata/backup-age.key` (`WATA_BACKUP_AGE_IDENTITY` names another file).
 
 A sweep takes `--walk-forward TRAIN/TEST` (days to choose on, days to keep it); its summary
 says how likely choosing its best was fitting, with the family's earlier trials counted.

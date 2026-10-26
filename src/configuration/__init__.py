@@ -4,7 +4,10 @@ import logging
 
 import pytz
 
+from src.trade.account_guard import refusal as account_guard_refusal
+from src.trade.day_breakers import refusal as day_breakers_refusal
 from src.trade.macro_calendar import NewsRule
+from src.trade.signal_sources import CONFIG_PATH as SIGNAL_SOURCES_PATH, refusal as signal_sources_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +269,14 @@ class ConfigurationManager:
                     logger.error(error_msg)
                     raise ValueError(error_msg) from None
 
+            elif rule_type == "risk_management":
+                # The account guard and the day's breakers (src/trade/account_guard.py, day_breakers.py): off unless set.
+                risk_error = account_guard_refusal(rule_config) or day_breakers_refusal(rule_config)
+                if risk_error:
+                    error_msg = f"Rule {rule_name}: {risk_error}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
         # Validate trade.config structure
         trade_config = self.get_config_value("trade.config")
         if trade_config:
@@ -430,6 +441,34 @@ class ConfigurationManager:
             fresh_quote = self.get_config_value("trade.config.position_management.wait_for_fresh_quote")
             if fresh_quote is not None and not isinstance(fresh_quote, bool):
                 error_msg = "Config field 'trade.config.position_management.wait_for_fresh_quote' must be a boolean"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # No turbo with a wider spread than this share of its ask is bought: no limit unless set
+            max_spread = self.get_config_value("trade.config.turbo_preference.max_spread_percent")
+            if max_spread is not None and (
+                isinstance(max_spread, bool) or not isinstance(max_spread, (int, float)) or not 0 <= max_spread <= 100
+            ):
+                error_msg = "Config field 'trade.config.turbo_preference.max_spread_percent' must be between 0 and 100 (0: no limit)"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # Which source each index takes its signals from (src/trade/signal_sources.py): TradingView's unless set
+            indices = next(
+                (set((rule.get("rule_config") or {}).get("indice_ids") or {})
+                 for rule in trade_rules if rule.get("rule_type") == "allowed_indices"),
+                set(),
+            )
+            sources_error = signal_sources_refusal(self.get_config_value(SIGNAL_SOURCES_PATH), indices)
+            if sources_error:
+                error_msg = f"Config field '{SIGNAL_SOURCES_PATH}': {sources_error}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # The bot answers its commands, which only read (src/mq_telegram/commands.py): off unless true
+            telegram_commands = self.get_config_value("reporting.telegram_commands")
+            if telegram_commands is not None and not isinstance(telegram_commands, bool):
+                error_msg = "Config field 'reporting.telegram_commands' must be a boolean"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 

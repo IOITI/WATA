@@ -111,7 +111,7 @@ def test_no_entry_is_made_that_would_be_sold_at_once():
 @pytest.mark.parametrize("config, refusal", [
     ({"flatten_minutes_before": -1}, "flatten_minutes_before is a whole number of minutes from 0 to 120"),
     ({"flatten_minutes_before": 5.5}, "flatten_minutes_before is a whole number"),
-    ({"events": ["CPI", "GDP"]}, "events is a list of some of FOMC, CPI, NFP, PCE"),
+    ({"events": ["CPI", "ISM"]}, "events is a list of some of FOMC, CPI, NFP, PCE, PPI, RETAIL, GDP, JOLTS"),
     ({"events": []}, "events is a list"),
     ({"minutes_before": -1}, "minutes_before is a whole number of minutes from 0 to 120"),
     ({"minutes_after": 121}, "minutes_after is a whole number"),
@@ -127,11 +127,15 @@ def test_a_rule_the_trader_could_not_follow_is_refused(config, refusal):
 
 
 def test_its_upkeep_is_said_from_thirty_days_before_the_calendar_ends(tmp_path):
-    # PCE is known to 23 December 2026, the others to December 2027.
-    assert CALENDAR.known_until() == date(2026, 12, 23)
-    assert upkeep(CALENDAR, date(2026, 11, 22)) is None
-    assert "ends on 2026-12-23, in 30 day(s)" in upkeep(CALENDAR, date(2026, 11, 23))
-    assert "ended on 2026-12-23" in upkeep(CALENDAR, date(2026, 12, 24))
+    # The four a rule takes when it names none: the jobs report of 3 December 2027 is the last known of all four.
+    assert CALENDAR.known_until() == date(2027, 12, 3)
+    assert upkeep(CALENDAR, date(2027, 11, 2)) is None
+    assert "(NFP) ends on 2027-12-03, in 30 day(s)" in upkeep(CALENDAR, date(2027, 11, 3))
+    assert "ended on 2027-12-03" in upkeep(CALENDAR, date(2027, 12, 4))
+    # A kind the rule names ends the calendar where it ends: BLS had given JOLTS's dates to December 2026.
+    assert upkeep(CALENDAR, date(2026, 10, 31), ("CPI", "JOLTS")) is None
+    assert upkeep(CALENDAR, date(2026, 11, 1), ("CPI", "JOLTS")).startswith(
+        "The calendar of US releases (JOLTS) ends on 2026-12-01, in 30 day(s)")
     # Past its last day nothing is known: no window, the trader trades on.
     path = tmp_path / "calendar.csv"
     path.write_text("# one release\ndate,time_new_york,event,covers,source\n2026-10-14,08:30,CPI,2026-09,bls.gov\n")
@@ -214,7 +218,7 @@ def test_the_dashboard_is_told_the_window_in_force_or_the_next():
         "event": "CPI", "released_at": "2026-10-14T12:30:00+00:00",
         "start": "2026-10-14T12:25:00+00:00", "end": "2026-10-14T12:45:00+00:00",
     }
-    assert morning["known_until"] == date(2026, 12, 23)
+    assert morning["known_until"] == date(2027, 12, 3)
     assert _news(on, datetime(2026, 10, 14, 13, 0, tzinfo=pytz.utc))["window"] is None
     assert _news(DictConfig({"trade": {"rules": []}}), datetime(2026, 10, 14, 7, 0, tzinfo=pytz.utc)) is None
 
@@ -223,9 +227,39 @@ def test_the_dashboard_is_told_the_window_in_force_or_the_next():
 def test_the_health_says_the_calendar_while_the_rule_is_on():
     assert macro_calendar_entry(False, CALENDAR, date(2026, 12, 20)) == []
     [known] = macro_calendar_entry(True, CALENDAR, date(2026, 10, 21))
-    [short] = macro_calendar_entry(True, CALENDAR, date(2026, 12, 20))
+    [short] = macro_calendar_entry(True, CALENDAR, date(2027, 11, 30))
     [unread] = macro_calendar_entry(True, None, date(2026, 10, 21))
+    [jolts] = macro_calendar_entry(True, CALENDAR, date(2026, 11, 28), ("CPI", "JOLTS"))
 
-    assert (known["status"], known["detail"]) == (OK, "Known until 2026-12-23")
+    assert (known["status"], known["detail"]) == (OK, "Known until 2027-12-03")
     assert short["status"] == WARNING and "in 3 day(s)" in short["detail"]
     assert unread["status"] == WARNING and "Cannot be read" in unread["detail"]
+    assert jolts["status"] == WARNING and "(JOLTS) ends on 2026-12-01, in 3 day(s)" in jolts["detail"]
+
+
+# ── the releases kept from late 2026 ──
+
+
+def test_a_rule_that_names_none_keeps_the_four_and_the_others_apply_once_named():
+    named = NewsRule.from_config({"events": ["GDP", "CPI", "PPI"]})
+
+    assert NewsRule.from_config({}).events == ("FOMC", "CPI", "NFP", "PCE")
+    assert named.events == ("CPI", "PPI", "GDP")
+    # Producer prices on 13 November 2026, at 8:30 in New York, 14:30 in Paris.
+    assert said(paris(2026, 11, 13, 14, 30)) is None
+    assert said(paris(2026, 11, 13, 14, 30), named) == (
+        "Breaking trading rule: no entry around PPI (14:30) from 14:25 to 14:45.")
+    # Job openings at 10:00 in New York: 16:00 in Paris.
+    jolts = NewsRule.from_config({"events": ["JOLTS"]})
+    assert said(paris(2026, 11, 3, 16, 10), jolts) == (
+        "Breaking trading rule: no entry around JOLTS (16:00) from 15:55 to 16:15.")
+    with pytest.raises(ValueError, match="events is a list of some of"):
+        NewsRule.from_config({"events": ["ISM"]})
+
+
+def test_the_calendar_knows_each_kind_from_its_first_row():
+    assert CALENDAR.known_from() == date(2024, 1, 31)
+    assert CALENDAR.since["GDP"] == date(2026, 10, 29) and CALENDAR.since["JOLTS"] == date(2026, 11, 3)
+    assert CALENDAR.known_from(("PPI", "RETAIL")) == date(2026, 11, 17)
+    assert CALENDAR.known_until(("PPI", "RETAIL", "GDP")) == date(2027, 10, 28)
+    assert CALENDAR.known_until(("ISM",)) is None

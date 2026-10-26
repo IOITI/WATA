@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 
 import { POSITION_CSV, positionColumns } from './columns'
 import { LivePositionChart } from './LivePositionChart'
+import { PositionChart } from './PositionChart'
 import { PositionOrders } from './PositionOrders'
 
 type StatusFilter = 'open' | 'closed' | 'all'
@@ -126,7 +127,10 @@ export function PositionsPage() {
                     <PositionOrders positionId={row.position_id} />
                   </div>
                 ) : (
-                  <PositionOrders positionId={row.position_id} />
+                  <div className="space-y-4">
+                    <PositionChart position={row} />
+                    <PositionOrders positionId={row.position_id} />
+                  </div>
                 )
               }
             />

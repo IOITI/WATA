@@ -14,3 +14,4 @@ VERSION_DIR="$APP_BASE_DIR/$VERSION"
 
 cd $VERSION_DIR
 docker build -t wata-base . --platform=linux/amd64
+docker build -t wata-backup --platform=linux/amd64 - < deploy/pg_backup.Dockerfile

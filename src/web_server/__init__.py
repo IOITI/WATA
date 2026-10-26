@@ -4,9 +4,11 @@ from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.web_server_token import INTERNAL, WEBHOOK, WebServerToken
+from src.web_server.ignored import IgnoredWebhooks
 from src.web_server.signal_store import SignalStore
 import logging
 from src.configuration import ConfigurationManager
+from src.trade.signal_sources import ENGINE, configured as configured_sources, source_of
 from src.schema import SchemaLoader
 import jsonschema
 from datetime import datetime
@@ -36,10 +38,15 @@ web_server_token = WebServerToken(config_manager)
 # by both the public /webhook and the internal /internal/signal endpoints.
 SIGNAL_STORE = SignalStore()
 
+# Which source each index takes its signals from (read at the start): an index set to the TA engine takes
+# no webhook, so that TradingView's alerts and a live rule never trade it together.
+SIGNAL_SOURCES = configured_sources(config_manager)
+WEBHOOKS_IGNORED = IgnoredWebhooks()
+
 # Paths that are only ever called by other WATA containers on the internal Docker
 # network (trader polling, scheduler EOD close). They are exempt from the IP
 # allowlist below but still require the Bearer token (see verify_bearer_token).
-INTERNAL_ONLY_PATHS = {"/latest-signals", "/internal/signal"}
+INTERNAL_ONLY_PATHS = {"/latest-signals", "/internal/signal", "/internal/webhook"}
 
 # Upper bound on how long /latest-signals holds a long-poll request open.
 MAX_LONG_POLL_WAIT_MS = 30000
@@ -156,6 +163,17 @@ async def webhook(request: Request):
     except jsonschema.exceptions.ValidationError as e:
         logging.warning(f"Invalid data received from from {request.client.host}: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
+    if source_of(SIGNAL_SOURCES, data["indice"]) == ENGINE:
+        # Answered, so that TradingView does not report a failure, and counted for the admin's Signals page.
+        WEBHOOKS_IGNORED.note(data["indice"], received_timestamp, data.get("action"))
+        logging.info(
+            f"Webhook signal for indice={data['indice']} ignored: that index takes the TA engine's signals "
+            f"(trade.config.signal_sources): {data}"
+        )
+        return JSONResponse(
+            content={"status": "ignored", "reason": f"{data['indice']} takes the TA engine's signals"},
+            status_code=200,
+        )
     # TODO : Error handling error 500
     signal_uuid = await _ingest_and_store_signal(data, received_timestamp)
     logging.info(f"Received data from {request.client.host} : {data}")
@@ -179,6 +197,15 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
     signal_uuid = await _ingest_and_store_signal(data, received_timestamp)
     logging.info(f"Received internal signal: {data}")
     return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+
+
+@app.get("/internal/webhook", include_in_schema=False)
+async def webhook_state(_: None = Depends(verify_bearer_token)):
+    """Which source each index takes its signals from, and the webhooks ignored since the start, by index."""
+    return JSONResponse(
+        content={"sources": dict(SIGNAL_SOURCES), "ignored": WEBHOOKS_IGNORED.as_dict()},
+        status_code=200,
+    )
 
 
 @app.get("/latest-signals", include_in_schema=False)

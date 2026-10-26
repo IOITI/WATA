@@ -751,6 +751,49 @@ def test_the_mcp_tokens_kept_in_postgresql_open_the_endpoint_until_revoked(in_a_
     assert entries[0]["state"] == "revoked"
 
 
+def test_the_bots_commands_read_what_the_services_wrote_and_cannot_write(in_a_database_of_its_own):
+    import asyncpg
+
+    from src.mq_telegram import commands
+    from src.mq_telegram.commands import Calendars, Commands, CommandSettings
+
+    async def scenario(writer, reader):
+        now = datetime.now(timezone.utc)
+        await writer.execute(
+            "INSERT INTO turbo_data_position (position_id, action, position_status, execution_time_open, position_amount,"
+            " position_open_price, position_max_performance_percent) VALUES ('p1', 'long', 'Open', $1, 220, 4.52, 2.4)",
+            now - timedelta(minutes=30),
+        )
+        await writer.execute("INSERT INTO position_live_value VALUES ('p1', 4.61, 1.99, $1)", now)
+        await writer.execute(
+            "INSERT INTO signal_journal (signal_uuid, action, indice, received_timestamp, decided_at, outcome)"
+            " VALUES ('u1', 'long', 'us100', $1, $1, 'executed')", now,
+        )
+        # A query parameter of the address is a setting of the session: the commands read the test's schema.
+        schema = await writer.fetchval("SELECT current_schema()")
+        address = f"{POSTGRES_DSN}{'&' if '?' in POSTGRES_DSN else '?'}search_path={schema}"
+        said = Commands(CommandSettings(dsn=address), Calendars.read())
+        answers = {command: await asyncio.to_thread(said.answer, command)
+                   for command in ("/status", "/positions", "/day", "/signals")}
+        connection = await commands._connect(address)
+        try:
+            await connection.execute("INSERT INTO trade_risk_state VALUES ('written', now())")
+            refused = None
+        except asyncpg.ReadOnlySQLTransactionError as e:
+            refused = e
+        finally:
+            await connection.close()
+        return answers, refused, await writer.fetchval("SELECT COUNT(*) FROM trade_risk_state")
+
+    answers, refused, risk_rows = in_a_database_of_its_own(scenario)
+
+    assert "Positions: 1 open, live +1.99 %" in answers["/status"]
+    assert "Now 4.61 € (+1.99 %)" in answers["/positions"]
+    assert "Positions opened today: 1" in answers["/day"]
+    assert ": executed" in answers["/signals"]
+    assert refused is not None and risk_rows == 0
+
+
 def _saxo_services(tmp_path, schema, roles):
     """SaxoAuth of each role over the test's schema, its key and the shared token folder, as in production."""
     from unittest.mock import MagicMock

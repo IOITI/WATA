@@ -1,8 +1,13 @@
 # The US macro news that moves the Nasdaq: FOMC statements, CPI, the jobs report (NFP) and
-# the PCE price index (Personal Income and Outlays). Times are New York's. Every date was read
-# from the source named on its row on 2026-10-20; the releases of October 2025 that the
-# shutdown cancelled are absent, the delayed ones are at the day they came out. Dates after
-# 2026-10-20 are those scheduled then. Keep it up to date: python -m lab calendar check.
+# the PCE price index (Personal Income and Outlays) since 2024; from late 2026, producer prices
+# (PPI), retail sales (RETAIL, Census's advance report), the GDP's advance estimate (GDP) and job
+# openings (JOLTS). Times are New York's. Every date was read from the source named on its row:
+# the first four kinds on 2026-10-20 (PCE's 2027 dates on 2026-10-26), the others on 2026-10-26.
+# The releases of October 2025 that the shutdown cancelled are absent, the delayed ones are at the
+# day they came out; dates after the day they were read are those scheduled then. BLS had not given
+# the 2027 dates of JOLTS on 2026-10-26. ISM's manufacturing index is not kept: only its rule is
+# public (the first business day, 10:00), which it broke in January 2026, and its dated calendar is
+# for its members. Keep it up to date: python -m lab calendar check.
 date,time_new_york,event,covers,source
 2024-01-05,08:30,NFP,2023-12,bls.gov/bls/news-release/empsit.htm
 2024-01-11,08:30,CPI,2023-12,bls.gov/bls/news-release/cpi.htm
@@ -126,42 +131,89 @@ date,time_new_york,event,covers,source
 2026-10-14,08:30,CPI,2026-09,bls.gov/bls/news-release/cpi.htm
 2026-10-28,14:00,FOMC,statement,federalreserve.gov/monetarypolicy/fomccalendars.htm
 2026-10-29,08:30,PCE,2026-09,bea.gov/news/schedule/full
+2026-10-29,08:30,GDP,2026-Q3,bea.gov/news/schedule
+2026-11-03,10:00,JOLTS,2026-09,bls.gov/schedule/2026/home.htm
 2026-11-06,08:30,NFP,2026-10,bls.gov/schedule/news_release/empsit.htm
 2026-11-10,08:30,CPI,2026-10,bls.gov/schedule/news_release/cpi.htm
+2026-11-13,08:30,PPI,2026-10,bls.gov/schedule/news_release/ppi.htm
+2026-11-17,08:30,RETAIL,2026-10,census.gov/economic-indicators/calendar-listview-2026.html
 2026-11-25,08:30,PCE,2026-10,bea.gov/news/schedule/full
+2026-12-01,10:00,JOLTS,2026-10,bls.gov/schedule/news_release/jolts.htm
 2026-12-04,08:30,NFP,2026-11,bls.gov/schedule/news_release/empsit.htm
 2026-12-09,14:00,FOMC,statement,federalreserve.gov/monetarypolicy/fomccalendars.htm
 2026-12-10,08:30,CPI,2026-11,bls.gov/schedule/news_release/cpi.htm
+2026-12-15,08:30,PPI,2026-11,bls.gov/schedule/news_release/ppi.htm
+2026-12-16,08:30,RETAIL,2026-11,census.gov/economic-indicators/calendar-listview-2026.html
 2026-12-23,08:30,PCE,2026-11,bea.gov/news/schedule/full
 2027-01-08,08:30,NFP,2026-12,bls.gov/schedule/news_release/empsit.htm
 2027-01-13,08:30,CPI,2026-12,bls.gov/schedule/news_release/cpi.htm
+2027-01-14,08:30,PPI,2026-12,bls.gov/schedule/news_release/ppi.htm
+2027-01-15,08:30,RETAIL,2026-12,census.gov/economic-indicators/calendar-listview.html
 2027-01-27,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
+2027-01-28,08:30,PCE,2026-12,bea.gov/news/schedule/next-year
+2027-01-28,08:30,GDP,2026-Q4,bea.gov/news/schedule/next-year
 2027-02-05,08:30,NFP,2027-01,bls.gov/schedule/news_release/empsit.htm
 2027-02-11,08:30,CPI,2027-01,bls.gov/schedule/news_release/cpi.htm
+2027-02-12,08:30,PPI,2027-01,bls.gov/schedule/news_release/ppi.htm
+2027-02-17,08:30,RETAIL,2027-01,census.gov/economic-indicators/calendar-listview.html
+2027-02-25,08:30,PCE,2027-01,bea.gov/news/schedule/next-year
 2027-03-05,08:30,NFP,2027-02,bls.gov/schedule/news_release/empsit.htm
 2027-03-10,08:30,CPI,2027-02,bls.gov/schedule/news_release/cpi.htm
+2027-03-12,08:30,PPI,2027-02,bls.gov/schedule/news_release/ppi.htm
+2027-03-16,08:30,RETAIL,2027-02,census.gov/economic-indicators/calendar-listview.html
 2027-03-17,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
+2027-03-31,08:30,PCE,2027-02,bea.gov/news/schedule/next-year
 2027-04-02,08:30,NFP,2027-03,bls.gov/schedule/news_release/empsit.htm
 2027-04-13,08:30,CPI,2027-03,bls.gov/schedule/news_release/cpi.htm
+2027-04-14,08:30,PPI,2027-03,bls.gov/schedule/news_release/ppi.htm
+2027-04-16,08:30,RETAIL,2027-03,census.gov/economic-indicators/calendar-listview.html
 2027-04-28,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
+2027-04-29,08:30,PCE,2027-03,bea.gov/news/schedule/next-year
+2027-04-29,08:30,GDP,2027-Q1,bea.gov/news/schedule/next-year
 2027-05-07,08:30,NFP,2027-04,bls.gov/schedule/news_release/empsit.htm
 2027-05-12,08:30,CPI,2027-04,bls.gov/schedule/news_release/cpi.htm
+2027-05-13,08:30,PPI,2027-04,bls.gov/schedule/news_release/ppi.htm
+2027-05-14,08:30,RETAIL,2027-04,census.gov/economic-indicators/calendar-listview.html
+2027-05-27,08:30,PCE,2027-04,bea.gov/news/schedule/next-year
 2027-06-04,08:30,NFP,2027-05,bls.gov/schedule/news_release/empsit.htm
 2027-06-09,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
 2027-06-10,08:30,CPI,2027-05,bls.gov/schedule/news_release/cpi.htm
+2027-06-11,08:30,PPI,2027-05,bls.gov/schedule/news_release/ppi.htm
+2027-06-16,08:30,RETAIL,2027-05,census.gov/economic-indicators/calendar-listview.html
+2027-06-25,08:30,PCE,2027-05,bea.gov/news/schedule/next-year
 2027-07-02,08:30,NFP,2027-06,bls.gov/schedule/news_release/empsit.htm
 2027-07-14,08:30,CPI,2027-06,bls.gov/schedule/news_release/cpi.htm
+2027-07-15,08:30,PPI,2027-06,bls.gov/schedule/news_release/ppi.htm
+2027-07-16,08:30,RETAIL,2027-06,census.gov/economic-indicators/calendar-listview.html
 2027-07-28,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
+2027-07-29,08:30,PCE,2027-06,bea.gov/news/schedule/next-year
+2027-07-29,08:30,GDP,2027-Q2,bea.gov/news/schedule/next-year
 2027-08-06,08:30,NFP,2027-07,bls.gov/schedule/news_release/empsit.htm
+2027-08-10,08:30,PPI,2027-07,bls.gov/schedule/news_release/ppi.htm
 2027-08-11,08:30,CPI,2027-07,bls.gov/schedule/news_release/cpi.htm
+2027-08-16,08:30,RETAIL,2027-07,census.gov/economic-indicators/calendar-listview.html
+2027-08-25,08:30,PCE,2027-07,bea.gov/news/schedule/next-year
 2027-09-03,08:30,NFP,2027-08,bls.gov/schedule/news_release/empsit.htm
+2027-09-10,08:30,PPI,2027-08,bls.gov/schedule/news_release/ppi.htm
 2027-09-14,08:30,CPI,2027-08,bls.gov/schedule/news_release/cpi.htm
 2027-09-15,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
+2027-09-16,08:30,RETAIL,2027-08,census.gov/economic-indicators/calendar-listview.html
+2027-09-30,08:30,PCE,2027-08,bea.gov/news/schedule/next-year
 2027-10-08,08:30,NFP,2027-09,bls.gov/schedule/news_release/empsit.htm
 2027-10-14,08:30,CPI,2027-09,bls.gov/schedule/news_release/cpi.htm
+2027-10-15,08:30,PPI,2027-09,bls.gov/schedule/news_release/ppi.htm
+2027-10-15,08:30,RETAIL,2027-09,census.gov/economic-indicators/calendar-listview.html
 2027-10-27,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
+2027-10-28,08:30,PCE,2027-09,bea.gov/news/schedule/next-year
+2027-10-28,08:30,GDP,2027-Q3,bea.gov/news/schedule/next-year
 2027-11-05,08:30,NFP,2027-10,bls.gov/schedule/news_release/empsit.htm
 2027-11-10,08:30,CPI,2027-10,bls.gov/schedule/news_release/cpi.htm
+2027-11-12,08:30,PPI,2027-10,bls.gov/schedule/news_release/ppi.htm
+2027-11-16,08:30,RETAIL,2027-10,census.gov/economic-indicators/calendar-listview.html
+2027-11-24,08:30,PCE,2027-10,bea.gov/news/schedule/next-year
 2027-12-03,08:30,NFP,2027-11,bls.gov/schedule/news_release/empsit.htm
 2027-12-08,14:00,FOMC,statement (tentative),federalreserve.gov/monetarypolicy/fomccalendars.htm
 2027-12-10,08:30,CPI,2027-11,bls.gov/schedule/news_release/cpi.htm
+2027-12-15,08:30,PPI,2027-11,bls.gov/schedule/news_release/ppi.htm
+2027-12-15,08:30,RETAIL,2027-11,census.gov/economic-indicators/calendar-listview.html
+2027-12-22,08:30,PCE,2027-11,bea.gov/news/schedule/next-year

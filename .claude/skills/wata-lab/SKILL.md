@@ -141,12 +141,15 @@ a rule live.
 
 ## Analysing the data
 
-- `lab calendar check`: the macro calendar (FOMC, CPI, NFP, PCE) must be ahead of the days run;
-  each row names its source. Never add a date that was not read from that source. The trader
-  reads it too: its `macro_news` rule, when the user added it, keeps entries out from 5 minutes
-  before a release to 15 after (45 after FOMC). A run repeats it with `--set news_window=true`
+- `lab calendar check`: the macro calendar (FOMC, CPI, NFP, PCE since 2024; PPI, RETAIL, GDP,
+  JOLTS from late 2026) must be ahead of the days run; each row names its source. Never add a date
+  that was not read from that source. The trader reads it too: its `macro_news` rule, when the user
+  added it, keeps entries out from 5 minutes before a release to 15 after (45 after FOMC), around
+  the four first unless it names others. A run repeats it with `--set news_window=true`
   (`news_minutes_before`, `news_minutes_after`, `news_minutes_after_fomc`, `news_fomc`, `news_cpi`,
-  `news_nfp`, `news_pce`), or takes it from the configuration as the services do.
+  `news_nfp`, `news_pce`, `news_ppi`, `news_retail`, `news_gdp`, `news_jolts`), or takes it from the
+  configuration as the services do. The kinds of day still go by the four first: the others would
+  split a run's days in two.
 - `lab sql "<query>"` runs DuckDB over the research files. Each table of the server is a view of
   the same name over every day: `price_bar_10s`, `price_instrument` (the newest copy),
   `price_recorder_coverage`, `capital_bar_10s`, `capital_instrument`, `signal_journal`,

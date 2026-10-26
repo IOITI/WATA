@@ -6,6 +6,7 @@ save; the validators do that.
 
 from src.admin.config_catalog import flatten
 from src.admin.config_catalog.trading import CLOSE_TIME, END_HOUR, MAX_PROFIT, TRAILING
+from src.trade.signal_sources import CONFIG_PATH as SIGNAL_SOURCES, sources_from, unattended, unheard
 
 ADMIN_IDLE = "admin.session_idle_minutes"
 ADMIN_MAX_AGE = "admin.session_max_age_minutes"
@@ -23,10 +24,25 @@ def _minutes(clock) -> int | None:
     return hour * 60 + minute
 
 
-def warnings(config: dict) -> list[dict]:
-    """Each parameter that works against another, with what it means: ``{"path", "message"}``."""
+def warnings(config: dict, live_indices=()) -> list[dict]:
+    """
+    Each parameter that works against another, with what it means: ``{"path", "message"}``. ``live_indices``:
+    the indices a signal rule is live on now (rules.json).
+    """
     values = flatten(config)
     found = []
+
+    sources = sources_from(values.get(SIGNAL_SOURCES))
+    for indice in unheard(sources, live_indices):
+        found.append({"path": SIGNAL_SOURCES, "message": (
+            f"A signal rule is live on {indice}, which would take TradingView's signals: once the TA engine starts "
+            "again it sends that rule's signals no more, and TradingView's alerts trade it."
+        )})
+    for indice in unattended(sources, live_indices):
+        found.append({"path": SIGNAL_SOURCES, "message": (
+            f"{indice} would take the TA engine's signals and no rule is live on it: once the web server starts again "
+            "TradingView's alerts are ignored and nothing trades it, until a rule goes live."
+        )})
 
     end_hour, close = _number(values.get(END_HOUR)), _minutes(values.get(CLOSE_TIME))
     if end_hour is not None and close is not None and close >= end_hour * 60:

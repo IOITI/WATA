@@ -13,10 +13,13 @@ them on the same inputs: a change to one of those must be made here too.
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from src.backtest.clock import TradingClock
 from src.backtest.settings import BacktestSettings
+from src.trade.account_guard import AccountGuard
+from src.trade.day_breakers import DayBreakers
 from src.trade.macro_calendar import Calendar, refusal_text, window_at
 from src.trade.market_calendar import MarketCalendar, closed_text, early_close_text, entries_end_moment
 
@@ -33,6 +36,7 @@ DAY_LOSS = "day_loss"
 COOLDOWN = "cooldown"
 MAX_TRADES = "max_trades"
 CONFIDENCE = "confidence"
+ACCOUNT_GUARD = "account_guard"
 
 # What made the position monitor sell, as the admin groups the real closes (src/admin/analysis.py).
 STOP_LOSS = "stop_loss"
@@ -54,6 +58,11 @@ class ExitDecision:
     reason: str
     # The turbo's price at which the threshold is crossed.
     level: float
+
+
+def utc_moment(seconds: float) -> datetime:
+    """A moment as the trader's database gives it back: aware, in UTC."""
+    return datetime.fromtimestamp(seconds, timezone.utc)
 
 
 def compounded(percents) -> float:
@@ -90,12 +99,19 @@ def entry_refusal(
     confidence: float | None,
     calendar: Calendar | None = None,
     market_calendar: MarketCalendar | None = None,
+    account_value: float | None = None,
+    account_peak: float | None = None,
+    guard_paused_at: float | None = None,
+    day_results: list[float] | None = None,
 ) -> Refusal | None:
     """
     What refuses an entry, in the trader's order, or None. Nothing is closed
     when an entry is refused. The operator's pause is not part of a backtest,
-    nor Saxo's login. The window around US releases needs the ``calendar``
-    they are read from, the US holidays and early closes ``market_calendar``.
+    nor Saxo's login; the account guard's is (``guard_paused_at``, when it
+    tripped), on the ``account_value`` and its ``account_peak`` the simulator
+    keeps. The window around US releases needs the ``calendar`` they are read
+    from, the US holidays and early closes ``market_calendar``; the day's
+    breakers its closed results (``day_results``, in the order they closed).
     """
     # 1. The signal's age, by the clock of the decision (``check_signal_timestamp``).
     if decided_at - int(alert_at) > settings.max_signal_age_seconds:
@@ -132,6 +148,16 @@ def entry_refusal(
             INDICE, f"Breaking trading rule : Indice '{indice}' does not exist in the provided dictionary.",
         )
 
+    # 3b. The account guard's pause (``check_entries_paused``), or its trip now (``check_account_guard``).
+    if guard_paused_at is not None:
+        return Refusal(ACCOUNT_GUARD, (
+            f"Breaking trading rule: New entries are paused by the account guard since {utc_moment(guard_paused_at)}."
+        ))
+    guard = AccountGuard(settings.pause_below_balance_eur, settings.pause_after_drawdown_percent)
+    reason = guard.trip(account_value, account_peak) if guard.on else None
+    if reason is not None:
+        return Refusal(ACCOUNT_GUARD, f"Breaking trading rule: {reason}: new entries are paused until the operator resumes them.")
+
     # 4. A position of the same direction already open.
     if action in open_directions:
         return Refusal(DUPLICATE, f"Duplicate signal: {action} position already open")
@@ -163,6 +189,12 @@ def entry_refusal(
         return Refusal(MAX_TRADES, (
             f"Breaking trading rule: Maximum trades per day reached ({entries_today}/{settings.max_trades_per_day})."
         ))
+
+    # 7b. The day's breakers (``check_day_breakers``).
+    breakers = DayBreakers(settings.max_consecutive_losses, settings.max_drawdown_from_day_best_percent)
+    refused = breakers.refusal(day_results or []) if breakers.on else None
+    if refused is not None:
+        return Refusal(*refused)
 
     # 8. The signal's confidence (``check_confidence_threshold``).
     if settings.confidence_enabled and confidence is not None and confidence < settings.min_confidence:

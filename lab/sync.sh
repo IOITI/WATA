@@ -51,7 +51,8 @@ rsync -az --partial --stats \
 
 echo "Pulling the database's dumps (the server keeps 14 nights and 4 Sundays; so does this machine)"
 mkdir -p "$LAB_ROOT/backups"
-rsync -az --partial --stats --delete --exclude '*.part' \
+# .offsite holds a dump being encrypted for the bucket, for minutes.
+rsync -az --partial --stats --delete --exclude '*.part' --exclude '.offsite/' \
   "$server:$REMOTE_ROOT/var/lib/backups/" "$LAB_ROOT/backups/" | summary
 
 echo "Pulling the Pine scripts and the signal rules"

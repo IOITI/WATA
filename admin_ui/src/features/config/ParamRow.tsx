@@ -147,7 +147,15 @@ function ParamControl({ param, at }: { param: CatalogParam; at: ConfigPath | nul
     case 'dates':
       return at ? <DateListField label={label} path={at} /> : null
     case 'map':
-      return at ? <MapField label={label} path={at} keyLabel={param.key_label ?? 'Name'} valueLabel={param.value_label ?? 'Value'} /> : null
+      return at ? (
+        <MapField
+          label={label}
+          path={at}
+          keyLabel={param.key_label ?? 'Name'}
+          valueLabel={param.value_label ?? 'Value'}
+          valueChoices={param.choices.length > 0 ? param.choices : undefined}
+        />
+      ) : null
     case 'rows':
       return at ? <RowsField label={label} path={at} columns={columnsOf(param)} newRow={() => newRowOf(param)} /> : null
     case 'strings':

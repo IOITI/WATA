@@ -400,9 +400,18 @@ async def run(arguments) -> int:
         for cell_records in cell_days:
             for record in cell_records:
                 record["regime"] = features.get(record["day"])
-        known_until = calendar.known_until()
+        # The releases the run keeps entries away from, else those a day is known by.
+        news = settings.news_rule()
+        news_events = news.events if news is not None else regimes.DEFAULT_EVENTS
+        known_until = calendar.known_until(news_events)
         if known_until is not None and last_day > known_until:
             warnings.append(f"The macro calendar ends on {known_until.isoformat()}: later days have no news marked")
+        later = [event for event in news_events if calendar.since.get(event, first_day) > first_day]
+        if news is not None and later:
+            warnings.append(
+                f"The macro calendar knows {', '.join(later)} from {calendar.known_from(later).isoformat()} on: "
+                "the days before keep no window around them"
+            )
 
         # ── 3. the report ──
         progress("report", 0, 1, force=True)

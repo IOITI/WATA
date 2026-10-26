@@ -19,6 +19,7 @@ asyncpg_stub.Record = dict
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
 
+from src.admin.backtests import LIVE_PAPER  # noqa: E402
 from src.admin.errors import NotPossible  # noqa: E402
 from src.admin.paper import PaperTrading  # noqa: E402
 from src.admin.ta_rules import RuleStore  # noqa: E402
@@ -38,6 +39,20 @@ RULE = {
 class Queries:
     def __init__(self):
         self.asked = []
+        # The signals WATA received, its positions, its orders measured and its days: none unless a test gives some.
+        self.journal, self.positions, self.execution, self.daily = [], [], {}, []
+
+    async def journal_between(self, start, end):
+        return list(self.journal)
+
+    async def closed_positions(self, start, end):
+        return list(self.positions)
+
+    async def execution_rows(self, start, end):
+        return self.execution
+
+    async def performance(self, start=None, end=None):
+        return {"daily": list(self.daily)}
 
     async def ta_signals(self, start, end, rule_id=None, limit=500):
         self.asked.append((start, end, rule_id))
@@ -67,7 +82,9 @@ def test_each_finished_weekday_of_a_shadow_rule_is_traded_on_paper_once(tmp_path
     assert asyncio.run(trading.catch_up()) == 3
     assert queries.asked == [(date(2026, 10, day), date(2026, 10, day), SHADOW) for day in (15, 16, 19)]
     index = backtests.paper_index()
-    assert list(index) == [SHADOW] and sorted(index[SHADOW]) == ["2026-10-15", "2026-10-16", "2026-10-19"]
+    assert sorted(index[SHADOW]) == ["2026-10-15", "2026-10-16", "2026-10-19"]
+    # The signals WATA received: none came those days, kept as such and not asked again.
+    assert set(index) == {SHADOW, LIVE_PAPER} and index[LIVE_PAPER] == {day: "" for day in index[SHADOW]}
     folder = folder_of(tmp_path, index[SHADOW]["2026-10-19"])
     request = json.loads((folder / "request.json").read_text())
     assert request["paper"] == {"rule": SHADOW, "day": "2026-10-19"}
@@ -151,7 +168,101 @@ def test_the_oldest_paper_days_are_let_go(tmp_path, paper):
     backtests._waiting.clear()
     oldest = backtests.paper_index()[SHADOW]["2026-10-15"]
 
-    assert backtests.prune_paper(3, date(2026, 10, 20)) == 2
+    # The rule's two oldest days, and the same two of the signals received, which had no run.
+    assert backtests.prune_paper(3, date(2026, 10, 20)) == 4
 
     assert sorted(backtests.paper_index()[SHADOW]) == ["2026-10-19"]
+    assert sorted(backtests.paper_index()[LIVE_PAPER]) == ["2026-10-19"]
     assert not folder_of(tmp_path, oldest).exists()
+
+
+# ── the signals WATA received, under the live settings ──
+
+
+def _received(day: int, action: str = "long") -> dict:
+    moment = datetime(2026, 10, day, 8, 0, tzinfo=timezone.utc)
+    return {"signal_uuid": f"s{day}{action}", "action": action, "indice": "us100", "signal_timestamp": moment,
+            "alert_timestamp": moment, "received_timestamp": moment, "decided_at": moment, "outcome": "refused",
+            "reason": "Breaking trading rule: New entries are paused by the operator since 2026-10-14.", "position_id": None}
+
+
+def test_the_signals_received_each_day_are_traded_on_paper_under_the_live_settings(tmp_path, paper):
+    backtests, queries, trading = paper
+    queries.journal = [_received(day) for day in (15, 16, 19)]
+
+    asyncio.run(trading.catch_up())
+
+    live = backtests.paper_index()[LIVE_PAPER]
+    assert sorted(live) == ["2026-10-15", "2026-10-16", "2026-10-19"] and all(live.values())
+    request = json.loads((folder_of(tmp_path, live["2026-10-19"]) / "request.json").read_text())
+    assert request["paper"] == {"rule": LIVE_PAPER, "day": "2026-10-19"}
+    assert request["source"]["kind"] == "journal" and (request["from"], request["to"]) == ("2026-10-19", "2026-10-19")
+    # Too few of WATA's orders measured: the settings' fixed fills.
+    assert request["changes"] == {}
+    # Kept apart from the list of runs and from the rules' paper days.
+    assert backtests.list_runs() == [] and LIVE_PAPER not in backtests.paper()["rules"]
+    assert [day["day"] for day in backtests.paper()["live"]["days"]] == ["2026-10-19", "2026-10-16", "2026-10-15"]
+
+
+def _measured_rows(count: int = 12) -> dict:
+    """WATA's orders as execution_rows gives them: count purchases and count sales, each with its quote."""
+    sent = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    orders, quotes = [], []
+    for number in range(2 * count):
+        purpose = "open" if number < count else "close"
+        orders.append({"order_id": str(number), "purpose": purpose, "sent_at": sent, "accepted_at": sent, "outcome": "confirmed",
+                       "instrument_uic": 7, "position_open_price": 5.05 if purpose == "open" else None,
+                       "position_close_price": 4.9 if purpose == "close" else None})
+        quotes.append({"order_id": str(number), "bid_close": 4.95, "ask_close": 5.0})
+    return {"signals": [], "orders": orders, "quotes": quotes, "requests": []}
+
+
+def test_with_enough_orders_measured_the_live_paper_days_draw_their_fills_from_them(tmp_path, paper):
+    backtests, queries, trading = paper
+    queries.journal = [_received(19)]
+    queries.execution = _measured_rows()
+
+    asyncio.run(trading.catch_up())
+
+    run_id = backtests.paper_index()[LIVE_PAPER]["2026-10-19"]
+    request = json.loads((folder_of(tmp_path, run_id) / "request.json").read_text())
+    assert request["changes"] == {"execution": "measured"}
+
+
+def test_two_days_outside_the_live_reference_are_said_once(tmp_path, paper, scripts):  # noqa: F811
+    from tests.test_admin_backtests import finished
+
+    backtests, queries, trading = paper
+    said = []
+
+    async def notify(message):
+        said.append(message)
+
+    trading._notify = notify
+    # The reference: a replay of the journal whose days made -1 to +1 %.
+    reference = finished(tmp_path, backtests, scripts, {"days.json": [
+        {"day": f"2026-09-{day:02d}", "status": "tested", "day_percent": result}
+        for day, result in zip(range(1, 11), (-1, -0.5, 0, 0.2, 0.5, 1, -0.2, 0.1, 0.3, -0.8))
+    ]})
+    request_path = folder_of(tmp_path, reference) / "request.json"
+    request = json.loads(request_path.read_text())
+    request["source"] = {"kind": "journal", "signals": 10, "entries": 10}
+    request_path.write_text(json.dumps(request))
+    backtests.set_reference(reference)
+    assert backtests.paper()["live"]["reference"]["low"] == -1
+    # Paused: no real day; the paper days of 16 and 19 October fell under the range.
+    for day, result in (("2026-10-16", -6.0), ("2026-10-19", -9.5)):
+        run_id = finished(tmp_path, backtests, scripts, {"days.json": [
+            {"day": day, "status": "tested", "day_percent": result, "trades": 3}]})
+        backtests._index_paper(LIVE_PAPER, day, run_id)
+
+    asyncio.run(trading._say_drift())
+    asyncio.run(trading._say_drift())
+
+    assert len(said) == 1
+    assert said[0].startswith("⚠️ WATA: 2 days in a row outside the live reference's daily range (-1.00 to +1.00 %)")
+    assert "2026-10-19 paper -9.50 %; 2026-10-16 paper -6.00 %" in said[0]
+    # A real day back in the range ends it.
+    queries.daily = [{"day_date": "2026-10-20", "trade_count": 2, "performance_percent": 0.4}]
+    days, warning, _ = asyncio.run(trading.drift())
+    assert warning is None and days[0]["day"] == "2026-10-20" and days[0]["real_outside"] is False

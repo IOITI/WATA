@@ -29,6 +29,20 @@ REPORTING = (
         readers=("trader", "position_monitor", ADMIN), risk=NONE,
     ),
     Param(
+        path="reporting.telegram_commands", group="report", label="Answer the bot's commands", kind="bool",
+        optional=True, default=False,
+        help="The bot answers /status, /positions, /day, /signals and /help in its chat. It only reads: nothing it "
+             "answers pauses, resumes, closes, restarts or changes anything.",
+        readers=("telegram",), risk=NONE,
+        effects=("The telegram service reads the bot's updates (getUpdates) beside the queue's messages, and answers "
+                 "each command from a read-only connection to PostgreSQL.",
+                 "Only the chat the bot sends to is answered: a message from any other is passed over without a word.",
+                 "A command older than 2 minutes, sent while the service was stopped, is not answered, nor those over "
+                 "6 a minute."),
+        caveats=("Another program reading the same bot's updates, or a webhook set on the bot, keeps the commands "
+                 "from being read: the telegram service says so in its log.",),
+    ),
+    Param(
         path="logging.level", group="logs", label="Log level", kind="enum",
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         help="What every service writes in its log: DEBUG writes the most.",

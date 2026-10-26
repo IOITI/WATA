@@ -69,6 +69,7 @@ from src.ta_engine.rules import EngineRule, RulesSnapshot
 from src.ta_engine.runner import RunnerDown, RunnerFailed
 from src.ta_engine.signals import Candidate, interpret, payload, settled
 from src.ta_engine.tickers import parse_ticker
+from src.trade.signal_sources import ENGINE, source_of
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ LOADING, WAITING, RUNNING, ERROR = "loading", "waiting", "running", "error"
 # Why a live rule's signal is not sent (_refusal, _send), the start of what its journal says: the
 # admin's Engine monitor counts the signals not sent by them (src/admin/ta_monitor.py, tested together).
 NOT_ALONE = "More than one rule is live on {indice}: none of them sends"
+NOT_SOURCE = "TradingView's signals trade {indice} (trade.config.signal_sources): the engine sends it none"
 TOO_OLD = "The bar closed {age:.0f} s ago, more than {limit} s"
 STALE_FEED = "The Capital.com feed is stale"
 NO_SENDER = "No way to send signals"
@@ -181,8 +183,12 @@ class Engine:
         version: str = "unknown",
         shadow_runner=None,
         monitoring: Monitoring | None = None,
+        signal_sources: dict[str, str] | None = None,
     ):
         self._settings = settings
+        # Which source each index takes its signals from (src/trade/signal_sources.py): a live rule's signal
+        # for an index that takes TradingView's is not sent, or both would trade it.
+        self._signal_sources = dict(signal_sources or {})
         self._rules = rules
         self._source = source
         self._runner = runner
@@ -691,6 +697,8 @@ class Engine:
         rule = run.rule.rule
         if rule["indice"] in self._contested:
             return NOT_ALONE.format(indice=rule["indice"])
+        if source_of(self._signal_sources, rule["indice"]) != ENGINE:
+            return NOT_SOURCE.format(indice=rule["indice"])
         age = now - bar[6] / 1000
         if age > self._settings.max_signal_age_seconds:
             return TOO_OLD.format(age=age, limit=self._settings.max_signal_age_seconds)

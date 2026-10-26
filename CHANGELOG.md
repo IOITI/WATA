@@ -1,5 +1,175 @@
 # Changelog
 
+## v0.50.0 - Operations: the database's dumps off the server encrypted, a bot that answers and only reads, and more US releases
+
+**Release date:** not released yet
+
+The last of the three releases from the search of 2026-10-26.
+
+- **The database's dumps off the server, encrypted** (`deploy/pg_backup.sh`; off until `.env` gives `BACKUP_AGE_RECIPIENT` and `BACKUP_S3_BUCKET`): each night's dump is encrypted with age to the operator's public key, then sent with rclone to an S3-compatible bucket, under `nightly/` or `weekly/` (the Sunday dumps).
+  - Retention: 14 nightly and 8 weekly copies are kept in the bucket (`BACKUP_OFFSITE_KEEP`, `BACKUP_OFFSITE_KEEP_WEEKS`; 0 deletes none there, for a key of the bucket that may not delete).
+  - Encryption:
+    - The private key is made on the Mac and never leaves it: nothing on the server can open a copy.
+    - Nothing is sent unencrypted: a bucket without a key is said, and sends nothing.
+  - Health: `last.json` gains what became of the copy, and health says it, and warns after two nights without a copy sent. A failure's details are in `docker logs pg_backup1`, never in health.
+  - Restoring:
+    - `pg_backup.sh offsite` lists the bucket.
+    - `python -m lab backup check [--offsite]` restores, on the Mac, the newest dump pulled by `lab/sync.sh`, or the bucket's newest copy opened with the key, into a scratch PostgreSQL, and counts the trading tables as `pg_backup.sh check` does.
+    - `lab/backup_tools.sh` puts the same versions of age and rclone in `.venv-lab/bin`, checked by their sha256.
+  - The image: pg_backup1 now runs `wata-backup` (`deploy/pg_backup.Dockerfile`, built by `docker_build.sh` from that file alone). It is `postgres:16-alpine` with age v1.3.2 and rclone v1.75.2, each download checked against the sha256 its release lists.
+- **The bot answers commands, and only reads** (`reporting.telegram_commands`, off until true). The commands are `/status`, `/positions`, `/day`, `/signals` and `/help`:
+  - `/status` gives the trader and the position monitor by their heartbeats, the pause and since when, Saxo's login, the price feeds, the positions and the day, and the next US release with its window.
+  - Who and how often:
+    - The telegram service reads them (getUpdates) in a thread beside the queue's consumer.
+    - Only the chat the bot sends to is answered; another chat is passed over without a word.
+    - Each command gets one message, none older than 2 minutes (sent while the service was stopped) and none past 6 a minute.
+  - Never an action:
+    - Nothing it answers pauses, resumes, closes, restarts, saves a setting or switches a rule, and nothing is published to a queue.
+    - Each command opens a connection of its own with `default_transaction_read_only` and runs only the SELECTs it lists.
+    - Only getUpdates and sendMessage are asked of Telegram: never a webhook, never the bot's settings.
+    - What the services wrote is cleaned as log lines are, and no answer names an id, a key or a token.
+    - `tests/test_telegram_commands.py` holds its imports (pure modules alone, no queue client), its statements and its chat.
+- **More US releases** (`src/trade/data/macro_calendar.csv`): producer prices (`PPI`), retail sales (`RETAIL`), the GDP's advance estimate (`GDP`) and job openings (`JOLTS`), from late 2026 to December 2027.
+  - Sources and gaps:
+    - Each row names the official page it was read from on 2026-10-26: BLS, Census's economic indicator calendar, BEA.
+    - BLS had not given JOLTS's 2027 dates: JOLTS holds 3 November and 1 December 2026.
+    - ISM's manufacturing index is not there: only its rule is public (the first business day, 10:00), which it broke in January 2026, and its dated calendar is for ISM's members.
+    - PCE's twelve 2027 dates were added from BEA's 2027 schedule: the calendar ended on 23 December 2026.
+  - When they apply:
+    - A rule that names no release keeps the four as before (`DEFAULT_EVENTS`): the new ones apply once named in the `macro_news` rule's `events`.
+    - The calendar's end is now that of the releases the rule names, said with the kind that ends first: health, the scheduler's morning check, the dashboard and a run's note. A kind no rule names (JOLTS, the shortest) warns nobody.
+    - Each kind is known from its first row: a backtest that names one on earlier days says so.
+  - Backtests and the lab:
+    - Four backtest settings repeat them (`news_ppi`, `news_retail`, `news_gdp`, `news_jolts`, off).
+    - The kinds of day still go by the four, which the calendar holds since 2024.
+    - `python -m lab calendar check` lists each kind from its first day to its last, and judges the four, or those named with `--events`.
+
+**On the live path:**
+- The trader keeps the same windows: a rule that names none keeps the four, and no rule on the server names the new ones.
+- With PCE known to December 2027, the morning's "update the calendar" message is not due before November 2027.
+- The telegram service starts its commands only when switched on.
+- The backups change nothing until `.env` names a key and a bucket; the backup image is built at the deploy.
+
+**Backtests:** `src/backtest/settings.py` and `regimes.py` changed (the four settings, the kinds of day held to the four): every run is marked stale, as since v0.48.0 already. The calendar's digest changes.
+
+**Verification status:**
+- 3,121 Python tests pass on Python 3.12, the Pine runner's included (3.14 not run here), and 22 are skipped. The new ones:
+  - the bot's commands:
+    - what each answers on a fake database;
+    - the read-only connection, every statement a SELECT;
+    - the two files' imports: no queue client, no trading code;
+    - the chat: another chat passed over, an old command and the seventh of a minute not answered;
+    - Telegram's failures waited and said without the token, and the switch;
+  - health's copy off the server: sent, one night failed, two nights, none yet;
+  - the backup image: versions and sha256 checks, built from its file alone, no key on the server that opens a copy, the variables named in `.env.example`, CI's step;
+  - the lab's restore check: a real restore with pgserver, the newest copy chosen, the flow from the bucket with fakes;
+  - the calendar:
+    - the new kinds applying only when named, ISM refused;
+    - each kind's first and last day, JOLTS at 10:00;
+    - the end per the rule's kinds;
+  - the validator's boolean.
+- On a PostgreSQL 16 (pgserver): every command ran on the real schema, before and after the feeds' tables exist, and a write was refused on the commands' connection. The same is a new live test in `tests/test_infrastructure_live.py`, which CI runs against its own PostgreSQL.
+- `deploy/pg_backup.sh` ran on this Mac with pgserver's own pg_dump and stand-ins for age and rclone (the downloaded binaries were not run here). The cases:
+  - not asked; sent, the oldest copies deleted down to 14; 0 deleting none;
+  - no key; a failed send; a bad key;
+  - the bucket's path, the listing, the restore check, a failed dump.
+- The interface: no file of it changed. Seen in the browser pane on the fake admin:
+  - the Reporting group's "Telegram commands" switch;
+  - the eight kinds of the Releases, four on by default;
+  - health's warning after two nights without a copy.
+- **Not seen:**
+  - the real age and rclone: CI's image job runs them, against a folder standing for the bucket and a key made for it;
+  - a real bucket, and the real bot's updates;
+  - the server's own 429s: the logs of the trader and the position monitor say whether they waited 60 s.
+
+## v0.49.0 - Evidence while entries are paused: the signals received traded on paper, a drift watch, a real trade on its chart, and your own metrics on the Exits page
+
+**Release date:** not released yet
+
+The second of the three releases from the search of 2026-10-26. New entries have been paused since 21 October: these say each day what the live settings would have made of the signals received, and why a real trade went as it did.
+
+- **The signals WATA receives, traded on paper each day** (`src/admin/paper.py`): each finished weekday, once the market is closed, the day's signals of the journal (TradingView's alerts) replayed under the live settings.
+  - Their fills are WATA's own measured ones when enough orders were measured (10 of each), the settings' fixed ones otherwise.
+  - Their days are drawn on the index of the indice: the Capital.com feed's, Dukascopy's while the feed is off.
+  - A day without an entry signal is kept as such and not asked again.
+  - The runs are kept apart from the list of runs, 60 days, beside the shadow rules' paper days.
+- **A drift watch** (`src/admin/live_drift.py`): on a replay of the signals WATA received, "Set as the live reference" makes its daily range (5 % to 95 % of its days) the one each paper day, and each real day, is set against.
+  - The last two days with a result both outside it are said once on Telegram, and are a warning of health ("Live against its reference", off the services map).
+  - While entries are paused only the paper days have a result; once trading again, the real days count as much.
+- **The Performance page lists those days**: the real result, the paper one, each outside the range or not, the trades on paper, the paper run a click away, and the warning when there is one (`GET /api/backtests/paper/live`).
+- **A closed position drawn on its chart**: opened on the Positions page, a closed position is drawn on its turbo's bid every ten seconds as the price recorder kept it, with the index below, as a backtest's trade is drawn.
+  - The chart shows the signal that opened it, where it was bought and sold, the price paid, the best and worst it reached, and the level its close reason names (a stop-loss, a take-profit, a trailing stop's peak).
+  - `GET /api/positions/{id}/chart` finds the recorder's instrument of its Uic, the newest it named. A turbo the recorder did not keep is said to have no chart.
+- **Your own metrics on the Exits page** (`src/admin/live_breakdowns.py`, as the trading style file asks):
+  - by the signal's confidence, and by the turbo's price at entry, in the backtests' own buckets;
+  - by where the signal came from: a signal rule (its `ta_signal` sent with the same `signal_uuid`), or TradingView's alerts and the signals sent by hand, which the journal does not tell apart;
+  - by the signal's delay, from its own time to the trader's decision;
+  - by the worst the trade reached (recorded since v0.48.0).
+  Each is read from its own table only if it exists yet, so an engine that never ran empties the source groups and nothing else.
+
+**On the live path:** nothing. Only the admin and its interface change. The paper runs are the backtest service's own: one at a time, at the lowest priority, while the market is closed.
+
+**Backtests:** no file of the code digest changed: no run is marked stale.
+
+**Verification status:**
+- 3,052 Python tests pass on Python 3.12, the Pine runner's included (3.14 not run here), and 21 are skipped. The new ones:
+  - the live paper days: a journal day traded with fixed fills, then with measured ones; days without an entry kept as such; the queue left alone; the rules' paper days unchanged, their pruning with the live days;
+  - the drift: each day against the range, the warning after two days outside, said once on Telegram, a real day back in the range ending it; health's entry;
+  - the Exits page's groups; the position chart route (turbo, index, day, signal, an unknown position).
+- The new SQL was run on a PostgreSQL 16 (pgserver): the Exits extras without and with the TA engine's table, the worst read beside each trade; a position's chart refs, without the recorder's tables and with two rows of one Uic.
+- 1,163 interface tests pass (the live paper days' sentences, a position's marks, levels and focus, the services map's ids); lint, types and the build are clean.
+- Seen in the browser pane on the fake admin: the Performance page's paper days with the warning, the reference's range and a day without an entry signal; the five groups on the Exits page; a closed position drawn on its turbo's bid with the index below.
+- **Not seen on the server:** a paper day of the real journal, the drift on the real days, a real position's chart on the recorder's bars.
+
+## v0.48.0 - Guards before entries resume: orders a second apart, one source of signals per index, an account guard, the day's breakers, a spread limit, and each position's worst
+
+**Release date:** not released yet
+
+The first of three releases from the search of 2026-10-26 for what WATA is missing. They come from the record of 2 September to 20 October 2026: 118 trades, −69.75 % summed, the losses on days of 11 to 15 trades, three stop-losses at −7 % filled at −16.7 %, −30.2 % and +0.5 %, one order in ten waiting 60 s or more for Saxo. Each new setting is off until set, and the backtests and the dashboard repeat each new rule.
+
+- **An order is no longer held a minute by Saxo's rate limit.** Saxo takes one order a second per session (its `SessionOrders` limit), and an order refused for it (429) carries `X-RateLimit-SessionOrders-Reset`, about a second. The client read only `X-RateLimit-Session-Reset`, absent there, and waited its 60 s default before asking again: one order in ten of 27 Jul–26 Oct 2026 took 60 s or more to be accepted (the 90th percentile, 60.3 s, median 0.26 s). Now (`src/saxo_openapi/async_client.py`):
+  - order requests (POST, PATCH or DELETE of an order, not its precheck) leave `ORDER_SPACING_SECONDS` (1.05 s) apart, `OrderPacer`: two sales at once, or the other side sold right after a purchase, wait under a second instead of being refused;
+  - a refusal is waited as long as the limit that ran out says (`wait_after_refusal`): about a second for the order limit, the session's reset for the others, and not at all for the app's limit of the day, which is not asked again.
+  The services share one session at Saxo: two of them ordering in the same second can still be refused, and now wait about a second.
+- **One source of signals per index** (`trade.config.signal_sources`): each index takes TradingView's alerts (`tradingview`, and any index not named) or the TA engine's live rule (`engine`), never both. They feed one store, which keeps the newest signal of each index: a rule live beside TradingView's alerts would close what they opened, and the reverse.
+  - The web server answers a webhook for an `engine` index without keeping it (`ignored`), and counts it (`/internal/webhook`): the Signals page says how many came since it started and the last one, so an alert left on in TradingView is seen.
+  - The TA engine sends nothing for an index that takes TradingView's alerts, journaled with why (`NOT_SOURCE`, counted on the Engine monitor).
+  - A rule goes live only on an index the web server runs with set to the engine: a hard requirement, which "Go live anyway" does not skip.
+  - The scheduler's close of the day and the signals sent from the admin come through `/internal/signal`, and are taken whatever the source.
+  - Health warns of an `engine` index with no live rule, and of a live rule on an index that is not. The review before a save warns of a change that leaves either.
+  - The Configuration page offers each index's source in a list (a map's values may now be picked from one).
+- **An account guard** (`risk_management.pause_below_balance_eur`, `pause_after_drawdown_percent`; off until set): new entries are paused once the account is worth less than the floor, or that much less than its highest since entries were last resumed.
+  - It is the operator's own pause, said to be the guard's on the dashboard (its banner and the Next entry tile) and once on Telegram. Only the operator resumes it, and the resume starts the highest afresh (`entries_resumed_at`).
+  - The value is Saxo's `TotalValue`, read with the balance the trader asks for anyway: every 30 s on its keep-warm timer, where the guard runs between signals, and before an entry, read again only when older than 2 minutes.
+  - The highest is the larger of the daily values the report records since the resume (`account_balance_history`) and those the trader read since its start. A deposit raises it; a withdrawal reads as a fall.
+- **The day's breakers** (`risk_management.max_consecutive_losses`, `max_drawdown_from_day_best_percent`; off until set): no new entry for the rest of the day once that many of the day's trades lost in a row, or once the day's compounded result is that many points under the best it reached at a close (0 before the first). The −25 % day limit let 19 October reach −28.5 % over 15 trades. One module (`src/trade/day_breakers.py`) for the trader, the backtests and the dashboard's Next entry tile.
+- **The widest spread bought** (`trade.config.turbo_preference.max_spread_percent`; no limit until set): of the turbos in the price range, those whose spread is wider than that share of their ask are left out before the cheapest is chosen, in the trader, the watchlist manager and the backtests. With none left, the entry fails and names the narrowest spread seen.
+- **Each position's worst result**, kept beside its best: 0 until it falls under its open, never while a fresh quote is awaited, the database keeping the lower. It is in a table of its own (`position_worst`: the schema never alters an existing table), shown on the Positions page ("Worst so far" for an open position, a column one click away for the closed ones, and in the CSV), returned by Claude's `data_trades`, and exported for research. Positions closed before this version have none.
+- **The Positions and Orders timelines read earliest first** (ab60152, committed on 2026-10-26 and released with this version): the steps of an order, and the events of a position, are put in the order of their moments, whichever clock they were read on. Saxo often dates a fill before its answer reached WATA.
+
+**On the live path:**
+- The orders' pacing and the 429 waits apply at once, with no setting.
+- The worst result is written after the sales are attempted, as the best is, from the position monitor.
+- An index absent from `signal_sources` takes TradingView's alerts as before. A rule live on an index not set to the engine sends nothing from now on (none is live on the server).
+- Everything else is off until set.
+
+**Backtests:** four new settings repeat the breakers, the guard and the spread limit (all 0, which changes nothing), and `src/trade/async_services.py`, which every run's code digest holds, changed: every run made before is marked stale. `src/trade/account_guard.py` and `src/trade/day_breakers.py` join the digest.
+
+**Verification status:**
+- 3,040 Python tests pass on Python 3.12, the Pine runner's included (3.14 not run here), and 21 are skipped. The new ones:
+  - the client against a mock transport: each limit's wait, the request id kept, the app's day not waited, orders spaced, other requests never;
+  - the webhook ignored and counted for an `engine` index, `/internal/signal` taken, the state behind the internal token;
+  - the engine's refusal journaled, the go-live requirement (forced or not), health and the save preview's warnings;
+  - the guard: floor, highest recorded and read, the resume starting afresh, one pause and one message;
+  - the breakers: the row, the fall from the day's best, off;
+  - parity with the live trader for each new refusal (8 breaker and 7 guard scenarios), the spread limit against the live helper;
+  - the worst result written when it falls, never for a position that only rose.
+- **The new settings absent change nothing**: a Pine run (3 days, 24 trades, random entries, edge) and a sweep of 4 cells, each made on the same recorded files by v0.47.0's code and by this version's, gave the same files, but for what says when and with which code they were made.
+- The new SQL was run on a PostgreSQL 16 (pgserver), through the real managers and the admin's queries: the day's results in close order, the worst kept at the lower, the guard's pause and the resume, the highest since a moment, the worst read beside each position.
+- 1,156 interface tests pass (the Next entry tile's new states, the Signals page's notes, the closed table's columns); lint, types and the build are clean.
+- Seen in the browser pane on the fake admin: the dashboard's banner and tile say the pause is the guard's; the Signals page counts TradingView's ignored alerts; "Worst so far" on the open positions; the four limits and the spread on the Configuration page; the source picked from a list; the save preview's warning.
+- **Not seen on the server:** the 429 waits on Saxo's real answers, the account guard on the real balance, the web server ignoring a real TradingView alert.
+
 ## v0.47.0 - Range bars answered faster, read live a bar at a time, and the Charts page's scripts continued on the bars that are over
 
 **Release date:** 2026-10-25

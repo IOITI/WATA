@@ -316,7 +316,7 @@ def build_context(config_manager) -> AdminContext:
         ),
         paper=PaperTrading(
             backtests=backtests, queries=queries, rules=RuleStore(ta_scripts),
-            config_path=settings.config_path,
+            config_path=settings.config_path, notify=telegram_sender.send,
         ),
         history=PriceHistory(settings.price_history_path),
         live_prices=LivePrices(rabbitmq_source(rabbitmq_url)),

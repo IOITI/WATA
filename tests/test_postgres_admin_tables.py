@@ -47,7 +47,8 @@ NOW = datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
 
 
 def test_schema_creates_the_tables_the_admin_reads_without_touching_existing_ones():
-    for table in ("position_live_value", "signal_journal", "account_balance_history", "order_execution", "order_request"):
+    for table in ("position_live_value", "signal_journal", "account_balance_history", "order_execution", "order_request",
+                  "position_worst"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in SCHEMA_SQL
     assert "DROP " not in SCHEMA_SQL
     assert "ALTER " not in SCHEMA_SQL
@@ -66,14 +67,25 @@ def test_pausing_keeps_the_time_of_a_pause_already_in_place():
     assert "ON CONFLICT (key) DO NOTHING" in query
 
 
-def test_resuming_removes_the_pause_and_nothing_else():
+def test_resuming_removes_the_pause_and_the_guards_mark_and_keeps_when():
     db = FakeConnMgr()
 
     asyncio.run(AsyncDbRiskStateManager(db).resume_entries())
 
-    query, args = db.calls[0]
-    assert query.startswith("DELETE FROM trade_risk_state WHERE key = $1")
-    assert args == ("entries_paused_since",)
+    (delete, delete_args), (resumed, resumed_args) = db.calls
+    assert delete.startswith("DELETE FROM trade_risk_state WHERE key = ANY($1::text[])")
+    assert delete_args == (["entries_paused_since", "entries_paused_by_account_guard"],)
+    # The account guard's highest value is counted from then (src/trade/account_guard.py).
+    assert "ON CONFLICT (key) DO UPDATE" in resumed and resumed_args[0] == "entries_resumed_at"
+
+
+def test_the_account_guard_pauses_as_the_operator_does_and_marks_it():
+    db = FakeConnMgr()
+
+    asyncio.run(AsyncDbRiskStateManager(db).pause_entries_by_guard(NOW))
+
+    assert [args for _, args in db.calls] == [("entries_paused_since", NOW), ("entries_paused_by_account_guard", NOW)]
+    assert all("ON CONFLICT (key) DO NOTHING" in query for query, _ in db.calls)
 
 
 def test_pause_and_loss_cooldown_use_different_keys():
@@ -104,8 +116,13 @@ def _trading_rule(risk_state_manager):
 def test_rule_refuses_entries_while_paused_and_says_since_when():
     risk_state = MagicMock()
     risk_state.get_entries_paused_since = AsyncMock(return_value=NOW)
+    risk_state.get_entries_paused_by_guard = AsyncMock(return_value=None)
 
     with pytest.raises(TradingRuleViolation, match="paused by the operator since 2026-10-12"):
+        asyncio.run(_trading_rule(risk_state).check_entries_paused())
+
+    risk_state.get_entries_paused_by_guard = AsyncMock(return_value=NOW)
+    with pytest.raises(TradingRuleViolation, match="paused by the account guard since 2026-10-12"):
         asyncio.run(_trading_rule(risk_state).check_entries_paused())
 
 

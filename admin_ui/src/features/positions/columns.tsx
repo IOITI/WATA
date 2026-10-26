@@ -28,6 +28,7 @@ export const POSITION_CSV: CsvColumn<Position>[] = [
   { header: 'profit_loss', value: (row) => row.position_profit_loss },
   { header: 'performance_percent', value: (row) => row.position_total_performance_percent },
   { header: 'best_performance_percent', value: (row) => row.position_max_performance_percent },
+  { header: 'worst_performance_percent', value: (row) => row.position_min_performance_percent ?? null },
   { header: 'opened_at', value: (row) => row.execution_time_open },
   { header: 'closed_at', value: (row) => row.execution_time_close },
   { header: 'close_reason', value: (row) => row.position_close_reason },
@@ -190,6 +191,15 @@ export function positionColumns(
     align: 'right',
     cell: ({ row }) => <PnlValue value={row.position_max_performance_percent} kind="percent" />,
   }
+  const worst: ColumnDef<Position> = {
+    id: 'min_performance',
+    // Recorded since v0.48.0 (0 for a position that never fell under its open): none for an older one.
+    header: view === 'open' ? 'Worst so far' : 'Worst level',
+    accessorKey: 'position_min_performance_percent',
+    sortable: true,
+    align: 'right',
+    cell: ({ row }) => <PnlValue value={row.position_min_performance_percent ?? null} kind="percent" />,
+  }
 
   if (view === 'open') {
     const live: ColumnDef<Position> = {
@@ -206,7 +216,7 @@ export function positionColumns(
       align: 'right',
       cell: ({ row }) => <ClosePositionButton position={row} />,
     }
-    return [instrument, direction, quantity, openPrice, opened, live, best, ...(canClose ? [close] : [])]
+    return [instrument, direction, quantity, openPrice, opened, live, best, worst, ...(canClose ? [close] : [])]
   }
 
   const status: ColumnDef<Position> = {
@@ -285,6 +295,7 @@ export function positionColumns(
       performance,
       best,
       closeReason,
+      detail(worst),
       detail(quantity),
       detail(openPrice),
       detail(closePrice),
@@ -302,6 +313,7 @@ export function positionColumns(
     opened,
     closed,
     closeReason,
+    detail(worst),
     detail(quantity),
     detail(openPrice),
     detail(closePrice),

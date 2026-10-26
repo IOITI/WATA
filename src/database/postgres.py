@@ -386,6 +386,14 @@ CREATE TABLE IF NOT EXISTS order_request (
     response_body       TEXT
 );
 
+-- The worst result each position reached, kept by the position monitor once it fell under its open (a position
+-- without a row never did, or closed before v0.48.0): its best is turbo_data_position's.
+CREATE TABLE IF NOT EXISTS position_worst (
+    position_id     VARCHAR(64) PRIMARY KEY,
+    worst_percent   DOUBLE PRECISION NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL
+);
+
 -- Total account value, recorded with each daily report.
 CREATE TABLE IF NOT EXISTS account_balance_history (
     date_day     DATE PRIMARY KEY,
@@ -545,6 +553,37 @@ class AsyncDbPositionManager:
             today,
         )
         return self._calculate_final_percentage(rows)
+
+    async def get_today_closed_results(self) -> list[float]:
+        """The results of the day's closed positions in the order they closed: the day's breakers count them."""
+        today = self._today()
+        rows = await self.db.fetch(
+            """
+            SELECT position_total_performance_percent
+            FROM turbo_data_position
+            WHERE position_status = 'Closed'
+              AND execution_time_close::date = $1::date
+            ORDER BY execution_time_close, position_id
+            """,
+            today,
+        )
+        return [row[0] if row[0] is not None else 0.0 for row in rows]
+
+    async def lower_min_performance(self, position_id: str, percent: float):
+        """
+        Keep ``percent`` as the position's worst result (``position_worst``) if it is lower than the one kept:
+        the database keeps the lower, so that a monitor started again never raises it.
+        """
+        await self.db.execute(
+            """
+            INSERT INTO position_worst (position_id, worst_percent, updated_at)
+            VALUES ($1, LEAST($2::double precision, 0), $3)
+            ON CONFLICT (position_id) DO UPDATE SET
+                worst_percent = LEAST(position_worst.worst_percent, EXCLUDED.worst_percent),
+                updated_at = EXCLUDED.updated_at
+            """,
+            position_id, percent, datetime.now().astimezone(),
+        )
 
     async def get_max_position_percent(self, position_id: str) -> float:
         val = await self.db.fetchval(
@@ -834,6 +873,10 @@ class AsyncDbRiskStateManager:
     LAST_LOSS_KEY = "last_loss_timestamp"
     # Set (to the time of the pause) while the operator has paused new entries.
     ENTRIES_PAUSED_KEY = "entries_paused_since"
+    # Set beside it when the account guard paused them (src/trade/account_guard.py).
+    PAUSED_BY_GUARD_KEY = "entries_paused_by_account_guard"
+    # When entries were last resumed: the account guard's highest value is counted from then.
+    RESUMED_KEY = "entries_resumed_at"
 
     def __init__(self, conn_mgr: PostgresConnectionManager):
         self.db = conn_mgr
@@ -863,13 +906,46 @@ class AsyncDbRiskStateManager:
             self.ENTRIES_PAUSED_KEY, ts,
         )
 
+    async def pause_entries_by_guard(self, ts: datetime):
+        """The pause the account guard sets: the operator's own, said to be the guard's."""
+        await self.pause_entries(ts)
+        await self.db.execute(
+            """
+            INSERT INTO trade_risk_state (key, value_time) VALUES ($1, $2)
+            ON CONFLICT (key) DO NOTHING
+            """,
+            self.PAUSED_BY_GUARD_KEY, ts,
+        )
+
     async def resume_entries(self):
-        await self.db.execute("DELETE FROM trade_risk_state WHERE key = $1", self.ENTRIES_PAUSED_KEY)
+        await self.db.execute(
+            "DELETE FROM trade_risk_state WHERE key = ANY($1::text[])",
+            [self.ENTRIES_PAUSED_KEY, self.PAUSED_BY_GUARD_KEY],
+        )
+        await self.db.execute(
+            """
+            INSERT INTO trade_risk_state (key, value_time) VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value_time = EXCLUDED.value_time
+            """,
+            self.RESUMED_KEY, datetime.now().astimezone(),
+        )
 
     async def get_entries_paused_since(self) -> datetime | None:
         return await self.db.fetchval(
             "SELECT value_time FROM trade_risk_state WHERE key = $1",
             self.ENTRIES_PAUSED_KEY,
+        )
+
+    async def get_entries_paused_by_guard(self) -> datetime | None:
+        return await self.db.fetchval(
+            "SELECT value_time FROM trade_risk_state WHERE key = $1",
+            self.PAUSED_BY_GUARD_KEY,
+        )
+
+    async def get_entries_resumed_at(self) -> datetime | None:
+        return await self.db.fetchval(
+            "SELECT value_time FROM trade_risk_state WHERE key = $1",
+            self.RESUMED_KEY,
         )
 
 
@@ -1073,6 +1149,16 @@ class AsyncDbBalanceHistoryManager:
                 recorded_at = EXCLUDED.recorded_at
             """,
             day, total_value, datetime.now().astimezone(),
+        )
+
+    async def highest_since(self, moment: datetime | None) -> float | None:
+        """The highest daily value recorded since ``moment`` (ever, when None): the account guard's highest."""
+        return await self.db.fetchval(
+            """
+            SELECT MAX(total_value) FROM account_balance_history
+            WHERE total_value IS NOT NULL AND ($1::timestamptz IS NULL OR recorded_at >= $1::timestamptz)
+            """,
+            moment,
         )
 
     async def record_balance_safely(self, day: date, total_value: float | None) -> None:

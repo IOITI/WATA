@@ -12,7 +12,7 @@ asyncpg_stub.create_pool = None
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 
 from src.admin.errors import DatabaseUnavailable
-from src.admin.queries import MAX_REPLAYED_ROWS, MAX_ROWS, AdminQueries, LazyDatabase, summarise_trades
+from src.admin.queries import _WORST as WORST, MAX_REPLAYED_ROWS, MAX_ROWS, AdminQueries, LazyDatabase, summarise_trades
 from src.admin.ta_monitor import DELIVERY_STEPS
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
@@ -155,7 +155,8 @@ def test_positions_without_filters_have_no_where_clause_and_a_bounded_limit():
     asyncio.run(queries.list_positions(limit=10 ** 9))
 
     list_query, list_args = db.calls[1]
-    assert "WHERE" not in list_query
+    # The worst result comes from its own table, by a subquery of its own (position_worst).
+    assert "WHERE" not in list_query.replace(WORST, "")
     assert list_args == ()
     assert f"LIMIT {MAX_ROWS}" in list_query
 

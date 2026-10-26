@@ -5,7 +5,7 @@ import { Hint } from '@/components/Hint'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DatePicker } from '@/components/ui/date-picker'
-import { FormDescription, FormLabel, Input } from '@/components/ui/form'
+import { FormDescription, FormLabel, Input, Select } from '@/components/ui/form'
 import type { JsonObject, JsonValue } from '@/lib/types'
 
 import { getAt } from './configModel'
@@ -19,6 +19,8 @@ export interface RowColumn {
   kind: 'text' | 'number'
   /** Relative width of the column in the grid. */
   width?: string
+  /** The values a text cell may take, picked from a list (a map's sources, say). */
+  choices?: string[]
 }
 
 interface CellProps {
@@ -27,13 +29,31 @@ interface CellProps {
   value: JsonValue | undefined
   disabled: boolean
   onChange: (value: JsonValue) => void
+  choices?: string[]
 }
 
 /** One input of a row. A number being typed ("-", "1.") is kept as text until it parses. */
-function Cell({ ariaLabel, kind, value, disabled, onChange }: CellProps) {
+function Cell({ ariaLabel, kind, value, disabled, onChange, choices }: CellProps) {
   const [text, setText] = useState(value === undefined || value === null ? '' : String(value))
   const invalid = kind === 'number' && !isNumberText(text)
   useReportInvalid(invalid)
+
+  if (choices) {
+    // A value outside the list (written by hand in the file) stays listed, so that it is seen and changed.
+    const listed = text === '' || choices.includes(text) ? choices : [text, ...choices]
+    return (
+      <Select
+        aria-label={ariaLabel}
+        value={text}
+        disabled={disabled}
+        options={listed.map((choice) => ({ value: choice, label: choice }))}
+        onChange={(event) => {
+          setText(event.target.value)
+          onChange(event.target.value)
+        }}
+      />
+    )
+  }
 
   // No room for a message under a cell: the reason is the field's hint, the count in the bar under the form.
   return (
@@ -98,6 +118,7 @@ function RowsEditor({ label, hint, columns, rows, disabled, newRow, onChange }: 
                   key={column.key}
                   ariaLabel={`${column.label}, row ${index + 1}`}
                   kind={column.kind}
+                  choices={column.choices}
                   value={row[column.key]}
                   disabled={disabled}
                   onChange={(value) =>
@@ -168,10 +189,12 @@ interface MapFieldProps {
   keyLabel: string
   valueLabel: string
   hint?: string
+  /** The values a name may take, picked from a list; any text without. */
+  valueChoices?: string[]
 }
 
 /** An object of the config edited as name/value rows (the allowed indices and their Saxo identifiers). */
-export function MapField({ label, path, keyLabel, valueLabel, hint }: MapFieldProps) {
+export function MapField({ label, path, keyLabel, valueLabel, hint, valueChoices }: MapFieldProps) {
   const { draft, update, disabled } = useDraft()
   const current = getAt(draft, path)
   // Rows are kept here while they are being typed: a row without a name yet has no place in the object.
@@ -198,11 +221,11 @@ export function MapField({ label, path, keyLabel, valueLabel, hint }: MapFieldPr
       hint={hint}
       columns={[
         { key: 'name', label: keyLabel, kind: 'text' },
-        { key: 'value', label: valueLabel, kind: 'text' },
+        { key: 'value', label: valueLabel, kind: 'text', choices: valueChoices },
       ]}
       rows={rows}
       disabled={disabled}
-      newRow={() => ({ name: '', value: '' })}
+      newRow={() => ({ name: '', value: valueChoices?.[0] ?? '' })}
       onChange={commit}
     />
   )

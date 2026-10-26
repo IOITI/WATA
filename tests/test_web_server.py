@@ -125,3 +125,57 @@ def test_latest_signals_long_poll_returns_empty_once_wait_elapses(client):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ── one source of signals per index (trade.config.signal_sources) ──
+
+
+def _webhook(client, indice, action="long", signal_timestamp="2023-07-01T12:00:00Z"):
+    return client.post(
+        "/webhook?token=test_token",
+        json={"action": action, "indice": indice, "signal_timestamp": signal_timestamp, "alert_timestamp": signal_timestamp},
+    )
+
+
+def test_an_index_that_takes_the_engines_signals_takes_no_webhook_and_counts_it(client):
+    from src.web_server.ignored import IgnoredWebhooks
+
+    with patch("src.web_server.SIGNAL_STORE", new=SignalStore()), \
+            patch("src.web_server.SIGNAL_SOURCES", new={"us100": "engine"}), \
+            patch("src.web_server.WEBHOOKS_IGNORED", new=IgnoredWebhooks()):
+        ignored = _webhook(client, "us100")
+        _webhook(client, "us100", action="close-position", signal_timestamp="2023-07-01T12:01:00Z")
+        taken = _webhook(client, "dax")
+
+        stored = client.get("/latest-signals", headers=BEARER_HEADERS).json()
+        state = client.get("/internal/webhook", headers=BEARER_HEADERS).json()
+
+    # Answered, so that TradingView reports no failure, and never stored.
+    assert ignored.status_code == 200 and ignored.json()["status"] == "ignored"
+    assert taken.json()["status"] == "success"
+    assert [signal["indice"] for signal in stored] == ["dax"]
+    assert state["sources"] == {"us100": "engine"}
+    assert state["ignored"]["us100"]["count"] == 2
+    assert state["ignored"]["us100"]["last_action"] == "close-position"
+    assert "dax" not in state["ignored"]
+
+
+def test_the_engines_index_still_takes_the_internal_signals(client):
+    # The scheduler's close of the day and the signals sent from the admin come this way, whatever the source.
+    with patch("src.web_server.SIGNAL_STORE", new=SignalStore()), \
+            patch("src.web_server.SIGNAL_SOURCES", new={"us100": "engine"}):
+        response = client.post(
+            "/internal/signal",
+            headers=BEARER_HEADERS,
+            json={"action": "close-position", "indice": "us100", "signal_timestamp": "2023-07-01T19:55:00Z",
+                  "alert_timestamp": "2023-07-01T19:55:00Z"},
+        )
+        stored = client.get("/latest-signals", headers=BEARER_HEADERS).json()
+
+    assert response.json()["status"] == "success"
+    assert [signal["action"] for signal in stored] == ["close-position"]
+
+
+def test_the_webhooks_state_needs_the_internal_token(client):
+    response = client.get("/internal/webhook")
+    assert response.status_code in (401, 403)

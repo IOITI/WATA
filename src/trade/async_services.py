@@ -76,6 +76,9 @@ TURBO_DESCRIPTION_PATTERN = re.compile(r"(.*) (\w+) (\w+) (\d+(?:\.\d+)?) (\w+)$
 INITIAL_TURBO_SEARCH_LIMIT = 60
 INFO_PRICE_CANDIDATE_LIMIT = 20
 INFO_PRICE_RETRY_BACKOFFS = (0.2, 0.4, 0.8)
+# The account's value read with the balance is the account guard's while this recent; older, it is read
+# again (the keep-warm timer reads the balance every 30 s).
+ACCOUNT_VALUE_FRESH_SECONDS = 120
 # How long a token returned by SaxoAuth is trusted before asking it again. SaxoAuth
 # renews tokens 120s before they expire, so a few seconds of reuse is safe.
 TOKEN_RECHECK_INTERVAL_SECONDS = 5
@@ -275,6 +278,33 @@ def filter_items_in_price_range(items: list[dict], min_price: float, max_price: 
     return [item for item in items if min_price <= item["Quote"]["Bid"] <= max_price]
 
 
+def spread_percent(quote: dict) -> float | None:
+    """The spread of a quote, in percent of its ask; None when it has no bid or ask."""
+    bid, ask = quote.get("Bid"), quote.get("Ask")
+    if not all(isinstance(price, (int, float)) and not isinstance(price, bool) for price in (bid, ask)) or ask <= 0:
+        return None
+    return (ask - bid) / ask * 100
+
+
+def filter_items_within_spread(items: list[dict], max_spread_percent: float | None) -> list[dict]:
+    """
+    The candidates whose spread is at most ``max_spread_percent`` of their ask
+    (``trade.config.turbo_preference.max_spread_percent``): all of them without
+    a limit, none whose spread cannot be read with one. The cheapest turbo,
+    which is chosen, is also the one whose spread weighs most.
+    """
+    if not max_spread_percent:
+        return items
+    return [item for item in items if (spread := spread_percent(item["Quote"])) is not None and spread <= max_spread_percent]
+
+
+def no_turbo_within_spread(items: list[dict], max_spread_percent: float, min_price: float, max_price: float) -> str:
+    """Why no turbo of the price range is bought: their spreads, the narrowest said."""
+    spreads = [spread for item in items if (spread := spread_percent(item["Quote"])) is not None]
+    narrowest = f"; the narrowest was {min(spreads):.2f} %" if spreads else ""
+    return f"No turbo in price range {min_price}-{max_price} with a spread of {max_spread_percent:g} % or less{narrowest}."
+
+
 def select_best_price_candidate(items: list[dict]) -> dict:
     return sorted(items, key=lambda item: item["Quote"]["Bid"])[0]
 
@@ -311,6 +341,7 @@ def build_selected_turbo_from_candidate_snapshots(
     subscription_context_id: str | None = None,
     subscription_reference_id: str | None = None,
     uic_to_subscription_reference_id: dict | None = None,
+    max_spread_percent: float | None = None,
 ) -> dict:
     valid_bid_items = filter_items_with_valid_bid(candidate_snapshots)
     if not valid_bid_items:
@@ -326,8 +357,14 @@ def build_selected_turbo_from_candidate_snapshots(
             f"No turbos in price range {min_price}-{max_price}.",
             search_context={"PriceRange": (min_price, max_price), "AvailableCount": len(available_items)},
         )
+    spread_filtered = filter_items_within_spread(price_filtered, max_spread_percent)
+    if not spread_filtered:
+        raise NoTurbosAvailableException(
+            no_turbo_within_spread(price_filtered, max_spread_percent, min_price, max_price),
+            search_context={"MaxSpreadPercent": max_spread_percent, "InRangeCount": len(price_filtered)},
+        )
 
-    selected = select_best_price_candidate(price_filtered)
+    selected = select_best_price_candidate(spread_filtered)
     selected_source = selected_source_lookup.get(selected.get("Identifier"), {})
     resolved_subscription_reference_id = subscription_reference_id
     if resolved_subscription_reference_id is None and uic_to_subscription_reference_id is not None:
@@ -532,6 +569,8 @@ class AsyncInstrumentService:
         self.account_key = account_key
         self.api_limits = self.config.get_config_value("trade.config.general.api_limits", {"top_instruments": 200})
         self.turbo_price_range = self.config.get_config_value("trade.config.turbo_preference.price_range", {"min": 4, "max": 15})
+        # No turbo whose spread is wider than this share of its ask is bought; None: no limit.
+        self.max_spread_percent = self.config.get_config_value("trade.config.turbo_preference.max_spread_percent") or None
         self.retry_config = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": 3, "retry_sleep_seconds": 1})
         self.cache_config = self.config.get_config_value("trade.config.turbo_cache", {"enabled": False, "ttl_seconds": 30})
         self._turbo_cache: dict = {}
@@ -704,6 +743,7 @@ class AsyncInstrumentService:
                 selected_source_lookup=source_lookup,
                 min_price=self.turbo_price_range["min"],
                 max_price=self.turbo_price_range["max"],
+                max_spread_percent=self.max_spread_percent,
             )
         except (NoMarketAvailableException, NoTurbosAvailableException) as exc:
             logger.info(
@@ -874,8 +914,14 @@ class AsyncInstrumentService:
                 search_context={"PriceRange": (min_price, max_price), "AvailableCount": len(available_items)},
             )
 
-        # 8. Select best
-        selected = select_best_price_candidate(price_filtered)
+        # 8. Spread limit, then the cheapest
+        spread_filtered = filter_items_within_spread(price_filtered, self.max_spread_percent)
+        if not spread_filtered:
+            raise NoTurbosAvailableException(
+                no_turbo_within_spread(price_filtered, self.max_spread_percent, min_price, max_price),
+                search_context={"MaxSpreadPercent": self.max_spread_percent, "InRangeCount": len(price_filtered)},
+            )
+        selected = select_best_price_candidate(spread_filtered)
         selected_source = initial_instruments_by_identifier.get(selected.get("Identifier"), {})
         detail_response = await self._get_infoprices_for_asset_type(
             str(selected["Uic"]),
@@ -1060,6 +1106,14 @@ class AsyncPositionService:
         retry_cfg = self.config.get_config_value("trade.config.general.retry_config", {"max_retries": 5, "retry_sleep_seconds": 2})
         self.max_retries = retry_cfg["max_retries"]
         self.retry_sleep = retry_cfg["retry_sleep_seconds"]
+        # Saxo's TotalValue (cash and positions) of the last balance read, and when (monotonic): the account
+        # guard's value, which costs no request of its own (src/trade/account_guard.py).
+        self.last_total_value: tuple[float, float] | None = None
+
+    def _note_total_value(self, resp: dict) -> None:
+        total_value = resp.get("TotalValue")
+        if isinstance(total_value, (int, float)) and not isinstance(total_value, bool):
+            self.last_total_value = (float(total_value), time.monotonic())
 
     async def get_open_positions(self) -> dict:
         req = pf.positions.PositionsMe(
@@ -1155,6 +1209,7 @@ class AsyncPositionService:
         resp = await self.api_client.request(req)
         if not resp or "SpendingPower" not in resp:
             raise SaxoApiError("Invalid balance response, missing SpendingPower.")
+        self._note_total_value(resp)
         power = resp["SpendingPower"]
         logger.debug("Spending power: %s", power)
         return float(power)
@@ -1165,6 +1220,7 @@ class AsyncPositionService:
         resp = await self.api_client.request(req)
         if not resp or "TotalValue" not in resp:
             raise SaxoApiError("Invalid balance response, missing TotalValue.")
+        self._note_total_value(resp)
         total_value = resp["TotalValue"]
         logger.info("Current account balance: %s", total_value)
         return float(total_value)
@@ -1357,6 +1413,20 @@ class AsyncTradingOrchestrator:
     def invalidate_spending_power(self):
         """Forget the cached spending power (call after anything that moves cash)."""
         self._cached_spending_power = None
+
+    async def account_value(self, fresh_seconds: float = ACCOUNT_VALUE_FRESH_SECONDS) -> float | None:
+        """
+        Saxo's TotalValue as last read with the balance (the keep-warm timer reads it every 30 s), read again
+        when older than ``fresh_seconds``; None when Saxo does not answer. The account guard's value.
+        """
+        seen = getattr(self.position_service, "last_total_value", None)
+        if not isinstance(seen, tuple) or time.monotonic() - seen[1] > fresh_seconds:
+            try:
+                await self.refresh_spending_power()
+            except Exception as e:
+                logger.warning("The account's value could not be read for the account guard: %s", e)
+            seen = getattr(self.position_service, "last_total_value", None)
+        return seen[0] if isinstance(seen, tuple) else None
 
     async def _get_spending_power(self) -> float:
         cached = self._cached_spending_power
@@ -1651,6 +1721,10 @@ class AsyncPerformanceMonitor:
         # hasn't accepted yet wait in the pending map.
         self._max_perf_by_position: dict[str, float] = {}
         self._max_perf_pending_save: dict[str, float] = {}
+        # The worst result seen of each position (0 until it falls under its open), kept as the best is,
+        # the database keeping the lower one (lower_min_performance).
+        self._min_perf_by_position: dict[str, float] = {}
+        self._min_perf_pending_save: dict[str, float] = {}
         # Latest (bid, performance percent, observed at) per open position, kept
         # for the admin interface: see live_values(). Nothing here reads it back.
         self._live_values: dict[str, tuple[float, float, datetime]] = {}
@@ -1813,6 +1887,24 @@ class AsyncPerformanceMonitor:
                 del self._max_perf_pending_save[pid]
         return saved, 0
 
+    async def _save_pending_min_perf(self) -> int:
+        """Write to the DB the worst results it may not have yet; returns the error count."""
+        for pid, min_perf in list(self._min_perf_pending_save.items()):
+            if not self._db_usable():
+                break
+            try:
+                await asyncio.wait_for(
+                    self.db_position_manager.lower_min_performance(pid, min_perf),
+                    MANAGED_STATE_DB_TIMEOUT_SECONDS,
+                )
+            except Exception as e:
+                self._mark_db_unavailable()
+                logger.error("Failed min-perf update for %s: %r", pid, e)
+                return 1
+            if self._min_perf_pending_save.get(pid) == min_perf:
+                del self._min_perf_pending_save[pid]
+        return 0
+
     async def _record_loss(self):
         try:
             await self.trading_rule.record_loss()
@@ -1841,7 +1933,8 @@ class AsyncPerformanceMonitor:
         self._end_intents_of_sold(api_dict)
         db_positions, today_pct = await self._load_managed_state()
         managed_ids = {db_pos["position_id"] for db_pos in db_positions}
-        for known in (self._max_perf_by_position, self._max_perf_pending_save, self._live_values, self._missing_price_since):
+        for known in (self._max_perf_by_position, self._max_perf_pending_save, self._min_perf_by_position,
+                      self._min_perf_pending_save, self._live_values, self._missing_price_since):
             for pid in list(known):
                 if pid not in managed_ids:
                     del known[pid]
@@ -1893,6 +1986,9 @@ class AsyncPerformanceMonitor:
             if max_perf is not None and perf_pct > max_perf:
                 self._max_perf_by_position[pid] = perf_pct
                 self._max_perf_pending_save[pid] = perf_pct
+            if perf_pct < self._min_perf_by_position.get(pid, 0.0):
+                self._min_perf_by_position[pid] = perf_pct
+                self._min_perf_pending_save[pid] = perf_pct
 
             if pid in self.close_intents:
                 # Already to be sold: its intent is tried below, with its own reason, soon once quoted again.
@@ -1937,9 +2033,10 @@ class AsyncPerformanceMonitor:
 
         processed, errors = await self._attempt_due_closes(api_dict, now)
 
-        # Apply max-perf DB updates
+        # Apply max-perf DB updates, then the worst results
         db_updates, save_errors = await self._save_pending_max_perf()
         errors += save_errors
+        errors += await self._save_pending_min_perf()
 
         logger.debug("Perf check done. Closed=%d, MaxPerf updates=%d, Errors=%d", len(processed), len(db_updates), errors)
         return {"closed_positions_processed": processed, "db_updates": db_updates, "errors": errors}

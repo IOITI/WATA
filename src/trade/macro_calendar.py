@@ -1,8 +1,11 @@
 """
 The US macro news that moves the Nasdaq 100: FOMC statements, CPI, the jobs
-report (NFP) and the PCE price index, as ``data/macro_calendar.csv`` keeps
-them. Each row is a release's day and New York time, and the official page it
-was read from.
+report (NFP) and the PCE price index since 2024, and from November 2026 the
+producer prices (PPI), retail sales (RETAIL), the GDP's advance estimate (GDP)
+and job openings (JOLTS), as ``data/macro_calendar.csv`` keeps them. Each row
+is a release's day and New York time, and the official page it was read from.
+A rule that names no release takes the first four (``DEFAULT_EVENTS``): the
+others apply once named.
 
 The trader keeps entries out of a window around each release when the
 ``macro_news`` rule of ``trade.rules`` says so (``NewsRule``, ``window_at``),
@@ -19,15 +22,18 @@ calendar needs updating.
 import csv
 import hashlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import pytz
 
 CALENDAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "macro_calendar.csv")
 NEW_YORK = pytz.timezone("America/New_York")
-# The news a day is known by, the strongest first.
-MACRO_EVENTS = ("FOMC", "CPI", "NFP", "PCE")
+# The news the calendar knows, the strongest first.
+MACRO_EVENTS = ("FOMC", "CPI", "NFP", "PCE", "PPI", "RETAIL", "GDP", "JOLTS")
+# What a macro_news rule that names none keeps entries away from, and what a day is known by in the backtests'
+# kinds of day: the four the calendar holds since 2024.
+DEFAULT_EVENTS = ("FOMC", "CPI", "NFP", "PCE")
 # What the macro_news rule may say, and its defaults: from 5 minutes before a release to 15 after,
 # until 45 after an FOMC statement, whose press conference starts 30 minutes later.
 MAX_MINUTES = 120
@@ -55,12 +61,21 @@ class Calendar:
     digest: str
     # The last day each kind of news is known to: past it, a day is not known to have none.
     until: dict
+    # The first: before it, the same (PPI, RETAIL, GDP and JOLTS are kept from late 2026 on).
+    since: dict = field(default_factory=dict)
 
     def on(self, day: date) -> list[MacroEvent]:
         return self.by_day.get(day, [])
 
-    def known_until(self) -> date | None:
-        return min(self.until.values()) if self.until else None
+    def known_until(self, events=DEFAULT_EVENTS) -> date | None:
+        """The last day all of ``events`` are known to; None when the calendar holds none of them."""
+        found = [self.until[event] for event in events if event in self.until]
+        return min(found) if found else None
+
+    def known_from(self, events=DEFAULT_EVENTS) -> date | None:
+        """The first day all of ``events`` are known from; None when the calendar holds none of them."""
+        found = [self.since[event] for event in events if event in self.since]
+        return max(found) if found else None
 
 
 def read_calendar(path: str = CALENDAR_PATH) -> Calendar:
@@ -70,11 +85,13 @@ def read_calendar(path: str = CALENDAR_PATH) -> Calendar:
     rows = csv.DictReader(line for line in content.decode("utf-8").splitlines() if line and not line.startswith("#"))
     by_day: dict = {}
     until: dict = {}
+    since: dict = {}
     for row in rows:
         event = MacroEvent(date.fromisoformat(row["date"]), row["time_new_york"], row["event"], row["covers"])
         by_day.setdefault(event.day, []).append(event)
         until[event.event] = max(until.get(event.event, event.day), event.day)
-    return Calendar(by_day, hashlib.sha256(content).hexdigest()[:16], until)
+        since[event.event] = min(since.get(event.event, event.day), event.day)
+    return Calendar(by_day, hashlib.sha256(content).hexdigest()[:16], until, since)
 
 
 @dataclass(frozen=True)
@@ -90,7 +107,7 @@ class NewsWindow:
 class NewsRule:
     """The ``macro_news`` rule of ``trade.rules``: which releases, and how long before and after each."""
 
-    events: tuple[str, ...] = MACRO_EVENTS
+    events: tuple[str, ...] = DEFAULT_EVENTS
     minutes_before: int = 5
     minutes_after: int = 15
     minutes_after_fomc: int = 45
@@ -106,7 +123,7 @@ class NewsRule:
                                       "flatten_minutes_before"}
         if unknown:
             raise ValueError(f"macro_news: unknown field(s) {', '.join(sorted(unknown))}")
-        events = rule_config.get("events", list(MACRO_EVENTS))
+        events = rule_config.get("events", list(DEFAULT_EVENTS))
         if not isinstance(events, list) or not events or any(event not in MACRO_EVENTS for event in events):
             raise ValueError(f"macro_news: events is a list of some of {', '.join(MACRO_EVENTS)}")
         values = {}
@@ -183,16 +200,19 @@ def refusal_text(window: NewsWindow, timezone: str) -> str:
     )
 
 
-def upkeep(calendar: Calendar, today: date) -> str | None:
-    """What to say of the calendar from WARN_DAYS before its last known day; None before."""
-    until = calendar.known_until()
+def upkeep(calendar: Calendar, today: date, events=DEFAULT_EVENTS) -> str | None:
+    """What to say of the calendar of ``events`` (the rule's) from WARN_DAYS before its last known day; None before."""
+    until = calendar.known_until(events)
     if until is None:
         return "The calendar of US releases is empty: no window is kept around them"
     left = (until - today).days
     if left > WARN_DAYS:
         return None
+    # The kinds that end first, when not all of them do.
+    ending = [event for event in events if calendar.until.get(event) == until]
+    which = f" ({', '.join(ending)})" if len(ending) < len([event for event in events if event in calendar.until]) else ""
     if left < 0:
-        return (f"The calendar of US releases ended on {until.isoformat()}: no window is kept around them since. "
+        return (f"The calendar of US releases{which} ended on {until.isoformat()}: no window is kept around them since. "
                 "Update it (python -m lab calendar check), then deploy")
-    return (f"The calendar of US releases ends on {until.isoformat()}, in {left} day(s): "
+    return (f"The calendar of US releases{which} ends on {until.isoformat()}, in {left} day(s): "
             "update it (python -m lab calendar check), then deploy")

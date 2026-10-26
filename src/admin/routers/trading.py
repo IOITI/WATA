@@ -4,7 +4,10 @@ import pytz
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.admin.auth import require_session
+from src.admin.paper import index_asset
 from src.heartbeat import HEARTBEAT_STALE_SECONDS
+from src.trade.account_guard import AccountGuard
+from src.trade.day_breakers import DayBreakers, best_and_now, losses_in_a_row
 from src.trade.macro_calendar import NewsRule, next_window, read_calendar
 from src.trade.market_calendar import entries_end_moment, read_market_calendar, sale_moment
 
@@ -32,6 +35,11 @@ def _limits(config_manager) -> dict:
         "close_position_time": day_trading.get("close_position_time"),
         "max_trades_per_day": risk_management.get("max_trades_per_day", 0),
         "cooldown_after_loss_minutes": risk_management.get("cooldown_after_loss_minutes", 0),
+        # The day's breakers and the account guard (src/trade/day_breakers.py, account_guard.py): 0 is off.
+        "max_consecutive_losses": DayBreakers.from_config(risk_management).max_losses,
+        "max_drawdown_from_day_best_percent": DayBreakers.from_config(risk_management).max_drawdown,
+        "pause_below_balance_eur": AccountGuard.from_config(risk_management).below_eur,
+        "pause_after_drawdown_percent": AccountGuard.from_config(risk_management).drawdown_percent,
         "trading_start_hour": market_hours.get("trading_start_hour"),
         "trading_end_hour": market_hours.get("trading_end_hour"),
         "risky_trading_start_hour": market_hours.get("risky_trading_start_hour"),
@@ -102,7 +110,7 @@ def _news(config_manager, now: datetime) -> dict | None:
             "event": window.event.event, "released_at": _iso(window.event.moment()),
             "start": _iso(window.start), "end": _iso(window.end),
         },
-        "known_until": calendar.known_until(),
+        "known_until": calendar.known_until(news_rule.events),
         "readable": True,
     }
 
@@ -122,6 +130,15 @@ def _saxo_login(beats: dict) -> dict | None:
         "error": login.get("error"),
         "lapses_at": login.get("lapses_at"),
     }
+
+
+async def _breakers(ctx, limits: dict) -> dict | None:
+    """The day's figures the breakers are counted on, as the trader counts them; None while both are off."""
+    if not (limits["max_consecutive_losses"] or limits["max_drawdown_from_day_best_percent"]):
+        return None
+    results = await ctx.queries.today_closed_results()
+    best, now = best_and_now(results)
+    return {"losses_in_a_row": losses_in_a_row(results), "day_best_percent": best, "day_percent": now}
 
 
 def _cooldown(last_loss_at: datetime | None, cooldown_minutes: int) -> dict:
@@ -151,6 +168,10 @@ async def overview(request: Request):
         # No entry around US releases (the macro_news rule); None while the rule is off.
         "news": _news(ctx.config_manager, datetime.now(pytz.utc)),
         "entries_paused_since": await ctx.queries.entries_paused_since(),
+        # Set while the pause is the account guard's own (src/trade/account_guard.py).
+        "entries_paused_by_account_guard": await ctx.queries.entries_paused_by_guard(),
+        # The day's breakers' figures (losses in a row, the day's best and now); None while they are off.
+        "breakers": await _breakers(ctx, limits),
         # Saxo refusing to renew the login keeps entries out (the trader's heartbeat); None while not heard from.
         "saxo_login": _saxo_login(await ctx.queries.service_heartbeats()),
         "open_positions": await ctx.queries.open_positions(),
@@ -177,6 +198,28 @@ async def list_positions(
         end=end,
         limit=limit,
     )
+
+
+@router.get("/positions/{position_id}/chart")
+async def position_chart(position_id: str, request: Request):
+    """
+    What a position is drawn on: its turbo as the price recorder kept it (none when it was not recorded), the
+    index of its indice below it, the day it opened, and the signal that opened it.
+    """
+    ctx = request.app.state.ctx
+    found = await ctx.queries.position_chart(position_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+    indices = list((_rule_config(ctx.config_manager, "allowed_indices").get("indice_ids") or {}))
+    index = index_asset(ctx.config_manager.config_data, indices[0]) if indices else None
+    zone = pytz.timezone(ctx.settings.timezone)
+    opened = found["opened_at"]
+    return {
+        "turbo": f"saxo/{found['price_instrument_id']}" if found["price_instrument_id"] is not None else None,
+        "index": f"{index['provider']}/{index['key']}" if index else None,
+        "day": opened.astimezone(zone).date().isoformat() if opened is not None else None,
+        "signal": found["signal"],
+    }
 
 
 @router.get("/positions/{position_id}")

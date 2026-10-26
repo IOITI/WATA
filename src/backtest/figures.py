@@ -257,7 +257,7 @@ _CODE = ("src/backtest", "src/ta_engine/replay.py", "src/ta_engine/rules.py", "s
          "src/ta_engine/tickers.py", "src/ta_engine/signals.py", "src/ta_engine/settings.py", "src/ta_engine/bars.py",
          "src/ta_engine/source.py", "src/price_recorder/bars.py", "src/price_recorder/range_bars.py",
          "src/trade/async_services.py", "src/trade/fresh_quote.py", "src/trade/macro_calendar.py",
-         "src/trade/market_calendar.py",
+         "src/trade/market_calendar.py", "src/trade/account_guard.py", "src/trade/day_breakers.py",
          "src/admin/analysis.py")
 
 

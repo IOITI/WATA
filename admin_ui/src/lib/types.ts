@@ -30,6 +30,8 @@ export interface Position {
   position_total_close_price: number | null
   position_total_performance_percent: number | null
   position_max_performance_percent: number | null
+  /** The worst result reached, 0 when it never fell under its open: recorded since v0.48.0. */
+  position_min_performance_percent?: number | null
   position_status: string | null
   position_kind: string | null
   execution_time_open: string | null
@@ -312,6 +314,12 @@ export interface Overview {
     risky_trading_start_minute: number | null
     /** The timezone of these hours and of the close; null or absent: the trading one. */
     market_timezone?: string | null
+    /** The day's breakers (0: off): losses in a row, points under the day's best. Absent before v0.48.0. */
+    max_consecutive_losses?: number
+    max_drawdown_from_day_best_percent?: number
+    /** The account guard (0: off): its floor in euros, and its fall from the highest in percent. */
+    pause_below_balance_eur?: number
+    pause_after_drawdown_percent?: number
   }
   /** Today is a closed date, configured or a US holiday: the trader refuses every signal. */
   market_closed_today: boolean
@@ -324,12 +332,24 @@ export interface Overview {
   }
   /** Set while the operator has paused new entries. */
   entries_paused_since: string | null
+  /** Set beside it while the pause is the account guard's own; null or absent otherwise. */
+  entries_paused_by_account_guard?: string | null
+  /** The day's figures the breakers are counted on, as the trader counts them; null or absent while they are off. */
+  breakers?: OverviewBreakers | null
   /** No entry around US releases (the macro_news rule); null or absent while the rule is off. */
   news?: OverviewNews | null
   /** Saxo's login as the trader last said it; null or absent while the trader is not heard from. */
   saxo_login?: OverviewSaxoLogin | null
   open_positions: Position[]
   recent_days: DailyPerformance[]
+}
+
+export interface OverviewBreakers {
+  /** The losing trades at the end of the day's closed ones. */
+  losses_in_a_row: number
+  /** The best the day's compounded result reached at a close (0 before the first), and where it is now. */
+  day_best_percent: number
+  day_percent: number
 }
 
 export interface OverviewMarketDay {
@@ -368,6 +388,33 @@ export interface Signal {
   received_timestamp: string
   confidence?: number
   seq: number
+}
+
+/** Where an index takes its signals from (trade.config.signal_sources): TradingView's alerts unless set to the engine. */
+export type SignalSource = 'tradingview' | 'engine'
+
+/** The webhooks the web server answered without keeping them, for one index, since it started. */
+/** What a position is drawn on (GET /api/positions/{id}/chart): its recorded turbo and the index below. */
+export interface PositionChartRefs {
+  /** The turbo as the price recorder kept it ("saxo/<id>"); null when it was not recorded. */
+  turbo: string | null
+  index: string | null
+  /** The day it opened, in the trading timezone. */
+  day: string | null
+  signal: { action: string | null; signal_timestamp: string | null; received_timestamp?: string | null; decided_at?: string | null } | null
+}
+
+export interface IgnoredWebhooks {
+  count: number
+  first_at: string
+  last_at: string
+  last_action?: string | null
+}
+
+/** As the web server runs (it read the sources at its start); null from a web server before v0.48.0. */
+export interface WebhookState {
+  sources: Record<string, SignalSource>
+  ignored: Record<string, IgnoredWebhooks>
 }
 
 export type ServiceStatus = 'ok' | 'warning' | 'down' | 'unknown' | 'disabled'
@@ -664,6 +711,18 @@ export interface Exits {
   by_hour: (GroupStats & { hour: number })[]
   by_weekday_hour: WeekdayHourStats[]
   by_holding_time: (GroupStats & { bucket: string })[]
+  /** The trades grouped as the trading style asks (src/admin/live_breakdowns.py); absent before v0.49.0. */
+  breakdowns?: LiveBreakdowns
+}
+
+export type NamedGroupStats = GroupStats & { group: string }
+
+export interface LiveBreakdowns {
+  by_confidence: NamedGroupStats[]
+  by_source: NamedGroupStats[]
+  by_open_price: NamedGroupStats[]
+  by_signal_delay: NamedGroupStats[]
+  by_worst: NamedGroupStats[]
 }
 
 /** A period of the Telegram report (a day, a week, a month...), as message_helper computes it. */
@@ -1608,6 +1667,28 @@ export interface BacktestPaperReference {
 
 export interface BacktestPaper {
   rules: Record<string, { days: BacktestPaperDay[]; reference: BacktestPaperReference | null }>
+  /** The signals WATA received, traded on paper under the live settings; absent before v0.49.0. */
+  live?: { days: BacktestPaperDay[]; reference: BacktestPaperReference | null } | null
+}
+
+/** A finished day of the live settings: WATA's real result and the paper one, each against the live reference. */
+export interface LivePaperDay {
+  day: string
+  real_percent: number | null
+  real_outside: boolean | null
+  paper_percent: number | null
+  paper_outside: boolean | null
+  /** The paper run's state; 'no_entry' when no entry signal came that day. */
+  paper_state: BacktestState | 'no_entry' | null
+  paper_run_id: string | null
+  paper_trades: number | null
+}
+
+export interface LivePaper {
+  days: LivePaperDay[]
+  reference: BacktestPaperReference | null
+  /** Said once on Telegram, and in health, when the last two days with a result were outside the range. */
+  warning: string | null
 }
 
 /** Recorded by WATA, or made up from an index (src/backtest/turbo_model.py). */
@@ -1829,6 +1910,8 @@ export interface BacktestRunListed {
   /** A model check: the run on the recorded turbos it made again on made-up ones. */
   model_check_of?: string | null
   turbos?: BacktestTurbos
+  /** A paper day: of the signals a rule raised, or of those WATA received (rule "live"). */
+  paper?: { rule: string; day: string } | null
   /** Who asked for it through an agent ("claude"), and for which experiment of its journal; absent for the operator's. */
   made_by?: string | null
   experiment?: string | null

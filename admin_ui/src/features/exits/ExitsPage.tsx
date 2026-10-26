@@ -12,7 +12,7 @@ import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import { lastDays, rangeParams } from '@/lib/dateRange'
 import { formatNumber, formatPercent } from '@/lib/format'
-import type { Exits, GroupStats } from '@/lib/types'
+import type { Exits, GroupStats, LiveBreakdowns, NamedGroupStats } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 function GroupTable<T extends GroupStats>({
@@ -128,6 +128,57 @@ function ExitsContent({ exits }: { exits: Exits }) {
 
       <Panel title="By holding time" bodyClassName="pt-2">
         <GroupTable groups={holding} header="Held for" label={(group) => group.bucket} />
+      </Panel>
+
+      {exits.breakdowns && <Breakdowns breakdowns={exits.breakdowns} />}
+    </>
+  )
+}
+
+/** The groups that hold a trade, in their order. */
+function held(groups: NamedGroupStats[]): NamedGroupStats[] {
+  return groups.filter((group) => group.trade_count > 0)
+}
+
+/** The trades grouped as the trading style asks: confidence, source, turbo's price, signal's delay, worst reached. */
+function Breakdowns({ breakdowns }: { breakdowns: LiveBreakdowns }) {
+  const label = (group: NamedGroupStats) => group.group
+  return (
+    <>
+      <Panel
+        title="By the signal's confidence"
+        description="The confidence the signal came with, in the backtests' own bands: does it say anything of the result?"
+        bodyClassName="pt-2"
+      >
+        <GroupTable groups={held(breakdowns.by_confidence)} header="Confidence" label={label} />
+      </Panel>
+      <Panel
+        title="By where the signal came from"
+        description="One of WATA's signal rules, or TradingView's alerts and the signals sent by hand, which the journal does not tell apart."
+        bodyClassName="pt-2"
+      >
+        <GroupTable groups={held(breakdowns.by_source)} header="Source" label={label} />
+      </Panel>
+      <Panel
+        title="By the turbo's price at entry"
+        description="The cheaper the turbo, the nearer its knock-out level and the more each point of the index moves it."
+        bodyClassName="pt-2"
+      >
+        <GroupTable groups={held(breakdowns.by_open_price)} header="Price at entry (€)" label={label} />
+      </Panel>
+      <Panel
+        title="By the signal's delay"
+        description="From the signal's own time to the trader's decision: TradingView's alert and its delivery are in it."
+        bodyClassName="pt-2"
+      >
+        <GroupTable groups={held(breakdowns.by_signal_delay)} header="Delay" label={label} />
+      </Panel>
+      <Panel
+        title="By the worst it reached"
+        description="How far under its open a trade went before it closed: recorded since v0.48.0."
+        bodyClassName="pt-2"
+      >
+        <GroupTable groups={held(breakdowns.by_worst)} header="Worst" label={label} />
       </Panel>
     </>
   )

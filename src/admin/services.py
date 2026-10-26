@@ -67,6 +67,20 @@ class WataServices:
         response = await self._web_server_request("POST", "/internal/signal", json=payload)
         return response.json()["signal_uuid"]
 
+    async def webhook_state(self) -> dict | None:
+        """
+        The source each index takes its signals from as the web server runs (it read them at its start), and
+        the webhooks it answered without storing them since then; None from a web server before v0.48.0.
+        """
+        try:
+            response = await self._web_server_request("GET", "/internal/webhook")
+        except ServiceUnavailable as e:
+            cause = e.__cause__
+            if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 404:
+                return None
+            raise
+        return response.json()
+
     # ── watchlist manager ──
 
     @property

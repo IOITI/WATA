@@ -58,6 +58,7 @@ async def main():
     from src.database.postgres import AsyncDbTaManager, PostgresConnectionManager, init_ta_schema
     from src.logging_helper import setup_logging
     from src.mq_telegram.async_tools import AsyncTelegramSender
+    from src.trade.signal_sources import configured as configured_sources
     from src.ta_engine.engine import Engine
     from src.ta_engine.monitoring import Monitoring
     from src.ta_engine.rules import RulesFile
@@ -152,6 +153,7 @@ async def main():
             notify=telegram.send,
             version=version,
             monitoring=monitoring,
+            signal_sources=configured_sources(config_manager),
         )
 
         loop = asyncio.get_running_loop()

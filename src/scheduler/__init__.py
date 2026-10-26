@@ -66,7 +66,7 @@ def job_macro_calendar_upkeep():
     if trading_rule.news_calendar is None:
         said = "The calendar of US releases cannot be read: no window is kept around them"
     else:
-        said = upkeep(trading_rule.news_calendar, today)
+        said = upkeep(trading_rule.news_calendar, today, trading_rule.news_rule.events)
     if said:
         send_message_to_telegram(f"⚠️ WATA: {said}.")
 

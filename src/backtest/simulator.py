@@ -36,6 +36,7 @@ from src.backtest.clock import BAR_SECONDS, TradingClock, ceil10, utc_iso
 from src.backtest.data import DayData, TurboSeries
 from src.backtest.execution import FIXED, FixedFills
 from src.backtest.rules import (
+    ACCOUNT_GUARD,
     STOP_LOSS,
     TRAILING,
     compounded,
@@ -157,6 +158,10 @@ class Simulator:
         self._day_percents: list[float] = []
         self._entries_today = 0
         self._asset_label = asset_label
+        # The account guard (src/trade/account_guard.py): the account's highest since the start, and when it
+        # paused entries, which nothing resumes in a run.
+        self._account_peak: float | None = None
+        self._guard_paused_at: float | None = None
 
     # ── the day ──
 
@@ -189,6 +194,9 @@ class Simulator:
         by_fate = {fate: 0 for fate in FATES}
         for signal in signals:
             by_fate[signal["fate"]] = by_fate.get(signal["fate"], 0) + 1
+        if self._guard_on():
+            # The day's value, as the daily report records it: what the account guard counts its highest from.
+            self._account_peak = self.cash if self._account_peak is None else max(self._account_peak, self.cash)
         first, last = day.span()
         record = {
             "day": day.day.isoformat(),
@@ -243,8 +251,24 @@ class Simulator:
         self.signals.append(record)
         return record
 
+    def _guard_on(self) -> bool:
+        return self.settings.pause_below_balance_eur > 0 or self.settings.pause_after_drawdown_percent > 0
+
+    def _account_value(self, moment: float) -> float:
+        """Cash, and the positions at the bid standing then: Saxo's TotalValue, which the account guard reads."""
+        value = self.cash
+        boundary = ceil10(moment)
+        for position in self.positions:
+            quote = position.series.quote_at(boundary)
+            value += position.units * (quote[0] if quote is not None else position.open_price)
+        return value
+
     def _enter(self, event: SignalEvent, decided: float) -> None:
         settings = self.settings
+        account_value = None
+        if self._guard_on() and self._guard_paused_at is None:
+            account_value = self._account_value(decided)
+            self._account_peak = account_value if self._account_peak is None else max(self._account_peak, account_value)
         refusal = entry_refusal(
             settings, self.clock,
             action=event.action, indice=event.indice, decided_at=decided, alert_at=event.alert_at,
@@ -252,8 +276,12 @@ class Simulator:
             day_percent=self.day_percent(), last_loss_at=self.last_loss_at,
             entries_today=self._entries_today, confidence=event.confidence, calendar=self.calendar,
             market_calendar=self.market_calendar,
+            account_value=account_value, account_peak=self._account_peak, guard_paused_at=self._guard_paused_at,
+            day_results=self._day_percents,
         )
         if refusal is not None:
+            if refusal.rule == ACCOUNT_GUARD and self._guard_paused_at is None:
+                self._guard_paused_at = decided
             self._signal(event, decided, REFUSED, refusal.rule, refusal.reason)
             self.trader_free_at = decided
             return
@@ -269,7 +297,8 @@ class Simulator:
             selection_at = sale_at + settings.close_wait_seconds
 
         boundary = ceil10(selection_at)
-        choice = select_turbo(self._day, event.action, boundary, settings.turbo_min_price, settings.turbo_max_price)
+        choice = select_turbo(self._day, event.action, boundary, settings.turbo_min_price, settings.turbo_max_price,
+                              settings.max_spread_percent or None)
         if isinstance(choice, NotSelected):
             closed += self._sell_after_failed_entry(event, selection_at)
             self._signal(

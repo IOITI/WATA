@@ -99,7 +99,8 @@ services:
   # whole on Sundays, into var/lib/backups, which lab/sync.sh pulls to the Mac. Reaches only the
   # database; nothing reaches it.
   pg_backup1:
-    image: postgres:16-alpine
+    # postgres:16-alpine with age and rclone (deploy/pg_backup.Dockerfile, built by docker_build.sh).
+    image: wata-backup:latest
     hostname: pg_backup1
     container_name: 'pg_backup1'
     oom_score_adj: 300
@@ -109,6 +110,21 @@ services:
       - PGUSER=wata
       - PGPASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}
       - PGDATABASE=wata
+      # Each dump sent off the server, encrypted to the operator's age public key, whose private half
+      # stays on the Mac: off unless both the key and the bucket are set in .env (deploy/pg_backup.sh).
+      - BACKUP_AGE_RECIPIENT=${BACKUP_AGE_RECIPIENT:-}
+      - BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET:-}
+      - BACKUP_S3_PREFIX=${BACKUP_S3_PREFIX:-wata}
+      - BACKUP_OFFSITE_KEEP=${BACKUP_OFFSITE_KEEP:-14}
+      - BACKUP_OFFSITE_KEEP_WEEKS=${BACKUP_OFFSITE_KEEP_WEEKS:-8}
+      # The bucket, as the rclone remote "offsite": any S3-compatible store.
+      - RCLONE_CONFIG_OFFSITE_TYPE=s3
+      - RCLONE_CONFIG_OFFSITE_PROVIDER=${BACKUP_S3_PROVIDER:-Other}
+      - RCLONE_CONFIG_OFFSITE_ENDPOINT=${BACKUP_S3_ENDPOINT:-}
+      - RCLONE_CONFIG_OFFSITE_REGION=${BACKUP_S3_REGION:-}
+      - RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID=${BACKUP_S3_ACCESS_KEY_ID:-}
+      - RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY=${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      - RCLONE_CONFIG_OFFSITE_NO_CHECK_BUCKET=true
     volumes:
       - ./pg_backup.sh:/pg_backup.sh:ro
       - ../../var/lib/backups:/backups

@@ -21,6 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from src.admin import backtest_requests
 from src.admin.auth import require_session
 from src.admin.errors import InvalidRequest
+from src.admin.live_drift import live_days
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
 
@@ -153,6 +154,23 @@ async def research_switch(body: ResearchSwitch, export=Depends(research)):
 async def paper(service=Depends(backtests)):
     """Each shadow rule's days traded on paper, beside the daily range of its reference run."""
     return await run_in_threadpool(service.paper)
+
+
+@router.get("/paper/live")
+async def live_paper(request: Request, service=Depends(backtests)):
+    """
+    The signals WATA received traded on paper under the live settings, each day beside the real one and the
+    daily range of the live reference, with the warning said once two days in a row were outside it.
+    """
+    paper_task = getattr(request.app.state.ctx, "paper", None)
+    if paper_task is None:
+        return {"days": [], "reference": None, "warning": None}
+    days, warning, reference = await paper_task.drift()
+    if reference is None:
+        # No reference yet: the paper days alone.
+        live = (await run_in_threadpool(service.paper)).get("live") or {}
+        days = live_days(live.get("days") or [], {}, None)
+    return {"days": days, "reference": reference, "warning": warning}
 
 
 @router.get("/turbo-model")

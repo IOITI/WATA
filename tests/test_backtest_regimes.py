@@ -117,7 +117,7 @@ def test_the_macro_calendar_is_read_with_what_it_knows_until():
     assert [event.event for event in calendar.on(date(2026, 10, 14))] == ["CPI"]
     assert [event.event for event in calendar.on(date(2024, 11, 7))] == ["FOMC"]
     assert calendar.on(date(2026, 10, 15)) == []
-    assert calendar.known_until() == date(2026, 12, 23)
+    assert calendar.known_until() == date(2027, 12, 3)
     assert len(calendar.digest) == 16
 
 
@@ -128,10 +128,18 @@ def test_the_macro_calendar_has_each_release_once_on_a_weekday_at_its_hour():
     assert all(event.day.weekday() < 5 for event in events)
     assert len({(event.day, event.event) for event in events}) == len(events)
     assert {event.time_new_york for event in events if event.event == "FOMC"} == {"14:00"}
-    assert {event.time_new_york for event in events if event.event in ("CPI", "NFP")} == {"08:30"}
+    # PCE came out at 10:00 three times in 2025-2026 (the shutdown's delays among them).
+    assert {event.time_new_york for event in events if event.event in ("CPI", "NFP", "PPI", "RETAIL", "GDP")} == {"08:30"}
+    assert {event.time_new_york for event in events if event.event == "JOLTS"} == {"10:00"}
     # Eight FOMC statements a year; a CPI and a jobs report a month, but for the month the 2025 shutdown cancelled.
     per_year = Counter((event.day.year, event.event) for event in events)
     assert [per_year[(year, "FOMC")] for year in (2024, 2025, 2026, 2027)] == [8, 8, 8, 8]
     assert per_year[(2024, "CPI")] == 12 and per_year[(2025, "CPI")] == 11 and per_year[(2025, "NFP")] == 11
+    # Kept from late 2026: a release a month (a quarter for the GDP's advance estimate), JOLTS until BLS gives 2027's.
+    assert [per_year[(year, "PPI")] for year in (2026, 2027)] == [2, 12]
+    assert [per_year[(year, "RETAIL")] for year in (2026, 2027)] == [2, 12]
+    assert [per_year[(year, "GDP")] for year in (2026, 2027)] == [1, 4]
+    assert [per_year[(year, "JOLTS")] for year in (2026, 2027)] == [2, 0]
+    assert per_year[(2027, "PCE")] == 12
     # The October 2025 figures were never published.
     assert not any(event.covers == "2025-10" for event in events if event.event in ("CPI", "NFP"))

@@ -141,9 +141,10 @@ def register(server, research) -> None:
     @research_tool(server, calls, name="data_trades", title="WATA's real trades", read_only=True, export=True)
     async def data_trades(start_day: date, end_day: date | None = None, offset: int = 0, limit: int = DEFAULT_PAGE,
                           format: str = "json") -> dict | str:
-        """The positions WATA really opened and closed in a period (by their opening day), oldest first: times,
-        turbo, prices, result in %, best result reached, close reason. No account detail. With a count of wins and
-        the reasons positions were closed for."""
+        """The positions WATA really opened and closed in a period (by their opening day; end_day is start_day when
+        not given), oldest first: times, turbo, prices, result in %, best and worst results reached (the worst
+        recorded since v0.48.0, 0 for a position that never fell under its open), close reason. No account detail.
+        With a count of wins and the reasons positions were closed for."""
         _format(format)
         first, last = period(start_day, end_day, MAX_DATA_DAYS)
         refuse_lockbox(research.journal, first, last)

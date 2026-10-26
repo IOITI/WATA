@@ -120,6 +120,21 @@ def test_waiting_for_a_fresh_quote_is_switched_by_a_boolean(tmp_path, value, acc
             ConfigurationManager(str(path))
 
 
+@pytest.mark.parametrize("value, accepted", [(True, True), (False, True), ("true", False), (1, False)])
+def test_the_bots_commands_are_switched_by_a_boolean(tmp_path, value, accepted):
+    with open("tests/test_config.json") as config_file:
+        config = json.load(config_file)
+    config.setdefault("reporting", {})["telegram_commands"] = value
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+
+    if accepted:
+        assert ConfigurationManager(str(path)).get_config_value("reporting.telegram_commands") is value
+    else:
+        with pytest.raises(ValueError, match="telegram_commands' must be a boolean"):
+            ConfigurationManager(str(path))
+
+
 @pytest.mark.parametrize("section, refusal", [
     ({"full_trading_level": True}, None),
     ({"full_trading_level": False}, None),

@@ -380,11 +380,12 @@ class ConfigEditor:
         candidate_path, _, _ = self._validated_candidate(submitted)
         os.remove(candidate_path)
 
-    def preview(self, submitted: dict) -> dict:
+    def preview(self, submitted: dict, live_indices=()) -> dict:
         """
         What saving ``submitted`` would change, checked as a save is: each
         parameter changed, the services that must start again for it, the pages
-        and runs that read it, and what works against what (warnings).
+        and runs that read it, and what works against what (warnings), the
+        indices signal rules are live on (``live_indices``) included.
         """
         candidate_path, _, current = self._validated_candidate(submitted)
         try:
@@ -393,7 +394,7 @@ class ConfigEditor:
         finally:
             os.remove(candidate_path)
         found = changes(mask_secrets(current), mask_secrets(candidate))
-        return {"changes": found, "impact": impact(found), "warnings": warnings(candidate)}
+        return {"changes": found, "impact": impact(found), "warnings": warnings(candidate, live_indices)}
 
     def _record(self, action: str, before: dict, after: dict, by: str | None, revisions: tuple[str, str]) -> list[dict]:
         """

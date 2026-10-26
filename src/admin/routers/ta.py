@@ -54,8 +54,10 @@ from src.admin.ta_rules import (
 )
 from src.admin.ta_readiness import unmet_readiness
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
+from src.admin.errors import ServiceUnavailable
 from src.capital_feed.settings import CapitalSettings
 from src.ta_engine.settings import TaEngineSettings
+from src.trade.signal_sources import ENGINE, source_of, sources_from
 
 router = APIRouter(prefix="/api/ta", dependencies=[Depends(require_session)])
 
@@ -341,10 +343,14 @@ async def delete_rule(rule_id: str, revision: str = Query(max_length=64), rule_s
     return Response(status_code=204)
 
 
-def _check_can_go_live(request: Request, rule: dict) -> None:
-    """What only the configuration says: the indice is traded, and the feed records the asset's bars."""
+async def _check_can_go_live(request: Request, rule: dict) -> None:
+    """
+    What only the configuration says: the indice is traded, the feed records the asset's bars, and the indice
+    takes the engine's signals as the web server runs (or TradingView's alerts would trade it beside the rule).
+    """
     require_actions_enabled(request)
-    config_manager = request.app.state.ctx.config_manager
+    ctx = request.app.state.ctx
+    config_manager = ctx.config_manager
     if rule["indice"] not in _allowed_indices(config_manager):
         raise RuleConflict(f"{rule['indice']} is not one of the allowed indices of the trading rules")
     try:
@@ -355,6 +361,16 @@ def _check_can_go_live(request: Request, rule: dict) -> None:
         raise RuleConflict("The Capital.com feed is off: a live rule would have no bars")
     if rule["asset"]["key"] not in {instrument.epic for instrument in feed.instruments}:
         raise RuleConflict(f"The Capital.com feed does not record {rule['asset']['key']}: a live rule would have no bars")
+    try:
+        webhook = await ctx.services.webhook_state()
+    except ServiceUnavailable as e:
+        raise RuleConflict(f"The web server does not say which signals {rule['indice']} takes: {e}") from None
+    if webhook is None or source_of(sources_from(webhook.get("sources")), rule["indice"]) != ENGINE:
+        raise RuleConflict(
+            f"{rule['indice']} takes TradingView's signals: set it to the engine in trade.config.signal_sources "
+            "(Configuration page) and restart the web server and the TA engine first, or TradingView's alerts "
+            "and this rule would trade it together"
+        )
 
 
 async def _unmet_readiness(request: Request, rule: dict) -> list[str]:
@@ -385,7 +401,7 @@ async def set_rule_mode(
     current = await run_in_threadpool(rule_store.rule, rule_id)
     unmet = []
     if body.mode == LIVE and current["mode"] != LIVE:
-        _check_can_go_live(request, current)
+        await _check_can_go_live(request, current)
         unmet = await _unmet_readiness(request, current)
         if unmet and not body.force:
             raise RuleConflict(

@@ -389,6 +389,8 @@ def feed_config_path(config_path):
 @pytest.fixture
 def api(feed_config_path, tmp_path, scripts):
     ctx = make_ctx(feed_config_path, tmp_path)
+    # A web server run with us100 set to the engine's signals (trade.config.signal_sources).
+    ctx.services.webhook = {"sources": {"us100": "engine"}, "ignored": {}}
     client = _client(ctx, tmp_path, scripts)
     yield client, ctx
     client.__exit__(None, None, None)
@@ -555,6 +557,31 @@ def test_a_rule_goes_live_only_on_a_traded_indice_and_a_recorded_asset(api, cros
     response = client.post(f"/api/ta/rules/{rule['id']}/mode", json={"mode": "live", "revision": revision}, headers=SAME_ORIGIN)
 
     assert response.status_code == 409 and refusal in response.json()["detail"]
+
+
+@pytest.mark.parametrize("webhook, refusal", [
+    ({"sources": {}, "ignored": {}}, "us100 takes TradingView's signals: set it to the engine"),
+    ({"sources": {"us100": "tradingview"}, "ignored": {}}, "us100 takes TradingView's signals"),
+    (None, "us100 takes TradingView's signals"),
+    ("down", "The web server does not say which signals us100 takes"),
+])
+def test_a_rule_goes_live_only_on_an_indice_the_web_server_runs_with_set_to_the_engine(api, cross, ready, webhook, refusal):
+    client, ctx = api
+    rule, revision = _new_rule(client, cross)
+    if webhook == "down":
+        ctx.services.web_server_down = True
+    else:
+        ctx.services.webhook = webhook
+
+    response = client.post(f"/api/ta/rules/{rule['id']}/mode", json={"mode": "live", "revision": revision}, headers=SAME_ORIGIN)
+
+    assert response.status_code == 409 and refusal in response.json()["detail"]
+    # "Go live anyway" skips readiness, never this.
+    forced = client.post(
+        f"/api/ta/rules/{rule['id']}/mode", json={"mode": "live", "revision": revision, "force": True}, headers=SAME_ORIGIN,
+    )
+    assert forced.status_code == 409
+    assert client.get(f"/api/ta/rules/{rule['id']}").json()["rule"]["mode"] == "shadow"
 
 
 def test_no_rule_goes_live_while_the_capital_com_feed_is_off(ctx, tmp_path, scripts, cross):

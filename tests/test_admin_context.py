@@ -137,7 +137,8 @@ def test_pause_is_written_through_a_separate_connection_that_is_not_read_only(tm
     assert (write_options["min_size"], write_options["max_size"]) == (0, 1)
     read_pool.execute.assert_not_awaited()
     statements = [call.args[0] for call in write_pool.execute.await_args_list]
-    assert len(statements) == 2
+    # The pause, then the resume: its keys removed, and when entries were resumed (the account guard's highest).
+    assert len(statements) == 3
     assert all("trade_risk_state" in statement for statement in statements)
     assert ctx.audit_log.path == str(tmp_path / "log" / "wata-admin" / "audit.jsonl")
 

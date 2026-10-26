@@ -104,9 +104,10 @@ def test_a_run_may_take_the_runners_time_limit_or_its_bar_when_shorter():
 # ── why a live signal was not sent: by the engine's own texts ──
 
 
-def _refusal(contested=frozenset(), covered=None, sender=object(), closed_ago=5.0):
+def _refusal(contested=frozenset(), covered=None, sender=object(), closed_ago=5.0, sources=None):
     engine = Engine.__new__(Engine)
     engine._settings, engine._contested, engine._sender = SETTINGS, contested, sender
+    engine._signal_sources = {"us100": "engine"} if sources is None else sources
     engine._covered = covered if covered is not None else NOW.timestamp()
     run = SimpleNamespace(rule=SimpleNamespace(rule={"indice": "us100"}))
     return engine._refusal(run, [0, 0, 0, 0, 0, 0, (NOW.timestamp() - closed_ago) * 1000], NOW.timestamp())
@@ -118,6 +119,7 @@ def test_the_reasons_of_a_live_signal_not_sent_are_read_from_what_the_engine_wri
                           ticker="CAPITAL_US100", timeframe="1", plots={}, now=NOW.timestamp())
     said = {
         "not_alone": _refusal(contested=frozenset({"us100"})),
+        "not_source": _refusal(sources={}),
         "too_old": _refusal(closed_ago=75),
         "stale_feed": _refusal(covered=NOW.timestamp() - 600),
         "no_sender": _refusal(sender=None),

@@ -15,6 +15,7 @@ The lab's commands:
     python -m lab edge RUN [--by hour]      how the asset moved after the run's entry signals
     python -m lab regimes RUN               each day's kind (volatility, gap, trend, news) and the trades by it
     python -m lab calendar check            whether the macro calendar knows the news ahead
+    python -m lab backup check [--offsite]  the newest dump restored here, its trading tables counted
     python -m lab model calibrate|show      turbos made up from the index, measured on the recorded ones
     python -m lab model validate SPEC       the same signals on recorded and on made-up turbos
     python -m lab reconcile RUN             a replay of the journal beside WATA's real positions
@@ -237,7 +238,20 @@ def command_regimes(arguments) -> int:
 
 
 def command_calendar(arguments) -> int:
-    ok, shown = runs.calendar_check(date.today(), ahead_days=arguments.ahead)
+    events = tuple(event.strip().upper() for event in arguments.events.split(",") if event.strip()) if arguments.events else None
+    ok, shown = runs.calendar_check(date.today(), ahead_days=arguments.ahead, events=events)
+    print(shown)
+    return 0 if ok else 1
+
+
+def command_backup(arguments) -> int:
+    from lab import backup
+
+    try:
+        ok, shown = backup.check(arguments.offsite, arguments.remote, arguments.identity)
+    except backup.BackupError as e:
+        print(e, file=sys.stderr)
+        return 1
     print(shown)
     return 0 if ok else 1
 
@@ -645,7 +659,15 @@ def parser() -> argparse.ArgumentParser:
     calendar = commands.add_parser("calendar", parents=[common], help="the macro calendar the days are marked with")
     calendar.add_argument("action", choices=("check",))
     calendar.add_argument("--ahead", type=int, default=30, help="days ahead each kind of news must be known")
+    calendar.add_argument("--events", help="the kinds judged, as the macro_news rule names them (FOMC,CPI,NFP,PCE by default)")
     calendar.set_defaults(handler=command_calendar)
+
+    backups = commands.add_parser("backup", parents=[common], help="the newest dump restored here and counted")
+    backups.add_argument("action", choices=("check",))
+    backups.add_argument("--offsite", action="store_true", help="the newest copy in the bucket, decrypted here")
+    backups.add_argument("--remote", help="the rclone path of the copies (WATA_BACKUP_REMOTE)")
+    backups.add_argument("--identity", help="the file of your age key (WATA_BACKUP_AGE_IDENTITY)")
+    backups.set_defaults(handler=command_backup)
 
     model = commands.add_parser("model", parents=[common], help="turbos made up from the index")
     model.add_argument("action", choices=("calibrate", "show", "validate"))

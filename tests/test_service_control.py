@@ -776,6 +776,9 @@ class Services:
     async def latest_signals(self):
         return [{"indice": "us100"}]
 
+    async def webhook_state(self):
+        return None
+
     async def watchlist_health(self):
         return {"ready": True}
 

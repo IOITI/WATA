@@ -85,7 +85,10 @@ import type {
   TaScriptSummary,
   TaSignal,
   TaVersion,
+  LivePaper,
+  PositionChartRefs,
   Watchlist,
+  WebhookState,
 } from './types'
 
 export class ApiError extends Error {
@@ -219,6 +222,9 @@ export const api = {
     request<Page<Position>>('GET', `/api/positions${query({ ...params, limit: 2000 })}`),
   position: (positionId: string) =>
     request<PositionDetail>('GET', `/api/positions/${encodeURIComponent(positionId)}`),
+  /** What a position is drawn on: its recorded turbo, the index below, its day and the signal that opened it. */
+  positionChart: (positionId: string) =>
+    request<PositionChartRefs>('GET', `/api/positions/${encodeURIComponent(positionId)}/chart`),
   orders: (params: DateRangeParams = {}) =>
     request<OrdersPage>('GET', `/api/orders${query({ ...params, limit: 2000 })}`),
   performance: (params: DateRangeParams = {}) =>
@@ -296,7 +302,7 @@ export const api = {
     request<AssetStatistics>('GET', `/api/data/assets/${assetPath(ref)}/statistics${query({ ...period })}`),
   audit: () => request<{ items: AuditEntry[] }>('GET', '/api/audit?limit=500'),
 
-  signals: () => request<{ items: Signal[] }>('GET', '/api/signals'),
+  signals: () => request<{ items: Signal[]; webhook?: WebhookState | null }>('GET', '/api/signals'),
   health: () => request<Health>('GET', '/api/system/health'),
   services: () => request<ServicesState>('GET', '/api/system/services'),
   credentials: () => request<Credentials>('GET', '/api/credentials'),
@@ -367,6 +373,8 @@ export const api = {
     request<BacktestReconciliation | Record<string, never>>('GET', `/api/backtests/${encodeURIComponent(runId)}/reconciliation`),
   /** Each shadow rule's days traded on paper, beside its reference run. */
   backtestPaper: () => request<BacktestPaper>('GET', '/api/backtests/paper'),
+  /** The signals WATA received traded on paper under the live settings, beside the real days and the live reference. */
+  livePaper: () => request<LivePaper>('GET', '/api/backtests/paper/live'),
   /** A run made from a rule becomes the one its paper days are set against. */
   setBacktestReference: (runId: string) => request<BacktestPaper>('POST', `/api/backtests/${encodeURIComponent(runId)}/reference`),
   /** The measure of the turbos made up from the index, and whether one is being made. */

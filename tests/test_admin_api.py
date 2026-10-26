@@ -50,6 +50,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/overview"),
     ("GET", "/api/positions"),
     ("GET", "/api/positions/5001"),
+    ("GET", "/api/positions/5001/chart"),
     ("GET", "/api/orders"),
     ("GET", "/api/performance"),
     ("GET", "/api/exits"),
@@ -137,6 +138,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/turbo-model"),
     ("GET", "/api/backtests/execution"),
     ("GET", "/api/backtests/paper"),
+    ("GET", "/api/backtests/paper/live"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
     ("POST", "/api/backtests/turbo-model"),
     ("GET", "/api/mcp"),
@@ -264,6 +266,13 @@ class FakeQueries:
         self.calls.append(("list_positions", status, start, end, limit))
         return {"items": [POSITION], "total": 1}
 
+    async def position_chart(self, position_id):
+        for position in (POSITION, CLOSED_POSITION):
+            if position_id == position["position_id"]:
+                return {"price_instrument_id": 42, "opened_at": datetime(2026, 10, 19, 22, 30, tzinfo=timezone.utc),
+                        "closed_at": None, "signal": {"action": "long", "signal_timestamp": "2026-10-19T22:29:40Z"}}
+        return None
+
     async def get_position(self, position_id):
         for position in (POSITION, CLOSED_POSITION):
             if position_id == position["position_id"]:
@@ -280,6 +289,12 @@ class FakeQueries:
 
     async def entries_paused_since(self):
         return self.paused_since
+
+    async def entries_paused_by_guard(self):
+        return getattr(self, "paused_by_guard", None)
+
+    async def today_closed_results(self):
+        return list(getattr(self, "closed_results", []))
 
     async def signal_journal(self, start=None, end=None, limit=200):
         self.calls.append(("signal_journal", start, end, limit))
@@ -523,12 +538,18 @@ class FakeServices:
         self.sent_signals = []
         self.published = []
         self.web_server_down = False
+        self.webhook = {"sources": {}, "ignored": {}}
         self.consumers = {"trading-ops": 1, "telegram_channel": 1}
 
     async def latest_signals(self):
         if self.web_server_down:
             raise ServiceUnavailable("web_server: connection refused")
         return [{"action": "long", "indice": "us100", "seq": 1}, {"action": "short", "indice": "de40", "seq": 2}]
+
+    async def webhook_state(self):
+        if self.web_server_down:
+            raise ServiceUnavailable("web_server: connection refused")
+        return self.webhook
 
     async def send_signal(self, payload):
         if self.web_server_down:
@@ -949,10 +970,28 @@ def test_database_failure_is_reported_as_unavailable(client, ctx):
     assert response.json() == {"detail": "The database is unavailable"}
 
 
+def test_a_position_is_drawn_on_its_recorded_turbo_and_the_index_of_its_indice(client):
+    answer = client.get("/api/positions/5002/chart").json()
+
+    # The test configuration trades us100 without the Capital.com feed: Dukascopy's history below.
+    assert answer["turbo"] == "saxo/42" and answer["index"] == "dukascopy/us100"
+    # Its opening day in the trading timezone (Paris): 00:30 on the 20th.
+    assert answer["day"] == "2026-10-20" and answer["signal"]["action"] == "long"
+    assert client.get("/api/positions/9999/chart").status_code == 404
+
+
 def test_signals_are_listed_newest_first(client):
     items = client.get("/api/signals").json()["items"]
 
     assert [signal["seq"] for signal in items] == [2, 1]
+
+
+def test_signals_come_with_the_sources_and_the_alerts_the_web_server_ignored(client, ctx):
+    ctx.services.webhook = {"sources": {"us100": "engine"}, "ignored": {"us100": {"count": 3, "first_at": "x", "last_at": "y"}}}
+
+    answer = client.get("/api/signals").json()
+
+    assert answer["webhook"]["ignored"]["us100"]["count"] == 3
 
 
 def test_signals_report_an_unreachable_web_server(client, ctx):
@@ -1209,7 +1248,7 @@ def test_health_says_the_last_backup_and_when_it_failed_or_is_old(client, ctx):
 
     assert backups_entry(good, now, "Europe/Paris") == [{
         "id": "backups", "name": "Database backups", "status": "ok",
-        "detail": "Last dump 27/10 03:17, 48 MB (wata-2026-10-27.dump)",
+        "detail": "Last dump 27/10 03:17, 48 MB (wata-2026-10-27.dump); not sent off the server",
     }]
     assert backups_entry({**good, "ok": False, "detail": "pg_dump failed"}, now, "Europe/Paris")[0]["detail"] == (
         "The dump of 27/10 03:17 failed: pg_dump failed"
@@ -1222,6 +1261,30 @@ def test_health_says_the_last_backup_and_when_it_failed_or_is_old(client, ctx):
         json.dump({**good, "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}, report)
     backups = next(s for s in client.get("/api/system/health").json()["services"] if s["id"] == "backups")
     assert backups["status"] == "ok"
+
+
+def test_health_warns_after_two_days_without_a_copy_off_the_server():
+    from src.admin.health import backups_entry
+
+    now = datetime(2026, 10, 27, 9, 0, tzinfo=timezone.utc)
+    dumped = {"at": "2026-10-27T02:17:03Z", "file": "wata-2026-10-27.dump", "bytes": 48_000_000, "ok": True,
+              "detail": "dumped"}
+
+    def entry(ok, detail, last_ok_at):
+        found = backups_entry({**dumped, "offsite": {"ok": ok, "detail": detail, "last_ok_at": last_ok_at}}, now,
+                              "Europe/Paris")
+        return found[0]["status"], found[0]["detail"]
+
+    assert entry(True, "Sent to nightly/", "2026-10-27T02:18:10Z") == (
+        "ok", "Last dump 27/10 03:17, 48 MB (wata-2026-10-27.dump), sent off the server")
+    # One night failed: said, not yet a warning.
+    assert entry(False, "rclone could not send it", "2026-10-26T02:18:10Z") == (
+        "ok", "Last dump 27/10 03:17, 48 MB (wata-2026-10-27.dump); its copy off the server failed "
+              "(rclone could not send it), the last one sent 26/10 03:18")
+    assert entry(False, "rclone could not send it", "2026-10-25T02:18:10Z") == (
+        "warning", "No copy sent off the server since 25/10 03:18: rclone could not send it")
+    assert entry(False, "No BACKUP_AGE_RECIPIENT in .env: nothing is sent unencrypted", None) == (
+        "warning", "No copy sent off the server yet: No BACKUP_AGE_RECIPIENT in .env: nothing is sent unencrypted")
 
 
 def test_log_tail_is_filtered_by_level_and_text(client, ctx):

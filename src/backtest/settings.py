@@ -17,6 +17,8 @@ from dataclasses import asdict, dataclass, fields, replace
 
 from src.backtest.execution import EXECUTIONS, FIXED
 from src.ta_engine.settings import TaEngineSettings
+from src.trade.account_guard import AccountGuard
+from src.trade.day_breakers import DayBreakers
 from src.trade.fresh_quote import wait_for_fresh_quote
 from src.trade.macro_calendar import NewsRule
 
@@ -82,6 +84,16 @@ FIELDS = (
           source="trade.rules.risk_management.cooldown_after_loss_minutes"),
     Field("max_trades_per_day", "entries", "integer", "Entries per day at most (0: no limit)", 0, 1000,
           source="trade.rules.risk_management.max_trades_per_day"),
+    Field("max_consecutive_losses", "entries", "integer", "No more entry today after this many losses in a row (0: off)",
+          0, 1000, source="trade.rules.risk_management.max_consecutive_losses"),
+    Field("max_drawdown_from_day_best_percent", "entries", "number",
+          "No more entry today this far under the day's best (0: off)", 0, 1000, unit="points",
+          source="trade.rules.risk_management.max_drawdown_from_day_best_percent"),
+    Field("pause_below_balance_eur", "entries", "number", "Entries paused once the account is under (0: off)", 0, 1e9,
+          unit="€", source="trade.rules.risk_management.pause_below_balance_eur"),
+    Field("pause_after_drawdown_percent", "entries", "number",
+          "Entries paused once the account is this far under its highest (0: off)", 0, 100, unit="%",
+          source="trade.rules.risk_management.pause_after_drawdown_percent"),
     Field("min_confidence", "entries", "number", "Entries under this confidence are refused", 0, 100,
           source="trade.config.position_sizing.confidence_scaling.min_confidence_threshold"),
     # No entry around US releases: the macro_news rule, off unless it is in the configuration.
@@ -96,6 +108,10 @@ FIELDS = (
     Field("news_cpi", "entries", "boolean", "Around CPI", source="trade.rules.macro_news.events"),
     Field("news_nfp", "entries", "boolean", "Around the jobs report (NFP)", source="trade.rules.macro_news.events"),
     Field("news_pce", "entries", "boolean", "Around PCE", source="trade.rules.macro_news.events"),
+    Field("news_ppi", "entries", "boolean", "Around producer prices (PPI)", source="trade.rules.macro_news.events"),
+    Field("news_retail", "entries", "boolean", "Around retail sales", source="trade.rules.macro_news.events"),
+    Field("news_gdp", "entries", "boolean", "Around the GDP's advance estimate", source="trade.rules.macro_news.events"),
+    Field("news_jolts", "entries", "boolean", "Around job openings (JOLTS)", source="trade.rules.macro_news.events"),
     # ── the day ──
     Field("no_entry_above_day_profit", "day", "number", "No new entry once the day is above", 0.01, 10_000, unit="%",
           source="trade.rules.day_trading.dont_enter_trade_if_day_profit_is_more_than"),
@@ -125,6 +141,8 @@ FIELDS = (
     # ── the turbo bought ──
     Field("turbo_min_price", "turbo", "number", "Turbos priced from", 0.01, 10_000,
           source="trade.config.turbo_preference.price_range.min"),
+    Field("max_spread_percent", "turbo", "number", "No turbo whose spread is wider than (0: no limit)", 0, 100,
+          unit="% of its ask", source="trade.config.turbo_preference.max_spread_percent"),
     Field("turbo_max_price", "turbo", "number", "Turbos priced up to", 0.01, 10_000,
           source="trade.config.turbo_preference.price_range.max"),
     # ── how much is bought ──
@@ -191,6 +209,11 @@ class BacktestSettings:
     allowed_indices: tuple[str, ...] = ("us100",)
     cooldown_after_loss_minutes: int = 0
     max_trades_per_day: int = 0
+    # The day's breakers and the account guard (src/trade/day_breakers.py, account_guard.py): off at 0.
+    max_consecutive_losses: int = 0
+    max_drawdown_from_day_best_percent: float = 0.0
+    pause_below_balance_eur: float = 0.0
+    pause_after_drawdown_percent: float = 0.0
     min_confidence: float = 0.0
     # No entry around US releases (the macro_news rule): off unless the configuration has it.
     news_window: bool = False
@@ -201,6 +224,11 @@ class BacktestSettings:
     news_cpi: bool = True
     news_nfp: bool = True
     news_pce: bool = True
+    # Known from late 2026 on, and kept only once named: off in the runs made before.
+    news_ppi: bool = False
+    news_retail: bool = False
+    news_gdp: bool = False
+    news_jolts: bool = False
     news_flatten_minutes_before: int = NewsRule.flatten_minutes_before
     # The day.
     no_entry_above_day_profit: float = 1.25
@@ -218,6 +246,8 @@ class BacktestSettings:
     # The turbo.
     turbo_min_price: float = 4
     turbo_max_price: float = 15
+    # No turbo whose spread is wider than this share of its ask (0: no limit).
+    max_spread_percent: float = 0.0
     # Sizing.
     funds_percent: float = 100
     reserve_cash_percent: float = 0
@@ -255,8 +285,10 @@ class BacktestSettings:
         """The window around US releases, as the trader keeps it; None while it is off."""
         if not self.news_window:
             return None
-        events = tuple(event for event, on in (("FOMC", self.news_fomc), ("CPI", self.news_cpi), ("NFP", self.news_nfp),
-                                               ("PCE", self.news_pce)) if on)
+        events = tuple(event for event, on in (
+            ("FOMC", self.news_fomc), ("CPI", self.news_cpi), ("NFP", self.news_nfp), ("PCE", self.news_pce),
+            ("PPI", self.news_ppi), ("RETAIL", self.news_retail), ("GDP", self.news_gdp), ("JOLTS", self.news_jolts),
+        ) if on)
         return NewsRule(
             events, self.news_minutes_before, self.news_minutes_after, self.news_minutes_after_fomc,
             self.news_flatten_minutes_before,
@@ -349,6 +381,10 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         allowed_indices=tuple(indices),
         cooldown_after_loss_minutes=risk.get("cooldown_after_loss_minutes", 0),
         max_trades_per_day=risk.get("max_trades_per_day", 0),
+        max_consecutive_losses=DayBreakers.from_config(risk).max_losses,
+        max_drawdown_from_day_best_percent=DayBreakers.from_config(risk).max_drawdown,
+        pause_below_balance_eur=AccountGuard.from_config(risk).below_eur,
+        pause_after_drawdown_percent=AccountGuard.from_config(risk).drawdown_percent,
         min_confidence=confidence.get("min_confidence_threshold", 0.0),
         news_window=news is not None,
         news_minutes_before=(news or NewsRule()).minutes_before,
@@ -358,6 +394,10 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         news_cpi="CPI" in (news or NewsRule()).events,
         news_nfp="NFP" in (news or NewsRule()).events,
         news_pce="PCE" in (news or NewsRule()).events,
+        news_ppi="PPI" in (news or NewsRule()).events,
+        news_retail="RETAIL" in (news or NewsRule()).events,
+        news_gdp="GDP" in (news or NewsRule()).events,
+        news_jolts="JOLTS" in (news or NewsRule()).events,
         news_flatten_minutes_before=(news or NewsRule()).flatten_minutes_before,
         no_entry_above_day_profit=day_trading.get(
             "dont_enter_trade_if_day_profit_is_more_than", defaults.no_entry_above_day_profit,
@@ -373,6 +413,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         wait_for_fresh_quote=wait_for_fresh_quote(position_management),
         turbo_min_price=price_range.get("min", defaults.turbo_min_price),
         turbo_max_price=price_range.get("max", defaults.turbo_max_price),
+        max_spread_percent=_section(config, "trade", "config", "turbo_preference").get("max_spread_percent") or 0.0,
         funds_percent=buying.get("max_account_funds_to_use_percentage", 100),
         reserve_cash_percent=buying.get("reserve_cash_percent", 0),
         safety_units=(buying.get("safety_margins") or {"bid_calculation": 1}).get("bid_calculation", 1),

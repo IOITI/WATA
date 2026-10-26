@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 import pytz
 import logging
+from .account_guard import AccountGuard
+from .day_breakers import DayBreakers
 from .exceptions import TradingRuleViolation
 from .macro_calendar import NewsRule, read_calendar, refusal_text, window_at
 from .market_calendar import (
@@ -8,10 +10,12 @@ from .market_calendar import (
 )
 
 class TradingRule:
-    def __init__(self, config_manager, db_position_manager, db_risk_state_manager=None):
+    def __init__(self, config_manager, db_position_manager, db_risk_state_manager=None, db_balance_manager=None):
         self.config_manager = config_manager
         self.db_position_manager = db_position_manager
         self.db_risk_state_manager = db_risk_state_manager
+        # The daily values the report records: the account guard's highest since the last resume.
+        self.db_balance_manager = db_balance_manager
         self.allowed_indices_rule_config = self.get_rule_config("allowed_indices")
         self.market_closed_dates_list = self.get_rule_config("market_closed_dates")["market_closed_dates"]
         day_trading_config = self.get_rule_config("day_trading")
@@ -33,6 +37,12 @@ class TradingRule:
         self.risk_management_config = self.get_rule_config_safe("risk_management")
         self.cooldown_after_loss_minutes = self.risk_management_config.get("cooldown_after_loss_minutes", 0) if self.risk_management_config else 0
         self.max_trades_per_day = self.risk_management_config.get("max_trades_per_day", 0) if self.risk_management_config else 0
+        # The account guard and the day's breakers (src/trade/account_guard.py, day_breakers.py): off unless set.
+        self.account_guard = AccountGuard.from_config(self.risk_management_config)
+        self.day_breakers = DayBreakers.from_config(self.risk_management_config)
+        # The highest account value read since the start, or since entries were last resumed after it.
+        self._seen_peak: float | None = None
+        self._seen_since = datetime.now(pytz.utc)
         # Confidence scaling config (optional)
         self.confidence_config = self.config_manager.get_config_value("trade.config.position_sizing.confidence_scaling", {})
         self.min_confidence_threshold = self.confidence_config.get("min_confidence_threshold", 0.0)
@@ -53,6 +63,12 @@ class TradingRule:
             logging.info(f"Cooldown after loss: {self.cooldown_after_loss_minutes} minutes")
         if self.max_trades_per_day > 0:
             logging.info(f"Max trades per day: {self.max_trades_per_day}")
+        if self.account_guard.on:
+            logging.info(f"Account guard: pause below {self.account_guard.below_eur:g} € or "
+                         f"{self.account_guard.drawdown_percent:g} % under the highest (0: off)")
+        if self.day_breakers.on:
+            logging.info(f"Day breakers: {self.day_breakers.max_losses} losses in a row, "
+                         f"{self.day_breakers.max_drawdown:g} points under the day's best (0: off)")
 
     def get_rule_config(self, rule_type):
         """
@@ -273,7 +289,62 @@ class TradingRule:
 
         paused_since = await self.db_risk_state_manager.get_entries_paused_since()
         if paused_since is not None:
-            message = f"Breaking trading rule: New entries are paused by the operator since {paused_since}."
+            by_guard = await self.db_risk_state_manager.get_entries_paused_by_guard()
+            who = "the account guard" if by_guard is not None else "the operator"
+            message = f"Breaking trading rule: New entries are paused by {who} since {paused_since}."
+            logging.info(message)
+            raise TradingRuleViolation(message)
+
+    async def _account_peak(self, value: float) -> float:
+        """The account's highest value since entries were last resumed: recorded each day, and read since the start."""
+        resumed_at = await self.db_risk_state_manager.get_entries_resumed_at()
+        if resumed_at is not None and resumed_at > self._seen_since:
+            # Resumed since the values read were counted: they count no more.
+            self._seen_peak, self._seen_since = None, resumed_at
+        self._seen_peak = value if self._seen_peak is None else max(self._seen_peak, value)
+        recorded = await self.db_balance_manager.highest_since(resumed_at) if self.db_balance_manager is not None else None
+        return self._seen_peak if recorded is None else max(self._seen_peak, recorded)
+
+    async def guard_account(self, value: float | None, notify=None) -> str | None:
+        """
+        The account guard with the account worth ``value`` (Saxo's TotalValue; None when unknown, which
+        decides nothing): when it trips, new entries are paused, as the operator pauses them but said to be
+        the guard's, and it is said once. Why, when it paused them now; None otherwise.
+        """
+        if not self.account_guard.on or value is None or self.db_risk_state_manager is None:
+            return None
+        if await self.db_risk_state_manager.get_entries_paused_since() is not None:
+            return None
+        reason = self.account_guard.trip(value, await self._account_peak(value))
+        if reason is None:
+            return None
+        await self.db_risk_state_manager.pause_entries_by_guard(datetime.now(pytz.utc))
+        logging.warning(f"New entries paused by the account guard: {reason}.")
+        if notify is not None:
+            try:
+                await notify(
+                    f"⏸️ WATA: new entries paused by the account guard. {reason}. They stay paused until you resume "
+                    f"them from the admin's dashboard."
+                )
+            except Exception as e:
+                logging.error(f"The account guard's pause could not be said on Telegram: {e}")
+        return reason
+
+    async def check_account_guard(self, value: float | None, notify=None):
+        """Refuses the entry when the account guard pauses entries at ``value`` (and pauses them)."""
+        reason = await self.guard_account(value, notify)
+        if reason is not None:
+            message = f"Breaking trading rule: {reason}: new entries are paused until the operator resumes them."
+            logging.info(message)
+            raise TradingRuleViolation(message)
+
+    async def check_day_breakers(self):
+        """No more entry today after that many losses in a row, or that far under the day's best (day_breakers.py)."""
+        if not self.day_breakers.on or self.db_position_manager is None:
+            return
+        refused = self.day_breakers.refusal(await self.db_position_manager.get_today_closed_results())
+        if refused is not None:
+            message = refused[1]
             logging.info(message)
             raise TradingRuleViolation(message)
 

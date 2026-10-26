@@ -52,6 +52,8 @@ class TurboWatchlistManager:
         self.exchange_id = exchange_id
         self.allowed_indices = dict(allowed_indices)
         self.stream_client = stream_client
+        # The trader's spread limit, so that the turbo kept ready is one it would buy (None: no limit).
+        self.max_spread_percent = config_manager.get_config_value("trade.config.turbo_preference.max_spread_percent") or None
 
         config = config_manager.get_config_value("trade.config.watchlist_manager", {})
         self.refresh_interval_seconds = config.get("refresh_interval_seconds", 300)
@@ -336,6 +338,7 @@ class TurboWatchlistManager:
                     max_price=self.instrument_service.turbo_price_range["max"],
                     subscription_context_id=context_id,
                     uic_to_subscription_reference_id=uic_to_ref_id,
+                    max_spread_percent=self.max_spread_percent,
                 )
             except (NoMarketAvailableException, NoTurbosAvailableException):
                 entry["result"] = None

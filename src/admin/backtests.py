@@ -110,6 +110,11 @@ TA_SIGNALS = "ta_signals"
 RAISED_FILE = "ta_signals.json"
 # Each shadow rule's day made a run, every finished day (src/admin/paper.py): kept apart from the list of runs.
 PAPER_FOLDER = "paper"
+# The paper days of the signals WATA receives, under the live settings, kept beside the rules' (src/admin/paper.py).
+LIVE_PAPER = "live"
+# A day of theirs on which no entry signal came: nothing to trade, kept so that it is not asked again.
+NO_ENTRY = ""
+NO_ENTRY_SIGNAL = "WATA received no signal of entry in that period"
 SIDES = ("bid", "ask")
 CHART_PROVIDERS = ("capital", "dukascopy", "saxo")
 MAX_PERIOD_DAYS = 92
@@ -594,7 +599,7 @@ class BacktestService:
         else:
             entries = [row for row in journal or [] if row.get("action") in ("long", "short")]
             if not entries:
-                raise NotPossible("WATA received no signal of entry in that period")
+                raise NotPossible(NO_ENTRY_SIGNAL)
             kept_journal = [{key: _plain(value) for key, value in row.items()} for row in journal or []]
             kept_source = {"kind": JOURNAL, "signals": len(journal or []), "entries": len(entries)}
             chart = checked_chart(body.get("chart"))
@@ -667,10 +672,12 @@ class BacktestService:
         }
         paper = body.get("paper")
         if paper is not None:
-            if source["kind"] != TA_SIGNALS or not isinstance(paper, dict) or paper.get("day") != first_day.isoformat() \
-                    or first_day != last_day or paper.get("rule") != kept_source["rule"]["id"]:
-                raise InvalidRequest("A paper run is one day of the signals one rule raised")
-            request["paper"] = {"rule": kept_source["rule"]["id"], "day": first_day.isoformat()}
+            # One day: of the signals one rule raised, or of those WATA received under the live settings.
+            owner = kept_source["rule"]["id"] if source["kind"] == TA_SIGNALS else LIVE_PAPER if source["kind"] == JOURNAL else None
+            if owner is None or not isinstance(paper, dict) or paper.get("day") != first_day.isoformat() \
+                    or first_day != last_day or paper.get("rule") != owner:
+                raise InvalidRequest("A paper run is one day of the signals one rule raised, or of those WATA received")
+            request["paper"] = {"rule": owner, "day": first_day.isoformat()}
         settings_doc = {"settings": settings.to_dict(), "changed": kept, "live_before": before}
         if model is not None:
             # The measure the run is made with goes with it: a later one does not change what it found.
@@ -729,12 +736,20 @@ class BacktestService:
             if positions is not None and kept_journal is not None and request["source"]["kind"] == JOURNAL else None
         if request["source"]["kind"] == TA_SIGNALS:
             made = self._queue_run(request, settings_doc, sources, None, raised=kept_journal)
-            if request.get("paper"):
-                index = self.paper_index()
-                index.setdefault(request["paper"]["rule"], {})[request["paper"]["day"]] = made["id"]
-                self._write_paper("index.json", index)
-            return made
-        return self._queue_run(request, settings_doc, sources, kept_journal, positions=kept_positions)
+        else:
+            made = self._queue_run(request, settings_doc, sources, kept_journal, positions=kept_positions)
+        if request.get("paper"):
+            self._index_paper(request["paper"]["rule"], request["paper"]["day"], made["id"])
+        return made
+
+    def _index_paper(self, owner: str, day: str, run_id: str) -> None:
+        index = self.paper_index()
+        index.setdefault(owner, {})[day] = run_id
+        self._write_paper("index.json", index)
+
+    def mark_live_paper_without_entry(self, day: str) -> None:
+        """A day on which WATA received no entry signal: a paper day with nothing to trade, not asked again."""
+        self._index_paper(LIVE_PAPER, day, NO_ENTRY)
 
     def _queue_run(self, request: dict, settings_doc: dict, sources: list, journal: list | None, copy_from: str | None = None,
                    *, positions: list | None = None, raised: list | None = None,
@@ -1313,26 +1328,42 @@ class BacktestService:
         os.makedirs(os.path.join(self._root, PAPER_FOLDER), exist_ok=True)
         write_json(self._paper_path(name), content)
 
+    def paper_file(self, name: str):
+        """A file kept beside the paper index (the drift said last, say); None when there is none."""
+        return read_json(self._paper_path(name))
+
+    def write_paper_file(self, name: str, content) -> None:
+        self._write_paper(name, content)
+
     def paper_index(self) -> dict:
         """By rule, by day: the run made of the signals the rule raised that day."""
         found = read_json(self._paper_path("index.json"))
         return found if isinstance(found, dict) else {}
 
     def _paper_ids(self) -> set[str]:
-        return {run_id for days in self.paper_index().values() for run_id in days.values()}
+        return {run_id for days in self.paper_index().values() for run_id in days.values() if run_id != NO_ENTRY}
 
     def references(self) -> dict:
         found = read_json(self._paper_path("references.json"))
         return found if isinstance(found, dict) else {}
 
     def set_reference(self, run_id: str) -> dict:
-        """A finished run made from a rule becomes the one its paper days are set against."""
+        """
+        A finished run made from a rule becomes the one its paper days are set against; a replay of the
+        signals WATA received, the one the live paper days and WATA's real days are set against.
+        """
         request = read_json(self._file(run_id, "request.json")) or {}
-        rule = ((request.get("source") or {}).get("from_rule") or {}).get("id")
+        source = request.get("source") or {}
+        rule = (source.get("from_rule") or {}).get("id")
         if request.get("kind") != "run" or self._status(run_id).get("state") != DONE:
-            raise NotPossible("Only a finished run can be a rule's reference")
+            raise NotPossible("Only a finished run can be a reference")
+        if source.get("kind") == JOURNAL and not request.get("paper"):
+            rule = LIVE_PAPER
         if not rule:
-            raise NotPossible("This run was not made from a signal rule: start one from the rule to make it its reference")
+            raise NotPossible(
+                "This run was not made from a signal rule nor of the signals WATA received: start one from the rule to "
+                "make it its reference"
+            )
         references = self.references()
         references[rule] = run_id
         self._write_paper("references.json", references)
@@ -1351,13 +1382,20 @@ class BacktestService:
         return {"run_id": run_id, "name": name, "days": len(results), "low": pick(0.05), "median": pick(0.5), "high": pick(0.95)}
 
     def paper(self) -> dict:
-        """Each rule's paper days, newest first, beside the daily range of its reference run."""
+        """
+        Each rule's paper days, newest first, beside the daily range of its reference run; and apart
+        (``live``), the paper days of the signals WATA received, beside the range of the live reference.
+        """
         references = self.references()
         rules = {}
         for rule_id, days in self.paper_index().items():
             reference = self._reference_range(references[rule_id]) if rule_id in references else None
             listed = []
             for day, run_id in sorted(days.items(), reverse=True):
+                if run_id == NO_ENTRY:
+                    listed.append({"day": day, "run_id": None, "state": "no_entry", "day_percent": 0.0, "trades": 0,
+                                   "outside": None})
+                    continue
                 try:
                     status = self._status(run_id)
                     record = next(iter(read_json(self._file(run_id, "days.json")) or []), None) if status.get("state") == DONE else None
@@ -1372,7 +1410,10 @@ class BacktestService:
                     "trades": record.get("trades") if record else None, "outside": outside,
                 })
             rules[rule_id] = {"days": listed, "reference": reference}
-        return {"rules": rules}
+        live = rules.pop(LIVE_PAPER, None)
+        if live is None and LIVE_PAPER in references:
+            live = {"days": [], "reference": self._reference_range(references[LIVE_PAPER])}
+        return {"rules": rules, "live": live}
 
     def prune_paper(self, keep_days: int, today: date) -> int:
         """The paper runs of days older than ``keep_days`` removed, with their place in the index."""
@@ -1380,10 +1421,11 @@ class BacktestService:
         for days in index.values():
             for day in [day for day in days if (today - date.fromisoformat(day)).days > keep_days]:
                 run_id = days.pop(day)
-                try:
-                    self.delete(run_id)
-                except (UnknownRun, NotPossible):
-                    pass
+                if run_id != NO_ENTRY:
+                    try:
+                        self.delete(run_id)
+                    except (UnknownRun, NotPossible):
+                        pass
                 removed += 1
         if removed:
             self._write_paper("index.json", index)

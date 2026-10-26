@@ -212,8 +212,12 @@ def test_the_days_of_a_run_read_with_their_kind_and_the_calendar_says_how_far_it
     assert "Trend up" in shown and "Wed" in shown and "trades by news:" in shown and "PCE" not in shown
 
     ok, said = runs.calendar_check(date(2026, 10, 20))
-    assert ok and "PCE   known until 2026-12-23" in said
-    late, said = runs.calendar_check(date(2026, 12, 1))
+    assert ok and "PCE    known from 2024-01-26 until 2027-12-22" in said and "PPI    known from 2026-11-13" in said
+    # JOLTS runs out first, but a rule names it only by choice: said, judged when named.
+    ok, said = runs.calendar_check(date(2026, 11, 15))
+    assert ok and "JOLTS  known from 2026-11-03 until 2026-12-01  ← short, judged when named" in said
+    assert not runs.calendar_check(date(2026, 11, 15), events=("CPI", "JOLTS"))[0]
+    late, said = runs.calendar_check(date(2027, 11, 20))
     assert not late and "add the next dates" in said
 
 
@@ -469,3 +473,109 @@ def test_the_command_line_keeps_the_journal_and_the_lock_box(capsys):
     assert experiments.get(listed[0]["id"])["verdict"] == "rejected"
     assert main(["exp", "show", "nothere"]) == 2
     assert "No experiment" in capsys.readouterr().err
+
+
+# ── a dump restored here ──
+
+
+def test_the_lab_counts_the_tables_the_server_counts():
+    from lab.backup import TRADING_TABLES
+
+    script = open("deploy/pg_backup.sh").read()
+    listed = script.split('TRADING_TABLES="', 1)[1].split('"', 1)[0].split()
+
+    assert tuple(listed) == TRADING_TABLES
+
+
+def test_the_lab_takes_the_versions_of_age_and_rclone_the_servers_image_takes():
+    image = open("deploy/pg_backup.Dockerfile").read()
+    tools = open("lab/backup_tools.sh").read()
+
+    for name in ("AGE_VERSION", "RCLONE_VERSION"):
+        version = image.split(f"ARG {name}=", 1)[1].split()[0]
+        assert f"{name}={version}" in tools, name
+    assert tools.count("shasum -a 256 -c -") == 2
+
+
+def test_the_newest_dump_and_the_newest_copy_are_found_by_their_day(tmp_path):
+    from lab.backup import newest_local, newest_sealed
+
+    for name in ("wata-2026-10-24.dump", "wata-2026-10-25-full.dump", "wata-2026-10-23.dump", "notes.txt"):
+        (tmp_path / name).write_text("x")
+
+    assert newest_local(tmp_path).name == "wata-2026-10-25-full.dump"
+    assert newest_local(tmp_path / "nothing") is None
+    assert newest_sealed({"nightly": ["wata-2026-10-26.dump.age", "wata-2026-10-24.dump.age"],
+                          "weekly": ["wata-2026-10-25-full.dump.age", "readme.txt"]}) == "nightly/wata-2026-10-26.dump.age"
+    assert newest_sealed({"nightly": [], "weekly": []}) is None
+
+
+class Done:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def test_the_newest_copy_is_downloaded_and_opened_with_the_key_kept_here(tmp_path, monkeypatch):
+    from lab import backup
+
+    key = tmp_path / "backup-age.key"
+    key.write_text("AGE-SECRET-KEY-1...")
+    ran = []
+
+    def run(command, capture_output, text):
+        ran.append(command)
+        if command[1] == "lsf":
+            return Done(stdout="wata-2026-10-26.dump.age\nwata-2026-10-24.dump.age\n") if "nightly" in command[-1] \
+                else Done(returncode=3, stderr="directory not found")
+        if command[1] == "copyto":
+            with open(command[-1], "w") as sealed:
+                sealed.write("sealed")
+        return Done()
+
+    monkeypatch.setattr(backup, "tool", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(backup, "restore_and_count", lambda dump, folder, run: {
+        table: (3 if table == "turbo_data_position" else 0) for table in backup.TRADING_TABLES})
+
+    ok, shown = backup.check(offsite=True, remote="wata-offsite:wata-backups/wata/", identity=str(key), run=run)
+
+    assert ok and shown.splitlines()[0] == "Restored wata-2026-10-26.dump.age, from wata-offsite:wata-backups/wata:"
+    assert "  turbo_data_position: 3" in shown
+    assert ran[0] == ["/bin/rclone", "lsf", "--files-only", "wata-offsite:wata-backups/wata/nightly/"]
+    assert ran[2][:3] == ["/bin/rclone", "copyto", "wata-offsite:wata-backups/wata/nightly/wata-2026-10-26.dump.age"]
+    assert ran[3][:4] == ["/bin/age", "--decrypt", "--identity", str(key)]
+
+
+def test_a_check_says_what_it_lacks(tmp_path, monkeypatch):
+    from lab import backup
+
+    monkeypatch.delenv("WATA_BACKUP_REMOTE", raising=False)
+    monkeypatch.setattr(backup, "tool", lambda name: f"/bin/{name}")
+
+    with pytest.raises(backup.BackupError, match="WATA_BACKUP_REMOTE"):
+        backup.check(offsite=True)
+    with pytest.raises(backup.BackupError, match="run lab/sync.sh"):
+        backup.check()
+    with pytest.raises(backup.BackupError, match="No age key at"):
+        backup.decrypt(tmp_path / "wata-2026-10-26.dump.age", tmp_path / "missing.key", tmp_path)
+
+
+def test_a_dump_is_restored_into_a_server_of_its_own_and_counted(tmp_path):
+    # The lab's own library (requirements-lab.txt): imported only through importorskip, never by name.
+    pgserver = pytest.importorskip("pgserver")
+    import subprocess
+
+    from lab.backup import restore_and_count
+
+    pg_dump = pgserver._commands.POSTGRES_BIN_PATH / "pg_dump"
+
+    source = pgserver.get_server(tmp_path / "source", cleanup_mode="delete")
+    try:
+        source.psql("CREATE TABLE turbo_data_position (position_id text); INSERT INTO turbo_data_position VALUES ('a'), ('b');")
+        dump = tmp_path / "wata-2026-10-26.dump"
+        subprocess.run([str(pg_dump), "-Fc", "-f", str(dump), source.get_uri()], check=True)
+    finally:
+        source.cleanup()
+
+    counts = restore_and_count(dump, tmp_path)
+
+    assert counts["turbo_data_position"] == 2 and counts["signal_journal"] is None

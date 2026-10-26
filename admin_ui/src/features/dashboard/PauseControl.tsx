@@ -10,6 +10,8 @@ import { formatDateTime } from '@/lib/format'
 
 interface PauseControlProps {
   pausedSince: string | null
+  /** Set when the account guard paused entries (src/trade/account_guard.py), not the operator. */
+  pausedByGuard?: string | null
   timeZone: string
   actionsEnabled: boolean
 }
@@ -18,7 +20,7 @@ interface PauseControlProps {
  * Stops the trader opening positions without stopping anything else: closing
  * signals, the end-of-day close and the position monitor's exits keep working.
  */
-export function PauseControl({ pausedSince, timeZone, actionsEnabled }: PauseControlProps) {
+export function PauseControl({ pausedSince, pausedByGuard = null, timeZone, actionsEnabled }: PauseControlProps) {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState(false)
@@ -55,10 +57,12 @@ export function PauseControl({ pausedSince, timeZone, actionsEnabled }: PauseCon
             )
           }
         >
-          <AlertTitle>New entries are paused</AlertTitle>
+          <AlertTitle>{pausedByGuard ? 'New entries are paused by the account guard' : 'New entries are paused'}</AlertTitle>
           <AlertDescription>
-            Since {formatDateTime(pausedSince, timeZone, false)}. Signals that would open a position are refused; open
-            positions are still monitored and closed as usual.
+            Since {formatDateTime(pausedSince, timeZone, false)}.{' '}
+            {pausedByGuard &&
+              'The account fell under the guard’s floor, or that far under its highest since entries were last resumed: Telegram said by how much. '}
+            Signals that would open a position are refused; open positions are still monitored and closed as usual.
           </AlertDescription>
         </Alert>
       ) : (

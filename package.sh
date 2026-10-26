@@ -58,6 +58,7 @@ cp -r ./deploy/docker-compose.override.yml _tmp_package/wata/$VERSION/deploy/
 cp -r ./deploy/install_package.sh _tmp_package/wata/$VERSION/deploy/
 cp -r ./deploy/update_rabbit_password.sh _tmp_package/wata/$VERSION/deploy/
 cp ./deploy/pg_backup.sh _tmp_package/wata/$VERSION/deploy/
+cp ./deploy/pg_backup.Dockerfile _tmp_package/wata/$VERSION/deploy/
 
 # Go to the temporary directory and create the zip
 cd _tmp_package

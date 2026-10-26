@@ -191,6 +191,42 @@ jobs:
         test -n "$expected"
         docker run --rm wata-base python --version | grep -F "Python $expected."
 
+    - name: Build the backup image with the server's own command
+      run: docker build -t wata-backup --platform=linux/amd64 - < deploy/pg_backup.Dockerfile
+
+    # deploy/pg_backup.sh as pg_backup1 runs it, a folder standing for the bucket and a key made for the test.
+    - name: A dump goes off the server encrypted, and only the key kept elsewhere opens it
+      run: |
+        docker network create backup-check
+        docker run -d --name backup-db --network backup-check -e POSTGRES_USER=wata -e POSTGRES_PASSWORD=wata \
+          -e POSTGRES_DB=wata postgres:16-alpine
+        # Over TCP: the image's first start answers on its socket alone while it initialises, then restarts.
+        for attempt in $(seq 1 30); do docker exec backup-db pg_isready -h 127.0.0.1 -U wata && break; sleep 1; done
+        docker exec backup-db psql -U wata -d wata -c \
+          "CREATE TABLE turbo_data_position (position_id text); INSERT INTO turbo_data_position VALUES ('p1')"
+        mkdir -p check/backups check/bucket check/key
+        docker run --rm -v "$PWD/check/key:/key" wata-backup age-keygen -o /key/identity.txt
+        recipient=$(sed -n 's/^# public key: //p' check/key/identity.txt)
+        docker run --rm --network backup-check --entrypoint sh \
+          -v "$PWD/deploy/pg_backup.sh:/pg_backup.sh:ro" -v "$PWD/check/backups:/backups" -v "$PWD/check/bucket:/bucket" \
+          -e PGHOST=backup-db -e PGUSER=wata -e PGPASSWORD=wata -e PGDATABASE=wata \
+          -e BACKUP_AGE_RECIPIENT="$recipient" -e BACKUP_OFFSITE=offsite:/bucket/wata -e RCLONE_CONFIG_OFFSITE_TYPE=local \
+          wata-backup /pg_backup.sh now
+        cat check/backups/last.json
+        grep -F '"offsite": {"ok": true' check/backups/last.json
+        sealed=$(cd check/bucket && ls wata/nightly/*.age wata/weekly/*.age 2>/dev/null | head -n 1)
+        test -n "$sealed"
+        # Without the key it is no dump; with it, the dump of the table above.
+        if docker run --rm -v "$PWD/check/bucket:/bucket:ro" wata-backup pg_restore --list "/bucket/$sealed"; then
+          echo "The copy off the server reads without the key" >&2
+          exit 1
+        fi
+        docker run --rm -v "$PWD/check/bucket:/bucket:ro" -v "$PWD/check/key:/key:ro" wata-backup sh -c \
+          "age -d -i /key/identity.txt '/bucket/$sealed' > /tmp/restored.dump && pg_restore --list /tmp/restored.dump" \
+          | grep -F "turbo_data_position"
+        docker rm -f backup-db
+        docker network rm backup-check
+
   # The database and the queue for real, with the libraries that talk to them.
   infrastructure:
     runs-on: ubuntu-latest

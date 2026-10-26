@@ -28,7 +28,7 @@ from src.admin.prices import range_bars, range_rows, range_volumes  # noqa: E402
 from src.admin.ta_rules import RuleStore  # noqa: E402
 from src.admin.ta_scripts import ScriptStore  # noqa: E402
 from src.ta_engine.bars import RangeBars, TimeBars, bucket_end  # noqa: E402
-from src.ta_engine.engine import CHECK_SECONDS, Engine  # noqa: E402
+from src.ta_engine.engine import CHECK_SECONDS, NOT_SOURCE, Engine  # noqa: E402
 from src.ta_engine.monitoring import Monitoring  # noqa: E402
 from src.ta_engine.rules import read_rules  # noqa: E402
 from src.ta_engine.runner import NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command  # noqa: E402
@@ -620,6 +620,7 @@ def engine_with(scripts, *, mode="shadow", now=T0 + 1.5, settings=None, **rule_c
         settings=settings or TaEngineSettings(enabled=True, history_days=0),
         rules=lambda: read_rules(scripts.root), source=source, runner=runner, journal=journal, sender=sender,
         notify=telegram, clock=clock, version="test",
+        signal_sources={"us100": "engine"},
     )
     return engine, rule, clock, source, runner, journal, sender, telegram
 
@@ -727,6 +728,23 @@ def test_a_live_rules_signal_is_sent_stamped_with_its_bars_close(scripts):
     [(signal_id, outcome, details)] = journal.completed
     assert (outcome, details["http_status"], details["signal_uuid"]) == ("sent", 200, "5e1f2a3b-0000-4000-8000-000000000001")
     assert journal.signals[0]["outcome"] == "sending"
+
+
+def test_a_live_rule_sends_nothing_for_an_index_that_takes_tradingviews_signals(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, mode="live")
+    # As the service builds it from a configuration without the index set to the engine.
+    engine._signal_sources = {}
+    run(engine.tick())
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 61.5
+
+    run(engine.tick())
+
+    assert sender.sent == []
+    [(signal_id, outcome, details)] = journal.completed
+    assert outcome == "refused"
+    assert details["detail"] == NOT_SOURCE.format(indice="us100")
 
 
 def test_a_live_rule_on_ten_second_bars_sends_at_the_tick_after_its_bar_and_never_late(scripts):
@@ -1171,6 +1189,7 @@ def two_runner_engine(scripts, settings=None):
         settings=settings or TaEngineSettings(enabled=True, history_days=0),
         rules=lambda: read_rules(scripts.root), source=source, runner=live, shadow_runner=shadow, journal=journal,
         sender=sender, notify=telegram, clock=clock, version="test",
+        signal_sources={"us100": "engine"},
     )
     return engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, sender, telegram
 
@@ -1293,6 +1312,7 @@ def test_without_a_shadow_rule_no_second_runner_is_started(scripts):
         settings=TaEngineSettings(enabled=True, history_days=0), rules=lambda: read_rules(scripts.root),
         source=Source(ten_second_rows(T0 - 3600, 360), covered=T0), runner=live, shadow_runner=shadow, journal=Journal(),
         sender=Sender(), notify=Telegram(), clock=clock, version="test",
+        signal_sources={"us100": "engine"},
     )
 
     run(engine.tick())
@@ -1466,6 +1486,7 @@ def test_each_tick_reads_the_memory_of_both_runners_once_its_rules_ran(scripts):
         source=Source(ten_second_rows(T0 - 3600, 360), covered=T0), runner=live, shadow_runner=shadow, journal=journal,
         sender=Sender(), notify=Telegram(), clock=clock, version="test",
         monitoring=Monitoring(journal, days=7, clock=clock, memory=memory),
+        signal_sources={"us100": "engine"},
     )
 
     run(ticked(engine))

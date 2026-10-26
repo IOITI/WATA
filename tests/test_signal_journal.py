@@ -13,6 +13,7 @@ sys.modules.setdefault("asyncpg", asyncpg_stub)
 sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
 
 import src.trader as trader
+from src.trade.account_guard import AccountGuard
 from src.trade.exceptions import (
     DatabaseOperationException,
     NoTurbosAvailableException,
@@ -74,8 +75,11 @@ def _dependencies():
 
     trading_rule = MagicMock()
     trading_rule.get_allowed_indice_id.return_value = "1909050"
-    for check in ("check_entries_paused", "check_profit_per_day", "check_cooldown_after_loss", "check_max_trades_per_day"):
+    for check in ("check_entries_paused", "check_profit_per_day", "check_cooldown_after_loss", "check_max_trades_per_day",
+                  "check_day_breakers"):
         setattr(trading_rule, check, AsyncMock())
+    # Off, as in a configuration without its settings (src/trade/account_guard.py).
+    trading_rule.account_guard = AccountGuard()
 
     db_position_manager = MagicMock()
     db_position_manager.get_open_positions_ids_actions = AsyncMock(return_value=[])

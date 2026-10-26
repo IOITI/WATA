@@ -23,7 +23,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 from src.admin.ta_rules import RuleStore, timeframe_seconds
-from src.ta_engine.engine import NO_SENDER, NOT_ALONE, NOT_TAKEN, STALE_FEED, TICK_SECONDS, TOO_OLD
+from src.ta_engine.engine import NO_SENDER, NOT_ALONE, NOT_SOURCE, NOT_TAKEN, STALE_FEED, TICK_SECONDS, TOO_OLD
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
 # The minutes the checks look back over: a trouble is said for this long after it ends, never on and off.
@@ -64,6 +64,7 @@ def _start_of(template: str) -> str:
 # Why a live signal was not sent, by the start of what its journal says (the engine's own texts).
 REFUSALS = (
     ("not_alone", "Another rule is live on its indice", _start_of(NOT_ALONE)),
+    ("not_source", "Its indice takes TradingView's signals", _start_of(NOT_SOURCE)),
     ("too_old", "Its bar closed too long before", _start_of(TOO_OLD)),
     ("stale_feed", "The Capital.com feed was stale", STALE_FEED),
     ("no_sender", "No way to send signals", NO_SENDER),

@@ -75,8 +75,12 @@ class Config(DictConfig):
 
 
 class Positions:
-    def __init__(self, open_actions=(), day_percent=0.0, trades_today=0):
+    def __init__(self, open_actions=(), day_percent=0.0, trades_today=0, closed_results=()):
         self.open_actions, self.day_percent, self.trades_today = list(open_actions), day_percent, trades_today
+        self.closed_results = list(closed_results)
+
+    async def get_today_closed_results(self):
+        return self.closed_results
 
     async def get_open_positions_ids_actions(self):
         return [{"position_id": f"p{number}", "action": action} for number, action in enumerate(self.open_actions)]
@@ -91,12 +95,30 @@ class Positions:
 class RiskState:
     def __init__(self, last_loss: datetime | None):
         self.last_loss = last_loss
+        self.paused_by_guard = None
 
     async def get_last_loss_timestamp(self):
         return self.last_loss
 
     async def get_entries_paused_since(self):
+        return self.paused_by_guard
+
+    async def get_entries_paused_by_guard(self):
+        return self.paused_by_guard
+
+    async def get_entries_resumed_at(self):
         return None
+
+    async def pause_entries_by_guard(self, ts):
+        self.paused_by_guard = ts
+
+
+class Balances:
+    def __init__(self, highest: float | None):
+        self.highest = highest
+
+    async def highest_since(self, moment):
+        return self.highest
 
 
 class Journal:
@@ -108,9 +130,11 @@ class Journal:
 
 
 def live_outcome(config: dict, *, now: datetime, action: str, indice: str, alert_at: datetime, positions: Positions,
-                 last_loss: datetime | None, confidence: float | None) -> tuple[str, str | None]:
+                 last_loss: datetime | None, confidence: float | None, account_value: float | None = None,
+                 highest: float | None = None) -> tuple[str, str | None]:
     orchestrator = MagicMock()
     orchestrator.reserve_cash_percent = 0
+    orchestrator.account_value = AsyncMock(return_value=account_value)
     orchestrator.execute_trade_signal = AsyncMock(return_value={
         "order_details": {"order_id": "o1"}, "position_details": {"position_id": "p9"}, "selected_turbo_info": {},
     })
@@ -130,7 +154,7 @@ def live_outcome(config: dict, *, now: datetime, action: str, indice: str, alert
     }
     if confidence is not None:
         signal["confidence"] = confidence
-    rule = TradingRule(Config(config), positions, RiskState(last_loss))
+    rule = TradingRule(Config(config), positions, RiskState(last_loss), Balances(highest))
     with patch.object(live_rules, "datetime", frozen_at(now)), patch.object(trader, "TelegramMessageComposer"):
         asyncio.run(trader.handle_trading_signal(
             signal, orchestrator, monitor, rule, positions, "exchange", telegram, journal=journal,
@@ -230,6 +254,86 @@ def test_an_entry_around_a_us_release_is_refused_as_live(name, moment, news, tak
 
     mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
     assert mirrored == live and (live[0] == "executed") == taken
+
+
+BREAKER_SCENARIOS = [
+    # (name, risk_management changes, the day's closed results in order, open actions)
+    ("no breaker set", {}, [-1, -1, -1, -1], []),
+    ("two losses of three", {"max_consecutive_losses": 3}, [2, -1, -1], []),
+    ("three losses in a row", {"max_consecutive_losses": 3}, [2, -1, -1, -1], []),
+    ("a win breaks the row", {"max_consecutive_losses": 2}, [-1, -1, 0.5], []),
+    ("under the day's best", {"max_drawdown_from_day_best_percent": 5}, [4, -6], []),
+    ("not far enough under it", {"max_drawdown_from_day_best_percent": 5}, [4, -1], []),
+    ("from the start of the day", {"max_drawdown_from_day_best_percent": 3}, [-3.5], []),
+    ("a duplicate comes first", {"max_consecutive_losses": 1}, [-1], ["long"]),
+]
+
+
+@pytest.mark.parametrize("name, risk, results, open_actions", BREAKER_SCENARIOS,
+                         ids=[scenario[0] for scenario in BREAKER_SCENARIOS])
+def test_the_days_breakers_refuse_as_live(name, risk, results, open_actions):
+    # Above the day loss of the example (-25 %) and under its no-entry line (1.25 %), so that only the breakers decide.
+    config = config_with(risk_management=risk, day_trading={"max_day_loss_percent": -90.0,
+                                                           "dont_enter_trade_if_day_profit_is_more_than": 50.0})
+    moment = paris("10:00")
+    positions = Positions(open_actions, day_percent=0.0, trades_today=len(results), closed_results=results)
+
+    live = live_outcome(config, now=moment, action="long", indice="us100", alert_at=moment - timedelta(seconds=1),
+                        positions=positions, last_loss=None, confidence=None)
+    refusal = entry_refusal(
+        from_config(config), CLOCK, action="long", indice="us100", decided_at=moment.timestamp(),
+        alert_at=moment.timestamp() - 1, open_directions=open_actions, day_percent=0.0, last_loss_at=None,
+        entries_today=len(results), confidence=None, day_results=results,
+    )
+
+    mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
+    assert mirrored == live
+
+
+GUARD_SCENARIOS = [
+    # (name, risk_management changes, the account's value, its highest recorded)
+    ("no guard", {}, 1.0, 1000.0),
+    ("above the floor", {"pause_below_balance_eur": 50}, 50.0, None),
+    ("under the floor", {"pause_below_balance_eur": 50}, 49.9, None),
+    ("not far under the highest", {"pause_after_drawdown_percent": 30}, 71.0, 100.0),
+    ("a third under the highest", {"pause_after_drawdown_percent": 30}, 66.0, 100.0),
+    ("the value is the highest", {"pause_after_drawdown_percent": 30}, 66.0, None),
+]
+
+
+@pytest.mark.parametrize("name, risk, value, highest", GUARD_SCENARIOS, ids=[scenario[0] for scenario in GUARD_SCENARIOS])
+def test_the_account_guard_refuses_as_live(name, risk, value, highest):
+    config = config_with(risk_management=risk)
+    moment = paris("10:00")
+
+    live = live_outcome(config, now=moment, action="long", indice="us100", alert_at=moment - timedelta(seconds=1),
+                        positions=Positions(), last_loss=None, confidence=None, account_value=value, highest=highest)
+    # The trader's highest is the larger of the recorded one and the value it reads.
+    refusal = entry_refusal(
+        from_config(config), CLOCK, action="long", indice="us100", decided_at=moment.timestamp(),
+        alert_at=moment.timestamp() - 1, open_directions=[], day_percent=0.0, last_loss_at=None, entries_today=0,
+        confidence=None, account_value=value, account_peak=max(value, highest or value),
+    )
+
+    mirrored = ("executed", None) if refusal is None else ("refused", refusal.reason)
+    assert mirrored == live
+
+
+def test_once_the_guard_paused_entries_both_refuse_every_later_one_as_paused_by_it():
+    config = config_with(risk_management={"pause_below_balance_eur": 50})
+    tripped = paris("10:00")
+    risk_state = RiskState(None)
+    risk_state.paused_by_guard = tripped.astimezone(timezone.utc)
+    rule = TradingRule(Config(config), Positions(), risk_state, Balances(None))
+    with pytest.raises(Exception) as live:
+        asyncio.run(rule.check_entries_paused())
+
+    refusal = entry_refusal(
+        from_config(config), CLOCK, action="long", indice="us100", decided_at=paris("10:05").timestamp(),
+        alert_at=paris("10:05").timestamp() - 1, open_directions=[], day_percent=0.0, last_loss_at=None,
+        entries_today=0, confidence=None, guard_paused_at=tripped.timestamp(),
+    )
+    assert refusal.reason == str(live.value)
 
 
 # ── the size of an order ──

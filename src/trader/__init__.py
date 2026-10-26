@@ -206,6 +206,9 @@ async def handle_trading_signal(
 
         # Paused by the operator: refused before anything is closed or opened
         await trading_rule.check_entries_paused()
+        # The account guard: below its floor, or that far under its highest, entries pause until resumed.
+        if trading_rule.account_guard.on:
+            await trading_rule.check_account_guard(await trading_orchestrator.account_value(), notify=telegram.send)
 
         # No new position while Saxo refuses to renew the login: once it lapses, nothing can be sold.
         login_refusal = watch.login_refusal() if watch is not None else None
@@ -223,6 +226,7 @@ async def handle_trading_signal(
 
         await trading_rule.check_cooldown_after_loss()
         await trading_rule.check_max_trades_per_day()
+        await trading_rule.check_day_breakers()
         if confidence is not None:
             trading_rule.check_confidence_threshold(confidence)
 
@@ -692,7 +696,7 @@ async def poll_and_dispatch_signals(
 
 async def keep_saxo_session_warm(
     trading_orchestrator: AsyncTradingOrchestrator, interval_seconds: float,
-    watch: TraderWatch | None = None, api_client=None,
+    watch: TraderWatch | None = None, api_client=None, trading_rule: TradingRule | None = None, notify=None,
 ) -> None:
     """
     Call Saxo on a timer between signals.
@@ -700,7 +704,8 @@ async def keep_saxo_session_warm(
     The trader is otherwise silent until a signal arrives, which leaves the first
     request of a trade to pay for a new TLS connection (the HTTP keep-alive
     expires after 60s) and, once the access token has expired, for its refresh.
-    The balance fetched here also feeds the optional spending-power cache, and
+    The balance fetched here also feeds the optional spending-power cache and
+    the account guard, which pauses entries between signals when it trips, and
     the trader's watch is checked after it: the signals' silence, Saxo's login
     and the level of WATA's session.
     """
@@ -710,6 +715,12 @@ async def keep_saxo_session_warm(
             await trading_orchestrator.refresh_spending_power()
         except Exception as e:
             logger.warning("Saxo keep-warm call failed: %s", e)
+        if trading_rule is not None and trading_rule.account_guard.on:
+            try:
+                seen = trading_orchestrator.position_service.last_total_value
+                await trading_rule.guard_account(seen[0] if isinstance(seen, tuple) else None, notify=notify)
+            except Exception as e:
+                logger.error("The account guard could not be checked: %s", e)
         if watch is not None:
             await watch.check(api_client)
 
@@ -791,7 +802,7 @@ async def main():
         )
 
         # 4. Trading rules (async DB-backed checks; risk state shared with position_monitor)
-        trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager)
+        trading_rule = TradingRule(config_manager, db_position_manager, db_risk_state_manager, db_balance_manager)
         trade_turbo_exchange_id = config_manager.get_config_value("trade.config.turbo_preference.exchange_id")
         milestones_eur = config_manager.get_config_value("reporting.milestones_eur", list(DEFAULT_MILESTONES_EUR))
 
@@ -853,7 +864,8 @@ async def main():
         )
         if keep_warm_interval_seconds > 0:
             keep_warm_task = asyncio.create_task(
-                keep_saxo_session_warm(trading_orchestrator, keep_warm_interval_seconds, watch, api_client)
+                keep_saxo_session_warm(trading_orchestrator, keep_warm_interval_seconds, watch, api_client,
+                                       trading_rule=trading_rule, notify=telegram.send)
             )
 
         # 10. The position monitor takes over the sales that did not go through

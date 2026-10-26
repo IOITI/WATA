@@ -334,6 +334,20 @@ def test_parameters_that_work_against_each_other_are_said():
     assert warnings(EXAMPLE) == []
 
 
+def test_a_source_of_signals_that_leaves_a_live_rule_unheard_or_an_index_unattended_is_said():
+    engine = copy.deepcopy(EXAMPLE)
+    place(engine, "trade.config.signal_sources", {"us100": "engine"})
+
+    # The example's us100 takes TradingView's signals: a rule live on it would send nothing.
+    [unheard] = warnings(EXAMPLE, live_indices=["us100"])
+    [unattended] = warnings(engine)
+
+    assert unheard["path"] == unattended["path"] == "trade.config.signal_sources"
+    assert "sends that rule's signals no more" in unheard["message"]
+    assert "nothing trades it" in unattended["message"]
+    assert warnings(engine, live_indices=["us100"]) == []
+
+
 def test_the_keys_nothing_reads_can_be_taken_out_of_the_file(tmp_path):
     config = copy.deepcopy(EXAMPLE)
     general = config["trade"]["config"]["general"]

@@ -7,6 +7,7 @@ designed for the async Trader and Position Monitor services.
 
 import json
 import logging
+import re
 import time
 import asyncio
 from threading import Lock
@@ -16,6 +17,83 @@ import httpx
 from .exceptions import OpenAPIError
 
 logger = logging.getLogger(__name__)
+
+# Saxo's limits (developer.saxo/openapi/learn/rate-limiting): 120 requests a
+# minute per session and service group ("Session"), one order a second per
+# session ("SessionOrders"), and the app's requests of the day ("AppDay"). A
+# refusal (429) says which ran out in its headers: an order refused for the
+# order limit carries X-RateLimit-SessionOrders-*, and no Session-Reset.
+ORDER_ENDPOINT = re.compile(r"^openapi/trade/v[12]/orders(/(?!precheck$)[^/]+)?$")
+ORDER_METHODS = frozenset({"post", "patch", "delete"})
+# A little over Saxo's second, so that two orders in a row are never refused.
+ORDER_SPACING_SECONDS = 1.05
+# What a refusal is waited when no header says when its limit resets.
+ORDER_REFUSAL_WAIT_SECONDS = 1.0
+SESSION_REFUSAL_WAIT_SECONDS = 60.0
+
+
+def is_order_request(method: str, endpoint) -> bool:
+    """A request Saxo counts against its order a second: placing, changing or cancelling an order."""
+    return method.lower() in ORDER_METHODS and bool(ORDER_ENDPOINT.match(str(endpoint)))
+
+
+def _int_header(headers, name: str) -> int | None:
+    try:
+        return int(headers[name]) if name in headers else None
+    except (TypeError, ValueError):
+        return None
+
+
+def wait_after_refusal(headers, ordering: bool) -> float | None:
+    """
+    How long to wait after Saxo's 429 before asking once more: the reset of the
+    limit that ran out (about a second for the order limit), or None when it is
+    the app's limit of the day, which is not worth waiting for. Until v0.48.0 an
+    order refused for the order limit waited 60 s, the default for a missing
+    Session-Reset: a sale a minute late.
+    """
+    for dimension in ("SessionOrders", "Session", "AppDay"):
+        remaining = _int_header(headers, f"X-RateLimit-{dimension}-Remaining")
+        if remaining is None or remaining > 0:
+            continue
+        if dimension == "AppDay":
+            return None
+        reset = _int_header(headers, f"X-RateLimit-{dimension}-Reset")
+        if reset is None:
+            return ORDER_REFUSAL_WAIT_SECONDS if dimension == "SessionOrders" else SESSION_REFUSAL_WAIT_SECONDS
+        return float(max(reset, 1))
+    reset = _int_header(headers, "X-RateLimit-SessionOrders-Reset" if ordering else "X-RateLimit-Session-Reset")
+    if reset is not None:
+        return float(max(reset, 1))
+    return ORDER_REFUSAL_WAIT_SECONDS if ordering else SESSION_REFUSAL_WAIT_SECONDS
+
+
+class OrderPacer:
+    """
+    Order requests spaced ``ORDER_SPACING_SECONDS`` apart, since Saxo refuses a
+    second order within a second of the session's last (429). A position sold
+    while another is (the monitor sells three at a time), or the other side sold
+    right after a purchase, waits under a second instead of being refused.
+    The services share one session at Saxo: two of them ordering in the same
+    second can still be refused, and are then waited as ``wait_after_refusal`` says.
+    """
+
+    def __init__(self, spacing: float = ORDER_SPACING_SECONDS, clock=time.monotonic):
+        self._spacing = spacing
+        self._clock = clock
+        self._lock = asyncio.Lock()
+        self._last: float | None = None
+
+    async def wait_turn(self) -> float:
+        """Wait until the next order may leave, mark it as leaving, and say how long was waited."""
+        async with self._lock:
+            waited = 0.0
+            if self._last is not None:
+                waited = max(0.0, self._spacing - (self._clock() - self._last))
+                if waited > 0:
+                    await asyncio.sleep(waited)
+            self._last = self._clock()
+            return waited
 
 TRADING_ENVIRONMENTS = {
     "simulation": {
@@ -93,6 +171,7 @@ class AsyncAPI:
         self.environment = environment
         self.access_token = access_token
         self.rate_limiter = AsyncRateLimiter()
+        self.order_pacer = OrderPacer()
 
         _headers = {**DEFAULT_HEADERS, "Authorization": f"Bearer {access_token}"}
         if headers:
@@ -151,7 +230,10 @@ class AsyncAPI:
         if hasattr(endpoint, "data") and endpoint.data:
             kwargs["json"] = endpoint.data
 
+        ordering = is_order_request(method, endpoint)
         await self.rate_limiter.wait_if_needed()
+        if ordering:
+            await self.order_pacer.wait_turn()
         logger.debug("AsyncAPI: %s %s", method.upper(), url)
 
         try:
@@ -162,13 +244,18 @@ class AsyncAPI:
 
         self.rate_limiter.update_limits(response.headers)
 
-        # Handle 429 rate-limit with one retry
+        # Handle 429 rate-limit with one retry, after the reset of the limit that ran out
         if response.status_code == 429:
-            reset_time = int(response.headers.get("X-RateLimit-Session-Reset", 60))
-            logger.warning("Rate limit exceeded (429). Waiting %d seconds…", reset_time)
-            await asyncio.sleep(reset_time)
-            response = await self._client.request(method, url, headers=ep_headers, **kwargs)
-            self.rate_limiter.update_limits(response.headers)
+            wait = wait_after_refusal(response.headers, ordering)
+            if wait is not None:
+                logger.warning("Rate limit exceeded (429). Waiting %.0f seconds…", wait)
+                await asyncio.sleep(wait)
+                if ordering:
+                    await self.order_pacer.wait_turn()
+                response = await self._client.request(method, url, headers=ep_headers, **kwargs)
+                self.rate_limiter.update_limits(response.headers)
+            else:
+                logger.warning("Rate limit of the app's day exceeded (429): not asked again")
 
         if response.status_code >= 400:
             content = response.text

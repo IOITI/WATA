@@ -284,6 +284,17 @@ export function RunPage() {
         onSelect: () => reference.mutate(),
       })
     }
+    // A replay of the signals WATA received (not a paper day of its own): the live settings' reference.
+    if (done && shown.source.kind === 'journal' && !shown.paper) {
+      options.push({
+        value: 'live-reference',
+        label: reference.isSuccess ? 'The live reference' : 'Set as the live reference',
+        description: 'The run the paper days of the signals received, and WATA’s real days, are set against',
+        icon: <Flag />,
+        disabled: reference.isSuccess || reference.isPending,
+        onSelect: () => reference.mutate(),
+      })
+    }
     options.push({
       value: 'rename',
       label: 'Rename',
