@@ -1,5 +1,5 @@
 import type { TimelineItem, TimelineStatus } from '@/components/ui/interactive-timeline'
-import { formatClock, formatNumber, formatWait } from '@/lib/format'
+import { formatClock, formatNumber, formatTime, formatWait } from '@/lib/format'
 import type { Order, Refusal, SellRefusals } from '@/lib/types'
 
 import { answerText, sellRefusalLabel } from './orderRequests'
@@ -43,6 +43,8 @@ export interface LifeStep {
   at: string | null
   /** Whose clock the moment was read on. */
   clock: 'wata' | 'saxo'
+  /** The moment was kept to the second alone: shown so, and put in order as the end of its second. */
+  toTheSecond?: boolean
   note: string
   tone?: 'danger' | 'warning'
 }
@@ -147,7 +149,7 @@ function sentAndAccepted(order: Order, purpose: Purpose): LifeStep[] {
     label: 'Accepted by Saxo',
     at: order.accepted_at ?? null,
     clock: 'wata',
-    note: answered != null ? `${formatWait(answered)} after it left` : '',
+    note: answered != null ? `${formatWait(answered)} after the order left` : '',
   })
   return steps
 }
@@ -240,12 +242,8 @@ function trackedLife(
   refusal: Refusal | null,
 ): Pick<OrderLife, 'steps' | 'summary'> {
   const life = trackedSteps(order, purpose, result)
-  // What came before the order left: the sells Saxo refused, the resting orders cancelled.
-  const before = [...(refusal ? [refusedBefore(refusal)] : []), ...restingOrdersCancelled(order)]
-  if (before.length > 0) {
-    const sent = life.steps.findIndex((step) => step.key === 'sent')
-    life.steps.splice(sent < 0 ? 0 : sent, 0, ...before)
-  }
+  // What came before the order left: the sells Saxo refused, the resting orders cancelled. Their moments place them.
+  life.steps.unshift(...(refusal ? [refusedBefore(refusal)] : []), ...restingOrdersCancelled(order))
   if (refusal) {
     const sells = refusal.count === 1 ? 'a sell order' : `${formatNumber(refusal.count)} sell orders`
     life.summary = `${life.summary} Saxo had refused ${sells} of this position before taking this one.`
@@ -357,6 +355,7 @@ function untrackedLife(order: Order, purpose: Purpose): Pick<OrderLife, 'steps' 
     label: 'Recorded by WATA',
     at: order.order_time,
     clock: 'wata',
+    toTheSecond: true,
     note: 'To the second, once the position was confirmed',
   })
   return {
@@ -372,7 +371,31 @@ export function orderLife(order: Order, refusal: Refusal | null = null): OrderLi
   const tracked = isTracked(order)
   const result = orderResult(order)
   const life = tracked ? trackedLife(order, purpose, result, refusal) : untrackedLife(order, purpose)
-  return { purpose, tracked, result, tookMs: tookMs(order), ...life }
+  return { purpose, tracked, result, tookMs: tookMs(order), ...life, steps: inTimeOrder(life.steps, (step) => step) }
+}
+
+/** A step's moment as a number to put steps in order by, null without one: one kept to the second is its second's end. */
+function orderedAt(step: LifeStep): number | null {
+  const at = step.at ? Date.parse(step.at) : NaN
+  if (!Number.isFinite(at)) return null
+  return step.toTheSecond ? at + 999 : at
+}
+
+/**
+ * Steps in the order they happened, the earliest first, whichever clock each was read on (its note says which): Saxo
+ * may date a fill before its answer reached WATA. A step without a moment of its own stays after the step before it,
+ * and steps of the same moment keep the order they were given in.
+ */
+function inTimeOrder<T>(entries: T[], stepOf: (entry: T) => LifeStep): T[] {
+  let before = -Infinity
+  return entries
+    .map((entry, index) => {
+      const at = orderedAt(stepOf(entry)) ?? before
+      before = at
+      return { entry, index, at }
+    })
+    .sort((a, b) => a.at - b.at || a.index - b.index)
+    .map(({ entry }) => entry)
 }
 
 function statusOf(step: LifeStep): TimelineStatus {
@@ -381,20 +404,24 @@ function statusOf(step: LifeStep): TimelineStatus {
   return 'completed'
 }
 
+function timelineItem(step: LifeStep, timeZone: string, prefix: string, tag: string | undefined): TimelineItem {
+  return {
+    id: `${prefix}${step.key}`,
+    title: step.label,
+    timestamp: step.toTheSecond ? formatTime(step.at, timeZone) : formatClock(step.at, timeZone),
+    status: statusOf(step),
+    ...(step.note ? { description: step.note } : {}),
+    ...(tag ? { tag } : {}),
+  }
+}
+
 /**
  * Steps as the timeline draws them: the moment on the clock it was read on (a
  * dash for a step without one), the note under it. Ids are prefixed by the order
  * when a timeline holds several; the tag says which order of a position a step is of.
  */
 export function timelineItems(steps: LifeStep[], timeZone: string, { prefix = '', tag }: { prefix?: string; tag?: string } = {}): TimelineItem[] {
-  return steps.map((step) => ({
-    id: `${prefix}${step.key}`,
-    title: step.label,
-    timestamp: formatClock(step.at, timeZone),
-    status: statusOf(step),
-    ...(step.note ? { description: step.note } : {}),
-    ...(tag ? { tag } : {}),
-  }))
+  return steps.map((step) => timelineItem(step, timeZone, prefix, tag))
 }
 
 /** The step a timeline is opened on: the first that went wrong, else the last. */
@@ -403,17 +430,18 @@ export function stepToLookAt(items: TimelineItem[]): string | undefined {
 }
 
 /**
- * What happened to a position, on one line: the moments of the orders that
- * opened it, the sells Saxo did not take, then the moments of the orders that
- * closed it, each marked Entry or Exit.
+ * What happened to a position, on one line and in the order it happened: the
+ * moments of the orders that opened it, the sells Saxo did not take and the
+ * moments of the orders that closed it, each marked Entry or Exit.
  */
 export function positionTimeline(opening: Order[], closing: Order[], refusals: SellRefusals | null, timeZone: string): TimelineItem[] {
-  const ofOrder = (order: Order, tag: string) => timelineItems(orderLife(order).steps, timeZone, { prefix: `${order.order_id}-`, tag })
-  return [
+  const ofOrder = (order: Order, tag: string) => orderLife(order).steps.map((step) => ({ step, prefix: `${order.order_id}-`, tag }))
+  const events = [
     ...opening.flatMap((order) => ofOrder(order, 'Entry')),
-    ...(refusals ? timelineItems([sellsRefused(refusals)], timeZone, { tag: 'Exit' }) : []),
+    ...(refusals ? [{ step: sellsRefused(refusals), prefix: '', tag: 'Exit' }] : []),
     ...closing.flatMap((order) => ofOrder(order, 'Exit')),
   ]
+  return inTimeOrder(events, (event) => event.step).map(({ step, prefix, tag }) => timelineItem(step, timeZone, prefix, tag))
 }
 
 /**

@@ -493,9 +493,12 @@ class FakeQueries:
             "Breaking trading rule: Cooldown active after last loss. Remaining: 412s (cooldown: 10min)",
             decided_at=now - timedelta(minutes=47),
         )
+        # Received before its order left and decided once its position was seen, as the trader journals it.
+        bought = next(order for order in self.orders if order["order_id"] == "7999999")
         self.add_decision(
             {"action": "long", "indice": "us100", "confidence": 0.9}, "executed",
-            decided_at=now - timedelta(minutes=18), position_id="5999999", order_id="7999999",
+            decided_at=bought["confirmed_at"], received_at=bought["sent_at"] - timedelta(milliseconds=170),
+            position_id="5999999", order_id="7999999",
         )
         # The signals behind the made-up trades of the Prices page, for the last week.
         for days_ago in range(7):

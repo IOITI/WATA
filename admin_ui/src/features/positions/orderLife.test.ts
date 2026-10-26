@@ -60,13 +60,13 @@ const GIVEN_UP = {
   cancel_accepted: true,
 } as unknown as Order
 
-/** As WATA wrote orders before it kept their moments. */
+/** As WATA wrote orders before it kept their moments: to the second, once its position was confirmed. */
 const OLD = {
   order_id: '4001',
   buy_sell: 'Buy',
-  position_id: '5098',
+  position_id: '4090',
   order_time: '2026-09-01T07:31:03Z',
-  position: POSITION,
+  position: { ...POSITION, position_id: '4090', execution_time_open: '2026-09-01T07:31:02.297Z', execution_time_close: '2026-09-01T08:02:11.270Z' },
 } as unknown as Order
 
 function steps(order: Order) {
@@ -74,19 +74,25 @@ function steps(order: Order) {
 }
 
 describe('an order that gave a position', () => {
-  it('goes from the signal to the position being seen, each step set against the one before', () => {
+  it('goes from the signal to the position being seen in the order it happened, each step set against a moment before it', () => {
+    // Saxo filled the order 13 ms before its answer reached WATA.
     expect(steps(BUY)).toEqual([
       ['Signal received', ''],
       ['Order sent', '170 ms after the signal'],
-      ['Accepted by Saxo', '190 ms after it left'],
       ['Filled at Saxo', "Saxo's clock: 177 ms after the order left"],
+      ['Accepted by Saxo', '190 ms after the order left'],
       ['Seen by WATA', '330 ms after Saxo accepted the order, at the 2nd look'],
     ])
   })
 
+  it("puts the fill after Saxo's answer when Saxo dates it later", () => {
+    const later = { ...BUY, position: { ...POSITION, execution_time_open: '2026-10-13T07:31:02.420Z' } } as Order
+    expect(steps(later).map(([label]) => label)).toEqual(['Signal received', 'Order sent', 'Accepted by Saxo', 'Filled at Saxo', 'Seen by WATA'])
+  })
+
   it("keeps Saxo's fill apart from the server's own moments", () => {
     const clocks = orderLife(BUY).steps.map((step) => step.clock)
-    expect(clocks).toEqual(['wata', 'wata', 'wata', 'saxo', 'wata'])
+    expect(clocks).toEqual(['wata', 'wata', 'saxo', 'wata', 'wata'])
   })
 
   it('took the time from leaving to being seen, on one clock', () => {
@@ -95,19 +101,16 @@ describe('an order that gave a position', () => {
     expect(orderResult(BUY)).toBe('opened')
   })
 
-  it('says so when Saxo dates the fill before the order left, instead of a negative wait', () => {
+  it('says so when Saxo dates the fill before the order left, instead of a negative wait, and shows it there', () => {
     const early = { ...BUY, position: { ...POSITION, execution_time_open: '2026-10-13T07:31:02.100Z' } } as Order
-    expect(steps(early)[3]).toEqual([
-      'Filled at Saxo',
-      "Saxo's clock: 20 ms before the order left, so the two clocks differ by at least that",
+    expect(steps(early).slice(1, 3)).toEqual([
+      ['Filled at Saxo', "Saxo's clock: 20 ms before the order left, so the two clocks differ by at least that"],
+      ['Order sent', '170 ms after the signal'],
     ])
   })
 
   it('starts at the order when the journal has no signal for it', () => {
-    expect(steps({ ...BUY, signal: null } as Order).slice(0, 2)).toEqual([
-      ['Order sent', ''],
-      ['Accepted by Saxo', '190 ms after it left'],
-    ])
+    expect(steps({ ...BUY, signal: null } as Order)[0]).toEqual(['Order sent', ''])
   })
 
   it('writes a wait of seconds as seconds', () => {
@@ -131,7 +134,7 @@ describe('an order that gave a position', () => {
 describe('an order that gave no position', () => {
   it('says how long and how often the trader looked, then what Saxo answered to the cancellation', () => {
     expect(steps(GIVEN_UP).slice(2)).toEqual([
-      ['Accepted by Saxo', '190 ms after it left'],
+      ['Accepted by Saxo', '190 ms after the order left'],
       ['No position', 'after 10.8 s and 14 looks'],
       ['Cancellation', 'Accepted by Saxo'],
     ])
@@ -192,8 +195,8 @@ describe('a sell order', () => {
   it("is followed to the position being seen closed, with Saxo's time for the closure", () => {
     expect(steps(SELL)).toEqual([
       ['Sell order sent', ''],
-      ['Accepted by Saxo', '190 ms after it left'],
       ['Closed at Saxo', "Saxo's clock: 170 ms after the order left"],
+      ['Accepted by Saxo', '190 ms after the order left'],
       ['Seen closed by WATA', '310 ms after Saxo accepted the order, at the 1st look'],
     ])
     expect(orderResult(SELL)).toBe('closed')
@@ -257,6 +260,15 @@ describe('an order placed before its moments were kept', () => {
     expect(purposeOf(OLD)).toBe('open')
     expect(orderResult(OLD)).toBe('opened')
   })
+
+  it('shows when it was written down to the second, after a fill of the same second', () => {
+    const items = timelineItems(orderLife({ ...OLD, order_time: '2026-09-01T07:31:02Z' } as Order).steps, 'Europe/Paris')
+
+    expect(items.map((item) => [item.title, item.timestamp])).toEqual([
+      ['Filled at Saxo', '09:31:02.297'],
+      ['Recorded by WATA', '09:31:02'],
+    ])
+  })
 })
 
 describe('the figures of a period', () => {
@@ -312,8 +324,8 @@ describe('a sell order Saxo had refused before taking it', () => {
     expect(life.steps.map((step) => step.label)).toEqual([
       'Refused by Saxo ×37',
       'Sell order sent',
-      'Accepted by Saxo',
       'Closed at Saxo',
+      'Accepted by Saxo',
       'Seen closed by WATA',
     ])
     expect(life.steps[0]).toMatchObject({
@@ -356,8 +368,8 @@ describe('the timeline of an order', () => {
     expect(items.map((item) => [item.id, item.title, item.timestamp, item.status])).toEqual([
       ['signal', 'Signal received', '09:31:01.950', 'completed'],
       ['sent', 'Order sent', '09:31:02.120', 'completed'],
-      ['accepted', 'Accepted by Saxo', '09:31:02.310', 'completed'],
       ['saxo', 'Filled at Saxo', '09:31:02.297', 'completed'],
+      ['accepted', 'Accepted by Saxo', '09:31:02.310', 'completed'],
       ['seen', 'Seen by WATA', '09:31:02.640', 'completed'],
     ])
     // No note, no description: the step then has nothing to open.
@@ -393,9 +405,36 @@ describe('the timeline of a position', () => {
     const items = positionTimeline([BUY], [SELL], null, 'Europe/Paris')
 
     expect(items.map((item) => [item.id, item.tag])).toEqual([
-      ['5012-signal', 'Entry'], ['5012-sent', 'Entry'], ['5012-accepted', 'Entry'], ['5012-saxo', 'Entry'], ['5012-seen', 'Entry'],
-      ['5013-sent', 'Exit'], ['5013-accepted', 'Exit'], ['5013-saxo', 'Exit'], ['5013-seen', 'Exit'],
+      ['5012-signal', 'Entry'], ['5012-sent', 'Entry'], ['5012-saxo', 'Entry'], ['5012-accepted', 'Entry'], ['5012-seen', 'Entry'],
+      ['5013-sent', 'Exit'], ['5013-saxo', 'Exit'], ['5013-accepted', 'Exit'], ['5013-seen', 'Exit'],
     ])
+  })
+
+  it('reads in the order it happened, the sells Saxo did not take among the exit orders', () => {
+    // A sell Saxo took but WATA did not see closed, then refused sells, then the sell that closed it.
+    const unseen = {
+      ...SELL,
+      order_id: '5014',
+      sent_at: '2026-10-13T07:50:00.100Z',
+      accepted_at: '2026-10-13T07:50:00.290Z',
+      confirmed_at: null,
+      gave_up_at: '2026-10-13T07:50:08.000Z',
+      outcome: 'gave_up',
+      position: { ...POSITION, execution_time_close: null },
+    } as Order
+    const refusals = {
+      count: 37, first_at: '2026-10-13T07:58:00Z', last_at: '2026-10-13T08:02:00Z', outcome: 'refused' as const,
+      http_status: 400, error_code: 'OtherError', error_message: 'Limit orders only',
+    }
+    const items = positionTimeline([BUY], [unseen, SELL], refusals, 'Europe/Paris')
+
+    expect(items.map((item) => item.id)).toEqual([
+      '5012-signal', '5012-sent', '5012-saxo', '5012-accepted', '5012-seen',
+      '5014-sent', '5014-accepted', '5014-gave_up',
+      'sells-refused',
+      '5013-sent', '5013-saxo', '5013-accepted', '5013-seen',
+    ])
+    expect(items.map((item) => item.timestamp)).toEqual([...items.map((item) => item.timestamp)].sort())
   })
 
   it('puts the sells Saxo did not take between the two, with the last answer', () => {

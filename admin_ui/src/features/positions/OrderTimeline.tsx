@@ -101,7 +101,7 @@ interface OrderTimelineProps {
   showRequests?: boolean
 }
 
-/** The moments of an order, on a timeline: what, when, on whose clock, and how long after the step before. */
+/** The moments of an order, on a timeline in the order they happened: what, when, on whose clock, and how long after what. */
 export function OrderTimeline({
   order,
   timeZone,
