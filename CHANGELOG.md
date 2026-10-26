@@ -2,7 +2,7 @@
 
 ## v0.50.0 - Operations: the database's dumps off the server encrypted, a bot that answers and only reads, and more US releases
 
-**Release date:** not released yet
+**Release date:** 2026-10-26
 
 The last of the three releases from the search of 2026-10-26.
 
@@ -84,7 +84,7 @@ The last of the three releases from the search of 2026-10-26.
 
 ## v0.49.0 - Evidence while entries are paused: the signals received traded on paper, a drift watch, a real trade on its chart, and your own metrics on the Exits page
 
-**Release date:** not released yet
+**Release date:** 2026-10-26
 
 The second of the three releases from the search of 2026-10-26. New entries have been paused since 21 October: these say each day what the live settings would have made of the signals received, and why a real trade went as it did.
 
@@ -123,7 +123,7 @@ The second of the three releases from the search of 2026-10-26. New entries have
 
 ## v0.48.0 - Guards before entries resume: orders a second apart, one source of signals per index, an account guard, the day's breakers, a spread limit, and each position's worst
 
-**Release date:** not released yet
+**Release date:** 2026-10-26
 
 The first of three releases from the search of 2026-10-26 for what WATA is missing. They come from the record of 2 September to 20 October 2026: 118 trades, −69.75 % summed, the losses on days of 11 to 15 trades, three stop-losses at −7 % filled at −16.7 %, −30.2 % and +0.5 %, one order in ten waiting 60 s or more for Saxo. Each new setting is off until set, and the backtests and the dashboard repeat each new rule.
 
