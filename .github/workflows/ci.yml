@@ -205,8 +205,10 @@ jobs:
         docker exec backup-db psql -U wata -d wata -c \
           "CREATE TABLE turbo_data_position (position_id text); INSERT INTO turbo_data_position VALUES ('p1')"
         mkdir -p check/backups check/bucket check/key
+        # The key file is root's and its owner's alone, as age-keygen writes it: read in the image.
         docker run --rm -v "$PWD/check/key:/key" wata-backup age-keygen -o /key/identity.txt
-        recipient=$(sed -n 's/^# public key: //p' check/key/identity.txt)
+        recipient=$(docker run --rm -v "$PWD/check/key:/key:ro" wata-backup age-keygen -y /key/identity.txt)
+        test -n "$recipient"
         docker run --rm --network backup-check --entrypoint sh \
           -v "$PWD/deploy/pg_backup.sh:/pg_backup.sh:ro" -v "$PWD/check/backups:/backups" -v "$PWD/check/bucket:/bucket" \
           -e PGHOST=backup-db -e PGUSER=wata -e PGPASSWORD=wata -e PGDATABASE=wata \

@@ -726,16 +726,26 @@ def test_the_backup_image_takes_age_and_rclone_at_one_version_checked_by_its_sha
     image = _backup_image()
     arguments = dict(line[len("ARG "):].split("=", 1) for line in image if line.startswith("ARG "))
 
-    assert set(arguments) == {"AGE_VERSION", "AGE_SHA256", "RCLONE_VERSION", "RCLONE_SHA256"}
-    assert re.fullmatch(r"v\d+\.\d+\.\d+", arguments["AGE_VERSION"]) and re.fullmatch(r"v\d+\.\d+\.\d+", arguments["RCLONE_VERSION"])
-    assert re.fullmatch(r"[0-9a-f]{64}", arguments["AGE_SHA256"]) and re.fullmatch(r"[0-9a-f]{64}", arguments["RCLONE_SHA256"])
+    assert set(arguments) == {"PINNED_AGE", "PINNED_AGE_SHA256", "PINNED_RCLONE", "PINNED_RCLONE_SHA256"}
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", arguments["PINNED_AGE"]) and re.fullmatch(r"v\d+\.\d+\.\d+", arguments["PINNED_RCLONE"])
+    assert re.fullmatch(r"[0-9a-f]{64}", arguments["PINNED_AGE_SHA256"])
+    assert re.fullmatch(r"[0-9a-f]{64}", arguments["PINNED_RCLONE_SHA256"])
     commands = " ".join(image)
-    assert 'echo "${AGE_SHA256}  age.tar.gz" | sha256sum -c -' in commands
-    assert 'echo "${RCLONE_SHA256}  rclone.zip" | sha256sum -c -' in commands
-    assert "releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz" in commands
-    assert "downloads.rclone.org/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" in commands
+    assert 'echo "${PINNED_AGE_SHA256}  age.tar.gz" | sha256sum -c -' in commands
+    assert 'echo "${PINNED_RCLONE_SHA256}  rclone.zip" | sha256sum -c -' in commands
+    assert "releases/download/${PINNED_AGE}/age-${PINNED_AGE}-linux-amd64.tar.gz" in commands
+    assert "downloads.rclone.org/${PINNED_RCLONE}/rclone-${PINNED_RCLONE}-linux-amd64.zip" in commands
     # Built from the file alone: nothing of the server is sent to the build.
     assert "docker build -t wata-backup --platform=linux/amd64 - < deploy/pg_backup.Dockerfile" in open("docker_build.sh").read()
+
+
+def test_rclone_is_given_no_variable_it_would_take_for_a_flag(compose_services):
+    """rclone takes every RCLONE_<flag> of its environment for that flag: the build's RCLONE_VERSION was --version."""
+    arguments = [line.split()[1].split("=", 1)[0] for line in _backup_image() if line.startswith("ARG ")]
+    names = [variable.split("=", 1)[0] for variable in compose_services["pg_backup1"]["environment"]]
+
+    assert [name for name in arguments if name.startswith("RCLONE_")] == []
+    assert [name for name in names if name.startswith("RCLONE_") and not name.startswith("RCLONE_CONFIG_OFFSITE_")] == []
 
 
 def test_no_key_that_opens_the_copies_off_the_server_is_ever_on_it(compose_services):

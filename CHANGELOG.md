@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.50.1 - The backup image builds
+
+**Release date:** 2026-10-26
+
+- **v0.50.0's backup image stopped at its last check, in CI** (`deploy/pg_backup.Dockerfile`):
+  - The cause: rclone takes every `RCLONE_<flag>` of its environment for that flag, and the build argument `RCLONE_VERSION` (v1.75.2) was in the environment of its `RUN`, read as `--version`, which takes true or false. The downloads, their sha256 checks and age had passed.
+  - The build arguments are named `PINNED_*` now, in the image and in `lab/backup_tools.sh`.
+  - A test holds that nothing rclone is given starts with `RCLONE_`, but the bucket's own settings (`RCLONE_CONFIG_OFFSITE_*`).
+- **CI's check of a copy sent off the server** read the public key from the key file itself, which age-keygen writes as root and for its owner alone from inside the image. The check now asks `age-keygen -y` there. That step had not run yet: the image build failed before it.
+
+**On the live path:** nothing. v0.50.0 was not deployed, and the image is built at the deploy.
+
+**Verification status:**
+- The compose and lab tests pass (the names, the CI step).
+- The image is built and a copy checked only by CI, which runs the real age and rclone.
+
 ## v0.50.0 - Operations: the database's dumps off the server encrypted, a bot that answers and only reads, and more US releases
 
 **Release date:** 2026-10-26

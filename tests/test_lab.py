@@ -491,7 +491,7 @@ def test_the_lab_takes_the_versions_of_age_and_rclone_the_servers_image_takes():
     image = open("deploy/pg_backup.Dockerfile").read()
     tools = open("lab/backup_tools.sh").read()
 
-    for name in ("AGE_VERSION", "RCLONE_VERSION"):
+    for name in ("PINNED_AGE", "PINNED_RCLONE"):
         version = image.split(f"ARG {name}=", 1)[1].split()[0]
         assert f"{name}={version}" in tools, name
     assert tools.count("shasum -a 256 -c -") == 2
