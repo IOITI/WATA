@@ -1,10 +1,6 @@
+import { Combobox, FormControl, FormDescription, FormItem, FormLabel, FormMessage, Input, SpringSelect, StretchSwitch } from 'ioiti-ui'
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-
-import { Combobox } from '@/components/ui/combobox'
-import { FormControl, FormDescription, FormItem, FormLabel, FormMessage, Input } from '@/components/ui/form'
-import { SpringSelect } from '@/components/ui/spring-select'
-import { StretchSwitch } from '@/components/ui/stretch-switch'
 
 import { getAt, toggled } from './configModel'
 import { knownZones, zoneLabel } from './zones'

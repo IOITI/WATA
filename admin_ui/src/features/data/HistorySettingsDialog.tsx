@@ -1,19 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  Badge,
+  Button,
+  formatDateTime,
+  formatNumber,
+  Input,
+  QueryState,
+  SettleModal,
+  SpringSelect,
+  StretchSwitch,
+} from 'ioiti-ui'
 import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
-import { SpringSelect } from '@/components/ui/spring-select'
-import { StretchSwitch } from '@/components/ui/stretch-switch'
 import { useSession } from '@/features/auth/auth-context'
 import { KEEP_DAYS, keepSentence } from '@/features/data/providers'
 import { api } from '@/lib/api'
-import { formatDateTime, formatNumber } from '@/lib/format'
 import type { DukascopyProviderDetails, HistoryOffer } from '@/lib/types'
 
 /** What a change here makes out of date: the provider, the list of assets, the days fetched. */

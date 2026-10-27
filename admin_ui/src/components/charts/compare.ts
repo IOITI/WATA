@@ -3,7 +3,7 @@
  * the colour of each.
  */
 
-/** As many as there are colours that stay apart, for colour-blind readers too (styles/theme.css). */
+/** As many as there are colours that stay apart, for colour-blind readers too (ioiti-ui's theme.css). */
 export const MAX_COMPARED = 4
 
 const COMPARE_COLORS = [

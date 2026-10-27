@@ -18,12 +18,10 @@
 
 import { PineWorkerEngine } from '@luxalgo/vela-pinets'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
+import { cn, useTheme } from 'ioiti-ui'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import velaWorkerUrl from 'virtual:vela-pine-worker'
-
-import { useTheme } from '@/components/theme-context'
-import { cn } from '@/lib/utils'
 
 import { WataBars } from '../data/wataBars'
 import type { LibraryResolver } from '../engine/prepare'

@@ -1,7 +1,7 @@
+import { Badge } from 'ioiti-ui'
 import { AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router'
 
-import { Badge } from '@/components/ui/badge'
 import type { CatalogChange, ConfigCatalog, ConfigImpact, ConfigPreview } from '@/lib/types'
 
 import { hrefOf, lookup, shownValue } from './catalog'

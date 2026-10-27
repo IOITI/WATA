@@ -1,6 +1,5 @@
-import { PnlValue } from '@/components/status'
-import { ActivityHeatmap } from '@/components/ui/activity-heatmap'
-import { formatMoney, formatNumber, formatPercent } from '@/lib/format'
+import { ActivityHeatmap, formatMoney, formatNumber, formatPercent, SignedValue } from 'ioiti-ui'
+
 import type { DailyPerformance, WeekdayHourStats } from '@/lib/types'
 
 import { calendarDays, GAIN_LOSS, weekdayHourGrid, weekdayName, weeksOf } from './heatmapData'
@@ -57,7 +56,7 @@ export function WeekdayHourHeatmap({ rows, label }: { rows: WeekdayHourStats[]; 
                   <td className="py-2 pr-4 text-right tabular-nums">{formatNumber(row.trade_count)}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">{formatPercent(row.win_rate, false, 0)}</td>
                   <td className="py-2 text-right">
-                    <PnlValue value={row.profit_loss} kind="money" />
+                    <SignedValue value={row.profit_loss} kind="money" />
                   </td>
                 </tr>
               ))}

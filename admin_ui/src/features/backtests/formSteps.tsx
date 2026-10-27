@@ -1,23 +1,31 @@
 import { useQuery } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Checkbox,
+  cn,
+  Combobox,
+  DateRangePicker,
+  formatDay,
+  formatMoney,
+  formatNumber,
+  Input,
+  Select,
+  toIsoDay,
+} from 'ioiti-ui'
+import type { DateRange } from 'ioiti-ui'
 import { Plus, RotateCcw, Trash2 } from 'lucide-react'
 import type { IPineInput } from 'pinets'
 import { useId } from 'react'
 import type { ReactNode } from 'react'
 
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import type { DateRange } from '@/components/ui/calendar'
-import { Combobox } from '@/components/ui/combobox'
-import { DateRangePicker } from '@/components/ui/date-picker'
-import { Checkbox, Input, Select } from '@/components/ui/form'
 import { BarsFields, ScriptChoice, ScriptSettings } from '@/features/ta/signals/RuleFields'
 import type { ScriptInputs } from '@/features/ta/signals/useScriptInputs'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import type { RuleDraft } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
-import { formatDay, formatMoney, formatNumber, toIsoDay } from '@/lib/format'
 import type { BacktestCoverage, BacktestCoverageDay, BacktestField, BacktestOptions, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { executionChanges, executionSentence } from './execution'
 import {

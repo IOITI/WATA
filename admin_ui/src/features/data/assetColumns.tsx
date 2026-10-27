@@ -1,11 +1,9 @@
+import { Badge, formatDateTime, formatNumber, Hint } from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router'
 
-import { Hint } from '@/components/Hint'
-import { Badge } from '@/components/ui/badge'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { valueDecimals } from '@/features/prices/chartData'
-import { formatDateTime, formatNumber } from '@/lib/format'
 import type { AssetStatus } from '@/lib/types'
 
 import { assetHref, PROVIDER_LABELS, STATUS_LABELS, TYPE_LABELS } from './assets'

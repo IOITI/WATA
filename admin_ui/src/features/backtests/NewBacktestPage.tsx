@@ -1,12 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, AlertTitle, Button, PageHeader, Panel, QueryState, StepPanels, Stepper } from 'ioiti-ui'
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 
-import { PageHeader, Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { StepPanels, Stepper } from '@/components/ui/stepper'
 import { useSession } from '@/features/auth/auth-context'
 import { todayIn, shiftDay } from '@/features/prices/chartData'
 import { useScriptInputs } from '@/features/ta/signals/useScriptInputs'

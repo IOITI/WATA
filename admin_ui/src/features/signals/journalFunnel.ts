@@ -4,7 +4,8 @@
  * journal is read newest first, so its oldest entry says from when.
  */
 
-import type { FunnelStage } from '@/components/ui/funnel-chart'
+import type { FunnelStage } from 'ioiti-ui'
+
 import type { JournalEntry } from '@/lib/types'
 
 export interface JournalFunnel {

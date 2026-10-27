@@ -1,14 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { Alert, AlertDescription, Button, cn, formatNumber, Panel, QueryState } from 'ioiti-ui'
 import { useState } from 'react'
 
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { formatNumber } from '@/lib/format'
 import type { BacktestEdge } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { basisPoints, edgeRows, edgeSplits, edgeVerdict, horizonLabel } from './edge'
 import type { EdgeSplit } from './edge'

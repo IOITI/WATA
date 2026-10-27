@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ThemeProvider } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
-import { ThemeProvider } from '@/components/ThemeProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import type { Session, TaScript } from '@/lib/types'
 import { enginesMade, resetVela, workspaces } from '@/test/fakeVela'

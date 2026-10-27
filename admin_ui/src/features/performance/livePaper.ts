@@ -2,7 +2,8 @@
 // signals WATA received replayed each finished day under the live settings, beside the real day and the daily
 // range of the replay chosen as the live reference. Pure.
 
-import { formatPercent } from '@/lib/format'
+import { formatPercent } from 'ioiti-ui'
+
 import type { BacktestPaperReference, LivePaperDay } from '@/lib/types'
 
 /** What the reference is, or how to choose one. */

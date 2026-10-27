@@ -16,9 +16,8 @@ import {
   keymap,
   lineNumbers,
 } from '@codemirror/view'
+import { cn } from 'ioiti-ui'
 import { useEffect, useRef } from 'react'
-
-import { cn } from '@/lib/utils'
 
 import type { Diagnostic } from './diagnostics'
 import { toCodeMirror } from './marks'

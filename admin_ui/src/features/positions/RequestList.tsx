@@ -1,7 +1,6 @@
-import { Badge } from '@/components/ui/badge'
-import { formatClock, formatNumber, formatWait } from '@/lib/format'
+import { Badge, cn, formatClock, formatNumber, formatWait } from 'ioiti-ui'
+
 import type { OrderRequest } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { REQUEST_RESULTS, requestLabel, requestTookMs, saxoAnswer } from './orderRequests'
 

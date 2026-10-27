@@ -1,5 +1,5 @@
 // Pine Script v5 and v6 for CodeMirror: a line-by-line tokenizer for highlighting,
-// its colours (theme.css, --code-*), and completion of the built-in functions from
+// its colours (ioiti-ui's theme.css, --code-*), and completion of the built-in functions from
 // the TradingView reference the validator carries.
 
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete'

@@ -1,24 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  AdvancedDataTable,
+  Badge,
+  Button,
+  ButtonLink,
+  formatBytes,
+  formatDateTime,
+  formatDay,
+  formatPercent,
+  Hint,
+  PageHeader,
+  QueryState,
+  Select,
+  SettleModal,
+  SignedValue,
+} from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { Columns3, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
-import { ButtonLink } from '@/components/ButtonLink'
-import { Hint } from '@/components/Hint'
-import { PageHeader } from '@/components/Panel'
-import { RouterLink } from '@/components/RouterLink'
-import { ClaudeBadge, PnlValue, QueryState } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Select } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
+import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
-import { formatBytes, formatDateTime, formatDay, formatPercent } from '@/lib/format'
 import type { BacktestRunListed, Experiment } from '@/lib/types'
 
 import { collapseAttempts, comparable, failureLine, filterRuns, isActive, RUN_FILTER_NAMES, runFilterOf, sourceLabel, STATE_LABEL } from './model'
@@ -180,7 +187,7 @@ function runColumns(
       accessorFn: (row) => row.headline?.total_percent ?? null,
       sortable: true,
       align: 'right',
-      cell: ({ row }) => <PnlValue value={row.headline?.total_percent} kind="percent" />,
+      cell: ({ row }) => <SignedValue value={row.headline?.total_percent} kind="percent" />,
     },
     {
       id: 'money',
@@ -188,7 +195,7 @@ function runColumns(
       accessorFn: (row) => row.headline?.profit_loss ?? null,
       sortable: true,
       align: 'right',
-      cell: ({ row }) => <PnlValue value={row.headline?.profit_loss} kind="money" />,
+      cell: ({ row }) => <SignedValue value={row.headline?.profit_loss} kind="money" />,
     },
     {
       id: 'beaten',

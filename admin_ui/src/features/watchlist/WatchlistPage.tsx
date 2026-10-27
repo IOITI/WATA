@@ -1,12 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { Alert, AlertDescription, Badge, formatMoney, formatRelative, PageHeader, Panel, QueryState } from 'ioiti-ui'
 import { useEffect, useState } from 'react'
 
-import { PageHeader, Panel } from '@/components/Panel'
-import { ActionBadge, QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
+import { ActionBadge } from '@/components/status'
 import { api } from '@/lib/api'
-import { formatMoney, formatRelative } from '@/lib/format'
 import type { WatchlistItem } from '@/lib/types'
 
 function StateBadge({ item }: { item: WatchlistItem }) {

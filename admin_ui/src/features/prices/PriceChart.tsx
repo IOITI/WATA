@@ -1,3 +1,4 @@
+import { cn } from 'ioiti-ui'
 import {
   CandlestickSeries,
   ColorType,
@@ -18,8 +19,6 @@ import type {
   UTCTimestamp,
 } from 'lightweight-charts'
 import { useCallback, useEffect, useRef } from 'react'
-
-import { cn } from '@/lib/utils'
 
 import { withAlpha } from './chartData'
 import type { Candle, ChartMarker, ChartOverlay, EmptyPoint, LinePoint, MarkerTone } from './chartData'

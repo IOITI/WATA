@@ -1,7 +1,7 @@
+import { PeekCard } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import type { ComponentProps, ReactNode } from 'react'
 
-import { RouterLink } from '@/components/RouterLink'
-import { PeekCard } from '@/components/ui/peek-card'
 import { RunPeek } from '@/features/backtests/RunPeek'
 import { PositionPeek } from '@/features/positions/PositionPeek'
 

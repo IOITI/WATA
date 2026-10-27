@@ -1,10 +1,10 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ThemeProvider } from 'ioiti-ui'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ThemeContext } from '@/components/theme-context'
-import type { Theme } from '@/lib/theme'
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
+import { stubSystemTheme } from '@/test/systemTheme'
 
 import type { Candle } from '../engine/workerProtocol'
 
@@ -42,6 +42,9 @@ const DONE: TestDone = {
 }
 
 beforeEach(resetCharts)
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('the result of a test', () => {
   it('draws the day with the plots near the prices and the alerts on their bars, and names what is not drawn', () => {
@@ -73,15 +76,16 @@ describe('the result of a test', () => {
   })
 
   it('draws the chart again in another theme, its colours read when it was made', () => {
-    const themed = (theme: Theme) => (
-      <ThemeContext.Provider value={{ preference: theme, theme, setPreference: () => {} }}>
+    // The theme followed is the system's, which goes light.
+    const system = stubSystemTheme(true)
+    render(
+      <ThemeProvider>
         <TestResult run={DONE} scriptName="EMA" timeZone="Europe/Paris" />
-      </ThemeContext.Provider>
+      </ThemeProvider>,
     )
-    const { rerender } = render(themed('dark'))
     const first = theChart()
 
-    rerender(themed('light'))
+    act(() => system.set(false))
 
     expect(first.removed).toBe(true)
     expect(charts).toHaveLength(2)

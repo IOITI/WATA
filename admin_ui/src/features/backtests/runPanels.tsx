@@ -1,15 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
+import { Button, formatNumber, formatPercent, FunnelChart, Panel, QueryState, SignedValue } from 'ioiti-ui'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { WeekdayHourHeatmap } from '@/components/charts/Heatmaps'
 import { CumulativeProfitChart, DailyProfitChart, DistributionChart, ProfitByGroupChart } from '@/components/charts/PerformanceCharts'
-import { Panel } from '@/components/Panel'
-import { PnlValue, QueryState } from '@/components/status'
-import { Button } from '@/components/ui/button'
-import { FunnelChart } from '@/components/ui/funnel-chart'
 import { api } from '@/lib/api'
-import { formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestBreakdowns, BacktestFigures, BacktestGroupRow, BacktestSummary } from '@/lib/types'
 
 import { curveDays, distribution, FATE_LABEL, RANDOM_VERDICT, randomSentence, randomVerdict, roomSentences, ruleLabel, signalFunnel, tally } from './model'
@@ -89,7 +85,7 @@ export function TrustPanel({ runId, summary }: { runId: string; summary: Backtes
             <Heading>Per trade</Heading>
             <dl className="mt-2 flex flex-col gap-1.5">
               <Measure label="On average, wins and losses together">
-                <PnlValue value={figures.expectancy} kind="percent" />
+                <SignedValue value={figures.expectancy} kind="percent" />
               </Measure>
               <Measure label="Average win, average loss">
                 {formatPercent(figures.average_win, true)}, {formatPercent(figures.average_loss, true)}
@@ -112,7 +108,7 @@ export function TrustPanel({ runId, summary }: { runId: string; summary: Backtes
             {range ? (
               <p className="mt-2 text-sm leading-relaxed">
                 Drawing {figures.days} days again from the ones traded, {range.level} totals in 100 fall between{' '}
-                <PnlValue value={range.low} kind="percent" /> and <PnlValue value={range.high} kind="percent" />.{' '}
+                <SignedValue value={range.low} kind="percent" /> and <SignedValue value={range.high} kind="percent" />.{' '}
                 {formatPercent(range.losing_share, false, 0)} of the draws end in a loss.{' '}
                 <span className="text-muted-foreground">It knows nothing of days unlike any of these.</span>
               </p>
@@ -334,11 +330,11 @@ export function BreakdownsPanel({ runId }: { runId: string }) {
                           <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(group.trade_count)}</td>
                           <td className="py-2.5 pr-4 text-right tabular-nums">{formatPercent(group.win_rate, false, 0)}</td>
                           <td className="py-2.5 pr-4 text-right">
-                            <PnlValue value={group.average_percent} kind="percent" />
+                            <SignedValue value={group.average_percent} kind="percent" />
                           </td>
                           <td className="py-2.5 pr-4 text-right tabular-nums">{formatPercent(group.average_best_percent, true)}</td>
                           <td className="py-2.5 text-right">
-                            <PnlValue value={group.profit_loss} kind="money" />
+                            <SignedValue value={group.profit_loss} kind="money" />
                           </td>
                         </tr>
                       ))}

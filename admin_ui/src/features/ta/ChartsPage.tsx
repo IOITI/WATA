@@ -2,12 +2,10 @@
 // the Indicators page in Vela's own indicator picker. Live where WATA's data is.
 
 import { useQuery } from '@tanstack/react-query'
+import { Alert, PageHeader, QueryState } from 'ioiti-ui'
 import { useCallback, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 
-import { PageHeader } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert } from '@/components/ui/alert'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 

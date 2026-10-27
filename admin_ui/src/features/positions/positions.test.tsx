@@ -1,9 +1,9 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { AdvancedDataTable } from 'ioiti-ui'
 import { describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router'
 
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
 import type { Position } from '@/lib/types'
 
 import { positionColumns } from './columns'

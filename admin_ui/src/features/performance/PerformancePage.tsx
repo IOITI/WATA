@@ -1,23 +1,29 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  AdvancedDataTable,
+  cn,
+  DateRangeFilter,
+  ExportButton,
+  formatDay,
+  formatNumber,
+  formatPercent,
+  KpiTile,
+  lastDays,
+  PageHeader,
+  Panel,
+  QueryState,
+  rangeParams,
+  SignedValue,
+} from 'ioiti-ui'
+import type { ColumnDef, CsvColumn, DateRange } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
 import { DayCalendar } from '@/components/charts/Heatmaps'
 import { CumulativeProfitChart, DailyProfitChart, ProfitLossLegend } from '@/components/charts/PerformanceCharts'
-import { DateRangeFilter } from '@/components/DateRangeFilter'
-import { ExportButton } from '@/components/ExportButton'
-import { KpiTile } from '@/components/KpiTile'
-import { PageHeader, Panel } from '@/components/Panel'
-import { ActionBadge, PnlValue, QueryState } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import type { DateRange } from '@/components/ui/calendar'
+import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { lastDays, rangeParams } from '@/lib/dateRange'
-import { formatDay, formatNumber, formatPercent } from '@/lib/format'
-import type { CsvColumn } from '@/lib/csv'
 import type { DailyPerformance, InstrumentPerformance, Performance } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { LivePaperPanel } from './LivePaperPanel'
 
@@ -38,7 +44,7 @@ const DAILY_COLUMNS: ColumnDef<DailyPerformance>[] = [
     accessorKey: 'profit_loss',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.profit_loss} kind="money" />,
+    cell: ({ row }) => <SignedValue value={row.profit_loss} kind="money" />,
   },
   {
     id: 'performance',
@@ -46,7 +52,7 @@ const DAILY_COLUMNS: ColumnDef<DailyPerformance>[] = [
     accessorKey: 'performance_percent',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.performance_percent} kind="percent" />,
+    cell: ({ row }) => <SignedValue value={row.performance_percent} kind="percent" />,
   },
   {
     id: 'cumulative',
@@ -54,7 +60,7 @@ const DAILY_COLUMNS: ColumnDef<DailyPerformance>[] = [
     accessorKey: 'cumulative_profit_loss',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.cumulative_profit_loss} kind="money" />,
+    cell: ({ row }) => <SignedValue value={row.cumulative_profit_loss} kind="money" />,
   },
 ]
 
@@ -84,7 +90,7 @@ const INSTRUMENT_COLUMNS: ColumnDef<InstrumentPerformance>[] = [
     accessorKey: 'profit_loss',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.profit_loss} kind="money" />,
+    cell: ({ row }) => <SignedValue value={row.profit_loss} kind="money" />,
   },
 ]
 
@@ -94,7 +100,7 @@ function Summary({ performance }: { performance: Performance }) {
     <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
       <KpiTile
         label="Profit and loss"
-        value={<PnlValue value={summary.profit_loss} kind="money" className="font-semibold" />}
+        value={<SignedValue value={summary.profit_loss} kind="money" className="font-semibold" />}
         hint={`${formatNumber(summary.trade_count)} closed trade${summary.trade_count === 1 ? '' : 's'}`}
       />
       <KpiTile
@@ -113,8 +119,8 @@ function Summary({ performance }: { performance: Performance }) {
         hint={
           summary.best_day && summary.worst_day ? (
             <>
-              Best <PnlValue value={summary.best_day.profit_loss} kind="money" /> · worst{' '}
-              <PnlValue value={summary.worst_day.profit_loss} kind="money" />
+              Best <SignedValue value={summary.best_day.profit_loss} kind="money" /> · worst{' '}
+              <SignedValue value={summary.worst_day.profit_loss} kind="money" />
             </>
           ) : (
             'No trading day in this range'
@@ -123,7 +129,7 @@ function Summary({ performance }: { performance: Performance }) {
       />
       <KpiTile
         label="Average trade"
-        value={<PnlValue value={summary.average_trade_percent} kind="percent" className="font-semibold" />}
+        value={<SignedValue value={summary.average_trade_percent} kind="percent" className="font-semibold" />}
         hint="Mean performance of a closed trade"
       />
     </div>
@@ -156,10 +162,10 @@ function ByDirection({ performance }: { performance: Performance }) {
             <td className="py-2.5 pr-4 text-right tabular-nums">{entry.win_count}</td>
             <td className="py-2.5 pr-4 text-right tabular-nums">{entry.loss_count}</td>
             <td className="py-2.5 pr-4 text-right">
-              <PnlValue value={entry.average_percent} kind="percent" />
+              <SignedValue value={entry.average_percent} kind="percent" />
             </td>
             <td className="py-2.5 text-right">
-              <PnlValue value={entry.profit_loss} kind="money" />
+              <SignedValue value={entry.profit_loss} kind="money" />
             </td>
           </tr>
         ))}

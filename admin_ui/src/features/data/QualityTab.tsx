@@ -1,13 +1,11 @@
 import { keepPreviousData, skipToken, useQuery } from '@tanstack/react-query'
+import { formatDay, formatNumber, formatPercent, formatTime, Panel, QueryState } from 'ioiti-ui'
 
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
 import { Coverage } from '@/features/data/HistoryPanel'
 import { availabilityOf, instrumentFacts } from '@/features/prices/availability'
 import { daysBetween } from '@/features/prices/chartData'
 import { GapsPanel } from '@/features/prices/GapsPanel'
 import { api } from '@/lib/api'
-import { formatDay, formatNumber, formatPercent, formatTime } from '@/lib/format'
 import type { AssetDayStatistics, AssetLimits, DataAsset } from '@/lib/types'
 
 import { Facts } from './Facts'

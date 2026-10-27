@@ -1,4 +1,4 @@
-import { Panel } from '@/components/Panel'
+import { Panel } from 'ioiti-ui'
 
 const SOURCE = 'https://github.com/IOITI/WATA'
 

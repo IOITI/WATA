@@ -1,3 +1,4 @@
+import { cn } from 'ioiti-ui'
 import {
   CalendarClock,
   ChartCandlestick,
@@ -25,7 +26,6 @@ import type { LucideIcon } from 'lucide-react'
 import { BrandMark } from '@/components/BrandMark'
 import type { Brand } from '@/components/BrandMark'
 import type { MenuSection } from '@/components/navigation'
-import { cn } from '@/lib/utils'
 
 // The menu's sections (components/navigation.ts), as the Configuration page groups its parameters under them.
 const SECTION_ICONS: Record<MenuSection, LucideIcon> = {

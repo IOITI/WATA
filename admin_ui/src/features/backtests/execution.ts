@@ -1,4 +1,5 @@
-import { formatDay, formatNumber } from '@/lib/format'
+import { formatDay, formatNumber } from 'ioiti-ui'
+
 import type { BacktestExecution } from '@/lib/types'
 
 /** What WATA's own orders took and cost, as the form says it and the values it would take from it. Pure. */

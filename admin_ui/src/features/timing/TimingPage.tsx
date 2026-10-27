@@ -1,13 +1,10 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { Button, cn, formatNumber, KpiTile, PageHeader, Panel, QueryState } from 'ioiti-ui'
 import { useState } from 'react'
 
-import { KpiTile } from '@/components/KpiTile'
-import { PageHeader, Panel } from '@/components/Panel'
-import { ActionBadge, QueryState } from '@/components/status'
-import { Button } from '@/components/ui/button'
+import { ActionBadge } from '@/components/status'
 import { api } from '@/lib/api'
-import { formatNumber, formatWallTime } from '@/lib/format'
-import { cn } from '@/lib/utils'
+import { formatWallTime } from '@/lib/wallTime'
 
 const PERIODS = [7, 30, 90]
 

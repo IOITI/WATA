@@ -1,12 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { formatDay, formatMoney, formatNumber, formatPercent, KpiTile, PageHeader, Panel, QueryState, SignedValue, StatCard } from 'ioiti-ui'
 
 import { BalanceChart } from '@/components/charts/PerformanceCharts'
-import { KpiTile } from '@/components/KpiTile'
-import { PageHeader, Panel } from '@/components/Panel'
-import { PnlValue, QueryState } from '@/components/status'
-import { StatCard } from '@/components/ui/stat-card'
 import { api } from '@/lib/api'
-import { formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { MilestoneProjection, Report, TradeSummary } from '@/lib/types'
 
 interface PeriodRow {
@@ -50,20 +46,20 @@ function PeriodTable({ rows, periodHeader }: { rows: PeriodRow[]; periodHeader: 
                 {summary.trade_count > 0 ? formatPercent(summary.win_rate, false, 0) : '—'}
               </td>
               <td className="py-2.5 pr-4 text-right">
-                <PnlValue value={summary.net_profit} kind="money" />
+                <SignedValue value={summary.net_profit} kind="money" />
               </td>
               <td className="py-2.5 pr-4 text-right">
-                <PnlValue value={summary.compounded_percent} kind="percent" />
+                <SignedValue value={summary.compounded_percent} kind="percent" />
               </td>
               <td className="py-2.5 pr-4 text-right tabular-nums">{profitFactor(summary)}</td>
               <td className="py-2.5 pr-4 text-right">
-                <PnlValue value={summary.max_drawdown} kind="percent" />
+                <SignedValue value={summary.max_drawdown} kind="percent" />
               </td>
               <td className="py-2.5 pr-4 text-right">
-                <PnlValue value={summary.avg_win} kind="percent" />
+                <SignedValue value={summary.avg_win} kind="percent" />
               </td>
               <td className="py-2.5 text-right">
-                <PnlValue value={summary.avg_loss} kind="percent" />
+                <SignedValue value={summary.avg_loss} kind="percent" />
               </td>
             </tr>
           ))}
@@ -177,12 +173,12 @@ function ReportContent({ report }: { report: Report }) {
         />
         <KpiTile
           label="Average week"
-          value={<PnlValue value={report.averages.weekly_percent} kind="percent" className="font-semibold" />}
+          value={<SignedValue value={report.averages.weekly_percent} kind="percent" className="font-semibold" />}
           hint="Compounded return, weeks without a trade count as 0%"
         />
         <KpiTile
           label="Average month"
-          value={<PnlValue value={report.averages.monthly_percent} kind="percent" className="font-semibold" />}
+          value={<SignedValue value={report.averages.monthly_percent} kind="percent" className="font-semibold" />}
           hint={`Average year: ${formatPercent(report.averages.yearly_percent, true)}`}
         />
       </div>

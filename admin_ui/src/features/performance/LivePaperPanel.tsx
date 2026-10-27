@@ -1,12 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { Alert, AlertDescription, AlertTitle, Badge, formatDay, Panel, QueryState, SignedValue } from 'ioiti-ui'
 import { Link } from 'react-router'
 
-import { Panel } from '@/components/Panel'
-import { PnlValue, QueryState } from '@/components/status'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { api } from '@/lib/api'
-import { formatDay } from '@/lib/format'
 import type { LivePaperDay } from '@/lib/types'
 
 import { paperState, referenceText } from './livePaper'
@@ -16,7 +12,7 @@ function Result({ value, outside, word }: { value: number | null; outside: boole
   if (value === null) return <span className="text-muted-foreground">—</span>
   return (
     <span className="inline-flex items-center justify-end gap-2">
-      <PnlValue value={value} kind="percent" />
+      <SignedValue value={value} kind="percent" />
       {outside && <Badge tone="warning">Outside</Badge>}
     </span>
   )

@@ -2,22 +2,15 @@
 // script is written, its versions, and a test on WATA's prices.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertTitle, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
 import { ChartSpline, FlaskConical, History, Radar, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
-import { ButtonLink } from '@/components/ButtonLink'
-import { Hint } from '@/components/Hint'
 import { NotFoundState } from '@/components/NotFoundState'
-import { PageHeader } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { LeaveGuard } from '@/features/config/LeaveGuard'
 import { api, ApiError, isNotFound } from '@/lib/api'
-import { formatDateTime } from '@/lib/format'
 import type { TaScript, TaScriptKind } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'

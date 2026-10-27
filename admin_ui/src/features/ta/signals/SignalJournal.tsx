@@ -3,20 +3,12 @@
 // trader made of them.
 
 import { useQuery } from '@tanstack/react-query'
+import { AdvancedDataTable, Badge, DateRangeFilter, formatDateTime, formatNumber, lastDays, Panel, QueryState, rangeParams, Select } from 'ioiti-ui'
+import type { BadgeTone, ColumnDef, DateRange } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
-import { DateRangeFilter } from '@/components/DateRangeFilter'
-import { Panel } from '@/components/Panel'
-import { ActionBadge, QueryState } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
-import type { BadgeTone } from '@/components/ui/badge'
-import type { DateRange } from '@/components/ui/calendar'
-import { Select } from '@/components/ui/form'
+import { ActionBadge } from '@/components/status'
 import { api } from '@/lib/api'
-import { lastDays, rangeParams } from '@/lib/dateRange'
-import { formatDateTime, formatNumber } from '@/lib/format'
 import type { TaRule, TaSignal } from '@/lib/types'
 
 const OUTCOMES: Record<TaSignal['outcome'], { label: string; tone: BadgeTone }> = {

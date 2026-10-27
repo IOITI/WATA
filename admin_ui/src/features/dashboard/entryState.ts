@@ -1,4 +1,5 @@
-import { formatDuration, formatPercent } from '@/lib/format'
+import { formatDuration, formatPercent } from 'ioiti-ui'
+
 import type { Overview } from '@/lib/types'
 
 export type EntryBlockerCode =

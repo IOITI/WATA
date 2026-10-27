@@ -1,8 +1,9 @@
 // What the pages say of WATA's containers and their restarts (src/admin/routers/services.py,
 // src/admin/service_restart.py): pure, so that what can be said wrong is tested.
 
-import type { BadgeTone } from '@/components/ui/badge'
-import { formatDateTime } from '@/lib/format'
+import { formatDateTime } from 'ioiti-ui'
+import type { BadgeTone } from 'ioiti-ui'
+
 import type { RestartPlan, RestartStepState, ServicesState, Session, WataService } from '@/lib/types'
 
 export const STEP_LABEL: Record<RestartStepState, string> = {

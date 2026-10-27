@@ -1,7 +1,6 @@
+import { Badge, formatNumber, formatTime } from 'ioiti-ui'
 import { Link } from 'react-router'
 
-import { Badge } from '@/components/ui/badge'
-import { formatNumber, formatTime } from '@/lib/format'
 import type { Refusal } from '@/lib/types'
 
 import { orderLink } from './orderLife'

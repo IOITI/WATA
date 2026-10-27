@@ -1,8 +1,8 @@
+import { formatDateTime, NotificationBell } from 'ioiti-ui'
+import type { NotificationTone } from 'ioiti-ui'
+
 import { HoverPeekRouterLink } from '@/components/PeekRouterLink'
-import { NotificationBell } from '@/components/ui/notification-bell'
-import type { NotificationTone } from '@/components/ui/notification-bell'
 import { useSession } from '@/features/auth/auth-context'
-import { formatDateTime } from '@/lib/format'
 
 import { useEventLog } from './eventLog'
 import type { LoggedEvent } from './eventLog'

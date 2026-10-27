@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { RouterRoot } from 'ioiti-ui/react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
@@ -13,18 +14,24 @@ function Address() {
 
 function renderLink() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // Under RouterRoot, as in App.tsx: the link is the router's.
   const router = createMemoryRouter(
     [
       {
-        path: '/',
-        element: (
-          <>
-            <RunPeekLink id={RUN_ID}>Smoke EMA cross</RunPeekLink>
-            <Address />
-          </>
-        ),
+        element: <RouterRoot />,
+        children: [
+          {
+            path: '/',
+            element: (
+              <>
+                <RunPeekLink id={RUN_ID}>Smoke EMA cross</RunPeekLink>
+                <Address />
+              </>
+            ),
+          },
+          { path: '/backtests/:runId', element: <Address /> },
+        ],
       },
-      { path: '/backtests/:runId', element: <Address /> },
     ],
     { initialEntries: ['/'] },
   )

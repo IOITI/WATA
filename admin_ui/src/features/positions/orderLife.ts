@@ -1,5 +1,6 @@
-import type { TimelineItem, TimelineStatus } from '@/components/ui/interactive-timeline'
-import { formatClock, formatNumber, formatTime, formatWait } from '@/lib/format'
+import { formatClock, formatNumber, formatTime, formatWait } from 'ioiti-ui'
+import type { TimelineItem, TimelineStatus } from 'ioiti-ui'
+
 import type { Order, Refusal, SellRefusals } from '@/lib/types'
 
 import { answerText, sellRefusalLabel } from './orderRequests'

@@ -1,11 +1,7 @@
+import { Badge, Button, DatePicker, FormDescription, FormLabel, Hint, Input, Select } from 'ioiti-ui'
 import { Plus, Trash2 } from 'lucide-react'
 import { useId, useState } from 'react'
 
-import { Hint } from '@/components/Hint'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { DatePicker } from '@/components/ui/date-picker'
-import { FormDescription, FormLabel, Input, Select } from '@/components/ui/form'
 import type { JsonObject, JsonValue } from '@/lib/types'
 
 import { getAt } from './configModel'

@@ -4,15 +4,12 @@
 // downloaded for pinets-cli or an agent: `pinets run <script> --data <bars>`.
 
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { Button, Checkbox, Combobox, Input, Panel, Select } from 'ioiti-ui'
 import { ChartSpline, Download, Play } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import type { IPineInput } from 'pinets'
 
-import { Panel } from '@/components/Panel'
-import { Button } from '@/components/ui/button'
-import { Combobox } from '@/components/ui/combobox'
-import { Checkbox, Input, Select } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { assetKeywords } from '@/features/data/assets'
 import { api } from '@/lib/api'

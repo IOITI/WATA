@@ -3,7 +3,8 @@
 // as the server counts them with the engine's own code (src/admin/ta_history.py).
 // Pure, so that it is tested alone.
 
-import { formatNumber } from '@/lib/format'
+import { formatNumber } from 'ioiti-ui'
+
 import type { TaHistory } from '@/lib/types'
 
 import { timeframeOf } from '../engine/timeframes'

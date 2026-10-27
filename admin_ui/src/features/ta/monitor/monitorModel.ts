@@ -2,7 +2,8 @@
 // minutes, the charts' lines and gaps, the bars of the delivery steps, the results beside the days on
 // paper. The figures and the checks are the server's (src/admin/ta_monitor.py): this only reads them.
 
-import { formatDateTime, formatNumber, formatSpan, formatWait } from '@/lib/format'
+import { formatDateTime, formatNumber, formatSpan, formatWait } from 'ioiti-ui'
+
 import type {
   BacktestPaper,
   TaMonitorNow,

@@ -1,6 +1,5 @@
+import { cn } from 'ioiti-ui'
 import { AlertCircle, AlertTriangle, Info, LoaderCircle } from 'lucide-react'
-
-import { cn } from '@/lib/utils'
 
 import { checkSummary } from './diagnostics'
 import type { Diagnostic, Severity } from './diagnostics'

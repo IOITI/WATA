@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { PeekCard, Skeleton } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import type { ReactNode } from 'react'
 
-import { RouterLink } from '@/components/RouterLink'
-import { PeekCard } from '@/components/ui/peek-card'
-import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 
 import { barsLabel, MODE_LABEL } from './ruleModel'

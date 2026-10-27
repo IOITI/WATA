@@ -1,4 +1,5 @@
-import { formatNumber } from '@/lib/format'
+import { formatNumber } from 'ioiti-ui'
+
 import type { BacktestDayKind, BacktestEdge, BacktestEdgeHorizon, BacktestSummary } from '@/lib/types'
 
 /** What the moves after a run's entry signals say (src/backtest/edge.py). Pure. */

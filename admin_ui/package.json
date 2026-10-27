@@ -23,16 +23,13 @@
     "@codemirror/search": "^6.7.2",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.14",
-    "@fontsource-variable/geist": "^5.3.0",
-    "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@lezer/highlight": "^1.2.5",
     "@luxalgo/vela": "0.8.5",
     "@luxalgo/vela-pinets": "0.2.17",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.2",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
     "framer-motion": "^13.5.1",
+    "ioiti-ui": "github:IOITI/ioiti-ui#v0.2.1",
     "lightweight-charts": "^5.2.1",
     "lucide-react": "^1.55.0",
     "pinescript-v6-validator": "0.4.3",
@@ -41,9 +38,7 @@
     "react-dom": "^19.2.8",
     "react-router": "^8.4.0",
     "recharts": "^3.10.1",
-    "tailwind-merge": "^3.7.0",
-    "tailwindcss": "^4.3.3",
-    "tw-animate-css": "^1.4.0"
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

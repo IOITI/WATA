@@ -1,28 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  AnimatedTabs,
+  Badge,
+  Button,
+  formatDateTime,
+  formatDay,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  Input,
+  KpiTile,
+  PageHeader,
+  Panel,
+  QueryState,
+  ScrollProgressNav,
+  SettleModal,
+  SignedValue,
+  SplitButton,
+  useMainScroll,
+} from 'ioiti-ui'
+import type { SplitButtonOption } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { Flag, Pencil, Radar, RotateCcw, Square, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
-import { KpiTile } from '@/components/KpiTile'
-import { useMainScroll } from '@/components/main-scroll-context'
 import { NotFoundState } from '@/components/NotFoundState'
-import { PageHeader, Panel } from '@/components/Panel'
-import { RouterLink } from '@/components/RouterLink'
-import { PnlValue, QueryState } from '@/components/status'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { AnimatedTabs } from '@/components/ui/animated-tabs'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/form'
-import { ScrollProgressNav } from '@/components/ui/scroll-progress-nav'
-import { SettleModal } from '@/components/ui/settle-modal'
-import { SplitButton } from '@/components/ui/split-button'
-import type { SplitButtonOption } from '@/components/ui/split-button'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { RulePeekName } from '@/features/ta/signals/RulePeek'
 import { api, isNotFound } from '@/lib/api'
-import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestRun } from '@/lib/types'
 
 import {
@@ -423,12 +433,12 @@ export function RunPage() {
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
                     <KpiTile
                       label="All days"
-                      value={<PnlValue value={figures.total_percent} kind="percent" />}
+                      value={<SignedValue value={figures.total_percent} kind="percent" />}
                       hint={figures.total_range ? `${formatPercent(figures.total_range.low, true)} to ${formatPercent(figures.total_range.high, true)} with other days` : 'each trade as the whole stake'}
                     />
                     <KpiTile
                       label="In money"
-                      value={<PnlValue value={money.profit_loss} kind="money" />}
+                      value={<SignedValue value={money.profit_loss} kind="money" />}
                       hint={`${formatMoney(money.capital, 'EUR')} to ${formatMoney(money.final, 'EUR')} (${formatPercent(money.return_percent, true)})`}
                     />
                     <KpiTile
@@ -436,8 +446,8 @@ export function RunPage() {
                       value={formatNumber(figures.trades)}
                       hint={`${formatPercent(figures.win_rate, false, 0)} won, on ${figures.days_with_an_entry} of ${figures.days} days`}
                     />
-                    <KpiTile label="Per trade" value={<PnlValue value={figures.expectancy} kind="percent" />} hint={`won ${formatPercent(figures.average_win, true)}, lost ${formatPercent(figures.average_loss, true)}`} />
-                    <KpiTile label="Worst drawdown" value={<PnlValue value={figures.worst_drawdown} kind="percent" />} hint={`${formatMoney(money.worst_drawdown, 'EUR')} of the account`} />
+                    <KpiTile label="Per trade" value={<SignedValue value={figures.expectancy} kind="percent" />} hint={`won ${formatPercent(figures.average_win, true)}, lost ${formatPercent(figures.average_loss, true)}`} />
+                    <KpiTile label="Worst drawdown" value={<SignedValue value={figures.worst_drawdown} kind="percent" />} hint={`${formatMoney(money.worst_drawdown, 'EUR')} of the account`} />
                     <KpiTile
                       label="Beats random"
                       value={summary.against_random ? formatPercent(summary.against_random.beaten, false, 0) : '-'}

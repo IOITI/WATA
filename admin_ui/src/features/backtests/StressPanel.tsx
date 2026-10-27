@@ -1,10 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, Button, Panel, QueryState } from 'ioiti-ui'
 import { Gauge } from 'lucide-react'
 
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import type { BacktestRun } from '@/lib/types'
 

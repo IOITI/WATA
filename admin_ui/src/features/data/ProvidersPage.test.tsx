@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
-import { ToastContext } from '@/components/toast-context'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
   CapitalProviderDetails,
@@ -168,27 +167,23 @@ function Address() {
   return <output aria-label="address">{location.pathname + location.search}</output>
 }
 
-const toast = vi.fn()
-
 const trail = () => within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
 
 function renderPage(address = '/data/providers', session: Session = SESSION) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
-      <ToastContext.Provider value={toast}>
-        <AuthContext.Provider value={{ session, error: null, login: async () => {}, logout: async () => {} }}>
-          <MemoryRouter initialEntries={[address]}>
-            <WithTrail>
-              <Routes>
-                <Route path="data/providers" element={<ProvidersPage />} />
-                <Route path="data/providers/:providerId" element={<ProviderPage />} />
-                <Route path="*" element={<Address />} />
-              </Routes>
-            </WithTrail>
-          </MemoryRouter>
-        </AuthContext.Provider>
-      </ToastContext.Provider>
+      <AuthContext.Provider value={{ session, error: null, login: async () => {}, logout: async () => {} }}>
+        <MemoryRouter initialEntries={[address]}>
+          <WithTrail>
+            <Routes>
+              <Route path="data/providers" element={<ProvidersPage />} />
+              <Route path="data/providers/:providerId" element={<ProviderPage />} />
+              <Route path="*" element={<Address />} />
+            </Routes>
+          </WithTrail>
+        </MemoryRouter>
+      </AuthContext.Provider>
     </QueryClientProvider>,
   )
 }
@@ -196,7 +191,6 @@ function renderPage(address = '/data/providers', session: Session = SESSION) {
 const writes = () => requests.filter((request) => request.method !== 'GET')
 
 beforeEach(() => {
-  toast.mockClear()
   vi.useFakeTimers({ toFake: ['Date'], now: NOW })
 })
 
@@ -314,7 +308,8 @@ describe('the price recorder’s settings', () => {
       path: '/api/data/providers/saxo/config',
       body: { section: { enabled: true }, revision: 'r1' },
     })
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Price recorder settings saved' })))
+    // Said in a toast (WithTrail's, as the application's).
+    expect(await screen.findByText('Price recorder settings saved')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 

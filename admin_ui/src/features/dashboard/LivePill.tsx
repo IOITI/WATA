@@ -1,16 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
+import { cn, DynamicIsland, SignedValue, toneOf } from 'ioiti-ui'
+import type { DynamicIslandState } from 'ioiti-ui'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
-import { ActionBadge, PnlValue } from '@/components/status'
-import { DynamicIsland, type DynamicIslandState } from '@/components/ui/dynamic-island'
+import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { ClosePositionButton } from '@/features/positions/ClosePositionButton'
 import { LiveValue } from '@/features/positions/LiveValue'
 import { unrealisedProfitLoss } from '@/features/positions/unrealised'
 import { api } from '@/lib/api'
-import { toneOf } from '@/lib/format'
-import { cn } from '@/lib/utils'
 
 import { entryBlockers } from './entryState'
 
@@ -65,9 +64,9 @@ export function LivePill() {
         <Dot tone={toneOf(total ?? single)} />
         <span className="hidden sm:inline">{positions.length} open</span>
         {total !== null ? (
-          <PnlValue value={total} kind="money" animate />
+          <SignedValue value={total} kind="money" animate />
         ) : (
-          single !== null && <PnlValue value={single} kind="percent" animate />
+          single !== null && <SignedValue value={single} kind="percent" animate />
         )}
       </>
     )

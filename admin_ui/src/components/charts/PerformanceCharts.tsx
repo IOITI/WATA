@@ -1,3 +1,4 @@
+import { formatDay, formatMoney, formatMoneyCompact, formatPercent } from 'ioiti-ui'
 import {
   Area,
   AreaChart,
@@ -15,7 +16,6 @@ import {
   YAxis,
 } from 'recharts'
 
-import { formatDay, formatMoney, formatMoneyCompact, formatPercent } from '@/lib/format'
 import type { BalancePoint, DailyPerformance } from '@/lib/types'
 
 import { compareColor } from './compare'

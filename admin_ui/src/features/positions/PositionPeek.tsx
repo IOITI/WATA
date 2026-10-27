@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
+import { formatDateTime, formatMoney, formatNumber, PeekLink, SignedValue, Skeleton } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
-import { PeekLink } from '@/components/PeekLink'
-import { ActionBadge, PnlValue } from '@/components/status'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatDateTime, formatMoney, formatNumber } from '@/lib/format'
 
 import { positionLink } from './orderLife'
 
@@ -25,11 +23,11 @@ export function PositionPeek({ id }: { id: string }) {
     ['Opened', formatDateTime(position.execution_time_open, timezone)],
   ]
   if (open) {
-    figures.push(['Now', <PnlValue key="now" value={position.live_performance_percent} kind="percent" />])
+    figures.push(['Now', <SignedValue key="now" value={position.live_performance_percent} kind="percent" />])
   } else {
     figures.push(
       ['Sold at', formatMoney(position.position_close_price, currency)],
-      ['Result', <PnlValue key="result" value={position.position_profit_loss} kind="money" currency={currency} />],
+      ['Result', <SignedValue key="result" value={position.position_profit_loss} kind="money" currency={currency} />],
       ['Closed', formatDateTime(position.execution_time_close, timezone)],
     )
   }

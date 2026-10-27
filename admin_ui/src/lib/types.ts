@@ -1,8 +1,8 @@
 // Shapes of the admin API (src/admin/routers/*.py).
 
-import type { MenuSection } from '@/components/navigation'
+import type { Check } from 'ioiti-ui'
 
-import type { Check } from './checks'
+import type { MenuSection } from '@/components/navigation'
 
 export interface Session {
   authenticated: boolean

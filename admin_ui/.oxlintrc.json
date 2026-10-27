@@ -13,10 +13,5 @@
         "allowConstantExport": true
       }
     ]
-  },
-  "ignorePatterns": [
-    "src/components/ui/**",
-    "src/lib/chart-primitives.tsx",
-    "src/lib/dashboard-chart-utils.ts"
-  ]
+  }
 }

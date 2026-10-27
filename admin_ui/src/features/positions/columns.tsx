@@ -1,10 +1,8 @@
+import { Badge, formatDateTime, formatMoney, formatNumber, formatWait, SignedValue } from 'ioiti-ui'
+import type { ColumnDef, CsvColumn } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
-import { ActionBadge, PnlValue } from '@/components/status'
-import { Badge } from '@/components/ui/badge'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import type { CsvColumn } from '@/lib/csv'
-import { formatDateTime, formatMoney, formatNumber, formatWait } from '@/lib/format'
+import { ActionBadge } from '@/components/status'
 import type { Order, Position } from '@/lib/types'
 
 import { ClosePositionButton } from './ClosePositionButton'
@@ -189,7 +187,7 @@ export function positionColumns(
     accessorKey: 'position_max_performance_percent',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.position_max_performance_percent} kind="percent" />,
+    cell: ({ row }) => <SignedValue value={row.position_max_performance_percent} kind="percent" />,
   }
   const worst: ColumnDef<Position> = {
     id: 'min_performance',
@@ -198,7 +196,7 @@ export function positionColumns(
     accessorKey: 'position_min_performance_percent',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.position_min_performance_percent ?? null} kind="percent" />,
+    cell: ({ row }) => <SignedValue value={row.position_min_performance_percent ?? null} kind="percent" />,
   }
 
   if (view === 'open') {
@@ -247,7 +245,7 @@ export function positionColumns(
     accessorKey: 'position_profit_loss',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.position_profit_loss} kind="money" currency={row.instrument_currency} />,
+    cell: ({ row }) => <SignedValue value={row.position_profit_loss} kind="money" currency={row.instrument_currency} />,
   }
   const performance: ColumnDef<Position> = {
     id: 'performance',
@@ -255,7 +253,7 @@ export function positionColumns(
     accessorKey: 'position_total_performance_percent',
     sortable: true,
     align: 'right',
-    cell: ({ row }) => <PnlValue value={row.position_total_performance_percent} kind="percent" />,
+    cell: ({ row }) => <SignedValue value={row.position_total_performance_percent} kind="percent" />,
   }
   const closed: ColumnDef<Position> = {
     id: 'closed',

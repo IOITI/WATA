@@ -1,11 +1,6 @@
+import { Alert, AlertDescription, Badge, formatNumber, Hint, Panel, QueryState } from 'ioiti-ui'
 import { useState } from 'react'
 
-import { Hint } from '@/components/Hint'
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { formatNumber } from '@/lib/format'
 import type { ServicesState } from '@/lib/types'
 
 import { RestartButton, RestartDialog, RestartProgress } from './RestartViews'

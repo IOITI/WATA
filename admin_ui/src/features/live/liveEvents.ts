@@ -1,5 +1,6 @@
+import { formatMoney, formatPercent } from 'ioiti-ui'
+
 import { orderLink, positionLink } from '@/features/positions/orderLife'
-import { formatMoney, formatPercent } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import { planOutcome, planSucceeded } from '@/features/system/restarts'
 import type { LiveEvent, RestartPlan } from '@/lib/types'

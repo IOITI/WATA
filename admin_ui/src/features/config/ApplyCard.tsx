@@ -1,8 +1,7 @@
+import { Alert, AlertDescription, AlertTitle, Button } from 'ioiti-ui'
 import { Check, Copy, X } from 'lucide-react'
 import { useState } from 'react'
 
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import { RestartAction } from '@/features/system/RestartViews'
 import type { ConfigCatalog, ConfigSaved } from '@/lib/types'
 

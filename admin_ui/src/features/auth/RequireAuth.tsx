@@ -1,8 +1,6 @@
+import { Alert, AlertDescription, AlertTitle, Loader } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router'
-
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Loader } from '@/components/ui/loader'
 
 import { useAuth } from './auth-context'
 

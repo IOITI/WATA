@@ -1,10 +1,7 @@
+import { Badge, formatDateTime, formatMoney, formatNumber, InteractiveTimeline, SignedValue } from 'ioiti-ui'
+import type { TimelineItem } from 'ioiti-ui'
 import { Link } from 'react-router'
 
-import { PnlValue } from '@/components/status'
-import { Badge } from '@/components/ui/badge'
-import { InteractiveTimeline } from '@/components/ui/interactive-timeline'
-import type { TimelineItem } from '@/components/ui/interactive-timeline'
-import { formatDateTime, formatMoney, formatNumber } from '@/lib/format'
 import type { Order, OrderPosition, Refusal } from '@/lib/types'
 
 import { orderLife, orderLink, RESULTS, stepToLookAt, timelineItems } from './orderLife'
@@ -31,9 +28,9 @@ function LinkedPosition({ position, currency, timeZone }: { position: OrderPosit
       </span>
       {closed && (
         <>
-          <PnlValue value={position.position_profit_loss} kind="money" currency={currency} />
+          <SignedValue value={position.position_profit_loss} kind="money" currency={currency} />
           <span>
-            (<PnlValue value={position.position_total_performance_percent} kind="percent" />)
+            (<SignedValue value={position.position_total_performance_percent} kind="percent" />)
           </span>
           <span>closed {formatDateTime(position.execution_time_close, timeZone)}</span>
         </>

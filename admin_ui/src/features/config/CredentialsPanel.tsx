@@ -1,17 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  Badge,
+  Button,
+  FormDescription,
+  FormItem,
+  FormLabel,
+  Input,
+  Panel,
+  QueryState,
+  SettleModal,
+  Textarea,
+} from 'ioiti-ui'
 import { Check, Copy, KeyRound, RotateCw, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { BrandMark } from '@/components/BrandMark'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { FormDescription, FormItem, FormLabel, Input, Textarea } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { RestartAction } from '@/features/system/RestartViews'
 import { ApiError, api } from '@/lib/api'

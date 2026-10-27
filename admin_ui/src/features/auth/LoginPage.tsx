@@ -1,17 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
+import { Alert, AlertDescription, Button, cn, Form, formatDuration, FormControl, FormItem, FormLabel, Input, OTPInput, ThemeToggle } from 'ioiti-ui'
 import { Lock } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router'
 
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { Form, FormControl, FormItem, FormLabel, Input } from '@/components/ui/form'
-import { OTPInput } from '@/components/ui/otp-input'
 import { api, ApiError } from '@/lib/api'
-import { formatDuration } from '@/lib/format'
-import { cn } from '@/lib/utils'
 
 import { useAuth } from './auth-context'
 import { returnPath } from './returnPath'

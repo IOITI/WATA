@@ -3,12 +3,11 @@
 // the server as the engine would load them.
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { cn, Input } from 'ioiti-ui'
 import { useEffect, useId, useState } from 'react'
 
-import { Input } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { api, isNotFound } from '@/lib/api'
-import { cn } from '@/lib/utils'
 
 import { engineDays, historyHelp, historyRequest, historySentence } from './history'
 import type { HistoryRequest } from './history'

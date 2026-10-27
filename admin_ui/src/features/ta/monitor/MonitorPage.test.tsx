@@ -1,11 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ThemeProvider, ToastProvider } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
-import { ThemeProvider } from '@/components/ThemeProvider'
-import { ToastProvider } from '@/components/ToastProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import type { BacktestPaper, Session, TaEngine, TaMonitor, TaMonitorNow } from '@/lib/types'
 import { monitorPeriod, NOW } from '@/test/monitor'

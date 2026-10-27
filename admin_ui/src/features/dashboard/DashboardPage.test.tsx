@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
+import { ToastProvider } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 
-import { ToastProvider } from '@/components/ToastProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import { forgetLiveSamples } from '@/features/positions/liveSamples'
 import type { Health, Overview, Session } from '@/lib/types'

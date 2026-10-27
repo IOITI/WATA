@@ -1,11 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { cn, formatMoney, Skeleton } from 'ioiti-ui'
 import { Link } from 'react-router'
 
-import { Skeleton } from '@/components/ui/skeleton'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatMoney } from '@/lib/format'
-import { cn } from '@/lib/utils'
 
 import { MomentsTimeline, OrderHeading } from './OrderTimeline'
 import { closureWithoutOrder, orderLife, orderLink, positionTimeline, purposeOf } from './orderLife'

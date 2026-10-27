@@ -1,5 +1,6 @@
+import { cn } from 'ioiti-ui'
+
 import capitalIcon from '@/assets/brands/capital-com.png'
-import { cn } from '@/lib/utils'
 
 /**
  * The marks of the services WATA connects to, beside their names. Saxo's is the

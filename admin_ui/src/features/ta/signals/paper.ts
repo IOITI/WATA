@@ -1,4 +1,5 @@
-import { formatDay, formatNumber, formatPercent } from '@/lib/format'
+import { formatDay, formatNumber, formatPercent } from 'ioiti-ui'
+
 import type { BacktestPaper } from '@/lib/types'
 
 /** What a rule's days traded on paper say, beside its reference run. Pure. */

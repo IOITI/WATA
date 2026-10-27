@@ -1,19 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Badge,
+  Button,
+  formatDateTime,
+  formatRelative,
+  FormControl,
+  FormDescription,
+  FormItem,
+  FormLabel,
+  Input,
+  Panel,
+  QueryState,
+  StepPanels,
+  Stepper,
+} from 'ioiti-ui'
 import { Check, Copy, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { BrandMark } from '@/components/BrandMark'
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { FormControl, FormDescription, FormItem, FormLabel, Input } from '@/components/ui/form'
-import { StepPanels, Stepper } from '@/components/ui/stepper'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatDateTime, formatRelative } from '@/lib/format'
 import type { SaxoStatus } from '@/lib/types'
 
 import { extractAuthorizationCode, extractAuthorizationState } from './authorizationCode'

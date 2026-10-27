@@ -1,14 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  DragToConfirm,
+  FormDescription,
+  FormItem,
+  FormLabel,
+  QueryState,
+  SettleModal,
+  useToast,
+} from 'ioiti-ui'
 import { useCallback, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { QueryState } from '@/components/status'
-import { useToast } from '@/components/toast-context'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { DragToConfirm } from '@/components/ui/drag-to-confirm'
-import { FormDescription, FormItem, FormLabel } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
 import { ChangeList } from '@/features/config/ChangeList'
 import { diffConfigs, getAt, setAt } from '@/features/config/configModel'
 import { useDraft } from '@/features/config/draft-context'

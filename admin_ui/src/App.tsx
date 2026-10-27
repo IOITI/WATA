@@ -1,13 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MotionConfig } from 'framer-motion'
+import { IoitiProvider, Skeleton } from 'ioiti-ui'
+import { RouterRoot } from 'ioiti-ui/react-router'
 import { lazy, Suspense, useState } from 'react'
 import type { ReactNode } from 'react'
-import { createBrowserRouter, createRoutesFromElements, Navigate, Outlet, Route, RouterProvider, useLocation } from 'react-router'
+import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterProvider, useLocation } from 'react-router'
 
 import { AppShell } from '@/components/AppShell'
-import { ThemeProvider } from '@/components/ThemeProvider'
-import { ToastProvider } from '@/components/ToastProvider'
-import { Skeleton } from '@/components/ui/skeleton'
+import { APP_NAME } from '@/components/navigation'
 import { AuditPage } from '@/features/audit/AuditPage'
 import { AuthProvider } from '@/features/auth/AuthProvider'
 import { BacktestsPage } from '@/features/backtests/BacktestsPage'
@@ -86,13 +85,14 @@ function createQueryClient() {
   })
 }
 
-/** What every page needs around it, the login included. */
+/**
+ * What every page needs around it, the login included: the session, the router's links for
+ * every component (ioiti-ui's RouterRoot), and the toasts, above the configuration page's bar.
+ */
 function Root() {
   return (
     <AuthProvider>
-      <ToastProvider>
-        <Outlet />
-      </ToastProvider>
+      <RouterRoot toastWrapperClassName="bottom-20" />
     </AuthProvider>
   )
 }
@@ -261,13 +261,12 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Light or dark, for every page, the login included. */}
-      <ThemeProvider>
-        {/* Animations follow the system's "reduce motion" setting. */}
-        <MotionConfig reducedMotion="user">
-          <RouterProvider router={router} />
-        </MotionConfig>
-      </ThemeProvider>
+      {/* Light or dark for every page, the login included, kept under the key of the pre-paint
+          script (`ioiti({ themeStorageKey })` in vite.config.ts); animations as the system's
+          "reduce motion" setting says; the name ending every tab's title. */}
+      <IoitiProvider appName={APP_NAME}>
+        <RouterProvider router={router} />
+      </IoitiProvider>
     </QueryClientProvider>
   )
 }

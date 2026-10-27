@@ -1,7 +1,6 @@
+import { Alert, AlertDescription, AlertTitle, Badge } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import type { BacktestFate, BacktestStatus } from '@/lib/types'
 
 import { FATE_LABEL, FATE_TONE, STATE_LABEL, STATE_TONE } from './model'

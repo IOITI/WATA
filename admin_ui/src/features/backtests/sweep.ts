@@ -1,4 +1,5 @@
-import { formatPercent } from '@/lib/format'
+import { formatPercent } from 'ioiti-ui'
+
 import type { BacktestFigures, BacktestSweep, BacktestSweepAxis, BacktestSweepCell, BacktestValue } from '@/lib/types'
 
 /** A sweep's combinations as a grid, its tints, and what it says about choosing a value. Pure. */

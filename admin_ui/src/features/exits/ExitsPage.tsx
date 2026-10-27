@@ -1,19 +1,25 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  cn,
+  DateRangeFilter,
+  formatNumber,
+  formatPercent,
+  KpiTile,
+  lastDays,
+  PageHeader,
+  Panel,
+  QueryState,
+  rangeParams,
+  SignedValue,
+} from 'ioiti-ui'
+import type { DateRange } from 'ioiti-ui'
 import { useState } from 'react'
 
 import { WeekdayHourHeatmap } from '@/components/charts/Heatmaps'
 import { ProfitByGroupChart, ProfitLossLegend } from '@/components/charts/PerformanceCharts'
-import { DateRangeFilter } from '@/components/DateRangeFilter'
-import { KpiTile } from '@/components/KpiTile'
-import { PageHeader, Panel } from '@/components/Panel'
-import { PnlValue, QueryState } from '@/components/status'
-import type { DateRange } from '@/components/ui/calendar'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { lastDays, rangeParams } from '@/lib/dateRange'
-import { formatNumber, formatPercent } from '@/lib/format'
 import type { Exits, GroupStats, LiveBreakdowns, NamedGroupStats } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 function GroupTable<T extends GroupStats>({
   groups,
@@ -44,13 +50,13 @@ function GroupTable<T extends GroupStats>({
               <td className="py-2.5 pr-4 text-right tabular-nums">{group.trade_count}</td>
               <td className="py-2.5 pr-4 text-right tabular-nums">{formatPercent(group.win_rate, false, 0)}</td>
               <td className="py-2.5 pr-4 text-right">
-                <PnlValue value={group.average_percent} kind="percent" />
+                <SignedValue value={group.average_percent} kind="percent" />
               </td>
               <td className="py-2.5 pr-4 text-right">
-                <PnlValue value={group.average_best_percent} kind="percent" />
+                <SignedValue value={group.average_best_percent} kind="percent" />
               </td>
               <td className="py-2.5 text-right">
-                <PnlValue value={group.profit_loss} kind="money" />
+                <SignedValue value={group.profit_loss} kind="money" />
               </td>
             </tr>
           ))}
@@ -80,12 +86,12 @@ function ExitsContent({ exits }: { exits: Exits }) {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <KpiTile
           label="Average result"
-          value={<PnlValue value={summary.average_percent} kind="percent" className="font-semibold" />}
+          value={<SignedValue value={summary.average_percent} kind="percent" className="font-semibold" />}
           hint={`${formatNumber(summary.trade_count)} closed trades`}
         />
         <KpiTile
           label="Average best level"
-          value={<PnlValue value={summary.average_best_percent} kind="percent" className="font-semibold" />}
+          value={<SignedValue value={summary.average_best_percent} kind="percent" className="font-semibold" />}
           hint="The highest performance a trade reached while open"
         />
         <KpiTile

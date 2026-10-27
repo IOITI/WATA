@@ -1,11 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ThemeProvider, ToastProvider } from 'ioiti-ui'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ThemeProvider } from '@/components/ThemeProvider'
-import { ToastProvider } from '@/components/ToastProvider'
 import type { RestartPlan, ServicesState, WataService } from '@/lib/types'
 
 import { ContainersPanel } from './ContainersPanel'

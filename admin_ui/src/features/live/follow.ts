@@ -8,9 +8,10 @@
  * little before the ask on (`CLOCK_SLACK_MS`).
  */
 
+import { formatMoney, formatNumber, formatPercent, formatTime, formatWait } from 'ioiti-ui'
+
 import { positionLink, purposeOf, tookMs } from '@/features/positions/orderLife'
 import { answerText } from '@/features/positions/orderRequests'
-import { formatMoney, formatNumber, formatPercent, formatTime, formatWait } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import type { JournalEntry, Order, OrderRequest, Position, PositionDetail } from '@/lib/types'
 

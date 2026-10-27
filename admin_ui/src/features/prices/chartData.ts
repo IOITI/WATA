@@ -1,4 +1,5 @@
-import { formatMoney, formatPercent } from '@/lib/format'
+import { formatMoney, formatPercent } from 'ioiti-ui'
+
 import { actionLabel } from '@/lib/labels'
 import type { JournalEntry, Position, PriceBarRow, PriceInstrument, PriceRangeRow } from '@/lib/types'
 

@@ -1,13 +1,9 @@
+import { Badge, Button, cn, Hint, StretchSwitch } from 'ioiti-ui'
 import { AlertTriangle, ChevronDown, Lock, RotateCcw } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Link } from 'react-router'
 
-import { Hint } from '@/components/Hint'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { StretchSwitch } from '@/components/ui/stretch-switch'
 import type { CatalogParam, JsonObject, JsonValue } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import {
   anchorOf,

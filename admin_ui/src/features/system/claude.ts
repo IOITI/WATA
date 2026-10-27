@@ -4,9 +4,9 @@
  * the server against its limits, and its calls in a line each.
  */
 
-import type { AgentActivityItemData, ActivityStatus } from '@/components/ui/ai-agent-activity'
-import type { BadgeTone } from '@/components/ui/badge'
-import { formatDateTime, formatNumber } from '@/lib/format'
+import { formatDateTime, formatNumber } from 'ioiti-ui'
+import type { ActivityStatus, AgentActivityItemData, BadgeTone } from 'ioiti-ui'
+
 import type { McpCall, McpCallOutcome, McpState, McpTokenState } from '@/lib/types'
 
 /** Who Claude's work is written as, whichever of its tokens asked. */

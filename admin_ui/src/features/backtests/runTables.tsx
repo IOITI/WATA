@@ -1,14 +1,20 @@
+import {
+  AdvancedDataTable,
+  Badge,
+  ExportButton,
+  formatDay,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  formatTime,
+  isPlainClick,
+  SignedValue,
+} from 'ioiti-ui'
+import type { ColumnDef, CsvColumn } from 'ioiti-ui'
 import { useMemo } from 'react'
 import { Link } from 'react-router'
 
-import { ExportButton } from '@/components/ExportButton'
-import { ActionBadge, PnlValue } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
-import { formatDay, formatMoney, formatNumber, formatPercent, formatTime } from '@/lib/format'
-import { isPlainClick } from '@/lib/links'
-import type { CsvColumn } from '@/lib/csv'
+import { ActionBadge } from '@/components/status'
 import type { BacktestDay, BacktestSignal, BacktestTrade, BacktestTurbos } from '@/lib/types'
 
 import { DAY_STATUS_LABEL, dayStatusLabel, FATE_LABEL, heldFor, ruleLabel } from './model'
@@ -85,7 +91,7 @@ export function DaysTable({ runId, days, turbos = 'recorded' }: { runId: string;
         accessorKey: 'day_percent',
         sortable: true,
         align: 'right',
-        cell: ({ row }) => <PnlValue value={row.day_percent} kind="percent" />,
+        cell: ({ row }) => <SignedValue value={row.day_percent} kind="percent" />,
       },
       {
         id: 'profit_loss',
@@ -93,7 +99,7 @@ export function DaysTable({ runId, days, turbos = 'recorded' }: { runId: string;
         accessorKey: 'profit_loss',
         sortable: true,
         align: 'right',
-        cell: ({ row }) => <PnlValue value={row.profit_loss} kind="money" />,
+        cell: ({ row }) => <SignedValue value={row.profit_loss} kind="money" />,
       },
       {
         id: 'equity',
@@ -272,9 +278,9 @@ export function TradesTable({
         align: 'right',
         cell: ({ row }) => (
           <div className="text-right">
-            <PnlValue value={row.performance_percent} kind="percent" />
+            <SignedValue value={row.performance_percent} kind="percent" />
             <p className="text-xs">
-              <PnlValue value={row.profit_loss} kind="money" />
+              <SignedValue value={row.profit_loss} kind="money" />
             </p>
           </div>
         ),

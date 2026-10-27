@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.51.0 - The admin interface on IOITI's design system, ioiti-ui
+
+**Release date:** 2026-10-27
+
+The admin interface's design and generic components now come from ioiti-ui, the package made from it on 26 October (`github:IOITI/ioiti-ui#v0.2.1` in `admin_ui/package.json`). The admin's interface only: no server route, query or trading service changes, and it looks and behaves as it did.
+
+- **One design, kept in one place**: the tokens and the design (`src/styles/index.css` imports `ioiti-ui/styles.css`), EasyUI's 44 components as the admin had changed them, the blocks of the pages (`Panel`, `PageHeader`, `KpiTile`, `Hint`, `ButtonLink`, `QueryState`…), the formats, CSV and date ranges, the shell (the sidebar, the top bar and its trail, the page's column), the 404 and the theme are the package's.
+  - WATA's copies went: 88 files, 13 of them tests, which the package holds.
+  - So did the dependencies only they imported: `clsx`, `tailwind-merge`, `tw-animate-css` and the two fonts come with ioiti-ui now, at the same versions; `class-variance-authority`, which nothing imported, is gone.
+  - A change to one of them is made in ioiti-ui, released as a tag and installed here (`admin_ui/README.md`, AGENTS.md).
+- **What is WATA's stays in WATA**: the menu (`components/navigation.ts`), what the shell holds (`components/AppShell.tsx`: the Saxo and restart chips, the live pill, the palette, the bell, the services' state, signing out), `ConfirmLiveAction` (the package's `ConfirmAction`, saying first that the account is live), the 404's way back to the dashboard, the trading badges, the charts, `formatWallTime` (`lib/wallTime.ts`) and every page.
+- **Named as the package names them**: `PnlValue` is `SignedValue`, `ServiceStatusBadge` `StatusBadge`, EasyUI's `payment-status` `RequestStatus`; a service's state is said with the package's words, the same.
+- **The theme is set before the first paint by the package's script** (`ioiti-theme.js`, written and put at the top of `<head>` by `ioiti()` in `vite.config.ts`), under the key it always had (`wata.theme`): a choice kept in a browser stays. `public/theme.js` went.
+- **ioiti-ui 0.2.1, for the one regression found**: 0.2.0's `RouterLink` sent a check's link to a part of the page (`#trust` among a run's checks, `#rules` on the Engine monitor) through the router, which wrote `/backtests/…#trust`, dropped the address's query and scrolled nothing. Fixed in the package, with its test: such a link is a plain `<a>`, which the browser follows in the page.
+
+My calls: ioiti-ui 0.2's accents and glass material are not offered (no picker): the admin stays neutral and flat. `ConfirmLiveAction` and `NotFoundState` stay as a few lines around the package's. The tests that follow a link a component of the package draws mount their page under `RouterRoot`, as `App.tsx` does.
+
+**On the live path:** nothing. The interface is built on the Mac by `package.sh`, whose `npm ci` now fetches ioiti-ui from GitHub (a public repository: no key).
+
+**Verification status:**
+- The interface's 1,101 tests pass, with lint and types (1,163 before: the copies' 64 tests are the package's now, 2 added for `formatWallTime`); ioiti-ui's checks pass on 0.2.1.
+- The built CSS holds every rule of the build before, in the same order; the package adds its accents' and glass's rules, inert without their attribute on `<html>`.
+- In a browser, on the fake admin: the computed styles of every element of 26 pages, in both themes at 1440 × 900 and of 5 at 375 × 812, the same as with the build before, but for the fake's live data. The pause's dialog, ⌘K, the bell, the theme kept under `wata.theme` and the toasts' place were looked at.
+- `npm ci` installs ioiti-ui 0.2.1 from GitHub with SSH turned off (its tag pushed on 2026-10-27), as CI and `package.sh` will.
+- Not deployed.
+
 ## v0.50.1 - The backup image builds
 
 **Release date:** 2026-10-26

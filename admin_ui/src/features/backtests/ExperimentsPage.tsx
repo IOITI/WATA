@@ -1,19 +1,28 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  AdvancedDataTable,
+  Alert,
+  AlertDescription,
+  Badge,
+  Button,
+  formatDateTime,
+  formatDay,
+  formatNumber,
+  FormItem,
+  FormLabel,
+  Input,
+  PageHeader,
+  Panel,
+  QueryState,
+} from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { PageHeader, Panel } from '@/components/Panel'
-import { ClaudeBadge, QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { FormItem, FormLabel, Input } from '@/components/ui/form'
+import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { Experiment, ResearchLockbox } from '@/lib/types'
 
 import { familyTrials, lockboxText, RUNS_SHOWN, VERDICT } from './experiments'

@@ -1,14 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Checkbox, Hint } from 'ioiti-ui'
 import { RotateCw } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
-import { Hint } from '@/components/Hint'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/form'
 import { ApiError, api } from '@/lib/api'
 import type { RestartPlan, ServicesState, WataService } from '@/lib/types'
 

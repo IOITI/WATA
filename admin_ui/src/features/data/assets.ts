@@ -1,7 +1,8 @@
+import { formatDateTime, formatDay, formatNumber } from 'ioiti-ui'
+
 import type { Fact } from '@/features/prices/availability'
 import { instrumentLabel, todayIn, valueDecimals } from '@/features/prices/chartData'
 import { isDay } from '@/features/prices/view'
-import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { AssetSeen, AssetStatus, DataAsset, DataProviderId, PriceInstrument } from '@/lib/types'
 
 /**

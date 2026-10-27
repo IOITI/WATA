@@ -1,4 +1,5 @@
-import { formatDateTime, formatNumber, formatPercent, formatSpan, formatTime } from '@/lib/format'
+import { formatDateTime, formatNumber, formatPercent, formatSpan, formatTime } from 'ioiti-ui'
+
 import type { InstrumentAvailability, PriceAvailability, PriceInstrument, PriceStretch } from '@/lib/types'
 
 import { valueDecimals } from './chartData'

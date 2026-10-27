@@ -1,4 +1,5 @@
-import { formatNumber, formatSpan } from '@/lib/format'
+import { formatNumber, formatSpan } from 'ioiti-ui'
+
 import type { PriceBarRow, PriceRangeRow } from '@/lib/types'
 
 import { chartTime, formatChartClock, formatChartTime, RANGE } from './chartData'

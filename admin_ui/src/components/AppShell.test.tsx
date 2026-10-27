@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { IoitiProvider, PageHeader } from 'ioiti-ui'
+import { RouterRoot } from 'ioiti-ui/react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
@@ -11,9 +13,7 @@ import { run, RUN_ID } from '@/test/backtests'
 import { openPosition, overview } from '@/test/overview'
 
 import { AppShell } from './AppShell'
-import { MENU } from './navigation'
-import { PageHeader } from './Panel'
-import { ToastProvider } from './ToastProvider'
+import { APP_NAME, MENU } from './navigation'
 
 const SESSION: Session = {
   authenticated: true,
@@ -99,32 +99,35 @@ function renderShell({
           logout: async () => {},
         }}
       >
-        <ToastProvider>
+        {/* As App.tsx has them: the application's name, then RouterRoot at the root route. */}
+        <IoitiProvider appName={APP_NAME}>
           <MemoryRouter initialEntries={[path]}>
             <Routes>
-              <Route element={<AppShell />}>
-                <Route index element={<PageHeader title="Dashboard" />} />
-                <Route path="positions" element={<h1>Positions</h1>} />
-                <Route
-                  path="data/assets/:provider/:key"
-                  element={
-                    <>
-                      <PageHeader title="Long 24,150 · SG" />
-                      <Link to="/positions">To the positions</Link>
-                      <Link to="?side=ask">The ask</Link>
-                    </>
-                  }
-                />
-                <Route
-                  path="backtests/:runId/days/:day"
-                  element={<PageHeader title="9 Oct 2026" parents={[{ label: 'Morning breakout', href: '/backtests/r1' }]} />}
-                />
-                <Route path="*" element={<NotFoundPage />} />
+              <Route element={<RouterRoot />}>
+                <Route element={<AppShell />}>
+                  <Route index element={<PageHeader title="Dashboard" />} />
+                  <Route path="positions" element={<h1>Positions</h1>} />
+                  <Route
+                    path="data/assets/:provider/:key"
+                    element={
+                      <>
+                        <PageHeader title="Long 24,150 · SG" />
+                        <Link to="/positions">To the positions</Link>
+                        <Link to="?side=ask">The ask</Link>
+                      </>
+                    }
+                  />
+                  <Route
+                    path="backtests/:runId/days/:day"
+                    element={<PageHeader title="9 Oct 2026" parents={[{ label: 'Morning breakout', href: '/backtests/r1' }]} />}
+                  />
+                  <Route path="*" element={<NotFoundPage />} />
+                </Route>
               </Route>
             </Routes>
             <Address />
           </MemoryRouter>
-        </ToastProvider>
+        </IoitiProvider>
       </AuthContext.Provider>
     </QueryClientProvider>,
   )

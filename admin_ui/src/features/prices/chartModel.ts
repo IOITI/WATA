@@ -1,4 +1,5 @@
-import type { CsvColumn } from '@/lib/csv'
+import type { CsvColumn } from 'ioiti-ui'
+
 import type { PriceBarRow, PriceBars, PriceInstrument, PriceRangeBars, PriceRangeRow } from '@/lib/types'
 
 import {

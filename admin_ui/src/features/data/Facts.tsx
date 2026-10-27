@@ -1,5 +1,6 @@
+import { cn } from 'ioiti-ui'
+
 import type { Fact } from '@/features/prices/availability'
-import { cn } from '@/lib/utils'
 
 /** What is known of an asset, label beside value; a value that says something is wrong in the warning colour. */
 export function Facts({ facts, id }: { facts: Fact[]; id?: string }) {

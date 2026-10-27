@@ -1,9 +1,7 @@
+import { formatDateTime, formatDuration, formatTime, Panel, Skeleton } from 'ioiti-ui'
 import { CircleCheck } from 'lucide-react'
 import { useMemo } from 'react'
 
-import { Panel } from '@/components/Panel'
-import { Skeleton } from '@/components/ui/skeleton'
-import { formatDateTime, formatDuration, formatTime } from '@/lib/format'
 import type { InstrumentAvailability, PriceGap, PriceStretch } from '@/lib/types'
 
 const REASONS: Record<PriceGap['reason'] | PriceStretch['reason'], string> = {

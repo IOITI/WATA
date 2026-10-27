@@ -1,11 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { formatDay, formatNumber, formatPercent, PeekLink, SignedValue, Skeleton } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
-import { PeekLink } from '@/components/PeekLink'
-import { PnlValue } from '@/components/status'
-import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { formatDay, formatNumber, formatPercent } from '@/lib/format'
 
 import { sourceLabel } from './model'
 import { StateBadge } from './parts'
@@ -19,7 +16,7 @@ export function RunPeek({ id }: { id: string }) {
   const headline = run.headline
   const figures: [string, ReactNode][] = headline
     ? [
-        ['Total', <PnlValue key="total" value={headline.total_percent} kind="percent" />],
+        ['Total', <SignedValue key="total" value={headline.total_percent} kind="percent" />],
         ['Trades', formatNumber(headline.trades)],
         ['Won', headline.win_rate === null ? '—' : formatPercent(headline.win_rate, false, 0)],
         ['Random runs beaten', headline.beaten === null ? '—' : formatPercent(headline.beaten, false, 0)],

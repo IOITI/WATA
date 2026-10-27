@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ThemeProvider } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
-import { ThemeProvider } from '@/components/ThemeProvider'
 import { AuthContext } from '@/features/auth/auth-context'
 import type { Session, TaScript, TaScriptSummary } from '@/lib/types'
 import { WithTrail } from '@/test/WithTrail'

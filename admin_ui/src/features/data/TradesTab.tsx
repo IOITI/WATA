@@ -1,17 +1,13 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { AdvancedDataTable, cn, formatNumber, KpiTile, QueryState, SignedValue } from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { KpiTile } from '@/components/KpiTile'
-import { PnlValue, QueryState } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
 import { positionColumns } from '@/features/positions/columns'
 import { positionLink } from '@/features/positions/orderLife'
 import { api } from '@/lib/api'
-import { formatNumber } from '@/lib/format'
 import type { DataAsset, Position } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 interface TradesTabProps {
   asset: DataAsset
@@ -71,7 +67,7 @@ export function TradesTab({ asset, from, to, timeZone }: TradesTabProps) {
           <KpiTile label="Won" value={closed.length > 0 ? `${won} of ${closed.length}` : '—'} hint="Of those closed" />
           <KpiTile
             label="Profit / loss"
-            value={closed.length > 0 ? <PnlValue value={profit} kind="money" currency={currency} /> : '—'}
+            value={closed.length > 0 ? <SignedValue value={profit} kind="money" currency={currency} /> : '—'}
             hint="Of those closed in the period"
           />
         </div>

@@ -5,29 +5,36 @@
 // what the engine did.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  AdvancedDataTable,
+  Alert,
+  AlertDescription,
+  Badge,
+  Button,
+  ButtonLink,
+  Checkbox,
+  CheckList,
+  formatDateTime,
+  Hint,
+  PageHeader,
+  Panel,
+  QueryState,
+  Select,
+  SettleModal,
+  StatusBadge,
+  useToast,
+} from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { Eye, Pencil, Plus, PowerOff, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
-import { ButtonLink } from '@/components/ButtonLink'
-import { CheckList } from '@/components/CheckList'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
-import { Hint } from '@/components/Hint'
-import { PageHeader, Panel } from '@/components/Panel'
-import { ClaudeBadge, QueryState, ServiceStatusBadge } from '@/components/status'
-import { useToast } from '@/components/toast-context'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox, Select } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
+import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { monitorHref } from '@/features/ta/monitor/monitorModel'
 import { api, ApiError } from '@/lib/api'
-import { formatDateTime } from '@/lib/format'
 import type { TaEngine, TaRule, TaRuleMode, TaRules } from '@/lib/types'
 
 import { ComparisonPanel } from './ComparisonPanel'
@@ -60,7 +67,7 @@ function EnginePanel({ engine, timeZone }: { engine: TaEngine; timeZone: string 
       }
     >
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        <ServiceStatusBadge status={engine.status} />
+        <StatusBadge status={engine.status} />
         <span>{engine.detail}</span>
       </div>
       {!engine.enabled && (

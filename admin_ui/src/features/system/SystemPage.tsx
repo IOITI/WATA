@@ -1,17 +1,23 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  DependencyTrace,
+  formatDateTime,
+  formatNumber,
+  PageHeader,
+  Panel,
+  QueryState,
+  StatusBadge,
+  useToast,
+} from 'ioiti-ui'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
-import { PageHeader, Panel } from '@/components/Panel'
-import { QueryState, ServiceStatusBadge } from '@/components/status'
-import { useToast } from '@/components/toast-context'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { DependencyTrace } from '@/components/ui/dependency-trace'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatDateTime, formatNumber } from '@/lib/format'
 import type { Health } from '@/lib/types'
 
 import { ClaudePanel } from './ClaudePanel'
@@ -47,7 +53,7 @@ function ServicesTable({ health }: { health: Health }) {
                 )}
               </td>
               <td className="py-2.5 pr-4">
-                <ServiceStatusBadge status={service.status} />
+                <StatusBadge status={service.status} />
               </td>
               <td className="py-2.5 text-muted-foreground">{service.detail}</td>
             </tr>

@@ -1,19 +1,27 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  formatDay,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  PageHeader,
+  Panel,
+  QueryState,
+  SignedValue,
+  SmartComparison,
+} from 'ioiti-ui'
+import type { ComparisonCategory, ComparisonFeature, ComparisonPlan } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { compareColor, MAX_COMPARED } from '@/components/charts/compare'
 import { CompareCurvesChart, CurvesLegend } from '@/components/charts/PerformanceCharts'
-import { PageHeader, Panel } from '@/components/Panel'
 import { PeekRouterLink } from '@/components/PeekRouterLink'
-import { PnlValue, QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { SmartComparison } from '@/components/ui/smart-comparison'
-import type { ComparisonCategory, ComparisonFeature, ComparisonPlan } from '@/components/ui/smart-comparison'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
-import { formatDay, formatMoney, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestRun } from '@/lib/types'
 
 import { assetLabel, compareCurves, comparisonWarnings, differingInputs, differingSettings, sourceLabel } from './model'
@@ -27,7 +35,7 @@ interface Measure {
 }
 
 const count = (value: number | null | undefined) => formatNumber(value)
-const result = (value: number | null | undefined) => <PnlValue value={value} kind="percent" />
+const result = (value: number | null | undefined) => <SignedValue value={value} kind="percent" />
 
 const MEASURES: Measure[] = [
   { label: 'Days tested', value: (run) => run.summary?.figures?.days, show: count },
@@ -44,7 +52,7 @@ const MEASURES: Measure[] = [
   { label: 'Worst day', value: (run) => run.summary?.figures?.worst_day, show: result },
   { label: 'Median day', value: (run) => run.summary?.figures?.median_day, show: result },
   { label: 'Worst drawdown', value: (run) => run.summary?.figures?.worst_drawdown, show: result },
-  { label: 'In money', value: (run) => run.summary?.money?.profit_loss, show: (value) => <PnlValue value={value} kind="money" /> },
+  { label: 'In money', value: (run) => run.summary?.money?.profit_loss, show: (value) => <SignedValue value={value} kind="money" /> },
   { label: 'Return on the account', value: (run) => run.summary?.money?.return_percent, show: result },
   { label: 'Average stake', value: (run) => run.summary?.money?.average_stake, show: (value) => formatMoney(value, 'EUR') },
   { label: 'Random runs beaten', value: (run) => run.summary?.against_random?.beaten, show: (value) => formatPercent(value, false, 0) },

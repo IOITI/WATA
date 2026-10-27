@@ -1,7 +1,6 @@
-import { PnlValue } from '@/components/status'
-import { formatDuration, formatMoney } from '@/lib/format'
+import { cn, formatDuration, formatMoney, SignedValue } from 'ioiti-ui'
+
 import type { Position } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { unrealisedProfitLoss } from './unrealised'
 
@@ -25,10 +24,10 @@ export function LiveValue({ position, now }: { position: Position; now: number }
   return (
     <span className="inline-flex flex-col items-end gap-0.5 leading-tight">
       <span className={cn('inline-flex items-baseline gap-2 text-sm font-medium', stale && 'opacity-60')}>
-        <PnlValue value={position.live_performance_percent} kind="percent" animate />
+        <SignedValue value={position.live_performance_percent} kind="percent" animate />
         {unrealised !== null && (
           <span title="Unrealised: what selling at this bid would bring">
-            <PnlValue value={unrealised} kind="money" currency={position.instrument_currency} animate />
+            <SignedValue value={unrealised} kind="money" currency={position.instrument_currency} animate />
           </span>
         )}
       </span>

@@ -1,9 +1,10 @@
 // What the Credentials group says of each credential kept sealed in PostgreSQL (src/vault/,
 // src/admin/vault.py): where it is, what its services last saw, and how each is obtained. Pure.
 
+import { formatDateTime } from 'ioiti-ui'
+import type { BadgeTone } from 'ioiti-ui'
+
 import type { Brand } from '@/components/BrandMark'
-import type { BadgeTone } from '@/components/ui/badge'
-import { formatDateTime } from '@/lib/format'
 import type { Credential, CredentialCheck } from '@/lib/types'
 
 export const WHERE_LABEL: Record<Credential['where'], { label: string; tone: BadgeTone }> = {

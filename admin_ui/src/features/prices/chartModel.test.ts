@@ -1,6 +1,6 @@
+import { toCsv } from 'ioiti-ui'
 import { describe, expect, it } from 'vitest'
 
-import { toCsv } from '@/lib/csv'
 import type { PriceInstrument, PriceRangeBars, PriceRangeRow } from '@/lib/types'
 
 import { rangeBarsCsv, rangeBarState, rangeChart } from './chartModel'

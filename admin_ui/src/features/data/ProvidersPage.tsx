@@ -1,22 +1,28 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  AdvancedDataTable,
+  Badge,
+  Button,
+  ButtonLink,
+  cn,
+  formatDateTime,
+  formatDay,
+  formatNumber,
+  isPlainClick,
+  PageHeader,
+  Panel,
+  QueryState,
+  SettleModal,
+  StatusBadge,
+} from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { ButtonLink } from '@/components/ButtonLink'
-import { PageHeader, Panel } from '@/components/Panel'
-import { QueryState, ServiceStatusBadge } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { SettleModal } from '@/components/ui/settle-modal'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay, formatNumber } from '@/lib/format'
-import { isPlainClick } from '@/lib/links'
 import type { DataProvider, DataProviders } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { assetsLink, PROVIDERS_PATH } from './assets'
 import { ProviderMark } from './ProviderMark'
@@ -75,7 +81,7 @@ function providerColumns(timeZone: string, edit: (provider: DataProvider) => voi
       accessorKey: 'status',
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col gap-1">
-          <ServiceStatusBadge status={row.status} />
+          <StatusBadge status={row.status} />
           <span className="max-w-[18rem] whitespace-normal text-xs text-muted-foreground">{row.detail}</span>
         </div>
       ),

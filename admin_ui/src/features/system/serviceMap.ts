@@ -4,8 +4,9 @@
  * changed here too. A link goes from the caller to what it calls or writes to.
  */
 
-import type { TraceConnection, TraceNode } from '@/components/ui/dependency-trace'
-import { SERVICE_STATUS_LABEL } from '@/lib/labels'
+import { HEALTH_STATUS_LABEL } from 'ioiti-ui'
+import type { TraceConnection, TraceNode } from 'ioiti-ui'
+
 import type { ServiceHealth } from '@/lib/types'
 
 export interface MapNode {
@@ -82,7 +83,7 @@ export function serviceMap(services: ServiceHealth[]): TraceNode[] {
       x: node.x,
       y: node.y,
       status,
-      statusLabel: SERVICE_STATUS_LABEL[status],
+      statusLabel: HEALTH_STATUS_LABEL[status],
       detail: service ? service.detail : 'Not in the health summary',
     }
   })

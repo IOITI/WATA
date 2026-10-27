@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { RouterRoot } from 'ioiti-ui/react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
@@ -170,9 +171,12 @@ function renderAt(address: string) {
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
         <MemoryRouter initialEntries={[address]}>
+          {/* The router's links for every component, as App.tsx gives them. */}
           <Routes>
-            <Route path="orders" element={<OrdersPage />} />
-            <Route path="positions" element={<PositionsPage />} />
+            <Route element={<RouterRoot />}>
+              <Route path="orders" element={<OrdersPage />} />
+              <Route path="positions" element={<PositionsPage />} />
+            </Route>
           </Routes>
           <Address />
         </MemoryRouter>

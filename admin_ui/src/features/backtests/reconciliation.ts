@@ -1,4 +1,5 @@
-import { formatNumber, formatPercent } from '@/lib/format'
+import { formatNumber, formatPercent } from 'ioiti-ui'
+
 import type { BacktestReconciliationSummary } from '@/lib/types'
 
 /** What a replay of the journal says set beside WATA's real positions. Pure. */

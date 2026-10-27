@@ -1,4 +1,5 @@
-import { formatDay, formatNumber } from '@/lib/format'
+import { formatDay, formatNumber } from 'ioiti-ui'
+
 import type { BacktestModelCheck, BacktestTurboDirection, BacktestTurboMeasure, BacktestTurboModel } from '@/lib/types'
 
 import { PROVIDER_LABEL } from './model'

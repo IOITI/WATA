@@ -1,10 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
+import { Alert, AlertDescription, formatDay, formatNumber, Panel, QueryState, SignedValue } from 'ioiti-ui'
 
-import { Panel } from '@/components/Panel'
-import { PnlValue, QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { api } from '@/lib/api'
-import { formatDay, formatNumber } from '@/lib/format'
 import type { BacktestReconciliation } from '@/lib/types'
 
 import { reconciliationVerdict } from './reconciliation'
@@ -82,10 +79,10 @@ export function ReconciliationPanel({ runId }: { runId: string }) {
                         </td>
                         <td className="p-2 text-right">{pair.entry_seconds === null ? '-' : formatNumber(pair.entry_seconds, 1)}</td>
                         <td className="p-2 text-right">
-                          <PnlValue value={pair.result.backtest} kind="percent" />
+                          <SignedValue value={pair.result.backtest} kind="percent" />
                         </td>
                         <td className="p-2 text-right">
-                          <PnlValue value={pair.result.real} kind="percent" />
+                          <SignedValue value={pair.result.real} kind="percent" />
                         </td>
                         <td className="p-2 text-left text-xs">
                           {pair.same_exit ? (

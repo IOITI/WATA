@@ -1,15 +1,27 @@
 import { useQuery } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  Badge,
+  ButtonLink,
+  cn,
+  formatDay,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  formatTime,
+  PageHeader,
+  Panel,
+  QueryState,
+  SignedValue,
+  useTheme,
+} from 'ioiti-ui'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
-import { ButtonLink } from '@/components/ButtonLink'
 import { NotFoundState } from '@/components/NotFoundState'
-import { PageHeader, Panel } from '@/components/Panel'
-import { ActionBadge, PnlValue, QueryState } from '@/components/status'
-import { useTheme } from '@/components/theme-context'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
+import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { rangeChart, timeChart } from '@/features/prices/chartModel'
@@ -18,9 +30,7 @@ import { PriceChart } from '@/features/prices/PriceChart'
 import { timeframeOf } from '@/features/ta/engine/timeframes'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { api, isNotFound } from '@/lib/api'
-import { formatDay, formatMoney, formatNumber, formatPercent, formatTime } from '@/lib/format'
 import type { BacktestChart, BacktestRun, BacktestSignal, BacktestTrade } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { signalMarkers, tradeFocus, tradeMarkers } from './dayChart'
 import { assetLabel, dayStatusLabel, heldFor, RUN_NOT_FOUND } from './model'
@@ -117,10 +127,10 @@ function TradeDetail({ run, trade, day, signals }: { run: BacktestRun; trade: Ba
           </dl>
           <dl className="flex flex-col gap-1.5">
             <Measure label="Result">
-              <PnlValue value={trade.performance_percent} kind="percent" />
+              <SignedValue value={trade.performance_percent} kind="percent" />
             </Measure>
             <Measure label="In money">
-              <PnlValue value={trade.profit_loss} kind="money" />
+              <SignedValue value={trade.profit_loss} kind="money" />
             </Measure>
             <Measure label="Best, worst">
               {formatPercent(trade.max_performance_percent, true)}, {formatPercent(trade.min_performance_percent, true)}
@@ -367,7 +377,7 @@ export function DayPage() {
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                   <Badge tone={record.status === 'tested' ? 'success' : 'neutral'}>{dayStatusLabel(record.status, run.turbos)}</Badge>
                   <span>
-                    Day <PnlValue value={record.day_percent} kind="percent" />, <PnlValue value={record.profit_loss} kind="money" />
+                    Day <SignedValue value={record.day_percent} kind="percent" />, <SignedValue value={record.profit_loss} kind="money" />
                   </span>
                   <span className="text-muted-foreground">
                     {record.trades} trade{record.trades === 1 ? '' : 's'},{' '}

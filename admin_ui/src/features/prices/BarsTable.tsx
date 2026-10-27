@@ -1,8 +1,7 @@
+import { AdvancedDataTable, formatNumber, formatSpan } from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { useMemo } from 'react'
 
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { formatNumber, formatSpan } from '@/lib/format'
 import type { PriceBarRow, PriceRangeRow } from '@/lib/types'
 
 import { chartTime, formatChartClock, formatChartTime, intervalLabel, RANGE } from './chartData'

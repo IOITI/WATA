@@ -4,20 +4,13 @@
 // (src/admin/ta_monitor.py); monitorModel.ts says them, monitorPanels.tsx draws a period of them.
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { Alert, AlertDescription, AnimatedTabs, CheckList, cn, KpiTile, Meter, PageHeader, Panel, QueryState, Select, StatusBadge } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { Link, useSearchParams } from 'react-router'
 
-import { CheckList } from '@/components/CheckList'
-import { KpiTile, Meter } from '@/components/KpiTile'
-import { PageHeader, Panel } from '@/components/Panel'
-import { RouterLink } from '@/components/RouterLink'
-import { QueryState, ServiceStatusBadge } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { AnimatedTabs } from '@/components/ui/animated-tabs'
-import { Select } from '@/components/ui/form'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { TaEngine, TaMonitorNow } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import {
   addressParams,
@@ -35,7 +28,7 @@ import { ChartsPanel, DeliveryPanel, ResultsPanel, RulesPanel } from './monitorP
 function EngineLine({ engine }: { engine: TaEngine }) {
   return (
     <div className="flex flex-wrap items-center gap-3 text-sm">
-      <ServiceStatusBadge status={engine.status} />
+      <StatusBadge status={engine.status} />
       <span>{engine.detail}</span>
       {!engine.enabled && (
         <span className="text-xs text-muted-foreground">

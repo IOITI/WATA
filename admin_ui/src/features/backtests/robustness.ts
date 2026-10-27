@@ -1,5 +1,6 @@
+import { formatDay, formatNumber, formatPercent } from 'ioiti-ui'
+
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
-import { formatDay, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestRisk, BacktestStress, BacktestSummary, BacktestSweep, BacktestSweepAxis, BacktestWalkForward } from '@/lib/types'
 
 import { axisName } from './sweep'

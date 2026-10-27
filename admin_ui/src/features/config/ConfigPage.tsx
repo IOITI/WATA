@@ -1,14 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, AlertTitle, Button, Loader, PageHeader, QueryState, useToast } from 'ioiti-ui'
 import { useCallback, useMemo, useState } from 'react'
 import { Outlet } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
-import { PageHeader } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { useToast } from '@/components/toast-context'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { Loader } from '@/components/ui/loader'
 import { api, ApiError } from '@/lib/api'
 import type { ConfigCatalog, ConfigDocument, ConfigHistoryEntry, ConfigSaved, JsonObject, JsonValue } from '@/lib/types'
 

@@ -1,8 +1,6 @@
+import { Button, SettleModal } from 'ioiti-ui'
 import { useEffect } from 'react'
 import { useBlocker } from 'react-router'
-
-import { Button } from '@/components/ui/button'
-import { SettleModal } from '@/components/ui/settle-modal'
 
 interface LeaveGuardProps {
   /** There is something on this page that leaving would lose. */

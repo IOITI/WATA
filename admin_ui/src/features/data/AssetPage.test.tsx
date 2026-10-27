@@ -1,11 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ThemeProvider, ThemeToggle } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
-import { ThemeProvider } from '@/components/ThemeProvider'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
   AssetDayStatistics,

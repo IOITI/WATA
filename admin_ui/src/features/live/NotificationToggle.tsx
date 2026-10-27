@@ -1,7 +1,6 @@
+import { useToast } from 'ioiti-ui'
 import { Bell, BellOff } from 'lucide-react'
 import { useState } from 'react'
-
-import { useToast } from '@/components/toast-context'
 
 import { notificationsEnabled, notificationsSupported, setNotificationsEnabled } from './notifications'
 

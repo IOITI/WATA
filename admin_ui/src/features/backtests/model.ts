@@ -1,9 +1,9 @@
+import { formatBytes, formatDay, formatPercent } from 'ioiti-ui'
+import type { BadgeTone, FunnelStage } from 'ioiti-ui'
+
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
-import type { BadgeTone } from '@/components/ui/badge'
-import type { FunnelStage } from '@/components/ui/funnel-chart'
 import { madeByClaude } from '@/features/system/claude'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
-import { formatBytes, formatDay, formatPercent } from '@/lib/format'
 import type {
   BacktestAgainstRandom,
   BacktestAsset,

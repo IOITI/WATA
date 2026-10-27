@@ -1,8 +1,9 @@
-import type { DivergingColors, HeatDay } from '@/components/ui/activity-heatmap'
-import { formatNumber, formatPercent } from '@/lib/format'
+import { formatNumber, formatPercent } from 'ioiti-ui'
+import type { DivergingColors, HeatDay } from 'ioiti-ui'
+
 import type { DailyPerformance, WeekdayHourStats } from '@/lib/types'
 
-/** Gains and losses by size, smallest first: `styles/theme.css` says how they were checked for colour-blind readers. */
+/** Gains and losses by size, smallest first: ioiti-ui's `theme.css` says how they were checked for colour-blind readers. */
 export const GAIN_LOSS: DivergingColors = {
   positive: [1, 2, 3, 4].map((step) => `var(--chart-gain-${step})`),
   negative: [1, 2, 3, 4].map((step) => `var(--chart-loss-${step})`),

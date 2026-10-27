@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Button, Select } from 'ioiti-ui'
 
-import { Button } from '@/components/ui/button'
-import { Select } from '@/components/ui/form'
 import { api } from '@/lib/api'
 
 import { researchSentence } from './model'

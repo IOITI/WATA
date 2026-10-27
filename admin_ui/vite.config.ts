@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import { ioiti } from 'ioiti-ui/vite'
 import { defineConfig } from 'vitest/config'
 
 import { pinetsZoneFormat, pinetsZoneFormatDeps } from './vite/pinetsZoneFormat.ts'
@@ -10,7 +11,10 @@ import { velaSeconds, velaSecondsDeps } from './vite/velaSeconds.ts'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), velaPineWorker(), velaSeconds()],
+  // ioiti(): the theme set before the stylesheet and the application, when the first pixel is painted
+  // (ioiti-theme.js, a file of its own: the admin's Content-Security-Policy allows no inline script),
+  // the choice kept under the key it always had.
+  plugins: [react(), tailwindcss(), ioiti({ themeStorageKey: 'wata.theme' }), velaPineWorker(), velaSeconds()],
   // Vela's chart learns bars of seconds, and PineTS keeps a formatter per time zone, in the dev server
   // too, whose dependencies Vite prepares itself.
   optimizeDeps: {

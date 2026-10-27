@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { useToast } from 'ioiti-ui'
 import { useEffect, useState } from 'react'
 
-import { useToast } from '@/components/toast-context'
 import type { LiveEvent } from '@/lib/types'
 
 import { useEventLog } from './eventLog'

@@ -1,9 +1,8 @@
+import { formatBytes, formatDateTime, formatDay, formatNumber, Panel } from 'ioiti-ui'
 import { Link } from 'react-router'
 import type { ReactNode } from 'react'
 
-import { Panel } from '@/components/Panel'
 import { instrumentLabel } from '@/features/prices/chartData'
-import { formatBytes, formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import type { AssetDetails, CapitalRecording, HistoryRecording, SaxoRecording } from '@/lib/types'
 

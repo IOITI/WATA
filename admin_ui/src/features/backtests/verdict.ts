@@ -1,5 +1,6 @@
-import type { Check, CheckState } from '@/lib/checks'
-import { formatNumber, formatPercent } from '@/lib/format'
+import { formatNumber, formatPercent } from 'ioiti-ui'
+import type { Check, CheckState } from 'ioiti-ui'
+
 import type { BacktestModelCheck, BacktestRun, BacktestRunListed, BacktestSample, BacktestSweep } from '@/lib/types'
 
 import { EDGE_BEATEN, EDGE_T, headlineEdge, horizonLabel, LEAST_SIGNALS } from './edge'

@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
+import { RequestStatus } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { useEffect, useState, type ReactNode } from 'react'
 
-import { RouterLink } from '@/components/RouterLink'
-import { PaymentStatus } from '@/components/ui/payment-status'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 
@@ -39,7 +39,7 @@ function watching(state: FollowState, since: number, now: number): boolean {
 
 function Card({ state, onDismiss }: { state: FollowState; onDismiss: () => void }) {
   return (
-    <PaymentStatus
+    <RequestStatus
       status={state.status}
       title={state.title}
       description={state.description}

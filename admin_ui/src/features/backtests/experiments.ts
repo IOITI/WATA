@@ -1,7 +1,8 @@
 /** The experiment journal Claude keeps on the server, as the Experiments page reads it. */
 
-import type { BadgeTone } from '@/components/ui/badge'
-import { formatDay } from '@/lib/format'
+import { formatDay } from 'ioiti-ui'
+import type { BadgeTone } from 'ioiti-ui'
+
 import type { Experiment, ExperimentVerdict, ResearchLockbox } from '@/lib/types'
 
 export const VERDICT: Record<ExperimentVerdict, { tone: BadgeTone; label: string }> = {

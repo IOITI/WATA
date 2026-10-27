@@ -4,15 +4,9 @@
 // reviewed before it is made.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, AlertTitle, Button, DragToConfirm, Input, Select, SettleModal, StepPanels, Stepper, useToast } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
-import { useToast } from '@/components/toast-context'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
-import { DragToConfirm } from '@/components/ui/drag-to-confirm'
-import { Input, Select } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
-import { StepPanels, Stepper } from '@/components/ui/stepper'
 import { api, ApiError } from '@/lib/api'
 import type { TaRule, TaRules, TaScriptSummary } from '@/lib/types'
 

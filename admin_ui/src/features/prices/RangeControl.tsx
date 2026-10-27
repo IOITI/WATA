@@ -1,9 +1,7 @@
+import { Button, Input } from 'ioiti-ui'
 import { Minus, Plus } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/form'
 
 import { sizeOf, stepRange, ticksOf } from './chartData'
 

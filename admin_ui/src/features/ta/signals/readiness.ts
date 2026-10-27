@@ -6,8 +6,9 @@
 // one goes live only if the operator goes live anyway, which the audit trail
 // records with what was missing. The switch stays the operator's. Pure.
 
-import type { Check } from '@/lib/checks'
-import { formatDateTime, formatDay } from '@/lib/format'
+import { formatDateTime, formatDay } from 'ioiti-ui'
+import type { Check } from 'ioiti-ui'
+
 import type { BacktestPaper, TaRule, TaRuleState } from '@/lib/types'
 
 import { addDays, dayIn } from '../data/wataBars'

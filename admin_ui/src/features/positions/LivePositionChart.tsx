@@ -1,8 +1,7 @@
+import { formatPercent, LiveLineChart } from 'ioiti-ui'
 import { useCallback, useMemo } from 'react'
 
 import { ActionBadge } from '@/components/status'
-import { LiveLineChart } from '@/components/ui/live-line-chart'
-import { formatPercent } from '@/lib/format'
 import type { Position } from '@/lib/types'
 
 import { liveSamples, onLiveSample } from './liveSamples'

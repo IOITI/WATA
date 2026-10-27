@@ -1,20 +1,16 @@
 // The parts of the Engine monitor that read a period: the rules' runs, the charts over time, the
 // delivery of the live signals and their results.
 
+import { AdvancedDataTable, Badge, formatDay, formatNumber, formatPercent, formatWait, Meter, Panel, SignedValue } from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { CountBarsChart, SeriesLegend, TimeSeriesChart } from '@/components/charts/PerformanceCharts'
 import type { SeriesLine } from '@/components/charts/PerformanceCharts'
-import { Meter } from '@/components/KpiTile'
-import { Panel } from '@/components/Panel'
-import { ClaudeBadge, PnlValue } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
+import { ClaudeBadge } from '@/components/status'
 import { madeByClaude } from '@/features/system/claude'
-import { formatDay, formatNumber, formatPercent, formatWait } from '@/lib/format'
 import type { TaMonitor, TaMonitorCount, TaMonitorRule, TaMonitorStep } from '@/lib/types'
 
 import { barsLabel, MODE_LABEL, MODE_TONE } from '../signals/ruleModel'
@@ -543,7 +539,7 @@ export function ResultsPanel({ rows, backtestsEnabled }: { rows: ResultRow[]; ba
                     {row.live ? `${formatNumber(row.live.won)} · ${formatNumber(row.live.lost)}` : '—'}
                   </td>
                   <td className="py-2.5 pr-4 text-right tabular-nums">
-                    {row.live?.profit_loss != null ? <PnlValue value={row.live.profit_loss} kind="money" currency="EUR" /> : '—'}
+                    {row.live?.profit_loss != null ? <SignedValue value={row.live.profit_loss} kind="money" currency="EUR" /> : '—'}
                     {row.live?.average_percent != null && (
                       <p className="text-muted-foreground">{formatPercent(row.live.average_percent, true)} a position</p>
                     )}

@@ -1,22 +1,30 @@
 import { useQuery } from '@tanstack/react-query'
+import {
+  Alert,
+  AlertDescription,
+  Badge,
+  Button,
+  formatBytes,
+  formatDateTime,
+  formatDay,
+  formatNumber,
+  KpiTile,
+  PageHeader,
+  Panel,
+  QueryState,
+  StatusBadge,
+} from 'ioiti-ui'
 import { Plus, Settings2 } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 
-import { KpiTile } from '@/components/KpiTile'
 import { NotFoundState } from '@/components/NotFoundState'
-import { PageHeader, Panel } from '@/components/Panel'
-import { QueryState, ServiceStatusBadge } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth/auth-context'
 import { HistoryPanel } from '@/features/data/HistoryPanel'
 import { GapsPanel } from '@/features/prices/GapsPanel'
 import { RestartAction } from '@/features/system/RestartViews'
 import { api } from '@/lib/api'
-import { formatBytes, formatDateTime, formatDay, formatNumber } from '@/lib/format'
 import type { CapitalProviderDetails, DataProvider, DukascopyProviderDetails, SaxoProviderDetails } from '@/lib/types'
 
 import { assetHref, assetsLink, PROVIDERS_PATH } from './assets'
@@ -46,7 +54,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function Overview({ provider, timeZone }: { provider: DataProvider; timeZone: string }) {
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      <KpiTile label="Status" value={<ServiceStatusBadge status={provider.status} />} hint={provider.detail} />
+      <KpiTile label="Status" value={<StatusBadge status={provider.status} />} hint={provider.detail} />
       <KpiTile
         label="Assets"
         value={provider.assets === null ? '—' : formatNumber(provider.assets)}

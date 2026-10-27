@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ThemeProvider } from 'ioiti-ui'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ThemeProvider } from '@/components/ThemeProvider'
 import type { TaRule } from '@/lib/types'
 import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
 import { stubSystemTheme } from '@/test/systemTheme'

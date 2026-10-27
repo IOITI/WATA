@@ -2,27 +2,29 @@
 // strategies and the libraries they import), kept by the admin as .pine files.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  AdvancedDataTable,
+  AnimatedFileUpload,
+  Badge,
+  Button,
+  ButtonLink,
+  formatDateTime,
+  Input,
+  PageHeader,
+  QueryState,
+  SettleModal,
+} from 'ioiti-ui'
+import type { ColumnDef, UploadFileItem, UploadResult } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { ChartSpline, Copy, Download, FileUp, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 
-import { ButtonLink } from '@/components/ButtonLink'
-import { RouterLink } from '@/components/RouterLink'
-import { PageHeader } from '@/components/Panel'
-import { ClaudeBadge, QueryState } from '@/components/status'
-import { AdvancedDataTable } from '@/components/ui/advanced-data-table'
-import { AnimatedFileUpload } from '@/components/ui/animated-file-upload'
-import type { UploadFileItem, UploadResult } from '@/components/ui/animated-file-upload'
-import type { ColumnDef } from '@/components/ui/advanced-data-table'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/form'
-import { SettleModal } from '@/components/ui/settle-modal'
+import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api, ApiError, taScriptSourceUrl } from '@/lib/api'
-import { formatDateTime } from '@/lib/format'
 import type { TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'

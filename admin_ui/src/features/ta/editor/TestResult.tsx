@@ -2,10 +2,9 @@
 // with the script's plots and alerts, every alert of the day (a click brings it
 // into view), the plots' last values and what PineTS warned of.
 
+import { Panel, useTheme } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
-import { Panel } from '@/components/Panel'
-import { useTheme } from '@/components/theme-context'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { PriceChart } from '@/features/prices/PriceChart'
 

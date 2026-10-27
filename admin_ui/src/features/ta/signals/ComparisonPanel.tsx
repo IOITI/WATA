@@ -3,21 +3,16 @@
 // tolerance, listed, and marked on the day's prices.
 
 import { useQuery } from '@tanstack/react-query'
+import { Badge, Button, formatDateTime, Input, Panel, QueryState, Select, useTheme } from 'ioiti-ui'
 import { ChartSpline, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { Panel } from '@/components/Panel'
-import { ActionBadge, QueryState } from '@/components/status'
-import { useTheme } from '@/components/theme-context'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input, Select } from '@/components/ui/form'
+import { ActionBadge } from '@/components/status'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { chartTime, priceDecimals, timeLocator } from '@/features/prices/chartData'
 import { PriceChart } from '@/features/prices/PriceChart'
 import { api } from '@/lib/api'
-import { formatDateTime } from '@/lib/format'
 import type { TaRule } from '@/lib/types'
 
 import { chartsPath } from '../chartLinks'

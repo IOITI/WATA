@@ -2,13 +2,11 @@
 // runs, the script's own inputs (read by PineTS in the page's worker), what
 // each alert becomes, the price side and the bars.
 
+import { Alert, AlertDescription, Checkbox, cn, Input, Select } from 'ioiti-ui'
 import type { IPineInput } from 'pinets'
 import { useId, useState } from 'react'
 
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Checkbox, Input, Select } from '@/components/ui/form'
 import type { TaAlertAction, TaScriptSummary } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { messageAction } from '../engine/outline'
 import { readTimeframe, TIMEFRAME_HINT, TIMEFRAMES, unevenNote } from '../engine/timeframes'

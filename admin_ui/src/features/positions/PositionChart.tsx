@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
+import { QueryState, useTheme } from 'ioiti-ui'
 import { useMemo } from 'react'
 
-import { QueryState } from '@/components/status'
-import { useTheme } from '@/components/theme-context'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { timeChart } from '@/features/prices/chartModel'
 import { PriceChart } from '@/features/prices/PriceChart'

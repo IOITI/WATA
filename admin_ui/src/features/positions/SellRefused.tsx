@@ -1,6 +1,6 @@
+import { Hint } from 'ioiti-ui'
 import { Link } from 'react-router'
 
-import { Hint } from '@/components/Hint'
 import type { SellRefusals } from '@/lib/types'
 
 import { orderLink } from './orderLife'

@@ -1,19 +1,32 @@
 import { useQuery } from '@tanstack/react-query'
+import {
+  AirportMatrixClock,
+  formatDateTime,
+  formatDay,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  formatRelative,
+  KpiTile,
+  Meter,
+  PageHeader,
+  Panel,
+  QueryState,
+  SignedValue,
+  Skeleton,
+  StatCard,
+  StatusBadge,
+  toneOf,
+} from 'ioiti-ui'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { KpiTile, Meter } from '@/components/KpiTile'
-import { PageHeader, Panel } from '@/components/Panel'
-import { ActionBadge, PnlValue, QueryState, ServiceStatusBadge } from '@/components/status'
-import { AirportMatrixClock } from '@/components/ui/airport-matrix-clock'
-import { Skeleton } from '@/components/ui/skeleton'
-import { StatCard } from '@/components/ui/stat-card'
+import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { ClosePositionButton } from '@/features/positions/ClosePositionButton'
 import { LivePositionChart } from '@/features/positions/LivePositionChart'
 import { LiveValue } from '@/features/positions/LiveValue'
 import { api } from '@/lib/api'
-import { formatDateTime, formatDay, formatMoney, formatNumber, formatPercent, formatRelative, toneOf } from '@/lib/format'
 import { actionLabel } from '@/lib/labels'
 import type { Overview, Position } from '@/lib/types'
 
@@ -108,7 +121,7 @@ function DayPerformanceTile({ overview }: { overview: Overview }) {
   return (
     <KpiTile
       label="Day performance"
-      value={<PnlValue value={performance} kind="percent" className="font-semibold" />}
+      value={<SignedValue value={performance} kind="percent" className="font-semibold" />}
       hint="Compounded over the closed trades"
     >
       {meter}
@@ -237,7 +250,7 @@ function OpenPositionsTable({ positions, timeZone, now, actionsEnabled }: OpenPo
                 <LiveValue position={position} now={now} />
               </td>
               <td className="py-2.5 text-right">
-                <PnlValue value={position.position_max_performance_percent} kind="percent" />
+                <SignedValue value={position.position_max_performance_percent} kind="percent" />
               </td>
               {actionsEnabled && (
                 <td className="py-2.5 pl-4 text-right">
@@ -307,7 +320,7 @@ function Services() {
                   {service.detail}
                 </span>
               </span>
-              <ServiceStatusBadge status={service.status} />
+              <StatusBadge status={service.status} />
             </li>
           ))}
         </ul>

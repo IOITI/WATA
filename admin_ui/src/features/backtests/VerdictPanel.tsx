@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
+import { CheckIcon, CheckList, Panel } from 'ioiti-ui'
 
-import { CheckIcon, CheckList } from '@/components/CheckList'
-import { Panel } from '@/components/Panel'
 import { api } from '@/lib/api'
 import type { BacktestRun } from '@/lib/types'
 

@@ -1,8 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { UndoToast, useToast } from 'ioiti-ui'
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 
-import { useToast } from '@/components/toast-context'
-import { UndoToast } from '@/components/ui/undo-toast'
 import { api } from '@/lib/api'
 
 import { PendingRemovalsContext, type RunToRemove } from './pending-removals-context'

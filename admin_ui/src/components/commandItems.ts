@@ -1,12 +1,13 @@
+import { formatDay } from 'ioiti-ui'
+import type { SpotlightSearchItem } from 'ioiti-ui'
+
 import { MENU } from '@/components/navigation'
-import type { SpotlightSearchItem } from '@/components/ui/spotlight-search'
 import { sourceLabel, STATE_LABEL } from '@/features/backtests/model'
 import { assetHref, assetKeywords, PROVIDER_LABELS } from '@/features/data/assets'
 import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { instrumentLabel } from '@/features/prices/chartData'
 import { barsLabel, MODE_LABEL } from '@/features/ta/signals/ruleModel'
 import { KIND_LABEL } from '@/features/ta/templates'
-import { formatDay } from '@/lib/format'
 import type { BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
 
 /**

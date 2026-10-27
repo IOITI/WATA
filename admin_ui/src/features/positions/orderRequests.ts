@@ -1,4 +1,5 @@
-import { formatNumber, formatTime, formatWait } from '@/lib/format'
+import { formatNumber, formatTime, formatWait } from 'ioiti-ui'
+
 import type { Order, OrderRequest, Refusal, RequestAnswer, RequestOutcome, SellRefusals } from '@/lib/types'
 
 /**

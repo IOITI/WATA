@@ -3,7 +3,8 @@
 // alerts it answered without keeping since it started. An index absent takes TradingView's alerts, as
 // before, and is not said. Pure.
 
-import { formatDateTime } from '@/lib/format'
+import { formatDateTime } from 'ioiti-ui'
+
 import type { WebhookState } from '@/lib/types'
 
 export interface SourceNote {

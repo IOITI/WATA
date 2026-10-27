@@ -1,9 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Button, Panel, QueryState } from 'ioiti-ui'
 import { Scale } from 'lucide-react'
 
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import type { BacktestModelCheck, BacktestRun } from '@/lib/types'
 

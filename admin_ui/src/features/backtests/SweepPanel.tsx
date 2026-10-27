@@ -1,16 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, Button, cn, formatDay, formatNumber, formatPercent, Panel, QueryState } from 'ioiti-ui'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { CompareCurvesChart, CurvesLegend } from '@/components/charts/PerformanceCharts'
-import { Panel } from '@/components/Panel'
-import { QueryState } from '@/components/status'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { formatDay, formatNumber, formatPercent } from '@/lib/format'
 import type { BacktestField, BacktestSummary, BacktestSweep } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 import { choiceTrust, daysRange, STRESS_AXES, stressVerdict, walkForwardCurves, walkForwardSentence } from './robustness'
 import { axisName, heat, METRICS, sweepGrid, sweepVerdict } from './sweep'

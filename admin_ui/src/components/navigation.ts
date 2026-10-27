@@ -1,20 +1,21 @@
+import type { Menu, MenuEntry } from 'ioiti-ui'
+
 /**
  * The menu of the interface, and where each page stands in it: the sidebar
- * lists it, and the trail of the top bar says it, from this one table.
+ * lists it (with its icons, AppShell.tsx), and the trail of the top bar says
+ * it, from this one table. ioiti-ui's shell reads it (`ADMIN_MENU`): which
+ * entry a page is under (`menuEntry`) and its trail (`trailFor`) are the
+ * package's.
  */
+
+/** The interface's name: in the sidebar, and at the end of every tab's title ("Orders · WATA Admin"). */
+export const APP_NAME = 'WATA Admin'
 
 export type MenuSection = 'Trading' | 'Analysis' | 'Data' | 'Technical Analysis' | 'Operations'
 
-export interface MenuEntry {
-  id: string
-  path: string
-  label: string
-  section: MenuSection
-}
-
 export const MENU_SECTIONS: MenuSection[] = ['Trading', 'Analysis', 'Data', 'Technical Analysis', 'Operations']
 
-export const MENU: MenuEntry[] = [
+export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'dashboard', path: '/', label: 'Dashboard', section: 'Trading' },
   { id: 'positions', path: '/positions', label: 'Positions', section: 'Trading' },
   { id: 'orders', path: '/orders', label: 'Orders', section: 'Trading' },
@@ -38,58 +39,16 @@ export const MENU: MenuEntry[] = [
   { id: 'config', path: '/config', label: 'Configuration', section: 'Operations' },
 ]
 
+/** The menu as ioiti-ui's shell takes it. */
+export const ADMIN_MENU: Menu<MenuSection> = { sections: MENU_SECTIONS, entries: MENU }
+
+/** The way home of the admin's 404s: the dashboard is its home page. */
+export const DASHBOARD_HOME = { href: '/', label: 'Back to the dashboard' }
+
 // The pages that take the whole width: an editor beside its test, a chart.
 const WIDE_PAGES = [/^\/ta\/indicators\/[^/]+\/?$/, /^\/ta\/charts\/?$/]
 
 /** A page without the width cap of the others. */
 export function isWidePage(pathname: string): boolean {
   return WIDE_PAGES.some((pattern) => pattern.test(pathname))
-}
-
-/** A step of a trail: a link unless it is the page shown, or a section, which has no page. */
-export interface Crumb {
-  label: string
-  href?: string
-}
-
-/**
- * What a page deeper than the menu says of itself (its PageHeader does): its
- * name, and the pages between its entry of the menu and itself.
- */
-export interface PageName {
-  title: string
-  parents?: Crumb[]
-}
-
-export const PAGE_NOT_FOUND = 'Page not found'
-/** The end of a deeper page's trail until the page has said its name. */
-export const UNNAMED = '…'
-
-function withoutTrailingSlash(pathname: string): string {
-  return pathname.replace(/\/+$/, '') || '/'
-}
-
-/** The entry of the menu a page is under: its own, or the one of the page it was reached from. */
-export function menuEntry(pathname: string): MenuEntry | undefined {
-  const path = withoutTrailingSlash(pathname)
-  return MENU.find((entry) => (entry.path === '/' ? path === '/' : path === entry.path || path.startsWith(`${entry.path}/`)))
-}
-
-/**
- * Where a page is, after Home: the section of its entry of the menu (not a
- * link: a section has no page of its own), then the entry; for a page deeper
- * than the menu, the entry becomes a link and the page adds its parents and
- * its name. The dashboard is Home itself: nothing comes after it.
- */
-export function trailFor(pathname: string, page?: PageName | null): Crumb[] {
-  const entry = menuEntry(pathname)
-  if (!entry) return [{ label: page?.title ?? PAGE_NOT_FOUND }]
-  if (entry.path === '/') return []
-  if (withoutTrailingSlash(pathname) === entry.path) return [{ label: entry.section }, { label: entry.label }]
-  return [
-    { label: entry.section },
-    { label: entry.label, href: entry.path },
-    ...(page?.parents ?? []),
-    { label: page?.title ?? UNNAMED },
-  ]
 }
