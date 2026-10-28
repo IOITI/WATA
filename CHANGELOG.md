@@ -2,7 +2,7 @@
 
 ## v0.58.0 - An accent and a material for the admin, chosen on its Configuration page
 
-**Release date:** not released yet
+**Release date:** 2026-10-28
 
 The admin had one look, neutral and flat. ioiti-ui, the design it is made of, has since offered accents and a glass material, which the admin left out.
 
