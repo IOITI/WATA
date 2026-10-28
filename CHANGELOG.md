@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.52.0 - The admin interface on ioiti-ui 0.4.2: its motion, its save bar and leave guard, its change lists, live values and charts
+
+**Release date:** 2026-10-28
+
+The admin interface on ioiti-ui 0.4.2 (`github:IOITI/ioiti-ui#v0.4.2`), from 0.2.1, and nothing left of what the admin wrote by hand where the package has a component. The admin's interface only: no server route, query or trading service changes.
+
+ioiti-ui 0.3.0's own changes, which came with the update:
+
+- **Motion, calm and the same everywhere**: a change of page is a cross-fade of the page alone, the sidebar and the top bar staying as they are; a change of theme is one fade of the whole page; a toast leaves before the next one comes; what arrives where a skeleton was fades in; dialogs grow from what opened them, and the theme button's icon turns. Motion is reduced as the system asks.
+- **The tables' filters are a filter group**: a button for each column that filters, opening its options as a list to tick, each with the rows it would leave, a search of its own from eight options (the Orders page's Result); a column of two options is an on/off pair (Long, Short); "Clear filters" clears them all, where "Reset" did.
+- **The check boxes draw their mark**: the tables' row boxes, "Restart anyway", "Go live anyway", a script's yes-or-no inputs.
+- **A skip link**: the first Tab of a page shows "Skip to the page", past the menu and the top bar.
+- **The bell's button** looks like the top bar's other buttons; the charts' small text (the trend tiles, the funnels, the heatmaps, the live lines) is the muted text of the design, 4.5:1 on the dark card where it was 3.6:1.
+- **React 19.3**, which ioiti-ui 0.3 asks for (the page's cross-fade is its `ViewTransition`): declared `^19.3.1`; 19.3.0 was installed already.
+
+The package's components in place of the admin's own (what they lacked was added to ioiti-ui, released as 0.4.0):
+
+- **The Configuration page's bar of unsaved changes is ioiti-ui's `SaveBar`**: a floating bar at the bottom of the page, there only while something is unsaved (the bar of before stayed, saying "No unsaved change"), with Check, Discard and "Review and save"; while a field holds what cannot be used, it says so and Save is held back. The toasts rise above it while it is there, and sit at the bottom of every other page (they were lifted on all of them for this bar).
+- **Leaving it asks through ioiti-ui's `RouterLeaveGuard`**, as the script editor does: "Leave and discard" or "Stay on this page", the page's own views (`/config/...`) being no leaving, and the sign-in a lapsed session is sent to let through. The browser's own question on a reload or a closed tab is unchanged.
+- **Every list of changes is ioiti-ui's `ChangeList`**: a save's review (by group, each parameter a link, the trading ones said, from its old value to its new one), a backup to restore, the price recorder's and Capital.com's settings, a run's settings against the live ones. A key added reads "New", one taken out "Removed" (they read "not set" and "removed", or "set to" and "taken out").
+- **An open position's live value** (the dashboard, the Positions page, the live pill) is ioiti-ui's `SignedValue`, `LiveValue` and `RelativeTime`: the same figures where they were; the bid shows a rise or a fall in its tone a moment; after a minute without the monitor every figure is muted and said stale to a screen reader (the figures were dimmed); the age has the moment in a hint, and is never said to be in the future when the server's clock is a little ahead of the browser's. One clock for the whole page (ioiti-ui's `useNow`): the positions' columns are no longer made again every 5 seconds.
+- **The charts Recharts drew are ioiti-ui's `LineChart` and `BarChart`**: Performance, Report, Exits, the backtests (a run's days, its random runs with the run marked among them, runs compared, a sweep's walk-forward), an asset's spread through the day, the engine monitor. The same figures, each chart's table read by screen readers, the arrow keys going from one point to the next. A long period's time axis may name months where it named days. Recharts is gone: the JavaScript is 378 kB smaller (106 kB gzipped).
+
+And the top bar's trail, fixed in ioiti-ui (0.4.2):
+
+- **The trail never runs under what stands beside it.** On a wide screen it is whole as long as it fits the room the top bar leaves it, the page's own name cut short to 8rem at most; otherwise its last two steps take its place, as on a narrower screen, until there is room again. The steps before the page kept their width whatever the room: at 1,024 px the configuration's trail ran under the live pill, and under the "Restart needed" chip when it was there (v0.51.0 did the same).
+
+My calls: the toasts are no longer lifted by 80 px on every page. A run's settings and the configuration's keys use the same list. ioiti-ui's accents (bloom included) and glass are not offered. Tests follow the new filter group (Orders, "Refused by Saxo"), find the bar by its region, the save review's list by its name, and two new ones check the script editor's leave guard and the live value.
+
+**On the live path:** nothing. `package.sh`'s `npm ci` fetches ioiti-ui 0.4.2 from GitHub as it fetched 0.2.1.
+
+**Verification status:**
+- The interface's 1,103 tests pass, with lint and types; `npm ci` fetches the locked commit with SSH turned off. ioiti-ui's 445 tests pass, and its CI and release check passed for 0.4.0, 0.4.1 and 0.4.2.
+- The built CSS keeps every rule of the 0.3.0 build but those of what the admin no longer writes (the old bar's, the Recharts tooltip's, the backtests' change list's), in the same order; 0.4.1 adds none, 0.4.2 the four of the trail that gives way (`lg:invisible`, `lg:absolute`, `lg:left-0`, `lg:w-max`).
+- In a browser, on the fake admin, the computed styles of every element of 26 pages in both themes, build against build. 0.3.0's against v0.51.0's: the differences are 0.3.0's (above). 0.4.1's against 0.3.0's: the design's tokens the same on every page; the elements differ where the admin's parts were replaced (the charts, the configuration's bar, now there only with something unsaved, the live value's hints) and in the fake's live data (the live pill's gain turned to a loss, the bell's count, a hovered row), nowhere else.
+- Looked at with 0.4.1: every chart replaced (Performance, Report, Exits, a backtest of the signals received, the engine monitor, an asset's spread), the configuration's bar, its leave dialog, the save's review, a saved change and its backup, the live values on the dashboard, the Positions page and the live pill; a run's random runs in the dark theme too.
+- One difference was found there and fixed in ioiti-ui (0.4.1): a line chart wrote its days "7 Oct" where every other date says "07 Oct".
+- The trail with 0.4.2, on the configuration's page, with and without the "Restart needed" chip: at 1,024 px its last two steps ("Configuration › Market hours and calendar", cut short beside the chip), at 1,280 px with the chip the same, whole, at 1,440 px the whole trail; the trail that gave way takes no focus; no page scrolls sideways; on a phone, the step back as before.
+- Not changed here, seen while looking: on a phone the top bar holds more than it has room for (the trail squeezed to its chevron, "Degraded" cut at the edge), as in v0.51.0. A change of page waits for the browser's next frame (a view transition): in the desktop app's browser pane, hidden, which draws none, the page stays as it was until one comes. Not seen in a browser that is looked at.
+- Not deployed.
+
 ## v0.51.0 - The admin interface on IOITI's design system, ioiti-ui
 
 **Release date:** 2026-10-27

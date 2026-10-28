@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, formatDateTime, formatNumber, Panel, QueryState, RecoveryLedger, Skeleton, useToast } from 'ioiti-ui'
+import {
+  Alert,
+  AlertDescription,
+  ChangeList,
+  formatDateTime,
+  formatNumber,
+  Panel,
+  QueryState,
+  RecoveryLedger,
+  Skeleton,
+  useToast,
+} from 'ioiti-ui'
 import type { LedgerEntry } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
@@ -7,7 +18,7 @@ import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { api, ApiError } from '@/lib/api'
 import type { ConfigDocument } from '@/lib/types'
 
-import { ChangeList } from './ChangeList'
+import { keyChanges } from './keyChanges'
 import { restoreChanges } from './configModel'
 
 /** The ledger's first entry: the file the services read, which is never restored. */
@@ -90,7 +101,7 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
             <p className="text-sm text-text-secondary">
               Restoring this version would make {changeCount} (current value → restored value):
             </p>
-            <ChangeList changes={changes} />
+            <ChangeList label="What restoring changes" className="max-h-64 overflow-y-auto" changes={keyChanges(changes)} />
           </>
         )}
         {backup && !configDoc.editable && (

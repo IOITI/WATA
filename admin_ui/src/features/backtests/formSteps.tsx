@@ -43,7 +43,7 @@ import {
 } from './form'
 import type { AxisDraft, BacktestDraft } from './form'
 import { assetLabel, settingChanges, showValue } from './model'
-import { ChangeList } from './parts'
+import { SettingChanges } from './parts'
 import { measureSentence, underlyingLabel } from './turboModel'
 
 type Update = (changes: Partial<BacktestDraft>) => void
@@ -666,7 +666,7 @@ export function ReviewStep({
       </dl>
       <div className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">Changed from the live settings</h3>
-        <ChangeList changes={changes} none="Nothing: WATA’s settings as they are live." />
+        <SettingChanges label="Changed from the live settings" changes={changes} none="Nothing: WATA’s settings as they are live." />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1">

@@ -27,7 +27,7 @@ const CLOSED = {
   execution_time_close: '2026-10-12T06:10:00Z',
 } as Position
 
-const OPTIONS = { now: Date.parse('2026-10-12T07:00:00Z'), canClose: true }
+const OPTIONS = { canClose: true }
 
 function headers() {
   return screen.getAllByRole('columnheader').map((header) => header.textContent?.trim()).filter(Boolean)

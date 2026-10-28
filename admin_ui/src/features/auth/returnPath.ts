@@ -5,3 +5,11 @@
 export function returnPath(from: unknown): string {
   return typeof from === 'string' && /^\/(?![/\\])/.test(from) ? from : '/'
 }
+
+/**
+ * The sign-in page, where a session that ended sends every page: a page with changes not saved lets it go
+ * there without asking, since staying would save nothing.
+ */
+export function isSignIn(pathname: string): boolean {
+  return pathname === '/login'
+}

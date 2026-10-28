@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { AdvancedDataTable, cn, formatNumber, KpiTile, QueryState, SignedValue } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Link } from 'react-router'
 
 import { positionColumns } from '@/features/positions/columns'
@@ -43,12 +43,7 @@ export function TradesTab({ asset, from, to, timeZone }: TradesTabProps) {
     placeholderData: keepPreviousData,
   })
   const trades = useMemo(() => query.data?.trades ?? [], [query.data])
-  // These columns show no live value: the moment the tab opened is enough.
-  const [now] = useState(() => Date.now())
-  const columns = useMemo(
-    () => [...positionColumns(timeZone, 'all', { now, canClose: false }), LINK],
-    [timeZone, now],
-  )
+  const columns = useMemo(() => [...positionColumns(timeZone, 'all', { canClose: false }), LINK], [timeZone])
   const closed = trades.filter((trade) => trade.position_status !== 'Open')
   const won = closed.filter((trade) => (trade.position_profit_loss ?? 0) > 0).length
   const profit = closed.reduce((sum, trade) => sum + (trade.position_profit_loss ?? 0), 0)

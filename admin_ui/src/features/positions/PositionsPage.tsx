@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { AdvancedDataTable, ALL_TIME, AnimatedTabs, cn, DateRangeFilter, ExportButton, PageHeader, QueryState, rangeParams } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { useSession } from '@/features/auth/auth-context'
@@ -39,19 +39,8 @@ const TABLE_TEXT: Record<StatusFilter, { title: string; emptyTitle: string; empt
   all: { title: 'Open and closed positions', emptyTitle: 'No position in this range' },
 }
 
-/** The current time, refreshed every few seconds: enough for "12 s ago" beside a live value. */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs])
-  return now
-}
-
 export function PositionsPage() {
   const { timezone, actions_enabled: actionsEnabled } = useSession()
-  const now = useNow(5_000)
   const [searchParams, setSearchParams] = useSearchParams()
   // A link from an order: its position, open or closed, with its orders shown.
   const find = searchParams.get('find') ?? ''
@@ -67,10 +56,7 @@ export function PositionsPage() {
     placeholderData: keepPreviousData,
   })
 
-  const columns = useMemo(
-    () => positionColumns(timezone, status, { now, canClose: actionsEnabled }),
-    [timezone, status, now, actionsEnabled],
-  )
+  const columns = useMemo(() => positionColumns(timezone, status, { canClose: actionsEnabled }), [timezone, status, actionsEnabled])
   const page = positionsQuery.data
 
   return (

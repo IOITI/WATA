@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Button, DragToConfirm, QueryState, SettleModal, useToast } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Button, ChangeList, DragToConfirm, QueryState, SettleModal, useToast } from 'ioiti-ui'
 import { useCallback, useMemo, useState } from 'react'
 
-import { ChangeList } from '@/features/config/ChangeList'
 import { diffConfigs, setAt } from '@/features/config/configModel'
 import { DraftProvider, NumberField, SwitchField } from '@/features/config/fields'
+import { keyChanges } from '@/features/config/keyChanges'
 import { RowsField } from '@/features/config/listFields'
 import type { RowColumn } from '@/features/config/listFields'
 import { api, ApiError } from '@/lib/api'
@@ -118,7 +118,11 @@ function RecorderForm({ config, start, onClose }: { config: RecorderConfig; star
           <code>config.json</code>. The current file is kept as a backup beside it, and the new one is checked with the
           services&rsquo; own validator before it is written.
         </p>
-        <ChangeList changes={changes.map((change) => ({ ...change, path: `trade.config.price_recorder.${change.path}` }))} />
+        <ChangeList
+          label="What saving changes"
+          className="max-h-64 overflow-y-auto"
+          changes={keyChanges(changes, 'trade.config.price_recorder')}
+        />
         {warnings.map((warning) => (
           <Alert key={warning} tone="warning">
             <AlertDescription>{warning}</AlertDescription>

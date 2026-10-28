@@ -4,6 +4,7 @@ import {
   AlertDescription,
   AlertTitle,
   Button,
+  ChangeList,
   DragToConfirm,
   FormDescription,
   FormItem,
@@ -15,7 +16,7 @@ import {
 import { useCallback, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import { ChangeList } from '@/features/config/ChangeList'
+import { keyChanges } from '@/features/config/keyChanges'
 import { diffConfigs, getAt, setAt } from '@/features/config/configModel'
 import { useDraft } from '@/features/config/draft-context'
 import { DraftProvider, NumberField, SwitchField } from '@/features/config/fields'
@@ -158,7 +159,7 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
           The current file is kept as a backup beside it, and the new one is checked with the feed&rsquo;s own rules
           before it is written.
         </p>
-        <ChangeList changes={changes.map((change) => ({ ...change, path: `${SECTION}.${change.path}` }))} />
+        <ChangeList label="What saving changes" className="max-h-64 overflow-y-auto" changes={keyChanges(changes, SECTION)} />
         {warnings.map((warning) => (
           <Alert key={warning} tone="warning">
             <AlertDescription>{warning}</AlertDescription>

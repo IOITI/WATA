@@ -136,6 +136,7 @@ function renderAt(address: string) {
       { path: '/ta/indicators', element: page(<IndicatorsPage />) },
       { path: '/ta/indicators/new', element: page(<ScriptEditorPage />) },
       { path: '/ta/indicators/:id', element: page(<ScriptEditorPage />) },
+      { path: '/login', element: <p>Sign in</p> },
     ],
     { initialEntries: [address] },
   )
@@ -265,6 +266,22 @@ describe('the script editor', () => {
       name: 'EMA',
     })
     expect(await screen.findByRole('button', { name: 'Saved' })).toBeDisabled()
+  })
+
+  it('asks before a script with changes is left, and lets a session that ended go to the sign-in', async () => {
+    const user = userEvent.setup()
+    const router = renderAt(`/ta/indicators/${EMA.id}`)
+
+    await user.type(await screen.findByRole('textbox', { name: 'Pine source of EMA' }), '// tuned')
+    await router.navigate('/ta/indicators')
+    const dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' })
+    expect(dialog).toHaveTextContent('The script has changes. Nothing of it has been saved.')
+    await user.click(within(dialog).getByRole('button', { name: 'Stay on this page' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByTestId('address')).toHaveTextContent(`/ta/indicators/${EMA.id}`)
+
+    await router.navigate('/login')
+    expect(await screen.findByText('Sign in')).toBeInTheDocument()
   })
 
   it('offers to reload or to save as a copy when another save came first', async () => {

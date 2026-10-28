@@ -1012,7 +1012,8 @@ describe('a sweep', () => {
     expect(within(walk).getByText(/again every 1 day, made −0\.50% over the 2 days after each choice/)).toBeInTheDocument()
     expect(within(walk).getByText('12 Oct to 13 Oct')).toBeInTheDocument()
     expect(within(walk).getAllByText('2 of 2')).toHaveLength(2)
-    expect(within(walk).getByText('The best, known afterwards')).toBeInTheDocument()
+    // Named in the legend (the chart's table for screen readers names it too).
+    expect(within(within(walk).getByRole('list', { name: 'Legend' })).getByText('The best, known afterwards')).toBeInTheDocument()
   })
 })
 
@@ -1084,7 +1085,8 @@ describe('runs compared', () => {
   it('sets their figures side by side with the settings they did not share', async () => {
     renderAt(`/backtests/compare?runs=${RUN_ID},20261019-210000-bbbbbb`)
 
-    const table = await screen.findByRole('table')
+    // The comparison's table (the chart has one of its own, for screen readers).
+    const table = await screen.findByRole('table', { name: 'The runs side by side' })
     expect(within(table).getByRole('link', { name: 'Stop at 10' })).toHaveAttribute('href', '/backtests/20261019-210000-bbbbbb')
     const stopRow = await within(table).findByRole('row', { name: /Stop-loss/ })
     expect(within(stopRow).getByText('-15 %')).toBeInTheDocument()

@@ -29,7 +29,7 @@ import { TimingPage } from '@/features/timing/TimingPage'
 import { WatchlistPage } from '@/features/watchlist/WatchlistPage'
 import { ApiError } from '@/lib/api'
 
-// The charting library is a large part of the bundle and only these pages use it.
+// Pages of charts, loaded when they are opened.
 const PerformancePage = lazy(() =>
   import('@/features/performance/PerformancePage').then((module) => ({ default: module.PerformancePage })),
 )
@@ -87,12 +87,12 @@ function createQueryClient() {
 
 /**
  * What every page needs around it, the login included: the session, the router's links for
- * every component (ioiti-ui's RouterRoot), and the toasts, above the configuration page's bar.
+ * every component (ioiti-ui's RouterRoot), and the toasts, which rise above a page's SaveBar.
  */
 function Root() {
   return (
     <AuthProvider>
-      <RouterRoot toastWrapperClassName="bottom-20" />
+      <RouterRoot />
     </AuthProvider>
   )
 }

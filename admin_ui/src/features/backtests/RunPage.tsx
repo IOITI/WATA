@@ -45,7 +45,7 @@ import {
   sourceLabel,
 } from './model'
 import { EdgePanel } from './EdgePanel'
-import { BacktestsDisabled, ChangeList, Measure, StateBadge } from './parts'
+import { BacktestsDisabled, Measure, SettingChanges, StateBadge } from './parts'
 import { useRemoveRuns } from './pending-removals-context'
 import { ReconciliationPanel } from './ReconciliationPanel'
 import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
@@ -190,7 +190,11 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
         </dl>
         <div className="flex flex-col gap-2">
           <h3 className="text-xs font-medium text-muted-foreground">Changed from WATA’s settings</h3>
-          <ChangeList changes={settingChanges(run.settings.changed, run.settings.live_before, labels)} none="Nothing: the live settings of the day it was asked." />
+          <SettingChanges
+            label="Changed from WATA’s settings"
+            changes={settingChanges(run.settings.changed, run.settings.live_before, labels)}
+            none="Nothing: the live settings of the day it was asked."
+          />
         </div>
       </div>
     </Panel>

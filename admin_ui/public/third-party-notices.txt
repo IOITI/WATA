@@ -94,8 +94,8 @@ The rest of the admin
 ---------------------
 TradingView Lightweight Charts(TM) (Apache License 2.0)
   Copyright (c) 2025 TradingView, Inc. https://www.tradingview.com/
-React, React Router, TanStack Query, Recharts, Tailwind CSS, Framer Motion,
-Lucide, ioiti-ui (IOITI's design system, https://github.com/IOITI/ioiti-ui) and
+React, React Router, TanStack Query, Tailwind CSS, Framer Motion, Lucide,
+ioiti-ui (IOITI's design system, https://github.com/IOITI/ioiti-ui) and
 the EasyUI components it holds are under the MIT licence (ISC for Lucide):
 see admin_ui/package.json and admin_ui/README.md in the repository, and
 ioiti-ui's THIRD-PARTY-NOTICES.md.

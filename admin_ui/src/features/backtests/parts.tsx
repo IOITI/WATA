@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, AlertTitle, Badge } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Badge, ChangeList } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
 import type { BacktestFate, BacktestStatus } from '@/lib/types'
@@ -20,26 +20,10 @@ export function FateBadge({ fate }: { fate: BacktestFate }) {
   return <Badge tone={FATE_TONE[fate]}>{FATE_LABEL[fate]}</Badge>
 }
 
-/** Each setting a run changed, with what it was live. */
-export function ChangeList({ changes, none }: { changes: readonly Change[]; none: string }) {
+/** Each setting a run changed, from what it was live (ioiti-ui's ChangeList), or what it means when it changed none. */
+export function SettingChanges({ changes, none, label }: { changes: readonly Change[]; none: string; label: string }) {
   if (changes.length === 0) return <p className="text-sm text-muted-foreground">{none}</p>
-  return (
-    <dl className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-[fit-content(60%)_1fr]">
-      {changes.map((change) => (
-        <div key={change.name} className="contents">
-          <dt className="text-muted-foreground">{change.label}</dt>
-          <dd className="tabular-nums">
-            <span className="text-muted-foreground line-through decoration-muted-foreground/50">{change.before}</span>
-            <span aria-hidden className="mx-1.5 text-muted-foreground">
-              →
-            </span>
-            <span className="sr-only"> changed to </span>
-            <span className="font-medium">{change.after}</span>
-          </dd>
-        </div>
-      ))}
-    </dl>
-  )
+  return <ChangeList label={label} numeric changes={changes.map(({ label, before, after }) => ({ label, before, after }))} />
 }
 
 export function Measure({ label, children }: { label: string; children: ReactNode }) {

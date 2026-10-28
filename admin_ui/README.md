@@ -6,7 +6,8 @@ built on the server.
 
 React 19, Vite, TypeScript, Tailwind CSS 4, IOITI's design system [ioiti-ui](https://github.com/IOITI/ioiti-ui)
 (the design and [EasyUI](https://easyui.site)'s components, see below), TanStack Query,
-React Router, Recharts, and TradingView's Lightweight Charts for the charts of the stored prices (the Data section).
+React Router, and TradingView's Lightweight Charts for the charts of the stored prices (the Data section); the other
+charts are ioiti-ui's (`LineChart`, `BarChart`).
 The Technical Analysis pages add PineTS, Vela and Vela-pinets, and CodeMirror 6 (see below).
 
 ## Working on it
@@ -76,8 +77,8 @@ operator.
   included; the light values of ioiti-ui's `theme.css` say which of EasyUI's own were lowered for that.
 - **The price chart draws on a canvas** with the colours it read when it was made: every page that shows one
   gives it the theme as its `key` (an asset's chart, a backtest's day and its trade, the editor's test, the
-  TradingView comparison), so another theme makes another chart. The Recharts charts read CSS variables and
-  follow by themselves.
+  TradingView comparison), so another theme makes another chart. ioiti-ui's charts are SVG drawn with CSS
+  variables and follow by themselves.
 - Tests stand in for the system setting with `src/test/systemTheme.ts` (jsdom has no `matchMedia`). A
   component rendered without a `ThemeProvider` is shown dark.
 
@@ -107,8 +108,9 @@ It holds:
 Everything is imported from `'ioiti-ui'`, the router's part from `'ioiti-ui/react-router'` (`RouterRoot`,
 `RouterAppShell`, `RouterLink`). What is WATA's stays here: the menu (`components/navigation.ts`), what the shell
 holds (`components/AppShell.tsx`), `ConfirmLiveAction` (ioiti-ui's `ConfirmAction` saying first that the account
-is live), `NotFoundState` (the way back to the dashboard), `ActionBadge`, `ClaudeBadge`, `BrandMark`, the charts on
-WATA's types (`components/charts/`), `formatWallTime` (`lib/wallTime.ts`) and the pages.
+is live), `NotFoundState` (the way back to the dashboard), `ActionBadge`, `ClaudeBadge`, `BrandMark`, what the
+package's charts are given from WATA's types (`components/charts/`), `formatWallTime` (`lib/wallTime.ts`) and the
+pages.
 
 - **A change to a component is made in ioiti-ui**, never in a copy here: there, with its test and a line of its
   CHANGELOG, then released as a tag (`npm run release -- <version>` in ioiti-ui, pushed by the user), and the tag
@@ -116,11 +118,32 @@ WATA's types (`components/charts/`), `formatWallTime` (`lib/wallTime.ts`) and th
   versions. A new EasyUI component is added there too (its `docs/easyui-changes.md` says how).
 - **`App.tsx` puts `IoitiProvider` around the router** (the theme, the animations as the system asks, the name
   ending every tab's title) **and `RouterRoot` at its root route** (every component's links are the router's;
-  the toasts, lifted above the configuration page's bar). A test that renders a page alone and follows a link a
+  the toasts, which rise above a page's `SaveBar` while it is there). A test that renders a page alone and follows a link a
   component of the package draws mounts it the same way: under `RouterRoot`, as `src/test/WithTrail.tsx` does,
   or the link is a plain `<a>` that jsdom does not follow.
-- **The accents and the glass material** of ioiti-ui 0.2 are not offered here: no `LookPicker`, no accent or
-  material given to `ioiti()`, so the interface is neutral and flat, as it was.
+- **The accents and the glass material** of ioiti-ui (0.3's bloom included) are not offered here: no
+  `LookPicker`, no accent or material given to `ioiti()`, so the interface is neutral and flat, as it was.
+- **ioiti-ui 0.3.0's motion and components came with its update**: a change of page is a cross-fade of the page
+  alone (React 19.3's `ViewTransition`), a change of theme one fade of the whole page, toasts leave before the
+  next comes, what arrives where a skeleton was fades in, dialogs grow from what opened them; the tables' filters
+  are a filter group (a column's options a list opened from its button, a column of two an on/off pair); the
+  check boxes draw their mark; the first Tab shows "Skip to the page".
+- **Since 0.4 the admin writes none of what the package has.** The Configuration page's bar of unsaved changes is
+  its `SaveBar` (there only while something is unsaved, Save held back and why while a field holds what cannot be
+  used), leaving the page asks through its `RouterLeaveGuard` (its own views, `within="/config"`, are no leaving;
+  the sign-in a lapsed session goes to is let through, `isSignIn` of `features/auth/returnPath.ts`, as in the
+  script editor); every list of changes (a save's review, a backup, the price recorder's and Capital.com's
+  settings, a run's settings) is its `ChangeList` (`features/config/keyChanges.tsx` for config.json's keys); an
+  open position's live value is its `SignedValue`, `LiveValue` and `RelativeTime`
+  (`features/positions/PositionLiveValue.tsx`: muted and said stale after a minute, its age never in the future
+  when the server's clock is ahead), every clock its `useNow`; the charts Recharts drew are its `LineChart` and
+  `BarChart` (`components/charts/PerformanceCharts.tsx`, the same names and props for the pages). What they
+  lacked was added to the package for this (0.4.0), and one difference found in a browser fixed there (0.4.1: a
+  line chart wrote "7 Oct" where the rest writes "07 Oct").
+- **The top bar's trail gives way where it does not fit** (ioiti-ui 0.4.2): whole on a wide screen as long as it
+  fits the room the chips and the controls leave it (the page's name cut to 8rem at most), its last two steps
+  otherwise. Before, its steps kept their width and ran under the live pill, or under a chip, at 1,024 px. The
+  tests read both trails, the whole one first (jsdom lays nothing out, so the whole one always fits there).
 - **When the admin moved onto the package**, the built CSS holds every rule of the build before, in the same
   order (the package adds its accents' and glass's rules, inert without their attribute on `<html>`), and in a
   browser the computed styles of every element of 26 pages, in both themes, were the same. One regression was
@@ -137,8 +160,9 @@ its last step may recede against the card, each stage's figure being written bes
 ## Lightweight Charts
 
 The candles of the stored prices are drawn by [Lightweight Charts](https://github.com/tradingview/lightweight-charts)
-5.2.1 (`lightweight-charts`, Apache License 2.0). Recharts stays for the other charts, the spread of an asset
-through the day included. It is loaded with the pages that draw candles only.
+5.2.1 (`lightweight-charts`, Apache License 2.0). The other charts, the spread of an asset through the day
+included, are ioiti-ui's `LineChart` and `BarChart` (`components/charts/PerformanceCharts.tsx`). It is loaded with
+the pages that draw candles only.
 
 - **Its licence asks for a notice and a link on the page that shows the charts.** The notice is
   "TradingView Lightweight Charts™ Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/".

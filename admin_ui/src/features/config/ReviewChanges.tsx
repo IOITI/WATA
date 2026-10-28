@@ -1,4 +1,5 @@
-import { Badge } from 'ioiti-ui'
+import { Badge, ChangeList, Code } from 'ioiti-ui'
+import type { Change, ChangeGroup } from 'ioiti-ui'
 import { AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router'
 
@@ -7,10 +8,27 @@ import type { CatalogChange, ConfigCatalog, ConfigImpact, ConfigPreview } from '
 import { hrefOf, lookup, shownValue } from './catalog'
 import { serviceNames } from './editor-context'
 
-function changeSaid(change: CatalogChange): string {
-  if (change.added) return `set to ${shownValue(change.after)}`
-  if (change.removed) return `taken out (was ${shownValue(change.before)})`
-  return `${shownValue(change.before)} → ${shownValue(change.after)}`
+/** A change as the list says it: the parameter (a link to it, the trading ones said), or the key nothing reads. */
+function changeOf(catalog: ConfigCatalog, change: CatalogChange): Change {
+  const param = lookup(catalog, change.path)
+  return {
+    label: param ? (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <Link to={hrefOf(param)} className="text-foreground underline-offset-2 hover:underline">
+          {param.label}
+        </Link>
+        {param.risk === 'trading' && (
+          <Badge variant="outline" tone="warning">
+            Trading
+          </Badge>
+        )}
+      </span>
+    ) : (
+      <Code className="break-all">{change.path}</Code>
+    ),
+    before: change.added ? undefined : shownValue(change.before),
+    after: change.removed ? undefined : shownValue(change.after),
+  }
 }
 
 /** Where a change applies: the services that read it at their start, and what else reads it. */
@@ -60,6 +78,17 @@ export function ReviewChanges({ catalog, preview }: { catalog: ConfigCatalog; pr
     byGroup.set(param.group, [...(byGroup.get(param.group) ?? []), change])
   }
 
+  const listed: ChangeGroup[] = [...byGroup.entries()].map(([group, changes]) => ({
+    title: groups.get(group) ?? group,
+    changes: changes.map((change) => changeOf(catalog, change)),
+  }))
+  if (unknown.length > 0) {
+    listed.push({
+      title: 'Keys WATA does not know (nothing reads them)',
+      changes: unknown.map((change) => changeOf(catalog, change)),
+    })
+  }
+
   return (
     <div className="space-y-3">
       {preview.warnings.length > 0 && (
@@ -73,50 +102,11 @@ export function ReviewChanges({ catalog, preview }: { catalog: ConfigCatalog; pr
         </ul>
       )}
       <ImpactSaid catalog={catalog} impact={preview.impact} />
-      <div className="max-h-72 space-y-3 overflow-y-auto rounded-lg border border-border bg-surface-raised/40 p-3 text-xs">
-        {[...byGroup.entries()].map(([group, changes]) => (
-          <section key={group}>
-            <p className="font-medium text-foreground">{groups.get(group) ?? group}</p>
-            <ul className="mt-1 space-y-1.5">
-              {changes.map((change) => {
-                const param = lookup(catalog, change.path)
-                return (
-                  <li key={change.path}>
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      {param ? (
-                        <Link to={hrefOf(param)} className="text-foreground underline-offset-2 hover:underline">
-                          {param.label}
-                        </Link>
-                      ) : (
-                        change.path
-                      )}
-                      {param?.risk === 'trading' && (
-                        <Badge variant="outline" tone="warning">
-                          Trading
-                        </Badge>
-                      )}
-                    </span>
-                    <span className="block break-all font-mono text-muted-foreground">{changeSaid(change)}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-        ))}
-        {unknown.length > 0 && (
-          <section>
-            <p className="font-medium text-foreground">Keys WATA does not know (nothing reads them)</p>
-            <ul className="mt-1 space-y-1">
-              {unknown.map((change) => (
-                <li key={change.path} className="break-all font-mono text-muted-foreground">
-                  {change.path}: {changeSaid(change)}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {preview.changes.length === 0 && <p className="text-muted-foreground">Nothing changes.</p>}
-      </div>
+      {listed.length > 0 ? (
+        <ChangeList label="What the save changes" className="max-h-72 overflow-y-auto" groups={listed} />
+      ) : (
+        <p className="text-sm text-muted-foreground">Nothing changes.</p>
+      )}
     </div>
   )
 }

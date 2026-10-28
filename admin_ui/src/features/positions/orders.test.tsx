@@ -525,11 +525,16 @@ describe('orders Saxo did not take', () => {
     serve([BUY, SELL, GIVEN_UP], { refusals: [RUN] })
     renderAt('/orders')
 
-    await user.click(await screen.findByRole('button', { name: 'Refused by Saxo' }))
+    // The Result filter's options are a list of boxes, opened from its button in the filter group.
+    await user.click(await screen.findByRole('button', { name: /^Result, \d+ options$/ }))
+    const results = within(screen.getByRole('group', { name: 'Filter by Result' }))
+    await user.click(results.getByRole('checkbox', { name: /^Refused by Saxo/ }))
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Filter by Result' })).not.toBeInTheDocument())
     expect(screen.getByText('Refused by Saxo ×37')).toBeInTheDocument()
     expect(screen.queryByText('5012')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /Reset/ }))
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
     await user.type(screen.getByPlaceholderText(/Search/), 'ordres limites')
     expect(screen.getByText('Refused by Saxo ×37')).toBeInTheDocument()
     expect(screen.queryByText('5013')).not.toBeInTheDocument()

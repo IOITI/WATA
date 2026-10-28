@@ -78,6 +78,7 @@ function renderPage(at: string) {
         ],
       },
       { path: '/elsewhere', element: <p>Elsewhere</p> },
+      { path: '/login', element: <p>Sign in</p> },
       { path: '/leave', element: <Link to="/elsewhere">Away</Link> },
     ],
     { initialEntries: [at] },
@@ -220,7 +221,8 @@ describe('a group of parameters', () => {
     expect(await screen.findByRole('textbox', { name: /From before a release/ })).toHaveValue('5')
 
     await user.click(screen.getByRole('link', { name: /^Exits/ }))
-    expect(await screen.findByText('2 unsaved changes')).toBeInTheDocument()
+    const bar = await screen.findByRole('region', { name: 'Unsaved changes' })
+    expect(await within(bar).findByText('2 unsaved changes')).toBeInTheDocument()
   })
 
   it('refuses a value out of its bounds before anything is sent', async () => {
@@ -255,7 +257,9 @@ describe('saving', () => {
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('The close of the day comes after trading ends.')).toBeInTheDocument()
     expect(dialog).toHaveTextContent('Applies at the next start of: Trader, Scheduler.')
-    expect(dialog).toHaveTextContent('8 → 9')
+    const listed = within(dialog).getByRole('group', { name: 'What the save changes' })
+    expect(within(listed).getByRole('heading', { name: 'Market hours and calendar' })).toBeInTheDocument()
+    expect(within(listed).getByRole('listitem')).toHaveTextContent(/^Trading starts at.*from 8\s*to 9$/)
     const validated = sent.find((request) => request.path === '/api/config/validate')
     expect(validated?.body).toMatchObject({ config: { trade: { rules: [{}, { rule_config: { trading_start_hour: 9 } }] } } })
 
@@ -280,7 +284,38 @@ describe('saving', () => {
     expect(router.state.location.pathname).toBe('/config/exits')
 
     await router.navigate('/elsewhere')
-    expect(await screen.findByText('Leave without saving?')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' })
+    expect(dialog).toHaveTextContent('1 unsaved change to the configuration will be lost. Nothing of it has been saved.')
     expect(router.state.location.pathname).toBe('/config/exits')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Leave and discard' }))
+    expect(await screen.findByText('Elsewhere')).toBeInTheDocument()
+  })
+
+  it('does not hold back a session that ended, which sends the page to the sign-in', async () => {
+    const user = userEvent.setup()
+    const router = renderPage('/config/hours')
+
+    const field = await screen.findByRole('textbox', { name: /Trading starts at/ })
+    await user.clear(field)
+    await user.type(field, '9')
+    await router.navigate('/login')
+
+    expect(await screen.findByText('Sign in')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('gives up the changes when asked, and the bar goes', async () => {
+    const user = userEvent.setup()
+    renderPage('/config/hours')
+
+    const field = await screen.findByRole('textbox', { name: /Trading starts at/ })
+    await user.clear(field)
+    await user.type(field, '9')
+    const bar = await screen.findByRole('region', { name: 'Unsaved changes' })
+    await user.click(within(bar).getByRole('button', { name: 'Discard' }))
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument())
+    expect(await screen.findByRole('textbox', { name: /Trading starts at/ })).toHaveValue('8')
   })
 })

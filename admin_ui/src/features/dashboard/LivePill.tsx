@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { cn, DynamicIsland, SignedValue, toneOf } from 'ioiti-ui'
+import { cn, DynamicIsland, SignedValue, toneOf, useNow } from 'ioiti-ui'
 import type { DynamicIslandState } from 'ioiti-ui'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { ClosePositionButton } from '@/features/positions/ClosePositionButton'
-import { LiveValue } from '@/features/positions/LiveValue'
+import { PositionLiveValue } from '@/features/positions/PositionLiveValue'
 import { unrealisedProfitLoss } from '@/features/positions/unrealised'
 import { api } from '@/lib/api'
 
@@ -24,25 +24,16 @@ function Dot({ tone }: { tone: keyof typeof DOT }) {
   return <span aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[tone])} />
 }
 
-/** Re-render on a timer, for what depends on the time (an entry window, how old a live value is). */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs])
-  return now
-}
-
 /**
  * On every page, in the top bar: the open positions' live result, or whether a new entry would be taken. Opened,
  * the positions with their Close, and what holds the next entry back. Reads the shell's overview, which is read
  * every few seconds while a position is open.
  */
 export function LivePill() {
-  const { actions_enabled: actionsEnabled } = useSession()
+  const { actions_enabled: actionsEnabled, timezone } = useSession()
   const [state, setState] = useState<DynamicIslandState>('collapsed')
   const expanded = state === 'expanded'
+  // What depends on the time: an entry window opening or closing.
   const now = useNow(expanded ? 1_000 : 15_000)
   const overviewQuery = useQuery({ queryKey: ['overview'], queryFn: api.overview })
   const overview = overviewQuery.data
@@ -115,7 +106,7 @@ export function LivePill() {
               <ActionBadge action={position.action} />
             </div>
             <div className="flex items-end justify-between gap-2">
-              <LiveValue position={position} now={now} />
+              <PositionLiveValue position={position} timeZone={timezone} />
               {actionsEnabled && <ClosePositionButton position={position} />}
             </div>
           </div>

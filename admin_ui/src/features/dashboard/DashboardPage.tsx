@@ -17,15 +17,16 @@ import {
   StatCard,
   StatusBadge,
   toneOf,
+  useNow,
 } from 'ioiti-ui'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Link } from 'react-router'
 
 import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { ClosePositionButton } from '@/features/positions/ClosePositionButton'
 import { LivePositionChart } from '@/features/positions/LivePositionChart'
-import { LiveValue } from '@/features/positions/LiveValue'
+import { PositionLiveValue } from '@/features/positions/PositionLiveValue'
 import { api } from '@/lib/api'
 import { actionLabel } from '@/lib/labels'
 import type { Overview, Position } from '@/lib/types'
@@ -33,16 +34,6 @@ import type { Overview, Position } from '@/lib/types'
 import { entryBlockers, openDirections, upcomingNews } from './entryState'
 import { cityOfZone, marketClock, NEW_YORK } from './marketClock'
 import { PauseControl } from './PauseControl'
-
-/** Re-render on a timer, for the countdowns that depend on the current time. */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs])
-  return now
-}
 
 const PNL_TEXT = { positive: 'text-positive', negative: 'text-negative', neutral: undefined }
 
@@ -182,11 +173,10 @@ function NextEntryTile({ overview, now }: { overview: Overview; now: number }) {
 interface OpenPositionsProps {
   positions: Position[]
   timeZone: string
-  now: number
   actionsEnabled: boolean
 }
 
-function OpenPositions({ positions, timeZone, now, actionsEnabled }: OpenPositionsProps) {
+function OpenPositions({ positions, timeZone, actionsEnabled }: OpenPositionsProps) {
   if (positions.length === 0) {
     return <p className="py-6 text-center text-sm text-muted-foreground">No open position.</p>
   }
@@ -207,18 +197,18 @@ function OpenPositions({ positions, timeZone, now, actionsEnabled }: OpenPositio
                 <br />
                 since {formatDateTime(position.execution_time_open, timeZone, false)}
               </p>
-              <LiveValue position={position} now={now} />
+              <PositionLiveValue position={position} timeZone={timeZone} />
             </div>
             {actionsEnabled && <ClosePositionButton position={position} />}
           </li>
         ))}
       </ul>
-      <OpenPositionsTable positions={positions} timeZone={timeZone} now={now} actionsEnabled={actionsEnabled} />
+      <OpenPositionsTable positions={positions} timeZone={timeZone} actionsEnabled={actionsEnabled} />
     </>
   )
 }
 
-function OpenPositionsTable({ positions, timeZone, now, actionsEnabled }: OpenPositionsProps) {
+function OpenPositionsTable({ positions, timeZone, actionsEnabled }: OpenPositionsProps) {
   return (
     <div className="hidden overflow-x-auto sm:block">
       <table className="w-full min-w-[40rem] text-left text-xs">
@@ -247,7 +237,7 @@ function OpenPositionsTable({ positions, timeZone, now, actionsEnabled }: OpenPo
               </td>
               <td className="py-2.5 pr-4">{formatDateTime(position.execution_time_open, timeZone)}</td>
               <td className="py-2.5 pr-4 text-right">
-                <LiveValue position={position} now={now} />
+                <PositionLiveValue position={position} timeZone={timeZone} />
               </td>
               <td className="py-2.5 text-right">
                 <SignedValue value={position.position_max_performance_percent} kind="percent" />
@@ -390,12 +380,7 @@ export function DashboardPage() {
               }
               bodyClassName="pt-2"
             >
-              <OpenPositions
-                positions={overview.open_positions}
-                timeZone={timezone}
-                now={now}
-                actionsEnabled={actionsEnabled}
-              />
+              <OpenPositions positions={overview.open_positions} timeZone={timezone} actionsEnabled={actionsEnabled} />
               {overview.open_positions.length > 0 && (
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   {overview.open_positions.map((position) => (

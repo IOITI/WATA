@@ -6,7 +6,7 @@ import { ActionBadge } from '@/components/status'
 import type { Order, Position } from '@/lib/types'
 
 import { ClosePositionButton } from './ClosePositionButton'
-import { LiveValue } from './LiveValue'
+import { PositionLiveValue } from './PositionLiveValue'
 import { orderResult, purposeOf, RESULT_FILTER, RESULTS, tookMs } from './orderLife'
 import type { OrderResult } from './orderLife'
 import { REQUEST_RESULTS, rowTime, runLabel, runTookMs } from './orderRequests'
@@ -123,17 +123,11 @@ function instrumentCell(name: string | null, symbol: string | null, below?: Reac
 export type PositionView = 'open' | 'closed' | 'all'
 
 interface PositionColumnOptions {
-  /** The current time, for the age of live values. */
-  now: number
   /** Whether the operator may close a position from here. */
   canClose: boolean
 }
 
-export function positionColumns(
-  timeZone: string,
-  view: PositionView,
-  { now, canClose }: PositionColumnOptions,
-): ColumnDef<Position>[] {
+export function positionColumns(timeZone: string, view: PositionView, { canClose }: PositionColumnOptions): ColumnDef<Position>[] {
   const instrument: ColumnDef<Position> = {
     id: 'instrument',
     header: 'Instrument',
@@ -206,7 +200,7 @@ export function positionColumns(
       accessorKey: 'live_performance_percent',
       sortable: true,
       align: 'right',
-      cell: ({ row }) => <LiveValue position={row} now={now} />,
+      cell: ({ row }) => <PositionLiveValue position={row} timeZone={timeZone} />,
     }
     const close: ColumnDef<Position> = {
       id: 'close',

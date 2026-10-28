@@ -29,15 +29,14 @@
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.2",
     "framer-motion": "^13.5.1",
-    "ioiti-ui": "github:IOITI/ioiti-ui#v0.2.1",
+    "ioiti-ui": "github:IOITI/ioiti-ui#v0.4.2",
     "lightweight-charts": "^5.2.1",
     "lucide-react": "^1.55.0",
     "pinescript-v6-validator": "0.4.3",
     "pinets": "0.12.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-router": "^8.4.0",
-    "recharts": "^3.10.1",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

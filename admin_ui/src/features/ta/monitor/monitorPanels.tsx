@@ -296,10 +296,9 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
             points={runs}
             lines={runLines}
             format={formatWait}
-            clock={clock}
             title={title}
+            timeZone={timeZone}
             marks={marks}
-            ticks={ticksAt}
             limit={inView(runs, ['run_max_ms'], runLimit, `Limit ${limitText(runLimit)}`)}
           />
           <SeriesLegend lines={runLines} marks={restarts} />
@@ -312,10 +311,9 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
             points={runs}
             lines={delayLines}
             format={formatWait}
-            clock={clock}
             title={title}
+            timeZone={timeZone}
             marks={marks}
-            ticks={ticksAt}
             limit={inView(runs, ['delay_max_ms'], limits.max_signal_age_ms, `Refused past ${limitText(limits.max_signal_age_ms)}`)}
           />
           <SeriesLegend lines={delayLines} marks={restarts} />
@@ -328,10 +326,9 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
             points={ticks}
             lines={tickLines}
             format={formatWait}
-            clock={clock}
             title={title}
+            timeZone={timeZone}
             marks={marks}
-            ticks={ticksAt}
             limit={inView(ticks, ['tick_max_ms'], limits.tick_ms, `One every ${limitText(limits.tick_ms)}`)}
           />
           <SeriesLegend lines={tickLines} marks={restarts} />
@@ -344,10 +341,9 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
             points={ticks}
             lines={feedLines}
             format={formatWait}
-            clock={clock}
             title={title}
+            timeZone={timeZone}
             marks={marks}
-            ticks={ticksAt}
             limit={inView(ticks, ['feed_lag_max_ms'], limits.stale_feed_ms, `Stale past ${limitText(limits.stale_feed_ms)}`)}
           />
           <SeriesLegend lines={feedLines} marks={restarts} />
@@ -364,11 +360,9 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
                 points={ticks}
                 lines={memory}
                 format={megabytes}
-                clock={clock}
                 title={title}
+                timeZone={timeZone}
                 marks={marks}
-                ticks={ticksAt}
-                yWidth={72}
                 limit={inView(ticks, ['memory_used_mb'], memoryLimit, `The container's ${memoryLimit === null ? '' : megabytes(memoryLimit)}`)}
               />
               <SeriesLegend lines={memory} marks={restarts} />

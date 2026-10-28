@@ -3,13 +3,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertTitle, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
+import { RouterLeaveGuard } from 'ioiti-ui/react-router'
 import { ChartSpline, FlaskConical, History, Radar, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
 import { useSession } from '@/features/auth/auth-context'
-import { LeaveGuard } from '@/features/config/LeaveGuard'
+import { isSignIn } from '@/features/auth/returnPath'
 import { api, ApiError, isNotFound } from '@/lib/api'
 import type { TaScript, TaScriptKind } from '@/lib/types'
 
@@ -304,7 +305,13 @@ function ScriptEditor({ id }: { id: string | undefined }) {
           }}
         />
       )}
-      <LeaveGuard dirty={dirty && leavingTo === null} summary="The script has changes." />
+      <RouterLeaveGuard
+        when={dirty && leavingTo === null}
+        allowed={isSignIn}
+        message="The script has changes. Nothing of it has been saved."
+        stayLabel="Stay on this page"
+        leaveLabel="Leave and discard"
+      />
     </>
   )
 }

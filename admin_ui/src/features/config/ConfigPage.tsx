@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Button, Loader, PageHeader, QueryState, useToast } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Button, Loader, PageHeader, QueryState, SaveBar, useToast } from 'ioiti-ui'
+import { RouterLeaveGuard } from 'ioiti-ui/react-router'
 import { useCallback, useMemo, useState } from 'react'
 import { Outlet } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
+import { isSignIn } from '@/features/auth/returnPath'
 import { api, ApiError } from '@/lib/api'
 import type { ConfigCatalog, ConfigDocument, ConfigHistoryEntry, ConfigSaved, JsonObject, JsonValue } from '@/lib/types'
 
@@ -13,7 +15,6 @@ import type { ConfigPath } from './configModel'
 import { ConfigEditorContext } from './editor-context'
 import type { ConfigEditorValue } from './editor-context'
 import { DraftProvider } from './fields'
-import { LeaveGuard } from './LeaveGuard'
 import { ImpactSaid, ReviewChanges } from './ReviewChanges'
 
 interface EditorProps {
@@ -126,53 +127,46 @@ function ConfigEditor({ catalog, doc, history, lastSaved, onSaved, dismissSaved 
         </Alert>
       )}
 
-      {!disabled && (
-        <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
-          <div className="text-xs text-muted-foreground">
-            <p>{changeCount === 0 ? 'No unsaved change' : `${changeCount} unsaved change${changeCount === 1 ? '' : 's'}`}</p>
-            {invalidCount > 0 && (
-              <p role="alert" className="mt-0.5 font-medium text-negative">
-                {invalidCount === 1 ? '1 field holds' : `${invalidCount} fields hold`} a value that cannot be used: correct{' '}
-                {invalidCount === 1 ? 'it' : 'them'} before checking or saving.
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="ghost" size="sm" disabled={!dirty} onClick={() => replaceDraft(doc.config)}>
-              Discard
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={invalidCount > 0}
-              isLoading={preview.isPending && !reviewing}
-              onClick={() => preview.mutate(draft)}
-            >
-              Check
-            </Button>
-            <Button
-              size="sm"
-              disabled={leaves.length === 0 || invalidCount > 0}
-              onClick={() => {
-                save.reset()
-                setReviewing(true)
-                preview.mutate(draft)
-              }}
-            >
-              Review and save
-            </Button>
-          </div>
-        </div>
-      )}
+      <SaveBar
+        open={dirty && !disabled}
+        message={changeCount === 0 ? 'Nothing to save yet' : `${changeCount} unsaved change${changeCount === 1 ? '' : 's'}`}
+        error={
+          invalidCount > 0 &&
+          `${invalidCount === 1 ? '1 field holds' : `${invalidCount} fields hold`} a value that cannot be used: correct ${
+            invalidCount === 1 ? 'it' : 'them'
+          } before checking or saving.`
+        }
+        saveLabel="Review and save"
+        saveDisabled={leaves.length === 0 || invalidCount > 0}
+        onSave={() => {
+          save.reset()
+          setReviewing(true)
+          preview.mutate(draft)
+        }}
+        onDiscard={() => replaceDraft(doc.config)}
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={invalidCount > 0}
+          isLoading={preview.isPending && !reviewing}
+          onClick={() => preview.mutate(draft)}
+        >
+          Check
+        </Button>
+      </SaveBar>
 
-      <LeaveGuard
-        dirty={dirty && !disabled}
+      <RouterLeaveGuard
+        when={dirty && !disabled}
         within="/config"
-        summary={
+        allowed={isSignIn}
+        message={`${
           changeCount === 0
             ? 'What was typed in this form will be lost.'
             : `${changeCount} unsaved change${changeCount === 1 ? '' : 's'} to the configuration will be lost.`
-        }
+        } Nothing of it has been saved.`}
+        stayLabel="Stay on this page"
+        leaveLabel="Leave and discard"
       />
 
       <ConfirmLiveAction
