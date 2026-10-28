@@ -39,6 +39,10 @@ def no_secret_registered():
      "Kz8%7C1"),
     ("Connection to amqp://trade-app:pykvys-9nixqo@rabbitmq1:5672/ failed", "pykvys-9nixqo"),
     ("postgresql://wata:wata_secret_change_me@postgres1:5432/wata", "wata_secret_change_me"),
+    # The Claude API's key, sent by the admin's AI agent as a header.
+    ("headers={'x-api-key': 'sk-ant-api03-Qx9rT2mVbL7wZ', 'anthropic-version': '2026-10-21'}", "Qx9rT2mVbL7wZ"),
+    ("x-api-key: k3Y-without-its-prefix-9f2", "k3Y-without-its-prefix-9f2"),
+    ("AuthenticationError: invalid key sk-ant-api03-Hj4kLm9NpQ2rS8", "Hj4kLm9NpQ2rS8"),
 ])
 def test_the_shapes_of_secrets_are_masked(line, secret):
     cleaned = redact(line)

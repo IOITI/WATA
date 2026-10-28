@@ -19,6 +19,7 @@ export const LIVE_EVENT_TYPES = [
   'backtest_finished',
   'prices_fetch_finished',
   'restart_plan',
+  'agent_finished',
 ] as const
 
 export interface EventNotice {
@@ -49,6 +50,15 @@ const SERVICE_STATE_TEXT: Record<string, string> = {
   down: 'is down',
   unknown: 'can no longer be observed',
   disabled: 'is disabled',
+}
+
+// How a request of the AI agent ended (src/admin/agent/loop.py).
+const AGENT_OUTCOME_TEXT: Record<string, string> = {
+  done: 'The AI agent answered',
+  limit: 'The AI agent reached a limit',
+  cut: "The AI agent's answer was cut",
+  failed: 'The AI agent failed',
+  declined: 'The AI agent declined',
 }
 
 /** What to tell the operator about an event, or null when the page refreshing is enough. */
@@ -120,6 +130,29 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         variant: state === 'done' ? 'success' : 'error',
       }
     }
+    case 'agent_finished': {
+      const outcome = text(event.outcome) ?? ''
+      const task = text(event.task)
+      // A research task going on to its next request: said once it ends, not at each request.
+      if (task === 'working') return null
+      // Stopped by the operator: they know.
+      if (outcome === 'stopped') return null
+      if (task === 'done' || task === 'ended') {
+        return {
+          title: task === 'done' ? 'The research task is done' : 'The research task ended',
+          body: [text(event.title), task === 'ended' ? text(event.task_detail) : undefined].filter(Boolean).join(' · '),
+          variant: task === 'done' ? 'success' : 'warning',
+        }
+      }
+      const cost = number(event.cost_usd)
+      const title = AGENT_OUTCOME_TEXT[outcome] ?? 'The AI agent stopped'
+      return {
+        title,
+        body: [text(event.title), outcome === 'done' ? undefined : text(event.detail),
+          cost !== null ? `$${cost.toFixed(2)}` : undefined].filter(Boolean).join(' · '),
+        variant: outcome === 'done' ? 'success' : outcome === 'failed' || outcome === 'declined' ? 'error' : 'warning',
+      }
+    }
     case 'prices_fetch_finished': {
       const state = text(event.state) ?? ''
       // Stopped by the operator, or one of the downloads the service makes by itself: no news.
@@ -184,6 +217,10 @@ export function eventLink(event: LiveEvent): string | null {
       return '/data/providers/dukascopy'
     case 'restart_plan':
       return '/system'
+    case 'agent_finished': {
+      const conversation = text(event.conversation_id)
+      return conversation ? `/agent/${encodeURIComponent(conversation)}` : '/agent'
+    }
     default:
       return null
   }
@@ -213,6 +250,9 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'backtest_finished':
       // A paper day or report is a run too: the pages that list them read them again.
       return ['backtests', 'backtest', 'backtest-paper', 'live-paper']
+    case 'agent_finished':
+      // Its runs, scripts and proposals are read again with it.
+      return ['agent', 'agent-conversations', 'agent-conversation', 'agent-artefacts', 'backtests', 'ta-script']
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
       return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']

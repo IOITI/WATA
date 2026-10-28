@@ -4,6 +4,8 @@ import type { BadgeTone, ColumnDef } from 'ioiti-ui'
 import { useMemo } from 'react'
 
 import { ActionBadge } from '@/components/status'
+import { AskAgentLink } from '@/features/agent/AskAgentLink'
+import { localDay } from '@/features/backtests/model'
 import { PositionPeekLink } from '@/features/positions/PositionPeek'
 import { api } from '@/lib/api'
 import type { JournalEntry } from '@/lib/types'
@@ -74,6 +76,16 @@ export function JournalPanel({ timeZone }: { timeZone: string }) {
               ))}
           </span>
         ),
+      },
+      {
+        id: 'ask',
+        header: '',
+        align: 'right',
+        // Its day as the journal counts it: the day its decision was taken, in the trading timezone.
+        cell: ({ row }) => row.decided_at ? (
+          <AskAgentLink compact subject={{ kind: 'signal', id: row.signal_uuid, day: localDay(row.decided_at, timeZone) }}
+            label="Ask the AI agent about this signal" />
+        ) : null,
       },
     ],
     [timeZone],

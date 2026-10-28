@@ -50,6 +50,8 @@ GROUPS = (
     Group("capital", "Capital.com feed", "The Nasdaq 100 from Capital.com, for live charts and WATA's own signals.",
           "Data"),
     Group("ta", "TA engine", "WATA's own signals from the Pine scripts of the signal rules.", "Technical Analysis"),
+    Group("agent", "AI agent", "Claude, from the pages: which model, and what one request and a month may spend.",
+          "AI agent"),
     Group("admin", "Admin interface", "This interface: its sessions, its switches, where it listens and keeps files.",
           "Operations"),
     Group("claude", "Claude (MCP)", "What Claude may do through the admin's endpoint: runs, Pine studies, shadow rules.",
@@ -67,6 +69,7 @@ _RECORDER = "trade.config.price_recorder"
 _CAPITAL = "trade.config.capital_feed"
 _TA = "trade.config.ta_engine"
 _MCP = "admin.mcp"
+_AGENT = "admin.ai_agent"
 _SAXO_APP = "authentication.saxo.app_config_object"
 
 # The headings of each group's page, in their order; a parameter goes under the first that holds its path, and a
@@ -139,6 +142,23 @@ BLOCKS = (
     Block("ta", "runners", "Pine runners", (
         f"{_TA}.run_timeout_seconds", f"{_TA}.runner_memory_mb", f"{_TA}.shadow_runner_memory_mb",
         f"{_TA}.shadow_seconds_per_tick"), "The confined Node processes that run the scripts, live and shadow apart."),
+    Block("agent", "provider", "Provider and model", (
+        f"{_AGENT}.enabled", f"{_AGENT}.provider", f"{_AGENT}.model", f"{_AGENT}.effort"),
+        "Its key is a credential: set it in the card above, or in Credentials."),
+    Block("agent", "request", "One request", (
+        f"{_AGENT}.max_tool_calls", f"{_AGENT}.max_backtests", f"{_AGENT}.max_request_usd"),
+        "A request stops where it reaches one of them, after saying what it found."),
+    Block("agent", "spending", "Spending and work", (f"{_AGENT}.monthly_budget_usd", f"{_AGENT}.max_running")),
+    Block("agent", "tasks", "Research tasks", (
+        f"{_AGENT}.max_task_usd", f"{_AGENT}.max_task_backtests", f"{_AGENT}.max_task_hours"),
+        "What a task the agent works on alone may be given at most: its budget is chosen when it is started."),
+    Block("agent", "debrief", "Daily debrief", (
+        f"{_AGENT}.debrief_enabled", f"{_AGENT}.debrief_model", f"{_AGENT}.debrief_effort", f"{_AGENT}.debrief_max_usd",
+        f"{_AGENT}.debrief_telegram"),
+        "An account of each trading day, written once the market is closed."),
+    Block("agent", "reads", "What it reads", (f"{_AGENT}.read_logs",),
+          "WATA's research data, its positions, orders and signals, and the admin's health, always; the logs if allowed."),
+    Block("agent", "kept", "Kept", (f"{_AGENT}.keep_days", "admin.persistant.agent_path")),
     Block("admin", "sessions", "Sessions", (
         "admin.session_idle_minutes", "admin.session_max_age_minutes", "admin.cookie_secure")),
     Block("admin", "switches", "Switches", ("admin.actions_enabled", "admin.config_edit_enabled"),

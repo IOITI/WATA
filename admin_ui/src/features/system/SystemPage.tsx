@@ -16,6 +16,8 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { Health } from '@/lib/types'
@@ -55,7 +57,16 @@ function ServicesTable({ health }: { health: Health }) {
               <td className="py-2.5 pr-4">
                 <StatusBadge status={service.status} />
               </td>
-              <td className="py-2.5 text-muted-foreground">{service.detail}</td>
+              <td className="py-2.5 text-muted-foreground">
+                <span className="flex items-start justify-between gap-2">
+                  <span>{service.detail}</span>
+                  {service.status !== 'ok' && (
+                    // The moment of the check, in UTC: the services' log lines are written so.
+                    <AskAgentLink compact label={`Ask the AI agent what went wrong with ${service.name}`}
+                      subject={{ kind: 'incident', id: service.id, at: health.checked_at.slice(0, 16).replace('T', ' ') }} />
+                  )}
+                </span>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -236,6 +247,7 @@ export function SystemPage() {
       </Panel>
 
       <LicencesPanel />
+      <AgentSheet />
     </>
   )
 }

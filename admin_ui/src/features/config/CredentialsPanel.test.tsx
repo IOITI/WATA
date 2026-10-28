@@ -70,6 +70,13 @@ function credentials(): Credentials {
         grace_seconds: 3600,
         checks: [],
       }),
+      credential('anthropic.api', {
+        label: 'Claude API key',
+        readers: ['admin'],
+        parts: [{ key: 'key', label: 'API key', secret: true, expected: 'sk-ant- then letters' }],
+        old_place: '',
+        fingerprint: 'wxyz',
+      }),
       credential('saxo.live.app', {
         label: 'Saxo live app',
         readers: ['trader', 'position_monitor', 'watchlist_manager', 'price_recorder'],
@@ -132,6 +139,10 @@ function serve() {
         return json({ token: 'tok', url: 'https://api.example.com/webhook?token=tok', path: '/webhook?token=tok' })
       }
       if (path === '/api/credentials/telegram.bot/test') return json({ ok: true, detail: 'Sent' })
+      if (path === '/api/credentials/anthropic.api/test') return json({ ok: true, detail: 'Works: Claude Opus 5.5 answers' })
+      if (path === '/api/credentials/anthropic.api' && method === 'PUT') {
+        return json({ name: 'anthropic.api', fingerprint: 'abcd', services: [] })
+      }
       if (path === '/api/credentials/saxo.live.app' && method === 'PUT') {
         return json({ name: 'saxo.live.app', fingerprint: 'c5d6', services: ['trader', 'position_monitor', 'watchlist_manager', 'price_recorder'] })
       }
@@ -305,6 +316,21 @@ describe('the Credentials group', () => {
     await user.click(within(telegram).getByRole('button', { name: 'Send a test message' }))
 
     expect(await within(telegram).findByText(/Telegram took the test message/)).toBeInTheDocument()
+  })
+
+  it('tries the Claude API key as stored, and says a new key applies at once', async () => {
+    const user = userEvent.setup()
+    renderCredentials()
+
+    const claude = (await screen.findByRole('heading', { name: 'Claude API key' })).closest('section')!
+    await user.click(within(claude).getByRole('button', { name: 'Test the connection' }))
+    expect(await within(claude).findByText(/The Claude API answered\. Works: Claude Opus 5\.5 answers/)).toBeInTheDocument()
+
+    await user.click(within(claude).getByRole('button', { name: /Replace|Set/ }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText(/API key/), 'sk-ant-api03-0123456789abcdef0123')
+    await user.click(within(dialog).getByRole('button', { name: /Seal|Save/ }))
+    expect(await within(claude).findByText(/It applies at once: nothing has to start again/)).toBeInTheDocument()
   })
 
   it('fills a Saxo app from its app object, seals its key and secret, and says whether it is in use', async () => {

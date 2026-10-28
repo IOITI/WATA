@@ -1,7 +1,8 @@
 """
 The MCP server of the admin, built with the official SDK when
-``admin.mcp_enabled`` is true (``create_app`` imports this module then, and
-only then).
+``admin.mcp_enabled`` is true (``create_app`` imports this module then), and
+by the AI agent when ``admin.ai_agent.enabled`` is (``src/admin/agent/tools.py``
+calls its tools in the admin's process).
 
 Stateless and in JSON: each POST is answered whole, nothing is held open,
 which suits Traefik and the admin's plain-ASGI headers middleware alike. The

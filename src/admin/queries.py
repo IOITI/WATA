@@ -102,6 +102,10 @@ _ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp"
 _REFUSED_SIGNAL_COLUMNS = (*_ORDER_SIGNAL_COLUMNS, "outcome", "reason")
 # The requests about one position a page shows at most (a sell Saxo kept refusing is retried about once a second).
 MAX_POSITION_REQUESTS = 500
+# What the research tools (Claude's, and the AI agent's) read of a request to Saxo's order endpoint: never the
+# request's body nor Saxo's answer's, which carry the order whole and its account.
+REQUEST_BODIES = ("request_body", "response_body")
+_ATTEMPT_COLUMNS = tuple(column for column in ORDER_REQUEST_COLUMNS if column not in REQUEST_BODIES)
 
 # An order with what became of it, its position and its signal. What a sell
 # order could not say of its instrument is taken from the position it closed.
@@ -1668,6 +1672,36 @@ class AdminQueries:
             *args,
         )
         return [_clean_row(row) for row in reversed(rows)]
+
+    async def order_attempts(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """The requests to Saxo's order endpoint between two days, as order_requests reads them, without their bodies."""
+        args: list[Any] = []
+        conditions = self._date_range_conditions("requested_at", start, end, args)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(_ATTEMPT_COLUMNS)} FROM order_request
+            {where}
+            ORDER BY requested_at DESC NULLS LAST, request_id DESC
+            LIMIT {MAX_REPLAYED_ROWS}
+            """,
+            *args,
+        )
+        return [_clean_row(row) for row in reversed(rows)]
+
+    async def position_record(self, position_id: str) -> dict | None:
+        """One position as get_position reads it, its requests to Saxo without their bodies: the research tools'."""
+        found = await self.get_position(position_id)
+        if found is None:
+            return None
+
+        def bare(request: dict) -> dict:
+            return {key: value for key, value in request.items() if key not in REQUEST_BODIES}
+
+        found["requests"] = [bare(request) for request in found["requests"]]
+        for order in found["orders"]:
+            order["requests"] = [bare(request) for request in order.get("requests") or []]
+        return found
 
     async def _link_refusals(self, runs: list[dict]) -> None:
         """Each run of refusals with its position as it is now, or the signal behind it and what became of it."""

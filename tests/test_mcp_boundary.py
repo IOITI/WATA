@@ -33,6 +33,8 @@ ALLOWED_IMPORTS = (
     "src.admin.asset_bars", "src.admin.backtest_requests", "src.admin.data", "src.admin.downloads",
     "src.admin.errors", "src.admin.prices", "src.admin.processes", "src.admin.studies", "src.admin.ta_compare",
     "src.admin.ta_rules", "src.admin.ta_scripts", "src.admin.auth",
+    # Pure: the refusal runs of the Orders page.
+    "src.admin.order_requests",
     "src.backtest.clock", "src.ta_engine.runner", "src.ta_engine.replay", "src.ta_engine.bars", "src.ta_engine.rules",
     "src.ta_engine.signals", "src.price_history.process",
     # The study child reads the configuration for the database's address, as a backtest's child does.
@@ -69,7 +71,8 @@ CALLS = {
     "status": {},
     "data_assets": {}, "data_coverage": {"start_day": "2026-10-13", "end_day": "2026-10-14"},
     "data_bars": {"asset": "capital/US100", "start_day": "2026-10-13"}, "data_signals": {"start_day": "2026-10-13"},
-    "data_trades": {"start_day": "2026-10-13"}, "data_execution": {},
+    "data_trades": {"start_day": "2026-10-13"}, "data_execution": {}, "data_position": {"position_id": "5001"},
+    "data_orders": {"start_day": "2026-10-13"},
     "pine_list": {}, "pine_get": {"script_id": "000000000000"},
     "pine_check": {"source": "//@version=6\nindicator('x')\nplot(close)\n"},
     "pine_run": {"asset": "capital/US100", "start_day": "2026-10-13", "script_id": "000000000000"},

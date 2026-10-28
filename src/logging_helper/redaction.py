@@ -40,6 +40,9 @@ _PATTERNS = (
     (re.compile(r"\b(AccountKey=|ClientKey=)" + _VALUE), r"\1" + MASK),
     # A password in an address: amqp://user:password@host, postgresql://user:password@host.
     (re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*://[^:/@\s]+:)[^@\s/]+@"), r"\1" + MASK + "@"),
+    # The Claude API's key (the admin's AI agent): as a header, or as it is written anywhere else.
+    (re.compile(r"(?i)\b(x-api-key[\"']?\s*[:=]\s*[\"']?)" + _VALUE), r"\1" + MASK),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{8,}"), "sk-ant-" + MASK),
 )
 
 _lock = threading.Lock()

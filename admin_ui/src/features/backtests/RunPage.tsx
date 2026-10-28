@@ -6,6 +6,7 @@ import {
   AnimatedTabs,
   Badge,
   Button,
+  ButtonLink,
   formatDateTime,
   formatDay,
   formatMoney,
@@ -24,11 +25,13 @@ import {
 } from 'ioiti-ui'
 import type { SplitButtonOption } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { Flag, Pencil, Radar, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { Flag, Pencil, Radar, RotateCcw, Sparkles, Square, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { RulePeekName } from '@/features/ta/signals/RulePeek'
@@ -357,6 +360,9 @@ export function RunPage() {
         actions={
           run && (
             <>
+              <ButtonLink to={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}>
+                Ask the AI agent
+              </ButtonLink>
               {/* Urgent, so never in a menu. */}
               {isActive(run.status.state) && (
                 <Button variant="outline" size="sm" leftIcon={<Square className="size-3.5" />} isLoading={cancel.isPending} onClick={() => cancel.mutate()}>
@@ -377,6 +383,7 @@ export function RunPage() {
           )
         }
       />
+      {run && <AgentSheet subject={{ kind: 'run', id: run.id, label: run.name }} />}
       {!enabled ? (
         <BacktestsDisabled />
       ) : (
@@ -397,6 +404,12 @@ export function RunPage() {
                   <RunPeekLink id={run.model_check_of} className="text-sm font-medium underline-offset-4 hover:underline">
                     The run it checks
                   </RunPeekLink>
+                )}
+                {run.made_via?.startsWith('agent:') && (
+                  <Link to={`/agent/${encodeURIComponent(run.made_via.slice('agent:'.length))}`}
+                    className="text-sm font-medium underline-offset-4 hover:underline">
+                    Started by the AI agent
+                  </Link>
                 )}
                 {run.tags.map((tag) => (
                   <Badge key={tag} tone="neutral">

@@ -1,4 +1,12 @@
 import type {
+  AgentArtefact,
+  AgentChoice,
+  AgentContext,
+  AgentSubject,
+  AgentConversation,
+  AgentConversationListed,
+  AgentProposal,
+  AgentState,
   AssetDetails,
   BacktestBaseline,
   BacktestBreakdowns,
@@ -30,6 +38,7 @@ import type {
   ConfigCatalog,
   ConfigDocument,
   ConfigHistoryEntry,
+  ConfigImpact,
   ConfigPreview,
   ConfigRestored,
   ConfigSaved,
@@ -314,6 +323,8 @@ export const api = {
     request<{ name: string; services: string[] }>('DELETE', `/api/credentials/${encodeURIComponent(name)}`),
   showWebhook: () => request<{ token: string; url: string | null; path: string }>('POST', '/api/credentials/webhook.token/show'),
   testTelegram: () => request<{ ok: boolean; detail: string }>('POST', '/api/credentials/telegram.bot/test'),
+  /** The Claude API asked for its model with the key as stored: a read, no token spent. */
+  testAnthropicKey: () => request<{ ok: boolean; detail: string }>('POST', '/api/credentials/anthropic.api/test'),
   restartServices: (services: string[], force = false) =>
     request<{ plan: RestartPlan }>('POST', '/api/system/services/restart', { body: { services, force } }),
   saxo: () => request<SaxoStatus>('GET', '/api/system/saxo'),
@@ -456,6 +467,53 @@ export const api = {
   /** The operator moves the lock box or clears it (start null), as Claude cannot. */
   setLockbox: (period: { start: string | null; end: string | null }) =>
     request<{ lockbox: ResearchLockbox | null }>('PUT', '/api/research/lockbox', { body: period }),
+
+  // ── The AI agent of the pages: its conversations, worked on by the admin whether a page follows them or not ──
+  agent: () => request<AgentState>('GET', '/api/agent'),
+  pauseAgent: (paused: boolean) =>
+    request<{ pause: AgentState['pause'] }>('POST', paused ? '/api/agent/pause' : '/api/agent/resume'),
+  agentConversations: (subject?: string) =>
+    request<{ items: AgentConversationListed[] }>('GET', `/api/agent/conversations${query({ subject })}`),
+  agentConversation: (id: string) =>
+    request<AgentConversation>('GET', `/api/agent/conversations/${encodeURIComponent(id)}`),
+  /** A new conversation, about a run or a script when given: its first request queued. */
+  startAgentConversation: (
+    prompt: string,
+    subject?: { kind: AgentSubject['kind']; id: string; version?: number; day?: string; at?: string },
+    choice?: AgentChoice,
+  ) =>
+    request<AgentConversationListed>('POST', '/api/agent/conversations', { body: { prompt, subject, ...choice } }),
+  askAgent: (id: string, prompt: string, choice?: AgentChoice) =>
+    request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/requests`, { body: { prompt, ...choice } }),
+  /** What the next request would put in the model's context window: of a conversation, or of a new one. */
+  agentContext: (id: string | null, model: string) =>
+    request<AgentContext>('GET', id
+      ? `/api/agent/conversations/${encodeURIComponent(id)}/context${query({ model })}`
+      : `/api/agent/context${query({ model })}`),
+  stopAgent: (id: string) => request<unknown>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/stop`),
+  retryAgent: (id: string) => request<unknown>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/retry`),
+  agentFeedback: (id: string, requestIndex: number, value: 'like' | 'dislike' | null) =>
+    request<void>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/feedback`, {
+      body: { request: requestIndex, value },
+    }),
+  renameAgentConversation: (id: string, title: string) =>
+    request<AgentConversationListed>('PATCH', `/api/agent/conversations/${encodeURIComponent(id)}`, { body: { title } }),
+  removeAgentConversation: (id: string) =>
+    request<void>('DELETE', `/api/agent/conversations/${encodeURIComponent(id)}`),
+  /** The proposal applied through the stores' checks: a new version of the script, or the rule (not live) changed. */
+  settleAgentProposal: (id: string, proposal: string, apply: boolean) =>
+    request<AgentProposal>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/${apply ? 'apply' : 'dismiss'}`),
+  startAgentTask: (body: { goal: string; budget: { usd: number; backtests: number; hours: number }; model?: string; effort?: string }) =>
+    request<AgentConversationListed>('POST', '/api/agent/tasks', { body }),
+  stopAgentTask: (id: string) =>
+    request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/task/stop`),
+  /** A change of settings as a save of the Configuration page is previewed, with the file's revision it was read at. */
+  previewAgentSettings: (id: string, proposal: string) =>
+    request<ConfigPreview & { revision: string }>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/preview`),
+  saveAgentSettings: (id: string, proposal: string, revision: string) =>
+    request<AgentProposal & { impact: ConfigImpact; restart_required: boolean }>(
+      'POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/apply`, { body: { revision } }),
+  agentArtefacts: () => request<{ items: AgentArtefact[] }>('GET', '/api/agent/artefacts'),
 
   config: () => request<ConfigDocument>('GET', '/api/config'),
   /** Every parameter of config.json, fixed for a version of WATA. */

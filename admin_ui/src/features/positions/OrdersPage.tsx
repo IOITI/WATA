@@ -18,6 +18,7 @@ import type { DateRange } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
+import { AgentSheet } from '@/features/agent/AgentSheet'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 
@@ -171,6 +172,7 @@ export function OrdersPage() {
           </div>
         )}
       </QueryState>
+      <AgentSheet />
     </>
   )
 }

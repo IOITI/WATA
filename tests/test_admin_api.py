@@ -72,6 +72,7 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/credentials/config.json.bak-20260101-000000/rotate"),
     ("POST", "/api/credentials/webhook.token/show"),
     ("POST", "/api/credentials/telegram.bot/test"),
+    ("POST", "/api/credentials/anthropic.api/test"),
     ("POST", "/api/mcp/tokens"),
     ("POST", "/api/system/saxo/authorize"),
     ("GET", "/api/logs"),
@@ -170,6 +171,27 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/ta/engine"),
     ("GET", "/api/ta/monitor/now"),
     ("GET", "/api/ta/monitor"),
+    ("GET", "/api/agent"),
+    ("POST", "/api/agent/pause"),
+    ("POST", "/api/agent/resume"),
+    ("GET", "/api/agent/conversations"),
+    ("POST", "/api/agent/conversations"),
+    ("GET", "/api/agent/conversations/20261028-101500-a1b2c3"),
+    ("PATCH", "/api/agent/conversations/20261028-101500-a1b2c3"),
+    ("DELETE", "/api/agent/conversations/20261028-101500-a1b2c3"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/requests"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/stop"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/retry"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/feedback"),
+    ("GET", "/api/agent/conversations/20261028-101500-a1b2c3/stream"),
+    ("GET", "/api/agent/conversations/20261028-101500-a1b2c3/context"),
+    ("GET", "/api/agent/context"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/apply"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/preview"),
+    ("POST", "/api/agent/tasks"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/task/stop"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/dismiss"),
+    ("GET", "/api/agent/artefacts"),
 ]
 
 
@@ -712,7 +734,9 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{rule_id}", "0123456789ab")
             .replace("{owner}", "0123456789ab")
             .replace("{token_id}", "0123abcd")
-            .replace("{number}", "1"),
+            .replace("{number}", "1")
+            .replace("{conversation_id}", "20261028-101500-a1b2c3")
+            .replace("{proposal_id}", "p0a1b2c3d"),
         )
         for route in app.routes
         if route.path.startswith("/api")

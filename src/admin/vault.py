@@ -22,10 +22,12 @@ logger = logging.getLogger(__name__)
 
 ROLE = "admin"
 # What the admin opens when it uses it, never at its start: a change of them asks no restart of the admin.
-OPENED_ON_DEMAND = ("webhook.token", "internal.token")
-# The credentials whose old place the admin can read itself (config.json, the token file); the others'
-# are in the environment of another container (.env), which the admin never has.
-OLD_PLACE_SEEN = ("telegram.bot", "webhook.token", "internal.token", "saxo.live.app", "saxo.simulation.app")
+OPENED_ON_DEMAND = ("webhook.token", "internal.token", "anthropic.api")
+# The credentials whose old place the admin can read itself (config.json, the token file), or that never had
+# one (the Claude API key): missing until set. The others' are in the environment of another container (.env),
+# which the admin never has.
+OLD_PLACE_SEEN = ("telegram.bot", "webhook.token", "internal.token", "saxo.live.app", "saxo.simulation.app",
+                  "anthropic.api")
 
 
 class AdminVault:

@@ -46,6 +46,8 @@ class ReadQueries:
         "capital_feed_state", "price_assets", "price_instrument", "price_bars", "capital_bars", "journal_between",
         "closed_positions", "last_balance", "execution_rows", "ta_signals", "ta_other_signals", "ta_rule_states",
         "ta_engine_state",
+        # Saxo's order requests and one position whole, never the requests' bodies (src/admin/queries.py).
+        "order_attempts", "position_record",
     })
 
     def __init__(self, queries):

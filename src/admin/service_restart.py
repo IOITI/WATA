@@ -46,7 +46,8 @@ COSTS = {
     "scheduler": "A job due while it starts again is missed.",
     "watchlist_manager": "Until it has found the turbos again, the trader searches Saxo itself (seconds more per entry).",
     "telegram": "Messages wait in the queue meanwhile, and are sent once it is back.",
-    "admin": "You are signed out, and the backtests and studies running are stopped.",
+    "admin": "You are signed out, and the backtests and studies running are stopped; the AI agent's requests are "
+             "taken up again once it is back.",
     "price_recorder": "About ten seconds of bars are not recorded, and cannot be fetched afterwards.",
     "capital_feed": "About ten seconds of bars are not recorded; the TA engine waits for them.",
     "ta_engine": "Every rule loads its history again, seconds to minutes; no signal is sent meanwhile.",
@@ -75,6 +76,8 @@ class Situation:
     study_running: bool = False
     # The scheduler's job due within its margin, said ("the close of the day at 15:55, America/New_York").
     scheduler_job_near: str | None = None
+    # The AI agent's requests queued or worked on: taken up again after the restart, a study or a wait cut short.
+    agent_requests: int = 0
 
 
 def _count(number: int, noun: str) -> str:
@@ -104,6 +107,8 @@ def refusal(service: str, situation: Situation) -> str | None:
             reasons.append(f"{_count(situation.backtests_running, 'backtest')} running")
         if situation.study_running:
             reasons.append("one of Claude's studies is running")
+        if situation.agent_requests:
+            reasons.append(f"the AI agent is working on {_count(situation.agent_requests, 'request')}")
     return "; ".join(reasons) or None
 
 
@@ -457,6 +462,7 @@ async def situation_of(ctx, now: float | None = None) -> Situation:
         backtests_running=ctx.backtests.under_way if ctx.backtests is not None else 0,
         study_running=bool(ctx.studies is not None and ctx.studies.busy),
         scheduler_job_near=scheduler_job_near(config, now) if config else None,
+        agent_requests=agent.under_way() if (agent := getattr(ctx, "agent", None)) is not None else 0,
     )
 
 

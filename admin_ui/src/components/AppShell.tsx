@@ -4,6 +4,7 @@ import type { Menu } from 'ioiti-ui'
 import { RouterAppShell, RouterLink } from 'ioiti-ui/react-router'
 import {
   Activity,
+  Bot,
   ChartCandlestick,
   ChartLine,
   ChartSpline,
@@ -16,6 +17,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Package,
   Radar,
   Radio,
   Receipt,
@@ -64,6 +66,8 @@ const ICONS: Record<string, ReactNode> = {
   'ta-charts': <ChartSpline />,
   'ta-signals': <Radar />,
   'ta-monitor': <Gauge />,
+  agent: <Bot />,
+  'agent-artefacts': <Package />,
   system: <Activity />,
   logs: <ScrollText />,
   audit: <ClipboardList />,

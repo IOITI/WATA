@@ -11,9 +11,9 @@ import type { Menu, MenuEntry } from 'ioiti-ui'
 /** The interface's name: in the sidebar, and at the end of every tab's title ("Orders · WATA Admin"). */
 export const APP_NAME = 'WATA Admin'
 
-export type MenuSection = 'Trading' | 'Analysis' | 'Data' | 'Technical Analysis' | 'Operations'
+export type MenuSection = 'Trading' | 'Analysis' | 'Data' | 'Technical Analysis' | 'AI agent' | 'Operations'
 
-export const MENU_SECTIONS: MenuSection[] = ['Trading', 'Analysis', 'Data', 'Technical Analysis', 'Operations']
+export const MENU_SECTIONS: MenuSection[] = ['Trading', 'Analysis', 'Data', 'Technical Analysis', 'AI agent', 'Operations']
 
 export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'dashboard', path: '/', label: 'Dashboard', section: 'Trading' },
@@ -33,6 +33,9 @@ export const MENU: MenuEntry<MenuSection>[] = [
   // "Signal rules": the Trading section's Signals page sends signals by hand.
   { id: 'ta-signals', path: '/ta/signals', label: 'Signal rules', section: 'Technical Analysis' },
   { id: 'ta-monitor', path: '/ta/monitor', label: 'Engine monitor', section: 'Technical Analysis' },
+  // Claude from these pages: its conversations (a conversation's page is under Activity), what they made.
+  { id: 'agent', path: '/agent', label: 'Activity', section: 'AI agent' },
+  { id: 'agent-artefacts', path: '/agent/artefacts', label: 'Artefacts', section: 'AI agent' },
   { id: 'system', path: '/system', label: 'System', section: 'Operations' },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations' },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations' },

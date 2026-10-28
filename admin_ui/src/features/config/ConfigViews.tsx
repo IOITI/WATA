@@ -342,6 +342,8 @@ export function ConfigGroupPage() {
         <GroupsNav current={group.id} />
         <div key={formVersion} className="min-w-0 space-y-6">
           {group.id === 'credentials' && <CredentialsPanel />}
+          {/* The AI agent's provider: its key's card above its parameters. */}
+          {group.id === 'agent' && <CredentialsPanel only={['anthropic.api']} />}
           {blocks.length > 1 && (
             <nav aria-label="In this group" className="flex flex-wrap gap-1.5">
               {blocks.map(({ block }) => (

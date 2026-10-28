@@ -1957,6 +1957,8 @@ export interface BacktestRunListed {
   paper?: BacktestPaperRun | null
   /** Who asked for it through an agent ("claude"), and for which experiment of its journal; absent for the operator's. */
   made_by?: string | null
+  /** Through what: an MCP token's name, or "agent:<conversation>" for the AI agent of these pages. */
+  made_via?: string | null
   experiment?: string | null
 }
 
@@ -2466,6 +2468,8 @@ export interface TaVersionEntry {
   saved_at: string
   size: number
   sha256: string
+  /** "claude" for a version Claude wrote: by the MCP endpoint, or applied from the AI agent's proposal. */
+  made_by?: string | null
 }
 
 export interface TaScriptSummary {
@@ -2541,6 +2545,8 @@ export interface TaRule extends Omit<TaRuleFields, 'script'> {
   created_at: string
   updated_at: string
   mode_changed_at: string
+  /** The last change of what it runs (script version, libraries, inputs, bars...): its week in shadow counts from it. */
+  run_changed_at?: string
   /** "claude" for a shadow rule Claude made through the admin's MCP endpoint. */
   made_by?: string | null
   /** Added by the admin: the script's name, and the versions there are now. */
@@ -3039,3 +3045,314 @@ export interface Experiments {
   experiments: Experiment[]
   lockbox: ResearchLockbox | null
 }
+
+// ── The AI agent of the pages (src/admin/agent/, /api/agent) ──
+
+export interface AgentState {
+  enabled: boolean
+  model: string
+  model_label?: string
+  started?: boolean
+  /** Why it cannot work: its tools could not be started. */
+  broken?: string | null
+  provider?: string
+  effort?: string
+  pause?: { since: string; by: string | null } | null
+  month?: { month: string; spent_usd: number; budget_usd: number }
+  limits?: { tool_calls: number; backtests: number; request_usd: number; running: number }
+  under_way?: string[]
+  conversations?: number
+  /** The month of the prices the costs are estimated with. */
+  prices_of?: string
+  /** Whether a Claude API key is set; null when it cannot be told. */
+  key?: boolean | null
+  /** The models a request may choose, each as the Models API said it for the key, and the efforts. */
+  models?: AgentModel[]
+  efforts?: AgentEffort[]
+  /** What a research task may be given at most. */
+  tasks?: { usd: number; backtests: number; hours: number }
+  /** The daily debrief: whether it is on, with which model, and the trading days it wrote. */
+  debrief?: AgentDebriefState
+}
+
+export interface AgentDebriefState {
+  enabled: boolean
+  model: string
+  effort: AgentEffort
+  max_usd: number
+  telegram: boolean
+}
+
+/** A research task: a goal the agent works on alone, request after request, within its budget. */
+export interface AgentTask {
+  goal?: string
+  budget: { usd: number; backtests: number; hours: number }
+  /** working; done by the agent's word; ended for another reason, said in ended_because. */
+  state: 'working' | 'done' | 'ended'
+  started_at?: string
+  /** No request of it starts after this. */
+  deadline: string
+  spent_usd: number
+  backtests: number
+  requests?: number
+  ended_at?: string | null
+  ended_because?: string | null
+  stopped_by?: string | null
+  conclusion?: { conclusion: string; runs_kept: string[]; next_steps: string | null } | null
+}
+
+export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export interface AgentModel {
+  id: string
+  label: string
+  /** Its context window and its longest answer, in tokens. */
+  window: number
+  max_output: number
+  /** Dollars per million tokens. */
+  prices: { input: number; output: number; cache_read: number }
+  efforts: AgentEffort[]
+  /** Whether the key may use it; null until the Models API answered. */
+  available: boolean | null
+  /** The models whose notes it reads. */
+  reads: string[]
+}
+
+/** A model and an effort, as a request is asked with them. */
+export interface AgentChoice {
+  model: string
+  effort: AgentEffort
+}
+
+/** What the next request of a conversation would put in the model's context window (GET …/context). */
+export interface AgentContext {
+  model: string
+  label: string
+  window: number
+  /** What an answer may take on top. */
+  answer_room: number
+  /** Counted by the API, estimated from the last answer, or not known. */
+  how: 'counted' | 'estimated' | null
+  total: number | null
+  parts: { id: AgentContextPart; tokens: number; count?: number; estimated?: boolean }[]
+  /** Tokens of old tool results context editing leaves out. */
+  cleared: number | null
+  clearing: { from_tokens: number; keep_tool_uses: number }
+  last: AgentLastCall | null
+  /** The models whose notes in the conversation this one cannot read. */
+  unread: string[]
+}
+
+export type AgentContextPart = 'system' | 'tools' | 'asked' | 'thinking' | 'calls' | 'results' | 'answers' | 'conversation'
+
+export interface AgentLastCall {
+  at: string | null
+  model: string | null
+  usd: number | null
+  prompt: number
+  uncached: number
+  cache_read: number
+  cache_write: number
+  output: number
+  thinking: number | null
+  cleared_tokens: number | null
+  cleared_tool_uses: number | null
+  dropped_notes: Record<string, number> | null
+}
+
+export interface AgentSubject {
+  kind: 'run' | 'script' | 'position' | 'signal' | 'day' | 'incident'
+  id: string
+  label: string
+  version?: number | null
+  /** A signal's day (YYYY-MM-DD). */
+  day?: string | null
+  /** An incident's moment (YYYY-MM-DD HH:MM, UTC). */
+  at?: string | null
+}
+
+/** What the agent is doing with a conversation: a request queued, worked on, waiting for a run; or nothing. */
+export type AgentStatus = 'queued' | 'running' | 'waiting' | 'idle' | 'failed'
+
+/** How a request ended, or where it stands. */
+export type AgentRequestStatus =
+  | 'queued' | 'running' | 'waiting' | 'done' | 'stopped' | 'failed' | 'declined' | 'limit' | 'cut'
+
+export interface AgentConversationListed {
+  id: string
+  title: string
+  subject: AgentSubject | null
+  status: AgentStatus
+  model: string | null
+  created_at: string
+  updated_at: string
+  requests: number | null
+  cost_usd: number | null
+  outcome: AgentRequestStatus | null
+  error: string | null
+  /** Who asked it: an operator's address, or "debrief" for a daily debrief. */
+  by?: string | null
+  task?: AgentTask | null
+}
+
+export interface AgentStep {
+  kind: 'note' | 'tool'
+  id: string
+  at?: string
+  /** A note: what the model said between its tool calls. */
+  text?: string
+  tool?: string
+  input?: unknown
+  started_at?: string
+  ended_at?: string | null
+  state?: 'running' | 'done' | 'error' | 'cancelled'
+  /** The tool's answer, cut for the pages. */
+  output?: string | null
+  /** A wait's last word: each run's place in line or progress. */
+  progress?: string | null
+}
+
+export interface AgentRequest {
+  index: number
+  prompt: string
+  shared: AgentSubject | null
+  asked_at: string | null
+  started_at: string | null
+  ended_at: string | null
+  status: AgentRequestStatus
+  detail: string | null
+  steps: AgentStep[]
+  answer: { text: string; model: string | null; stop_reason: string | null } | null
+  proposals: string[]
+  runs: string[]
+  cost_usd: number
+  feedback: 'like' | 'dislike' | null
+  /** The model and effort it was asked with (none for a request asked before they could be chosen). */
+  model?: string | null
+  effort?: AgentEffort | null
+  /** Who asked it: the operator's address, "task" for a research task's next request, "debrief" for a debrief. */
+  by?: string | null
+}
+
+export interface AgentInputChange {
+  id: string
+  title: string | null
+  before: boolean | number | string | null
+  after: boolean | number | string
+}
+
+/** A setting of config.json a change of settings proposes, as a backtest names it. */
+export interface AgentSettingChange {
+  setting: string
+  label: string
+  unit: string
+  group: string
+  /** Its place in config.json, as the catalog names it. */
+  path: string
+  before: number | boolean | string
+  after: number | boolean | string
+}
+
+/** A finished run a change of settings rests on. */
+export interface AgentProposalRun {
+  id: string
+  name: string | null
+  kind?: string | null
+  from?: string | null
+  to?: string | null
+  changes?: Record<string, unknown>
+  headline?: BacktestHeadline | null
+}
+
+export interface AgentProposal {
+  id: string
+  kind: 'script' | 'rule' | 'settings' | 'new_script'
+  request: number
+  created_at: string
+  status: 'proposed' | 'applied' | 'dismissed'
+  title: string
+  rationale: string
+  /** A script's: the operator's script and its version the change was made on, Claude's that holds it. */
+  script?: { id: string; name: string; base_version: number }
+  draft?: { id: string; name: string; version: number; kind?: string }
+  lines?: { added: number; removed: number }
+  /** A new script's: its name and description once created. */
+  new_script?: { name: string; description: string }
+  /** A change of settings: each setting, and the runs it rests on; ``same``, those already at the value. */
+  settings?: AgentSettingChange[]
+  runs?: AgentProposalRun[]
+  same?: string[]
+  /** A rule's: the rule as it was, and what changes. */
+  rule?: { id: string; name: string; mode: string; script_id: string; script_version: number }
+  changes?: {
+    script_version?: number
+    after_proposal?: string
+    inputs?: AgentInputChange[]
+    history_days?: { before: number | null; after: number | null }
+    libraries?: { name: string; before: number | null; after: number }[]
+  }
+  result?: {
+    script_id?: string
+    version?: number
+    name?: string
+    rule_id?: string
+    script_version?: number
+    libraries?: { name: string; before: number | null; after: number }[]
+    /** A change of settings saved: the file's revision, the backup of the one it replaced, the services to restart. */
+    revision?: string
+    backup?: string
+    services?: string[]
+  } | null
+  settled_at?: string
+  settled_by?: string | null
+}
+
+export interface AgentPending {
+  request: number
+  /** The answer's text so far, by block. */
+  text: Record<string, string>
+  /** The model's note so far, by block. */
+  note: Record<string, string>
+  /** A tool call being written: its input's length so far. */
+  writing: { tool: string; chars: number } | null
+}
+
+export interface AgentConversation {
+  id: string
+  title: string
+  subject: AgentSubject | null
+  status: AgentStatus
+  /** The model and effort it goes on with: its last request's. */
+  model: string | null
+  effort?: AgentEffort | null
+  created_at: string
+  updated_at: string
+  usage: Record<string, number> | null
+  cost_usd: number | null
+  error: string | null
+  /** Its size, in tokens, as its last answer left it. */
+  context?: { tokens: number; model: string | null; at: string } | null
+  requests: AgentRequest[]
+  proposals: AgentProposal[]
+  pending: AgentPending | null
+  /** A research task's budget, progress and end. */
+  task?: AgentTask | null
+}
+
+export interface AgentArtefact {
+  at: string
+  kind: 'run' | 'script' | 'rule' | 'experiment' | 'proposal' | 'applied' | 'dismissed'
+  conversation: string
+  /** The conversation's title. */
+  title_of: string | null
+  id: string
+  tool?: string
+  name?: string
+  version?: number
+  /** One of Claude's shadow rules: its mode when saved. */
+  mode?: string
+  proposal?: AgentProposal['kind']
+  title?: string
+  result?: AgentProposal['result']
+}
+

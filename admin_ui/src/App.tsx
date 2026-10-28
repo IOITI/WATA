@@ -67,6 +67,17 @@ const PaperReportPage = lazy(() =>
   import('@/features/backtests/PaperTradingPage').then((module) => ({ default: module.PaperReportPage })),
 )
 
+// The AI agent: its conversations, their activity and answers (a proposal's diff in CodeMirror), what it made.
+const AgentActivityPage = lazy(() =>
+  import('@/features/agent/AgentActivityPage').then((module) => ({ default: module.AgentActivityPage })),
+)
+const AgentConversationPage = lazy(() =>
+  import('@/features/agent/ConversationPage').then((module) => ({ default: module.ConversationPage })),
+)
+const AgentArtefactsPage = lazy(() =>
+  import('@/features/agent/ArtefactsPage').then((module) => ({ default: module.ArtefactsPage })),
+)
+
 /** An address of the former Prices page: to the Assets View, or to the asset it showed. */
 function PricesRedirect() {
   const location = useLocation()
@@ -206,6 +217,30 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <MonitorPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="agent"
+          element={
+            <ChartPage>
+              <AgentActivityPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="agent/artefacts"
+          element={
+            <ChartPage>
+              <AgentArtefactsPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="agent/:conversationId"
+          element={
+            <ChartPage>
+              <AgentConversationPage />
             </ChartPage>
           }
         />

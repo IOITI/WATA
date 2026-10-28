@@ -69,6 +69,7 @@ export const CREDENTIAL_BRANDS: Record<string, Brand> = {
   'capital.login': 'capital',
   'saxo.live.app': 'saxo',
   'saxo.simulation.app': 'saxo',
+  'anthropic.api': 'claude',
 }
 
 /** How each credential is obtained, step by step. */
@@ -84,6 +85,12 @@ export const HELPERS: Record<string, string[]> = {
     'Generate a key: a name, and a password of its own for the key (not the account’s).',
     'The key is shown once: set it here with the account’s email and the key’s password.',
     'Demo or live is the feed’s own setting (Capital.com feed group). Then restart the feed.',
+  ],
+  'anthropic.api': [
+    'In Anthropic’s Console (platform.claude.com), open API keys and create one for WATA.',
+    'Set a spending limit on its workspace there: the agent’s own budget (below) is an estimate.',
+    'Copy the key (it is shown once: sk-ant-…) and set it here. The agent opens it at each request: nothing to restart.',
+    'Test the connection, then switch the agent on below and restart the admin.',
   ],
   'heartbeat.url': [
     'An outside watcher (healthchecks.io, Better Stack...) gives a ping address and alerts when the pings stop.',

@@ -1275,8 +1275,10 @@ class BacktestService:
             "model_check_of": request.get("model_check_of"),
             "turbos": request.get("turbos") or RECORDED,
             "paper": request.get("paper"),
-            # Who asked for it through an agent, and for which experiment of its journal.
+            # Who asked for it through an agent, through what (the MCP endpoint's token, or "agent:<conversation>"
+            # for the admin's AI agent), and for which experiment of its journal.
             "made_by": request.get("made_by"),
+            "made_via": request.get("made_via"),
             "experiment": request.get("experiment"),
             "status": status,
             "headline": self._headline(summary),

@@ -8,7 +8,7 @@ import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { instrumentLabel } from '@/features/prices/chartData'
 import { barsLabel, MODE_LABEL } from '@/features/ta/signals/ruleModel'
 import { KIND_LABEL } from '@/features/ta/templates'
-import type { BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
+import type { AgentConversationListed, BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
 
 /**
  * What the palette (⌘K) goes to, as entries: the pages of the menu and what
@@ -31,6 +31,18 @@ export function runItems(runs: readonly BacktestRunListed[]): SpotlightSearchIte
     description: `${sourceLabel(run)} · ${formatDay(run.from)} to ${formatDay(run.to)} · ${STATE_LABEL[run.status.state]}`,
     href: `/backtests/${run.id}`,
     keywords: [run.id, ...run.tags],
+  }))
+}
+
+/** The AI agent's conversations, by their title and what they are about. */
+export function conversationItems(conversations: readonly AgentConversationListed[]): SpotlightSearchItem[] {
+  return conversations.map((conversation) => ({
+    id: `conversation-${conversation.id}`,
+    title: conversation.title,
+    category: 'AI agent',
+    description: conversation.subject ? `About ${conversation.subject.label}` : undefined,
+    href: `/agent/${conversation.id}`,
+    keywords: [conversation.id, conversation.subject?.id ?? ''],
   }))
 }
 

@@ -29,6 +29,16 @@ describe('the menu', () => {
     expect(trailFor(ADMIN_MENU, '/ta/charts')).toEqual([{ label: 'Technical Analysis' }, { label: 'Charts' }])
   })
 
+  it("has the AI agent's section: its activity, a conversation under it, and what it made apart", () => {
+    expect(menuEntry(ADMIN_MENU, '/agent')?.id).toBe('agent')
+    expect(menuEntry(ADMIN_MENU, '/agent/20261028-080000-a1b2c3')?.id).toBe('agent')
+    expect(menuEntry(ADMIN_MENU, '/agent/artefacts')?.id).toBe('agent-artefacts')
+    expect(trailFor(ADMIN_MENU, '/agent/artefacts')).toEqual([{ label: 'AI agent' }, { label: 'Artefacts' }])
+    expect(trailFor(ADMIN_MENU, '/agent/20261028-080000-a1b2c3', { title: 'Analyse this run' })).toEqual([
+      { label: 'AI agent' }, { label: 'Activity', href: '/agent' }, { label: 'Analyse this run' },
+    ])
+  })
+
   it('has the Engine monitor under Technical Analysis, apart from the Signal rules', () => {
     expect(menuEntry(ADMIN_MENU, '/ta/monitor')?.id).toBe('ta-monitor')
     expect(menuEntry(ADMIN_MENU, '/ta/signals')?.id).toBe('ta-signals')

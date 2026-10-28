@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable
 
 from fastapi import Request
 
+from src.admin.agent.settings import AgentSettings
 from src.admin.auth import CredentialStore, LoginThrottle, SessionStore, TrustedProxies, client_ip
 from src.admin.events import EventHub
 from src.admin.mcp_server.limits import McpLimits
@@ -79,6 +80,10 @@ class AdminSettings:
     mcp_enabled: bool = False
     mcp_tokens_path: str = "/app/var/lib/admin/mcp_tokens.json"
     mcp_limits: McpLimits = field(default_factory=McpLimits)
+    # The AI agent of the pages (src/admin/agent/): off unless asked for, its conversations kept as files
+    # beside the scripts' folder (which the signal engine mounts alone).
+    ai_agent: AgentSettings = field(default_factory=AgentSettings)
+    agent_path: str = "/app/var/lib/admin/agent"
 
     @classmethod
     def from_config(cls, config_manager) -> "AdminSettings":
@@ -111,6 +116,8 @@ class AdminSettings:
             mcp_enabled=mcp_enabled,
             mcp_tokens_path=admin_config.get("persistant", {}).get("mcp_tokens_path", cls.mcp_tokens_path),
             mcp_limits=McpLimits.from_config(admin_config.get("mcp")),
+            ai_agent=AgentSettings.from_config(admin_config.get("ai_agent")),
+            agent_path=admin_config.get("persistant", {}).get("agent_path", cls.agent_path),
         )
 
 
@@ -156,6 +163,10 @@ class AdminContext:
     restarts: Any = None
     # The credentials sealed in PostgreSQL (src/admin/vault.py): listed, set, rotated; never read back.
     vault: Any = None
+    # The AI agent of the pages (src/admin/agent/service.py): with admin.ai_agent.enabled only.
+    agent: Any = None
+    # Its daily debrief (src/admin/agent_debrief.py): with the agent, acting only while debrief_enabled.
+    debrief: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -191,6 +202,28 @@ class AdminContext:
                 await closer()
             except Exception as e:
                 logger.warning(f"Error while shutting down the admin: {e}")
+
+
+def agent_of(ctx):
+    """
+    The AI agent over the admin's services, given what it may read of the admin
+    itself: its health, and its services' logs when admin.ai_agent.read_logs
+    allows (never a service: src/admin/agent/ reaches none, tests/test_agent_boundary.py).
+    """
+    from functools import partial
+
+    from src.admin.agent.service import build_agent
+    from src.admin.agent.tools import OpsReads
+    from src.admin.health import collect_health
+    from src.admin.logs import read_log
+
+    settings = ctx.settings
+
+    async def health() -> dict:
+        return await collect_health(ctx)
+
+    logs = partial(read_log, settings.log_path) if settings.ai_agent.read_logs else None
+    return build_agent(ctx, ops=OpsReads(health=health, logs=logs))
 
 
 def build_context(config_manager) -> AdminContext:
@@ -277,7 +310,8 @@ def build_context(config_manager) -> AdminContext:
             raise ServiceUnavailable("web_server: no internal token is set (Credentials)")
         return value["token"]
     studies = None
-    if settings.mcp_enabled:
+    # Claude Code's endpoint and the AI agent run the same Pine studies.
+    if settings.mcp_enabled or settings.ai_agent.enabled:
         from src.admin.backtests import SIGNAL_CACHE_FOLDER
         from src.admin.studies import StudyService
 
@@ -290,7 +324,7 @@ def build_context(config_manager) -> AdminContext:
             minutes_per_hour=settings.mcp_limits.study_minutes_per_hour,
         )
 
-    return AdminContext(
+    ctx = AdminContext(
         config_manager=config_manager,
         settings=settings,
         credentials=CredentialStore(settings.credentials_path),
@@ -334,3 +368,11 @@ def build_context(config_manager) -> AdminContext:
         closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
                  service_control.close, *([studies.close] if studies is not None else [])],
     )
+    if settings.ai_agent.enabled:
+        from src.admin.agent_debrief import FILE, DailyDebrief
+
+        ctx.agent = agent_of(ctx)
+        ctx.closers.insert(0, ctx.agent.close)
+        ctx.debrief = DailyDebrief(agent=ctx.agent, queries=queries, config_path=settings.config_path,
+                                   path=os.path.join(settings.agent_path, FILE), notify=telegram_sender.send)
+    return ctx

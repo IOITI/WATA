@@ -13,6 +13,7 @@ import pytest
 from src.admin.health import ta_engine_status
 from src.admin.ta_compare import compare, default_tolerance
 from src.admin.ta_rules import (
+    RUN_FIELDS,
     InvalidRule,
     RuleConflict,
     RuleNotFound,
@@ -251,6 +252,27 @@ def test_a_rule_updated_to_a_new_version_runs_it_with_the_current_libraries(rule
 
     assert updated["script"]["version"] == 2 and updated["script"]["sha256"] == sha(STRATEGY + "\n// v2\n")
     assert [entry["version"] for entry in updated["libraries"]] == [1, 2]
+
+
+def test_a_change_of_what_a_rule_runs_is_dated_and_a_rename_is_not(rules, scripts, cross):
+    rule = created(rules, cross)["rule"]
+    renamed = rules.update(rule["id"], fields(cross, name="Renamed"), rules.load()["revision"])["rule"]
+    assert "run_changed_at" not in renamed
+
+    tuned = rules.update(rule["id"], fields(cross, name="Renamed", inputs=[
+        {"id": "in_0", "var": "fast", "title": "Fast", "value": 20}]), rules.load()["revision"])["rule"]
+    assert tuned["run_changed_at"] == tuned["updated_at"]
+
+    newer = scripts.save(cross["id"], 1, STRATEGY + "\n// v2\n")
+    repinned = rules.update(rule["id"], fields(newer, name="Renamed", inputs=[
+        {"id": "in_0", "var": "fast", "title": "Fast", "value": 20}]), rules.load()["revision"])["rule"]
+    assert repinned["script"]["version"] == 2 and repinned["run_changed_at"] == repinned["updated_at"]
+
+
+def test_what_a_rule_runs_is_what_the_engine_reloads_it_for():
+    from src.ta_engine.rules import RUN_FIELDS as ENGINE_RUN_FIELDS
+
+    assert RUN_FIELDS == ENGINE_RUN_FIELDS
 
 
 def test_a_save_that_changes_nothing_keeps_the_revision(rules, cross):

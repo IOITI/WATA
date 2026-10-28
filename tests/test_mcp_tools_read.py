@@ -52,6 +52,21 @@ POSITION_ROW = {"position_id": "5001", "action": "long", "execution_time_open": 
                 "instrument_name": "Turbo long US100 21000", "instrument_uic": 55}
 
 
+SENT = datetime(2026, 10, 13, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def attempt(seconds, outcome="refused", **extra):
+    """A request to Saxo's order endpoint as the research tools read it: no body."""
+    refused = outcome == "refused"
+    return {"request_id": f"r{seconds}", "requested_at": SENT.replace(second=seconds), "operation": "place",
+            "purpose": "close", "position_id": "5001", "outcome": outcome, "http_status": 400 if refused else 201,
+            "error_code": "OrderNotPlaced" if refused else None, "error_message": "Market closed" if refused else None,
+            "order_id": None if refused else "7002", "buy_sell": "Sell", "amount": 150, "reason": "max_profit", **extra}
+
+
+ATTEMPTS = [attempt(0), attempt(5), attempt(9, outcome="accepted")]
+
+
 class FakeQueries:
     """The named queries the research tools may run, answered from fixed rows."""
 
@@ -90,6 +105,16 @@ class FakeQueries:
 
     async def closed_positions(self, first, last):
         return [POSITION_ROW]
+
+    async def position_record(self, position_id):
+        if position_id != "5001":
+            return None
+        order = {"order_id": "7002", "buy_sell": "Sell", "order_time": SENT, "purpose": "close", "outcome": "filled"}
+        return {"position": POSITION_ROW, "orders": [{**order, "requests": ATTEMPTS[2:]}], "requests": ATTEMPTS,
+                "requests_total": 3}
+
+    async def order_attempts(self, first, last):
+        return ATTEMPTS
 
     async def last_balance(self):
         return 25_000.0
@@ -440,6 +465,27 @@ def test_a_rules_signals_are_set_beside_tradingviews(research, scripts):
 
     assert (found["paired"], found["only_wata"], found["only_tradingview"]) == (1, 0, 0)
     assert found["rows"][0]["delta_seconds"] == 60
+
+
+def test_one_position_is_read_whole_its_refusals_as_a_run_and_never_an_order_s_body(research):
+    found = answer(research, "data_position", {"position_id": "5001"})
+
+    assert found["position"]["position_id"] == "5001" and found["requests_total"] == 3
+    assert "requests" not in found["orders"][0]
+    (run,) = found["refusals"]
+    assert (run["count"], run["error_code"], run["followed_by"]["order_id"]) == (2, "OrderNotPlaced", "7002")
+    assert "unknown" in refusal(research, "data_position", {"position_id": "9"}).lower() or \
+        "no position" in refusal(research, "data_position", {"position_id": "9"})
+
+
+def test_a_period_s_orders_say_what_saxo_refused_by_code_and_by_hour(research):
+    found = answer(research, "data_orders", {"start_day": "2026-10-13"})
+
+    summary = found["summary"]
+    assert (summary["orders_placed"], summary["accepted"], summary["refused"]) == (3, 1, 2)
+    # 09:00 UTC is 11:00 in Paris, the trading timezone.
+    assert summary["refused_by_code"] == {"OrderNotPlaced": 2} and summary["refused_by_hour"] == {"11": 2}
+    assert found["total"] == 1 and found["items"][0]["count"] == 2
 
 
 # ── what is never reached ──

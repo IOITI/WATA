@@ -2,19 +2,17 @@
 // One is shown beside the text being edited, and can be taken back into the editor
 // (saving it then makes a new version: nothing is lost).
 
-import { syntaxHighlighting } from '@codemirror/language'
-import { MergeView } from '@codemirror/merge'
-import { EditorState } from '@codemirror/state'
-import { EditorView, lineNumbers } from '@codemirror/view'
 import { useQuery } from '@tanstack/react-query'
 import { Button, cn, formatDateTime, SettleModal } from 'ioiti-ui'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
+
+import { ClaudeBadge } from '@/components/status'
 
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { TaScriptSummary } from '@/lib/types'
 
-import { pineHighlight, pineLanguage } from './pineLanguage'
+import { ScriptDiff } from './ScriptDiff'
 
 interface HistoryDialogProps {
   open: boolean
@@ -25,42 +23,8 @@ interface HistoryDialogProps {
   onRestore: (source: string, version: number) => void
 }
 
-const readOnly = [
-  EditorState.readOnly.of(true),
-  EditorView.editable.of(false),
-  // Each side as wide as half the dialog: a long line wraps instead of hiding its end.
-  EditorView.lineWrapping,
-  lineNumbers(),
-  pineLanguage,
-  syntaxHighlighting(pineHighlight),
-  EditorView.theme({
-    '&': { fontSize: '12px', backgroundColor: 'var(--surface)', color: 'var(--text-primary)' },
-    '.cm-scroller': { fontFamily: 'var(--font-mono)' },
-    // CodeMirror's own is a light grey whatever the theme. The side's colour, not the editor's darker one:
-    // it stops where the text does, above the room the two sides are given.
-    '.cm-gutters': { backgroundColor: 'var(--surface)', color: 'var(--text-muted)', borderRight: '1px solid var(--border)' },
-    '.cm-changedLine': { backgroundColor: 'var(--accent-subtle)' },
-  }),
-]
-
 // The screen less the dialog's margins, title, the labels of the two sides and its buttons.
 const DIFF_HEIGHT = 'h-[calc(100dvh-17rem)] min-h-60'
-
-function Diff({ before, after }: { before: string; after: string }) {
-  const host = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!host.current) return
-    const view = new MergeView({
-      a: { doc: before, extensions: readOnly },
-      b: { doc: after, extensions: readOnly },
-      parent: host.current,
-      collapseUnchanged: { margin: 3, minSize: 6 },
-    })
-    return () => view.destroy()
-  }, [before, after])
-  // As tall as the dialog leaves room for: the two sides scroll together.
-  return <div ref={host} className={cn('overflow-auto rounded-lg border border-border', DIFF_HEIGHT)} data-testid="version-diff" />
-}
 
 export function HistoryDialog({ open, onClose, script, current, onRestore }: HistoryDialogProps) {
   const { timezone } = useSession()
@@ -113,6 +77,7 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
               >
                 <span className="font-mono">v{entry.number}</span>
                 {entry.number === script.version && <span className="text-muted-foreground"> · saved last</span>}
+                {entry.made_by === 'claude' && <ClaudeBadge className="ml-1.5 align-middle" />}
                 <span className="block text-muted-foreground">{formatDateTime(entry.saved_at, timezone, false)}</span>
               </button>
             </li>
@@ -135,7 +100,7 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
               {versionQuery.error.message}
             </p>
           ) : versionQuery.data && versionQuery.data.source !== current ? (
-            <Diff before={versionQuery.data.source} after={current} />
+            <ScriptDiff className={DIFF_HEIGHT} before={versionQuery.data.source} after={current} />
           ) : (
             <div className={cn('grid place-items-center rounded-lg border border-border text-sm text-muted-foreground', DIFF_HEIGHT)}>
               {versionQuery.data && `Version ${chosen} is the text in the editor.`}

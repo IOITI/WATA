@@ -50,6 +50,15 @@ describe('whether a rule is ready to go live', () => {
     expect(detail(checks, 'engine')).toBe('Running, its last bar 22 Oct, 07:02.')
   })
 
+  it('counts its week in shadow again from a change of what it runs', () => {
+    const now = Date.parse('2026-10-29T09:00:00Z')
+    const changed = liveReadiness(rule({ run_changed_at: '2026-10-27T10:00:00Z' }), state(), undefined, now, ZONE)
+    expect(states(changed).shadow).toBe('open')
+    expect(detail(changed, 'shadow')).toBe('What it runs changed on 27 Oct 2026: 2 weekdays in shadow since, of 5.')
+    const before = liveReadiness(rule({ run_changed_at: '2026-10-20T10:00:00Z' }), state(), undefined, now, ZONE)
+    expect(detail(before, 'shadow')).toBe('In shadow since 21 Oct 2026: 6 weekdays of 5.')
+  })
+
   it('passes a rule a week in shadow, its days on paper within its reference’s range', () => {
     const paper: BacktestPaper['rules'][string] = {
       days: [

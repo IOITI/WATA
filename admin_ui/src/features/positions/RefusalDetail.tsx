@@ -1,6 +1,7 @@
 import { Badge, formatNumber, formatTime } from 'ioiti-ui'
 import { Link } from 'react-router'
 
+import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import type { Refusal } from '@/lib/types'
 
 import { orderLink } from './orderLife'
@@ -24,6 +25,9 @@ export function RefusalDetail({ run, timeZone }: { run: Refusal; timeZone: strin
               {run.position_id}
             </PositionPeekLink>
           </span>
+        )}
+        {run.position_id && (
+          <AskAgentLink subject={{ kind: 'position', id: run.position_id }} label="Ask the AI agent why" />
         )}
         {run.followed_by?.order_id && (
           <span className="text-muted-foreground">

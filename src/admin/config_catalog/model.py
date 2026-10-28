@@ -58,7 +58,7 @@ class Consumer:
 
 
 # The menu's sections, in its order (admin_ui/src/components/navigation.ts): a group is listed under one.
-SECTIONS = ("Trading", "Analysis", "Data", "Technical Analysis", "Operations")
+SECTIONS = ("Trading", "Analysis", "Data", "Technical Analysis", "AI agent", "Operations")
 
 
 @dataclass(frozen=True)

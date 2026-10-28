@@ -1,15 +1,18 @@
 """
 Data: the assets WATA has prices of, what was recorded day by day, bars, the
-signals it received, its real trades and what its orders cost. Read only,
-through the admin's named queries; the lock box's days are refused.
+signals it received, its real trades, one of its positions whole, what its
+orders cost and what Saxo refused. Read only, through the admin's named
+queries; the lock box's days are refused; never an order's body nor an account.
 """
 
 from datetime import date
+from zoneinfo import ZoneInfo
 
 from starlette.concurrency import run_in_threadpool
 
 from src.admin import asset_bars, backtest_requests
 from src.admin.data import capital_asset, saxo_asset
+from src.admin.order_requests import refusal_runs
 from src.admin.mcp_server.budget import Refused, research_tool
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, csv_text, iso_moment, page, period, refuse_lockbox
 from src.admin.prices import MAX_BUCKETS
@@ -24,6 +27,10 @@ BARS_EXPORT_CHARS = 8_000_000
 # The Saxo instruments looked at at most to list them (indexes and turbos).
 MAX_SAXO_ASSETS = 5000
 SIGNAL_KINDS = ("received", "engine")
+# What a run of refusals says of each of its requests: its attempts are counted, the requests themselves left out.
+_RUN_FIELDS = ("purpose", "position_id", "signal_uuid", "action", "reason", "instrument_name", "buy_sell",
+               "order_amount", "instrument_price", "first_at", "last_at", "count", "outcome", "http_status",
+               "error_code", "error_message", "answers", "followed_by")
 FORMATS = ("json", "csv")
 
 
@@ -172,3 +179,52 @@ def register(server, research) -> None:
         refusals by hour, and the values a backtest would take from them (signal_delay_seconds, order_seconds,
         slippage), suggested only from 10 measures."""
         return compacted(await backtest_requests.execution(research.queries, research.timezone, start_day, end_day))
+
+    @research_tool(server, calls, name="data_position", title="One of WATA's positions, whole", read_only=True)
+    async def data_position(position_id: str) -> dict:
+        """One position WATA held (a position_id of data_trades): its turbo, prices, result, best and worst reached,
+        what closed it; each of its orders in time order with what became of it (sent, accepted by Saxo, filled; the
+        price paid against the quote when it left); each request to Saxo about it with Saxo's answer (accepted, or
+        refused with its code and message), and the refusals grouped into runs; the signal that opened it, with the
+        trader's decision. Never an order's body nor an account detail."""
+        found = await research.queries.position_record(position_id)
+        if found is None:
+            raise Refused(f"WATA has no position {position_id}")
+        opened = found["position"].get("execution_time_open")
+        if hasattr(opened, "date"):
+            refuse_lockbox(research.journal, opened.date(), opened.date())
+        return compacted({
+            "position": found["position"],
+            "orders": [{key: value for key, value in order.items() if key != "requests"} for order in found["orders"]],
+            "requests": found["requests"], "requests_total": found["requests_total"],
+            "refusals": [{key: run.get(key) for key in _RUN_FIELDS} for run in refusal_runs(found["requests"])],
+        })
+
+    @research_tool(server, calls, name="data_orders", title="What Saxo took and refused", read_only=True)
+    async def data_orders(start_day: date, end_day: date | None = None, offset: int = 0, limit: int = DEFAULT_PAGE) -> dict:
+        """The requests WATA sent to Saxo's order endpoint in a period (end_day is start_day when not given): how many
+        Saxo accepted and refused, the refusals by Saxo's code and by hour of the trading timezone, and the runs of
+        refusals newest first (the attempts made with one intent, selling a position or buying for a signal, until
+        Saxo accepted one or five minutes passed), each with its answers and the order that went through after it.
+        Never an order's body nor an account detail."""
+        first, last = period(start_day, end_day, MAX_DATA_DAYS)
+        refuse_lockbox(research.journal, first, last)
+        rows = await research.queries.order_attempts(first, last)
+        placed = [row for row in rows if row.get("operation") == "place"]
+        refused = [row for row in placed if row.get("outcome") != "accepted"]
+        zone = ZoneInfo(research.timezone)
+        by_code: dict[str, int] = {}
+        by_hour: dict[str, int] = {}
+        for row in refused:
+            code = row.get("error_code") or str(row.get("http_status") or row.get("outcome") or "unknown")
+            by_code[code] = by_code.get(code, 0) + 1
+            if hasattr(row.get("requested_at"), "astimezone"):
+                hour = f"{row['requested_at'].astimezone(zone).hour:02d}"
+                by_hour[hour] = by_hour.get(hour, 0) + 1
+        runs = [{key: run.get(key) for key in _RUN_FIELDS} for run in refusal_runs(rows)]
+        return compacted({
+            "summary": {"requests": len(rows), "orders_placed": len(placed), "accepted": len(placed) - len(refused),
+                        "refused": len(refused), "refused_by_code": by_code,
+                        "refused_by_hour": dict(sorted(by_hour.items())), "timezone": research.timezone},
+            **page(runs, offset, limit),
+        })

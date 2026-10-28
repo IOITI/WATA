@@ -20,6 +20,7 @@ import { useState } from 'react'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { ActionBadge } from '@/components/status'
+import { AgentSheet } from '@/features/agent/AgentSheet'
 import { useSession } from '@/features/auth/auth-context'
 import { useFollow } from '@/features/live/follow-context'
 import { api } from '@/lib/api'
@@ -259,6 +260,7 @@ export function SignalsPage() {
         Written by the trader as it handles each signal. A signal replaced by a newer one for the same indice before
         the trader read it never reaches the trader, and is not listed.
       </p>
+      <AgentSheet />
     </>
   )
 }

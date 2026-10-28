@@ -17,12 +17,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
+from src.admin.agent.store import UnknownConversation
 from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, backtests, config, credentials, data, research, saxo, services, session, system, ta, trading,
+    actions, agent, backtests, config, credentials, data, research, saxo, services, session, system, ta, trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -210,6 +211,12 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.mcp_tokens is not None and hasattr(ctx.mcp_tokens, "keep_fresh"):
             # The MCP endpoint's tokens, read again from PostgreSQL every few seconds for the gate.
             background.append(asyncio.create_task(ctx.mcp_tokens.keep_fresh()))
+        if ctx.agent is not None:
+            # The AI agent's requests, worked on whether a page follows them or not; those a stop left, taken up again.
+            background.append(asyncio.create_task(ctx.agent.run()))
+        if ctx.debrief is not None:
+            # The agent's daily debrief, once the market is closed (while admin.ai_agent.debrief_enabled).
+            background.append(asyncio.create_task(ctx.debrief.keep()))
         if ctx.vault is not None:
             # Its own credentials laid over its configuration: the Telegram bot of its direct fallback.
             background.append(asyncio.create_task(_load_own_credentials(ctx)))
@@ -238,6 +245,10 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
     async def service_unavailable(_: Request, exc: ServiceUnavailable):
         logger.warning(f"Upstream service unavailable: {exc}")
         return JSONResponse(content={"detail": f"Service unavailable ({exc})"}, status_code=502)
+
+    @app.exception_handler(UnknownConversation)
+    async def unknown_conversation(_: Request, __: UnknownConversation):
+        return JSONResponse(content={"detail": "No such conversation"}, status_code=404)
 
     @app.exception_handler(UnknownRun)
     async def unknown_run(_: Request, __: UnknownRun):
@@ -277,7 +288,8 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, saxo, trading, system, services, actions, config, credentials, data, backtests, ta, research):
+    for module in (session, saxo, trading, system, services, actions, config, credentials, data, backtests, ta, research,
+                   agent):
         app.include_router(module.router)
 
     if mcp is not None:

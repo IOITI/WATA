@@ -237,6 +237,34 @@ def test_the_telegram_bot_is_tried_with_its_stored_value(ctx, tmp_path, monkeypa
     assert ctx.audit_log.read(1)[0]["detail"] == "Sent"
 
 
+def test_the_claude_api_key_is_set_without_a_restart_and_tried_with_its_stored_value(ctx, tmp_path, monkeypatch):
+    tried_with = []
+
+    async def check_key(key, model):
+        tried_with.append((key, model))
+        return True, "Works: Claude Opus 5.5 answers"
+
+    monkeypatch.setattr("src.admin.agent.provider.check_key", check_key)
+    key = "sk-ant-api03-" + "x" * 40
+    client = signed_in(ctx, tmp_path)
+    try:
+        missing = [item for item in client.get("/api/credentials").json()["items"] if item["name"] == "anthropic.api"]
+        refused = client.put("/api/credentials/anthropic.api", json={"parts": {"key": "not-a-key"}}, headers=SAME_ORIGIN)
+        saved = client.put("/api/credentials/anthropic.api", json={"parts": {"key": key}}, headers=SAME_ORIGIN).json()
+        tried = client.post("/api/credentials/anthropic.api/test", headers=SAME_ORIGIN).json()
+        listed = [item for item in client.get("/api/credentials").json()["items"] if item["name"] == "anthropic.api"]
+    finally:
+        client.__exit__(None, None, None)
+
+    assert missing[0]["where"] == "missing" and missing[0]["readers"] == ["admin"]
+    assert refused.status_code == 422 and key not in refused.text
+    # The agent opens it at each request: nothing has to start again.
+    assert saved["services"] == []
+    assert tried == {"ok": True, "detail": "Works: Claude Opus 5.5 answers"}
+    assert tried_with == [(key, "claude-opus-5-5")]
+    assert listed[0]["where"] == "database" and listed[0]["fingerprint"] == "xxxx"
+
+
 # ── the MCP tokens in PostgreSQL ──
 
 

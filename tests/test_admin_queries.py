@@ -519,6 +519,24 @@ def test_position_detail_gives_every_request_about_it_oldest_first():
     assert result["requests_total"] == 2
 
 
+def test_the_research_tools_read_saxo_s_requests_without_their_bodies():
+    position = {"position_id": "5001", "order_id": "7001", "related_order_id": None}
+    with_bodies = [{**_sent(0), "request_body": '{"AccountKey": "secret"}', "response_body": '{"Orders": []}'}]
+    db = TablesDb({"order_execution": [], "order_request": with_bodies, "turbo_data_position": [position]})
+    queries = AdminQueries(db, "Europe/Paris")
+
+    record = asyncio.run(queries.position_record("5001"))
+    attempts = asyncio.run(queries.order_attempts(DAY_1, DAY_2))
+
+    assert record["requests"] and all("request_body" not in request and "response_body" not in request
+                                      for request in record["requests"])
+    attempts_query = db.calls[-1][0]
+    assert "FROM order_request" in attempts_query and "request_body" not in attempts_query
+    assert "response_body" not in attempts_query and "error_message" in attempts_query
+    assert asyncio.run(AdminQueries(TablesDb({"turbo_data_position": []}), "Europe/Paris").position_record("9")) is None
+    assert attempts == list(reversed(with_bodies))
+
+
 def test_position_detail_counts_the_requests_it_does_not_show(monkeypatch):
     monkeypatch.setattr("src.admin.queries.MAX_POSITION_REQUESTS", 2)
     position = {"position_id": "5001", "order_id": "7001", "related_order_id": None}

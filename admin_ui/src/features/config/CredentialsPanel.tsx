@@ -13,7 +13,7 @@ import {
   SettleModal,
   Textarea,
 } from 'ioiti-ui'
-import { Check, Copy, KeyRound, RotateCw, Send, Trash2 } from 'lucide-react'
+import { Check, Copy, KeyRound, PlugZap, RotateCw, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
@@ -245,6 +245,7 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
   })
   const show = useMutation({ mutationFn: api.showWebhook })
   const tryBot = useMutation({ mutationFn: api.testTelegram, onSuccess: () => refresh() })
+  const tryKey = useMutation({ mutationFn: api.testAnthropicKey, onSuccess: () => refresh() })
   const where = WHERE_LABEL[credential.where]
   const checks = checksSaid(credential.checks, names, timeZone)
   const blocked = keysMissing || !canEdit
@@ -315,6 +316,11 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
             Send a test message
           </Button>
         )}
+        {credential.name === 'anthropic.api' && credential.where === 'database' && (
+          <Button size="sm" variant="ghost" leftIcon={<PlugZap className="size-3.5" />} isLoading={tryKey.isPending} onClick={() => tryKey.mutate()}>
+            Test the connection
+          </Button>
+        )}
         {credential.where === 'database' && !credential.generated && (
           <Button size="sm" variant="ghost" leftIcon={<Trash2 className="size-3.5" />} disabled={blocked} onClick={() => setRemoving(true)}>
             Remove
@@ -339,12 +345,24 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
           </AlertDescription>
         </Alert>
       )}
-      {(show.error || tryBot.error) && (
-        <Alert tone="danger" role="alert">
-          <AlertDescription>{errorText(show.error ?? tryBot.error)}</AlertDescription>
+      {tryKey.data && (
+        <Alert tone={tryKey.data.ok ? 'success' : 'danger'}>
+          <AlertDescription>
+            {tryKey.data.ok ? `The Claude API answered. ${tryKey.data.detail}.` : `The Claude API refused it: ${tryKey.data.detail}`}
+          </AlertDescription>
         </Alert>
       )}
-      {changed && (
+      {(show.error || tryBot.error || tryKey.error) && (
+        <Alert tone="danger" role="alert">
+          <AlertDescription>{errorText(show.error ?? tryBot.error ?? tryKey.error)}</AlertDescription>
+        </Alert>
+      )}
+      {changed && changed.length === 0 && (
+        <Alert tone="success">
+          <AlertDescription>Saved. It applies at once: nothing has to start again.</AlertDescription>
+        </Alert>
+      )}
+      {changed && changed.length > 0 && (
         <Alert tone="warning">
           <AlertDescription>
             <div className="space-y-2">
@@ -408,11 +426,13 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
 }
 
 /** The Credentials group of the Configuration page: what is sealed in PostgreSQL, and what is kept elsewhere. */
-export function CredentialsPanel() {
+/** The credentials' cards; ``only``: those of one group's page (the AI agent's key), without what is kept elsewhere. */
+export function CredentialsPanel({ only }: { only?: string[] } = {}) {
   const { catalog } = useConfigEditor()
   const { timezone } = useSession()
   const query = useQuery({ queryKey: ['credentials'], queryFn: api.credentials })
   const names = Object.fromEntries(catalog.services.map((service) => [service.id, service.name]))
+  const items = (query.data?.items ?? []).filter((credential) => !only || only.includes(credential.name))
 
   return (
     <>
@@ -424,7 +444,7 @@ export function CredentialsPanel() {
                 <AlertDescription>{query.data.keys}. What is here can be read, nothing can be set.</AlertDescription>
               </Alert>
             )}
-            {query.data.items.map((credential) => (
+            {items.map((credential) => (
               <CredentialCard
                 key={credential.name}
                 credential={credential}
@@ -436,19 +456,21 @@ export function CredentialsPanel() {
           </div>
         )}
       </QueryState>
-      <Panel title="Kept elsewhere" description="Credentials not set from these cards: where each is kept, and how it is changed.">
-        <ul className="space-y-1.5 text-xs">
-          {KEPT_ELSEWHERE.map((entry) => (
-            <li key={entry.what}>
-              {entry.brands?.map((brand) => (
-                <BrandMark key={brand} brand={brand} className="mr-1 size-3.5 align-[-2px]" />
-              ))}
-              <span className="font-medium text-foreground">{entry.what}</span>
-              <span className="text-text-secondary">: {entry.where}.</span>
-            </li>
-          ))}
-        </ul>
-      </Panel>
+      {!only && (
+        <Panel title="Kept elsewhere" description="Credentials not set from these cards: where each is kept, and how it is changed.">
+          <ul className="space-y-1.5 text-xs">
+            {KEPT_ELSEWHERE.map((entry) => (
+              <li key={entry.what}>
+                {entry.brands?.map((brand) => (
+                  <BrandMark key={brand} brand={brand} className="mr-1 size-3.5 align-[-2px]" />
+                ))}
+                <span className="font-medium text-foreground">{entry.what}</span>
+                <span className="text-text-secondary">: {entry.where}.</span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
     </>
   )
 }

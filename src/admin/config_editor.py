@@ -68,6 +68,7 @@ EDITABLE_PATHS = (
     "admin.backtests_signal_cache_mb",
     "admin.mcp_enabled",
     "admin.mcp",
+    "admin.ai_agent",
 )
 
 # Inside the editable sections, but they say where the services connect and
@@ -245,7 +246,9 @@ def check_admin_limits(config: dict) -> None:
     one would stop it there.
     """
     for param in CATALOG.params:
-        if not param.path.startswith("admin.") or param.path.startswith("admin.mcp.") or param.access != EDITABLE:
+        # admin.mcp and admin.ai_agent are checked whole, by McpLimits and AgentSettings (AdminSettings.from_config).
+        if (not param.path.startswith("admin.") or param.path.startswith(("admin.mcp.", "admin.ai_agent."))
+                or param.access != EDITABLE):
             continue
         value = _get_path(config, param.path)
         if value is _MISSING:

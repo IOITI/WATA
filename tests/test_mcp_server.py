@@ -18,7 +18,8 @@ from tests.test_mcp_gate import mcp_ctx
 EXPECTED_TOOLS = {
     "job_wait",
     "status",
-    "data_assets", "data_coverage", "data_bars", "data_signals", "data_trades", "data_execution",
+    "data_assets", "data_coverage", "data_bars", "data_signals", "data_trades", "data_execution", "data_position",
+    "data_orders",
     "pine_list", "pine_get", "pine_check", "pine_run", "pine_signals", "pine_compare", "pine_save", "pine_delete",
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "turbo_model",

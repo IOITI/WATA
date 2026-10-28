@@ -1,7 +1,7 @@
 """
 The credentials kept sealed in PostgreSQL (src/vault/, ``ctx.vault``): what
 each is and whether it is set, set or replaced, a token rotated, the Telegram
-bot tried, the TradingView webhook's address shown. Every change is audited
+bot and the Claude API key tried, the TradingView webhook's address shown. Every change is audited
 (its name and last four characters, never a value) and applies when the
 services that read it start again.
 """
@@ -117,4 +117,25 @@ async def test_telegram(request: Request):
     except Exception:
         pass
     ctx.audit(request, "Telegram bot tried", detail)
+    return {"ok": ok, "detail": detail}
+
+
+@router.post("/anthropic.api/test")
+async def test_anthropic(request: Request):
+    """
+    The Claude API asked, with the key as stored now, for the model the AI agent
+    is set to use: a read of the model's entry, which spends no token.
+    """
+    from src.admin.agent.provider import check_key
+
+    ctx = request.app.state.ctx
+    vault = _vault(request)
+    value = await vault.open("anthropic.api")
+    if not value:
+        raise HTTPException(status_code=404, detail="No Claude API key is set")
+    ok, detail = await check_key(value["key"], ctx.settings.ai_agent.model)
+    try:
+        await store.record_check(vault.writer, "anthropic.api", "admin", ok, detail)
+    except Exception:
+        pass
     return {"ok": ok, "detail": detail}

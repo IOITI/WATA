@@ -1,5 +1,6 @@
 """Reporting and logs, the admin's own settings, the infrastructure, and the credentials still kept in the file."""
 
+from src.admin.agent.settings import EFFORTS, MODELS, PROVIDERS
 from src.admin.config_catalog.model import CREDENTIAL, NONE, SERVER, SERVICE, UNUSED, Param
 
 ALL_SERVICES = (
@@ -8,6 +9,7 @@ ALL_SERVICES = (
 )
 ADMIN = "admin"
 MCP = "admin.mcp"
+AGENT = "admin.ai_agent"
 
 ON_THE_SERVER = "Edit /app/wata/etc/config.json on the server, then restart the services that read it."
 INFRASTRUCTURE = ("The services connect with it before they read anything else: it is set at install, beside "
@@ -68,7 +70,8 @@ REPORTING = (
 )
 
 # The admin's folders, each with the group of what it keeps.
-PERSISTANT_GROUPS = {"mcp_tokens_path": "claude", "backtests_path": "backtests", "price_history_path": "backtests"}
+PERSISTANT_GROUPS = {"mcp_tokens_path": "claude", "backtests_path": "backtests", "price_history_path": "backtests",
+                     "agent_path": "agent"}
 
 ADMIN_PARAMS = (
     Param(
@@ -171,6 +174,136 @@ ADMIN_PARAMS = (
         help="Nothing of Claude's is started when the disk has less free.", readers=(ADMIN,), risk=NONE,
     ),
     Param(
+        path=f"{AGENT}.enabled", group="agent", label="AI agent", kind="bool", optional=True, default=False,
+        help="Lets you hand a backtest run or a Pine script to Claude from its page: it analyses it, runs backtests "
+             "within the limits below, and proposes changes that you apply.",
+        readers=(ADMIN,), risk=NONE,
+        effects=("Claude works with WATA's research tools, in the admin: nothing it does trades, edits this "
+                 "configuration, takes a rule live or changes a rule's mode.",
+                 "Its backtests are Claude's: they wait behind yours, within Claude's daily limits (Claude (MCP)).",
+                 "Each request is billed by Anthropic to the account of the key."),
+        also_needs=("The Claude API key (Credentials, or the card above).",),
+    ),
+    Param(
+        path=f"{AGENT}.provider", group="agent", label="Provider", kind="enum", choices=PROVIDERS, optional=True,
+        default="anthropic", help="Who runs the model: Anthropic's Claude API, the only one so far.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.model", group="agent", label="Default model", kind="enum", choices=MODELS, optional=True,
+        default="claude-opus-5-5",
+        help="The model a new conversation starts with: each request may choose another under the field it is typed "
+             "in. Claude Opus 5.5 by default. Sonnet 5.5 costs half as much, Haiku 5.5 a fortieth, Fable 5.1 two and a "
+             "half times as much.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("A conversation goes on with the model of its last request.",
+                 "A model reads the notes of some others only: a switch to one that cannot answers without them.")
+    ),
+    Param(
+        path=f"{AGENT}.effort", group="agent", label="Default effort", kind="enum", choices=EFFORTS, optional=True,
+        default="high", help="How much the model thinks before it acts and answers, unless a request chooses another: "
+                             "more is slower and dearer.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.max_tool_calls", group="agent", label="Tool calls of a request at most", kind="int", minimum=5,
+        maximum=200, optional=True, default=60,
+        help="What one request may read and do: each run read, each backtest started or waited for is a call.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.max_backtests", group="agent", label="Backtests of a request at most", kind="int", minimum=0,
+        maximum=30, optional=True, default=8,
+        help="Runs one request may start, stress tests and checks included. 0: it reads and proposes only.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.max_request_usd", group="agent", label="Cost of a request at most", kind="number", unit="$",
+        minimum=0.5, maximum=100, optional=True, default=5,
+        help="Estimated from Anthropic's prices as the request goes: it is asked to conclude near it, and stopped "
+             "there.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.monthly_budget_usd", group="agent", label="Monthly budget", kind="number", unit="$",
+        minimum=1, maximum=10_000, optional=True, default=50,
+        help="No new request once the month's estimated cost reaches it (months of UTC).",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("The requests under way finish within their own limit: a month may end a little over it.",),
+    ),
+    Param(
+        path=f"{AGENT}.max_running", group="agent", label="Requests at once", kind="int", minimum=1, maximum=4,
+        optional=True, default=2, help="The others wait their turn.", readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.keep_days", group="agent", label="Conversations kept", kind="int", unit="days", minimum=30,
+        maximum=3650, optional=True, default=365, help="From a conversation's last change.", readers=(ADMIN,),
+        risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.read_logs", group="agent", label="Reads the services' logs", kind="bool", optional=True,
+        default=True,
+        help="Lets the agent read a service's log lines around a moment, to explain what went wrong: the lines it "
+             "reads go to Anthropic with its request, cleaned of secrets as the Logs page shows them.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("Off, it still reads the admin's health and WATA's positions, orders and signals.",),
+    ),
+    Param(
+        path=f"{AGENT}.max_task_usd", group="agent", label="Cost of a research task at most", kind="number", unit="$",
+        minimum=1, maximum=1_000, optional=True, default=20,
+        help="The most a research task may be given to spend, all its requests together: the task's own budget is "
+             "chosen when it is started, up to this.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("Each of its requests also stays within 'Cost of a request at most', and the month within its "
+                 "budget.",),
+    ),
+    Param(
+        path=f"{AGENT}.max_task_backtests", group="agent", label="Backtests of a research task at most", kind="int",
+        minimum=0, maximum=200, optional=True, default=40,
+        help="The most backtests a research task may be given, all its requests together.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.max_task_hours", group="agent", label="Hours of a research task at most", kind="number",
+        unit="h", minimum=0.5, maximum=72, optional=True, default=12,
+        help="The longest a research task may be given: no request of it starts after its hours, the one under way "
+             "ending within its own limits.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.debrief_enabled", group="agent", label="Daily debrief", kind="bool", optional=True,
+        default=False,
+        help="Each trading day, once the market is closed, the agent writes an account of the day: its trades, its "
+             "signals, what Saxo refused and the day traded on paper, kept as a conversation on AI agent › Activity.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("A day without a trade, a signal or a refusal is noted in a line, without a call to the API.",
+                 "Nothing is written while the agent is paused, without a key, or once the month's budget is spent."),
+        also_needs=(f"{AGENT}.enabled",),
+    ),
+    Param(
+        path=f"{AGENT}.debrief_model", group="agent", label="Debrief's model", kind="enum", choices=MODELS,
+        optional=True, default="claude-sonnet-5-5",
+        help="The model that writes the daily debrief: an account of the day needs less than an analysis.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.debrief_effort", group="agent", label="Debrief's effort", kind="enum", choices=EFFORTS,
+        optional=True, default="medium", help="How much the debrief's model thinks before it writes.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.debrief_max_usd", group="agent", label="Cost of a debrief at most", kind="number", unit="$",
+        minimum=0.1, maximum=5, optional=True, default=0.5,
+        help="What one daily debrief may cost: it is asked to conclude near it, and stopped there.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.debrief_telegram", group="agent", label="Debrief said on Telegram", kind="bool",
+        optional=True, default=True,
+        help="Once a debrief is written, Telegram gets the day and its first lines, with the way to the whole of it.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
         path="admin.actions_enabled", group="admin", label="Operator actions", kind="bool", access=SERVER,
         optional=True, default=True, reason=KILL_SWITCH, how=ON_THE_SERVER,
         help="Closing a position, sending a signal, pausing entries, authorising Saxo from the page.",
@@ -224,6 +357,8 @@ ADMIN_PARAMS = (
          "Dukascopy's and Capital.com's day files.", (ADMIN, "capital_feed")),
         ("backups_path", "Database dumps' folder", "/app/var/lib/backups", "Read only, for health.", (ADMIN,)),
         ("ta_path", "Pine scripts' folder", "/app/var/lib/admin/ta", "The scripts and the signal rules.", (ADMIN,)),
+        ("agent_path", "AI agent's folder", "/app/var/lib/admin/agent",
+         "Its conversations, what they made, what they cost.", (ADMIN,)),
     )
 )
 

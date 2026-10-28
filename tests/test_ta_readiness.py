@@ -42,6 +42,14 @@ def test_a_rule_off_a_silent_one_a_failing_one_and_paper_days_outside_its_range_
     ]
 
 
+def test_a_change_of_what_a_rule_runs_starts_its_week_in_shadow_again():
+    changed = {**rule(), "run_changed_at": "2026-10-23T08:00:00Z"}
+    assert unmet_readiness(changed, RUNNING, None, NOW, "Europe/Paris") == [f"1 weekday(s) in shadow of {SHADOW_DAYS}"]
+    # A change before it went into shadow counts from its going into shadow.
+    earlier = {**rule(), "run_changed_at": "2026-10-01T08:00:00Z"}
+    assert unmet_readiness(earlier, RUNNING, None, NOW, "Europe/Paris") == []
+
+
 def test_a_rule_without_its_moment_of_change_has_no_day_in_shadow():
     assert unmet_readiness({"id": "r1", "mode": "shadow"}, RUNNING, None, NOW, "Europe/Paris") == [
         f"0 weekday(s) in shadow of {SHADOW_DAYS}",

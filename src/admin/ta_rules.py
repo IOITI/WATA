@@ -51,6 +51,11 @@ SHADOW = "shadow"
 LIVE = "live"
 MODES = (OFF, SHADOW, LIVE)
 
+# What a rule runs: a change of one is new code for the engine (RUN_FIELDS of src/ta_engine/rules.py, which
+# imports this module and so cannot be imported here; tests/test_admin_ta_rules.py holds the two equal), and
+# its week in shadow starts again (run_changed_at, read by src/admin/ta_readiness.py).
+RUN_FIELDS = ("asset", "side", "bars", "script", "libraries", "inputs", "history_days")
+
 # What an alert of the script becomes. "message" reads the action in the alert's
 # message, WATA's webhook JSON as TradingView's alerts send it.
 IGNORE = "ignore"
@@ -493,6 +498,9 @@ class RuleStore:
             if rule["mode"] == LIVE:
                 self._check_one_live(rules, rule)
             rule["updated_at"] = _now()
+            if any(rule.get(name) != before.get(name) for name in RUN_FIELDS):
+                # Its days in shadow, paper and signals were of the code before: readiness counts again from here.
+                rule["run_changed_at"] = rule["updated_at"]
             new_revision = self._write([rule if entry["id"] == rule_id else entry for entry in rules])
         return {"rule": rule, "before": before, "revision": new_revision}
 

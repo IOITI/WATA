@@ -67,6 +67,26 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'backtest_finished', state: 'cancelled' })).toBeNull()
   })
 
+  it("says how the AI agent's request ended, what it cost, and nothing when the operator stopped it", () => {
+    expect(describeEvent({ type: 'agent_finished', outcome: 'done', title: 'Analyse this run', cost_usd: 0.4182 })).toEqual({
+      title: 'The AI agent answered', body: 'Analyse this run · $0.42', variant: 'success',
+    })
+    expect(describeEvent({ type: 'agent_finished', outcome: 'failed', title: 'Analyse', detail: 'No key', cost_usd: 0 }))
+      .toEqual({ title: 'The AI agent failed', body: 'Analyse · No key · $0.00', variant: 'error' })
+    expect(describeEvent({ type: 'agent_finished', outcome: 'limit', title: 'Tune' })?.variant).toBe('warning')
+    expect(describeEvent({ type: 'agent_finished', outcome: 'stopped' })).toBeNull()
+    // A research task: said when it ends, not at each of its requests.
+    expect(describeEvent({ type: 'agent_finished', outcome: 'done', task: 'working', title: 'Tune' })).toBeNull()
+    expect(describeEvent({ type: 'agent_finished', outcome: 'done', task: 'done', title: 'Tune' })).toEqual({
+      title: 'The research task is done', body: 'Tune', variant: 'success' })
+    expect(describeEvent({ type: 'agent_finished', outcome: 'stopped', task: 'ended', title: 'Tune' })).toBeNull()
+    expect(describeEvent({ type: 'agent_finished', outcome: 'limit', task: 'ended', title: 'Tune',
+      task_detail: 'its budget of $5.00 is spent' })).toEqual({
+      title: 'The research task ended', body: 'Tune · its budget of $5.00 is spent', variant: 'warning' })
+    expect(eventLink({ type: 'agent_finished', conversation_id: '20261028-080000-a1b2c3' })).toBe('/agent/20261028-080000-a1b2c3')
+    expect(staleQueries({ type: 'agent_finished' })).toContain('agent-conversation')
+  })
+
   it('says how a download of prices ended, and that days are usually still missing', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done' })).toEqual({
       title: 'Prices downloaded', body: undefined, variant: 'success',

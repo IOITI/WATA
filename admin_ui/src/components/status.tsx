@@ -1,4 +1,4 @@
-import { Badge } from 'ioiti-ui'
+import { Badge, Hint } from 'ioiti-ui'
 
 import { actionLabel } from '@/lib/labels'
 
@@ -8,9 +8,11 @@ import { actionLabel } from '@/lib/labels'
 /** Beside the name of what Claude made through the admin's MCP endpoint: a run, a script, a rule, an experiment. */
 export function ClaudeBadge({ className }: { className?: string }) {
   return (
-    <Badge variant="outline" className={className} title="Made by Claude through the admin's MCP endpoint">
-      Claude
-    </Badge>
+    <Hint content="Made by Claude: through the MCP endpoint, or by the AI agent of these pages" wrap>
+      <Badge variant="outline" className={className}>
+        Claude
+      </Badge>
+    </Hint>
   )
 }
 

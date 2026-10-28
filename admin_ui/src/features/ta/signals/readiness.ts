@@ -36,7 +36,10 @@ export function liveReadiness(
 ): Check[] {
   const checks: Check[] = []
 
-  const since = dayIn(Date.parse(rule.mode_changed_at), timeZone)
+  // From the later of its going into shadow and the last change of what it runs (run_changed_at).
+  const changedRun = rule.run_changed_at ? dayIn(Date.parse(rule.run_changed_at), timeZone) : null
+  const shadowFrom = dayIn(Date.parse(rule.mode_changed_at), timeZone)
+  const since = changedRun !== null && changedRun > shadowFrom ? changedRun : shadowFrom
   const days = weekdaysBetween(since, dayIn(now, timeZone))
   checks.push({
     id: 'shadow',
@@ -45,7 +48,9 @@ export function liveReadiness(
     detail:
       rule.mode !== 'shadow'
         ? 'Not in shadow now: what it would send is not being journaled.'
-        : `In shadow since ${formatDay(since)}: ${days} weekday${days === 1 ? '' : 's'} of ${SHADOW_DAYS}.`,
+        : since === changedRun
+          ? `What it runs changed on ${formatDay(since)}: ${days} weekday${days === 1 ? '' : 's'} in shadow since, of ${SHADOW_DAYS}.`
+          : `In shadow since ${formatDay(since)}: ${days} weekday${days === 1 ? '' : 's'} of ${SHADOW_DAYS}.`,
   })
 
   checks.push({

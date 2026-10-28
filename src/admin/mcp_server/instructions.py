@@ -5,16 +5,21 @@ prompt (``/wata:research``), the loop of .claude/skills/wata-lab/SKILL.md
 written for the server.
 """
 
-INSTRUCTIONS = """\
+# What WATA and this server are.
+ABOUT = """\
 WATA trades Saxo knock-out turbos on the Nasdaq 100 from signals. This server is its research side, on the live \
 server: Pine scripts (run by PineTS, as WATA's TA engine runs them), the prices WATA recorded, and backtests that \
-trade the recorded turbos under WATA's own rules.
+trade the recorded turbos under WATA's own rules."""
 
+# What the endpoint may do and how its calls end (Claude Code's 60 s).
+LIMITS = """\
 Limits: nothing here trades, edits the configuration or takes a rule live; going live stays the operator's. \
 Claude's runs wait behind the operator's; Pine studies run one at a time; large data comes as CSV, which Claude \
 Code saves to a file on the Mac, to analyse there (data_bars: a week of 10 s bars a call). Every tool answers \
-within 50 s: a study not done by 45 s comes back as a job, which job_wait answers.
+within 50 s: a study not done by 45 s comes back as a job, which job_wait answers."""
 
+# The research loop, tool by tool.
+LOOP = """\
 Start with `status`. The loop:
 1. `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as trials of the family; \
 configurations tried elsewhere (a port on the Mac) too, once written down with `exp_trials`.
@@ -31,14 +36,19 @@ check of a recorded run (`backtest_derive` kind model_check).
 7. What survives may become one of Claude's shadow rules, once the operator switched them on: `rule_shadow_save` \
 (the engine journals its signals, never sends them), a run made from it (`source.from_rule`) set as its \
 reference (`rule_set_reference`), then its paper days in `rule_list`, and its report since it was made \
-(`paper.report.run_id`, read as any run: made again after each finished day, no random entries).
+(`paper.report.run_id`, read as any run: made again after each finished day, no random entries)."""
 
+# The bar a result must clear, mirrored by admin_ui/src/features/backtests/verdict.ts: a change to one is made in
+# the other. The admin's AI agent (src/admin/agent/prompts.py) says it too.
+DO_NOT_BELIEVE = """\
 Do not believe: fewer than 30 trades or 20 days; random entries beaten less than 95 % of the time; no edge \
 (t under 2.6 at the best horizon); a best value whose neighbours do badly, or a held-out result far below the \
 chosen-on one; a probability of overfitting above 0.5 or a deflated Sharpe ratio under 95 %; a result that fails \
 one stress step; results on the lock box's days, except for a candidate's final check. Recorded turbos start on \
-2026-10-13: say on how few days each conclusion rests.
+2026-10-13: say on how few days each conclusion rests."""
 
+# How a Pine script must be written for WATA's engine: the AI agent says it too.
+PINE_FOR_WATA = """\
 Pine for WATA: //@version=6 and indicator(); inputs are in_0, in_1… in declaration order; signals are \
 alertcondition(condition, "Title", message), each title mapped to long, short, close-position, message or \
 ignore. No barstate.islast, nothing that repaints; request.security reads WATA's assets only. A strategy()'s \
@@ -46,8 +56,9 @@ orders are not signals: only alerts are. A bar that raises an entry and a close-
 (it sells the other side first). R<ticks> counts the asset's own tick (data_assets): R60 is 6 points on \
 capital/US100, 0.06 on dukascopy/us100, where 6 points are R6000. An engine day starts history_days before the \
 daily restart: a rule may have its own (0 to 30), fewer for a script that needs little warm-up. A rule's bars \
-are of any length from 10 s to a day, or range bars.
-"""
+are of any length from 10 s to a day, or range bars."""
+
+INSTRUCTIONS = "\n\n".join((ABOUT, LIMITS, LOOP, DO_NOT_BELIEVE, PINE_FOR_WATA)) + "\n"
 
 RESEARCH_PROMPT = """\
 Work on WATA's strategies through the `wata` tools, on the live server's data, as follows.

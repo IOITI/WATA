@@ -13,6 +13,7 @@ import re
 
 import pytest
 
+from src.admin.agent.settings import AgentSettings
 from src.admin.config_catalog import (
     ACCESSES, CATALOG, CONSUMERS, GROUPS, KINDS, RISKS, SERVICES, changes, flatten, impact, lookup, place,
     unknown_paths,
@@ -48,6 +49,7 @@ def test_every_setting_the_sections_check_themselves_is_described():
         (CapitalSettings, "trade.config.capital_feed", {"timezone", "prices_root"}),
         (TaEngineSettings, "trade.config.ta_engine", {"rules_path", "node_path", "service_url"}),
         (McpLimits, "admin.mcp", set()),
+        (AgentSettings, "admin.ai_agent", set()),
         (NewsRule, "trade.rules[macro_news].rule_config", set()),
     )
     expected = {
@@ -61,9 +63,9 @@ def test_every_setting_the_sections_check_themselves_is_described():
 
 
 def test_every_setting_of_the_admin_is_described():
-    elsewhere = {"config_path", "log_path", "timezone", "mcp_limits"}
+    elsewhere = {"config_path", "log_path", "timezone", "mcp_limits", "ai_agent"}
     in_persistant = {"credentials_path", "backtests_path", "price_history_path", "backups_path", "ta_path",
-                     "mcp_tokens_path"}
+                     "mcp_tokens_path", "agent_path"}
     expected = {
         f"admin.persistant.{field.name}" if field.name in in_persistant else f"admin.{field.name}"
         for field in dataclasses.fields(AdminSettings)

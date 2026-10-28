@@ -8,9 +8,10 @@ from src.logging_helper.redaction import RedactingFilter, register_secret
 
 # Libraries that log each request at INFO with its whole address: the outside watcher's,
 # Telegram's (the bot's token in it), Saxo's (the account keys in its query); and at DEBUG,
-# websockets the stream's address with its token. Nothing they say below WARNING is needed,
-# so they stay there whatever logging.level says.
-QUIET_LOGGERS = ("httpx", "httpcore", "websockets", "hpack")
+# websockets the stream's address with its token, the Claude API's client (anthropic, on
+# httpx2 and httpcore2) its requests. Nothing they say below WARNING is needed, so they stay
+# there whatever logging.level says.
+QUIET_LOGGERS = ("httpx", "httpcore", "websockets", "hpack", "anthropic", "httpx2", "httpcore2")
 
 # The secrets of the configuration file, never written in a log line by any service.
 CONFIG_SECRETS = (

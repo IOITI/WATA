@@ -4,11 +4,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertTitle, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
 import { RouterLeaveGuard } from 'ioiti-ui/react-router'
-import { ChartSpline, FlaskConical, History, Radar, Save } from 'lucide-react'
+import { ChartSpline, FlaskConical, History, Radar, Save, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
 import { isSignIn } from '@/features/auth/returnPath'
 import { api, ApiError, isNotFound } from '@/lib/api'
@@ -202,6 +204,9 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                 <ButtonLink to={`/ta/signals?new=${script.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
                   New signal rule
                 </ButtonLink>
+                <ButtonLink to={withAgent(searchParams, NEW)} variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />}>
+                  Ask the AI agent
+                </ButtonLink>
               </>
             )}
             <Hint content={errors > 0 ? 'It can be saved with its errors, and fixed later' : null} wrap={!dirty}>
@@ -211,6 +216,20 @@ function ScriptEditor({ id }: { id: string | undefined }) {
         }
       />
 
+      {script && (
+        <AgentSheet
+          subject={{ kind: 'script', id: script.id, label: script.name, version: script.version }}
+          // A new version of this script, while the editor holds changes not saved: they would be left behind.
+          blockedFor={(proposal) => (dirty && proposal.kind === 'script' && proposal.script?.id === script.id
+            ? 'Save or drop your changes in the editor first: applying it saves a new version.' : null)}
+          // A new version saved from its proposal: the editor starts again from it.
+          onApplied={(proposal) => {
+            if (proposal.kind !== 'script' || proposal.script?.id !== script.id) return
+            void queryClient.fetchQuery({ queryKey: ['ta-script', script.id], queryFn: () => api.taScript(script.id) })
+              .then((fresh) => setDraft(fromScript(fresh)))
+          }}
+        />
+      )}
       <QueryState isPending={!!id && scriptQuery.isPending} error={id ? scriptQuery.error : null} hasData={!!draft}>
         {draft && (
           <>

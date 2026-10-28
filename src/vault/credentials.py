@@ -116,6 +116,17 @@ CREDENTIALS = (
         fingerprint="url",
         old_place=".env (WATA_HEARTBEAT_URL)",
     ),
+    Credential(
+        name="anthropic.api",
+        label="Claude API key",
+        # The admin's AI agent (src/admin/agent/) alone calls the Claude API; it was never kept anywhere else.
+        readers=("admin",),
+        parts=(
+            Part("key", "API key", secret=True, pattern=re.compile(r"^sk-ant-[A-Za-z0-9_-]{16,200}$"),
+                 expected="the key as Anthropic's Console gives it once: sk-ant- then letters, digits, - and _"),
+        ),
+        fingerprint="key",
+    ),
 )
 
 

@@ -8,7 +8,9 @@ trail records with what was missing: the switch stays the operator's.
 Held: a week of weekdays in shadow (its signals journaled, never sent), a
 signal journaled, no day on paper outside the range of its reference run, and
 the engine running it without fault. A newer version of its script is only
-said. Pure.
+said. The week counts from the later of its going into shadow and the last
+change of what it runs (``run_changed_at``: a script version, its inputs...),
+whoever made it. Pure.
 """
 
 from datetime import date, datetime, timedelta
@@ -29,6 +31,10 @@ def weekdays_between(start: date, end: date) -> int:
     return count
 
 
+def _day(moment, zone) -> date:
+    return datetime.fromisoformat(str(moment).replace("Z", "+00:00")).astimezone(zone).date()
+
+
 def unmet_readiness(rule: dict, state: dict | None, paper: dict | None, now: datetime, timezone_name: str) -> list[str]:
     """What keeps ``rule`` from being ready to go live, in words; empty once it is."""
     zone = pytz.timezone(timezone_name)
@@ -36,8 +42,8 @@ def unmet_readiness(rule: dict, state: dict | None, paper: dict | None, now: dat
     if rule.get("mode") != "shadow":
         unmet.append("it is not in shadow: what it would send is not being journaled")
     else:
-        changed = rule.get("mode_changed_at")
-        since = datetime.fromisoformat(str(changed).replace("Z", "+00:00")).astimezone(zone).date() if changed else None
+        moments = [moment for moment in (rule.get("mode_changed_at"), rule.get("run_changed_at")) if moment]
+        since = max(_day(moment, zone) for moment in moments) if moments else None
         days = weekdays_between(since, now.astimezone(zone).date()) if since else 0
         if days < SHADOW_DAYS:
             unmet.append(f"{days} weekday(s) in shadow of {SHADOW_DAYS}")

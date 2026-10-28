@@ -208,9 +208,11 @@ def test_outside_the_api_only_the_interface_and_the_endpoint_are_routed(ctx, bui
 
 
 def test_the_admin_never_loads_the_sdk_while_the_endpoint_is_off():
+    # The AI agent's modules too: they call the tools through the SDK only once the agent starts.
     probe = (
         "import sys; import src.admin.app, src.admin.context, src.admin.cli, src.admin.mcp_server.gate; "
-        "print(json.dumps(sorted(name for name in sys.modules if name == 'mcp' or name.startswith('mcp.'))))"
+        "import src.admin.agent.service, src.admin.agent.tools, src.admin.routers.agent; "
+        "print(json.dumps(sorted(name for name in sys.modules if name.split('.')[0] in ('mcp', 'anthropic'))))"
     )
     ran = subprocess.run(
         [sys.executable, "-c", "import json; " + probe], capture_output=True, text=True,

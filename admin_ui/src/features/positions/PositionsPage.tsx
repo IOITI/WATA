@@ -5,6 +5,8 @@ import { RouterLink } from 'ioiti-ui/react-router'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { Position } from '@/lib/types'
@@ -99,19 +101,15 @@ export function PositionsPage() {
               selectable={false}
               initialSearch={find}
               initialExpandedRowIds={find ? [find] : undefined}
-              renderSubComponent={(row) =>
-                row.position_status === 'Open' ? (
-                  <div className="space-y-4">
-                    <LivePositionChart position={row} />
-                    <PositionOrders positionId={row.position_id} />
+              renderSubComponent={(row) => (
+                <div className="space-y-4">
+                  <div className="flex justify-end">
+                    <AskAgentLink subject={{ kind: 'position', id: row.position_id }} />
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    <PositionChart position={row} />
-                    <PositionOrders positionId={row.position_id} />
-                  </div>
-                )
-              }
+                  {row.position_status === 'Open' ? <LivePositionChart position={row} /> : <PositionChart position={row} />}
+                  <PositionOrders positionId={row.position_id} />
+                </div>
+              )}
             />
             {page.total > page.items.length && (
               <p className="text-xs text-muted-foreground">
@@ -121,6 +119,7 @@ export function PositionsPage() {
           </div>
         )}
       </QueryState>
+      <AgentSheet />
     </>
   )
 }

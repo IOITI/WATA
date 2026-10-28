@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import { formatDay, formatMoney, formatNumber, formatPercent, KpiTile, PageHeader, Panel, QueryState, SignedValue, StatCard } from 'ioiti-ui'
 
 import { BalanceChart } from '@/components/charts/PerformanceCharts'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { api } from '@/lib/api'
 import type { MilestoneProjection, Report, TradeSummary } from '@/lib/types'
 
@@ -238,10 +240,12 @@ export function ReportPage() {
             ? `The figures of the daily Telegram report, as of ${formatDay(report.report_date)}.`
             : 'The figures of the daily Telegram report.'
         }
+        actions={report ? <AskAgentLink subject={{ kind: 'day', id: report.report_date.slice(0, 10) }} label="Ask about the day" /> : undefined}
       />
       <QueryState isPending={reportQuery.isPending} error={reportQuery.error} hasData={!!report}>
         {report && <ReportContent report={report} />}
       </QueryState>
+      <AgentSheet />
     </>
   )
 }

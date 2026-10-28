@@ -562,9 +562,10 @@ The credentials the services use are kept in PostgreSQL, each sealed for the ser
 | Outside watcher's address | the position monitor alone |
 | Saxo live app, Saxo simulation app (App Key, App Secret) | trader, position monitor, watchlist manager, price recorder |
 | Saxo's login (its tokens, renewed by those four in turn; authorised on the System page) | trader, position monitor, watchlist manager, price recorder |
+| Claude API key (set under Configuration › AI agent) | the admin alone, for its [AI agent](#-the-ai-agent-in-the-admin) |
 
 - **Sealed**: a value is encrypted once (AES-256-GCM) and its key wrapped for each reader (X25519): only a reader's private key opens it, and the credential's name is bound in, so that a row moved under another name opens no more. Each service has its key pair, made by the install script in `/app/wata/keys` (`python -m src.vault keygen`, never replacing one) and mounted into its own container alone, the public keys into every one. The keys are in no dump and no export: a copy of the database is ciphertext. **Keep a copy of `/app/wata/keys`**: without it, every credential must be entered again.
-- **Never read back**: the admin seals what you enter with the readers' public keys and shows only its last four characters, when it was set and from where, and what each service last saw when it used it (a message sent, a ping answered, the feed's login). It opens only what it uses itself: the internal token (signals sent from the pages), the Telegram bot (its own fallback, and "Send a test message") and the webhook token, shown on request and audited.
+- **Never read back**: the admin seals what you enter with the readers' public keys and shows only its last four characters, when it was set and from where, and what each service last saw when it used it (a message sent, a ping answered, the feed's login). It opens only what it uses itself: the internal token (signals sent from the pages), the Telegram bot (its own fallback, and "Send a test message") and the webhook token, shown on request and audited; and the Claude API key, opened at each request of its AI agent, so that a key set applies at once.
 - **Applied at the next start** of the services that read it: the card offers to restart them (see above). A token rotated stays accepted for a while (an hour for TradingView's, fifteen minutes for the internal one), the time to change the alerts or restart the services.
 - **Not in PostgreSQL**: what is needed to reach it (the database's password, RabbitMQ's), the keys, the control service's token, Traefik's certificates, and your own sign-in (`wataadminpasswd`, `wataadmintotp`).
 - **Saxo's two apps** are kept apart, live and simulation: the services log in with the one of the account `saxo_auth.env` names, which stays a setting of the server (a switch would mix the two accounts' positions in one history). Only the App Key and App Secret are kept: Saxo's addresses are WATA's own, and the redirect is the server's (`SAXO_REDIRECT_URL`). Another app needs a new login; the same app with another secret does not.
@@ -1124,6 +1125,85 @@ Thirty-nine tools, in groups: `status`; the data (`data_assets`, `data_coverage`
 - **The data**: recorded turbos only begin on 2026-10-13, so every conclusion rests on few days for a while.
 - **What reaches Claude**: WATA's real trades and balance, never a key, an order body or a token.
 - **The lab on the Mac** keeps its own journal, apart from the server's.
+
+## ✨ The AI agent, in the admin
+
+The admin can hand a backtest run or a Pine script to Claude, through the Claude API, from its own pages. "Ask the AI agent" on a run's page, or in the script editor, opens a panel beside it: ask Claude to analyse it, to run backtests with other settings, to say what it would change. The same panel asks **why**, beside the live trading: a position (Positions, and a refusal of Saxo on Orders), a signal of the journal (Signals), a trading day (Report) and an entry of the health that is not OK (System). The **AI agent** section of the menu lists every conversation with what it did and cost, and what it made; it also starts **research tasks** the agent works on alone, and keeps its **daily debriefs**. The agent works on the server: a request goes on when the page is closed, and after a restart of the admin.
+
+### What it may do
+
+It has the research tools of Claude Code's endpoint (above), under the same limits, run inside the admin: it reads the runs, the scripts, the recorded prices and WATA's own signals, trades and orders (a position whole, with Saxo's answer to each request; a period's refusals by code and hour; never a request's body); it runs Pine studies, saves scripts of its own, keeps shadow rules of its own once Claude's are switched on (never live), and keeps the experiment journal; it starts backtests (stress tests and checks included) up to each request's limit. It reads the admin's health, and, unless `read_logs` is off, a service's log lines around a moment, cleaned of secrets as the Logs page shows them. Its runs and scripts carry the "Claude" badge, and its runs say which conversation made them.
+
+What would change your work, you apply. Each proposal is a card under its answer, with the change beside what it changes:
+
+- **a new version of one of your scripts** (never a library), saved as the script's next version, marked as written by Claude. A script saved meanwhile refuses it: ask again on the new version. In the editor, it applies only once your own changes are saved;
+- **a new script of yours**, an indicator or a strategy, from one Claude saved: created under the name it proposes, yours, its first version marked as written by Claude;
+- **a change to a signal rule that is not live** (in shadow or off): the version of its script, its inputs, its days of history. Applied, the rule's week in shadow starts again, as it does after any change of what a rule runs, yours included;
+- **new values of trading settings in `config.json`** (the entries, the day, the exits, the turbo, the sizing: the settings a backtest reads from it), with the finished runs they rest on. **Preview and save** shows what the Configuration page would show of that save (each key, the services it restarts, what works against what), then saves it with a slide, as that page does: kept as a backup, written in the configuration's history and the audit, applied at each service's next start (System restarts them). Only while configuration editing is on; a file saved since its preview refuses it.
+
+Whether the window around US releases is on, the hours' timezone and the TA engine's days stay yours alone: it says what it would set them to. It never changes a live rule or a rule's mode, reads no credential, never `config.json` whole, and nothing it does trades.
+
+### Research tasks, and the daily debrief
+
+- **A research task** (AI agent › New research task): a goal, and a budget of dollars, backtests and hours (each at most `max_task_usd`, `max_task_backtests`, `max_task_hours`). The agent works on it alone, request after request, each within what is left, until it says it is done with its conclusion, the runs it kept and what to try next, or its dollars or hours are spent. Its conversation shows what it spent of each and its conclusion; **Stop the task** ends it between two tool calls. What it proposes waits for you, as in any conversation. The bell says when it ends, not at each of its requests.
+- **The daily debrief** (`debrief_enabled`, off by default): each trading day, once the market is closed, an account of the day (its trades, its signals, what Saxo refused, the day traded on paper) written by `debrief_model` within `debrief_max_usd`, starting no backtest, kept as a conversation marked "Daily debrief"; its first lines go to Telegram (`debrief_telegram`). A day without a signal, a trade or a request to Saxo costs nothing. The pause, a missing key or a spent month hold it back, and it is written once they no longer do.
+
+### Choosing the model, and the context window
+
+Under the field a request is typed in:
+
+- **The model**: Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 or Fable 5.1, each with its prices and its window; one the key cannot use is greyed. A conversation goes on with the model of its last request; the settings give a new one's.
+- **The effort**, from low to max: how much Claude thinks, and how many tools it calls, before it answers. The conversation's last, likewise.
+- **The context window**: how much of the model's window the conversation fills. Opened, the Claude API counts it as the next request would be sent (a count costs nothing): the system prompt, the tool definitions, Claude's thinking, the rest of the conversation split by its length, what context editing leaves out, and what the last answer used, cached or not.
+
+A model reads the notes of some others only: Opus 5.5 reads Sonnet 5.5's and Haiku 5.5's, Sonnet 5.5 Haiku 5.5's, Fable 5.1 Opus 5.5's. A switch to a model that cannot read the conversation's notes says so, and that model answers without them. Its first request also reads the whole conversation again, without the cache another model wrote.
+
+### Setting it up
+
+1. A Claude API key from the [Claude Console](https://console.anthropic.com) (Settings › API keys). A key of its own for WATA, in a workspace with a spending limit, keeps its cost apart and bounded at Anthropic too.
+2. **Configuration › AI agent**: set the key, then **Test the connection** (it reads the model's entry, which costs nothing). The key is sealed for the admin alone, opened at each request, never shown again and never logged.
+3. `admin.ai_agent.enabled: true` on the same page, then restart the admin (System): its settings are read at its start.
+
+| Setting (`admin.ai_agent`) | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Whether the agent is on |
+| `provider` | `anthropic` | The Claude API, the only provider for now |
+| `model` | `claude-opus-5-5` | A new conversation's model, Claude Opus 5.5; or Claude Sonnet 5.5, Claude Haiku 5.5, Claude Fable 5.1. Each request may choose another |
+| `effort` | `high` | A new conversation's effort: `low`, `medium`, `high`, `xhigh`, `max`. Each request may choose another |
+| `max_tool_calls` | `60` | Tool calls a request may make (5 to 200) |
+| `max_backtests` | `8` | Backtests a request may start, stress tests and checks included (0 to 30; with 0 it reads and proposes only) |
+| `max_request_usd` | `5` | What a request may cost, in dollars (0.5 to 100) |
+| `monthly_budget_usd` | `50` | What a month may cost (1 to 10,000): past it, no new request until the next month |
+| `max_running` | `2` | Requests at work at once (1 to 4) |
+| `keep_days` | `365` | Days a conversation is kept (30 to 3,650) |
+| `read_logs` | `true` | Whether it may read the services' log lines (cleaned of secrets; they go to Anthropic with its request) |
+| `max_task_usd` | `20` | What a research task may be given to spend, all its requests together (1 to 1,000) |
+| `max_task_backtests` | `40` | Backtests a research task may be given (0 to 200) |
+| `max_task_hours` | `12` | Hours a research task may be given (0.5 to 72): no request of it starts after them |
+| `debrief_enabled` | `false` | A debrief of each trading day once the market is closed |
+| `debrief_model` | `claude-sonnet-5-5` | The model that writes it |
+| `debrief_effort` | `medium` | How much it thinks |
+| `debrief_max_usd` | `0.5` | What one debrief may cost (0.1 to 5) |
+| `debrief_telegram` | `true` | Its first lines said on Telegram once written |
+
+`admin.persistant.agent_path` (`/app/var/lib/admin/agent`) is where its conversations are kept, inside the admin's own folder.
+
+### What it costs
+
+Each answer of the API is priced from its tokens at the model's prices (read from Anthropic's pricing page in October 2026, cached input and the cache's writes included). Each request and conversation shows its cost, and the Activity page shows the month's against its budget. These are estimates: the Claude Console's figures are the bill. A request near one of its limits (tool calls, backtests, dollars) is asked to answer with what it has, and stops at the limit. While it waits for its backtests, nothing is spent.
+
+### Watching it, and stopping it
+
+- **AI agent › Activity**: the month's spending against its budget, the key, what is under way, every conversation (removed with an Undo). **Pause** refuses new requests until resumed; those under way go on to their end. It is the agent's own pause: System › Claude's stays Claude Code's.
+- **Stop**, in a conversation, ends its request between two tool calls (a wait for backtests at its next look, within 40 s). The backtests it started go on: remove them from Backtests if they are not wanted.
+- **AI agent › Artefacts**: the runs it started, the scripts and shadow rules it saved, its experiments, and its proposals with whether they were applied.
+- A request that ends is said by a toast and kept in the bell. Its calls are logged in `var/log/wata-admin/agent.jsonl`, as Claude Code's are in `mcp.jsonl`. A restart of the admin from the System page waits while the agent works ("Restart anyway" does not).
+
+### What to keep in mind
+
+- **The server's room** is shared with the backtests and Claude Code: the agent's Pine studies run one at a time behind any other, and its runs wait behind the operator's.
+- **What reaches Anthropic**: your questions, and what its tools read: WATA's real trades and balance included, never a key, an order body or a token.
+- **Its conversations** are files on the server, kept a year unless set otherwise; removing one removes its files, not the runs or scripts it made.
 
 ## 📈 Reporting
 

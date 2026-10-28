@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { Session, TaScript, TaScriptSummary } from '@/lib/types'
+import type { AgentConversation, AgentConversationListed, AgentState, Session, TaScript, TaScriptSummary } from '@/lib/types'
 import { WithTrail } from '@/test/WithTrail'
 
 import { IndicatorsPage } from './IndicatorsPage'
@@ -74,6 +74,42 @@ const DOUBLED = summary({
   imports: [{ user: 'someone', name: 'Helpers', version: 1, alias: 'h' }], made_by: 'claude',
 })
 
+// A conversation of the AI agent about EMA: a new version of it and a change to a rule that runs it.
+const CONVERSATION_ID = '20261028-080000-a1b2c3'
+const AGENT: AgentState = {
+  enabled: true, model: 'claude-opus-5-5', model_label: 'Claude Opus 5.5', key: true, pause: null, started: true,
+  month: { month: '2026-10', spent_usd: 0.1, budget_usd: 50 }, under_way: [], conversations: 1,
+  limits: { tool_calls: 60, backtests: 8, request_usd: 5, running: 2 },
+}
+const ABOUT_EMA = { kind: 'script', id: EMA.id, label: 'EMA', version: 2 } as const
+const LISTED: AgentConversationListed = {
+  id: CONVERSATION_ID, title: 'Improve it', subject: ABOUT_EMA, status: 'idle', model: 'claude-opus-5-5',
+  created_at: '2026-10-28T08:00:00Z', updated_at: '2026-10-28T08:05:00Z', requests: 1, cost_usd: 0.1, outcome: 'done', error: null,
+}
+const PROPOSING: AgentConversation = {
+  id: CONVERSATION_ID, title: 'Improve it', subject: ABOUT_EMA, status: 'idle', model: 'claude-opus-5-5',
+  created_at: LISTED.created_at, updated_at: LISTED.updated_at, usage: {}, cost_usd: 0.1, error: null, pending: null,
+  requests: [{
+    index: 0, prompt: 'Improve it', shared: ABOUT_EMA, asked_at: '2026-10-28T08:00:00Z', started_at: '2026-10-28T08:00:01Z',
+    ended_at: '2026-10-28T08:05:00Z', status: 'done', detail: null, steps: [],
+    answer: { text: 'Two changes.', model: 'claude-opus-5-5', stop_reason: 'end_turn' },
+    proposals: ['p0a1b2c3d', 'p1a1b2c3d'], runs: [], cost_usd: 0.1, feedback: null,
+  }],
+  proposals: [
+    {
+      id: 'p0a1b2c3d', kind: 'script', request: 0, created_at: '2026-10-28T08:04:00Z', status: 'proposed',
+      title: 'A slower fast line', rationale: 'It traded less noise.', script: { id: EMA.id, name: 'EMA', base_version: 2 },
+      draft: { id: 'eeeeeeeeeeee', name: 'EMA by Claude', version: 1 }, lines: { added: 1, removed: 1 },
+    },
+    {
+      id: 'p1a1b2c3d', kind: 'rule', request: 0, created_at: '2026-10-28T08:04:30Z', status: 'proposed',
+      title: 'A longer history', rationale: 'Its averages need it.',
+      rule: { id: 'r1', name: 'EMA rule', mode: 'shadow', script_id: EMA.id, script_version: 2 },
+      changes: { history_days: { before: null, after: 5 } },
+    },
+  ],
+}
+
 let sent: { method: string; path: string; body: unknown }[] = []
 /** The assets the fake server lists (the editor's test offers them). */
 let assets: unknown[] = []
@@ -113,6 +149,9 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
       if (url.pathname.endsWith('/duplicate')) return json({ ...EMA, id: 'dddddddddddd', name: (body as { name: string }).name }, 201)
       if (url.pathname.startsWith('/api/ta/libraries/')) return json({ detail: 'No library' }, 404)
       if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', seen: 'all', items: assets, truncated: false, max: 5000, saxo_error: null })
+      if (url.pathname === '/api/agent') return json(AGENT)
+      if (url.pathname === '/api/agent/conversations' && method === 'GET') return json({ items: [LISTED] })
+      if (url.pathname === `/api/agent/conversations/${CONVERSATION_ID}`) return json(PROPOSING)
       return json({ detail: `Not served in this test: ${method} ${url.pathname}` }, 404)
     }),
   )
@@ -282,6 +321,19 @@ describe('the script editor', () => {
 
     await router.navigate('/login')
     expect(await screen.findByText('Sign in')).toBeInTheDocument()
+  })
+
+  it("holds back a new version the AI agent proposed while the editor has changes, not a rule's change", async () => {
+    const user = userEvent.setup()
+    const router = renderAt(`/ta/indicators/${EMA.id}`)
+
+    await user.type(await screen.findByRole('textbox', { name: 'Pine source of EMA' }), '// tuned')
+    await router.navigate(`/ta/indicators/${EMA.id}?agent=${CONVERSATION_ID}`)
+
+    const version = await screen.findByRole('region', { name: 'Proposal: A slower fast line' })
+    expect(within(version).getByRole('button', { name: 'Save as version 3' })).toBeDisabled()
+    const rule = screen.getByRole('region', { name: 'Proposal: A longer history' })
+    expect(within(rule).getByRole('button', { name: 'Change the rule' })).toBeEnabled()
   })
 
   it('offers to reload or to save as a copy when another save came first', async () => {

@@ -310,7 +310,13 @@ class ScriptStore:
     def count_made_by(self, made_by: str) -> int:
         return sum(1 for meta in self.scripts() if meta.get("made_by") == made_by)
 
-    def create(self, name: str, source: str, description: str = "", made_by: str | None = None) -> dict:
+    def create(self, name: str, source: str, description: str = "", made_by: str | None = None,
+               written_by: str | None = None) -> dict:
+        """
+        A new script, ``made_by`` the agent it belongs to (none: the operator's).
+        ``written_by`` marks its first version alone: a script of the operator's
+        that the admin's AI agent wrote.
+        """
         name = _checked_name(name)
         description = _checked_description(description)
         facts = pine_facts(source)
@@ -322,7 +328,7 @@ class ScriptStore:
             directory = self._script_dir(script_id)
             os.makedirs(directory)
             now = _now()
-            entry = self._version_entry(1, source, made_by)
+            entry = self._version_entry(1, source, written_by or made_by)
             meta = {
                 "id": script_id,
                 "name": name,

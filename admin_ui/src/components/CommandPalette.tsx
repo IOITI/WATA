@@ -5,7 +5,7 @@ import { Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { assetItems, idItems, pageItems, ruleItems, runItems, scriptItems } from '@/components/commandItems'
+import { assetItems, conversationItems, idItems, pageItems, ruleItems, runItems, scriptItems } from '@/components/commandItems'
 import { useSession } from '@/features/auth/auth-context'
 import { useHiddenRuns } from '@/features/backtests/pending-removals-context'
 import { api } from '@/lib/api'
@@ -29,6 +29,8 @@ export function CommandPalette() {
   const rulesQuery = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules, enabled: open })
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts, enabled: open })
   const assetsQuery = useQuery({ queryKey: ['data-assets', 'all'], queryFn: () => api.dataAssets('all'), enabled: open, staleTime: 60_000 })
+  // The agent's conversations: refused (403) while it is off, which lists none.
+  const conversationsQuery = useQuery({ queryKey: ['agent-conversations', 'all'], queryFn: () => api.agentConversations(), enabled: open, retry: false })
 
   const items = useMemo(
     () => [
@@ -38,8 +40,9 @@ export function CommandPalette() {
       ...ruleItems(rulesQuery.data?.rules ?? []),
       ...scriptItems(scriptsQuery.data?.items ?? []),
       ...assetItems(assetsQuery.data?.items ?? []),
+      ...conversationItems(conversationsQuery.data?.items ?? []),
     ],
-    [query, runsQuery.data, hiddenRuns, rulesQuery.data, scriptsQuery.data, assetsQuery.data],
+    [query, runsQuery.data, hiddenRuns, rulesQuery.data, scriptsQuery.data, assetsQuery.data, conversationsQuery.data],
   )
 
   return (

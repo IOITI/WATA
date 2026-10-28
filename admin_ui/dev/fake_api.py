@@ -28,6 +28,11 @@ a close shows each step). A signal sent by hand is decided two seconds later.
 Set FAKE_MCP=1 for Claude's MCP endpoint, on http://127.0.0.1:8082/mcp: a
 token is printed at start, its Pine studies are real ones (the real Pine
 runner) on the made-up recorded days, and Claude's shadow rules are on.
+
+Set FAKE_AI=1 for the AI agent of the pages (AI agent in the menu, "Ask the AI
+agent" on a run or a script): its real service, tools and files, with a key
+set, and answers made up in fake_ai.py, streamed as Claude's would be. Nothing
+reaches Anthropic.
 """
 
 import asyncio
@@ -948,6 +953,25 @@ class FakeQueries:
             order["requests"] = attached.get(order["order_id"], [])
         return {"position": position, "orders": linked, "requests": requests, "requests_total": len(requests)}
 
+    async def position_record(self, position_id):
+        """What AdminQueries.position_record gives the research tools: get_position, its requests without bodies."""
+        found = await self.get_position(position_id)
+        if found is None:
+            return None
+
+        def bare(request):
+            return {key: value for key, value in request.items() if key not in ("request_body", "response_body")}
+
+        found = {**found, "requests": [bare(request) for request in found["requests"]],
+                 "orders": [{**order, "requests": [bare(request) for request in order.get("requests") or []]}
+                            for order in found["orders"]]}
+        return found
+
+    async def order_attempts(self, start=None, end=None):
+        """The requests to Saxo between two days, oldest first, without their bodies (AdminQueries.order_attempts)."""
+        return [{key: value for key, value in request.items() if key not in ("request_body", "response_body")}
+                for request in self.requests if in_range(request["requested_at"], start, end)]
+
     def _sell_refusals(self, position_id: str) -> dict | None:
         """What AdminQueries.sell_refusals says of a position."""
         refused = [
@@ -1378,6 +1402,10 @@ def build_dev_context(work_dir: str) -> AdminContext:
     if mcp:
         config["admin"]["mcp_enabled"] = True
         config["admin"]["mcp"]["shadow_rules"] = True
+    ai = os.getenv("FAKE_AI") == "1"
+    if ai:
+        config["admin"]["ai_agent"]["enabled"] = True
+        config["admin"]["ai_agent"]["debrief_enabled"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))
@@ -1394,6 +1422,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
     settings.backtests_path = os.path.join(REPO_ROOT, "var", "lib", "backtests")
     # Plain HTTP on localhost: a Secure cookie would not come back in every browser.
     settings.cookie_secure = False
+    settings.agent_path = os.path.join(work_dir, "lib", "admin", "agent")
     write_sample_logs(settings.log_path)
 
     credentials = CredentialStore(settings.credentials_path)
@@ -1425,7 +1454,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
     settings.mcp_tokens_path = os.path.join(work_dir, "lib", "admin", "mcp_tokens.json")
     mcp_tokens = TokenStore(settings.mcp_tokens_path)
     studies = None
-    if mcp:
+    # Claude Code's endpoint and the AI agent run the same Pine studies.
+    if mcp or ai:
         studies = StudyService(
             root=os.path.join(settings.backtests_path, "_studies"), ta_root=ta_scripts.root,
             prices_root=prices_root, signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
@@ -1433,6 +1463,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
             minutes_per_hour=settings.mcp_limits.study_minutes_per_hour, data=f"files:{recorded_root}",
         )
         closers.append(studies.close)
+    if mcp:
         token, _ = mcp_tokens.create("dev")
         print(f"Claude's MCP endpoint on http://{HOST}:{PORT}/mcp, token: {token}")
     # The days the made-up rules raised signals on, traded on paper at the start and every quarter of an hour,
@@ -1483,6 +1514,16 @@ def build_dev_context(work_dir: str) -> AdminContext:
     table = FakeCredentialTable()
     ctx.vault = AdminVault(reader=table, writer=table, config_manager=config_manager, keys_dir=view,
                            feed_state=queries.capital_feed_state)
+    if ai and os.getenv("FAKE_NO_KEYS") != "1":
+        import fake_ai
+
+        asyncio.run(ctx.vault.set("anthropic.api", {"key": fake_ai.KEY}, by="dev"))
+        ctx.agent = fake_ai.agent_of(ctx)
+        ctx.closers.insert(0, ctx.agent.close)
+        # The last finished weekday debriefed at the start (its Telegram printed here).
+        ctx.debrief = fake_ai.FakeDailyDebrief(agent=ctx.agent, queries=queries, config_path=config_path,
+                                               path=os.path.join(settings.agent_path, "debriefs.json"), notify=notifier)
+        print("The AI agent is on, with answers made up (fake_ai.py)")
     return ctx
 
 

@@ -1,5 +1,6 @@
 import { cn } from 'ioiti-ui'
 import {
+  Bot,
   CalendarClock,
   ChartCandlestick,
   ChartNoAxesCombined,
@@ -33,6 +34,7 @@ const SECTION_ICONS: Record<MenuSection, LucideIcon> = {
   Analysis: ChartNoAxesCombined,
   Data: Database,
   'Technical Analysis': SquareFunction,
+  'AI agent': Bot,
   Operations: Wrench,
 }
 
@@ -50,6 +52,7 @@ const GROUP_ICONS: Record<string, LucideIcon | Brand> = {
   recorder: Disc3,
   capital: 'capital',
   ta: Cpu,
+  agent: Bot,
   admin: MonitorCog,
   claude: 'claude',
   logs: ScrollText,

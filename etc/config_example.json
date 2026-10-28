@@ -351,6 +351,27 @@
       "min_free_disk_gb": 5,
       "shadow_rules": false
     },
+    "ai_agent": {
+      "enabled": false,
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "max_tool_calls": 60,
+      "max_backtests": 8,
+      "max_request_usd": 5,
+      "monthly_budget_usd": 50,
+      "max_running": 2,
+      "keep_days": 365,
+      "read_logs": true,
+      "max_task_usd": 20,
+      "max_task_backtests": 40,
+      "max_task_hours": 12,
+      "debrief_enabled": false,
+      "debrief_model": "claude-sonnet-5-5",
+      "debrief_effort": "medium",
+      "debrief_max_usd": 0.5,
+      "debrief_telegram": true
+    },
     "persistant": {
       "credentials_path": "/app/var/lib/admin/credentials.json",
       "mcp_tokens_path": "/app/var/lib/admin/mcp_tokens.json"
