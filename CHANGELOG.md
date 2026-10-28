@@ -2,7 +2,7 @@
 
 ## v0.57.0 - The AI agent works unattended: research tasks and a daily debrief
 
-**Release date:** not yet released
+**Release date:** 2026-10-28
 
 A conversation stopped at the end of each request: a study of several hours meant coming back to ask "go on" each time, and the account of a day had to be asked for. The agent can now be left a goal with a budget, and write each trading day's account by itself.
 
@@ -26,7 +26,7 @@ A conversation stopped at the end of each request: a study of several hours mean
 
 ## v0.56.0 - The AI agent's proposals reach further: settings, new scripts, its own shadow rules
 
-**Release date:** not yet released
+**Release date:** 2026-10-28
 
 The agent could propose a new version of a script and a change to a rule that is not live. What a backtest most often finds, a better stop or fewer entries a day, it could only say in words.
 
@@ -45,7 +45,7 @@ The agent could propose a new version of a script and a change to a rule that is
 
 ## v0.55.0 - Asking the AI agent why: positions, signals, days and incidents
 
-**Release date:** not yet released
+**Release date:** 2026-10-28
 
 The agent read runs and scripts. Why a position ended so, why a signal was refused, what Saxo answered or why a service went down meant reading several pages, and the logs on the server.
 
@@ -64,7 +64,7 @@ The agent read runs and scripts. Why a position ended so, why a signal was refus
 
 ## v0.54.0 - An AI agent in the admin: Claude on a run or a script, from their pages
 
-**Release date:** not yet released
+**Release date:** 2026-10-28
 
 Handing a run or a script to Claude took Claude Code on the Mac, over the MCP endpoint and the VPN. The admin does it itself now, through the Claude API with a key set on the Configuration page, and the agent goes on working when the page is closed.
 
