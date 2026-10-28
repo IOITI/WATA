@@ -10,8 +10,10 @@ setup(
             'watawebtoken=src.web_server.cli:main',
         ],
     },
+    # The image installs requirements.txt alone. Each from the lowest version no known advisory applies to (OSV,
+    # 2026-10-28): without a version, GitHub's Dependabot cannot tell whether the one installed is vulnerable.
     install_requires=[
-        "requests",
-        "python-dotenv",
+        "requests>=2.33.0",
+        "python-dotenv>=1.2.2",
     ],
 ) 

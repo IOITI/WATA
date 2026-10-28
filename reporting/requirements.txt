@@ -1,3 +1,6 @@
-ansible
-pandas
-pyarrow
+# The reporting tools' own needs, on the machine that builds the reports: never in the image, which installs
+# requirements.txt alone. Each from the lowest version no known advisory applies to (OSV, 2026-10-28): without a
+# version, GitHub's Dependabot cannot tell whether the one installed is vulnerable.
+ansible>=12.2.0
+pandas>=1.0.4
+pyarrow>=23.0.1
