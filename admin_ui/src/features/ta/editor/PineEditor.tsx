@@ -162,10 +162,16 @@ export function PineEditor({ value, onChange, diagnostics, label, readOnly = fal
     })
   }, [functions])
 
+  // Its frame shows where the focus is, as a field's border does: what takes text has no ring (ioiti-ui 0.5.3),
+  // its search's fields included.
   return (
     <div
       ref={host}
-      className={cn('overflow-hidden rounded-xl border border-border text-base sm:text-[13px]', className)}
+      className={cn(
+        'overflow-hidden rounded-xl border border-border text-base transition-colors sm:text-[13px]',
+        'focus-within:border-neutral-500 dark:focus-within:border-[#4A4A4A] accent:focus-within:border-brand',
+        className,
+      )}
       data-testid="pine-editor"
     />
   )

@@ -16,7 +16,7 @@ const CODE_LENGTH = 6
 // Six boxes that look like the password field above them, and fill its width.
 const CODE_BOX = cn(
   'h-11 w-full rounded-lg border text-base transition-colors duration-150',
-  'border-neutral-300 bg-white text-neutral-900 hover:border-neutral-500 focus:border-neutral-500',
+  'border-neutral-300 bg-white text-neutral-900 hover:border-neutral-500 focus:border-neutral-500 accent:focus:border-brand',
   'dark:border-[#1F1F1F] dark:bg-[#141414] dark:text-[#FAFAFA] dark:hover:border-[#4A4A4A] dark:focus:border-[#4A4A4A]',
 )
 
@@ -73,7 +73,7 @@ export function LoginPage() {
     <main className="relative grid min-h-dvh place-items-center p-6">
       {/* The theme can be chosen before signing in: this page is the first one seen. */}
       <ThemeToggle className="absolute right-4 top-4" />
-      <div className="w-full max-w-sm rounded-2xl border border-border/70 bg-surface/50 p-8 shadow-elevated dark:bg-surface/25">
+      <div className="w-full max-w-sm rounded-2xl border border-border/70 bg-surface/50 p-8 shadow-elevated dark:bg-surface/25 glass-card">
         <div className="mb-6 flex flex-col gap-1.5">
           <div className="mb-3 grid size-10 place-items-center rounded-xl border border-border bg-surface-raised">
             <Lock className="size-4 text-foreground" aria-hidden />

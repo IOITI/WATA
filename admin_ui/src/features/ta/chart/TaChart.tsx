@@ -92,9 +92,11 @@ function LengthField({ timeframe, onApply }: { timeframe: string; onApply: (time
         autoComplete="off"
         spellCheck={false}
         enterKeyHint="done"
+        // Its focus as the form's Input shows it: a field that takes text has no ring (ioiti-ui 0.5.3).
         className={cn(
           'w-16 rounded-md border bg-surface px-1.5 py-0.5 font-mono',
-          error ? 'border-rose-500/50' : 'border-border',
+          'focus:border-neutral-500 dark:focus:border-[#4A4A4A] accent:focus:border-brand',
+          error ? 'border-rose-500/50 focus:border-rose-500' : 'border-border',
         )}
         onKeyDown={(event) => {
           if (event.key === 'Enter') apply(event.currentTarget.value)
@@ -327,7 +329,7 @@ export function TaChart(props: TaChartProps) {
                   defaultValue={ticker.rangeTicks}
                   key={ticker.rangeTicks}
                   aria-label="Range, in steps of the price"
-                  className="w-16 rounded-md border border-border bg-surface px-1.5 py-0.5 font-mono"
+                  className="w-16 rounded-md border border-border bg-surface px-1.5 py-0.5 font-mono focus:border-neutral-500 dark:focus:border-[#4A4A4A] accent:focus:border-brand"
                   onKeyDown={(event) => {
                     if (event.key !== 'Enter') return
                     const value = Number((event.target as HTMLInputElement).value)

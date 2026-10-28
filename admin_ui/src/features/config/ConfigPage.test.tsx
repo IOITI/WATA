@@ -113,6 +113,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // What the look's test left on the page and in the browser.
+  for (const name of ['data-accent', 'data-material', 'data-theme-storage-key']) document.documentElement.removeAttribute(name)
+  window.localStorage.clear()
 })
 
 describe('the overview of the configuration', () => {
@@ -164,6 +167,29 @@ describe('the overview of the configuration', () => {
 
     const found = screen.getByRole('link', { name: /Trading starts at/ })
     expect(found).toHaveAttribute('href', `/config/hours#${anchorOf(START)}`)
+  })
+
+  it("offers this browser's accent and material, which are no part of the file", async () => {
+    const user = userEvent.setup()
+    // The key the pre-paint script is given (vite.config.ts), which the theme's provider reads from the page.
+    document.documentElement.setAttribute('data-theme-storage-key', 'wata.theme')
+    renderPage('/config')
+
+    const panel = (await screen.findByRole('heading', { name: 'Accent and material' })).closest('section') as HTMLElement
+    expect(panel).toHaveTextContent('Shown now: neutral accent, flat material.')
+    await user.click(within(panel).getByRole('button', { name: 'Accent and material: neutral, flat' }))
+    await user.click(within(panel).getByRole('radio', { name: 'Violet' }))
+    await user.click(within(panel).getByRole('radio', { name: 'Glass' }))
+
+    expect(document.documentElement).toHaveAttribute('data-accent', 'violet')
+    expect(document.documentElement).toHaveAttribute('data-material', 'glass')
+    expect(panel).toHaveTextContent('Shown now: violet accent, glass material.')
+    // Kept beside the theme, in this browser alone.
+    expect(window.localStorage.getItem('wata.theme.accent')).toBe('violet')
+    expect(window.localStorage.getItem('wata.theme.material')).toBe('glass')
+    // Nothing to save, nothing sent.
+    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument()
+    expect(sent.filter((request) => request.method !== 'GET')).toEqual([])
   })
 })
 

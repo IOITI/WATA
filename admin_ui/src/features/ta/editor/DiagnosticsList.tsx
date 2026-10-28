@@ -14,7 +14,7 @@ const TONE: Record<Severity, string> = {
 /** What the checks found, under the editor: line, message and which check said it. */
 export function DiagnosticsList({ diagnostics, checking }: { diagnostics: Diagnostic[]; checking: boolean }) {
   return (
-    <section aria-label="Problems" className="rounded-xl border border-border bg-surface/50">
+    <section aria-label="Problems" className="rounded-xl border border-border bg-surface/50 glass-card">
       <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
         <span className="font-medium">Problems</span>
         <span className="flex items-center gap-1.5 text-muted-foreground" aria-live="polite">

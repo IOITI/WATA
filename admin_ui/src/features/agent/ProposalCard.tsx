@@ -223,7 +223,7 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
 
   return (
     <section id={`proposal-${proposal.id}`} aria-label={`Proposal: ${proposal.title}`}
-      className="scroll-mt-14 space-y-3 rounded-xl border border-border bg-surface p-4">
+      className="scroll-mt-14 space-y-3 rounded-xl border border-border bg-surface p-4 glass-card">
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 space-y-0.5">
           <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">

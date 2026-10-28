@@ -26,7 +26,10 @@ import { ConversationView } from './ConversationView'
 import { ABOUT_PARAM, AGENT_PARAM, costText, NEW, STATUS_LABEL, subjectOf, subjectSaid, withAgent } from './model'
 import { useConversation } from './useConversation'
 
-const CHIP = 'inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs aria-[current=page]:bg-surface-raised'
+// The conversation open in the accent where the look has one, as a tab shown is.
+const CHIP =
+  'inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs aria-[current=page]:bg-surface-raised ' +
+  'accent:aria-[current=page]:border-brand/30 accent:aria-[current=page]:bg-brand-soft accent:aria-[current=page]:text-brand-text'
 
 export function AgentSheet({ subject: given, blockedFor, onApplied }: {
   /** What the page is about; a list's page leaves it to the address (?about=) or to the conversation open. */

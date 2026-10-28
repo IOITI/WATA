@@ -288,7 +288,7 @@ function ScriptEditor({ id }: { id: string | undefined }) {
               </div>
               <div className="flex min-w-0 flex-col gap-4">
                 {kind === 'library' ? (
-                  <section className="rounded-2xl border border-border/70 p-5 text-sm text-text-secondary">
+                  <section className="rounded-2xl border border-border/70 p-5 text-sm text-text-secondary glass-card">
                     A library runs inside the scripts that import it:{' '}
                     <code className="font-mono text-xs">
                       import you/{libraryName}/1 as {libraryName ? libraryName.charAt(0).toLowerCase() + libraryName.slice(1) : 'lib'}

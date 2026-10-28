@@ -114,7 +114,7 @@ function Progress({ run }: { run: BacktestRun }) {
         </p>
         {run.status.state === 'running' && (
           <div className="h-1.5 w-full max-w-md rounded-full bg-foreground/10" role="progressbar" aria-valuenow={Math.round(share * 100)} aria-valuemin={0} aria-valuemax={100}>
-            <div className="h-1.5 rounded-full bg-foreground/60 transition-all" style={{ width: `${Math.max(share * 100, 3)}%` }} />
+            <div className="h-1.5 rounded-full bg-foreground/60 transition-all accent:bg-brand" style={{ width: `${Math.max(share * 100, 3)}%` }} />
           </div>
         )}
         {run.lines.length > 0 && (

@@ -173,7 +173,7 @@ export function StrategyStep({
               key={kind}
               className={cn(
                 'flex cursor-pointer flex-col gap-1 rounded-xl border p-3',
-                draft.sourceKind === kind ? 'border-foreground/40 bg-surface/60' : 'border-border/70',
+                draft.sourceKind === kind ? 'border-foreground/40 bg-surface/60 accent:border-brand' : 'border-border/70',
               )}
             >
               <span className="flex items-center gap-2 font-medium">

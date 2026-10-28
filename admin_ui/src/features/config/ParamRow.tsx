@@ -357,7 +357,7 @@ export function RuleBlock({ ruleType, params }: { ruleType: string; params: Cata
   const keys = params.filter((param) => param.kind !== 'rule')
 
   return (
-    <section className="space-y-3 rounded-2xl border border-border/60 bg-surface/30 p-4">
+    <section className="space-y-3 rounded-2xl border border-border/60 bg-surface/30 p-4 glass-card">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">{ruleParam?.label ?? ruleType}</h3>

@@ -79,6 +79,16 @@ operator.
   gives it the theme as its `key` (an asset's chart, a backtest's day and its trade, the editor's test, the
   TradingView comparison), so another theme makes another chart. ioiti-ui's charts are SVG drawn with CSS
   variables and follow by themselves.
+- **An accent and a material, each browser's own**, chosen with ioiti-ui's `LookPicker` in the panel "Accent and
+  material" of the Configuration page (its overview): kept beside the theme (`wata.theme.accent`,
+  `wata.theme.material`) and set by the same script before the first paint, neutral and flat (the interface as
+  it always was) until chosen, never part of `config.json`. The interface's own classes follow them as the
+  package's components do: a card drawn here on the page is glass under the glass material as a `Panel` is
+  (its utility, `glass-card`), and what is chosen, current or a progress takes the accent (the `accent:`
+  variant and the `--brand` tokens). A field drawn here shows its focus by its own border, or by its frame's
+  (the Pine editor's): since ioiti-ui 0.5.3 a field that takes text has no focus ring. The price chart reads
+  the accent's line colour (`--chart-series`) as it reads the others, once; no chart is on the page where the
+  accent is chosen.
 - Tests stand in for the system setting with `src/test/systemTheme.ts` (jsdom has no `matchMedia`). A
   component rendered without a `ThemeProvider` is shown dark.
 
@@ -102,8 +112,8 @@ It holds:
   `CheckList`, `ExportButton`, `DateRangeFilter`, `QueryState`, `SignedValue`, `StatusBadge`, `ConfirmAction`),
   the formats (`formatMoney`, `formatDateTime`…), CSV, the date ranges;
 - the shell (`RouterAppShell`: the sidebar, the top bar and the trail of where a page is, the page's column), the
-  404 (`NotFoundState`, `NotFoundPage`), the theme (`ThemeProvider`, `ThemeToggle`, the pre-paint script and the
-  Vite plugin that serves it, `ioiti()`), the toasts.
+  404 (`NotFoundState`, `NotFoundPage`), the theme (`ThemeProvider`, `ThemeToggle`, `LookPicker`, the pre-paint
+  script and the Vite plugin that serves it, `ioiti()`), the toasts.
 
 Everything is imported from `'ioiti-ui'`, the router's part from `'ioiti-ui/react-router'` (`RouterRoot`,
 `RouterAppShell`, `RouterLink`). What is WATA's stays here: the menu (`components/navigation.ts`), what the shell

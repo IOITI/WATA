@@ -71,8 +71,9 @@ export function ConversationPage() {
             <InlineEdit label="Title" value={data.title} onSave={(title) => rename.mutateAsync(title).then(() => undefined)} />
             {data.task && <TaskPanel conversation={data} task={data.task} />}
             <ConversationView conversation={data} />
-            {/* Above what scrolls under it: the activity's step marks are positioned (z-10). */}
-            <div className="sticky bottom-0 z-20 bg-background/90 pb-2 pt-2 backdrop-blur">
+            {/* Above what scrolls under it: the activity's step marks are positioned (z-10). Under the glass
+                material, the glass of what floats over the page rather than a band of the page's colour. */}
+            <div className="sticky bottom-0 z-20 bg-background/90 pb-2 pt-2 backdrop-blur glass:bg-(--glass-float)">
               <AgentComposer conversation={data} />
             </div>
             {rename.error && (

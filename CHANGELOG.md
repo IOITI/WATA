@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.58.0 - An accent and a material for the admin, chosen on its Configuration page
+
+**Release date:** not released yet
+
+The admin had one look, neutral and flat. ioiti-ui, the design it is made of, has since offered accents and a glass material, which the admin left out.
+
+- **Configuration › Accent and material** (the page's overview): ioiti-ui's picker. An accent (violet, indigo, blue or bloom) colours what is chosen, current or primary, the links and the focus ring; glass turns the panels, the bars and what floats over the page to glass, over washes of colour. Each browser's own, kept beside the light or dark theme and set before the first paint as it is: nothing of it is in `config.json`, nothing to save, nothing sent. Neutral and flat, the admin as it was, until another is chosen.
+- What the admin draws itself follows them as ioiti-ui's components do: its cards on the page (the groups of the configuration, a rule's block, the logs, a script's problems, a library's note, an AI agent's proposal, the sign-in) are glass under glass; the group shown in the configuration, the conversation open in the AI agent's sheet, the chosen source of a new backtest and a run's progress take the accent; a conversation's composer is glass over what scrolls under it.
+- On ioiti-ui 0.5.4. Since 0.5.3 a field that takes text no longer has a focus ring (it was drawn at every click into one); its border shows its focus. The Charts page's Length and R fields and the Pine editor, whose focus only the ring showed, take the border of a field in focus (the editor's frame). Since 0.5.4 what a page fades in as it arrives (`QueryState`) is no layer of its own once it has arrived: it held the picker's choices under the panel after it.
+
+**On the live path:** nothing. The admin's interface alone; `package.sh`'s `npm ci` fetches ioiti-ui 0.5.4 from GitHub as it fetched 0.5.2, once its tag is pushed.
+
+**Backtests:** no file of the code digest changed.
+
+**Verification status:**
+- 1,172 interface tests pass (one more: the panel's choices shown at once and kept beside the theme, under `wata.theme`, with nothing sent and no unsaved change); lint, types and the build are clean. No Python file changed; the Python tests were not run.
+- Seen in the browser pane on the development admin, at the pane's width (910 px) and at 375 px, in the light and the dark theme: the panel and its picker (at 375 px its choices stay inside the screen, nothing wider than the page); violet, bloom and glass on the Configuration overview and a group, Logs, Positions, a new backtest's strategy step, a script's editor and its problems, a conversation and its composer, the AI agent's sheet, the sign-in page; the Charts page's Length field and the Pine editor in focus (a violet border, no ring); Bloom's grain served from the admin's own origin under its Content-Security-Policy; the choice kept through a reload.
+- Found in the browser and fixed in ioiti-ui (0.5.4): the page's reveal (`QueryState`) left each block it faded in a layer of its own and the root of its glass's backdrop, which held the picker's choices under the panel after it and kept their glass from blurring it. Seen again on 0.5.4, the panel fading in with the others: nothing of the fade left once it had run, the choices above the next panel and their glass blurring it.
+
 ## v0.57.0 - The AI agent works unattended: research tasks and a daily debrief
 
 **Release date:** 2026-10-28

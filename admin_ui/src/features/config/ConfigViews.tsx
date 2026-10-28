@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, AnimatedTabs, Badge, cn, formatDateTime, Input, PageHeader, Panel } from 'ioiti-ui'
+import { Alert, AlertDescription, AnimatedTabs, Badge, cn, formatDateTime, Input, LookPicker, PageHeader, Panel, useTheme } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -110,6 +110,29 @@ const ELSEWHERE = [
   { label: 'Signal rules', where: 'Technical Analysis › Signal rules', href: '/ta/signals', what: 'Live or shadow, their scripts, a rule’s own days of history.' },
 ]
 
+/**
+ * The look of the interface: ioiti-ui's picker of the accent and the material. Each browser's own, kept
+ * beside its light or dark theme (`wata.theme.accent`, `.material`): nothing of it is in config.json.
+ */
+function LookPanel() {
+  const { accent, material } = useTheme()
+  return (
+    <Panel
+      title="Accent and material"
+      description="How this interface looks in this browser, as its light or dark theme does: not in config.json, nothing to save."
+    >
+      <div className="flex items-center justify-between gap-4">
+        <p className="min-w-0 text-xs text-text-secondary">
+          Shown now: {accent} accent, {material} material. Neutral and flat are the admin as it always was; an accent colours
+          what is chosen, current or primary, and glass turns the panels, the bars and what floats over the page to glass.
+        </p>
+        {/* At the row's end, a phone's too: its choices open under it, from its right edge. */}
+        <LookPicker />
+      </div>
+    </Panel>
+  )
+}
+
 /** The page's start: a search over every parameter, its groups, and what the file holds that nothing reads. */
 export function ConfigOverview() {
   const { catalog, draft, unsaved, doc } = useConfigEditor()
@@ -148,7 +171,8 @@ export function ConfigOverview() {
                     <Link
                       key={group.id}
                       to={`/config/${group.id}`}
-                      className="rounded-2xl border border-border/70 bg-surface/50 p-4 transition-colors hover:bg-surface-hover focus-ring dark:bg-surface/25"
+                      // A card as a Panel is, glass under the glass material, which still shows the pointer over it.
+                      className="rounded-2xl border border-border/70 bg-surface/50 p-4 transition-colors hover:bg-surface-hover focus-ring dark:bg-surface/25 glass-card glass:hover:bg-surface-hover"
                     >
                       <p className="flex items-center gap-2 text-sm font-semibold">
                         <GroupIcon group={group.id} className="text-text-secondary" />
@@ -195,6 +219,7 @@ export function ConfigOverview() {
               </ul>
             </Panel>
           )}
+          <LookPanel />
           <Panel title="Settings kept elsewhere" description="What changes WATA's work without being in config.json.">
             <ul className="grid gap-3 sm:grid-cols-2">
               {ELSEWHERE.map((entry) => (
@@ -259,7 +284,10 @@ function GroupsNav({ current }: { current: string }) {
                       aria-current={candidate.id === current ? 'page' : undefined}
                       className={cn(
                         'flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-surface-hover focus-ring',
-                        candidate.id === current ? 'bg-surface-hover font-medium text-foreground' : 'text-text-secondary',
+                        // The group shown, in the accent where the look has one, as the menu's page is.
+                        candidate.id === current
+                          ? 'bg-surface-hover font-medium text-foreground accent:bg-brand-soft accent:text-brand-text'
+                          : 'text-text-secondary',
                       )}
                     >
                       <GroupIcon group={candidate.id} className="size-3.5" />

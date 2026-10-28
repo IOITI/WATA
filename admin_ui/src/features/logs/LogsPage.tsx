@@ -96,7 +96,7 @@ export function LogsPage() {
         {tail && (
           <section
             className={cn(
-              'overflow-hidden rounded-2xl border border-border/70 bg-surface/50 transition-opacity dark:bg-surface/25',
+              'overflow-hidden rounded-2xl border border-border/70 bg-surface/50 transition-opacity dark:bg-surface/25 glass-card',
               tailQuery.isPlaceholderData && 'opacity-60',
             )}
           >
