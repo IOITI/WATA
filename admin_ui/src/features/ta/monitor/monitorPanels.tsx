@@ -443,7 +443,8 @@ export function DeliveryPanel({ period }: { period: TaMonitor }) {
       {steps.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">No live signal was sent in this period.</p>
       ) : (
-        <div className="overflow-x-auto">
+        // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[44rem] text-left text-xs">
             <thead className="text-muted-foreground">
               <tr>

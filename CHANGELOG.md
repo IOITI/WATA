@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.52.1 - Nothing wider than a phone's screen
+
+**Release date:** 2026-10-28
+
+On a phone, pages of the admin slid sideways, onto nothing or onto a chart drawn past its card. Fixed in ioiti-ui (released as 0.4.3, `github:IOITI/ioiti-ui#v0.4.3`) and in the admin's own tables. The admin's interface only.
+
+What was found at 375 px on the fake admin, with a check that lists what stands past the page:
+
+- **The Dashboard**: "Latest signals" and "Services" were 580 px wide in a column of 337: a card in a grid's single column (every grid on a phone) grew to its widest line, a service's detail meant to be cut short. ioiti-ui's `Panel` is never wider than its place now, and the detail ends in "…".
+- **A backtest's "Day after day"**: both charts were 640 px wide, past their card. A chart is drawn 640 px wide until it is measured, and in a grid's single column it held the column open at that width, then was measured so. A chart takes its width from its container alone now.
+- **Performance, Signals, the Engine monitor and a backtest** scrolled sideways onto nothing: the table each chart gives screen readers was made 1 px wide, which a table never is; it stood as wide as its text, past the page. It is in a box of its own now, read as before.
+- **System and the Engine monitor** (and the Dashboard's open positions on a tablet) did too: the name of a table's last column for screen readers ("Restart", "Revoke", "Median against the longest step"), and the words of a rolling value, stood out of the frame that scrolls the table. The admin's three tables, ioiti-ui's frames and its rolling digits are positioned now, and keep them.
+- **An asset's tabs** (Chart, Statistics, Data quality, Trades, Details) stood 23 px past a phone's screen: the row scrolls in itself now, each name on one line, without a bar. The Engine monitor's periods did so already; their own setting is gone.
+- At 320 px, the Performance page's "Long and short" table scrolls in its own frame, and an asset's bid and ask (O, H, L, C) go on two lines.
+- **And the page itself never scrolls sideways** (ioiti-ui's shell): what would still stand past its edge is cut there. A table wider than a phone needs a frame of its own (AGENTS.md says so now).
+
+The top bar on a phone is as it was: at 375 px and under it holds more than fits, the services' badge cut short.
+
+**On the live path:** nothing. `package.sh`'s `npm ci` fetches ioiti-ui 0.4.3 from GitHub as it fetched 0.4.2.
+
+**Verification status:**
+- The interface's 1,103 tests pass, with lint and types, and the Python tests that read its files; ioiti-ui's 454 (8 new, on the CSS that keeps each part to its place: they fail without the fixes) and its release checks.
+- In a browser, on the fake admin with ioiti-ui 0.4.3 installed from its tag: every page at 375 px, and the heavier ones at 320, 430, 768 and 1,024 px. Nothing scrolls sideways, and nothing stands past the page with its clip lifted, the top bar apart. At 1,280 px, 31 pages measured on v0.52.0's build and on this one: their cards, grids, tables and charts are where they were (the only differences, in cells of live figures, come and go between two loads of one build), and the backtest page no longer scrolls sideways by 29 px. Looked at: the Dashboard's two cards, the backtest's "Day after day" at 430 px, an asset's tabs and prices at 320 px. ioiti-ui's gallery at 375 px: no page scrolls sideways.
+
 ## v0.52.0 - The admin interface on ioiti-ui 0.4.2: its motion, its save bar and leave guard, its change lists, live values and charts
 
 **Release date:** 2026-10-28

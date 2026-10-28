@@ -129,7 +129,6 @@ export function MonitorPage() {
           onChange={(id) => go({ hours: Number(id) })}
           linkComponent={RouterLink}
           renderContent={false}
-          tabsContainerClassName="max-w-full overflow-x-auto whitespace-nowrap"
         />
         {line && <p className="text-xs text-muted-foreground">{line.text}</p>}
       </div>

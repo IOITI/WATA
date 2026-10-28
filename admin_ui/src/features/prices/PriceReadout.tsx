@@ -29,7 +29,8 @@ function Quote({ label, values, decimals }: { label: string; values: (number | n
   return (
     <div className="flex items-baseline gap-2">
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="flex gap-2 tabular-nums">
+      {/* Its four prices go on two lines where one is wider than the screen (320 px). */}
+      <dd className="flex flex-wrap gap-x-2 tabular-nums">
         {OHLC.map(([letter, name], index) => (
           <span key={letter}>
             <abbr title={name} className="mr-0.5 text-muted-foreground no-underline">

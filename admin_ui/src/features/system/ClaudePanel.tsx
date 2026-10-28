@@ -52,7 +52,8 @@ function Tokens({ tokens, onRevoke }: { tokens: McpToken[]; onRevoke: (token: Mc
     )
   }
   return (
-    <div className="overflow-x-auto">
+    // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
+    <div className="relative overflow-x-auto">
       <table className="w-full min-w-[34rem] text-left text-xs">
         <thead className="text-muted-foreground">
           <tr>

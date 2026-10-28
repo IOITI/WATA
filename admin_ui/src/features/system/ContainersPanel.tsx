@@ -9,7 +9,8 @@ import { useServices } from './useServices'
 
 function ContainersTable({ state, timeZone, onRestart }: { state: ServicesState; timeZone: string; onRestart: (ids: string[]) => void }) {
   return (
-    <div className="overflow-x-auto">
+    // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
+    <div className="relative overflow-x-auto">
       <table className="w-full min-w-[40rem] text-left text-xs">
         <thead className="text-muted-foreground">
           <tr>

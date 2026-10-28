@@ -141,36 +141,39 @@ function ByDirection({ performance }: { performance: Performance }) {
     return <p className="py-4 text-center text-sm text-muted-foreground">No closed trade in this range.</p>
   }
   return (
-    <table className="w-full text-left text-xs">
-      <thead className="text-muted-foreground">
-        <tr>
-          <th className="py-2 pr-4 font-medium">Direction</th>
-          <th className="py-2 pr-4 text-right font-medium">Trades</th>
-          <th className="py-2 pr-4 text-right font-medium">Won</th>
-          <th className="py-2 pr-4 text-right font-medium">Lost</th>
-          <th className="py-2 pr-4 text-right font-medium">Average trade</th>
-          <th className="py-2 text-right font-medium">Profit / loss</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border/40">
-        {performance.by_action.map((entry) => (
-          <tr key={entry.action}>
-            <td className="py-2.5 pr-4">
-              <ActionBadge action={entry.action} />
-            </td>
-            <td className="py-2.5 pr-4 text-right tabular-nums">{entry.trade_count}</td>
-            <td className="py-2.5 pr-4 text-right tabular-nums">{entry.win_count}</td>
-            <td className="py-2.5 pr-4 text-right tabular-nums">{entry.loss_count}</td>
-            <td className="py-2.5 pr-4 text-right">
-              <SignedValue value={entry.average_percent} kind="percent" />
-            </td>
-            <td className="py-2.5 text-right">
-              <SignedValue value={entry.profit_loss} kind="money" />
-            </td>
+    // Its six columns are wider than the narrowest phones: they scroll in their own frame there.
+    <div className="relative overflow-x-auto">
+      <table className="w-full text-left text-xs">
+        <thead className="text-muted-foreground">
+          <tr>
+            <th className="py-2 pr-4 font-medium">Direction</th>
+            <th className="py-2 pr-4 text-right font-medium">Trades</th>
+            <th className="py-2 pr-4 text-right font-medium">Won</th>
+            <th className="py-2 pr-4 text-right font-medium">Lost</th>
+            <th className="py-2 pr-4 text-right font-medium">Average trade</th>
+            <th className="py-2 text-right font-medium">Profit / loss</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-border/40">
+          {performance.by_action.map((entry) => (
+            <tr key={entry.action}>
+              <td className="py-2.5 pr-4">
+                <ActionBadge action={entry.action} />
+              </td>
+              <td className="py-2.5 pr-4 text-right tabular-nums">{entry.trade_count}</td>
+              <td className="py-2.5 pr-4 text-right tabular-nums">{entry.win_count}</td>
+              <td className="py-2.5 pr-4 text-right tabular-nums">{entry.loss_count}</td>
+              <td className="py-2.5 pr-4 text-right">
+                <SignedValue value={entry.average_percent} kind="percent" />
+              </td>
+              <td className="py-2.5 text-right">
+                <SignedValue value={entry.profit_loss} kind="money" />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
