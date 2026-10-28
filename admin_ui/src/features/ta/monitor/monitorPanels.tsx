@@ -10,6 +10,7 @@ import { Link } from 'react-router'
 import { CountBarsChart, SeriesLegend, TimeSeriesChart } from '@/components/charts/PerformanceCharts'
 import type { SeriesLine } from '@/components/charts/PerformanceCharts'
 import { ClaudeBadge } from '@/components/status'
+import { paperTradingHref } from '@/features/backtests/paperModel'
 import { madeByClaude } from '@/features/system/claude'
 import type { TaMonitor, TaMonitorCount, TaMonitorRule, TaMonitorStep } from '@/lib/types'
 
@@ -542,8 +543,11 @@ export function ResultsPanel({ rows, backtestsEnabled }: { rows: ResultRow[]; ba
                   <td className="py-2.5">
                     {row.paper ? (
                       <>
-                        {formatNumber(row.paper.days)} day{row.paper.days === 1 ? '' : 's'}, {formatPercent(row.paper.total, true)}
-                        {row.paper.last && (
+                        {/* Every day on paper, and the report since it began, on the Paper trading page. */}
+                        <Link className="underline-offset-2 hover:underline" to={paperTradingHref(row.rule_id)}>
+                          {formatNumber(row.paper.days)} day{row.paper.days === 1 ? '' : 's'}, {formatPercent(row.paper.total, true)}
+                        </Link>
+                        {row.paper.last?.run_id && (
                           <p>
                             <Link className="text-muted-foreground underline-offset-2 hover:underline" to={`/backtests/${row.paper.last.run_id}`}>
                               Last, {formatDay(row.paper.last.day, false)}: {formatPercent(row.paper.last.percent, true)}

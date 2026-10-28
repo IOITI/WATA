@@ -34,6 +34,7 @@ import type { BacktestChart, BacktestRun, BacktestSignal, BacktestTrade } from '
 
 import { signalMarkers, tradeFocus, tradeMarkers } from './dayChart'
 import { assetLabel, dayStatusLabel, heldFor, RUN_NOT_FOUND } from './model'
+import { runParents } from './paperModel'
 import { BacktestsDisabled, Measure } from './parts'
 import { SignalsTable, TradesTable } from './runTables'
 import { exitSettings, tradeLevels, tradeOverlays } from './tradeChart'
@@ -341,7 +342,7 @@ export function DayPage() {
       <NotFoundState
         title="No such day"
         description={`${run.name} covers ${formatDay(run.from)} to ${formatDay(run.to)}: the address names another day.`}
-        parents={[{ label: run.name, href: `/backtests/${runId}` }]}
+        parents={[...runParents(run), { label: run.name, href: `/backtests/${runId}` }]}
         suggestions={[
           { label: run.name, href: `/backtests/${runId}`, description: 'The run and its days' },
           { label: 'Backtests', href: '/backtests', description: 'Every run kept' },
@@ -355,7 +356,7 @@ export function DayPage() {
       <PageHeader
         title={formatDay(day)}
         description={run ? `${run.name}: every signal of the day and what became of it, every trade and its turbo.` : undefined}
-        parents={run ? [{ label: run.name, href: `/backtests/${runId}` }] : []}
+        parents={run ? [...runParents(run), { label: run.name, href: `/backtests/${runId}` }] : []}
         actions={
           <>
             <ButtonLink to={previous && `/backtests/${runId}/days/${previous}`} variant="outline" size="sm" leftIcon={<ChevronLeft className="size-3.5" />}>

@@ -2,7 +2,7 @@ import type { IPineInput } from 'pinets'
 import { describe, expect, it } from 'vitest'
 
 import type { TaRule, TaScriptSummary } from '@/lib/types'
-import { FIELDS, OPTIONS, run } from '@/test/backtests'
+import { FIELDS, OPTIONS, PAPER_RULE, paperReport, run } from '@/test/backtests'
 
 import {
   axisValues,
@@ -155,6 +155,43 @@ describe('a new draft', () => {
     expect(draft).toMatchObject({ sourceKind: 'journal', asset: 'dukascopy/us100', sweep: true, heldOut: '0.25', walkForward: '15/5' })
     expect(draft.rule.timeframe).toBe('5')
     expect(draft.axes).toEqual([{ kind: 'setting', name: 'stoploss_percent', values: '-10, -15' }])
+  })
+})
+
+describe('the signals a rule raised', () => {
+  it('takes back a paper report as a run of the same signals, to be changed and asked again', () => {
+    const draft = draftOfRun(paperReport(), OPTIONS)
+
+    expect(draft).toMatchObject({
+      sourceKind: 'ta_signals', fromRule: PAPER_RULE, asset: 'capital/US100', repetitions: '0', name: 'Paper: Kernel VWAP, since 2026-10-14 (again)',
+    })
+    expect(draft.rule).toMatchObject({ barsType: 'time', timeframe: '1', side: 'bid' })
+    expect(backtestProblems(draft, OPTIONS, null)).toEqual([])
+  })
+
+  it('sends the rule it reads them for, and the chart its days are drawn on', () => {
+    const body = requestOf(draftOfRun(paperReport(), OPTIONS), OPTIONS, null)
+
+    expect(body.source).toEqual({ kind: 'ta_signals', rule: PAPER_RULE })
+    expect(body.chart).toEqual({ asset: { provider: 'capital', key: 'US100' }, side: 'bid', bars: { type: 'time', timeframe: '1' } })
+    // Never a paper run of its own: an ordinary run, in the list.
+    expect(body).not.toHaveProperty('paper')
+  })
+
+  it('takes a rule chosen for its signals with its asset, bars and indice, and no history of the engine', () => {
+    const draft = withRule({ ...ready({ changes: { history_days: '3' } }), sourceKind: 'ta_signals' }, { ...RULE, history_days: 5 })
+
+    expect(draft).toMatchObject({ sourceKind: 'ta_signals', fromRule: { id: RULE.id, name: RULE.name }, asset: 'capital/US100', indice: 'us100' })
+    expect(draft.rule).toMatchObject({ barsType: 'range', ticks: '40', side: 'ask' })
+    expect(draft.changes).toEqual({})
+  })
+
+  it('needs its rule, and has no script inputs to sweep', () => {
+    const draft = { ...ready(), sourceKind: 'ta_signals' as const, fromRule: null }
+
+    expect(backtestProblems(draft, OPTIONS, null)).toContain('Choose the rule whose signals are traded.')
+    const sweep = { ...draft, fromRule: PAPER_RULE, sweep: true, axes: [{ kind: 'input' as const, name: 'in_0', values: '9, 12' }] }
+    expect(backtestProblems(sweep, OPTIONS, META)).toContain('The signals a rule raised have no script inputs to try: its script is not run again.')
   })
 })
 

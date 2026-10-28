@@ -72,6 +72,8 @@ from src.admin.mcp_server.calls import CallLog
 from src.admin.mcp_server.pause import McpPause
 from src.admin.mcp_server.tokens import TokenStore
 from src.admin.order_requests import refusal_runs, requests_by_order
+from src.admin.paper import PaperTrading
+from src.admin.ta_rules import RuleStore
 from src.admin.service_control import RestartRefused
 from src.admin.vault import AdminVault
 from src.vault import keys
@@ -689,6 +691,10 @@ class FakeQueries:
     async def ta_signals(self, start=None, end=None, rule_id=None, limit=500):
         return self.ta_engine.signals(start, end, rule_id, limit) if self.ta_engine else []
 
+    async def rule_signals(self, rule_id, start, end, limit=20_000):
+        found = self.ta_engine.signals(start, end, rule_id, limit) if self.ta_engine else []
+        return [signal for signal in reversed(found) if signal.get("action")]
+
     async def ta_other_signals(self, indice, day):
         return self.ta_engine.others(indice, day) if self.ta_engine else []
 
@@ -1260,6 +1266,13 @@ class FakeReadiness:
         return True, "At work again (made up)"
 
 
+class FakePaperTrading(PaperTrading):
+    """Paper trading at any hour: the fake's made-up market is closed whenever its days are due."""
+
+    def _market_is_open(self, now: float) -> bool:
+        return False
+
+
 class FakeSaxo:
     def __init__(self):
         self.expired = os.getenv("FAKE_SAXO_EXPIRED") == "1"
@@ -1422,6 +1435,10 @@ def build_dev_context(work_dir: str) -> AdminContext:
         closers.append(studies.close)
         token, _ = mcp_tokens.create("dev")
         print(f"Claude's MCP endpoint on http://{HOST}:{PORT}/mcp, token: {token}")
+    # The days the made-up rules raised signals on, traded on paper at the start and every quarter of an hour,
+    # into the fake's backtests: real runs of the recorded days above.
+    paper = FakePaperTrading(backtests=backtests, queries=queries, rules=RuleStore(ta_scripts), config_path=config_path,
+                             notify=notifier)
     ctx = AdminContext(
         config_manager=config_manager,
         settings=settings,
@@ -1445,6 +1462,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         mcp_calls=seeded_mcp_calls(CallLog(os.path.join(settings.log_path, "wata-admin", "mcp.jsonl"))),
         mcp_pause=McpPause(os.path.join(work_dir, "lib", "admin", "mcp_pause.json")),
         studies=studies,
+        paper=paper,
         # The containers, as the heartbeats say: started three hours ago.
         service_control=FakeControl(datetime.now(timezone.utc) - timedelta(hours=3)),
         events=events,

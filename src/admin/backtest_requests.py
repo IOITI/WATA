@@ -5,8 +5,8 @@ shows beside it: one implementation for the admin's routes
 
 The service never reads the database: the signals WATA received (for a run
 that replays them), its real positions of those days (to set the run beside
-them) and the account's last value (the run's money starts from it) are read
-here and handed over.
+them), the signals a rule raised (for a run of them), and the account's last
+value (the run's money starts from it) are read here and handed over.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -15,7 +15,8 @@ import pytz
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
-from src.admin.errors import DatabaseUnavailable, InvalidRequest
+from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible
+from src.admin.ta_scripts import ID_PATTERN
 
 # The orders measured by default: the three months before today.
 EXECUTION_DAYS = 92
@@ -29,20 +30,43 @@ async def last_balance(queries) -> float | None:
         return None
 
 
+def _period(body: dict) -> tuple[date, date]:
+    try:
+        return date.fromisoformat(body.get("from")), date.fromisoformat(body.get("to"))
+    except (TypeError, ValueError):
+        raise InvalidRequest("The period is two days, YYYY-MM-DD") from None
+
+
+async def raised_signals(queries, rule_id: str, first: date, last: date) -> list[dict]:
+    """
+    The signals a rule raised in a period, as a run of them replays them: refused when there are more than a run
+    takes, which a shorter period may not have.
+    """
+    from src.admin.backtests import MAX_RAISED_SIGNALS
+
+    rows = await queries.rule_signals(rule_id, first, last, limit=MAX_RAISED_SIGNALS)
+    if len(rows) >= MAX_RAISED_SIGNALS:
+        raise NotPossible(f"The rule raised more than {MAX_RAISED_SIGNALS:,} signals in that period: ask for a shorter one")
+    return rows
+
+
 async def ask_backtest(queries, service, body: dict, *, made_by: str | None = None, made_via: str | None = None,
                        experiment: str | None = None, lockbox: dict | None = None) -> dict:
     """
     Ask for a run, or a sweep. Of the signals WATA received, the journal of the
     period (and a day either side) is read first, with WATA's closed positions
-    of the same days.
+    of the same days; of the signals a rule raised, the rule's of the period.
     """
     journal = positions = None
     source = body.get("source") if isinstance(body, dict) else None
+    if isinstance(source, dict) and source.get("kind") == "ta_signals":
+        rule = source.get("rule") if isinstance(source.get("rule"), dict) else {}
+        if not isinstance(rule.get("id"), str) or not ID_PATTERN.match(rule["id"]):
+            raise InvalidRequest("The signals a rule raised are named by the rule")
+        first, last = _period(body)
+        journal = await raised_signals(queries, rule["id"], first, last)
     if isinstance(source, dict) and source.get("kind") == "journal":
-        try:
-            first, last = date.fromisoformat(body.get("from")), date.fromisoformat(body.get("to"))
-        except (TypeError, ValueError):
-            raise InvalidRequest("The period is two days, YYYY-MM-DD") from None
+        first, last = _period(body)
         journal = await queries.journal_between(first - timedelta(days=1), last + timedelta(days=1))
         # What WATA really did with those signals, for the run to be set beside it.
         try:
@@ -85,7 +109,8 @@ async def measured_orders(queries, service) -> dict:
     return {"from": first_day.isoformat(), "to": last_day.isoformat(), "samples": samples(rows)}
 
 
-def _local_day(moment, zone) -> str | None:
+def local_day(moment, zone) -> str | None:
+    """The day a moment (a datetime, or ISO text: UTC when it names no zone) falls on in ``zone``: YYYY-MM-DD."""
     if moment is None:
         return None
     if isinstance(moment, str):
@@ -96,11 +121,12 @@ def _local_day(moment, zone) -> str | None:
 
 
 async def coverage(queries, history, timezone_name: str, max_period_days: int, first_day: date, last_day: date,
-                   indice: str = "us100", asset: str | None = None, source: str = "pine") -> dict:
+                   indice: str = "us100", asset: str | None = None, source: str = "pine", rule: str | None = None) -> dict:
     """
     What was recorded on each day of a period: the turbos of the indice by
     direction and the hours of their bars, how long the recorder listened,
-    the bars of the asset a strategy would run on, the signals WATA received.
+    the bars of the asset a strategy would run on, the signals WATA received
+    or those a rule raised (its entries).
     """
     if last_day < first_day or (last_day - first_day).days >= max_period_days:
         raise InvalidRequest(f"A period of {max_period_days} days at most")
@@ -165,8 +191,23 @@ async def coverage(queries, history, timezone_name: str, max_period_days: int, f
         for row in rows:
             if row.get("action") not in ("long", "short") or row.get("indice") != indice:
                 continue
-            day = _local_day(row.get("received_timestamp") or row.get("decided_at"), zone)
+            day = local_day(row.get("received_timestamp") or row.get("decided_at"), zone)
             if day in days:
+                days[day]["signals"] += 1
+    if source == "ta_signals" and rule is not None and database:
+        if not ID_PATTERN.match(rule):
+            raise InvalidRequest("The signals a rule raised are named by the rule")
+        from src.admin.backtests import MAX_RAISED_SIGNALS
+
+        try:
+            rows = await queries.rule_signals(rule, first_day, last_day, limit=MAX_RAISED_SIGNALS)
+        except DatabaseUnavailable:
+            rows, database = [], False
+        for entry in days.values():
+            entry["signals"] = 0
+        for row in rows:
+            day = local_day(row.get("raised_at"), zone)
+            if row.get("action") in ("long", "short") and day in days:
                 days[day]["signals"] += 1
     return {"days": list(days.values()), "database": database, "timezone": timezone_name}
 

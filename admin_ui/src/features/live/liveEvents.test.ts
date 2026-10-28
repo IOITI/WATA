@@ -133,7 +133,7 @@ describe('staleQueries', () => {
     expect(staleQueries({ type: 'entries_paused' })).toEqual(['overview'])
     expect(staleQueries({ type: 'order_refused' })).toEqual(['overview', 'positions', 'position', 'orders'])
     expect(staleQueries({ type: 'service_status' })).toEqual(['health', 'data-providers', 'data-provider'])
-    expect(staleQueries({ type: 'backtest_finished' })).toEqual(['backtests', 'backtest'])
+    expect(staleQueries({ type: 'backtest_finished' })).toEqual(['backtests', 'backtest', 'backtest-paper', 'live-paper'])
     expect(staleQueries({ type: 'prices_fetch_finished' })).toEqual([
       'history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider',
     ])

@@ -136,6 +136,9 @@ export function assetLabel(asset: BacktestAsset): string {
 /** What a run trades on, in a few words. */
 export function sourceLabel(run: Pick<BacktestRunListed, 'source' | 'chart'>): string {
   if (run.source.kind === 'journal') return 'Signals WATA received'
+  if (run.source.kind === 'ta_signals') {
+    return `Signals ${run.source.from_rule?.name ?? 'a rule'} raised · ${assetLabel(run.chart.asset)} · ${barsLabel(run.chart.bars)}`
+  }
   const script = run.source.script
   return `${script ? `${script.name} v${script.version}` : 'Pine script'} · ${assetLabel(run.chart.asset)} · ${barsLabel(run.chart.bars)}`
 }

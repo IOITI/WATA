@@ -1648,12 +1648,48 @@ export interface BacktestReconciliation {
 /** A shadow rule's day traded on paper (src/admin/paper.py). */
 export interface BacktestPaperDay {
   day: string
-  run_id: string
-  state: BacktestState
+  /** None for a day of the signals received without an entry signal ('no_entry'). */
+  run_id: string | null
+  state: BacktestState | 'no_entry'
   day_percent: number | null
   trades: number | null
   /** Outside the 5 % to 95 % of its reference run's days; none without a result or a reference. */
   outside: boolean | null
+}
+
+/** What a paper run is: one day, or the report of the days since it began. */
+export type BacktestPaperRun = { rule: string; day: string; report?: undefined } | { rule: string; report: true; day?: undefined }
+
+/** The newest finished report of a rule (or of the signals received): one run of its days since it began. */
+export interface BacktestPaperReport {
+  run_id: string
+  from: string
+  to: string
+  made_at: string | null
+  signals: number | null
+  /** The versions of the rule's script that raised its signals. */
+  versions: number[]
+  headline: BacktestHeadline | null
+}
+
+/** A newer report than the one shown: waiting its turn, running, or one that did not finish. */
+export interface BacktestPaperNextReport {
+  run_id: string
+  from: string
+  to: string
+  state: BacktestState
+  error: string | null
+  /** Its place in line, while it waits. */
+  position: number | null
+}
+
+/** What paper trading keeps of a rule, or of the signals received. */
+export interface BacktestPaperEntry {
+  days: BacktestPaperDay[]
+  reference: BacktestPaperReference | null
+  /** Absent before v0.53.0. */
+  report?: BacktestPaperReport | null
+  next_report?: BacktestPaperNextReport | null
 }
 
 export interface BacktestPaperReference {
@@ -1666,9 +1702,9 @@ export interface BacktestPaperReference {
 }
 
 export interface BacktestPaper {
-  rules: Record<string, { days: BacktestPaperDay[]; reference: BacktestPaperReference | null }>
+  rules: Record<string, BacktestPaperEntry>
   /** The signals WATA received, traded on paper under the live settings; absent before v0.49.0. */
-  live?: { days: BacktestPaperDay[]; reference: BacktestPaperReference | null } | null
+  live?: BacktestPaperEntry | null
 }
 
 /** A finished day of the live settings: WATA's real result and the paper one, each against the live reference. */
@@ -1689,6 +1725,9 @@ export interface LivePaper {
   reference: BacktestPaperReference | null
   /** Said once on Telegram, and in health, when the last two days with a result were outside the range. */
   warning: string | null
+  /** Their report since their first day on paper; absent before v0.53.0. */
+  report?: BacktestPaperReport | null
+  next_report?: BacktestPaperNextReport | null
 }
 
 /** Recorded by WATA, or made up from an index (src/backtest/turbo_model.py). */
@@ -1764,6 +1803,8 @@ export type BacktestSourceBody =
       from_rule?: { id: string; name: string } | null
     }
   | { kind: 'journal' }
+  /** The signals a rule raised, as the TA engine journaled them: no script run again (paper trading). */
+  | { kind: 'ta_signals'; rule: { id: string; name: string } }
 
 /** What the form sends. */
 export interface BacktestRequestBody {
@@ -1833,6 +1874,8 @@ export interface BacktestStoredRequest {
   source:
     | { kind: 'pine'; rule: BacktestRule; from_rule: { id: string; name: string } | null }
     | { kind: 'journal'; signals: number; entries: number }
+    /** The versions of the rule's script that raised them; absent before v0.53.0, or when unknown. */
+    | { kind: 'ta_signals'; signals: number; rule: { id: string; name: string }; versions?: number[] }
   chart: BacktestChart
   changes: Record<string, BacktestValue>
   baseline: { repetitions: number; seed: number } | null
@@ -1892,7 +1935,7 @@ export interface BacktestRunListed {
   to: string
   indice: string
   source: {
-    kind: 'pine' | 'journal'
+    kind: 'pine' | 'journal' | 'ta_signals'
     script: { id: string; version: number; name: string } | null
     from_rule: { id: string; name: string } | null
     signals: number | null
@@ -1910,8 +1953,8 @@ export interface BacktestRunListed {
   /** A model check: the run on the recorded turbos it made again on made-up ones. */
   model_check_of?: string | null
   turbos?: BacktestTurbos
-  /** A paper day: of the signals a rule raised, or of those WATA received (rule "live"). */
-  paper?: { rule: string; day: string } | null
+  /** A paper run: a day, or the report of the days since it began, of the signals a rule raised or of those WATA received (rule "live"). */
+  paper?: BacktestPaperRun | null
   /** Who asked for it through an agent ("claude"), and for which experiment of its journal; absent for the operator's. */
   made_by?: string | null
   experiment?: string | null

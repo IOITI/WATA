@@ -139,6 +139,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/execution"),
     ("GET", "/api/backtests/paper"),
     ("GET", "/api/backtests/paper/live"),
+    ("POST", "/api/backtests/paper/0123456789ab/report"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
     ("POST", "/api/backtests/turbo-model"),
     ("GET", "/api/mcp"),
@@ -422,6 +423,11 @@ class FakeQueries:
         self.calls.append(("ta_signals", start, end, rule_id, limit))
         return self.ta_signal_rows
 
+    async def rule_signals(self, rule_id, start, end, limit=20_000):
+        self._check()
+        self.calls.append(("rule_signals", rule_id, start, end, limit))
+        return list(getattr(self, "raised_rows", []))[-limit:]
+
     async def ta_engine_state(self):
         self._check()
         return self.ta_engine
@@ -704,6 +710,7 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{label}", "de40")
             .replace("{script_id}", "0123456789ab")
             .replace("{rule_id}", "0123456789ab")
+            .replace("{owner}", "0123456789ab")
             .replace("{token_id}", "0123abcd")
             .replace("{number}", "1"),
         )
@@ -3414,6 +3421,74 @@ def test_a_replay_of_the_journal_is_given_its_signals_with_a_day_either_side(cli
     assert backtests.asked[0][4] == [CLOSED_POSITION]
     refused = client.post("/api/backtests", json={"from": "monday", "source": {"kind": "journal"}}, headers=SAME_ORIGIN)
     assert refused.status_code == 422
+
+
+RAISED = {"id": 7, "rule_id": "0123456789ab", "action": "long", "raised_at": datetime(2026, 10, 14, 13, 40, tzinfo=timezone.utc),
+          "bar_closed_at": datetime(2026, 10, 14, 13, 40, tzinfo=timezone.utc), "script_version": 2, "trader": None}
+
+
+def test_a_run_of_the_signals_a_rule_raised_is_given_them_for_its_days(client, ctx, backtests, monkeypatch):
+    ctx.queries.raised_rows = [RAISED, {**RAISED, "id": 8, "action": "close-position"}]
+    body = {"from": "2026-10-13", "to": "2026-10-16", "source": {"kind": "ta_signals", "rule": {"id": "0123456789ab", "name": "EMA"}}}
+
+    response = client.post("/api/backtests", json=body, headers=SAME_ORIGIN)
+
+    assert response.status_code == 202
+    assert ("rule_signals", "0123456789ab", date(2026, 10, 13), date(2026, 10, 16), 20_000) in ctx.queries.calls
+    assert backtests.asked[0][2] == ctx.queries.raised_rows
+    unnamed = client.post("/api/backtests", json={**body, "source": {"kind": "ta_signals", "rule": {"id": "../etc"}}}, headers=SAME_ORIGIN)
+    assert unnamed.status_code == 422
+    # More than a run takes: a shorter period.
+    monkeypatch.setattr("src.admin.backtests.MAX_RAISED_SIGNALS", 2)
+    refused = client.post("/api/backtests", json=body, headers=SAME_ORIGIN)
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409, "The rule raised more than 2 signals in that period: ask for a shorter one")
+
+
+def test_the_form_is_told_the_entries_a_rule_raised_each_day(client, ctx, backtests):
+    ctx.queries.raised_rows = [RAISED, {**RAISED, "id": 8, "action": "close-position"},
+                               {**RAISED, "id": 9, "raised_at": datetime(2026, 10, 15, 13, 40, tzinfo=timezone.utc)}]
+
+    found = client.get("/api/backtests/coverage?from=2026-10-14&to=2026-10-15&source=ta_signals&rule=0123456789ab").json()
+
+    assert [day["signals"] for day in found["days"]] == [1, 1]
+    assert client.get("/api/backtests/coverage?from=2026-10-14&to=2026-10-15&source=ta_signals&rule=nope").status_code == 422
+
+
+class FakePaper:
+    """Stands for the paper task: what it was asked to make now, refused when told to."""
+
+    def __init__(self):
+        self.asked, self.failure = [], None
+
+    async def ask_report(self, owner):
+        self.asked.append(owner)
+        if self.failure is not None:
+            raise self.failure
+
+    async def drift(self):
+        return [], None, None
+
+
+def test_a_paper_report_is_made_now_when_asked(client, ctx, backtests):
+    from src.admin.errors import NotPossible
+
+    assert client.post("/api/backtests/paper/0123456789ab/report", headers=SAME_ORIGIN).status_code == 503
+    ctx.paper = FakePaper()
+
+    made = client.post("/api/backtests/paper/0123456789ab/report", headers=SAME_ORIGIN)
+    live = client.post("/api/backtests/paper/live/report", headers=SAME_ORIGIN)
+
+    assert (made.status_code, made.json()) == (202, {"rules": {}})
+    assert live.status_code == 202 and ctx.paper.asked == ["0123456789ab", "live"]
+    assert client.post("/api/backtests/paper/somebody/report", headers=SAME_ORIGIN).status_code == 422
+    ctx.paper.failure = NotPossible("Its report is being made already")
+    refused = client.post("/api/backtests/paper/0123456789ab/report", headers=SAME_ORIGIN)
+    assert (refused.status_code, refused.json()["detail"]) == (409, "Its report is being made already")
+    # The live paper days come with their report.
+    assert client.get("/api/backtests/paper/live").json() == {
+        "days": [], "reference": None, "warning": None, "report": None, "next_report": None,
+    }
 
 
 def test_without_the_database_a_run_starts_from_the_default_account_and_a_replay_cannot_be_asked(client, ctx, backtests):

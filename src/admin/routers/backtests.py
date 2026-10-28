@@ -7,14 +7,14 @@ entry, and their own switch (``admin.backtests_enabled``).
 
 What a run needs from the database is read before it is asked for, by
 src/admin/backtest_requests.py, which Claude's tools share: the signals WATA
-received, for a run that replays them, and the account's last value, which the
-money of a run starts from. The service never reads the database; the command
+received, or those a rule raised, for a run that replays them, and the
+account's last value, which the money of a run starts from. The service never reads the database; the command
 reads the recorded turbos through a read-only connection of its own.
 """
 
 from datetime import date
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -80,17 +80,19 @@ async def coverage(
     indice: str = Query("us100", max_length=32),
     asset: str | None = Query(None, max_length=80),
     source: str = Query("pine"),
+    rule: str | None = Query(None, pattern=r"^[0-9a-f]{12}$"),
     service=Depends(backtests),
 ):
     """
     What was recorded on each day of a period: the turbos of the indice by
     direction and the hours of their bars, how long the recorder listened,
-    the bars of the asset a strategy would run on, the signals WATA received.
+    the bars of the asset a strategy would run on, the signals WATA received
+    or those a rule raised.
     """
     ctx = request.app.state.ctx
     return await backtest_requests.coverage(
         ctx.queries, ctx.history, ctx.settings.timezone, service.max_period_days, first_day, last_day,
-        indice=indice, asset=asset, source=source,
+        indice=indice, asset=asset, source=source, rule=rule,
     )
 
 
@@ -152,7 +154,27 @@ async def research_switch(body: ResearchSwitch, export=Depends(research)):
 
 @router.get("/paper")
 async def paper(service=Depends(backtests)):
-    """Each shadow rule's days traded on paper, beside the daily range of its reference run."""
+    """Each shadow rule's days traded on paper, beside the daily range of its reference run, and its report."""
+    return await run_in_threadpool(service.paper)
+
+
+def paper_task(request: Request):
+    """What trades the rules and the signals received on paper, with the backtests."""
+    paper_trading = getattr(request.app.state.ctx, "paper", None)
+    if paper_trading is None:
+        raise HTTPException(status_code=503, detail="Paper trading is not available")
+    return paper_trading
+
+
+@router.post("/paper/{owner}/report", status_code=202)
+async def paper_report(
+    owner: str = Path(pattern=r"^([0-9a-f]{12}|live)$"), service=Depends(backtests), paper_trading=Depends(paper_task),
+):
+    """
+    A report of a shadow rule's days on paper since it began (or of the signals WATA received, ``live``), made
+    now rather than after the next finished day. On the event loop: the run joins the service's line.
+    """
+    await paper_trading.ask_report(owner)
     return await run_in_threadpool(service.paper)
 
 
@@ -162,15 +184,16 @@ async def live_paper(request: Request, service=Depends(backtests)):
     The signals WATA received traded on paper under the live settings, each day beside the real one and the
     daily range of the live reference, with the warning said once two days in a row were outside it.
     """
-    paper_task = getattr(request.app.state.ctx, "paper", None)
-    if paper_task is None:
-        return {"days": [], "reference": None, "warning": None}
-    days, warning, reference = await paper_task.drift()
+    paper_trading = getattr(request.app.state.ctx, "paper", None)
+    if paper_trading is None:
+        return {"days": [], "reference": None, "warning": None, "report": None, "next_report": None}
+    days, warning, reference = await paper_trading.drift()
+    live = (await run_in_threadpool(service.paper)).get("live") or {}
     if reference is None:
         # No reference yet: the paper days alone.
-        live = (await run_in_threadpool(service.paper)).get("live") or {}
         days = live_days(live.get("days") or [], {}, None)
-    return {"days": days, "reference": reference, "warning": warning}
+    return {"days": days, "reference": reference, "warning": warning,
+            "report": live.get("report"), "next_report": live.get("next_report")}
 
 
 @router.get("/turbo-model")

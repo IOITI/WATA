@@ -32,6 +32,7 @@ import { Link, useSearchParams } from 'react-router'
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
+import { paperReportHref, paperTradingHref } from '@/features/backtests/paperModel'
 import { madeByClaude } from '@/features/system/claude'
 import { monitorHref } from '@/features/ta/monitor/monitorModel'
 import { api, ApiError } from '@/lib/api'
@@ -413,7 +414,14 @@ export function SignalRulesPage() {
           const last = entry?.days.find((day) => day.day_percent !== null)
           return (
             <div className="min-w-0 max-w-72 whitespace-normal text-xs">
-              <span className="font-medium">{line.total}</span>
+              {/* Its report, one run of every day since it was made, in place of its days added up. */}
+              {line.report ? (
+                <Link className="font-medium underline-offset-2 hover:underline" to={paperReportHref(row.id)}>
+                  {line.report}
+                </Link>
+              ) : (
+                <span className="font-medium">{line.total}</span>
+              )}
               {line.last && (
                 <p className="text-muted-foreground">
                   {last ? (
@@ -430,6 +438,11 @@ export function SignalRulesPage() {
                   {line.outside > 0 ? `${line.outside} day${line.outside === 1 ? '' : 's'} outside it. ` : ''}
                   {line.reference}
                 </p>
+              )}
+              {entry && (entry.days.length > 0 || entry.report) && (
+                <Link className="text-muted-foreground underline underline-offset-2 hover:text-foreground" to={paperTradingHref(row.id)}>
+                  Every day on paper
+                </Link>
               )}
             </div>
           )

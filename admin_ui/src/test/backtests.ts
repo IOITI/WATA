@@ -161,6 +161,33 @@ export function run(changes: Partial<BacktestRun> = {}): BacktestRun {
   }
 }
 
+/** The shadow rule whose signals the paper runs below trade. */
+export const PAPER_RULE = { id: 'a00000000001', name: 'Kernel VWAP' }
+export const PAPER_REPORT_ID = '20261020-213500-aaaaaa'
+
+/** A rule's paper report: one run of the signals it raised since it was made, as the TA engine journaled them. */
+export function paperReport(changes: Partial<BacktestRun> = {}): BacktestRun {
+  const found = run({
+    id: PAPER_REPORT_ID,
+    name: 'Paper: Kernel VWAP, since 2026-10-14',
+    tags: ['paper'],
+    source: { kind: 'ta_signals', script: null, from_rule: PAPER_RULE, signals: 12 },
+    paper: { rule: PAPER_RULE.id, report: true },
+    ...changes,
+  })
+  return {
+    ...found,
+    request: {
+      ...found.request,
+      name: found.name,
+      tags: found.tags,
+      source: { kind: 'ta_signals', signals: 12, rule: PAPER_RULE, versions: [3, 4] },
+      baseline: { repetitions: 0, seed: 1 },
+    },
+    ...changes,
+  }
+}
+
 export function trade(changes: Partial<BacktestTrade> = {}): BacktestTrade {
   return {
     id: 1,

@@ -337,7 +337,7 @@ export const api = {
 
   // ── backtests on the recorded turbos ──
   backtestOptions: () => request<BacktestOptions>('GET', '/api/backtests/options'),
-  backtestCoverage: (params: { from: string; to: string; indice: string; asset?: string; source?: 'pine' | 'journal' }) =>
+  backtestCoverage: (params: { from: string; to: string; indice: string; asset?: string; source?: 'pine' | 'journal' | 'ta_signals'; rule?: string }) =>
     request<BacktestCoverage>('GET', `/api/backtests/coverage${query(params)}`),
   backtests: () => request<{ items: BacktestRunListed[]; storage: BacktestStorage }>('GET', '/api/backtests'),
   backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
@@ -371,8 +371,10 @@ export const api = {
   /** A replay of the journal beside WATA's real positions; empty for any other run. */
   backtestReconciliation: (runId: string) =>
     request<BacktestReconciliation | Record<string, never>>('GET', `/api/backtests/${encodeURIComponent(runId)}/reconciliation`),
-  /** Each shadow rule's days traded on paper, beside its reference run. */
+  /** Each shadow rule's days traded on paper, beside its reference run, and its report since it began. */
   backtestPaper: () => request<BacktestPaper>('GET', '/api/backtests/paper'),
+  /** A rule's report (or the signals received's, owner "live") made now rather than after the next finished day. */
+  askPaperReport: (owner: string) => request<BacktestPaper>('POST', `/api/backtests/paper/${encodeURIComponent(owner)}/report`),
   /** The signals WATA received traded on paper under the live settings, beside the real days and the live reference. */
   livePaper: () => request<LivePaper>('GET', '/api/backtests/paper/live'),
   /** A run made from a rule becomes the one its paper days are set against. */

@@ -86,11 +86,14 @@ export function NewBacktestPage() {
 
   const inputs = useScriptInputs(draft?.sourceKind === 'pine' ? (draft?.rule.scriptId ?? '') : '', draft?.rule.version ?? 1)
   const periodOk = Boolean(draft && draft.from && draft.to && draft.to >= draft.from && options && periodDays(draft.from, draft.to) <= periodLimit(draft, options))
+  // The rule whose signals are counted each day, for a run of them.
+  const countedRule = draft?.sourceKind === 'ta_signals' ? draft.fromRule?.id : undefined
   const coverageQuery = useQuery({
-    queryKey: ['backtest-coverage', draft?.from, draft?.to, draft?.indice, draft?.asset, draft?.sourceKind],
+    queryKey: ['backtest-coverage', draft?.from, draft?.to, draft?.indice, draft?.asset, draft?.sourceKind, countedRule],
     queryFn: () =>
       api.backtestCoverage({
         from: draft!.from, to: draft!.to, indice: draft!.indice, asset: draft!.asset || undefined, source: draft!.sourceKind,
+        rule: countedRule,
       }),
     // Made-up turbos are made on any day of the index: nothing recorded to count.
     enabled: enabled && periodOk && draft?.turbos !== 'modelled',
@@ -142,6 +145,8 @@ export function NewBacktestPage() {
                     update={update}
                     updateRule={updateRule}
                     scripts={scripts}
+                    rules={rules}
+                    onRule={(rule) => setDraft(withRule(draft, rule))}
                     options={options}
                     inputs={inputs}
                     invalidInputs={invalidInputs}

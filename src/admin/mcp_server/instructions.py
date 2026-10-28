@@ -30,7 +30,8 @@ check of a recorded run (`backtest_derive` kind model_check).
 6. `exp_conclude`: kept, rejected or inconclusive, with what it rests on.
 7. What survives may become one of Claude's shadow rules, once the operator switched them on: `rule_shadow_save` \
 (the engine journals its signals, never sends them), a run made from it (`source.from_rule`) set as its \
-reference (`rule_set_reference`), then its paper days in `rule_list`.
+reference (`rule_set_reference`), then its paper days in `rule_list`, and its report since it was made \
+(`paper.report.run_id`, read as any run: made again after each finished day, no random entries).
 
 Do not believe: fewer than 30 trades or 20 days; random entries beaten less than 95 % of the time; no edge \
 (t under 2.6 at the best horizon); a best value whose neighbours do badly, or a held-out result far below the \

@@ -211,7 +211,8 @@ export function staleQueries(event: LiveEvent): string[] {
       // The health summary carries the Saxo connection too (top bar, dashboard).
       return ['saxo', 'health']
     case 'backtest_finished':
-      return ['backtests', 'backtest']
+      // A paper day or report is a run too: the pages that list them read them again.
+      return ['backtests', 'backtest', 'backtest-paper', 'live-paper']
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
       return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']

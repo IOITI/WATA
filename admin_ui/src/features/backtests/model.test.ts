@@ -35,6 +35,8 @@ describe('what a run is', () => {
   it('names its signals, asset and bars', () => {
     expect(sourceLabel(listedRun())).toBe('EMA cross v1 · Capital.com US100 · 1 min')
     expect(sourceLabel(listedRun({ source: { kind: 'journal', script: null, from_rule: null, signals: 40 } }))).toBe('Signals WATA received')
+    expect(sourceLabel(listedRun({ source: { kind: 'ta_signals', script: null, from_rule: { id: 'a00000000001', name: 'Kernel VWAP' }, signals: 12 } })))
+      .toBe('Signals Kernel VWAP raised · Capital.com US100 · 1 min')
   })
 
   it('says where it is while it runs', () => {

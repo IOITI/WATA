@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.53.0 - Paper trading reports: every day since a rule began, as a backtest, and a place in Backtests
+
+**Release date:** 2026-10-28
+
+The days on paper said "4 days, +1.20 %" and no more: each was a run of one day, and nothing put them together or showed their trades, and the Backtests section did not list them at all.
+
+- **Each rule in shadow has its report** (`src/admin/paper.py`): one backtest of every signal it raised since it was made, to the last finished weekday, its account carried from one day to the next, every trade on its page as on any backtest's.
+  - It is made again after each finished day, once the market is closed, the older one removed once the newer is done (`paper/reports.json`). It trades no random entries: it is made every night. A report that fails says so beside the last good one, and is asked again for the next day.
+  - It covers 92 days at most (`admin.backtests_max_period_days`) and the newest 20,000 signals of the rule; it says which versions of the script raised them when the rule changed meanwhile.
+  - **"Make it now"** asks for it at any hour.
+- **So do the signals WATA receives**: their report since their first day on paper, under the live settings, each paper trade set beside WATA's real one.
+- **Backtests › Paper trading** (`/backtests/paper`): each rule's report (its result, trades, worst drawdown, days, where it stands), its days on paper each a link to its run, its reference run; and the signals received, their report and their days beside the real ones.
+  - Each report has an address that outlives its run, `/backtests/paper/<rule>`: the run behind it changes each night, a bookmark keeps working.
+  - The Signal rules page says a rule's report in place of its days added up ("Since 14 Oct: +1.18 % in 9 trades"), a link to it, and "Every day on paper"; Performance says the report of the signals received; the Engine monitor's paper days lead to the page.
+- **A paper run's page says what it is**: "Signals <rule> raised" where it said "Pine script", and "The 68 signals <rule> raised" where it said "signals WATA received"; under Paper trading in the trail; a report cannot be removed (WATA keeps them), a day can.
+- **"Run again with changes" works on a paper run**: it crashed the form. The New backtest form takes **"The signals a rule raised"** as its third source, for any period, with random entries and changed settings, the period's days saying how many entries the rule raised.
+
+Fixed on the way:
+
+- A day on paper read at most the newest 2,000 of a rule's signals: a busy rule's morning was left out without a word (`AdminQueries.rule_signals`, oldest first, 20,000).
+- A rule on an indice the trader does not take stopped the whole night's paper trading: it is said in the log, and the others go on.
+- A stress sweep or model check of a paper run looked like a paper run; it is an ordinary run, in the list. Claude's neighbours of a run of a rule's signals replayed the journal in their place: they are refused.
+
+**On the live path:** nothing. The admin, its interface and the docs alone. The reports are the backtest service's own runs: one at a time, at the lowest priority, while the market is closed.
+
+**Backtests:** no file of the code digest changed: no run is marked stale.
+
+**Verification status:**
+- 3,149 Python tests pass on Python 3.12 (3.14 not run here), the Pine runner's included; 22 are skipped (the live infrastructure). New: the reports (asked once per finished day, held to 92 days, a read of more signals than a run takes, the older let go once the newer is done, one that failed, two asks at once, a rule the backtests refuse, "Make it now" at any hour), the signals received's report (their first day kept, without an entry), the requests a paper run is, derived runs, the route, the form's new source and its coverage, `body_of`, Claude's refusal.
+- The new SQL was run on a PostgreSQL 16 (pgserver), through the live test CI runs: a rule's signals of two local days, a close journaled without an action left out, the newest kept.
+- 1,128 interface tests pass (25 new: the page's model, the page, a report's address and its run page, "Run again with changes", the form's new source, the Signal rules cell); lint, types and the build are clean.
+- Seen in the browser pane on the fake admin, which trades its rules on paper now: the reports made (a rule's of 7 days and 9 trades, the signals received's), the page in light and dark at 1,440 px and at 375 px (nothing past the page), a report opened from its address, its run page, "Make it now" (made again, and refused for a rule made that day), "Run again with changes" made a run of the same 68 signals.
+- **Not seen on the server:** a report of the real rules and journal, and how long one takes there.
+
 ## v0.52.1 - Nothing wider than a phone's screen
 
 **Release date:** 2026-10-28

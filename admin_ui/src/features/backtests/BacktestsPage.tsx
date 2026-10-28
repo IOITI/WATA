@@ -17,7 +17,7 @@ import {
 } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { Columns3, FlaskConical, Plus, Trash2 } from 'lucide-react'
+import { Columns3, FlaskConical, Newspaper, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
@@ -314,10 +314,13 @@ export function BacktestsPage() {
     <>
       <PageHeader
         title="Backtests"
-        description="A Pine script, or the signals WATA received, traded as WATA trades on the turbos the price recorder kept. Nothing here trades."
+        description="A Pine script, the signals WATA received or those a rule raised, traded as WATA trades on the turbos the price recorder kept. Nothing here trades."
         actions={
           enabled && (
             <>
+              <ButtonLink to="/backtests/paper" variant="outline" size="sm" leftIcon={<Newspaper className="size-3.5" />}>
+                Paper trading
+              </ButtonLink>
               <ButtonLink to="/backtests/experiments" variant="outline" size="sm" leftIcon={<FlaskConical className="size-3.5" />}>
                 Experiments
               </ButtonLink>

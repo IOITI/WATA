@@ -330,8 +330,8 @@ export interface ResultRow {
   made_by: string | null
   /** What its live signals traded. */
   live: TaMonitorResult | null
-  /** Its finished days traded on paper in the period, newest first. */
-  paper: { days: number; total: number; last: { day: string; percent: number; run_id: string } | null } | null
+  /** Its finished days traded on paper in the period, newest first: the last one's run, when it had one. */
+  paper: { days: number; total: number; last: { day: string; percent: number; run_id: string | null } | null } | null
 }
 
 /** Each rule's results in the period: the positions of its live signals, its days on paper in shadow. */

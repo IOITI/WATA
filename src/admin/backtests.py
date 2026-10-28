@@ -115,6 +115,10 @@ LIVE_PAPER = "live"
 # A day of theirs on which no entry signal came: nothing to trade, kept so that it is not asked again.
 NO_ENTRY = ""
 NO_ENTRY_SIGNAL = "WATA received no signal of entry in that period"
+# Each one's report, one run of its days on paper since it began, made again after each finished day: kept beside.
+PAPER_REPORTS = "reports.json"
+# The signals a rule raised that one run replays at most (AdminQueries.rule_signals keeps the newest).
+MAX_RAISED_SIGNALS = 20_000
 SIDES = ("bid", "ask")
 CHART_PROVIDERS = ("capital", "dukascopy", "saxo")
 MAX_PERIOD_DAYS = 92
@@ -312,9 +316,12 @@ def _research_fields(made_by, made_via, experiment, lockbox) -> dict:
     return {key: value for key, value in fields.items() if value is not None}
 
 
-def _without_research(request: dict) -> dict:
-    """A run made from another (a stress sweep, a sweep's combination) says by itself who asked for it."""
-    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS}
+def _derived(request: dict) -> dict:
+    """
+    What a run made from another (a stress sweep, a sweep's combination, a model check) keeps of its request: it
+    says by itself who asked for it, and it is an ordinary run, never a paper day or report of its own.
+    """
+    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS and key != "paper"}
 
 
 def _checked_count(value, what: str) -> int:
@@ -594,6 +601,11 @@ class BacktestService:
                 "kind": TA_SIGNALS, "signals": len(kept_journal),
                 "rule": {"id": str(rule_ref["id"])[:12], "name": _text(rule_ref.get("name"), "The rule's name", 80)},
             }
+            # The versions of the rule's script that raised them: a rule changed during the period raised them by several.
+            versions = sorted({row["script_version"] for row in kept_journal
+                               if isinstance(row.get("script_version"), int) and not isinstance(row["script_version"], bool)})
+            if versions:
+                kept_source["versions"] = versions
             chart = checked_chart(body.get("chart"))
             default_name = f"Paper: {kept_source['rule']['name'] or kept_source['rule']['id']}"
         else:
@@ -672,12 +684,17 @@ class BacktestService:
         }
         paper = body.get("paper")
         if paper is not None:
-            # One day: of the signals one rule raised, or of those WATA received under the live settings.
+            # One day, or the report of the days since it began: of the signals one rule raised, or of those WATA
+            # received under the live settings.
             owner = kept_source["rule"]["id"] if source["kind"] == TA_SIGNALS else LIVE_PAPER if source["kind"] == JOURNAL else None
-            if owner is None or not isinstance(paper, dict) or paper.get("day") != first_day.isoformat() \
-                    or first_day != last_day or paper.get("rule") != owner:
+            if owner is None or not isinstance(paper, dict) or paper.get("rule") != owner:
                 raise InvalidRequest("A paper run is one day of the signals one rule raised, or of those WATA received")
-            request["paper"] = {"rule": owner, "day": first_day.isoformat()}
+            if paper.get("report") is True:
+                request["paper"] = {"rule": owner, "report": True}
+            elif paper.get("day") == first_day.isoformat() and first_day == last_day:
+                request["paper"] = {"rule": owner, "day": first_day.isoformat()}
+            else:
+                raise InvalidRequest("A paper run is one day of the signals one rule raised, or of those WATA received")
         settings_doc = {"settings": settings.to_dict(), "changed": kept, "live_before": before}
         if model is not None:
             # The measure the run is made with goes with it: a later one does not change what it found.
@@ -738,8 +755,11 @@ class BacktestService:
             made = self._queue_run(request, settings_doc, sources, None, raised=kept_journal)
         else:
             made = self._queue_run(request, settings_doc, sources, kept_journal, positions=kept_positions)
-        if request.get("paper"):
-            self._index_paper(request["paper"]["rule"], request["paper"]["day"], made["id"])
+        paper = request.get("paper")
+        if paper and paper.get("report"):
+            self._index_paper_report(paper["rule"], made["id"])
+        elif paper:
+            self._index_paper(paper["rule"], paper["day"], made["id"])
         return made
 
     def _index_paper(self, owner: str, day: str, run_id: str) -> None:
@@ -832,7 +852,7 @@ class BacktestService:
             raise InvalidRequest(str(e)) from None
         described = ", ".join(f"{axis['name']} {value}" for axis, value in zip(axes, values))
         new_request = {
-            **_without_research(request), "kind": "run", "sweep": None, "changes": changes, "source": source,
+            **_derived(request), "kind": "run", "sweep": None, "changes": changes, "source": source,
             "name": f"{request['name']} ({described})"[:MAX_NAME_LENGTH],
             "baseline": {"repetitions": DEFAULT_REPETITIONS, "seed": DEFAULT_SEED},
             "asked_at": utc(self._clock()), "from_sweep": {"id": run_id, "cell": cell},
@@ -865,7 +885,7 @@ class BacktestService:
         if model.get("indice") != request.get("indice"):
             raise NotPossible(f"The turbos were measured for {model.get('indice')}, not {request.get('indice')}")
         new_request = {
-            **{key: value for key, value in _without_research(request).items() if key not in ("from_sweep", "stress_of")},
+            **{key: value for key, value in _derived(request).items() if key not in ("from_sweep", "stress_of")},
             "turbos": MODELLED, "baseline": {**(request.get("baseline") or {}), "repetitions": 0},
             "name": f"Model check: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
             "asked_at": utc(self._clock()), "model_check_of": run_id,
@@ -903,7 +923,7 @@ class BacktestService:
         except (InvalidSweep, InvalidSettings) as e:
             raise NotPossible(f"This run cannot be stressed: {e}") from None
         new_request = {
-            **_without_research(request), "kind": "sweep", "baseline": None,
+            **_derived(request), "kind": "sweep", "baseline": None,
             "name": f"Stress: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
             "sweep": {"axes": axes, "held_out": DEFAULT_HELD_OUT, "walk_forward": None, "trials_before": 0},
             "asked_at": utc(self._clock()), "stress_of": run_id,
@@ -1340,8 +1360,128 @@ class BacktestService:
         found = read_json(self._paper_path("index.json"))
         return found if isinstance(found, dict) else {}
 
+    def paper_reports(self) -> dict:
+        """By rule (or ``live``): its reports' runs, newest first (``runs``), and for ``live`` the day it began (``since``)."""
+        found = read_json(self._paper_path(PAPER_REPORTS))
+        return found if isinstance(found, dict) else {}
+
     def _paper_ids(self) -> set[str]:
-        return {run_id for days in self.paper_index().values() for run_id in days.values() if run_id != NO_ENTRY}
+        days = {run_id for days in self.paper_index().values() for run_id in days.values() if run_id != NO_ENTRY}
+        return days | {run_id for entry in self.paper_reports().values() for run_id in entry.get("runs") or []}
+
+    def _index_paper_report(self, owner: str, run_id: str) -> None:
+        reports = self.paper_reports()
+        entry = reports.setdefault(owner, {})
+        entry["runs"] = [run_id, *(other for other in entry.get("runs") or [] if other != run_id)]
+        self._write_paper(PAPER_REPORTS, reports)
+
+    def paper_since(self, owner: str) -> str | None:
+        """The day an owner's report starts at when nothing else says it (the signals received's first day on paper)."""
+        return (self.paper_reports().get(owner) or {}).get("since")
+
+    def keep_paper_since(self, owner: str, day: str) -> None:
+        reports = self.paper_reports()
+        reports.setdefault(owner, {})["since"] = day
+        self._write_paper(PAPER_REPORTS, reports)
+
+    def nothing_to_report(self, owner: str) -> str | None:
+        """The last day up to which an owner had nothing to make a report of (no entry signal): not asked again for it."""
+        return (self.paper_reports().get(owner) or {}).get("nothing_to")
+
+    def mark_nothing_to_report(self, owner: str, day: str) -> None:
+        reports = self.paper_reports()
+        reports.setdefault(owner, {})["nothing_to"] = day
+        self._write_paper(PAPER_REPORTS, reports)
+
+    def _report_runs(self, owner: str) -> list[dict]:
+        """An owner's reports whose run is still there, newest first: each run's request and state."""
+        found = []
+        for run_id in (self.paper_reports().get(owner) or {}).get("runs") or []:
+            try:
+                request = read_json(self._file(run_id, "request.json")) or {}
+                status = self._status(run_id)
+            except UnknownRun:
+                continue
+            if status.get("state") == RUNNING and run_id not in self._running:
+                status = {**status, "state": INTERRUPTED}
+            found.append({"run_id": run_id, "request": request, "status": status})
+        return found
+
+    def newest_paper_report(self, owner: str) -> dict | None:
+        """The newest report asked for an owner, whatever its state: its run, period and state."""
+        runs = self._report_runs(owner)
+        if not runs:
+            return None
+        newest = runs[0]
+        return {"run_id": newest["run_id"], "from": newest["request"].get("from"), "to": newest["request"].get("to"),
+                "state": newest["status"].get("state")}
+
+    def _reports_of(self, owner: str) -> dict:
+        """
+        An owner's report to show, the newest finished one (``report``), and a newer one that waits, runs or did not
+        finish (``next_report``), with its place in line or what stopped it.
+        """
+        report, next_report = None, None
+        for found in self._report_runs(owner):
+            request, status = found["request"], found["status"]
+            if status.get("state") == DONE:
+                source = request.get("source") or {}
+                report = {
+                    "run_id": found["run_id"], "from": request.get("from"), "to": request.get("to"),
+                    "made_at": status.get("finished_at"), "signals": source.get("signals"),
+                    "versions": source.get("versions") or [],
+                    "headline": self._headline(self._summary_of(found["run_id"])),
+                }
+                break
+            if next_report is None:
+                waiting = self._in_turn()
+                next_report = {
+                    "run_id": found["run_id"], "from": request.get("from"), "to": request.get("to"),
+                    "state": status.get("state"), "error": status.get("error"),
+                    "position": waiting.index(found["run_id"]) + 1 if found["run_id"] in waiting else None,
+                }
+        return {"report": report, "next_report": next_report}
+
+    def _summary_of(self, run_id: str) -> dict | None:
+        """A finished run's summary; None when it is gone meanwhile (read from the routes' threads)."""
+        try:
+            return read_json(self._file(run_id, "summary.json"))
+        except UnknownRun:
+            return None
+
+    def settle_paper_reports(self) -> int:
+        """
+        Each owner's reports down to the newest finished one and the newest of all (a report waiting, running, or
+        one that did not finish, said beside it until the next is asked): the others removed, and the ids whose
+        run is gone forgotten. How many runs were removed.
+        """
+        reports, removed, changed = self.paper_reports(), 0, False
+        for entry in reports.values():
+            listed = entry.get("runs") or []
+            states = {}
+            for run_id in listed:
+                try:
+                    states[run_id] = self._status(run_id).get("state")
+                except UnknownRun:
+                    continue
+            present = [run_id for run_id in listed if run_id in states]
+            finished = next((run_id for run_id in present if states[run_id] == DONE), None)
+            kept = []
+            for place, run_id in enumerate(present):
+                if place == 0 or run_id == finished or run_id in self._waiting or run_id in self._running:
+                    kept.append(run_id)
+                    continue
+                try:
+                    self.delete(run_id)
+                    removed += 1
+                except (UnknownRun, NotPossible):
+                    kept.append(run_id)
+            if kept != listed:
+                entry["runs"] = kept
+                changed = True
+        if changed:
+            self._write_paper(PAPER_REPORTS, reports)
+        return removed
 
     def references(self) -> dict:
         found = read_json(self._paper_path("references.json"))
@@ -1381,14 +1521,17 @@ class BacktestService:
         pick = lambda share: results[min(len(results) - 1, max(0, round(share * (len(results) - 1))))]  # noqa: E731
         return {"run_id": run_id, "name": name, "days": len(results), "low": pick(0.05), "median": pick(0.5), "high": pick(0.95)}
 
-    def paper(self) -> dict:
+    def paper(self, *, with_reports: bool = True) -> dict:
         """
-        Each rule's paper days, newest first, beside the daily range of its reference run; and apart
-        (``live``), the paper days of the signals WATA received, beside the range of the live reference.
+        Each rule's paper days, newest first, beside the daily range of its reference run, and its report since it
+        began; and apart (``live``), the same of the signals WATA received, beside the range of the live reference.
+        ``with_reports`` False: the days and references alone (the drift, read at each look at health).
         """
         references = self.references()
+        index = self.paper_index()
         rules = {}
-        for rule_id, days in self.paper_index().items():
+        for rule_id in sorted(set(index) | (set(self.paper_reports()) if with_reports else set())):
+            days = index.get(rule_id) or {}
             reference = self._reference_range(references[rule_id]) if rule_id in references else None
             listed = []
             for day, run_id in sorted(days.items(), reverse=True):
@@ -1409,14 +1552,19 @@ class BacktestService:
                     "day": day, "run_id": run_id, "state": status.get("state"), "day_percent": result,
                     "trades": record.get("trades") if record else None, "outside": outside,
                 })
-            rules[rule_id] = {"days": listed, "reference": reference}
+            rules[rule_id] = {"days": listed, "reference": reference,
+                              **(self._reports_of(rule_id) if with_reports else {})}
         live = rules.pop(LIVE_PAPER, None)
         if live is None and LIVE_PAPER in references:
-            live = {"days": [], "reference": self._reference_range(references[LIVE_PAPER])}
+            live = {"days": [], "reference": self._reference_range(references[LIVE_PAPER]),
+                    **({"report": None, "next_report": None} if with_reports else {})}
         return {"rules": rules, "live": live}
 
     def prune_paper(self, keep_days: int, today: date) -> int:
-        """The paper runs of days older than ``keep_days`` removed, with their place in the index."""
+        """
+        The paper runs of days older than ``keep_days`` removed, with their place in the index; and the reports
+        that end on such a day (a rule's last, once it left shadow), with theirs.
+        """
         index, removed = self.paper_index(), 0
         for days in index.values():
             for day in [day for day in days if (today - date.fromisoformat(day)).days > keep_days]:
@@ -1429,7 +1577,24 @@ class BacktestService:
                 removed += 1
         if removed:
             self._write_paper("index.json", index)
-        return removed
+        reports, dropped = self.paper_reports(), 0
+        for entry in reports.values():
+            for run_id in list(entry.get("runs") or []):
+                try:
+                    ends = (read_json(self._file(run_id, "request.json")) or {}).get("to")
+                except UnknownRun:
+                    continue
+                if not ends or (today - date.fromisoformat(ends)).days <= keep_days:
+                    continue
+                entry["runs"].remove(run_id)
+                try:
+                    self.delete(run_id)
+                except (UnknownRun, NotPossible):
+                    pass
+                dropped += 1
+        if dropped:
+            self._write_paper(PAPER_REPORTS, reports)
+        return removed + dropped
 
     def _done_file(self, run_id: str, name: str):
         content = read_json(self._file(run_id, name))

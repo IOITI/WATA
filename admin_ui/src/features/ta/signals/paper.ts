@@ -1,5 +1,6 @@
 import { formatDay, formatNumber, formatPercent } from 'ioiti-ui'
 
+import { reportLine } from '@/features/backtests/paperModel'
 import type { BacktestPaper } from '@/lib/types'
 
 /** What a rule's days traded on paper say, beside its reference run. Pure. */
@@ -7,6 +8,8 @@ import type { BacktestPaper } from '@/lib/types'
 export interface PaperLine {
   /** "4 days, +1.20 %" */
   total: string
+  /** "Since 14 Oct: +1.18 % in 9 trades": its report, one run of every day since it was made; null before the first. */
+  report: string | null
   /** "Last, Mon 19 Oct: +0.40 %" */
   last: string | null
   reference: string
@@ -16,9 +19,10 @@ export interface PaperLine {
 }
 
 export function paperLine(entry: BacktestPaper['rules'][string] | undefined, mode: string): PaperLine | null {
-  if (!entry || entry.days.length === 0) {
+  const report = entry?.report ? reportLine(entry.report) : null
+  if (!entry || (entry.days.length === 0 && !report)) {
     return mode === 'shadow'
-      ? { total: 'Each finished day, once the market is closed', last: null, reference: '', outside: 0, tone: 'neutral' }
+      ? { total: 'Each finished day, once the market is closed', report: null, last: null, reference: '', outside: 0, tone: 'neutral' }
       : null
   }
   const results = entry.days.filter((day) => day.day_percent !== null)
@@ -35,6 +39,7 @@ export function paperLine(entry: BacktestPaper['rules'][string] | undefined, mod
   }
   return {
     total: `${results.length} day${results.length === 1 ? '' : 's'}, ${formatPercent(total, true)}`,
+    report,
     last: last ? `Last, ${formatDay(last.day, false)}: ${formatPercent(last.day_percent, true)}${last.trades !== null ? ` in ${formatNumber(last.trades)} trade${last.trades === 1 ? '' : 's'}` : ''}` : null,
     reference: referenceText,
     outside,

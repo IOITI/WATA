@@ -289,6 +289,29 @@ describe('the Signal rules page', () => {
     expect(await screen.findByText('2 days, −5.60%')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Last, 19 Oct: +0.40% in 2 trades' })).toHaveAttribute('href', '/backtests/20261020-010000-aaaaaa')
     expect(screen.getByText(/^1 day outside it\. Its reference \(Cross, 3 months\)/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Every day on paper' })).toHaveAttribute('href', '/backtests/paper#rule-aaaaaaaaaaaa')
+  })
+
+  it('shows a shadow rule\'s report since it was made, in place of its days added up', async () => {
+    paper = {
+      rules: {
+        aaaaaaaaaaaa: {
+          days: [{ day: '2026-10-19', run_id: '20261020-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2, outside: false }],
+          reference: null,
+          report: {
+            run_id: '20261020-213500-dddddd', from: '2026-10-14', to: '2026-10-19', made_at: '2026-10-20T21:40:00Z', signals: 12, versions: [1],
+            headline: { total_percent: 1.18, trades: 9, win_rate: 55.5, worst_drawdown: -2.1, sample: 'few', beaten: null, days_tested: 4, profit_loss: 11.8, cells: null },
+          },
+          next_report: null,
+        },
+      },
+    }
+    renderPage()
+
+    // Its report, whatever its run is tonight: through the report's own address.
+    expect(await screen.findByRole('link', { name: 'Since 14 Oct: +1.18% in 9 trades' })).toHaveAttribute('href', '/backtests/paper/aaaaaaaaaaaa')
+    expect(screen.queryByText('1 day, +0.40%')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Last, 19 Oct: +0.40% in 2 trades' })).toHaveAttribute('href', '/backtests/20261020-010000-aaaaaa')
   })
 
   it('switches a rule off at once, and asks before it goes live', async () => {

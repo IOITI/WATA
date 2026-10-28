@@ -256,6 +256,26 @@ def test_a_model_check_is_made_from_a_finished_recorded_run_and_read_as_a_part(t
     assert answer(research, "backtest_result", {"run_id": checked["id"], "part": "model_check"}) == paired
 
 
+def test_neighbours_of_a_run_of_a_rule_s_signals_are_refused(tmp_path, research, experiment):
+    body = {
+        "from": "2026-10-14", "to": "2026-10-16", "indice": "us100",
+        "source": {"kind": "ta_signals", "rule": {"id": "a00000000001", "name": "EMA"}},
+        "chart": {"asset": {"provider": "capital", "key": "US100"}, "side": "bid", "bars": {"type": "range", "ticks": 40}},
+        "paper": {"rule": "a00000000001", "report": True},
+    }
+    run_id = research.backtests.create(body, journal=[])["id"]
+    (folder_of(tmp_path, run_id) / "summary.json").write_text(json.dumps(SUMMARY))
+    (folder_of(tmp_path, run_id) / "status.json").write_text(json.dumps({"state": DONE}))
+    research.backtests._waiting.clear()
+
+    said = refusal(research, "backtest_derive", {"run_id": run_id, "kind": "neighbours", "experiment_id": experiment,
+                                                 "parameter": "stoploss_percent"})
+
+    # Claude's runs replay a script or the journal: never the journal in the place of a rule's signals.
+    assert "Claude's runs replay a Pine script" in said
+    assert research.backtests.list_runs() == []
+
+
 def test_neighbours_need_a_parameter_the_run_had(tmp_path, research, scripts, experiment):
     run_id = finished_run(tmp_path, research, scripts, {"summary.json": SUMMARY})
 

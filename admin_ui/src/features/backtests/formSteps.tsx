@@ -139,6 +139,8 @@ export function StrategyStep({
   update,
   updateRule,
   scripts,
+  rules,
+  onRule,
   options,
   inputs,
   invalidInputs,
@@ -148,6 +150,8 @@ export function StrategyStep({
   update: Update
   updateRule: (changes: Partial<RuleDraft>) => void
   scripts: TaScriptSummary[]
+  rules: readonly TaRule[]
+  onRule: (rule: TaRule) => void
   options: BacktestOptions
   inputs: ScriptInputs
   invalidInputs: Record<string, string>
@@ -157,11 +161,12 @@ export function StrategyStep({
   return (
     <div className="space-y-5 text-sm">
       <Section title="What makes the signals">
-        <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What makes the signals">
+        <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="What makes the signals">
           {(
             [
               ['pine', 'A Pine script', 'Run as the TA engine runs a signal rule: day by day, each alert counting once its bar closed.'],
               ['journal', 'The signals WATA received', 'TradingView’s, as the trader received them, each beside what WATA did of it.'],
+              ['ta_signals', 'The signals a rule raised', 'As the TA engine journaled them, live or in shadow: no script is run again. What paper trading trades.'],
             ] as const
           ).map(([kind, title, description]) => (
             <label
@@ -213,12 +218,44 @@ export function StrategyStep({
             </p>
           </>
         )
+      ) : draft.sourceKind === 'ta_signals' ? (
+        <RaisedSignals draft={draft} rules={rules} onRule={onRule} />
       ) : (
         <p className="text-xs leading-relaxed text-muted-foreground">
           The journal of the period is read when the backtest is asked for. The scheduler’s close of the day is left out:
           each day closes at the run’s own close time.
         </p>
       )}
+    </div>
+  )
+}
+
+/** The rule whose signals are traded: its asset, bars and indice come with it, its script is not run again. */
+function RaisedSignals({ draft, rules, onRule }: { draft: BacktestDraft; rules: readonly TaRule[]; onRule: (rule: TaRule) => void }) {
+  const chosen = draft.fromRule
+  // A rule deleted since keeps its signals: a run made again from one still names it.
+  const options = [
+    ...(chosen && !rules.some((rule) => rule.id === chosen.id) ? [{ value: chosen.id, label: `${chosen.name} (deleted)` }] : []),
+    ...rules.map((rule) => ({ value: rule.id, label: rule.name })),
+  ]
+  return (
+    <div className="space-y-2">
+      <label className="flex max-w-md flex-col gap-1">
+        <span className="text-xs text-text-secondary">The rule whose signals are traded</span>
+        <Select
+          value={chosen?.id ?? ''}
+          onChange={(event) => {
+            const rule = rules.find((entry) => entry.id === event.target.value)
+            if (rule) onRule(rule)
+          }}
+          options={[...(chosen ? [] : [{ value: '', label: 'Choose a rule' }]), ...options]}
+        />
+      </label>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        The signals it raised in the period are read when the backtest is asked for, each reaching the trader as the
+        journal says (a setting of the last step). Its asset and bars, of the first step, only draw the days and measure
+        the edge.
+      </p>
     </div>
   )
 }
@@ -245,8 +282,8 @@ function isWeekend(day: string): boolean {
   return weekday === 0 || weekday === 6
 }
 
-/** What was recorded each day of the period: one square a day, weekends left out. */
-export function RecordedDays({ coverage, journal }: { coverage: BacktestCoverage; journal: boolean }) {
+/** What was recorded each day of the period: one square a day, weekends left out; the entry signals, received or raised. */
+export function RecordedDays({ coverage, signals }: { coverage: BacktestCoverage; signals: 'received' | 'raised' | null }) {
   const days = coverage.days.filter((day) => !isWeekend(day.day) || day.turbos.long + day.turbos.short > 0)
   return (
     <div className="space-y-2">
@@ -257,7 +294,7 @@ export function RecordedDays({ coverage, journal }: { coverage: BacktestCoverage
             `${day.turbos.long} long and ${day.turbos.short} short turbos`,
             day.asset_bars === null ? null : `${formatNumber(day.asset_bars)} bars of the asset`,
             `the recorder listened ${formatNumber(day.recorded_minutes)} min`,
-            journal && day.signals !== null ? `${day.signals} signal${day.signals === 1 ? '' : 's'} of entry received` : null,
+            signals && day.signals !== null ? `${day.signals} signal${day.signals === 1 ? '' : 's'} of entry ${signals}` : null,
           ].filter(Boolean).join(', ')
           return (
             <li key={day.day} title={`${formatDay(day.day)}: ${state.label} (${detail})`} className={cn('size-4 rounded-[4px]', state.className)}>
@@ -347,7 +384,10 @@ export function PeriodStep({
             <p className="text-sm">
               {ready} day{ready === 1 ? '' : 's'} of the {periodDays(draft.from, draft.to)} can be traded.
             </p>
-            <RecordedDays coverage={coverage} journal={draft.sourceKind === 'journal'} />
+            <RecordedDays
+              coverage={coverage}
+              signals={draft.sourceKind === 'journal' ? 'received' : draft.sourceKind === 'ta_signals' ? 'raised' : null}
+            />
           </>
         ) : (
           coveragePending && <p className="text-xs text-muted-foreground">Reading what was recorded…</p>
@@ -629,6 +669,13 @@ function SweepAxes({
 
 // ── 5. the review ──
 
+/** What makes a run's signals, as the review names it. */
+function signalsLabel(draft: BacktestDraft, script: TaScriptSummary | undefined): string {
+  if (draft.sourceKind === 'journal') return 'The signals WATA received'
+  if (draft.sourceKind === 'ta_signals') return `The signals ${draft.fromRule?.name ?? 'a rule'} raised, as the engine journaled them`
+  return `${script?.name ?? 'Script'} v${draft.rule.version}${draft.fromRule ? ` (from the rule ${draft.fromRule.name})` : ''}`
+}
+
 export function ReviewStep({
   draft,
   update,
@@ -652,7 +699,7 @@ export function ReviewStep({
     <div className="space-y-5 text-sm">
       <dl className="divide-y divide-border rounded-lg border border-border">
         {[
-          ['Signals', draft.sourceKind === 'pine' ? `${script?.name ?? 'Script'} v${draft.rule.version}${draft.fromRule ? ` (from the rule ${draft.fromRule.name})` : ''}` : 'The signals WATA received'],
+          ['Signals', signalsLabel(draft, script)],
           ['Asset', asset ? `${assetLabel(asset)} · ${barsLabel(draftBars(draft))} · ${draft.rule.side}` : '-'],
           ['Turbos of', `${draft.indice}, ${draft.turbos === 'modelled' && options.turbo_model ? `made up from ${underlyingLabel(options.turbo_model.underlying)}` : 'as recorded'}`],
           ['Period', draft.from && draft.to ? `${formatDay(draft.from)} to ${formatDay(draft.to)}${ready !== null ? `: ${ready} day${ready === 1 ? '' : 's'} can be traded` : ''}` : '-'],

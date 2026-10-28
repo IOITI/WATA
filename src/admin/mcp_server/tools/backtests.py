@@ -38,7 +38,9 @@ def _source_line(source: dict) -> dict:
     """What the signals of a run are, in a few fields."""
     kind = source.get("kind")
     if kind != "pine":
-        return {"kind": kind, "signals": source.get("signals"), "rule": source.get("rule")}
+        line = {"kind": kind, "signals": source.get("signals"), "rule": source.get("rule")}
+        # A rule's signals: the versions of its script that raised them.
+        return {**line, "versions": source["versions"]} if source.get("versions") else line
     rule = source.get("rule") or {}
     return {
         "kind": kind,
@@ -454,6 +456,8 @@ def register_writing(server, research) -> None:
         except ValueError as e:
             raise Refused(str(e)) from None
         body = body_of(run)
+        # Claude's own runs replay a script or the journal: the neighbours of another run are refused plainly.
+        guards.check_source(research, body)
         body["name"] = f"Neighbours of {parameter}: {run.get('name') or run_id}"[:120]
         body["sweep"] = {
             "axes": [{"kind": "input" if parameter.startswith("in_") else "setting", "name": parameter, "values": chosen}],

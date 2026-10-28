@@ -6,7 +6,7 @@ import pytest
 
 from src.price_history.process import OOM_SCORE_ADJ, give_up_memory_first
 from src.research.experiments import ExperimentJournal, UnknownExperiment
-from src.research.requests import neighbour_values, trials_of
+from src.research.requests import body_of, neighbour_values, trials_of
 
 
 @pytest.fixture
@@ -184,3 +184,16 @@ def test_a_child_asks_to_be_stopped_first_when_memory_runs_out(tmp_path):
 
 def test_where_nothing_can_be_asked_nothing_fails(tmp_path):
     give_up_memory_first(str(tmp_path / "no" / "such" / "file"))
+
+
+def test_a_run_of_the_signals_a_rule_raised_is_asked_again_as_one(tmp_path):
+    chart = {"asset": {"provider": "capital", "key": "US100"}, "side": "bid", "bars": {"type": "range", "ticks": 40}}
+    run = {"request": {"name": "Paper: EMA, since 2026-10-14", "tags": ["paper"], "from": "2026-10-14", "to": "2026-10-19",
+                       "indice": "us100", "changes": {}, "chart": chart, "paper": {"rule": "a00000000001", "report": True},
+                       "source": {"kind": "ta_signals", "signals": 6, "rule": {"id": "a00000000001", "name": "EMA"}}}}
+
+    body = body_of(run)
+
+    # Its signals read again for the period, never the journal in their place; never a paper run of its own.
+    assert body["source"] == {"kind": "ta_signals", "rule": {"id": "a00000000001", "name": "EMA"}}
+    assert body["chart"] == chart and "paper" not in body

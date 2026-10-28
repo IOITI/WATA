@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Alert, AlertDescription, AlertTitle, Badge, formatDay, Panel, QueryState, SignedValue } from 'ioiti-ui'
 import { Link } from 'react-router'
 
+import { paperReportHref, reportLine } from '@/features/backtests/paperModel'
 import { api } from '@/lib/api'
 import type { LivePaperDay } from '@/lib/types'
 
@@ -43,10 +44,19 @@ export function LivePaperPanel({ enabled }: { enabled: boolean }) {
               </Alert>
             )}
             <p className="text-xs text-muted-foreground">{referenceText(live.reference)}</p>
+            {live.report && (
+              <p className="text-xs">
+                Their report:{' '}
+                <Link className="font-medium underline-offset-2 hover:underline" to={paperReportHref('live')}>
+                  {reportLine(live.report)}
+                </Link>
+                , every trade on paper beside WATA’s real one.
+              </p>
+            )}
             {live.days.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">No paper day yet: the first come once the market is closed.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full min-w-[30rem] text-left text-xs">
                   <thead className="text-muted-foreground">
                     <tr>

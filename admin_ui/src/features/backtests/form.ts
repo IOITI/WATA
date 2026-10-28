@@ -28,7 +28,8 @@ import { PROVIDER_LABEL } from './model'
  * Tested without a page.
  */
 
-export type SourceKind = 'pine' | 'journal'
+/** A Pine script run again, the signals WATA received, or those a rule raised as the TA engine journaled them. */
+export type SourceKind = 'pine' | 'journal' | 'ta_signals'
 
 export interface AxisDraft {
   kind: 'setting' | 'input'
@@ -130,17 +131,18 @@ export function newBacktestDraft(
   }
 }
 
-/** A draft filled from a signal rule: its script, asset, bars, inputs and alerts. */
+/**
+ * A draft filled from a signal rule: its script, asset, bars, inputs and alerts. Of the signals it raised (the
+ * source chosen already), its asset, bars and indice: what it raised is read, no script is run again.
+ */
 export function withRule(draft: BacktestDraft, rule: TaRule): BacktestDraft {
   // Replayed as the engine runs it: on the rule's own days of history, or the engine's.
   const { history_days: _, ...changes } = draft.changes
+  const chosen = { ...draft, asset: assetRef(rule.asset), indice: rule.indice, rule: draftOfRule(rule), fromRule: { id: rule.id, name: rule.name } }
+  if (draft.sourceKind === 'ta_signals') return { ...chosen, changes }
   return {
-    ...draft,
+    ...chosen,
     sourceKind: 'pine',
-    asset: assetRef(rule.asset),
-    indice: rule.indice,
-    rule: draftOfRule(rule),
-    fromRule: { id: rule.id, name: rule.name },
     changes: rule.history_days === null || rule.history_days === undefined ? changes : { ...changes, history_days: String(rule.history_days) },
   }
 }
@@ -167,6 +169,15 @@ export function draftOfRun(run: BacktestRun, options: BacktestOptions): Backtest
   }
   if (request.source.kind === 'journal') {
     return { ...draft, sourceKind: 'journal', rule: { ...draft.rule, ...barsDraft(request.chart.bars), side: request.chart.side } }
+  }
+  if (request.source.kind === 'ta_signals') {
+    // A day on paper, or a report: the same signals, read again for the period (a rule deleted since keeps them).
+    return {
+      ...draft,
+      sourceKind: 'ta_signals',
+      fromRule: request.source.rule,
+      rule: { ...draft.rule, ...barsDraft(request.chart.bars), side: request.chart.side },
+    }
   }
   const rule = request.source.rule
   return {
@@ -339,6 +350,7 @@ export function backtestProblems(
     const fields = ruleFields(draft.rule, inputs as IPineInput[] | null)
     if (fields.alerts.length === 0 && fields.alert_calls !== 'message') problems.push('Make at least one alert of the script a signal.')
   }
+  if (draft.sourceKind === 'ta_signals' && !draft.fromRule) problems.push('Choose the rule whose signals are traded.')
   for (const [name, text] of Object.entries(draft.changes)) {
     const field = options.fields.find((entry) => entry.name === name)
     const error = field ? fieldError(field, text) : null
@@ -352,6 +364,9 @@ export function backtestProblems(
     }
     if (draft.axes.some((axis) => axis.kind === 'input') && draft.sourceKind === 'journal') {
       problems.push('A replay of the journal has no script inputs to try.')
+    }
+    if (draft.axes.some((axis) => axis.kind === 'input') && draft.sourceKind === 'ta_signals') {
+      problems.push('The signals a rule raised have no script inputs to try: its script is not run again.')
     }
     const cells = sweepCells(draft.axes.map((axis) => {
       const read = axisValues(axis, options.fields, inputs, options.sweep.values)
@@ -406,6 +421,7 @@ export function requestOf(draft: BacktestDraft, options: BacktestOptions, inputs
       from_rule: draft.fromRule,
     }
   } else {
+    if (draft.sourceKind === 'ta_signals' && draft.fromRule) body.source = { kind: 'ta_signals', rule: draft.fromRule }
     body.chart = { asset, side: draft.rule.side, bars }
   }
   if (draft.sweep) {

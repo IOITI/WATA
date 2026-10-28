@@ -44,7 +44,9 @@ def register(server, research) -> None:
         """Every signal rule the TA engine runs: its mode (live sends signals to the trader, shadow only journals
         them, off), who made it (made_by "claude" for Claude's), the script version it pins, its asset and bars, its
         inputs, what each alert becomes, how the engine runs it now, and for a shadow rule its days traded on paper
-        beside the daily range (5 % to 95 %) of its reference run."""
+        beside the daily range (5 % to 95 %) of its reference run, and its report: one run of its signals since it
+        was made (paper.report.run_id, read with backtest_result and backtest_trades), made again after each
+        finished day; paper.next_report is the one being made, or why it was not."""
         def read():
             paper = research.backtests.paper() if research.backtests is not None else {}
             return research.rules.load()["rules"], {meta["id"]: meta for meta in research.scripts.scripts()}, paper

@@ -32,6 +32,10 @@ def body_of(run: dict) -> dict:
             "kind": "pine", "script": {"id": rule["script"]["id"], "version": rule["script"]["version"]},
             **{key: copy.deepcopy(rule[key]) for key in ("asset", "side", "bars", "inputs", "alerts", "alert_calls", "confidence_plot") if key in rule},
         }
+    elif source["kind"] == "ta_signals":
+        # The signals a rule raised, read again for the period: never a journal replay in their place.
+        body["source"] = {"kind": "ta_signals", "rule": copy.deepcopy(source.get("rule"))}
+        body["chart"] = copy.deepcopy(request["chart"])
     else:
         body["source"] = {"kind": "journal"}
         body["chart"] = copy.deepcopy(request["chart"])

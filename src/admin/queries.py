@@ -185,6 +185,14 @@ def _clean_row(record) -> dict:
     return row
 
 
+def _raised_signal(record) -> dict:
+    """A row of ``ta_signal`` with what the trader made of it when it was sent (``trader``, None otherwise)."""
+    signal = _clean_row(record)
+    trader = {key[len("trader__"):]: signal.pop(key) for key in list(signal) if key.startswith("trader__")}
+    signal["trader"] = trader if trader["decided_at"] is not None else None
+    return signal
+
+
 def _linked_order(record) -> dict:
     """A row of the linked orders: its position and its signal as dicts, None when it has none."""
     row = _clean_row(record)
@@ -1002,13 +1010,29 @@ class AdminQueries:
             """,
             *args,
         )
-        signals = []
-        for row in rows:
-            signal = _clean_row(row)
-            trader = {key[len("trader__"):]: signal.pop(key) for key in list(signal) if key.startswith("trader__")}
-            signal["trader"] = trader if trader["decided_at"] is not None else None
-            signals.append(signal)
-        return signals
+        return [_raised_signal(row) for row in rows]
+
+    async def rule_signals(self, rule_id: str, start: date, end: date, limit: int = MAX_REPLAYED_ROWS) -> list[dict]:
+        """
+        What a paper run of a rule replays: the signals it raised with an action, between two days (both
+        included), as ``ta_signals`` gives them, oldest first. The newest ``limit`` at most (``MAX_REPLAYED_ROWS``):
+        as many coming back means there were more, and the oldest are the ones left out.
+        """
+        args: list[Any] = [rule_id]
+        conditions = ["s.rule_id = $1", "s.action IS NOT NULL", *self._date_range_conditions("s.raised_at", start, end, args)]
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(f"s.{column}" for column in _TA_SIGNAL_COLUMNS)},
+                   {", ".join(f"j.{column} AS trader__{column}" for column in _TA_TRADER_COLUMNS)}
+            FROM ta_signal s
+            LEFT JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            WHERE {' AND '.join(conditions)}
+            ORDER BY s.raised_at DESC, s.id DESC
+            LIMIT {min(max(limit, 1), MAX_REPLAYED_ROWS)}
+            """,
+            *args,
+        )
+        return [_raised_signal(row) for row in reversed(rows)]
 
     async def ta_other_signals(self, indice: str, day: date) -> list[dict]:
         """

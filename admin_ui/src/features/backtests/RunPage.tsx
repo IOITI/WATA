@@ -51,6 +51,7 @@ import { ReconciliationPanel } from './ReconciliationPanel'
 import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
 import { DaysTable, SignalsTable, TradesTable } from './runTables'
 import { ModelCheckPanel } from './ModelCheckPanel'
+import { paperRunLine, runParents } from './paperModel'
 import { choiceTrust } from './robustness'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
@@ -146,6 +147,16 @@ function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof
                     {' '}
                     (the rule <RulePeekName id={source.from_rule.id} name={source.from_rule.name} />)
                   </>
+                )}
+              </>
+            ) : source.kind === 'ta_signals' ? (
+              <>
+                The {formatNumber(source.signals)} signal{source.signals === 1 ? '' : 's'}{' '}
+                <RulePeekName id={source.rule.id} name={source.rule.name} /> raised
+                {source.versions && source.versions.length > 0 && (
+                  <span className="block text-xs text-muted-foreground">
+                    as the engine journaled them, by {source.versions.map((version) => `v${version}`).join(' and ')} of its script
+                  </span>
                 )}
               </>
             ) : (
@@ -264,6 +275,7 @@ export function RunPage() {
   const summary = run?.summary
   const figures = summary?.figures
   const money = summary?.money
+  const paperLine = run ? paperRunLine(run) : null
   const sections = useMemo(() => (run ? runSections(run) : []), [run])
   // Numbered as the nav shows them, each a link to its place (`#edge`), which can be opened in another tab.
   const parts = useMemo(
@@ -319,7 +331,8 @@ export function RunPage() {
         setRenaming(true)
       },
     })
-    if (!isActive(shown.status.state)) {
+    // A paper report is WATA's to keep: made again after each finished day, the older removed.
+    if (!isActive(shown.status.state) && !shown.paper?.report) {
       options.push({
         value: 'remove',
         label: 'Remove',
@@ -328,7 +341,7 @@ export function RunPage() {
         tone: 'danger',
         onSelect: () => {
           removeRuns([{ id: shown.id, name: shown.name }])
-          navigate('/backtests')
+          navigate(shown.paper ? '/backtests/paper' : '/backtests')
         },
       })
     }
@@ -340,6 +353,7 @@ export function RunPage() {
       <PageHeader
         title={run?.name ?? 'Backtest'}
         description={run ? `${sourceLabel(run)} · ${formatDay(run.from)} to ${formatDay(run.to)}` : undefined}
+        parents={runParents(run)}
         actions={
           run && (
             <>
@@ -390,6 +404,15 @@ export function RunPage() {
                   </Badge>
                 ))}
               </div>
+
+              {paperLine && (
+                <p className="text-sm text-muted-foreground">
+                  {paperLine.text}{' '}
+                  <Link to={paperLine.link.href} className="font-medium text-foreground underline-offset-4 hover:underline">
+                    {paperLine.link.label}
+                  </Link>
+                </p>
+              )}
 
               {reference.error && (
                 <p role="alert" className="text-sm text-negative">

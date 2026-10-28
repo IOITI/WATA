@@ -603,6 +603,47 @@ def test_the_signals_from_elsewhere_are_read_before_the_ta_engine_ever_ran(in_a_
     assert [row["signal_uuid"] for row in in_a_database_of_its_own(scenario)] == ["tradingview-0002"]
 
 
+def test_a_paper_run_reads_the_signals_a_rule_raised_with_an_action_the_newest_kept_oldest_first(in_a_database_of_its_own):
+    from src.admin.queries import AdminQueries, LazyDatabase
+    from src.database.postgres import AsyncDbTaManager, init_ta_schema
+
+    def raised(rule_id, at, action, key):
+        return {
+            "rule_id": rule_id, "rule_name": "EMA", "script_id": "0123456789ab", "script_version": 4,
+            "asset": "capital/US100", "side": "bid", "bars": "1", "bar_time": at - timedelta(minutes=1), "bar_closed_at": at,
+            "alert_key": key, "alert_title": key, "alert_message": "{}", "action": action, "indice": "us100",
+            "confidence": None, "mode": "shadow", "raised_at": at, "outcome": "shadow" if action else "refused", "detail": None,
+        }
+
+    async def scenario(writer, reader):
+        await init_ta_schema(writer)
+        store = AsyncDbTaManager(writer)
+        rows = (
+            # 23:30 on Monday 12 in Paris, then 00:30 on Tuesday 13 there.
+            ("aaaaaaaaaaaa", datetime(2026, 10, 12, 21, 30, tzinfo=timezone.utc), "long", "a"),
+            ("aaaaaaaaaaaa", datetime(2026, 10, 12, 22, 30, tzinfo=timezone.utc), "short", "b"),
+            ("aaaaaaaaaaaa", datetime(2026, 10, 13, 13, 31, tzinfo=timezone.utc), "long", "c"),
+            # A close raised with an entry: journaled without an action, never traded.
+            ("aaaaaaaaaaaa", datetime(2026, 10, 13, 13, 41, tzinfo=timezone.utc), None, "d"),
+            ("aaaaaaaaaaaa", datetime(2026, 10, 14, 9, 0, tzinfo=timezone.utc), "close-position", "e"),
+            ("aaaaaaaaaaaa", datetime(2026, 10, 15, 9, 0, tzinfo=timezone.utc), "long", "f"),
+            ("bbbbbbbbbbbb", datetime(2026, 10, 13, 10, 0, tzinfo=timezone.utc), "long", "g"),
+        )
+        for rule_id, at, action, key in rows:
+            await store.journal_signal(raised(rule_id, at, action, key))
+        queries = AdminQueries(LazyDatabase(reader), "Europe/Paris")
+        return (
+            await queries.rule_signals("aaaaaaaaaaaa", date(2026, 10, 13), date(2026, 10, 14)),
+            await queries.rule_signals("aaaaaaaaaaaa", date(2026, 10, 13), date(2026, 10, 14), limit=2),
+        )
+
+    period, newest = in_a_database_of_its_own(scenario)
+
+    assert [row["alert_key"] for row in period] == ["b", "c", "e"]
+    assert [row["alert_key"] for row in newest] == ["c", "e"]
+    assert period[0]["script_version"] == 4 and period[0]["trader"] is None
+
+
 def test_what_the_ta_engine_measures_of_itself_is_what_its_monitor_reads_and_older_rows_go(in_a_database_of_its_own):
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.database.postgres import AsyncDbSignalJournalManager, AsyncDbTaManager, init_ta_schema

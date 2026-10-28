@@ -10,6 +10,7 @@ warning and health's).
 """
 
 import hashlib
+import json
 import math
 import os
 import random
@@ -97,10 +98,17 @@ def seeded_store(root: str) -> ScriptStore:
 # ── a signal rule, and what a made-up TA engine did with the rules ──
 
 
+# The rule traded on paper: the same id at every start, so that its days and reports, kept with the fake's
+# backtests (var/lib/backtests), are not made again each time.
+PAPER_RULE_ID = "00000000a1a1"
+PAPER_RULE_DAYS = 10
+
+
 def seed_rule(store: ScriptStore) -> None:
     """
-    A live rule on the EMA cross, as one is made from the Signal rules page then switched, and one
-    of Claude's in shadow on ten-second bars, as the MCP endpoint makes them.
+    A live rule on the EMA cross, as one is made from the Signal rules page then switched, one of
+    Claude's in shadow on ten-second bars, as the MCP endpoint makes them, and one in shadow on
+    US100 since ten days, traded on paper (its days and its report).
     """
     rules = RuleStore(store)
     if rules.load()["rules"]:
@@ -124,6 +132,15 @@ def seed_rule(store: ScriptStore) -> None:
         {**fields, "name": "Claude · EMA cross 10 s", "bars": {"type": "time", "timeframe": "10S"}, "indice": "us500"},
         rules.load()["revision"], made_by="claude",
     )
+    shadow = rules.create({**fields, "name": "EMA cross 9/21 in shadow", "inputs": []}, rules.load()["revision"])["rule"]
+    made = (datetime.now(timezone.utc) - timedelta(days=PAPER_RULE_DAYS)).isoformat()
+    with open(rules.path, encoding="utf-8") as in_file:
+        listed = json.load(in_file)
+    for rule in listed["rules"]:
+        if rule["id"] == shadow["id"]:
+            rule.update(id=PAPER_RULE_ID, created_at=made, updated_at=made, mode_changed_at=made)
+    with open(rules.path, "w", encoding="utf-8") as out_file:
+        json.dump(listed, out_file, indent=2)
 
 
 def _rng(*parts) -> random.Random:
