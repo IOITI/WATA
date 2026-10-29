@@ -2,7 +2,7 @@
 
 ## v0.62.0 - A backtest's day drawn with the script that made its signals
 
-**Release date:** not yet released
+**Release date:** 2026-10-29
 
 A day of a backtest showed the asset with the run's signals and trades, but not the script that made the signals: why one fired could only be guessed. A day whose signals a script of WATA made, a Pine run or a rule's on paper, is now drawn on Vela, the Charts page's chart. The script is drawn as it ran, its plots, fills, shapes, backgrounds and labels as on the Charts page, with the run's signals and trades over it. A replay of TradingView's alerts keeps the chart it had.
 
