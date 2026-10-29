@@ -2,7 +2,7 @@
 
 ## v0.60.0 - The AI agent keeps a memory between its conversations
 
-**Release date:** not yet released
+**Release date:** 2026-10-29
 
 Each conversation of the AI agent started from nothing: what one learned (a unit trap, a strategy without edge, how the operator wants answers) was lost for the next, and a research task's conclusion stayed inside its own conversation. The agent now keeps entries of a memory it reads and changes itself, which the operator reads and manages on a page of their own, and which Claude Code reads too.
 
