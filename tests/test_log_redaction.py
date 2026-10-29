@@ -43,6 +43,13 @@ def no_secret_registered():
     ("headers={'x-api-key': 'sk-ant-api03-Qx9rT2mVbL7wZ', 'anthropic-version': '2026-10-21'}", "Qx9rT2mVbL7wZ"),
     ("x-api-key: k3Y-without-its-prefix-9f2", "k3Y-without-its-prefix-9f2"),
     ("AuthenticationError: invalid key sk-ant-api03-Hj4kLm9NpQ2rS8", "Hj4kLm9NpQ2rS8"),
+    # Saxo's keys (made up, in their shape): the trader's start line until v0.59.1, a body, a dictionary.
+    ("2026-10-29 06:17:25,000 - INFO - __main__ - Account: Qm9ndXMtYWNjb3VudC0wMQ==, Client: Qm9ndXMtY2xpZW50LTAwMQ==",
+     "Qm9ndXMtYWNjb3VudC0wMQ=="),
+    ("2026-10-29 06:17:25,000 - INFO - __main__ - Account: Qm9ndXMtYWNjb3VudC0wMQ==, Client: Qm9ndXMtY2xpZW50LTAwMQ==",
+     "Qm9ndXMtY2xpZW50LTAwMQ=="),
+    ('{"AccountKey": "Qm9ndXMtYWNjb3VudC0wMQ==", "Amount": 3}', "Qm9ndXMtYWNjb3VudC0wMQ=="),
+    ("{'ClientKey': 'Qm9ndXMtY2xpZW50LTAwMQ=='}", "Qm9ndXMtY2xpZW50LTAwMQ=="),
 ])
 def test_the_shapes_of_secrets_are_masked(line, secret):
     cleaned = redact(line)
@@ -54,6 +61,15 @@ def test_the_shapes_of_secrets_are_masked(line, secret):
 def test_what_is_not_a_secret_is_left_as_it_is():
     line = "Position 5123 sold at 12.34 (stop -7.00 %), order 98765, contextId=wata_pm_1"
 
+    assert redact(line) == line
+
+
+@pytest.mark.parametrize("line", [
+    "Client: connected again after 3 s",
+    "Accounts: 2, Account: 9000001/EUR",
+    "AccountKey is required by Saxo",
+])
+def test_a_word_after_account_or_client_is_not_taken_for_a_key(line):
     assert redact(line) == line
 
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.59.1 - Saxo's account keys kept out of the logs
+
+**Release date:** not released yet
+
+At each start the trader wrote Saxo's account key and client key in its log, `Account: <key>, Client: <key>`. The cleaning of log lines knew those keys only in an address's query (`AccountKey=`), and no service registered their values: the line stayed in the trader's log files on the server and was shown on the admin's Logs page. Seen while deploying v0.59.0, whose read of the trader's log printed them.
+
+- **Registered where they are read**: the trader's helper, which the position monitor and the price recorder use too, and the watchlist manager's own register both keys (`register_secret`) as soon as Saxo gives them: no log line of those services can write them, whatever names them (an order's body, an error, a message).
+- **The trader's start line** no longer names them: "Saxo account read (its keys are kept out of the logs)".
+- **The lines written before**: the shapes cleaned on every line, and on the Logs page, now include `Account: <key>, Client: <key>` (a padded base64 value after the word, never a plain word) and `AccountKey: …` / `"ClientKey": "…"` in a body or a message. The admin never reads Saxo's keys, so only a shape cleans what its Logs page shows of the files of before. The files themselves keep those lines until they rotate away.
+
+**On the live path:** the trader's start line, and the registration of two values in the trader, the position monitor, the price recorder and the watchlist manager; nothing that trades changes.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- 3,335 Python tests pass (38 skipped: the live database and queue, and the Pine runner's, Node 24 not on that run's path; CI runs them), ten of them new (keys made up, in Saxo's shape): the keys read by either helper masked wherever a line names them, the trader's line of before written as `Account: ***, Client: ***`, the new shapes masked, and a word after "Account:" or "Client:" left as it is.
+
 ## v0.59.0 - Days on paper made with older backtest code are made again
 
 **Release date:** 2026-10-29

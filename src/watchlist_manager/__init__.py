@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from src.configuration import ConfigurationManager
 from src.logging_helper import setup_logging
+from src.logging_helper.redaction import register_secret
 from src.saxo_authen import SaxoAuth
 from src.trade.async_services import AsyncInstrumentService, AsyncSaxoApiClient
 from src.saxo_streaming.client import SaxoStreamClient
@@ -35,11 +36,14 @@ def get_version() -> str:
 
 
 async def get_account_key_async(api_client: AsyncSaxoApiClient) -> str:
+    """The account's key, kept out of every log line from then on, and its client's key with it (register_secret)."""
     request = pf.accounts.AccountsMe()
     response = await api_client.request(request)
     accounts = response.get("Data", []) if response else []
     if not accounts:
         raise RuntimeError("No Saxo accounts returned for watchlist manager startup")
+    register_secret("saxo.account_key", accounts[0]["AccountKey"])
+    register_secret("saxo.client_key", accounts[0].get("ClientKey"))
     return accounts[0]["AccountKey"]
 
 

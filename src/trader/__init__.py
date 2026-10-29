@@ -22,6 +22,7 @@ import pytz
 from src import event_loop
 from src.configuration import ConfigurationManager
 from src.logging_helper import setup_logging
+from src.logging_helper.redaction import register_secret
 
 # --- Async services ---
 from src.trade.async_services import (
@@ -730,19 +731,25 @@ async def keep_saxo_session_warm(
 # ─────────────────────────────────────────────────────
 
 async def get_account_info_async(api_client: AsyncSaxoApiClient):
-    """Fetch AccountKey/ClientKey using the async API client."""
+    """
+    Fetch AccountKey/ClientKey using the async API client. Both are kept out of every log line of the service from
+    then on (register_secret): the trader's start line wrote them until v0.59.1.
+    """
     import src.saxo_openapi.endpoints.portfolio as pf
     from collections import namedtuple
 
     req = pf.accounts.AccountsMe()
     rv = await api_client.request(req)
     t = namedtuple("AcctInfo", "ClientId ClientKey AccountId AccountKey")
-    return t(
+    info = t(
         ClientId=rv["Data"][0]["ClientId"],
         ClientKey=rv["Data"][0]["ClientKey"],
         AccountId=rv["Data"][0]["AccountId"],
         AccountKey=rv["Data"][0]["AccountKey"],
     )
+    register_secret("saxo.account_key", info.AccountKey)
+    register_secret("saxo.client_key", info.ClientKey)
+    return info
 
 
 # ─────────────────────────────────────────────────────
@@ -816,7 +823,7 @@ async def main():
         acct = await get_account_info_async(api_client)
         account_key = acct.AccountKey
         client_key = acct.ClientKey
-        logger.info("Account: %s, Client: %s", account_key, client_key)
+        logger.info("Saxo account read (its keys are kept out of the logs)")
 
         # 7. Async services
         instrument_service = AsyncInstrumentService(api_client, config_manager, account_key)

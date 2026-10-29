@@ -4,9 +4,13 @@ What a log line must never hold, taken out before it is written.
 Two kinds of secret reach the logs: those that addresses and headers carry
 (the webhook's ``?token=``, a Bearer header, the stream's
 ``?authorization=BEARER%20…``, Telegram's ``/bot<id>:<token>/`` address,
-Saxo's account keys in a query string, the password of an
-``amqp://user:password@`` address), found by their shape; and the values a
-service holds and registered (``register_secret``), found wherever they are.
+Saxo's account keys in a query string or named in a message, the password
+of an ``amqp://user:password@`` address), found by their shape; and the
+values a service holds and registered (``register_secret``), found wherever
+they are. Saxo's account and client keys are registered where they are read
+(``get_account_info_async``, the watchlist manager's ``get_account_key_async``):
+until v0.59.1 the trader's start line wrote them as ``Account: <key>, Client:
+<key>``, a shape kept here for the files the admin's Logs page still reads.
 
 ``RedactingFilter`` goes on every handler ``setup_logging`` installs, so that
 whatever logger a library writes with, its line is cleaned before the file
@@ -36,8 +40,11 @@ _PATTERNS = (
     (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1" + MASK),
     # Telegram's address carries the bot's token: https://api.telegram.org/bot<id>:<secret>/sendMessage
     (re.compile(r"(/bot)\d+:[A-Za-z0-9_-]+"), r"\1" + MASK),
-    # Saxo's account keys, which its addresses carry in their query.
-    (re.compile(r"\b(AccountKey=|ClientKey=)" + _VALUE), r"\1" + MASK),
+    # Saxo's account keys, which its addresses carry in their query, and a body or a message names (AccountKey: …).
+    (re.compile(r"\b((?:AccountKey|ClientKey)[\"']?\s*[:=]\s*[\"']?)" + _VALUE), r"\1" + MASK),
+    # The trader's start line until v0.59.1: "Account: <key>, Client: <key>". Saxo's keys are base64, padded:
+    # a word after "Account:" or "Client:" is left as it is.
+    (re.compile(r"\b((?:Account|Client):\s*)[A-Za-z0-9_|+/-]{16,}={1,2}"), r"\1" + MASK),
     # A password in an address: amqp://user:password@host, postgresql://user:password@host.
     (re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*://[^:/@\s]+:)[^@\s/]+@"), r"\1" + MASK + "@"),
     # The Claude API's key (the admin's AI agent): as a header, or as it is written anywhere else.
