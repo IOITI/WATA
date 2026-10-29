@@ -167,6 +167,9 @@ class AdminContext:
     agent: Any = None
     # Its daily debrief (src/admin/agent_debrief.py): with the agent, acting only while debrief_enabled.
     debrief: Any = None
+    # Its memory (src/admin/agent_memory.py), beside its conversations: there whether the agent is on or not, read by
+    # the Memory page and by Claude Code's endpoint too.
+    agent_memory: Any = None
     # Nobody's X-Forwarded-For header is believed unless said otherwise.
     trusted_proxies: TrustedProxies = field(default_factory=TrustedProxies)
     events: EventHub = field(default_factory=EventHub)
@@ -230,6 +233,7 @@ def build_context(config_manager) -> AdminContext:
     """The context used in production, wired to the real services."""
     import httpx
 
+    from src.admin.agent_memory import memory_of
     from src.admin.audit import AuditLog
     from src.admin.backtests import BacktestService
     from src.admin.config_editor import ConfigEditor
@@ -361,6 +365,7 @@ def build_context(config_manager) -> AdminContext:
         studies=studies,
         service_control=service_control,
         vault=vault,
+        agent_memory=memory_of(settings.agent_path),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,

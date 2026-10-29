@@ -3084,6 +3084,8 @@ export interface AgentState {
   tasks?: { usd: number; backtests: number; hours: number }
   /** The daily debrief: whether it is on, with which model, and the trading days it wrote. */
   debrief?: AgentDebriefState
+  /** Whether it uses its memory (admin.ai_agent.memory). */
+  memory?: boolean
 }
 
 export interface AgentDebriefState {
@@ -3243,6 +3245,8 @@ export interface AgentRequest {
   effort?: AgentEffort | null
   /** Who asked it: the operator's address, "task" for a research task's next request, "debrief" for a debrief. */
   by?: string | null
+  /** The entries of its memory it saved or forgot. */
+  memory?: { name: string; action: AgentMemoryAction }[]
 }
 
 export interface AgentInputChange {
@@ -3352,7 +3356,7 @@ export interface AgentConversation {
 
 export interface AgentArtefact {
   at: string
-  kind: 'run' | 'script' | 'rule' | 'experiment' | 'proposal' | 'applied' | 'dismissed'
+  kind: 'run' | 'script' | 'rule' | 'experiment' | 'proposal' | 'applied' | 'dismissed' | 'memory'
   conversation: string
   /** The conversation's title. */
   title_of: string | null
@@ -3365,5 +3369,88 @@ export interface AgentArtefact {
   proposal?: AgentProposal['kind']
   title?: string
   result?: AgentProposal['result']
+  /** An entry of its memory: what was done to it. */
+  action?: AgentMemoryAction
+}
+
+/** The AI agent's memory (src/admin/agent_memory.py): entries kept between its conversations. */
+export type AgentMemoryKind = 'preference' | 'lesson' | 'finding' | 'reference'
+
+export type AgentMemoryAction =
+  | 'created' | 'changed' | 'renamed' | 'forgotten' | 'restored' | 'locked' | 'unlocked' | 'paused' | 'resumed'
+
+export interface AgentMemoryEntry {
+  name: string
+  kind: AgentMemoryKind
+  /** The line its memory's list shows: what it is and when it matters. */
+  description: string
+  /** Markdown. */
+  body: string
+  /** The operator's: the agent reads it, never changes it. */
+  locked: boolean
+  /** Up by one at each change: a change is made from the revision read. */
+  revision: number
+  created_at: string
+  created_by: 'operator' | 'agent'
+  /** The conversation that wrote it, when the agent did. */
+  created_in: string | null
+  updated_at: string
+  updated_by: 'operator' | 'agent'
+  updated_in: string | null
+  /** Its last read, and by whom: "agent:<conversation>", or Claude Code's token. */
+  read_at: string | null
+  read_by: string | null
+}
+
+/** What an entry is at one moment: what its history keeps before and after a change. */
+export interface AgentMemoryVersion {
+  kind: AgentMemoryKind
+  description: string
+  body: string
+  locked: boolean
+}
+
+/** A line of the memory's history. */
+export interface AgentMemoryChange {
+  seq: number
+  at: string
+  action: AgentMemoryAction
+  /** None for a pause. */
+  name: string | null
+  by: 'operator' | 'agent'
+  /** The operator's address. */
+  address: string | null
+  /** The agent's conversation, and its title. */
+  conversation: string | null
+  title_of: string | null
+  request: number | null
+  before: AgentMemoryVersion | null
+  after: AgentMemoryVersion | null
+  /** The name it had, for a rename. */
+  from?: string
+  /** Why it was forgotten. */
+  why?: string
+  /** The line whose version was brought back. */
+  restored?: number
+}
+
+export interface AgentMemoryState {
+  entries: AgentMemoryEntry[]
+  /** The operator's pause of the agent's changes. */
+  pause: { since: string; by: string | null } | null
+  /** The agent on, and using its memory (admin.ai_agent.memory). */
+  agent: boolean
+  used: boolean
+  kinds: AgentMemoryKind[]
+  limits: { entries: number; description: number; body: number }
+}
+
+/** What the page's form sends. */
+export interface AgentMemoryDraft {
+  name: string
+  kind: AgentMemoryKind
+  description: string
+  body: string
+  locked: boolean
 }
 

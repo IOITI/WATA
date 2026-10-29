@@ -61,6 +61,7 @@ if "asyncpg" not in sys.modules:
 
 import uvicorn
 
+from src.admin.agent_memory import memory_of
 from src.admin.analysis import summarise_exits
 from src.admin.live_breakdowns import live_breakdowns
 from src.admin.app import SHUTDOWN_GRACE_SECONDS, create_app
@@ -1500,6 +1501,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         notifier=notifier,
         version="dev",
         closers=closers,
+        agent_memory=memory_of(settings.agent_path),
     )
     ctx.restarts = RestartPlans(ctx.service_control, FakeReadiness(), lambda: situation_of(ctx), events, poll_seconds=1)
     # The credentials, sealed with keys made for this run: the admin's own and every public one, as the
@@ -1518,6 +1520,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         import fake_ai
 
         asyncio.run(ctx.vault.set("anthropic.api", {"key": fake_ai.KEY}, by="dev"))
+        fake_ai.seed_memory(ctx.agent_memory)
         ctx.agent = fake_ai.agent_of(ctx)
         ctx.closers.insert(0, ctx.agent.close)
         # The last finished weekday debriefed at the start (its Telegram printed here).

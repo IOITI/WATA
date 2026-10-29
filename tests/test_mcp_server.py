@@ -27,6 +27,7 @@ EXPECTED_TOOLS = {
     "exp_new", "exp_get", "exp_trials", "exp_conclude", "lockbox_set",
     "backtest_start", "backtest_derive", "backtest_wait", "backtest_remove", "turbo_model_measure",
     "rule_shadow_save", "rule_shadow_remove", "rule_set_reference",
+    "memory_list", "memory_read",
 }
 # What Claude Code keeps of the server's instructions, and a tool description it reads in full.
 MAX_INSTRUCTIONS = 4096

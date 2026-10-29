@@ -64,6 +64,10 @@ describe('a step', () => {
     expect(stepTitle('data_trades', { start_day: '2026-10-13', end_day: '2026-10-16' }))
       .toBe("Read WATA's trades of 2026-10-13 to 2026-10-16")
     expect(stepTitle('propose_rule_change', { title: 'Run v2' })).toBe('Proposed a change to a rule: Run v2')
+    expect(stepTitle('memory_read', { names: ['range-ticks', 'answer-short'] })).toBe('Read range-ticks and answer-short from its memory')
+    expect(stepTitle('memory_read', { names: ['a', 'b', 'c'] })).toBe('Read 3 entries from its memory')
+    expect(stepTitle('memory_save', { name: 'range-ticks' })).toBe('Saved range-ticks to its memory')
+    expect(stepTitle('memory_forget', { name: 'old-note' })).toBe('Forgot old-note from its memory')
     expect(stepTitle('unknown_tool', {})).toBe('unknown_tool')
   })
 

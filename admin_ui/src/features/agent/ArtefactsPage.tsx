@@ -12,6 +12,8 @@ import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { AgentArtefact } from '@/lib/types'
 
+import { MEMORY_DONE, MEMORY_PATH, memoryLink } from './memoryModel'
+
 const KIND_LABEL: Record<AgentArtefact['kind'], string> = {
   run: 'Backtest',
   script: "Claude's script",
@@ -20,6 +22,7 @@ const KIND_LABEL: Record<AgentArtefact['kind'], string> = {
   proposal: 'Proposal',
   applied: 'Applied',
   dismissed: 'Dismissed',
+  memory: 'Memory',
 }
 
 function what(row: AgentArtefact): { text: string; to: string | null } {
@@ -34,6 +37,11 @@ function what(row: AgentArtefact): { text: string; to: string | null } {
       return { text: `Experiment ${row.id}`, to: '/backtests/experiments' }
     case 'proposal':
       return { text: row.title ?? row.id, to: `/agent/${encodeURIComponent(row.conversation)}#proposal-${row.id}` }
+    case 'memory':
+      return {
+        text: `${row.action ? `${MEMORY_DONE[row.action][0].toUpperCase()}${MEMORY_DONE[row.action].slice(1)}` : 'Kept'} ${row.name ?? row.id}`,
+        to: row.action === 'forgotten' ? `${MEMORY_PATH}?tab=history&find=${encodeURIComponent(row.id)}` : memoryLink(row.id),
+      }
     default: {
       const result = row.result
       if (result?.script_id && result.name) return { text: `A new script: ${result.name}`, to: `/ta/indicators/${encodeURIComponent(result.script_id)}` }
@@ -77,7 +85,7 @@ export function ArtefactsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Artefacts" description="What the AI agent made: its backtests, its scripts, its experiments and what it proposed." />
+      <PageHeader title="Artefacts" description="What the AI agent made: its backtests, its scripts, its experiments, what it proposed and what it kept in its memory." />
       <QueryState isPending={query.isPending} error={query.error} hasData={!!query.data}>
         <AdvancedDataTable<AgentArtefact>
           title="Artefacts"

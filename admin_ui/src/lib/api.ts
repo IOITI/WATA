@@ -1,5 +1,9 @@
 import type {
   AgentArtefact,
+  AgentMemoryChange,
+  AgentMemoryDraft,
+  AgentMemoryEntry,
+  AgentMemoryState,
   AgentChoice,
   AgentContext,
   AgentSubject,
@@ -514,6 +518,23 @@ export const api = {
     request<AgentProposal & { impact: ConfigImpact; restart_required: boolean }>(
       'POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/apply`, { body: { revision } }),
   agentArtefacts: () => request<{ items: AgentArtefact[] }>('GET', '/api/agent/artefacts'),
+  // Its memory: kept whether the agent is on or not, every change journaled and undoable.
+  agentMemory: () => request<AgentMemoryState>('GET', '/api/agent/memory'),
+  agentMemoryHistory: (name?: string) =>
+    request<{ items: AgentMemoryChange[] }>('GET', `/api/agent/memory/history${query({ name })}`),
+  createAgentMemory: (entry: AgentMemoryDraft) =>
+    request<AgentMemoryEntry>('POST', '/api/agent/memory', { body: entry }),
+  /** Changed, or renamed to entry.name, from the revision the page showed: refused (409) once it moved on. */
+  changeAgentMemory: (name: string, entry: AgentMemoryDraft & { revision: number }) =>
+    request<AgentMemoryEntry>('PUT', `/api/agent/memory/${encodeURIComponent(name)}`, { body: entry }),
+  lockAgentMemory: (name: string, locked: boolean) =>
+    request<AgentMemoryEntry>('POST', `/api/agent/memory/${encodeURIComponent(name)}/lock`, { body: { locked } }),
+  forgetAgentMemory: (name: string, revision: number) =>
+    request<void>('DELETE', `/api/agent/memory/${encodeURIComponent(name)}${query({ revision })}`),
+  /** The entry as a line of the history left it, back. */
+  restoreAgentMemory: (seq: number) => request<AgentMemoryEntry>('POST', '/api/agent/memory/restore', { body: { seq } }),
+  pauseAgentMemory: (paused: boolean) =>
+    request<{ pause: AgentMemoryState['pause'] }>('POST', paused ? '/api/agent/memory/pause' : '/api/agent/memory/resume'),
 
   config: () => request<ConfigDocument>('GET', '/api/config'),
   /** Every parameter of config.json, fixed for a version of WATA. */

@@ -15,6 +15,10 @@ A research task is a conversation the agent works on alone: once one of its
 requests ends, the next is queued with what is spent and what is left, each
 within the task's budget, until the agent says it is done (task_done), its
 dollars or hours are spent, it was stopped, or nothing new may start.
+
+With its memory (src/admin/agent_memory.py), a conversation's first request
+opens with the memory's list, and each later one with what the operator or
+other conversations changed in it since (``memory_seq`` of its meta).
 """
 
 import asyncio
@@ -34,7 +38,9 @@ from src.admin.agent.loop import (
     CLEAR_FROM_TOKENS, DECLINED, DONE, FAILED, KEEP_TOOL_USES, STOPPED, RequestRun, Used, counted_params, digest_of,
     request_params,
 )
-from src.admin.agent.prompts import limits_note, subject_text, task_going_on, task_opening
+from src.admin.agent.prompts import (
+    limits_note, memory_changes, memory_index, subject_text, task_going_on, task_opening,
+)
 from src.admin.agent.proposals import Proposals
 from src.admin.agent.settings import EFFORTS
 from src.admin.agent.settings import MODELS as CHOICES
@@ -83,9 +89,11 @@ class AgentUnavailable(Exception):
 
 class AgentService:
     def __init__(self, *, settings, store, provider, tools, proposals, backtests, scripts, key, publish,
-                 clock=time.time, queries=None):
+                 clock=time.time, queries=None, memory=None):
         self.settings = settings
         self.store = store
+        # Its memory (src/admin/agent_memory.py): None without it (admin.ai_agent.memory).
+        self.memory = memory
         # The research tools' named queries (src/admin/mcp_server/facade.py ReadQueries): a position, a day's journal.
         self._queries = queries
         self._provider = provider
@@ -158,6 +166,11 @@ class AgentService:
         self._queue.put_nowait((conversation_id, resumed))
 
     def _prune(self) -> None:
+        if self.memory is not None:
+            try:
+                self.memory.prune(self.settings.keep_days)
+            except OSError as e:
+                logger.warning(f"The AI agent's memory history could not be pruned: {e}")
         try:
             removed = self.store.prune(self._clock(), self.settings.keep_days)
         except OSError as e:
@@ -309,7 +322,20 @@ class AgentService:
             "subject": meta.get("subject") if request == 0 else None,
             "limits": limits_note(settings.max_tool_calls, settings.max_backtests, settings.max_request_usd),
             "shared": self._shared,
+            "memory": (lambda: self._memory_said(meta["id"], request)) if self.memory is not None else None,
         }
+
+    def _memory_said(self, conversation_id: str, request: int) -> tuple[str | None, int]:
+        """
+        What a request is told of the memory as it starts, and the change it saw
+        last: the list at a conversation's first request (or at the first since
+        it has a memory), then what the operator or other conversations changed.
+        """
+        memory = self.memory
+        seen, seq = self.store.meta(conversation_id).get("memory_seq"), memory.seq()
+        if request == 0 or seen is None:
+            return memory_index(memory.entries(), memory.pause()), seq
+        return memory_changes(memory.changes_since(seen, conversation_id)), seq
 
     async def _shared(self, session, subject: dict, request: int) -> str:
         """What the operator shares at a conversation's start, as the tools read it."""
@@ -422,6 +448,7 @@ class AgentService:
             "debrief": {"enabled": settings.debrief_enabled, "model": settings.debrief_model,
                         "effort": settings.debrief_effort, "max_usd": settings.debrief_max_usd,
                         "telegram": settings.debrief_telegram},
+            "memory": self.memory is not None,
         }
 
     # ── the models a request may choose ──
@@ -869,6 +896,7 @@ def build_agent(ctx, ops=None) -> AgentService:
     settings = ctx.settings
     store = ConversationStore(settings.agent_path)
     backtests = ctx.backtests if settings.backtests_enabled else None
+    memory = getattr(ctx, "agent_memory", None) if settings.ai_agent.memory else None
     proposals = Proposals(store, ctx.ta_scripts, backtests=backtests)
     # Its calls written apart: System › Claude keeps Claude Code's.
     research = replace(ResearchServices.from_context(ctx),
@@ -880,7 +908,7 @@ def build_agent(ctx, ops=None) -> AgentService:
 
     return AgentService(
         settings=settings.ai_agent, store=store, provider=claude.ClaudeProvider(key),
-        tools=AgentTools(research, proposals, ops=ops), proposals=proposals,
+        tools=AgentTools(research, proposals, ops=ops, memory=memory), proposals=proposals,
         backtests=backtests, scripts=ctx.ta_scripts, key=key,
-        publish=ctx.events.publish, queries=research.queries,
+        publish=ctx.events.publish, queries=research.queries, memory=memory,
     )

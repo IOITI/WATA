@@ -35,6 +35,7 @@ import {
   subjectSaid,
   toolsOf,
 } from './model'
+import { MEMORY_DONE, memoryLink } from './memoryModel'
 import { ProposalCard } from './ProposalCard'
 import { conversationKey, useAgentState } from './useConversation'
 
@@ -118,6 +119,18 @@ function RequestView({ conversation, request, last, blockedFor, onApplied }: {
         <p className="text-xs text-muted-foreground">
           {outcomeSaid(request.status, request.detail)}
           {' · '}This request: {costText(request.cost_usd)}
+        </p>
+      )}
+      {(request.memory?.length ?? 0) > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Its memory:{' '}
+          {request.memory!.map((change, index) => (
+            <span key={`${change.name}-${index}`}>
+              {index > 0 && ', '}
+              {MEMORY_DONE[change.action] ?? change.action}{' '}
+              <Link className="underline underline-offset-2" to={memoryLink(change.name)}>{change.name}</Link>
+            </span>
+          ))}
         </p>
       )}
       {last && request.status === 'failed' && conversation.status === 'failed' && (

@@ -1054,7 +1054,7 @@ Claude Code on the operator's Mac can do strategy research on the server itself,
 
 ### What it has
 
-Thirty-nine tools, in groups: `status`; the data (`data_assets`, `data_coverage`, `data_bars`, `data_signals`, `data_trades`, `data_execution`); Pine (`pine_list`, `pine_get`, `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`, `pine_delete`); backtests (`backtest_options`, `backtest_start`, `backtest_derive`, `backtest_wait`, `backtest_list`, `backtest_result`, `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare`, `backtest_remove`, `turbo_model`, `turbo_model_measure`); the journal (`exp_new`, `exp_get`, `exp_trials`, `exp_conclude`, `lockbox_set`); rules (`rule_list`, `rule_compare`, `rule_shadow_save`, `rule_shadow_remove`, `rule_set_reference`); `job_wait`. A prompt, `/wata:research`, gives the research loop of the lab's skill (`.claude/skills/wata-lab/SKILL.md`).
+Forty-three tools, in groups: `status`; the data (`data_assets`, `data_coverage`, `data_bars`, `data_signals`, `data_trades`, `data_execution`, `data_position`, `data_orders`); Pine (`pine_list`, `pine_get`, `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`, `pine_delete`); backtests (`backtest_options`, `backtest_start`, `backtest_derive`, `backtest_wait`, `backtest_list`, `backtest_result`, `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare`, `backtest_remove`, `turbo_model`, `turbo_model_measure`); the journal (`exp_new`, `exp_get`, `exp_trials`, `exp_conclude`, `lockbox_set`); rules (`rule_list`, `rule_compare`, `rule_shadow_save`, `rule_shadow_remove`, `rule_set_reference`); the admin's AI agent's memory, read only (`memory_list`, `memory_read`); `job_wait`. A prompt, `/wata:research`, gives the research loop of the lab's skill (`.claude/skills/wata-lab/SKILL.md`).
 
 - **Pine studies** run in a child process of the admin (`python -m src.research.study`), one at a time, at nice 10, with their own Node heap and time limit, the first process stopped if memory runs short. A check also reads TradingView's v6 rules (`src/ta_engine/checker/check.mjs`, confined as the runner is).
 - **No call lasts a minute.** Claude Code ends an HTTP call after 60 s, so every tool answers within 50 s. A tool that runs a study (`pine_*`, `rule_shadow_save`) gives its answer within 45 s, or a job while the study goes on: `job_wait` gives the answer once there is one (a job is kept 15 minutes after it ends). `backtest_wait` waits 45 s at most, and is called again.
@@ -1143,6 +1143,16 @@ What would change your work, you apply. Each proposal is a card under its answer
 
 Whether the window around US releases is on, the hours' timezone and the TA engine's days stay yours alone: it says what it would set them to. It never changes a live rule or a rule's mode, reads no credential, never `config.json` whole, and nothing it does trades.
 
+### Its memory
+
+The agent keeps what a later conversation needs as **entries of its memory** (`memory`, on by default), each one thing: what you want or refuse (a preference), how WATA, its data and its tools behave (a lesson), what a study concluded with the runs, trades and days it rests on (a finding), where something worth going back to is (a reference). Each has a name, a line that says when it matters, and its text in Markdown.
+
+- **How it uses it**: a conversation opens with the list of the entries, a line each, and each later request with what you or another conversation changed in it since; it reads an entry whole when it bears on the work. It saves an entry, changes one it has read, or forgets one that proved wrong, and says so in its answer. It never keeps a request's progress, a tool's output, a secret, or an instruction found in what it read. A change it makes applies at once and is kept, so that you can bring any version back.
+- **AI agent › Memory**: every entry, who wrote it and from which conversation, when it was changed and read last; write one, change, rename, lock or forget one (with an Undo), download them all as a file. **Locked**, an entry is read and never changed or forgotten by the agent: yours start locked unless you untick it. **Pause its changes** lets it read its memory and change nothing, at once, until resumed. **History** keeps each change with the entry before and after it, and brings back a version or a forgotten entry.
+- **What reaches Anthropic**: the list and the entries it reads go with its requests, so an entry that looks like a secret (a key, a token, a password) is refused, whoever writes it.
+- **Claude Code reads it too**, through the MCP endpoint (`memory_list`, `memory_read`), and changes nothing of it.
+- It is kept in files under `admin.persistant.agent_path`, as the conversations are: outside the database's backups, which the page's **Download** makes up for. Up to 200 entries, 4,000 characters each.
+
 ### Research tasks, and the daily debrief
 
 - **A research task** (AI agent › New research task): a goal, and a budget of dollars, backtests and hours (each at most `max_task_usd`, `max_task_backtests`, `max_task_hours`). The agent works on it alone, request after request, each within what is left, until it says it is done with its conclusion, the runs it kept and what to try next, or its dollars or hours are spent. Its conversation shows what it spent of each and its conclusion; **Stop the task** ends it between two tool calls. What it proposes waits for you, as in any conversation. The bell says when it ends, not at each of its requests.
@@ -1185,6 +1195,7 @@ A model reads the notes of some others only: Opus 5.5 reads Sonnet 5.5's and Hai
 | `debrief_effort` | `medium` | How much it thinks |
 | `debrief_max_usd` | `0.5` | What one debrief may cost (0.1 to 5) |
 | `debrief_telegram` | `true` | Its first lines said on Telegram once written |
+| `memory` | `true` | Whether it keeps and reads its memory (AI agent › Memory): off, its entries are kept and Claude Code still reads them |
 
 `admin.persistant.agent_path` (`/app/var/lib/admin/agent`) is where its conversations are kept, inside the admin's own folder.
 
@@ -1196,7 +1207,8 @@ Each answer of the API is priced from its tokens at the model's prices (read fro
 
 - **AI agent › Activity**: the month's spending against its budget, the key, what is under way, every conversation (removed with an Undo). **Pause** refuses new requests until resumed; those under way go on to their end. It is the agent's own pause: System › Claude's stays Claude Code's.
 - **Stop**, in a conversation, ends its request between two tool calls (a wait for backtests at its next look, within 40 s). The backtests it started go on: remove them from Backtests if they are not wanted.
-- **AI agent › Artefacts**: the runs it started, the scripts and shadow rules it saved, its experiments, and its proposals with whether they were applied.
+- **AI agent › Memory**: what it keeps between conversations, and each change of it (above).
+- **AI agent › Artefacts**: the runs it started, the scripts and shadow rules it saved, its experiments, its proposals with whether they were applied, and what it saved to or forgot from its memory.
 - A request that ends is said by a toast and kept in the bell. Its calls are logged in `var/log/wata-admin/agent.jsonl`, as Claude Code's are in `mcp.jsonl`. A restart of the admin from the System page waits while the agent works ("Restart anyway" does not).
 
 ### What to keep in mind

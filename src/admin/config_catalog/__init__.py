@@ -158,6 +158,8 @@ BLOCKS = (
         "An account of each trading day, written once the market is closed."),
     Block("agent", "reads", "What it reads", (f"{_AGENT}.read_logs",),
           "WATA's research data, its positions, orders and signals, and the admin's health, always; the logs if allowed."),
+    Block("agent", "memory", "Memory", (f"{_AGENT}.memory",),
+          "What it keeps between conversations, on AI agent › Memory, where you read, change and lock it."),
     Block("agent", "kept", "Kept", (f"{_AGENT}.keep_days", "admin.persistant.agent_path")),
     Block("admin", "sessions", "Sessions", (
         "admin.session_idle_minutes", "admin.session_max_age_minutes", "admin.cookie_secure")),

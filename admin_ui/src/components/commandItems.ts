@@ -2,13 +2,14 @@ import { formatDay } from 'ioiti-ui'
 import type { SpotlightSearchItem } from 'ioiti-ui'
 
 import { MENU } from '@/components/navigation'
+import { KIND_LABEL as MEMORY_KIND_LABEL, memoryLink } from '@/features/agent/memoryModel'
 import { sourceLabel, STATE_LABEL } from '@/features/backtests/model'
 import { assetHref, assetKeywords, PROVIDER_LABELS } from '@/features/data/assets'
 import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { instrumentLabel } from '@/features/prices/chartData'
 import { barsLabel, MODE_LABEL } from '@/features/ta/signals/ruleModel'
 import { KIND_LABEL } from '@/features/ta/templates'
-import type { AgentConversationListed, BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
+import type { AgentConversationListed, AgentMemoryEntry, BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
 
 /**
  * What the palette (⌘K) goes to, as entries: the pages of the menu and what
@@ -43,6 +44,18 @@ export function conversationItems(conversations: readonly AgentConversationListe
     description: conversation.subject ? `About ${conversation.subject.label}` : undefined,
     href: `/agent/${conversation.id}`,
     keywords: [conversation.id, conversation.subject?.id ?? ''],
+  }))
+}
+
+/** The AI agent's memory, an entry by its name and its line: each opens on the Memory page. */
+export function memoryItems(entries: readonly AgentMemoryEntry[]): SpotlightSearchItem[] {
+  return entries.map((entry) => ({
+    id: `memory-${entry.name}`,
+    title: entry.name,
+    category: 'Memory',
+    description: `${MEMORY_KIND_LABEL[entry.kind]} · ${entry.description}`,
+    href: memoryLink(entry.name),
+    keywords: [entry.kind],
   }))
 }
 

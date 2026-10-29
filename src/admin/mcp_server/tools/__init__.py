@@ -4,9 +4,9 @@ The tools of the MCP endpoint, one module per group. Each module's
 A test holds the server to the exact list of tools.
 """
 
-from src.admin.mcp_server.tools import backtests, data, experiments, jobs, pine, rules, status
+from src.admin.mcp_server.tools import backtests, data, experiments, jobs, memory, pine, rules, status
 
-GROUPS = (status, data, pine, backtests, rules, experiments, jobs)
+GROUPS = (status, data, pine, backtests, rules, experiments, jobs, memory)
 
 
 def register_all(server, research) -> None:

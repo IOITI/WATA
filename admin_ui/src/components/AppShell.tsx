@@ -5,6 +5,7 @@ import { RouterAppShell, RouterLink } from 'ioiti-ui/react-router'
 import {
   Activity,
   Bot,
+  BrainCircuit,
   ChartCandlestick,
   ChartLine,
   ChartSpline,
@@ -67,6 +68,7 @@ const ICONS: Record<string, ReactNode> = {
   'ta-signals': <Radar />,
   'ta-monitor': <Gauge />,
   agent: <Bot />,
+  'agent-memory': <BrainCircuit />,
   'agent-artefacts': <Package />,
   system: <Activity />,
   logs: <ScrollText />,

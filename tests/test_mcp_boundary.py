@@ -39,6 +39,8 @@ ALLOWED_IMPORTS = (
     "src.ta_engine.signals", "src.price_history.process",
     # The study child reads the configuration for the database's address, as a backtest's child does.
     "src.configuration",
+    # The AI agent's memory, which the endpoint reads and never changes.
+    "src.admin.agent_memory",
 )
 NEVER = (
     "src.admin.routers", "src.admin.services", "src.admin.config_editor", "src.admin.live_prices", "src.admin.queries",
@@ -99,6 +101,7 @@ CALLS = {
     "rule_shadow_save": {"name": "X", "script_id": "000000000000", "asset": "capital/US100", "indice": "us100",
                          "alerts": {"Up": "long"}},
     "rule_shadow_remove": {"rule_id": "0123456789ab"}, "rule_set_reference": {"run_id": "20261019-200000-abcdef"},
+    "memory_list": {}, "memory_read": {"names": ["range-ticks"]},
 }
 
 

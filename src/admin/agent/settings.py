@@ -42,6 +42,8 @@ _SWITCHES = {
     # A debrief of each trading day once the market is closed, said on Telegram when debrief_telegram.
     "debrief_enabled": False,
     "debrief_telegram": True,
+    # Its memory between conversations (src/admin/agent_memory.py): its index shared at each one's start, its tools.
+    "memory": True,
 }
 # name: (default, lowest, highest), in US dollars as the Claude API bills them.
 _AMOUNTS = {
@@ -77,6 +79,7 @@ class AgentSettings:
     debrief_effort: str = "medium"
     debrief_max_usd: float = 0.5
     debrief_telegram: bool = True
+    memory: bool = True
 
     @classmethod
     def from_config(cls, section) -> "AgentSettings":

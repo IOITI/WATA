@@ -154,6 +154,11 @@ function runs(ids: unknown): string {
   return ids.length === 1 ? `run ${short(ids[0])}` : `${ids.length} runs`
 }
 
+function entries(names: unknown): string {
+  if (!Array.isArray(names) || names.length === 0) return 'entries'
+  return names.length <= 2 ? names.map(short).join(' and ') : `${names.length} entries`
+}
+
 const DERIVED: Record<string, string> = {
   stress: 'Stress-tested',
   model_check: 'Checked the turbo model on',
@@ -209,6 +214,10 @@ const TITLES: Record<string, (input: Input) => string> = {
   rule_shadow_remove: (input) => `Removed its shadow rule ${short(input.rule_id)}`,
   rule_set_reference: (input) => `Set run ${short(input.run_id)} as its rule's reference`,
   task_done: () => 'Said the task is done',
+  memory_list: () => "Read its memory's list",
+  memory_read: (input) => `Read ${entries(input.names)} from its memory`,
+  memory_save: (input) => `Saved ${short(input.name)} to its memory`,
+  memory_forget: (input) => `Forgot ${short(input.name)} from its memory`,
 }
 
 const TYPES: Record<string, ActivityType> = {
@@ -230,6 +239,8 @@ const TYPES: Record<string, ActivityType> = {
   rule_shadow_remove: 'writing',
   rule_set_reference: 'writing',
   task_done: 'writing',
+  memory_save: 'writing',
+  memory_forget: 'writing',
   data_position: 'database_query',
   data_orders: 'database_query',
   data_signals: 'database_query',
@@ -281,6 +292,10 @@ const WRITING: Record<string, string> = {
   rule_shadow_remove: 'Removing a shadow rule',
   rule_set_reference: "Setting a rule's reference",
   task_done: 'Ending the task',
+  memory_list: "Reading its memory's list",
+  memory_read: 'Reading its memory',
+  memory_save: 'Saving to its memory',
+  memory_forget: 'Forgetting an entry of its memory',
 }
 
 export function stepTitle(tool: string, input: unknown): string {

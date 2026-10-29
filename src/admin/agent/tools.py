@@ -18,6 +18,10 @@ The agent also reads, through what the admin gives it (``OpsReads``), the
 admin's health and its services' log lines, cleaned of secrets as the Logs page
 shows them: never a service itself.
 
+With its memory (src/admin/agent_memory.py, ``admin.ai_agent.memory``), it reads
+the entries through the MCP endpoint's own tools, as Claude Code does, and
+saves and forgets them with two of its own, as ``agent:<conversation>``.
+
 The MCP SDK is imported in the functions that use it: with the agent off, the
 admin never loads it.
 """
@@ -34,6 +38,8 @@ import jsonschema
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.agent.proposals import ProposalRefused
+from src.admin.agent_memory import FORGOTTEN, KINDS, MAX_BODY, MAX_DESCRIPTION, NAME, Author, UnknownEntry
+from src.admin.errors import InvalidRequest, NotPossible
 from src.admin.logs import LEVELS, LOG_SERVICES, MAX_LINES
 from src.admin.mcp_server.gate import CALLER
 from src.admin.mcp_server.tokens import Caller
@@ -41,7 +47,9 @@ from src.admin.mcp_server.tokens import Caller
 # The research tools the agent may call, in the order it is shown them. Never the tools that remove scripts or runs
 # (pine_delete, backtest_remove), set the lock box, measure the turbo model again, write down trials made elsewhere
 # or export a week of bars; job_wait is waited for here. Claude's own shadow rules are kept as the MCP endpoint keeps
-# them (rule_shadow_*): gated by admin.mcp.shadow_rules, never live, the endpoint's only change of a mode.
+# them (rule_shadow_*): gated by admin.mcp.shadow_rules, never live, the endpoint's only change of a mode. Its memory
+# is read as Claude Code reads it (memory_*), when it has its memory.
+MEMORY_READS = ("memory_list", "memory_read")
 AGENT_TOOLS = (
     "status", "data_assets", "data_coverage", "data_signals", "data_trades", "data_execution", "data_position",
     "data_orders",
@@ -49,7 +57,7 @@ AGENT_TOOLS = (
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "backtest_start", "backtest_derive", "backtest_wait",
     "turbo_model", "rule_list", "rule_compare", "rule_shadow_save", "rule_shadow_remove", "rule_set_reference",
-    "exp_new", "exp_get", "exp_conclude",
+    "exp_new", "exp_get", "exp_conclude", *MEMORY_READS,
 )
 PROPOSE_SCRIPT = "propose_script_change"
 PROPOSE_RULE = "propose_rule_change"
@@ -59,6 +67,10 @@ PROPOSE_NEW_SCRIPT = "propose_new_script"
 TASK_DONE = "task_done"
 PROPOSALS = (PROPOSE_SCRIPT, PROPOSE_RULE, PROPOSE_SETTINGS, PROPOSE_NEW_SCRIPT)
 OWN_TOOLS = (*PROPOSALS, TASK_DONE)
+# Its memory's changes, its own: the MCP endpoint only reads the memory.
+MEMORY_SAVE = "memory_save"
+MEMORY_FORGET = "memory_forget"
+MEMORY_WRITES = (MEMORY_SAVE, MEMORY_FORGET)
 # The Pine studies run one at a time on the server, whoever asks: never two of them at once. A shadow rule saved is
 # run on its history first.
 STUDIES = frozenset({"pine_check", "pine_run", "pine_signals", "pine_compare", "pine_save", "rule_shadow_save"})
@@ -82,6 +94,11 @@ DESCRIPTIONS = {
     "backtest_wait": "Wait until none of the runs is queued or running, up to 90 minutes (call it again if some still "
                      "are), then each one's state, place in line and progress. Your runs wait behind the operator's; "
                      "nothing is spent while you wait.",
+    "memory_list": "Your memory as it stands now: each entry's name, kind, line, who wrote it and whether the operator "
+                   "locked it, and whether the operator paused its changes. The list your conversation began with may "
+                   "be older.",
+    "memory_read": "Entries of your memory whole, ten at most: their text, who wrote and changed them, from which "
+                   "conversation, and their revision, which memory_save and memory_forget need to change one.",
 }
 
 OWN_DEFINITIONS = (
@@ -216,6 +233,56 @@ OWN_DEFINITIONS = (
 )
 
 
+_NAME_SCHEMA = {"type": "string", "pattern": NAME.pattern, "description": (
+    "2 to 60 lowercase letters, digits and dashes, as your memory's list names it.")}
+MEMORY_DEFINITIONS = (
+    {
+        "name": MEMORY_SAVE,
+        "description": (
+            "Save an entry of your memory, kept for later conversations and shown to the operator on the Memory page: "
+            "a new one, or a change to one you read (with the revision memory_read gave). One thing an entry, its "
+            "description the line your memory's list shows. Refused for an entry the operator locked, while they "
+            "paused its changes, or with what looks like a secret."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {**_NAME_SCHEMA, "description": "A new name, or the entry to change: 2 to 60 lowercase "
+                                                        "letters, digits and dashes."},
+                "kind": {"type": "string", "enum": list(KINDS), "description": (
+                    "preference: what the operator wants or refuses; lesson: how WATA, its data and its tools "
+                    "behave; finding: what a study concluded, with the runs, trades and days it rests on; "
+                    "reference: where something worth going back to is.")},
+                "description": {"type": "string", "maxLength": MAX_DESCRIPTION, "description": (
+                    "One line: what it is and when it matters.")},
+                "body": {"type": "string", "maxLength": MAX_BODY, "description": (
+                    "Markdown: the thing itself and what it rests on (runs, days, the operator's words), dated when "
+                    "it can change.")},
+                "revision": {"type": "integer", "description": "To change an entry: the revision memory_read gave."},
+            },
+            "required": ["name", "kind", "description", "body"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": MEMORY_FORGET,
+        "description": (
+            "Forget an entry of your memory that proved wrong or no longer matters: the operator can bring it back. "
+            "Refused for an entry the operator locked, or while they paused its changes."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": _NAME_SCHEMA,
+                "revision": {"type": "integer", "description": "The revision memory_read gave."},
+                "why": {"type": "string", "maxLength": 500, "description": (
+                    "Why it goes: the operator reads it in the memory's history.")},
+            },
+            "required": ["name", "revision", "why"],
+            "additionalProperties": False,
+        },
+    },
+)
+
+
 # The admin's own state, read for the agent: its health, and a service's log lines around a moment.
 OPS_HEALTH = "ops_health"
 OPS_LOGS = "ops_logs"
@@ -282,6 +349,8 @@ class ToolAnswer:
     rule: dict | None = None
     # A research task said to be done (task_done): its conclusion.
     task_done: dict | None = None
+    # An entry of its memory saved or forgotten: its name and what was done.
+    memory: dict | None = None
 
 
 def _definition(tool) -> dict:
@@ -305,11 +374,13 @@ def _parsed(text: str):
 class AgentTools:
     """The tools, built once over the admin's research services; a session for each request."""
 
-    def __init__(self, research, proposals, *, clock=time.time, ops: OpsReads | None = None):
+    def __init__(self, research, proposals, *, clock=time.time, ops: OpsReads | None = None, memory=None):
         self._research = research
         self._proposals = proposals
         self._clock = clock
         self._ops = ops
+        # Its memory (src/admin/agent_memory.py), None when it has none (admin.ai_agent.memory).
+        self._memory = memory
         self._server = None
         self._definitions: list[dict] | None = None
         self._read_only: dict[str, bool] = {}
@@ -324,16 +395,18 @@ class AgentTools:
         self._server = build_server(self._research)
         async with Client(self._server) as client:
             listed = {tool.name: tool for tool in (await client.list_tools()).tools}
-        missing = [name for name in AGENT_TOOLS if name not in listed]
+        reads = [name for name in AGENT_TOOLS if self._memory is not None or name not in MEMORY_READS]
+        missing = [name for name in reads if name not in listed]
         if missing:
             raise RuntimeError(f"The research tools lack {', '.join(missing)}")
         offered = [OPS_HEALTH] if self._ops is not None else []
         if self._ops is not None and self._ops.logs is not None:
             offered.append(OPS_LOGS)
-        self._definitions = ([_definition(listed[name]) for name in AGENT_TOOLS] + [dict(own) for own in OWN_DEFINITIONS]
-                             + [dict(OPS_DEFINITIONS[name]) for name in offered])
+        memory = [dict(own) for own in MEMORY_DEFINITIONS] if self._memory is not None else []
+        self._definitions = ([_definition(listed[name]) for name in reads] + [dict(own) for own in OWN_DEFINITIONS]
+                             + memory + [dict(OPS_DEFINITIONS[name]) for name in offered])
         self._read_only = {name: bool(listed[name].annotations and listed[name].annotations.read_only_hint)
-                           for name in AGENT_TOOLS}
+                           for name in reads}
 
     def definitions(self) -> list[dict]:
         if self._definitions is None:
@@ -383,6 +456,8 @@ class ToolSession:
             return ToolAnswer(f"INVALID_JSON: {e.message}"[:2000], is_error=True)
         if name == TASK_DONE:
             return self._task_done(arguments)
+        if name in MEMORY_WRITES:
+            return await self._remember(name, arguments, request)
         if name in OWN_TOOLS:
             return await self._propose(name, arguments, request)
         if name in OPS_TOOLS:
@@ -512,6 +587,28 @@ class ToolSession:
             said["left_out"] = f"Already the live value: {', '.join(proposal['same'])}"
         return ToolAnswer(json.dumps(said, ensure_ascii=False), proposal=proposal)
 
+
+    async def _remember(self, name: str, arguments: dict, request: int) -> ToolAnswer:
+        """An entry of its memory saved or forgotten, as ``agent:<conversation>``: refused with a sentence otherwise."""
+        memory = self._tools._memory
+        author = Author.agent(self._conversation_id, request)
+        try:
+            if name == MEMORY_SAVE:
+                entry, action = await run_in_threadpool(lambda: memory.save(
+                    author, arguments["name"], kind=arguments["kind"], description=arguments["description"],
+                    body=arguments["body"], revision=arguments.get("revision")))
+            else:
+                entry = await run_in_threadpool(lambda: memory.forget(
+                    author, arguments["name"], revision=arguments["revision"], why=arguments["why"]))
+                action = FORGOTTEN
+        except (InvalidRequest, NotPossible, UnknownEntry) as e:
+            return ToolAnswer(str(e), is_error=True)
+        if action is None:
+            return ToolAnswer(json.dumps({"unchanged": entry["name"], "revision": entry["revision"]}))
+        said = {action: entry["name"], "next": "Say in your answer what you saved or forgot."}
+        if action != FORGOTTEN:
+            said["revision"] = entry["revision"]
+        return ToolAnswer(json.dumps(said, ensure_ascii=False), memory={"name": entry["name"], "action": action})
 
     def _task_done(self, arguments: dict) -> ToolAnswer:
         if not self._task:

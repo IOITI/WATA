@@ -120,6 +120,8 @@ class ResearchServices:
     events: Any = None
     # Pine studies, child processes one at a time (src/admin/studies.py).
     studies: Any = None
+    # The AI agent's memory (src/admin/agent_memory.py): read here, never changed.
+    memory: Any = None
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
@@ -146,6 +148,7 @@ class ResearchServices:
             research_export=ctx.research,
             events=ctx.events,
             studies=ctx.studies,
+            memory=getattr(ctx, "agent_memory", None),
         )
 
     def service(self):

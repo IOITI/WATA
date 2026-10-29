@@ -13,6 +13,10 @@ day or an incident shared: an account of it, the health and logs read for an
 incident. A research task: a look at the backtests, then, at its next request,
 task_done and its conclusion. A daily debrief: an account of the day. Anything
 else: the backtests listed, then an answer.
+
+Its memory (seed_memory, at the start): a run shared has the entries its
+memory's list names read first, and a finding about the run saved before the
+answer.
 """
 
 import asyncio
@@ -22,6 +26,7 @@ import secrets
 
 from src.admin.agent import provider as claude
 from src.admin.agent_debrief import DailyDebrief
+from src.admin.agent_memory import Author
 from src.admin.agent.settings import EFFORTS
 from src.admin.ta_rules import LIVE, RuleStore
 
@@ -37,6 +42,17 @@ _SHARED_TRADING = re.compile(r"The operator shares the (position|signal|trading 
 _TASK = "A research task the operator left you"
 _TASK_GOES_ON = "The research task goes on"
 _DEBRIEF = "Write the debrief of this trading day"
+# An entry of the memory's list, as a conversation's first words give it (src/admin/agent/prompts.py memory_index).
+_LISTED = re.compile(r"^- \[[a-z]+\] ([a-z0-9-]+): ", re.M)
+# What the development admin's memory holds at its start.
+SEEDED = (
+    ("operator", "answer-short", "preference", "The verdict first, five lines at most: I read the answers on a phone",
+     "Start with whether the result can be believed and on how many trades and days, then at most four lines.", True),
+    ("agent", "range-ticks", "lesson", "R60 is 6 points on capital/US100, 0.06 on dukascopy/us100",
+     "Dukascopy's files hold thousandths: 6 points there are **R6000**. Seen 2026-10-21 (made up).", False),
+    ("agent", "kernel-vwap-no-edge", "finding", "The kernel and VWAP script showed no edge over 90 days",
+     "No edge at any horizon (t 1.1), 122 trades on made-up turbos, 2026-10-21. Rejected (made up).", False),
+)
 
 
 def _blocks_of(message) -> list:
@@ -52,6 +68,7 @@ class FakeClaude:
         self._backtests = backtests
         # The agent's conversations (agent_of sets it): the proposals a turn follows up.
         self.store = None
+        self._opening = ""
 
     async def close(self) -> None:
         pass
@@ -82,6 +99,9 @@ class FakeClaude:
                     subject = (trading.group(1), trading.group(2).strip())
         done = self._done(messages)
         asked = self._asked(messages)
+        # The conversation's first words: its memory's list, when it has one.
+        self._opening = next((block.get("text", "") for block in _blocks_of(messages[0])
+                              if block.get("type") == "text"), "") if messages else ""
         if asked.startswith(_DEBRIEF):
             blocks = await self._debrief(on_event)
         elif asked.startswith(_TASK_GOES_ON):
@@ -164,6 +184,10 @@ class FakeClaude:
             "- Stress it before keeping anything\n"))
 
     async def _run(self, run_id: str, done: dict, on_event) -> list:
+        listed = _LISTED.findall(self._opening)
+        if listed and "memory_read" not in done:
+            return await self._turn(on_event, "My memory names what I learned before: I read what bears on a run.", [
+                ("memory_read", {"names": listed[:2]})])
         if "backtest_result" not in done:
             return await self._turn(on_event, "I read the edge of its entries before its total.", [
                 ("backtest_result", {"run_id": run_id, "part": "edge"})])
@@ -187,8 +211,16 @@ class FakeClaude:
                     "changes": [{"setting": "stoploss_percent", "value": tighter}], "runs": [run_id],
                     "title": f"A stop at {tighter} %",
                     "rationale": "Made up by the development admin: the run's losers ran past the stop before it sold."})])
+        name = f"run-{run_id[-6:]}-few-days"
+        if "memory_save" not in done:
+            return await self._turn(on_event, "What I found holds for later conversations: I keep it.", [
+                ("memory_save", {"name": name, "kind": "finding",
+                                 "description": f"Run {run_id} rests on too few days to be believed",
+                                 "body": f"Under 30 trades and 20 days (made up by the development admin), "
+                                         f"[the run](/backtests/{run_id})."})])
         link = f"[the stress test](/backtests/{stress_id})" if stress_id else "the stress test (refused)"
         return await self._turn(on_event, "I have its edge and its stress test.", text=(
+            f"I kept it in my memory as [{name}](/agent/memory?find={name}).\n\n"
             f"## Not believable yet\n\nIt rests on **too few days** to be believed, whatever its total; see {link}.\n\n"
             "| Check | Result |\n| --- | --- |\n| Trades | under 30 |\n| Days | under 20 |\n| Stress | read above |\n\n"
             "- Run it again over every recorded day\n- Then look at the edge of its entries before its total\n"))
@@ -289,6 +321,15 @@ def agent_of(ctx):
     fake.store = agent.store
     agent._provider = fake
     return agent
+
+
+def seed_memory(memory) -> None:
+    """A few entries, the operator's and the agent's, once: what the Memory page and a run shared start with."""
+    if memory.entries():
+        return
+    for author, name, kind, description, body, locked in SEEDED:
+        who = Author.operator("127.0.0.1") if author == "operator" else Author.agent("20261021-090000-0a0b0c", 0)
+        memory.save(who, name, kind=kind, description=description, body=body, locked=locked)
 
 
 class FakeDailyDebrief(DailyDebrief):

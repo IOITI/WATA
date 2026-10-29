@@ -18,6 +18,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
 from src.admin.agent.store import UnknownConversation
+from src.admin.agent_memory import UnknownEntry
 from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
@@ -249,6 +250,10 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
     @app.exception_handler(UnknownConversation)
     async def unknown_conversation(_: Request, __: UnknownConversation):
         return JSONResponse(content={"detail": "No such conversation"}, status_code=404)
+
+    @app.exception_handler(UnknownEntry)
+    async def unknown_entry(_: Request, exc: UnknownEntry):
+        return JSONResponse(content={"detail": str(exc)}, status_code=404)
 
     @app.exception_handler(UnknownRun)
     async def unknown_run(_: Request, __: UnknownRun):

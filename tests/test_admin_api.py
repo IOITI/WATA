@@ -192,6 +192,15 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/task/stop"),
     ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/dismiss"),
     ("GET", "/api/agent/artefacts"),
+    ("GET", "/api/agent/memory"),
+    ("POST", "/api/agent/memory"),
+    ("GET", "/api/agent/memory/history"),
+    ("PUT", "/api/agent/memory/range-ticks"),
+    ("DELETE", "/api/agent/memory/range-ticks"),
+    ("POST", "/api/agent/memory/range-ticks/lock"),
+    ("POST", "/api/agent/memory/restore"),
+    ("POST", "/api/agent/memory/pause"),
+    ("POST", "/api/agent/memory/resume"),
 ]
 
 
@@ -736,7 +745,8 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{token_id}", "0123abcd")
             .replace("{number}", "1")
             .replace("{conversation_id}", "20261028-101500-a1b2c3")
-            .replace("{proposal_id}", "p0a1b2c3d"),
+            .replace("{proposal_id}", "p0a1b2c3d")
+            .replace("{entry}", "range-ticks"),
         )
         for route in app.routes
         if route.path.startswith("/api")

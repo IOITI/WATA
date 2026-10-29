@@ -249,6 +249,18 @@ ADMIN_PARAMS = (
         caveats=("Off, it still reads the admin's health and WATA's positions, orders and signals.",),
     ),
     Param(
+        path=f"{AGENT}.memory", group="agent", label="Memory", kind="bool", optional=True, default=True,
+        help="The agent keeps what a later conversation needs (your preferences, lessons about WATA, what its studies "
+             "found) as entries it saves and forgets itself: their list is shared at each conversation's start, and "
+             "you read, change, lock and restore them on AI agent › Memory.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("What the memory holds goes to Anthropic with every conversation: text that looks like a secret is "
+                 "refused.",
+                 "Off, the agent neither reads nor changes it; its entries are kept, and Claude Code still reads them "
+                 "(Claude (MCP)).",
+                 "Its changes can also be paused from AI agent › Memory, at once and without a restart."),
+    ),
+    Param(
         path=f"{AGENT}.max_task_usd", group="agent", label="Cost of a research task at most", kind="number", unit="$",
         minimum=1, maximum=1_000, optional=True, default=20,
         help="The most a research task may be given to spend, all its requests together: the task's own budget is "

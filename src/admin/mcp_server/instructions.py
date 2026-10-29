@@ -20,7 +20,8 @@ within 50 s: a study not done by 45 s comes back as a job, which job_wait answer
 
 # The research loop, tool by tool.
 LOOP = """\
-Start with `status`. The loop:
+Start with `status`, then `memory_list`: what WATA's AI agent and the operator kept between conversations (read \
+what bears on the work with `memory_read`; only they change it). The loop:
 1. `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as trials of the family; \
 configurations tried elsewhere (a port on the Mac) too, once written down with `exp_trials`.
 2. The strategy: `pine_check`, `pine_run` (plots and alerts on recorded bars), `pine_signals` (what a rule would \
@@ -63,7 +64,8 @@ INSTRUCTIONS = "\n\n".join((ABOUT, LIMITS, LOOP, DO_NOT_BELIEVE, PINE_FOR_WATA))
 RESEARCH_PROMPT = """\
 Work on WATA's strategies through the `wata` tools, on the live server's data, as follows.
 
-1. `status`: what data there is (recorded days per source), the queue, the lock box and the open experiments.
+1. `status`: what data there is (recorded days per source), the queue, the lock box and the open experiments. \
+Then `memory_list`, and `memory_read` of what bears on the work: what WATA's AI agent and the operator kept.
 2. `exp_new` before running anything: a title, a hypothesis the data can refute, and a family (the idea it \
 belongs to). Every run counts 1 trial of the family, every sweep its combinations; the overfitting figures are \
 corrected with that count. Configurations screened outside the server's runs (a port on the Mac, by hand) are \

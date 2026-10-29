@@ -23,9 +23,9 @@ from typing import Callable
 
 from src.admin.agent import provider as claude
 from src.admin.agent import transcript
-from src.admin.agent.prompts import SYSTEM_PROMPT, wrap_up_note
+from src.admin.agent.prompts import system_prompt, wrap_up_note
 from src.admin.agent.store import stamp
-from src.admin.agent.tools import STARTS
+from src.admin.agent.tools import MEMORY_SAVE, STARTS
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +45,14 @@ CLEAR_AT_LEAST_TOKENS = 30_000
 DONE, STOPPED, FAILED, DECLINED, LIMIT, CUT = "done", "stopped", "failed", "declined", "limit", "cut"
 
 
+def prompt_for(tools: list[dict]) -> str:
+    """The system prompt that goes with these tools: the memory's rules with the memory's tools."""
+    return system_prompt(any(tool.get("name") == MEMORY_SAVE for tool in tools))
+
+
 def digest_of(tools: list[dict]) -> str:
     """The prompt and tools a conversation was begun with: another one means its thinking blocks are another's."""
-    return hashlib.sha256(json.dumps([SYSTEM_PROMPT, tools], sort_keys=True).encode()).hexdigest()[:16]
+    return hashlib.sha256(json.dumps([prompt_for(tools), tools], sort_keys=True).encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -191,14 +196,25 @@ class RequestRun:
                 self._near_limits()
 
     async def _open(self, session) -> None:
-        """The request as the API is sent it: what was shared (a conversation's first), the prompt, its limits."""
-        opening, content = self.opening, []
+        """
+        The request as the API is sent it: the memory's list (a conversation's
+        first) or what changed in it since, what was shared (a conversation's
+        first), the prompt, its limits.
+        """
+        opening, content, seen = self.opening, [], None
+        if opening.get("memory") is not None:
+            said, seen = opening["memory"]()
+            if said:
+                content.append({"type": "text", "text": said})
         if opening.get("subject"):
             shared = await opening["shared"](session, opening["subject"], self.request)
             content.append({"type": "text", "text": shared})
         content.append({"type": "text", "text": opening["prompt"]})
         self._message("user", content)
         self._message("system", opening["limits"])
+        if seen is not None:
+            # The next request is told what changed after this one.
+            self.store.update_meta(self.conversation_id, memory_seq=seen)
 
     def _past_limits(self) -> bool:
         return self.used.tool_calls >= self.settings.max_tool_calls
@@ -313,7 +329,7 @@ class RequestRun:
             return "Not run: your answer reached its length limit in the middle of this call: make it again, shorter"
         if interrupted and not self.tools.is_read(call["name"]):
             return ("Interrupted by a restart of the admin: check whether it was done (backtest_list, pine_list, "
-                    "exp_get) before doing it again")
+                    "exp_get, memory_read) before doing it again")
         if self.stopping():
             return "Not run: the operator stopped the request"
         if self.used.tool_calls + planned["calls"] >= settings.max_tool_calls:
@@ -358,6 +374,10 @@ class RequestRun:
             if answer.task_done is not None:
                 # Kept with the request: a restart before its answer still ends the task.
                 self._activity("task_done", **answer.task_done)
+            if answer.memory is not None:
+                self._activity("memory", **answer.memory)
+                self.store.add_artefact({"at": stamp(self.clock()), "kind": "memory", "conversation": self.conversation_id,
+                                         "id": answer.memory["name"], **answer.memory})
         self._activity("tool_done", id=call["id"], is_error=is_error, seconds=round(time.monotonic() - started, 1),
                        output=transcript.shown(text, transcript.SHOWN_OUTPUT_CHARS))
         result = {"type": "tool_result", "tool_use_id": call["id"], "content": text}
@@ -379,7 +399,7 @@ def request_params(model, effort: str, tools: list[dict], messages: list[dict], 
     params = {
         "model": model.id,
         "max_tokens": claude.MAX_OUTPUT,
-        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        "system": [{"type": "text", "text": prompt_for(tools), "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         "tools": [{**tool, "eager_input_streaming": True} for tool in tools],
         "messages": messages,
         "thinking": thinking,

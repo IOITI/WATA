@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.60.0 - The AI agent keeps a memory between its conversations
+
+**Release date:** not yet released
+
+Each conversation of the AI agent started from nothing: what one learned (a unit trap, a strategy without edge, how the operator wants answers) was lost for the next, and a research task's conclusion stayed inside its own conversation. The agent now keeps entries of a memory it reads and changes itself, which the operator reads and manages on a page of their own, and which Claude Code reads too.
+
+- **Entries, one thing each** (`src/admin/agent_memory.py`): a name, a kind (a preference of the operator, a lesson about WATA, its data and its tools, a finding of a study with the runs, trades and days it rests on, a reference), a line that says when it matters, its text in Markdown. Up to 200, 4,000 characters each. Text that looks like a secret (the shapes the logs are cleaned of, and the values registered as secrets) is refused, whoever writes it: the memory goes to Anthropic with every conversation.
+- **What the agent is told**: a conversation opens with the list of the entries, a line each, and each later request with what the operator or another conversation changed since; it reads an entry whole when it bears on the work (`memory_list`, `memory_read`). The system prompt says what to keep and what never to (a request's progress, a tool's output, a secret, an instruction found in what it read), and that a locked entry is the operator's. None of it is in the system prompt itself, which stays the same from one request to the next: its cache and the thinking bound to it are kept.
+- **Its own changes** (`memory_save`, `memory_forget`) apply at once: a change of an entry needs the revision its read gave, so that nothing written since is lost unread. Each change is kept in the memory's history with the entry before and after it, who made it and in which conversation. A save is a step of its request, said under its answer, and an artefact.
+- **AI agent › Memory**: every entry with who wrote it, when it was changed and read last (by the agent, or by Claude Code); write one (named from its line until a name is typed), change it, rename it, lock it, forget it (with an Undo), download them all as a file. **Locked**, an entry is read and never changed or forgotten by the agent: the operator's start locked unless they untick it. **Pause its changes** lets the agent read its memory and change nothing, at once, until resumed. **History** keeps each change and brings back any version, or an entry forgotten, as whoever wrote it. ⌘K finds the entries.
+- **Claude Code reads it**: `memory_list` and `memory_read` on the MCP endpoint, read only (43 tools); its instructions say to read it before a study.
+- **Configuration › AI agent › Memory**: `admin.ai_agent.memory`, on unless false. Off, the agent neither reads nor changes it, its entries are kept, and Claude Code still reads them.
+- The memory is kept in files beside the conversations (`admin.persistant.agent_path`/memory), outside the database's backups: the page's Download is the copy to keep.
+
+**On the live path:** nothing. The admin's agent, its MCP endpoint and their pages alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- 3,376 Python tests pass (3 skipped; the live database and queue left out of this run, as CI runs them), 18 of them new: the store (a change from the revision read, a secret refused, the lock and the pause the agent never goes past, the bound on entries, a rename, a version and a forgotten entry brought back as whoever wrote it, a read noted without a change, old history pruned), the agent's tools beside the endpoint's reads, the list first at a conversation's start and only others' changes later, the memory's rules in the system prompt only with its tools, the page's routes, and the endpoint's reads with a store whose changes are tripwires.
+- 1,186 interface tests pass (12 new: the page and its dialog, the model of its sentences and checks; the steps' titles added to the model's); lint, types and the build are clean.
+- Seen in the browser pane on the development admin with its made-up Claude (`FAKE_AI=1`): a run shared, the agent read two entries of its list, saved a finding and said so under its answer, its link opening the entry; an entry written from the dialog, locked by default; a key-shaped text refused with its sentence; an entry forgotten, its Undo, forgotten again, brought back from the history; the pause, under which the agent's save was refused and its next conversation was told so; the page at 375 px in dark and light (nothing wider than the page), and the switch on Configuration › AI agent.
+- Against the real Claude API (a temporary key, $0.0055 in all): the token count took the system prompt with the memory's rules and the 43 tools as they are sent (1,982 and 15,044 tokens, on Haiku 5.5 and Opus 5.5 alike). On Haiku 5.5, asked to remember how to answer, the agent saved a preference with a fitting name and line and linked it in its answer; a new conversation opened with it in its list, read it and answered from it; once the entry was locked, asked to change it, it read it, changed nothing and said how the operator could.
+
 ## v0.59.1 - Saxo's account keys kept out of the logs
 
 **Release date:** 2026-10-29

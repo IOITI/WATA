@@ -74,6 +74,9 @@ const AgentActivityPage = lazy(() =>
 const AgentConversationPage = lazy(() =>
   import('@/features/agent/ConversationPage').then((module) => ({ default: module.ConversationPage })),
 )
+const AgentMemoryPage = lazy(() =>
+  import('@/features/agent/MemoryPage').then((module) => ({ default: module.MemoryPage })),
+)
 const AgentArtefactsPage = lazy(() =>
   import('@/features/agent/ArtefactsPage').then((module) => ({ default: module.ArtefactsPage })),
 )
@@ -225,6 +228,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <AgentActivityPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="agent/memory"
+          element={
+            <ChartPage>
+              <AgentMemoryPage />
             </ChartPage>
           }
         />

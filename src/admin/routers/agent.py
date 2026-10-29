@@ -8,6 +8,12 @@ checks, which are not audited when made by hand either. A change of settings
 is previewed and saved here with the Configuration editor, as the
 Configuration page saves (config editing on, the file's revision, the audit):
 the agent's package never reaches the editor.
+
+Its memory (src/admin/agent_memory.py, ``ctx.agent_memory``) is read and changed
+here by the operator, whether the agent is on or not: what the operator writes
+is theirs (locked unless they say otherwise), every change is kept in the
+memory's journal with who made it, and none is audited, as a script saved by
+hand is not.
 """
 
 import asyncio
@@ -20,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from src.admin.agent_memory import KINDS, MAX_BODY, MAX_DESCRIPTION, MAX_ENTRIES, Author
 from src.admin.auth import client_ip, require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
 from src.admin.routers.config import changes_said, require_config_edit_enabled
@@ -79,6 +86,30 @@ class Feedback(BaseModel):
 class Apply(BaseModel):
     # A change of settings: the revision of config.json its preview was read at.
     revision: str | None = Field(None, max_length=128)
+
+
+class MemoryEntry(BaseModel):
+    # Held to the memory's own bounds by the store, which says why in a sentence; these only cap what is read.
+    name: str = Field(max_length=80)
+    kind: str = Field(max_length=20)
+    description: str = Field(max_length=MAX_DESCRIPTION * 2)
+    body: str = Field(max_length=MAX_BODY * 2)
+    # What the operator writes is theirs unless they say otherwise: the agent reads it, never changes it.
+    locked: bool = True
+
+
+class MemoryChange(MemoryEntry):
+    # The revision the page showed: a change made since is never written over unread.
+    revision: int
+    locked: bool | None = None
+
+
+class MemoryLock(BaseModel):
+    locked: bool
+
+
+class MemoryRestore(BaseModel):
+    seq: int
 
 
 def _agent(request: Request):
@@ -288,3 +319,93 @@ async def stream(conversation_id: str, request: Request):
 async def artefacts(request: Request):
     """What the conversations made: runs, Claude's scripts, experiments, proposals and what became of them."""
     return {"items": await run_in_threadpool(_agent(request).artefacts)}
+
+
+# ── its memory ──
+
+def _memory(request: Request):
+    memory = request.app.state.ctx.agent_memory
+    if memory is None:
+        raise HTTPException(status_code=404, detail="The AI agent's memory is not kept here")
+    return memory
+
+
+def _operator(request: Request) -> Author:
+    return Author.operator(_by(request))
+
+
+@router.get("/memory")
+async def memory_state(request: Request):
+    """Every entry whole, the pause of the agent's changes, whether the agent uses its memory, and the bounds."""
+    ctx = request.app.state.ctx
+    memory = _memory(request)
+    return {
+        "entries": await run_in_threadpool(memory.entries), "pause": await run_in_threadpool(memory.pause),
+        # The agent on and its memory with it: off, the entries are kept and Claude Code still reads them.
+        "agent": ctx.agent is not None, "used": ctx.agent is not None and ctx.agent.memory is not None,
+        "kinds": list(KINDS), "limits": {"entries": MAX_ENTRIES, "description": MAX_DESCRIPTION, "body": MAX_BODY},
+    }
+
+
+@router.get("/memory/history")
+async def memory_history(request: Request, name: str | None = Query(None, max_length=80)):
+    """The memory's changes, newest first (only one entry's when ``name`` is given), with their conversations' titles."""
+    ctx = request.app.state.ctx
+    lines = await run_in_threadpool(_memory(request).history, name)
+    titles = {}
+    if ctx.agent is not None:
+        titles = {meta["id"]: meta.get("title") for meta in await run_in_threadpool(ctx.agent.store.metas)}
+    return {"items": [{**line, "title_of": titles.get(line.get("conversation"))} for line in lines]}
+
+
+@router.post("/memory", status_code=201)
+async def memory_create(body: MemoryEntry, request: Request):
+    memory, author = _memory(request), _operator(request)
+    entry, _ = await run_in_threadpool(lambda: memory.save(
+        author, body.name, kind=body.kind, description=body.description, body=body.body, locked=body.locked,
+        create=True))
+    return entry
+
+
+@router.put("/memory/{entry}")
+async def memory_change(entry: str, body: MemoryChange, request: Request):
+    """An entry changed, or renamed to ``body.name``, from the revision the page showed (409 once it moved on)."""
+    memory, author = _memory(request), _operator(request)
+    changed, _ = await run_in_threadpool(lambda: memory.save(
+        author, entry, kind=body.kind, description=body.description, body=body.body, revision=body.revision,
+        locked=body.locked, new_name=body.name))
+    return changed
+
+
+@router.post("/memory/{entry}/lock")
+async def memory_lock(entry: str, body: MemoryLock, request: Request):
+    memory, author = _memory(request), _operator(request)
+    return await run_in_threadpool(memory.set_lock, author, entry, body.locked)
+
+
+@router.delete("/memory/{entry}", status_code=204)
+async def memory_forget(entry: str, request: Request, revision: int = Query(...)):
+    """Forgotten from the revision the page showed: the history keeps it, and it may come back."""
+    memory, author = _memory(request), _operator(request)
+    await run_in_threadpool(lambda: memory.forget(author, entry, revision=revision))
+    return Response(status_code=204)
+
+
+@router.post("/memory/restore")
+async def memory_restore(body: MemoryRestore, request: Request):
+    """An entry as a line of the history left it, back: a version, or one forgotten."""
+    memory, author = _memory(request), _operator(request)
+    return await run_in_threadpool(memory.restore, author, body.seq)
+
+
+@router.post("/memory/pause")
+async def memory_pause(request: Request):
+    """The agent reads its memory and changes nothing until resumed: at once, whatever is under way."""
+    memory, author = _memory(request), _operator(request)
+    return {"pause": await run_in_threadpool(memory.set_pause, author, True)}
+
+
+@router.post("/memory/resume")
+async def memory_resume(request: Request):
+    memory, author = _memory(request), _operator(request)
+    return {"pause": await run_in_threadpool(memory.set_pause, author, False)}

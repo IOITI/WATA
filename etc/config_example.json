@@ -370,7 +370,8 @@
       "debrief_model": "claude-sonnet-5-5",
       "debrief_effort": "medium",
       "debrief_max_usd": 0.5,
-      "debrief_telegram": true
+      "debrief_telegram": true,
+      "memory": true
     },
     "persistant": {
       "credentials_path": "/app/var/lib/admin/credentials.json",

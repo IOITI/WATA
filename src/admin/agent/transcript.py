@@ -116,7 +116,7 @@ def _request(requests: dict, index) -> dict:
         requests[index] = {
             "index": index, "prompt": "", "shared": None, "asked_at": None, "started_at": None, "ended_at": None,
             "status": "queued", "detail": None, "steps": [], "answer": None, "proposals": [], "runs": [],
-            "cost_usd": 0.0, "feedback": None, "model": None, "effort": None, "by": None,
+            "cost_usd": 0.0, "feedback": None, "model": None, "effort": None, "by": None, "memory": [],
         }
     return requests[index]
 
@@ -164,6 +164,8 @@ def project(meta: dict, activity: list[dict], proposals: dict, pending: dict | N
             request["runs"].append(event.get("id"))
         elif kind == "proposal":
             request["proposals"].append(event.get("id"))
+        elif kind == "memory":
+            request["memory"].append({"name": event.get("name"), "action": event.get("action")})
         elif kind == "answer":
             request["answer"] = {"text": event.get("text", ""), "model": event.get("model"),
                                  "stop_reason": event.get("stop_reason")}

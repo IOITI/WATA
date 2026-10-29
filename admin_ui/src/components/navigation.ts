@@ -33,8 +33,10 @@ export const MENU: MenuEntry<MenuSection>[] = [
   // "Signal rules": the Trading section's Signals page sends signals by hand.
   { id: 'ta-signals', path: '/ta/signals', label: 'Signal rules', section: 'Technical Analysis' },
   { id: 'ta-monitor', path: '/ta/monitor', label: 'Engine monitor', section: 'Technical Analysis' },
-  // Claude from these pages: its conversations (a conversation's page is under Activity), what they made.
+  // Claude from these pages: its conversations (a conversation's page is under Activity), what it keeps between
+  // them, what they made.
   { id: 'agent', path: '/agent', label: 'Activity', section: 'AI agent' },
+  { id: 'agent-memory', path: '/agent/memory', label: 'Memory', section: 'AI agent' },
   { id: 'agent-artefacts', path: '/agent/artefacts', label: 'Artefacts', section: 'AI agent' },
   { id: 'system', path: '/system', label: 'System', section: 'Operations' },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations' },
