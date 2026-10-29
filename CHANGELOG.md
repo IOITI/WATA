@@ -2,7 +2,7 @@
 
 ## v0.59.0 - Days on paper made with older backtest code are made again
 
-**Release date:** not released yet
+**Release date:** 2026-10-29
 
 Paper trading showed a rule's 23 October as +0.51 % in 6 trades on its days on paper, and -11.30 % in 28 trades in its report. Both replay the same 33 signals at the same moments under the same settings: the day on paper was made that evening by v0.33.0, before v0.38.0 priced fills at Saxo's next quote and judged a new position only on a fresh bid; the report is made each night with the server's code. With the old fills the first five trades lost 3.7 % together and the sixth reached the day's profit target (0.5 %) at 14:00, which stopped the day; with today's they lost 7.3 %, the day never came back to +0.5 %, and the rule went on trading an afternoon of back and forth. A day on paper was made once and never again, and the page did not say it was made with older code: the go-live check read it too.
 
