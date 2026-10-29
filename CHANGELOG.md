@@ -2,7 +2,7 @@
 
 ## v0.59.1 - Saxo's account keys kept out of the logs
 
-**Release date:** not released yet
+**Release date:** 2026-10-29
 
 At each start the trader wrote Saxo's account key and client key in its log, `Account: <key>, Client: <key>`. The cleaning of log lines knew those keys only in an address's query (`AccountKey=`), and no service registered their values: the line stayed in the trader's log files on the server and was shown on the admin's Logs page. Seen while deploying v0.59.0, whose read of the trader's log printed them.
 
