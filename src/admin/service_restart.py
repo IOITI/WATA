@@ -11,7 +11,9 @@ start, its log's line. The guards are read again before each step. The admin
 goes last and alone: its own restart ends the plan.
 
 The functions down to ``RestartPlans`` are pure; ``situation_of`` and
-``Readiness`` read the admin's context.
+``Readiness`` read the admin's context. What holds a restart back and the
+order (``refusal``, ``Situation``, ``ORDER``) are src/release/guards.py's,
+which a deploy reads too (src/release/host.py).
 """
 
 import asyncio
@@ -19,24 +21,28 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-import pytz
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.config_catalog import SERVICES, flatten, lookup
 from src.admin.config_editor import mask_secrets
-from src.admin.downloads import market_is_open, trading_timezone
+from src.release.guards import (  # noqa: F401 (the names the admin has always imported from here)
+    ORDER,
+    SCHEDULER_JOB_MARGIN_SECONDS,
+    TRADING_PATH,
+    Situation,
+    count as _count,
+    market_is_open,
+    moment,
+    ordered,
+    refusal,
+    scheduler_job_near,
+    scheduler_jobs,
+)
 
 logger = logging.getLogger(__name__)
 
-# What trades, or decides when to: not restarted with a position open or the market open, unless forced.
-TRADING_PATH = frozenset({"trader", "position_monitor", "watchlist_manager", "web_server", "scheduler"})
-# Restarted in this order: what the others call first, the trading pair after, the admin last.
-ORDER = (
-    "web_server", "telegram", "watchlist_manager", "price_recorder", "capital_feed", "ta_engine",
-    "scheduler", "position_monitor", "trader", "admin",
-)
 SERVICE_NAMES = {service.id: service.name for service in SERVICES}
 # What a restart costs each service, said before it is asked.
 COSTS = {
@@ -52,91 +58,10 @@ COSTS = {
     "capital_feed": "About ten seconds of bars are not recorded; the TA engine waits for them.",
     "ta_engine": "Every rule loads its history again, seconds to minutes; no signal is sent meanwhile.",
 }
-# How long a scheduled job keeps the scheduler from being restarted, before and after it: its
-# schedule is worked out when it starts, so a restart just past a job misses that day's.
-SCHEDULER_JOB_MARGIN_SECONDS = 120
 
 WAITING, RESTARTING, STARTING, READY, FAILED, HELD, SKIPPED = (
     "waiting", "restarting", "starting", "ready", "failed", "held", "skipped",
 )
-
-
-@dataclass(frozen=True)
-class Situation:
-    """What the guards read, gathered at the moment of the request and again before each step of a plan."""
-
-    # None: the database could not say.
-    positions_open: int | None = 0
-    # What the position monitor's heartbeat says Saxo lists: a position bought and not in a row yet counts.
-    positions_listed: int = 0
-    close_intents: tuple[str, ...] = ()
-    market_open: bool = False
-    live_rules: int = 0
-    backtests_running: int = 0
-    study_running: bool = False
-    # The scheduler's job due within its margin, said ("the close of the day at 15:55, America/New_York").
-    scheduler_job_near: str | None = None
-    # The AI agent's requests queued or worked on: taken up again after the restart, a study or a wait cut short.
-    agent_requests: int = 0
-
-
-def _count(number: int, noun: str) -> str:
-    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
-
-
-def refusal(service: str, situation: Situation) -> str | None:
-    """Why ``service`` should not be restarted now, or None. A forced restart goes ahead, said in the audit."""
-    reasons = []
-    if service in TRADING_PATH:
-        if situation.positions_open is None:
-            reasons.append("the open positions cannot be read")
-        held = max(situation.positions_open or 0, situation.positions_listed)
-        if held:
-            reasons.append(f"{_count(held, 'position')} open")
-        if situation.market_open:
-            reasons.append("the market is open by WATA's hours")
-    if service == "position_monitor" and situation.close_intents:
-        reasons.append(f"{_count(len(situation.close_intents), 'sale')} still being tried "
-                       f"(position {', '.join(situation.close_intents)}), which the restart drops")
-    if service == "scheduler" and situation.scheduler_job_near:
-        reasons.append(f"{situation.scheduler_job_near} is within {SCHEDULER_JOB_MARGIN_SECONDS // 60} minutes")
-    if service == "ta_engine" and situation.live_rules and situation.market_open:
-        reasons.append(f"{_count(situation.live_rules, 'live rule')} with the market open: a signal could be missed")
-    if service == "admin":
-        if situation.backtests_running:
-            reasons.append(f"{_count(situation.backtests_running, 'backtest')} running")
-        if situation.study_running:
-            reasons.append("one of Claude's studies is running")
-        if situation.agent_requests:
-            reasons.append(f"the AI agent is working on {_count(situation.agent_requests, 'request')}")
-    return "; ".join(reasons) or None
-
-
-def ordered(services) -> list[str]:
-    """``services`` in the order a plan restarts them, each once; anything else is refused."""
-    wanted = set(services)
-    unknown = wanted - set(ORDER)
-    if unknown:
-        raise ValueError(f"Not WATA services: {', '.join(sorted(unknown))}")
-    return [service for service in ORDER if service in wanted]
-
-
-def moment(value) -> datetime | None:
-    """An instant as Docker, the journal or the database gives it (Docker's has nanoseconds), or None."""
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if not isinstance(value, str) or not value or value.startswith("0001-"):
-        return None
-    text = value.replace("Z", "+00:00")
-    if "." in text:
-        head, _, rest = text.partition(".")
-        digits = "".join(character for character in rest if character.isdigit())
-        text = f"{head}.{digits[:6]}{rest[len(digits):]}"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def pending_changes(service: str, started_at: datetime | None, history: list[dict], current: dict,
@@ -183,39 +108,6 @@ def pending_changes(service: str, started_at: datetime | None, history: list[dic
         and (latest_save is None or (modified_at - latest_save).total_seconds() > 5)
     )
     return {"paths": paths, "outside": outside}
-
-
-def _rule_config(config: dict, rule_type: str) -> dict:
-    for rule in (config.get("trade") or {}).get("rules") or []:
-        if isinstance(rule, dict) and rule.get("rule_type") == rule_type:
-            return rule.get("rule_config") or {}
-    return {}
-
-
-def scheduler_jobs(config: dict) -> list[tuple[str, str, str]]:
-    """The scheduler's daily jobs, as it schedules them: (what, HH:MM, timezone)."""
-    zone = trading_timezone(config)
-    jobs = [("the daily report", "22:00", zone), ("the calendars' check", "09:00", zone)]
-    close = _rule_config(config, "day_trading").get("close_position_time")
-    if close:
-        jobs.append(("the close of the day", close, _rule_config(config, "market_hours").get("timezone") or zone))
-    return jobs
-
-
-def scheduler_job_near(config: dict, now: float, margin: int = SCHEDULER_JOB_MARGIN_SECONDS) -> str | None:
-    """The scheduler's job due within ``margin`` seconds of ``now``, before or after, said; None if none."""
-    for what, at, zone in scheduler_jobs(config):
-        try:
-            hour, minute = (int(part) for part in str(at).split(":")[:2])
-            local_zone = pytz.timezone(zone)
-        except (ValueError, pytz.UnknownTimeZoneError):
-            continue
-        today = datetime.fromtimestamp(now, local_zone).date()
-        for day in (today - timedelta(days=1), today, today + timedelta(days=1)):
-            due = local_zone.localize(datetime.combine(day, datetime.min.time().replace(hour=hour, minute=minute)))
-            if abs(due.timestamp() - now) <= margin:
-                return f"{what} at {hour:02d}:{minute:02d} ({zone})"
-    return None
 
 
 @dataclass

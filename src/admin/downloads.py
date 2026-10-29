@@ -30,8 +30,6 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
-import pytz
-
 from src.admin.data import PriceHistory
 from src.admin.errors import InvalidRequest, NotPossible
 from src.admin.processes import (
@@ -50,6 +48,14 @@ from src.admin.processes import (
     write_json,
 )
 from src.price_history import dukascopy
+# WATA's hours, read by the downloads, the research export, the paper days and the restarts: the rule a
+# deploy reads too, kept where the server's own python3 imports it.
+from src.release.guards import (  # noqa: F401 (imported from here by the admin's other modules)
+    market_is_open,
+    trading_hours,
+    trading_timezone,
+    within_hours,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,46 +86,6 @@ KEEP_GIVE_UP_AFTER_DAYS = 3
 
 # What the keeper remembers, copied once from where the former backtester kept it.
 _REMEMBERED = ("keep.json", "keeper.json")
-
-
-def trading_timezone(config: dict) -> str:
-    """The trading timezone (``trade.config.general.timezone``): the one WATA's days are counted in."""
-    return ((config.get("trade") or {}).get("config") or {}).get("general", {}).get("timezone", "Europe/Paris")
-
-
-def trading_hours(config: dict) -> tuple[str, int, int]:
-    """
-    The hours WATA trades in, as the live rules say (``market_hours``), and the
-    timezone they are written in: theirs (``market_hours.timezone``, New York's
-    say), the trading one unless they give one. Days are counted in the
-    trading timezone (``trading_timezone``).
-    """
-    for rule in (config.get("trade") or {}).get("rules") or []:
-        if isinstance(rule, dict) and rule.get("rule_type") == "market_hours":
-            hours = rule.get("rule_config") or {}
-            zone = hours.get("timezone") or trading_timezone(config)
-            return zone, int(hours["trading_start_hour"]), int(hours["trading_end_hour"])
-    raise KeyError("market_hours")
-
-
-def within_hours(hours: tuple[str, int, int], now: float) -> bool:
-    """Whether ``now`` falls in ``(timezone, start hour, end hour)`` on a weekday."""
-    zone, start_hour, end_hour = hours
-    local = datetime.fromtimestamp(now, pytz.timezone(zone))
-    return local.weekday() < 5 and start_hour <= local.hour < end_hour
-
-
-def market_is_open(config: dict, now: float) -> bool:
-    """
-    Whether WATA may be trading at ``now``, as the deploy judges it: its hours
-    (``market_hours``, in their timezone) on a weekday. Unknown counts as open.
-    The downloads, the research export, the paper days and the restarts of the
-    trading path wait for it to be closed.
-    """
-    try:
-        return within_hours(trading_hours(config), now)
-    except (ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
-        return True
 
 
 def config_hours(config_path: str) -> Callable[[], tuple[str, int, int]]:
@@ -376,7 +342,7 @@ class HistoryDownloads:
             return True
         try:
             return within_hours(self._hours(), now)
-        except (OSError, ValueError, KeyError, TypeError, pytz.UnknownTimeZoneError):
+        except (OSError, ValueError, KeyError, TypeError):
             return True
 
     def _days_to_keep(self, now: float, days: int) -> list[date]:

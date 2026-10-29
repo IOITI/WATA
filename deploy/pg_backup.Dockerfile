@@ -1,7 +1,8 @@
 # The image of pg_backup1 (deploy/pg_backup.sh): PostgreSQL's own tools, the version of the database's
-# image, and age and rclone, which send each dump off the server encrypted. Built by docker_build.sh as
-# wata-backup, from nothing but this file. Each download is checked against its sha256, as the release
-# lists it (rclone's SHA256SUMS, the digests GitHub gives age's assets), read on 2026-10-26.
+# image, age and rclone, which send each dump off the server encrypted, and the script itself, so that the
+# container names nothing in a release's folder. Built by docker_build.sh as wata-backup:<version>, from this
+# file and the script alone. Each download is checked against its sha256, as the release lists it (rclone's
+# SHA256SUMS, the digests GitHub gives age's assets), read on 2026-10-26.
 FROM postgres:16-alpine
 
 # No name starting with RCLONE_: rclone takes every RCLONE_<flag> of its environment for that flag, and a
@@ -27,3 +28,5 @@ RUN set -eu; \
     rm -rf /tmp/*; \
     age --version; \
     rclone version
+
+COPY pg_backup.sh /pg_backup.sh

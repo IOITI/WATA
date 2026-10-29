@@ -49,7 +49,8 @@ cp -r ./src _tmp_package/wata/$VERSION/
 cp -r ./etc _tmp_package/wata/
 cp ./requirements.txt _tmp_package/wata/$VERSION/
 cp ./Dockerfile _tmp_package/wata/$VERSION/
-cp ./VERSION _tmp_package/wata/
+# No top-level VERSION: the install names the release the newest (/app/wata/VERSION) once its image passed its
+# checks, so that a release that fails them leaves the running one as it was.
 cp ./VERSION _tmp_package/wata/$VERSION/
 cp ./docker_build.sh _tmp_package/wata/$VERSION/
 mkdir -p _tmp_package/wata/$VERSION/deploy

@@ -99,8 +99,9 @@ services:
   # whole on Sundays, into var/lib/backups, which lab/sync.sh pulls to the Mac. Reaches only the
   # database; nothing reaches it.
   pg_backup1:
-    # postgres:16-alpine with age and rclone (deploy/pg_backup.Dockerfile, built by docker_build.sh).
-    image: wata-backup:latest
+    # postgres:16-alpine with age, rclone and deploy/pg_backup.sh (deploy/pg_backup.Dockerfile, built by
+    # docker_build.sh), at the release its pin names (/app/wata/release/images.env, as every WATA container).
+    image: ${WATA_IMAGE_PG_BACKUP1:-wata-backup:latest}
     hostname: pg_backup1
     container_name: 'pg_backup1'
     oom_score_adj: 300
@@ -126,7 +127,6 @@ services:
       - RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY=${BACKUP_S3_SECRET_ACCESS_KEY:-}
       - RCLONE_CONFIG_OFFSITE_NO_CHECK_BUCKET=true
     volumes:
-      - ./pg_backup.sh:/pg_backup.sh:ro
       - ../../var/lib/backups:/backups
     networks:
       - trade-net
@@ -175,7 +175,11 @@ services:
           memory: 1024M
 
   web_server1:
-    image: wata-base:latest
+    # The release each WATA container runs is its own: /app/wata/release/images.env, which every
+    # command passes after .env, pins it (WATA_IMAGE_<container>=wata-base:<version>), and only
+    # watadeploy changes a pin, recreating that container alone (src/release/). So on every WATA
+    # service below; the default is for CI and a machine without pins.
+    image: ${WATA_IMAGE_WEB_SERVER1:-wata-base:latest}
     # tini as PID 1 hands Docker's stop (SIGTERM) to the service, started with exec by
     # src/start_python_script.sh, which then stops cleanly. So on every WATA service below.
     init: true
@@ -227,7 +231,7 @@ services:
       traefik:
         condition: service_healthy
   telegram1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_TELEGRAM1:-wata-base:latest}
     init: true
     hostname: telegram1
     container_name: 'telegram1'
@@ -261,7 +265,7 @@ services:
         condition: service_healthy
 
   scheduler1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_SCHEDULER1:-wata-base:latest}
     init: true
     hostname: scheduler1
     container_name: 'scheduler1'
@@ -296,7 +300,7 @@ services:
         condition: service_healthy
 
   trader1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_TRADER1:-wata-base:latest}
     init: true
     # A signal in hand is finished before the trader stops: a sale, a buy, the position looked
     # up (up to 11 s), each request to Saxo allowed 30 s.
@@ -332,7 +336,7 @@ services:
         condition: service_healthy
 
   position_monitor1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_POSITION_MONITOR1:-wata-base:latest}
     init: true
     # A sale sent to Saxo is waited for (15 s at most), then the closures being recorded.
     stop_grace_period: 45s
@@ -371,7 +375,7 @@ services:
         condition: service_healthy
 
   watchlist_manager1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_WATCHLIST_MANAGER1:-wata-base:latest}
     init: true
     hostname: watchlist_manager1
     container_name: 'watchlist_manager1'
@@ -410,7 +414,7 @@ services:
   # enabled (COMPOSE_PROFILES=admin in .env, with ADMIN_DOMAIN and ADMIN_ALLOWED_IPS,
   # and ADMIN_ENTRYPOINT and ADMIN_PORT when it has no domain of its own).
   admin1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_ADMIN1:-wata-base:latest}
     init: true
     hostname: admin1
     container_name: 'admin1'
@@ -438,6 +442,9 @@ services:
       - ../../var/lib/backtests:/app/var/lib/backtests
       # The database's dumps, only read: health says the last one (pg_backup1).
       - ../../var/lib/backups:/app/var/lib/backups:ro
+      # What each container runs and what waits for the newest release, only read: watadeploy writes it
+      # (src/release/host.py). A request to apply goes into var/lib/admin/deploy/requests, above.
+      - ../../release/status:/app/var/lib/release:ro
       # The directory rather than the file: the config editor replaces config.json atomically.
       # The RabbitMQ configuration kept beside it is not the admin's to change.
       - ../../etc:/app/etc
@@ -498,7 +505,7 @@ services:
   # read-only or not, the socket answers anything: its code makes two calls, nothing else. Only
   # the admin reaches it (control-net, internal), with the token both are given.
   service_control1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_SERVICE_CONTROL1:-wata-base:latest}
     init: true
     hostname: service_control1
     container_name: 'service_control1'
@@ -528,7 +535,7 @@ services:
   # (COMPOSE_PROFILES=recorder in .env, or admin,recorder for both) and
   # trade.config.price_recorder.enabled is true. No trading service uses it.
   price_recorder1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_PRICE_RECORDER1:-wata-base:latest}
     init: true
     hostname: price_recorder1
     container_name: 'price_recorder1'
@@ -574,7 +581,7 @@ services:
   # lines of .env, handed to this container alone: Capital.com has no key that
   # can only read prices. No trading service uses it.
   capital_feed1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_CAPITAL_FEED1:-wata-base:latest}
     init: true
     hostname: capital_feed1
     container_name: 'capital_feed1'
@@ -619,7 +626,7 @@ services:
   # until it is switched to live in the admin. No trading service waits for it,
   # and like them it keeps every processor: a rule runs its script on each bar.
   ta_engine1:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_TA_ENGINE1:-wata-base:latest}
     init: true
     hostname: ta_engine1
     container_name: 'ta_engine1'
@@ -665,7 +672,7 @@ services:
   # later at the operator's word (src/vault/migrate.py). Never started by up:
   #   docker compose --profile tools run --rm vault_tools migrate --dry-run
   vault_tools:
-    image: wata-base:latest
+    image: ${WATA_IMAGE_TOOLS:-wata-base:latest}
     profiles: ["tools"]
     environment:
       - WATA_ENV_FILE=/app/wata.env

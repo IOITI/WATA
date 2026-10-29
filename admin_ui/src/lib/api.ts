@@ -75,6 +75,8 @@ import type {
   PriceKeepStatus,
   PriceRangeBars,
   RecorderConfig,
+  ReleaseRequest,
+  ReleaseState,
   Report,
   ResearchFiles,
   ResearchLockbox,
@@ -331,6 +333,10 @@ export const api = {
   testAnthropicKey: () => request<{ ok: boolean; detail: string }>('POST', '/api/credentials/anthropic.api/test'),
   restartServices: (services: string[], force = false) =>
     request<{ plan: RestartPlan }>('POST', '/api/system/services/restart', { body: { services, force } }),
+  release: () => request<ReleaseState>('GET', '/api/system/release'),
+  /** Asks the server to apply the newest release to these containers; watadeploy reads their guards again. */
+  applyRelease: (containers: string[], force = false) =>
+    request<{ request: ReleaseRequest }>('POST', '/api/system/release/apply', { body: { containers, force } }),
   saxo: () => request<SaxoStatus>('GET', '/api/system/saxo'),
   logServices: () => request<LogServices>('GET', '/api/logs'),
   logTail: (service: string, params: { lines: number; level?: string | null; q?: string | null }) =>

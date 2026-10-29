@@ -1,51 +1,27 @@
 ---
+# A release installed beside the one that runs, then applied container by container (src/release/):
+# nothing stops for the install, and each container is recreated only if the release changes what it runs
+# and its guards allow (no position open and the market closed for the trading path and the recorders,
+# no backtest or agent request for the admin...). What is held back waits for `watadeploy apply`, from the
+# server or the admin's System page.
+#
+#   ./deploy_app_to_your_server.sh                     install, then apply what may go now
+#   ./deploy_app_to_your_server.sh -e apply=none        install and say what would go: nothing recreated
+#   ./deploy_app_to_your_server.sh -e services=admin1   install, then apply these containers alone
+#   ./deploy_app_to_your_server.sh -e force=true        whatever holds them back (said in the history)
+#   ./deploy_app_to_your_server.sh -e full=true         every container stopped and started again
 - name: Deploy application to server
   hosts: wata_server
   become: yes
   vars:
     version: "{{ lookup('file', '../../../../VERSION') }}"  # Read the version from the local file
     package_name: "wata_app_v{{ version }}.zip"       # Define the package name with the version
+    apply: now
+    services: ""
+    force: false
+    full: false
 
   tasks:
-    # A deploy stops the trading services: nothing sells a position while they are down. Refused while
-    # WATA holds a position or the market is open by its own hours; -e force=true deploys anyway.
-    - name: Count the positions WATA holds open
-      ansible.builtin.command: >-
-        docker exec postgres psql -U wata -d wata -tAc
-        "SELECT count(*) FROM turbo_data_position WHERE position_status = 'Open'"
-      register: open_positions
-      changed_when: false
-      failed_when: false
-
-    - name: Say whether the market is open by WATA's hours
-      ansible.builtin.command:
-        argv:
-          - python3
-          - -c
-          - |
-            import json
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            config = json.load(open("/app/wata/etc/config.json"))
-            rules = {rule.get("rule_type"): rule.get("rule_config", {}) for rule in config["trade"]["rules"]}
-            hours = rules["market_hours"]
-            zone = hours.get("timezone") or config["trade"]["config"]["general"].get("timezone", "Europe/Paris")
-            now = datetime.now(ZoneInfo(zone))
-            print("open" if now.weekday() < 5 and hours["trading_start_hour"] <= now.hour < hours["trading_end_hour"] else "closed")
-      register: market_now
-      changed_when: false
-      failed_when: false
-
-    - name: Refuse to deploy while a position is open or the market is open
-      ansible.builtin.fail:
-        msg: >-
-          WATA holds {{ open_positions.stdout | default('?') | trim }} open position(s) and the market is
-          {{ market_now.stdout | default('?') | trim }} by its hours: a deploy stops the trading services.
-          Wait for the close, or deploy anyway with -e force=true.
-      when:
-        - not (force | default(false) | bool)
-        - (open_positions.rc == 0 and (open_positions.stdout | trim | int) > 0) or (market_now.stdout | default('') | trim) == 'open'
-
     - name: Ensure the base directory exists with specific permissions
       ansible.builtin.file:
         path: /app/
@@ -53,7 +29,7 @@
         owner: root
         group: root
         mode: '0750'
-        
+
     - name: Ensure the wata directory exists with specific permissions
       ansible.builtin.file:
         path: /app/wata/
@@ -66,14 +42,6 @@
       copy:
         src: "../../../../{{ package_name }}"  # Use the versioned package name
         dest: /tmp/{{ package_name }}
-
-    - name: Stop the application
-      # The version running now, named by VERSION before the package replaces it, with its .env link, so
-      # that every container stops (the profiled ones too). `command` runs no shell, so a `cd ... &&`
-      # there always failed and the install script's own stop was the only one. That one stays, for a
-      # first install with nothing running yet.
-      ansible.builtin.shell: cd "/app/wata/$(cat /app/wata/VERSION)/deploy" && docker compose down && echo "The application is stopped"
-      ignore_errors: yes
 
     - name: Unzip the application package
       unarchive:
@@ -91,8 +59,44 @@
         mode: '0754'
         recurse: true
 
+    # Builds the images beside the running ones, checks them, and names the release the newest: no
+    # container is stopped. A release whose image fails its checks stops here, nothing changed.
     - name: Run the installation script
       command: /app/wata/{{ version }}/deploy/install_package.sh
       register: install_out
 
     - debug: var=install_out.stdout_lines
+
+    - name: Remove the transferred package
+      ansible.builtin.file:
+        path: /tmp/{{ package_name }}
+        state: absent
+
+    - name: Say what the release changes, container by container
+      command: /usr/local/bin/watadeploy plan
+      register: plan_out
+      changed_when: false
+
+    - debug: var=plan_out.stdout_lines
+
+    # Exit code 3: a container did not come back (put back on its image of before) or was not seen at work.
+    - name: Apply what may go now
+      command: >-
+        /usr/local/bin/watadeploy apply --by playbook
+        {{ '--services ' + services if services else '' }}
+        {{ '--force' if (force | bool) else '' }}
+      register: apply_out
+      when:
+        - apply == 'now'
+        - not (full | bool)
+
+    - debug: var=apply_out.stdout_lines
+      when: apply_out is not skipped
+
+    - name: Stop every container and start it again, on the newest release
+      command: /usr/local/bin/watadeploy full {{ '--force' if (force | bool) else '' }}
+      register: full_out
+      when: full | bool
+
+    - debug: var=full_out.stdout_lines
+      when: full_out is not skipped

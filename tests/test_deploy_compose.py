@@ -1,3 +1,5 @@
+import json
+import os
 import re
 
 import pytest
@@ -221,7 +223,7 @@ def test_the_install_script_gives_the_operator_the_command_that_makes_mcp_tokens
     script = open("deploy/install_package.sh").read()
 
     assert "cat << 'EOF' > /usr/local/bin/watamcptoken" in script
-    assert 'docker exec -it admin1 python -m src.admin.cli --mcp-token "$@"' in script
+    assert 'exec watatool admin1 python -m src.admin.cli --mcp-token "$@"' in script
     assert "chmod +x /usr/local/bin/watamcptoken" in script
     assert "watamcptoken create <name>" in script
 
@@ -234,11 +236,12 @@ def test_the_mcp_tokens_stay_in_the_admins_folder_out_of_the_ta_engines_reach(co
     assert "/app/var/lib/admin" not in _mount_modes(compose_services["ta_engine1"])
 
 
+def _runs_wata(service) -> bool:
+    return "wata-base" in str(service.get("image")) and service.get("profiles") != ["tools"]
+
+
 def test_every_wata_service_is_handed_dockers_stop(compose_services):
-    services = {
-        name: service for name, service in compose_services.items()
-        if service.get("image") == "wata-base:latest" and service.get("profiles") != ["tools"]
-    }
+    services = {name: service for name, service in compose_services.items() if _runs_wata(service)}
 
     assert len(services) == 11
     for name, service in services.items():
@@ -248,6 +251,25 @@ def test_every_wata_service_is_handed_dockers_stop(compose_services):
     # The signal in hand (trader) and the sale under way (position monitor) are finished first.
     assert compose_services["trader1"]["stop_grace_period"] == "60s"
     assert compose_services["position_monitor1"]["stop_grace_period"] == "45s"
+
+
+def test_each_container_runs_the_image_its_pin_names(compose_services):
+    """/app/wata/release/images.env, read after .env by every command: watadeploy moves one container at a time."""
+    from src.release.host import BACKUP_CONTAINER, TOOLS_VARIABLE, pin_variable
+    from src.release.manifest import CONTAINERS
+
+    for name in CONTAINERS:
+        assert compose_services[name]["image"] == f"${{{pin_variable(name)}:-wata-base:latest}}", name
+    assert compose_services[BACKUP_CONTAINER]["image"] == f"${{{pin_variable(BACKUP_CONTAINER)}:-wata-backup:latest}}"
+    assert compose_services["vault_tools"]["image"] == f"${{{TOOLS_VARIABLE}:-wata-base:latest}}"
+
+
+def test_no_container_names_a_file_of_a_releases_folder(compose_services):
+    """Every host path is under /app/wata whatever the release: a container left on an older release keeps
+    its mounts when the newer one's files are what compose reads, and pruning a release's folder takes none."""
+    for name, service in compose_services.items():
+        for volume in service.get("volumes") or []:
+            assert not volume.startswith("./"), (name, volume)
 
 
 def test_the_start_script_hands_its_place_to_python():
@@ -266,14 +288,25 @@ def test_ci_sees_a_service_stop_at_once_and_cleanly(ci_jobs):
     assert "--init" in check and "docker stop" in check and "WATA scheduler stopped" in check
 
 
-def test_the_deploy_stops_the_version_running_now():
+def test_a_deploy_stops_nothing():
     with open("deploy/tools/ansible/playbooks/deploy_app.yml") as playbook:
         tasks = yaml.safe_load(playbook)[0]["tasks"]
-    stop = next(task for task in tasks if task.get("name") == "Stop the application")
+    script = open("deploy/install_package.sh").read()
+    install = script.split("# Create command wrappers")[0]
 
-    # A shell, for its cd: `command` runs none, and the stop failed every time.
-    assert "command" not in stop
-    assert 'cd "/app/wata/$(cat /app/wata/VERSION)/deploy" && docker compose down' in stop["ansible.builtin.shell"]
+    assert not any("Stop the application" in task.get("name", "") for task in tasks)
+    assert "docker compose down" not in open("deploy/tools/ansible/playbooks/deploy_app.yml").read()
+    assert "docker compose down" not in install and "docker compose" not in install.replace("docker compose run", "")
+    # Built, checked, keyed, named the newest, pinned: in that order, so that a release whose image fails its
+    # checks leaves the running one as it was.
+    named = "printf '%s' \"$VERSION\" > \"$APP_BASE_DIR/VERSION\""
+    steps = ['"$VERSION_DIR/docker_build.sh"', 'deploy check-image "$VERSION"', "python -m src.vault keygen", named,
+             "deploy bootstrap"]
+    positions = [install.index(step) for step in steps]
+    assert positions == sorted(positions)
+    # The package no longer names the newest release itself.
+    assert "cp ./VERSION _tmp_package/wata/\n" not in open("package.sh").read()
+    assert "cp ./VERSION _tmp_package/wata/$VERSION/" in open("package.sh").read()
 
 
 def test_the_start_script_knows_every_role_of_the_compose_file(compose_services):
@@ -343,19 +376,63 @@ def test_the_install_script_gives_the_operator_the_command_that_moves_the_creden
     script = open("deploy/install_package.sh").read()
 
     assert "cat << 'EOF' > /usr/local/bin/watavault" in script
-    assert 'exec docker compose --env-file "$APP_BASE/.env" --profile tools run --rm vault_tools "$@"' in script
+    assert ('exec docker compose --env-file "$APP_BASE/.env" --env-file "$APP_BASE/release/images.env" '
+            '--profile tools run --rm vault_tools "$@"') in script
     # Saxo's login is written back by a container that can open it.
-    assert "run --rm trader1 python -m src.vault export-saxo" in script
+    assert "exec watatool trader1 python -m src.vault export-saxo" in script
     assert "chmod +x /usr/local/bin/watavault" in script
+
+
+def test_the_servers_commands_run_on_the_newest_release_in_a_container_of_their_own():
+    script = open("deploy/install_package.sh").read()
+    tool = script.split("cat << 'EOF' > /usr/local/bin/watatool")[1].split("\nEOF\n")[0]
+
+    assert '"$VARIABLE=wata-base:$VERSION"' in tool
+    # Its mounts and key, never its dependencies, and never one of Traefik's servers: a container of the web
+    # server's taking part of TradingView's webhooks would answer none of them.
+    assert "run --rm --no-deps --label traefik.enable=false" in tool
+    for wrapper, line in (("watasaxoauth", "exec watatool trader1 python -m src.saxo_authen.cli"),
+                          ("watawebtoken", "exec watatool web_server1 python -m src.web_server.cli $OPTIONS"),
+                          ("wataadminpasswd", "exec watatool admin1 python -m src.admin.cli --set-password"),
+                          ("watamcptoken", 'exec watatool admin1 python -m src.admin.cli --mcp-token "$@"'),
+                          ("wataprices", 'exec watatool price_recorder1 python -m src.price_recorder.probe "$@"')):
+        assert line in script.split(f"/usr/local/bin/{wrapper}\n")[1].split("\nEOF\n")[0], wrapper
+
+
+def test_every_compose_command_of_the_server_reads_the_pins_after_env():
+    script = open("deploy/install_package.sh").read()
+    lines = [line for line in script.splitlines() if "docker compose" in line and not line.lstrip().startswith("#")]
+
+    assert len(lines) >= 5
+    for line in lines:
+        assert "release/images.env" in line or "PINS_FILE" in line or line.rstrip().endswith("\\"), line
+    start = script.split("> /usr/local/bin/watastart")[1].split("\nEOF\n")[0]
+    assert 'PINS_FILE="\\$APP_BASE/release/images.env"' in start
+    # What exists is never recreated by a start: watadeploy recreates, one container at a time.
+    assert "up -d --no-recreate" in start
+
+
+def test_the_admins_requests_and_config_changes_reach_watadeploy_through_systemd():
+    from src.release.host import Layout
+
+    script = open("deploy/install_package.sh").read()
+    requests = script.split("/etc/systemd/system/watadeploy-requests.path")[1].split("\nEOF\n")[0]
+    served = script.split("/etc/systemd/system/watadeploy-requests.service")[1].split("\nEOF\n")[0]
+    config = script.split("/etc/systemd/system/watadeploy-config.path")[1].split("\nEOF\n")[0]
+
+    assert f"DirectoryNotEmpty={Layout().requests_in}" in requests
+    assert "ExecStart=/usr/local/bin/watadeploy serve-requests" in served and "Type=oneshot" in served
+    assert f"PathChanged={Layout().config}" in config
+    assert "systemctl enable --now watadeploy-requests.path watadeploy-config.path" in script
 
 
 def test_the_install_script_makes_the_keys_once_for_root_alone():
     script = open("deploy/install_package.sh").read()
 
-    keygen = 'docker run --rm -v "$APP_BASE_DIR/keys:/keys" wata-base:latest python -m src.vault keygen --root /keys'
+    keygen = 'docker run --rm -v "$APP_BASE_DIR/keys:/keys" "wata-base:$VERSION" python -m src.vault keygen --root /keys'
     assert keygen in script
-    # After the image it runs in is built, and after the playbook loosened /app/wata.
-    assert script.index("docker_build.sh\"\nelse") < script.index(keygen)
+    # After the image it runs in is built and checked, and after the playbook loosened /app/wata.
+    assert script.index('"$VERSION_DIR/docker_build.sh"') < script.index(keygen)
     assert 'find "$APP_BASE_DIR/keys" -name private.key -exec chmod 600 {} +' in script
     assert 'chmod 700 "$APP_BASE_DIR/keys" "$APP_BASE_DIR/keys"/*' in script
 
@@ -663,17 +740,16 @@ def test_the_live_tests_get_the_database_and_the_queue_of_the_compose_file(compo
     assert step["env"]["WATA_TEST_POSTGRES_DSN"].endswith("@localhost:5432/wata")
 
 
-def test_ci_builds_the_image_once_exactly_as_the_server_does(dockerfile, ci_jobs):
+def test_ci_builds_the_images_once_with_the_servers_own_script(dockerfile, ci_jobs):
     """The server asks for no Python: what it gets is the one the Dockerfile names."""
     steps = ci_jobs["image-as-deployed"]["steps"]
-    build = next(step["run"] for step in steps if step.get("name") == "Build the image with the server's own command")
-    backup = next(step["run"] for step in steps if step.get("name") == "Build the backup image with the server's own command")
-    on_the_server = [line.strip() for line in open("docker_build.sh") if line.startswith("docker build")]
+    build = next(step["run"] for step in steps if step.get("name") == "Build the images with the server's own script")
 
-    assert on_the_server == [build, backup]
-    assert "--build-arg" not in build
+    assert build.strip() == "./docker_build.sh"
+    assert "--build-arg" not in open("docker_build.sh").read()
     check = next(step["run"] for step in steps if "python --version" in step.get("run", ""))
     assert "ARG PYTHON_VERSION=" in check and 'grep -F "Python $expected."' in check
+    assert 'wata-base:$(cat VERSION)' in check
 
 
 def test_the_documents_name_the_python_of_the_image(dockerfile):
@@ -705,11 +781,12 @@ def _backup_image() -> list[str]:
 def test_the_database_is_dumped_by_a_container_that_reaches_it_alone(compose_services):
     backup = compose_services["pg_backup1"]
 
-    # The database's own image, with age and rclone: pg_dump of the server's version.
-    assert backup["image"] == "wata-backup:latest"
+    # The database's own image, with age, rclone and the script: pg_dump of the server's version.
+    assert backup["image"] == "${WATA_IMAGE_PG_BACKUP1:-wata-backup:latest}"
     assert _backup_image()[0] == f"FROM {compose_services['postgres1']['image']}"
+    assert _backup_image()[-1] == "COPY pg_backup.sh /pg_backup.sh"
     assert backup["entrypoint"] == ["sh", "/pg_backup.sh"]
-    assert _mount_modes(backup) == {"/pg_backup.sh": "ro", "/backups": "rw"}
+    assert _mount_modes(backup) == {"/backups": "rw"}
     assert "PGPASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}" in backup["environment"]
     assert "ports" not in backup and "expose" not in backup and "labels" not in backup
     # The admin reads the dumps' report, never writes there.
@@ -735,8 +812,8 @@ def test_the_backup_image_takes_age_and_rclone_at_one_version_checked_by_its_sha
     assert 'echo "${PINNED_RCLONE_SHA256}  rclone.zip" | sha256sum -c -' in commands
     assert "releases/download/${PINNED_AGE}/age-${PINNED_AGE}-linux-amd64.tar.gz" in commands
     assert "downloads.rclone.org/${PINNED_RCLONE}/rclone-${PINNED_RCLONE}-linux-amd64.zip" in commands
-    # Built from the file alone: nothing of the server is sent to the build.
-    assert "docker build -t wata-backup --platform=linux/amd64 - < deploy/pg_backup.Dockerfile" in open("docker_build.sh").read()
+    # Built from its two files alone: nothing else of the release's folder (its .env link) reaches the build.
+    assert "tar -c -C deploy pg_backup.Dockerfile pg_backup.sh \\\n        | docker build" in open("docker_build.sh").read()
 
 
 def test_rclone_is_given_no_variable_it_would_take_for_a_flag(compose_services):
@@ -753,7 +830,7 @@ def test_no_key_that_opens_the_copies_off_the_server_is_ever_on_it(compose_servi
     script = open("deploy/pg_backup.sh").read()
     names = [variable.split("=", 1)[0] for variable in backup["environment"]]
 
-    assert _mount_modes(backup) == {"/pg_backup.sh": "ro", "/backups": "rw"}
+    assert _mount_modes(backup) == {"/backups": "rw"}
     assert [name for name in names if "IDENTITY" in name or "PRIVATE" in name] == []
     assert "BACKUP_AGE_RECIPIENT" in names
     # The script encrypts, never decrypts, and sends only what it encrypted.
@@ -785,33 +862,103 @@ def test_the_mac_does_not_pull_a_dump_being_encrypted():
     assert "--exclude '.offsite/'" in open("lab/sync.sh").read()
 
 
-def test_a_deploy_is_refused_while_a_position_or_the_market_is_open():
+def test_a_deploy_installs_then_applies_what_may_go_through_watadeploy():
     with open("deploy/tools/ansible/playbooks/deploy_app.yml") as playbook:
-        tasks = yaml.safe_load(playbook)[0]["tasks"]
+        play = yaml.safe_load(playbook)[0]
+    tasks = play["tasks"]
     names = [task.get("name", "") for task in tasks]
 
-    refusal = names.index("Refuse to deploy while a position is open or the market is open")
-    assert refusal < names.index("Transfer the application package") < names.index("Stop the application")
-    when = tasks[refusal]["when"]
-    assert when[0] == "not (force | default(false) | bool)"
+    assert names.index("Transfer the application package") < names.index("Run the installation script") \
+        < names.index("Say what the release changes, container by container") < names.index("Apply what may go now")
+    apply = tasks[names.index("Apply what may go now")]
+    # The guards are watadeploy's, container by container: the playbook keeps none of its own.
+    assert "/usr/local/bin/watadeploy apply --by playbook" in apply["command"]
+    assert "'--force' if (force | bool)" in apply["command"] and "'--services ' + services" in apply["command"]
+    assert apply["when"] == ["apply == 'now'", "not (full | bool)"]
+    assert play["vars"]["apply"] == "now" and play["vars"]["force"] is False
+    assert not any("market" in name.lower() or "refuse" in name.lower() for name in names)
     assert '"$@"' in open("deploy/tools/deploy_app_to_your_server.sh").read()
 
 
-@pytest.mark.parametrize("weekday_hour, said", [((2026, 10, 26, 10), "open"), ((2026, 10, 24, 10), "closed"),
-                                                 ((2026, 10, 26, 23), "closed")])
-def test_the_deploys_market_check_reads_the_hours_of_the_configuration(tmp_path, weekday_hour, said):
-    import subprocess
-    import sys
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
+@pytest.fixture
+def stand_in_docker(tmp_path):
+    """A docker that keeps its images in a file, says their labels and records each build (and what it was sent)."""
+    state = tmp_path / "docker.json"
+    state.write_text("{}")
+    binary = tmp_path / "bin" / "docker"
+    binary.parent.mkdir()
+    binary.write_text(f"""#!{__import__("sys").executable}
+import io, json, sys, tarfile
+state = json.load(open({str(state)!r}))
+arguments = sys.argv[1:]
+if arguments[:2] == ["image", "inspect"]:
+    image = state.get("images", {{}}).get(arguments[-1])
+    if image is None:
+        sys.exit(1)
+    print(image["label"])
+    sys.exit(0)
+if arguments[0] == "build":
+    tag = arguments[arguments.index("-t") + 1]
+    label = arguments[arguments.index("--label") + 1].split("=", 1)[1]
+    sent = None
+    if arguments[-1] == "-":
+        sent = sorted(tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())).getnames())
+    if tag in state.get("fail", []):
+        sys.exit(1)
+    state.setdefault("images", {{}})[tag] = {{"label": label}}
+    state.setdefault("builds", []).append({{"tag": tag, "sent": sent}})
+    json.dump(state, open({str(state)!r}, "w"))
+    sys.exit(0)
+sys.exit(2)
+""")
+    binary.chmod(0o755)
+    release = tmp_path / "release"
+    for path in ("Dockerfile", "requirements.txt", "src/app.py", "deploy/pg_backup.Dockerfile", "deploy/pg_backup.sh"):
+        (release / path).parent.mkdir(parents=True, exist_ok=True)
+        (release / path).write_text(path)
+    (release / "VERSION").write_text("0.61.0")
+    (release / "deploy" / ".env").write_text("POSTGRES_PASSWORD=never-sent")
+    import shutil
 
-    with open("deploy/tools/ansible/playbooks/deploy_app.yml") as playbook:
-        tasks = yaml.safe_load(playbook)[0]["tasks"]
-    check = next(task for task in tasks if task.get("name") == "Say whether the market is open by WATA's hours")
-    script = check["ansible.builtin.command"]["argv"][2].replace("/app/wata/etc/config.json", "etc/config_example.json")
-    frozen = datetime(*weekday_hour, tzinfo=ZoneInfo("Europe/Paris"))
-    script = script.replace("now = datetime.now(ZoneInfo(zone))", f"now = datetime.fromisoformat({frozen.isoformat()!r}).astimezone(ZoneInfo(zone))")
+    shutil.copy("docker_build.sh", release / "docker_build.sh")
+    env = {**os.environ, "PATH": f"{binary.parent}:{os.environ['PATH']}"}
 
-    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    def run():
+        import subprocess
 
-    assert done.stdout.strip() == said
+        return subprocess.run(["bash", str(release / "docker_build.sh")], env=env, capture_output=True, text=True)
+
+    def builds():
+        return json.loads(state.read_text()).get("builds", [])
+
+    def fail(tag):
+        found = json.loads(state.read_text())
+        found.setdefault("fail", []).append(tag)
+        state.write_text(json.dumps(found))
+
+    return release, run, builds, fail
+
+
+def test_a_release_is_built_once_under_its_version_its_backup_image_from_its_two_files(stand_in_docker):
+    release, run, builds, _ = stand_in_docker
+
+    assert run().returncode == 0
+    assert [build["tag"] for build in builds()] == ["wata-base:0.61.0", "wata-backup:0.61.0"]
+    assert builds()[1]["sent"] == ["pg_backup.Dockerfile", "pg_backup.sh"]
+    # Installed again, nothing is built; a file of the code changed, its image alone is built again.
+    assert run().returncode == 0 and len(builds()) == 2
+    (release / "src" / "app.py").write_text("changed")
+    assert run().returncode == 0
+    assert [build["tag"] for build in builds()][2:] == ["wata-base:0.61.0"]
+
+
+def test_a_failed_build_fails_the_script(stand_in_docker):
+    """The install stops there, the running release untouched (bash ran the script without -e before v0.61.0)."""
+    _, run, builds, fail = stand_in_docker
+    fail("wata-base:0.61.0")
+
+    done = run()
+    assert done.returncode != 0
+    assert builds() == []
+
+

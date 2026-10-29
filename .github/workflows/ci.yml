@@ -79,12 +79,21 @@ jobs:
         docker run --rm wata-base:ci python -m pip freeze > installed.txt
         python3 tests/requirements_lock.py requirements.txt installed.txt
 
+    # What the install checks of a release's image before naming it the newest (src/release/check.py):
+    # every file compiles, every service loads, the libraries are requirements.txt's, the validators take the
+    # configuration, the Pine runner runs confined.
     - name: Every service can be loaded in it
       run: |
-        docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
-          python -W error::SyntaxWarning -m compileall -q /app/src
-        docker run --rm -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
-          python -c "import importlib; [importlib.import_module(name) for name in ('src.web_server', 'src.trader', 'src.position_monitor', 'src.watchlist_manager', 'src.price_recorder', 'src.admin', 'src.mq_telegram', 'src.saxo_authen', 'src.price_history.dukascopy', 'src.backtest.run', 'src.ta_engine', 'src.ta_engine.engine', 'src.ta_engine.replay', 'src.vault.migrate', 'src.admin.vault', 'src.service_control.app', 'schedule', 'duckdb', 'uvloop', 'httptools')]"
+        docker run --rm --network none -v "$PWD/tests/test_config.json:/app/etc/config.json:ro" wata-base:ci \
+          python -m src.release.check
+
+    # The fingerprints a deploy compares (src/release/manifest.py), read inside the image as the server
+    # reads them: given on stdin to its Python, and what the entries load inside them.
+    - name: What each container runs is fingerprinted inside the image
+      run: |
+        docker run --rm -i --network none --entrypoint python wata-base:ci - --root /app \
+          < src/release/manifest.py > manifest.json
+        python3 -c "import json; found = json.load(open('manifest.json')); assert len(found['containers']) == 11, found['containers'].keys(); assert all(entry['distributions'] for entry in found['containers'].values()); print({name: entry['code'] for name, entry in found['containers'].items()})"
 
     - name: The TA engine's Pine runner runs in it, confined
       run: |
@@ -182,21 +191,66 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build the image with the server's own command
-      run: docker build -t wata-base . --platform=linux/amd64
+    # wata-base:<VERSION> and wata-backup:<VERSION>, as the install builds them (docker_build.sh, the
+    # checkout standing for a release's folder).
+    - name: Build the images with the server's own script
+      run: ./docker_build.sh
 
     - name: It has the Python the Dockerfile names
       run: |
         expected=$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)
         test -n "$expected"
-        docker run --rm wata-base python --version | grep -F "Python $expected."
+        docker run --rm wata-base:$(cat VERSION) python --version | grep -F "Python $expected."
 
-    - name: Build the backup image with the server's own command
-      run: docker build -t wata-backup --platform=linux/amd64 - < deploy/pg_backup.Dockerfile
+    # What a deploy by service rests on, seen on real Docker (src/release/host.py): containers pinned by a
+    # second env file, a start that recreates nothing, one container recreated alone on another image, the
+    # commands watadeploy runs read back, and a command run in a container of its own, out of Traefik's routes.
+    - name: One container moves to another image, and the other is not touched
+      run: |
+        set -eux
+        version=$(cat VERSION)
+        docker tag "wata-base:$version" wata-base:toy-old
+        printf 'FROM wata-base:%s\nLABEL toy=new\n' "$version" | docker build -t wata-base:toy-new -
+        mkdir -p toy/1.0.0/deploy toy/release
+        printf '%s\n' 'services:' \
+          '  trader1:' '    image: ${WATA_IMAGE_TRADER1:-wata-base:latest}' '    init: true' '    command: ["sleep", "3600"]' \
+          '  admin1:' '    image: ${WATA_IMAGE_ADMIN1:-wata-base:latest}' '    init: true' '    profiles: ["admin"]' \
+          '    labels: ["traefik.enable=true"]' '    command: ["sleep", "3600"]' > toy/1.0.0/deploy/docker-compose.yml
+        printf 'COMPOSE_PROJECT_NAME=toy\nCOMPOSE_PROFILES=admin\n' > toy/.env
+        printf 'WATA_IMAGE_TRADER1=wata-base:toy-old\nWATA_IMAGE_ADMIN1=wata-base:toy-old\n' > toy/release/images.env
+        compose() { (cd toy/1.0.0/deploy && docker compose --env-file ../../.env --env-file ../../release/images.env "$@"); }
+        compose up -d --no-recreate
+        trader=$(docker inspect -f '{{.Id}}' toy-trader1-1)
+        sed -i 's/^WATA_IMAGE_ADMIN1=.*/WATA_IMAGE_ADMIN1=wata-base:toy-new/' toy/release/images.env
+        # A start after a pin moved recreates nothing.
+        compose up -d --no-recreate
+        test "$(docker inspect -f '{{.Config.Image}}' toy-admin1-1)" = wata-base:toy-old
+        # The one container asked for, on its new image; the other untouched.
+        compose up -d --no-deps --force-recreate --pull never admin1
+        test "$(docker inspect -f '{{.Config.Image}}' toy-admin1-1)" = wata-base:toy-new
+        test "$(docker inspect -f '{{.Id}}' toy-trader1-1)" = "$trader"
+        # What watadeploy reads, through its own code.
+        PYTHONPATH=. python3 -c "
+        from src.release.host import Docker, Layout
+        docker = Docker(Layout(base='$PWD/toy'))
+        found = docker.containers()
+        assert set(found) == {'trader1', 'admin1'}, found
+        assert found['admin1']['Config']['Image'] == 'wata-base:toy-new'
+        assert set(docker.compose('1.0.0', ['config', '--services']).stdout.split()) == {'trader1', 'admin1'}
+        print('read back:', sorted(found))
+        "
+        # A command of its own, on another image than its service's, never one of Traefik's servers.
+        one=$(WATA_IMAGE_TRADER1=wata-base:toy-new compose run -d --no-deps --label traefik.enable=false trader1 sleep 30)
+        test "$(docker inspect -f '{{index .Config.Labels "traefik.enable"}}' "$one")" = false
+        test "$(docker inspect -f '{{.Config.Image}}' "$one")" = wata-base:toy-new
+        docker rm -f "$one"
+        test "$(docker inspect -f '{{.Id}}' toy-trader1-1)" = "$trader"
+        compose down
 
     # deploy/pg_backup.sh as pg_backup1 runs it, a folder standing for the bucket and a key made for the test.
     - name: A dump goes off the server encrypted, and only the key kept elsewhere opens it
       run: |
+        backup="wata-backup:$(cat VERSION)"
         docker network create backup-check
         docker run -d --name backup-db --network backup-check -e POSTGRES_USER=wata -e POSTGRES_PASSWORD=wata \
           -e POSTGRES_DB=wata postgres:16-alpine
@@ -206,24 +260,25 @@ jobs:
           "CREATE TABLE turbo_data_position (position_id text); INSERT INTO turbo_data_position VALUES ('p1')"
         mkdir -p check/backups check/bucket check/key
         # The key file is root's and its owner's alone, as age-keygen writes it: read in the image.
-        docker run --rm -v "$PWD/check/key:/key" wata-backup age-keygen -o /key/identity.txt
-        recipient=$(docker run --rm -v "$PWD/check/key:/key:ro" wata-backup age-keygen -y /key/identity.txt)
+        docker run --rm -v "$PWD/check/key:/key" "$backup" age-keygen -o /key/identity.txt
+        recipient=$(docker run --rm -v "$PWD/check/key:/key:ro" "$backup" age-keygen -y /key/identity.txt)
         test -n "$recipient"
+        # The script the image carries (deploy/pg_backup.Dockerfile copies it in), as pg_backup1 runs it.
         docker run --rm --network backup-check --entrypoint sh \
-          -v "$PWD/deploy/pg_backup.sh:/pg_backup.sh:ro" -v "$PWD/check/backups:/backups" -v "$PWD/check/bucket:/bucket" \
+          -v "$PWD/check/backups:/backups" -v "$PWD/check/bucket:/bucket" \
           -e PGHOST=backup-db -e PGUSER=wata -e PGPASSWORD=wata -e PGDATABASE=wata \
           -e BACKUP_AGE_RECIPIENT="$recipient" -e BACKUP_OFFSITE=offsite:/bucket/wata -e RCLONE_CONFIG_OFFSITE_TYPE=local \
-          wata-backup /pg_backup.sh now
+          "$backup" /pg_backup.sh now
         cat check/backups/last.json
         grep -F '"offsite": {"ok": true' check/backups/last.json
         sealed=$(cd check/bucket && ls wata/nightly/*.age wata/weekly/*.age 2>/dev/null | head -n 1)
         test -n "$sealed"
         # Without the key it is no dump; with it, the dump of the table above.
-        if docker run --rm -v "$PWD/check/bucket:/bucket:ro" wata-backup pg_restore --list "/bucket/$sealed"; then
+        if docker run --rm -v "$PWD/check/bucket:/bucket:ro" "$backup" pg_restore --list "/bucket/$sealed"; then
           echo "The copy off the server reads without the key" >&2
           exit 1
         fi
-        docker run --rm -v "$PWD/check/bucket:/bucket:ro" -v "$PWD/check/key:/key:ro" wata-backup sh -c \
+        docker run --rm -v "$PWD/check/bucket:/bucket:ro" -v "$PWD/check/key:/key:ro" "$backup" sh -c \
           "age -d -i /key/identity.txt '/bucket/$sealed' > /tmp/restored.dump && pg_restore --list /tmp/restored.dump" \
           | grep -F "turbo_data_position"
         docker rm -f backup-db

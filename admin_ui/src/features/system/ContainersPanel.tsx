@@ -1,13 +1,28 @@
 import { Alert, AlertDescription, Badge, formatNumber, Hint, Panel, QueryState } from 'ioiti-ui'
 import { useState } from 'react'
 
-import type { ServicesState } from '@/lib/types'
+import type { ReleaseContainer, ServicesState } from '@/lib/types'
 
 import { RestartButton, RestartDialog, RestartProgress } from './RestartViews'
+import { reasonsSaid, versionSaid } from './release'
 import { containerSaid, pendingSaid, restartUnavailable, withPendingChanges } from './restarts'
+import { useRelease } from './useRelease'
 import { useServices } from './useServices'
 
-function ContainersTable({ state, timeZone, onRestart }: { state: ServicesState; timeZone: string; onRestart: (ids: string[]) => void }) {
+function ContainersTable({
+  state,
+  timeZone,
+  onRestart,
+  releases,
+  newest,
+}: {
+  state: ServicesState
+  timeZone: string
+  onRestart: (ids: string[]) => void
+  /** What each container runs, by its name, as watadeploy says it; empty before it said anything. */
+  releases: Record<string, ReleaseContainer>
+  newest: string | undefined
+}) {
   return (
     // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
     <div className="relative overflow-x-auto">
@@ -16,6 +31,7 @@ function ContainersTable({ state, timeZone, onRestart }: { state: ServicesState;
           <tr>
             <th className="py-2 pr-4 font-medium">Service</th>
             <th className="py-2 pr-4 font-medium">Container</th>
+            <th className="py-2 pr-4 font-medium">Release</th>
             <th className="py-2 pr-4 text-right font-medium">Restarts</th>
             <th className="py-2 pr-4 font-medium">Configuration</th>
             <th className="py-2 font-medium">
@@ -26,6 +42,8 @@ function ContainersTable({ state, timeZone, onRestart }: { state: ServicesState;
         <tbody className="divide-y divide-border/40">
           {state.services.map((service) => {
             const pending = pendingSaid(service)
+            const release = service.container ? releases[service.container] : undefined
+            const waits = release?.kind === 'change' || release?.kind === 'optional'
             return (
               <tr key={service.id}>
                 <td className="py-2.5 pr-4 font-medium">
@@ -43,6 +61,15 @@ function ContainersTable({ state, timeZone, onRestart }: { state: ServicesState;
                   {service.oom_killed && <span className="ml-1 text-negative">· stopped for lack of memory</span>}
                   {service.last_restart && !service.last_restart.ok && (
                     <span className="ml-1 text-negative">· its last restart failed: {service.last_restart.detail}</span>
+                  )}
+                </td>
+                <td className="py-2.5 pr-4 tabular-nums">
+                  {waits && release ? (
+                    <Hint content={`What ${newest} changes for it: ${reasonsSaid(release)}. The Release panel above applies it.`}>
+                      <span className="text-warning">{versionSaid(release, newest)}</span>
+                    </Hint>
+                  ) : (
+                    <span className="text-muted-foreground">{versionSaid(release, newest)}</span>
                   )}
                 </td>
                 <td className="py-2.5 pr-4 text-right tabular-nums">
@@ -80,6 +107,8 @@ function ContainersTable({ state, timeZone, onRestart }: { state: ServicesState;
 export function ContainersPanel({ timeZone }: { timeZone: string }) {
   const servicesQuery = useServices()
   const state = servicesQuery.data
+  const release = useRelease().data
+  const releases = Object.fromEntries((release?.status.containers ?? []).map((entry) => [entry.container, entry]))
   const [asked, setAsked] = useState<string[] | null>(null)
   const pending = state ? withPendingChanges(state) : []
 
@@ -87,7 +116,7 @@ export function ContainersPanel({ timeZone }: { timeZone: string }) {
     <Panel
       id="containers"
       title="Containers"
-      description="What Docker says of each of WATA's containers, through the control service, and the saved changes each does not run with yet: a service reads the configuration when it starts."
+      description="What Docker says of each of WATA's containers, through the control service, the release each runs, and the saved changes each does not run with yet: a service reads the configuration when it starts, and a restart keeps the release it runs."
       action={
         state &&
         pending.length > 0 && (
@@ -115,7 +144,13 @@ export function ContainersPanel({ timeZone }: { timeZone: string }) {
               </Alert>
             )}
             {state.plan && <RestartProgress plan={state.plan} services={state.services} />}
-            <ContainersTable state={state} timeZone={timeZone} onRestart={setAsked} />
+            <ContainersTable
+              state={state}
+              timeZone={timeZone}
+              onRestart={setAsked}
+              releases={releases}
+              newest={release?.status.newest}
+            />
             <RestartDialog state={state} ids={asked} onClose={() => setAsked(null)} />
           </>
         )}

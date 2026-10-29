@@ -109,6 +109,8 @@ async def session_info(request: Request):
         "restart_required": bool(needed) if needed is not None else await restart_required(ctx),
         # Which services, when the control service says when each started; None otherwise.
         "restart_services": None if needed is None else [{"id": service, "name": SERVICE_NAMES[service]} for service in needed],
+        # The newest release installed and the containers that wait for it (watadeploy's status); None without it.
+        "release": await run_in_threadpool(ctx.release.summary) if ctx.release is not None else None,
     }
 
 

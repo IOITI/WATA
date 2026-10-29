@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.61.0 - A deploy restarts only what a release changes
+
+**Release date:** not yet released
+
+A deploy stopped everything. The playbook and the install each ran `docker compose down`: the 15 containers stopped, Traefik, PostgreSQL and RabbitMQ included, the image was built while nothing ran, and `watastart` brought it all back. That was one to five minutes without trading, without TradingView's webhook, and without Saxo's and Capital.com's bars, which are lost for good; the TA engine also loaded its rules again. So every release waited for the evening, or was forced. Yet most releases change one corner: v0.60.0, the AI agent's memory, changes the admin alone.
+
+Now a release is installed beside the one that runs. Each container is recreated only if the release changes what it runs, and only when nothing holds it back. The others keep running, untouched, and what is held back waits until someone applies it.
+
+- **Installing stops nothing.** `install_package.sh` builds `wata-base:<version>` and `wata-backup:<version>` beside the running images, and builds nothing when that version is built already with the same content. It then checks the image (`src/release/check.py`): every service loads, the libraries are `requirements.txt`'s, the services' validators accept the server's `config.json`, and the Pine runner runs, confined. Until now these checks were run by hand before each deploy. Only then is the release named the newest (`/app/wata/VERSION`). A release whose image fails leaves the server as it was. `docker_build.sh` now stops at a failed build (`set -euo pipefail`); before, the backup image's build hid a failed build of WATA's.
+- **Each container runs the image its pin names** (`/app/wata/release/images.env`, read after `.env` by every compose command). Only `watadeploy` moves a pin, recreating that container alone. `watastart` starts what is not running and recreates nothing. The first install pins each running container to the image it runs, so the switch recreates nothing.
+- **What a release changes is read inside the images** (`src/release/manifest.py`). A container's code is every file its service can load: its imports, inside functions too, and the files they read (the calendars, the Pine runner, the interface). Its libraries are the packages those imports need, so a library bumped by Dependabot recreates only the containers that import it. Python files are compared as syntax trees, so a change of comments or layout recreates nothing. Python, Node or the system's packages changing alone makes an optional change. Measured on the last releases: v0.60.0, v0.59.0 and v0.58.0 change only the admin, and v0.47.0 the admin and the TA engine; most others change code every service shares.
+- **What holds a container back** is what holds a restart back from the System page, moved unchanged to `src/release/guards.py`, where the server's own python3 reads it:
+  - the trading services wait for the market to close by WATA's hours, with no position open;
+  - the TA engine waits for the close while a rule is live;
+  - the admin waits for its backtests, studies and AI agent requests;
+  - new for a deploy: the price recorder and the Capital.com feed wait for the market to close, since the bars they would miss are never fetched again.
+
+  A fact that cannot be read holds back; the playbook's checks of before let a deploy through when the database could not be read. Containers that change because of the same file move together: the admin never runs a newer `src/admin/ta_rules.py` than the TA engine.
+- **Applying** (`watadeploy apply`, `src/release/host.py`):
+  1. The database is dumped first.
+  2. One container at a time, the backups first and the admin last, each once the one before is at work again. "At work" uses the criteria of the admin's restarts, read from the server.
+  3. A container that does not stay up is put back on its image of before, and the rest waits.
+
+  The history is kept in `/app/wata/release/history.jsonl`. `watadeploy rollback` puts the last apply's containers back. `watadeploy full` stops and starts everything on the newest release, for a change of Traefik, PostgreSQL or RabbitMQ. `watadeploy prune` removes older releases' folders and images, keeping three and every one still named.
+- **System › Release**:
+  - the newest release, each container's release (also a column of the containers), what changes for those that wait, and what holds each back now;
+  - **Apply**, or **Apply anyway**, recorded in the audit trail and announced on Telegram.
+
+  The admin only writes a request into its own folder. A systemd path unit on the server hands it to `watadeploy`, which takes it out of the admin's reach, accepts only the newest release and containers that wait for it, and applies it with the same guards. The admin holds neither Docker, nor compose, nor the pins. An apply's outcome is said once, on Telegram and to the open pages. Once the market has closed, what still waits is said once a day. The top bar shows *Release waiting*, then *Deploying*. The admin's own restarts wait while an apply runs.
+- **Different releases side by side, kept safe.** Each time `config.json` changes, the server checks that every image in use still starts on it. An image that would not is said on the System page and on Telegram, before its container restarts on it.
+- **The server's commands run on the newest release** (`watatool`): `watasaxoauth`, `watawebtoken`, the admin's password and MCP tokens, `wataprices` and `watavault export-saxo`. Each runs in a container of its own, out of Traefik's routes. With `docker exec` they ran inside a service, on that service's image. They also brought their files into its code: `watawebtoken` brought the database module into the web server's, so every schema change would have recreated the webhook.
+- **The playbook** installs, prints the plan, and applies what may go now:
+  - `-e apply=none` installs only;
+  - `-e services=…` applies those containers;
+  - `-e force=true` applies whatever holds them back;
+  - `-e full=true` stops and starts everything.
+
+  The backups' script moved into their image: no container mounts a file of a release's folder any more.
+- Claude's `status` (the MCP endpoint) gives each container's release.
+
+**On the live path:** how a release reaches the trading services, not what they do. They are recreated only when their code, libraries or compose definition change, at a closed market with no position open, unless forced. The guards moved to `src/release/guards.py` unchanged; zoneinfo replaces pytz there, with the same answers minute by minute around the 2026 clock changes (tested).
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Deploying it:** this release carries v0.60.0 to the server.
+1. Install it with `-e apply=none` first, with trading running: it builds the image and pins the running containers to the 0.59.1 image they run.
+2. Read the plan. Only admin1 (v0.60.0's code and this release's) and pg_backup1 (its script now in its image) should change.
+3. Apply them: neither trades nor records, so the market may be open.
+
+**Verification status:**
+- 3,475 Python tests pass (23 skipped: the live database and queue, which CI runs). 92 of them are in five new files.
+  - The guards: the same answers as before, minute by minute around the 2026 clock changes; standard library only, Python 3.10.
+  - The fingerprints: closure rules on a made-up tree. On the real code: the trading services never reach the admin or the backtests, v0.60.0's files reach the admin alone, and every data file, dynamic import and command is declared. What each entry loads at import stays inside its closure.
+  - The plan: groups, held back, optional, infrastructure, order.
+  - The server's side, over a Docker made up in memory: first pins, an admin-only release with the market open, a group held back, what cannot be read holding back, a container put back, rollback, the lock, the admin's requests (out of bounds, a link, a stranger), prune, the config check.
+  - The admin's routes and announcements.
+  - The deploy files: one image per container's pin, no file of a release's folder mounted, `docker_build.sh` run against a stand-in `docker` (built once, again only when its content changed, a failed build failing it, the backup image sent its two files alone), the install's order, the systemd units, the commands on the newest release.
+- The image check run here against the checkout: every check passes, the Pine runner included. The fingerprints of v0.59.1 and of this release: only admin1's code differs.
+- 1,202 interface tests pass (16 new: the release's model, the panel and its dialog, the live event); lint, types and the build are clean.
+- Seen in the browser pane on the development admin (a made-up release whose apply plays out step by step): the panel, the containers' release column, the top bar's chip, a group held back applied anyway with the slide, its progress, its end, the audit and Telegram lines.
+- Not seen against real Docker or on the server: CI's new step runs the compose mechanics on Docker (two env files, one container recreated alone, a start that recreates nothing, a command out of Traefik's routes). The first install will be the first real run.
+
 ## v0.60.0 - The AI agent keeps a memory between its conversations
 
 **Release date:** 2026-10-29

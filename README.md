@@ -284,29 +284,84 @@ For detailed setup instructions, refer to our [HOW-TO Guide](https://ioiti.githu
      cd deploy/tools
      ./deploy_app_to_your_server.sh
      ```
-   - The script will use Ansible to deploy the application to your server
+   - The script will use Ansible to deploy the application to your server: the release is installed beside the one that runs, and only the containers it changes are recreated (see [Deploying a release](#deploying-a-release))
 
 4. **Configure Application**
    - On the server, set up your credentials in `etc/config.json` (see below in Configuration section)
 
 5. **Manage Application**
    Use the following aliases on your server:
-   - `watastart`: Start the application
+   - `watastart`: Start what is not running (each container on the image its pin names; nothing is recreated)
    - `watastop`: Stop the application
    - `watalogs`: View application logs
-   - `watastatus`: Check application status
+   - `watastatus`: Check each container, its image and its state
+   - `watadeploy`: What each container runs, what waits for the newest release, and applying it (below)
    - `watasaxoauth`: Hand Saxo's login code over (the admin's System page does the same from the browser)
    - `watawebtoken`: View your webhook authentication token
    - `watawebtoken --new`: Generate a new webhook token
 
+   These commands run in a container of their own, on the newest release's image (`watatool`): never inside a
+   service's container, whose image may be an older release's.
+
+### Deploying a release
+
+A deploy installs a release beside the one that runs and stops nothing for it: its image (`wata-base:<version>`)
+is built on the server and checked there (every service loads, the libraries are `requirements.txt`'s, the
+validators take the server's `config.json`, the Pine runner runs), and only then is the release named the newest.
+A release whose image fails its checks leaves the server as it was.
+
+Then each container is recreated on the new image only if the release changes what it runs, and only when its
+guards allow:
+
+- **What changes** is read from inside the images (`src/release/manifest.py`): a container's code is every file its
+  service can load (its imports, inside functions too, and the files they read), its libraries are the packages
+  those imports need. A change of comments or layout changes nothing. Traefik, PostgreSQL and RabbitMQ are never
+  recreated by a deploy; a change of theirs needs a full restart (`watadeploy full`).
+- **What holds a container back** is what holds a restart back from the System page: the trading services wait
+  for the market to close by WATA's hours and no position open, the price recorder and the Capital.com feed for the
+  market to close (the bars they would miss are never fetched again), the TA engine for the close while a rule is
+  live, the admin for its backtests, studies and AI agent requests. A fact that cannot be read holds back.
+- **Containers that change because of the same file move together**: the admin never runs a newer
+  `src/admin/ta_rules.py` than the TA engine.
+
+What is held back waits, running the release it runs, until it is applied: from the admin's System page (the
+Release panel: *Apply*, or *Apply anyway*, recorded in the audit trail) or on the server. Nothing restarts
+unattended. Each container runs the image its pin names (`/app/wata/release/images.env`), so a container left on an
+older release keeps it through restarts and `watastart`; the System page shows each container's release.
+
+```bash
+./deploy_app_to_your_server.sh                       # install, then apply what may go now
+./deploy_app_to_your_server.sh -e apply=none         # install and say what would go: nothing recreated
+./deploy_app_to_your_server.sh -e services=admin1    # install, then apply these containers alone
+./deploy_app_to_your_server.sh -e force=true         # whatever holds them back (said in the history)
+./deploy_app_to_your_server.sh -e full=true          # every container stopped and started again
+```
+
+On the server:
+
+```bash
+watadeploy status                # each container, its release, what waits and why
+watadeploy plan                  # what the newest release changes, and what may go now
+watadeploy apply                 # recreate what changed and may go now (--services a,b; --force)
+watadeploy rollback [container]  # the last apply's containers back on their images of before
+watadeploy full                  # every container stopped and started again, on the newest release
+watadeploy check-config          # does every image in use still start on config.json?
+watadeploy prune                 # older releases' folders and images (the install runs it)
+```
+
+An apply dumps the database first, then recreates one container at a time (the backups first, the admin last),
+each once the one before is at work again: one that does not stay up is put back on its image of before and the
+rest waits. Its history is `/app/wata/release/history.jsonl`. Each time `config.json` changes, the server checks
+that every image in use still starts on it; one that would not is said on the System page and on Telegram.
+
 
 ### Docker Compose Setup
 
-The current stack is defined in `deploy/docker-compose.yml`; it does not use the old setup service or a separate Compose override. It includes Traefik, PostgreSQL, RabbitMQ, the Web Server, Trader, Scheduler, Telegram, Position Monitor, and Watchlist Manager.
+The current stack is defined in `deploy/docker-compose.yml`, with `deploy/docker-compose.override.yml` beside it (a `setup` container that writes RabbitMQ's password into `config.json` when it differs, at `watastart`). It includes Traefik, PostgreSQL, RabbitMQ, the Web Server, Trader, Scheduler, Telegram, Position Monitor, and Watchlist Manager.
 
 The database is dumped each night at 02:17 UTC by `pg_backup1` (without the rows of the recorded bars, whole on Sundays; 14 nights and 4 Sundays kept in `var/lib/backups`, which `lab/sync.sh` pulls to the Mac); the admin's health says the last dump. `docker exec pg_backup1 sh /pg_backup.sh check` restores the newest into a scratch database and counts the trading tables; `docker exec pg_backup1 sh /pg_backup.sh now` makes one at once.
 
-**Off the server** (optional): with `BACKUP_AGE_RECIPIENT` and `BACKUP_S3_BUCKET` in `.env` (see `deploy/.env.example`), each dump is also encrypted with [age](https://age-encryption.org) to your public key and sent with [rclone](https://rclone.org) to an S3-compatible bucket (Scaleway, Backblaze B2, OVH, AWS…), 14 nightly and 8 Sunday copies kept there. The key is made on the Mac (`lab/backup_tools.sh`, then `age-keygen`, see `lab/README.md`): only its public line goes on the server, so nothing there can open a copy, and nothing is sent unencrypted. The admin's health says each copy and warns after two nights without one; `docker exec pg_backup1 sh /pg_backup.sh offsite` lists what the bucket holds, and `.venv-lab/bin/python -m lab backup check --offsite` downloads the newest copy, opens it with your key, restores it into a scratch PostgreSQL on the Mac and counts the trading tables. A key of the bucket that may not delete, with the bucket's own rules deleting old copies (`BACKUP_OFFSITE_KEEP=0`), keeps them from whoever would take the server. A deploy is refused while WATA holds a position or the market is open by its hours (`./deploy_app_to_your_server.sh -e force=true` deploys anyway).
+**Off the server** (optional): with `BACKUP_AGE_RECIPIENT` and `BACKUP_S3_BUCKET` in `.env` (see `deploy/.env.example`), each dump is also encrypted with [age](https://age-encryption.org) to your public key and sent with [rclone](https://rclone.org) to an S3-compatible bucket (Scaleway, Backblaze B2, OVH, AWS…), 14 nightly and 8 Sunday copies kept there. The key is made on the Mac (`lab/backup_tools.sh`, then `age-keygen`, see `lab/README.md`): only its public line goes on the server, so nothing there can open a copy, and nothing is sent unencrypted. The admin's health says each copy and warns after two nights without one; `docker exec pg_backup1 sh /pg_backup.sh offsite` lists what the bucket holds, and `.venv-lab/bin/python -m lab backup check --offsite` downloads the newest copy, opens it with your key, restores it into a scratch PostgreSQL on the Mac and counts the trading tables. A key of the bucket that may not delete, with the bucket's own rules deleting old copies (`BACKUP_OFFSITE_KEEP=0`), keeps them from whoever would take the server. A deploy dumps the database before it recreates anything (`watadeploy apply`).
 
 The Compose file uses health checks and service dependencies for PostgreSQL, RabbitMQ, and Traefik. Traefik is the public HTTPS ingress; the other application services communicate over the internal Compose network.
 

@@ -16,6 +16,8 @@ export interface Session {
   restart_required: boolean
   /** The services that run without a change saved since they started; null when the control service cannot say. */
   restart_services?: { id: string; name: string }[] | null
+  /** The newest release installed and the containers that wait for it; null before watadeploy said anything. */
+  release?: ReleaseSummary | null
 }
 
 export interface Position {
@@ -960,6 +962,144 @@ export interface ServicesState {
   actions_enabled: boolean
   services: WataService[]
   plan: RestartPlan | null
+}
+
+// ── releases, container by container (src/release/, src/admin/release.py) ──
+
+/** What runs where, in short: the session's, for the top bar. */
+export interface ReleaseSummary {
+  newest: string | null
+  /** Each container's release, by its name (trader1...). */
+  containers: Record<string, string>
+  /** The containers that wait for the newest release. */
+  waiting: string[]
+  applying: boolean
+}
+
+/**
+ * unchanged: nothing it runs differs; change: its code, libraries, compose definition or image settings do;
+ * optional: only Python, Node or the system's packages; infrastructure: Traefik, PostgreSQL or RabbitMQ changed;
+ * absent: its profile is on and it has no container.
+ */
+export type ReleaseKind = 'unchanged' | 'change' | 'optional' | 'infrastructure' | 'absent'
+
+export interface ReleaseLibraryChange {
+  name: string
+  from: string | null
+  to: string | null
+}
+
+export interface ReleaseReasons {
+  /** The files of its code that differ. */
+  code?: string[]
+  libraries?: ReleaseLibraryChange[]
+  /** The keys of its compose definition that differ. */
+  compose?: string[]
+  image?: string
+  unknown?: string
+  /** Python, Node or the system's packages alone: optional. */
+  platform?: string
+}
+
+export interface ReleaseContainer {
+  container: string
+  role: string
+  kind: ReleaseKind
+  /** now: may go now; pending: held back, or waits with its group; skip: nothing to apply. */
+  when: 'now' | 'pending' | 'skip'
+  /** The release its image is. */
+  version: string | null
+  target: string | null
+  reasons: ReleaseReasons
+  /** What held it back when watadeploy last looked. */
+  held: string | null
+  /** Containers changing because of the same file move together. */
+  group: number | null
+  held_with: string[]
+  image: string | null
+  said: string
+}
+
+export type ReleaseStepState =
+  | 'waiting'
+  | 'recreating'
+  | 'starting'
+  | 'ready'
+  | 'not_ready'
+  | 'failed'
+  | 'rolled_back'
+  | 'held'
+  | 'skipped'
+
+export interface ReleaseStep {
+  container: string
+  role: string
+  before: string | null
+  after: string
+  state: ReleaseStepState
+  detail: string | null
+  started_at: string | null
+}
+
+export interface ReleaseApply {
+  id: string
+  kind: 'apply' | 'rollback' | 'full'
+  by: string
+  force: boolean
+  version: string
+  request: string | null
+  started_at: string
+  finished_at?: string
+  steps: ReleaseStep[]
+  done: boolean
+  error?: string
+}
+
+export interface ReleaseRequestState {
+  id: string
+  state: 'accepted' | 'refused' | 'done'
+  detail?: string
+  at: string
+}
+
+export interface ReleaseConfigImage {
+  image: string
+  version: string | null
+  containers: string[]
+  accepted: boolean
+  detail: string
+}
+
+/** What watadeploy wrote (/app/wata/release/status/status.json), as the admin reads it. */
+export interface ReleaseStatusFile {
+  newest?: string
+  installed?: string[]
+  containers?: ReleaseContainer[]
+  planned_at?: string
+  applying?: ReleaseApply | null
+  last?: ReleaseApply | null
+  requests?: ReleaseRequestState[]
+  config?: { at: string; images: ReleaseConfigImage[] }
+  error?: string
+}
+
+export interface ReleaseState {
+  available: boolean
+  error: string | null
+  actions_enabled: boolean
+  status: ReleaseStatusFile
+  /** What holds each waiting container back now, as the admin sees it (watadeploy reads it again). */
+  held: Record<string, string>
+  applying: ReleaseApply | null
+}
+
+export interface ReleaseRequest {
+  id: string
+  version: string
+  containers: string[]
+  force: boolean
+  asked_by: string
+  asked_at: string
 }
 
 // ── stored prices (src/admin/routers/data.py) ──

@@ -12,9 +12,9 @@ import pathlib
 
 AGENT = pathlib.Path("src/admin/agent")
 # What the admin's context holds that the agent never touches: the services that trade, the operator's
-# credentials and sessions, the configuration's editor, the pause of entries, the restarts.
+# credentials and sessions, the configuration's editor, the pause of entries, the restarts and the deploy.
 NEVER = {"services", "saxo", "config_editor", "risk_state", "notifier", "audit_log", "credentials", "sessions",
-         "service_control", "restarts", "live_prices", "downloads", "paper"}
+         "service_control", "restarts", "release", "live_prices", "downloads", "paper"}
 
 
 def _trees():

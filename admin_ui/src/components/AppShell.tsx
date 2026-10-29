@@ -22,6 +22,7 @@ import {
   Radar,
   Radio,
   Receipt,
+  Rocket,
   RotateCw,
   ScrollText,
   SlidersHorizontal,
@@ -45,6 +46,7 @@ import { EventsBell } from '@/features/live/EventsBell'
 import { FollowProvider } from '@/features/live/FollowProvider'
 import { recordLiveValues } from '@/features/positions/liveSamples'
 import { useLiveEvents } from '@/features/live/useLiveEvents'
+import { releaseChipHint } from '@/features/system/release'
 import { restartNeededHint } from '@/features/system/restarts'
 import { api } from '@/lib/api'
 import { SAXO_SERVICE_ID } from '@/lib/types'
@@ -136,6 +138,15 @@ function Shell() {
               icon={<KeyRound className="size-3.5" aria-hidden />}
               label="Saxo: authorise"
               hint="The Saxo token can no longer be renewed: nothing can be traded until a new authorisation is given, on the System page."
+            />
+          )}
+          {session.release && (session.release.waiting.length > 0 || session.release.applying) && (
+            <StateChip
+              to="/system#release"
+              tone="warning"
+              icon={<Rocket className="size-3.5" aria-hidden />}
+              label={session.release.applying ? 'Deploying' : 'Release waiting'}
+              hint={releaseChipHint(session.release)}
             />
           )}
           {session.restart_required && (

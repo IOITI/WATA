@@ -19,6 +19,7 @@ export const LIVE_EVENT_TYPES = [
   'backtest_finished',
   'prices_fetch_finished',
   'restart_plan',
+  'release',
   'agent_finished',
 ] as const
 
@@ -217,6 +218,8 @@ export function eventLink(event: LiveEvent): string | null {
       return '/data/providers/dukascopy'
     case 'restart_plan':
       return '/system'
+    case 'release':
+      return '/system#release'
     case 'agent_finished': {
       const conversation = text(event.conversation_id)
       return conversation ? `/agent/${encodeURIComponent(conversation)}` : '/agent'
@@ -259,6 +262,10 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'restart_plan':
       // A service started again runs with the file as it is: its changes are no longer waiting.
       return ['services', 'session', 'health', 'config', 'data-provider']
+    case 'release':
+      // watadeploy wrote its status: what runs where, what waits, an apply as it goes. Said on Telegram once it
+      // ends (src/admin/release.py), so no toast: the System page shows it.
+      return ['release', 'session', 'services', 'health']
     default:
       return []
   }

@@ -66,6 +66,8 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/system/services"),
     ("POST", "/api/system/services/restart"),
     ("POST", "/api/system/services/wata-api/restart"),
+    ("GET", "/api/system/release"),
+    ("POST", "/api/system/release/apply"),
     ("GET", "/api/credentials"),
     ("PUT", "/api/credentials/config.json.bak-20260101-000000"),
     ("DELETE", "/api/credentials/config.json.bak-20260101-000000"),

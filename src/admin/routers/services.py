@@ -122,6 +122,8 @@ async def _start(request: Request, services: list[str], force: bool) -> dict:
         raise HTTPException(status_code=503, detail=NO_CONTROL)
     if restarts.busy:
         raise HTTPException(status_code=409, detail="A restart is already under way: wait for it to end")
+    if ctx.release is not None and await run_in_threadpool(ctx.release.applying):
+        raise HTTPException(status_code=409, detail="A deploy is applying a release: wait for it to end")
     situation = await situation_of(ctx)
     held = {service: reason for service in wanted if (reason := refusal(service, situation))}
     said = "; ".join(f"{SERVICE_NAMES[service]}: {reason}" for service, reason in held.items())

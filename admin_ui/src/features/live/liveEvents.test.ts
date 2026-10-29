@@ -138,6 +138,12 @@ describe('describeEvent', () => {
     expect(staleQueries({ type: 'restart_plan' })).toEqual(['services', 'session', 'health', 'config', 'data-provider'])
   })
 
+  it('reads the release again when watadeploy writes its status, said on Telegram by the server', () => {
+    expect(describeEvent({ type: 'release', applying: true, last: null })).toBeNull()
+    expect(eventLink({ type: 'release' })).toBe('/system#release')
+    expect(staleQueries({ type: 'release' })).toEqual(['release', 'session', 'services', 'health'])
+  })
+
   it('stays silent for what the dashboard already shows, and for events it does not know', () => {
     expect(describeEvent({ type: 'entries_paused' })).toBeNull()
     expect(describeEvent({ type: 'entries_resumed' })).toBeNull()

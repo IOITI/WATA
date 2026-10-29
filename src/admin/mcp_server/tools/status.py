@@ -63,16 +63,18 @@ def _journal(research) -> dict:
 def register(server, research) -> None:
     @research_tool(server, research.calls, name="status", title="Where things stand", read_only=True)
     async def status() -> dict:
-        """Start here. The server's version and time; whether the market is open by WATA's live rules; the data to
-        work on (days the recorder kept lately, the Capital.com feed, Dukascopy's history); the backtest line (what
-        runs, what waits, Claude's share) and the code digest runs are made with; the experiment journal (open
-        experiments, trials by family, lock box); whether the Pine runner is there; free disk; the token in use;
-        and what Claude may use of the server (limits)."""
+        """Start here. The server's version and time, and the release each container runs (the admin's is the
+        server's version; the others may run an older one with the same code); whether the market is open by WATA's
+        live rules; the data to work on (days the recorder kept lately, the Capital.com feed, Dukascopy's history);
+        the backtest line (what runs, what waits, Claude's share) and the code digest runs are made with; the
+        experiment journal (open experiments, trials by family, lock box); whether the Pine runner is there; free
+        disk; the token in use; and what Claude may use of the server (limits)."""
         caller = current_caller()
         service = research.backtests
         export = await run_in_threadpool(research.research_export.status) if research.research_export else None
         return compacted({
-            "server": {"version": research.version, "time": research.now_iso(), "timezone": research.timezone},
+            "server": {"version": research.version, "time": research.now_iso(), "timezone": research.timezone,
+                       "release": await run_in_threadpool(research.release) if research.release else None},
             "market": research.config.market(research.clock()),
             "indices": research.config.allowed_indices(),
             "data": await _data(research),

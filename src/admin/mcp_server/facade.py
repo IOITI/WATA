@@ -122,6 +122,8 @@ class ResearchServices:
     studies: Any = None
     # The AI agent's memory (src/admin/agent_memory.py): read here, never changed.
     memory: Any = None
+    # What each container runs and what waits for the newest release, in short: read here, never applied.
+    release: Callable[[], dict | None] | None = None
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
@@ -149,6 +151,7 @@ class ResearchServices:
             events=ctx.events,
             studies=ctx.studies,
             memory=getattr(ctx, "agent_memory", None),
+            release=ctx.release.summary if getattr(ctx, "release", None) is not None else None,
         )
 
     def service(self):

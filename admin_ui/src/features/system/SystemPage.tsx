@@ -25,6 +25,7 @@ import type { Health } from '@/lib/types'
 import { ClaudePanel } from './ClaudePanel'
 import { ContainersPanel } from './ContainersPanel'
 import { LicencesPanel } from './LicencesPanel'
+import { ReleasePanel } from './ReleasePanel'
 import { SaxoCallbackOutcome, SaxoPanel } from './SaxoPanel'
 import { MAP_HEIGHT, MAP_LINKS, MAP_WIDTH, serviceMap } from './serviceMap'
 
@@ -194,38 +195,41 @@ export function SystemPage() {
 
       <QueryState isPending={healthQuery.isPending} error={healthQuery.error} hasData={!!health}>
         {health && (
-          <>
-            <Panel
-              title="Services"
-              description="Whether each service does its work: what it answers, what the trader and the position monitor say of themselves every fifteen seconds, the consumers on its queue, or the start and stop lines of its log. What Docker says of the containers is below."
-              bodyClassName="pt-2"
-            >
-              {/* The services as a map, where there is room for it; the table says the same, line by line. */}
-              <DependencyTrace
-                className="mb-4 hidden lg:flex"
-                nodes={serviceMap(health.services)}
-                connections={MAP_LINKS}
-                width={MAP_WIDTH}
-                height={MAP_HEIGHT}
-                nodeSize={30}
-                label="WATA's services, and what each one calls"
-              />
-              <ServicesTable health={health} />
-            </Panel>
-
-            <ContainersPanel timeZone={timezone} />
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <Panel title="Queues" bodyClassName="pt-2">
-                <Queues health={health} />
-              </Panel>
-              <Panel title="Watchlist manager">
-                <Watchlist health={health} timeZone={timezone} />
-              </Panel>
-            </div>
-          </>
+          <Panel
+            title="Services"
+            description="Whether each service does its work: what it answers, what the trader and the position monitor say of themselves every fifteen seconds, the consumers on its queue, or the start and stop lines of its log. What Docker says of the containers is below."
+            bodyClassName="pt-2"
+          >
+            {/* The services as a map, where there is room for it; the table says the same, line by line. */}
+            <DependencyTrace
+              className="mb-4 hidden lg:flex"
+              nodes={serviceMap(health.services)}
+              connections={MAP_LINKS}
+              width={MAP_WIDTH}
+              height={MAP_HEIGHT}
+              nodeSize={30}
+              label="WATA's services, and what each one calls"
+            />
+            <ServicesTable health={health} />
+          </Panel>
         )}
       </QueryState>
+
+      <ReleasePanel timeZone={timezone} />
+
+      <ContainersPanel timeZone={timezone} />
+
+      {/* The queues and the watchlist, from the health read above: its loading and its error are said there. */}
+      {health && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="Queues" bodyClassName="pt-2">
+            <Queues health={health} />
+          </Panel>
+          <Panel title="Watchlist manager">
+            <Watchlist health={health} timeZone={timezone} />
+          </Panel>
+        </div>
+      )}
 
       <SaxoPanel />
 

@@ -346,7 +346,7 @@ def test_the_control_service_may_restart_watas_services_and_nothing_else_of_the_
     # The services, not the tools run by hand (profile tools, never started by up).
     wata = {
         name for name, service in services.items()
-        if service.get("image") == "wata-base:latest" and service.get("profiles") != ["tools"]
+        if "wata-base" in str(service.get("image")) and service.get("profiles") != ["tools"]
     }
 
     assert set(containers.CONTAINERS.values()) == wata - {"service_control1"}

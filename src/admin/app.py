@@ -24,7 +24,8 @@ from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, agent, backtests, config, credentials, data, research, saxo, services, session, system, ta, trading,
+    actions, agent, backtests, config, credentials, data, release, research, saxo, services, session, system, ta,
+    trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -215,6 +216,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.agent is not None:
             # The AI agent's requests, worked on whether a page follows them or not; those a stop left, taken up again.
             background.append(asyncio.create_task(ctx.agent.run()))
+        if ctx.release is not None:
+            # What the deploy did and what waits, said once each (src/admin/release.py).
+            background.append(asyncio.create_task(ctx.release.keep(ctx)))
         if ctx.debrief is not None:
             # The agent's daily debrief, once the market is closed (while admin.ai_agent.debrief_enabled).
             background.append(asyncio.create_task(ctx.debrief.keep()))
@@ -293,8 +297,8 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, saxo, trading, system, services, actions, config, credentials, data, backtests, ta, research,
-                   agent):
+    for module in (session, saxo, trading, system, services, release, actions, config, credentials, data, backtests, ta,
+                   research, agent):
         app.include_router(module.router)
 
     if mcp is not None:

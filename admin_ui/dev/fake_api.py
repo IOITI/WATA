@@ -44,6 +44,7 @@ import shutil
 import signal
 import sys
 import tempfile
+import threading
 import time
 import types
 import uuid
@@ -79,6 +80,7 @@ from src.admin.mcp_server.pause import McpPause
 from src.admin.mcp_server.tokens import TokenStore
 from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.paper import PaperTrading
+from src.admin.release import Release
 from src.admin.ta_rules import RuleStore
 from src.admin.service_control import RestartRefused
 from src.admin.vault import AdminVault
@@ -1243,6 +1245,117 @@ class FakeControl:
         pass
 
 
+class FakeRelease(Release):
+    """
+    watadeploy's status, made up (src/release/host.py): 0.61.0 installed, the admin and the control service on
+    it, the trading pair and the scheduler waiting for it (they share src/trade/rules.py), the recorder its own
+    change, the Capital.com feed its Python alone, the rest on older releases of the same code. A request is
+    carried out here as watadeploy would carry it out, a container every few seconds; the admin's own step is
+    only said, as its restart would stop this server.
+    """
+
+    NEWEST = "0.61.0"
+    STEP_SECONDS = 2.5
+
+    def __init__(self, work_dir: str):
+        super().__init__(os.path.join(work_dir, "release", "status", "status.json"),
+                         os.path.join(work_dir, "lib", "admin", "deploy", "requests"),
+                         os.path.join(work_dir, "lib", "admin", "deploy", "announced.json"))
+        self._lock = threading.Lock()
+        self._write(self.made_up())
+
+    def _write(self, status: dict) -> None:
+        status["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        os.makedirs(os.path.dirname(self._status_path), exist_ok=True)
+        temporary = f"{self._status_path}.tmp"
+        with open(temporary, "w") as written:
+            json.dump(status, written, indent=1)
+        os.replace(temporary, self._status_path)
+
+    def made_up(self) -> dict:
+        now = datetime.now(timezone.utc)
+        rules = ["src/trade/rules.py", "src/trade/fresh_quote.py"]
+
+        def entry(container, role, kind="unchanged", version=self.NEWEST, reasons=None, group=None):
+            return {"container": container, "role": role, "kind": kind,
+                    "when": "pending" if kind == "change" else "skip", "version": version,
+                    "target": self.NEWEST if kind in ("change", "optional") else None, "reasons": reasons or {},
+                    "held": None, "group": group, "held_with": [], "ahead_of": [], "image": f"wata-base:{version}",
+                    "said": ""}
+
+        containers = [
+            entry("pg_backup1", "pg_backup", version=None),
+            entry("web_server1", "web_server", version="0.59.1"),
+            entry("telegram1", "telegram", version="0.59.1"),
+            entry("watchlist_manager1", "watchlist_manager", version="0.59.1"),
+            entry("price_recorder1", "price_recorder", "change", "0.59.1",
+                  {"code": ["src/price_recorder/recorder.py"]}, group=2),
+            entry("capital_feed1", "capital_feed", "optional", "0.59.1",
+                  {"platform": "Python 3.14.11, Node v24.22.2"}),
+            entry("ta_engine1", "ta_engine", version="0.60.0"),
+            entry("scheduler1", "scheduler", "change", "0.59.1", {"code": rules[:1]}, group=1),
+            entry("position_monitor1", "position_monitor", "change", "0.59.1",
+                  {"code": rules, "libraries": [{"name": "websockets", "from": "16.0", "to": "16.1"}]}, group=1),
+            entry("trader1", "trader", "change", "0.59.1", {"code": rules + ["src/trader/__init__.py"]}, group=1),
+            entry("service_control1", "service_control"),
+            entry("admin1", "admin"),
+        ]
+        earlier = (now - timedelta(hours=5)).isoformat(timespec="seconds")
+        last = {
+            "id": "f0e1d2c3b4a59687", "kind": "apply", "by": "playbook", "force": False, "version": self.NEWEST,
+            "request": None, "started_at": earlier, "finished_at": earlier, "done": True,
+            "steps": [{"container": name, "role": role, "before": "wata-base:0.59.1",
+                       "after": f"wata-base:{self.NEWEST}", "state": "ready", "detail": "answering (200)",
+                       "started_at": earlier} for name, role in (("service_control1", "service_control"),
+                                                                 ("admin1", "admin"))],
+        }
+        return {"newest": self.NEWEST, "installed": [self.NEWEST, "0.60.0", "0.59.1"], "containers": containers,
+                "planned_at": now.isoformat(timespec="seconds"), "applying": None, "last": last, "requests": [],
+                "config": {"at": earlier, "images": [
+                    {"image": f"wata-base:{version}", "version": version, "containers": [], "accepted": True,
+                     "detail": "accepted"} for version in (self.NEWEST, "0.60.0", "0.59.1")]}}
+
+    def ask(self, containers, force, by):
+        request = super().ask(containers, force, by)
+        threading.Thread(target=self._carry_out, args=(request,), daemon=True).start()
+        return request
+
+    def _carry_out(self, request: dict) -> None:
+        def now() -> str:
+            return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        with self._lock:
+            status = self.status()
+            order = {name: index for index, name in enumerate(entry["container"] for entry in status["containers"])}
+            roles = {entry["container"]: entry for entry in status["containers"]}
+            steps = [{"container": name, "role": roles[name]["role"], "before": roles[name]["image"],
+                      "after": f"wata-base:{self.NEWEST}", "state": "waiting", "detail": None, "started_at": None}
+                     for name in sorted(request["containers"], key=lambda name: order.get(name, 99))]
+            record = {"id": uuid.uuid4().hex[:16], "kind": "apply", "by": f"admin ({request['asked_by']})",
+                      "force": request["force"], "version": self.NEWEST, "request": request["id"], "started_at": now(),
+                      "steps": steps, "done": False}
+            status["requests"] = [{"id": request["id"], "state": "accepted", "at": now()}] + status.get("requests", [])
+            status["applying"] = record
+            self._write(status)
+            for step in steps:
+                for state in ("recreating", "starting"):
+                    step["state"] = state
+                    self._write(status)
+                    time.sleep(self.STEP_SECONDS)
+                step.update(state="ready", started_at=now(), detail="answering (200)")
+                if step["container"] == "admin1":
+                    print("[fake] The admin would be recreated now, on wata-base:" + self.NEWEST)
+                found = roles[step["container"]]
+                found.update(kind="unchanged", when="skip", version=self.NEWEST, image=step["after"], reasons={},
+                             target=None, group=None)
+                self._write(status)
+            record.update(done=True, finished_at=now())
+            status["applying"] = None
+            status["last"] = record
+            status["requests"][0].update(state="done", at=now())
+            self._write(status)
+
+
 class FakeCredentialTable:
     """The tables credential and credential_check in memory, for the admin's vault (src/admin/vault.py)."""
 
@@ -1497,6 +1610,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
         paper=paper,
         # The containers, as the heartbeats say: started three hours ago.
         service_control=FakeControl(datetime.now(timezone.utc) - timedelta(hours=3)),
+        # What watadeploy would say of the server, made up; an apply asked from the System page plays out here.
+        release=FakeRelease(work_dir),
         events=events,
         notifier=notifier,
         version="dev",

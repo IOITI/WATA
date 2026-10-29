@@ -161,6 +161,9 @@ class AdminContext:
     # and the restarts asked of it, one plan at a time (src/admin/service_restart.py).
     service_control: Any = None
     restarts: Any = None
+    # The release each container runs and the requests to apply the newest (src/admin/release.py): watadeploy's
+    # status read, a request written; never Docker nor the pins.
+    release: Any = None
     # The credentials sealed in PostgreSQL (src/admin/vault.py): listed, set, rotated; never read back.
     vault: Any = None
     # The AI agent of the pages (src/admin/agent/service.py): with admin.ai_agent.enabled only.
@@ -234,6 +237,7 @@ def build_context(config_manager) -> AdminContext:
     import httpx
 
     from src.admin.agent_memory import memory_of
+    from src.admin.release import Release
     from src.admin.audit import AuditLog
     from src.admin.backtests import BacktestService
     from src.admin.config_editor import ConfigEditor
@@ -364,6 +368,7 @@ def build_context(config_manager) -> AdminContext:
         mcp_pause=McpPause(os.path.join(os.path.dirname(settings.mcp_tokens_path), "mcp_pause.json")),
         studies=studies,
         service_control=service_control,
+        release=Release(),
         vault=vault,
         agent_memory=memory_of(settings.agent_path),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),

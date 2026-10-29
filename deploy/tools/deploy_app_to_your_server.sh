@@ -10,7 +10,10 @@ fi
 
 echo "Send WATA version $VERSION to server"
 
-# Refused while WATA holds a position or the market is open by its hours: "$0 -e force=true" deploys anyway.
+# Installed beside what runs (nothing stops), then each container the release changes recreated when its
+# guards allow; the rest waits for `watadeploy apply`. -e apply=none installs and says what would go,
+# -e services=admin1,service_control1 applies those alone, -e force=true whatever holds them back,
+# -e full=true stops and starts everything (for a change of Traefik, PostgreSQL or RabbitMQ).
 ansible-playbook ansible/playbooks/deploy_app.yml -i "$INVENTORY_FILE" "$@"
 
-echo "WATA version $VERSION can be started on the server"
+echo "WATA version $VERSION is installed: watadeploy status on the server, or the admin's System page, says what runs it"
