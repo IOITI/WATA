@@ -2,7 +2,7 @@
 
 ## v0.61.0 - A deploy restarts only what a release changes
 
-**Release date:** not yet released
+**Release date:** 2026-10-29
 
 A deploy stopped everything. The playbook and the install each ran `docker compose down`: the 15 containers stopped, Traefik, PostgreSQL and RabbitMQ included, the image was built while nothing ran, and `watastart` brought it all back. That was one to five minutes without trading, without TradingView's webhook, and without Saxo's and Capital.com's bars, which are lost for good; the TA engine also loaded its rules again. So every release waited for the evening, or was forced. Yet most releases change one corner: v0.60.0, the AI agent's memory, changes the admin alone.
 
