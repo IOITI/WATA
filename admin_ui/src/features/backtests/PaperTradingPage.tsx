@@ -43,7 +43,7 @@ import {
   reportState,
   versionsSentence,
 } from './paperModel'
-import { BacktestsDisabled } from './parts'
+import { BacktestsDisabled, OlderCodeBadge } from './parts'
 
 /** The paper trading of every rule, read again every few seconds while a report is being made. */
 function usePaper(enabled: boolean) {
@@ -177,8 +177,11 @@ function dayResult(day: BacktestPaperDay) {
   return <SignedValue value={day.day_percent} kind="percent" />
 }
 
-/** Each finished day traded on paper by a run of its own, newest first. */
-function PaperDays({ days }: { days: BacktestPaperDay[] }) {
+/**
+ * Each finished day traded on paper by a run of its own, newest first; one made with older backtest code says so,
+ * and is made again while the rule is in shadow (`madeAgain`).
+ */
+function PaperDays({ days, madeAgain }: { days: BacktestPaperDay[]; madeAgain: boolean }) {
   if (days.length === 0) return <p className="py-4 text-center text-sm text-muted-foreground">No day on paper yet: the first comes once the market is closed.</p>
   return (
     <div className="relative overflow-x-auto">
@@ -196,13 +199,16 @@ function PaperDays({ days }: { days: BacktestPaperDay[] }) {
           {days.map((day) => (
             <tr key={day.day}>
               <td className="py-2.5 pr-4 font-medium">
-                {day.run_id ? (
-                  <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.run_id}`}>
-                    {formatDay(day.day)}
-                  </Link>
-                ) : (
-                  formatDay(day.day)
-                )}
+                <span className="inline-flex items-center gap-2">
+                  {day.run_id ? (
+                    <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.run_id}`}>
+                      {formatDay(day.day)}
+                    </Link>
+                  ) : (
+                    formatDay(day.day)
+                  )}
+                  {day.stale && <OlderCodeBadge madeWith={day.made_with} madeAgain={madeAgain} />}
+                </span>
               </td>
               <td className="py-2.5 pr-4 text-right">{dayResult(day)}</td>
               <td className="py-2.5 pr-4 text-right tabular-nums">{day.trades ?? '—'}</td>
@@ -282,7 +288,7 @@ export function PaperTradingPage() {
                   <section aria-label={`Days on paper of ${rule.name}`} className="space-y-2">
                     <h3 className="text-sm font-medium">Its days on paper</h3>
                     <Reference reference={entry?.reference ?? null} ruleId={rule.id} />
-                    <PaperDays days={entry?.days ?? []} />
+                    <PaperDays days={entry?.days ?? []} madeAgain={rule.mode === 'shadow'} />
                   </section>
                 </div>
               </Panel>

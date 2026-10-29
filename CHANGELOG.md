@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.59.0 - Days on paper made with older backtest code are made again
+
+**Release date:** not released yet
+
+Paper trading showed a rule's 23 October as +0.51 % in 6 trades on its days on paper, and -11.30 % in 28 trades in its report. Both replay the same 33 signals at the same moments under the same settings: the day on paper was made that evening by v0.33.0, before v0.38.0 priced fills at Saxo's next quote and judged a new position only on a fresh bid; the report is made each night with the server's code. With the old fills the first five trades lost 3.7 % together and the sixth reached the day's profit target (0.5 %) at 14:00, which stopped the day; with today's they lost 7.3 %, the day never came back to +0.5 %, and the rule went on trading an afternoon of back and forth. A day on paper was made once and never again, and the page did not say it was made with older code: the go-live check read it too.
+
+- **Made again**: once the market is closed, paper trading makes again each kept day on paper whose run was made with other backtest code than the server's (stale, as its run's page says), after the due days, the reports and the pruning: newest first, five a tick (every quarter of an hour), and only while no other run waits, so that it never holds up the operator's runs or a report. The old run is removed once the new one has its place. The rules in shadow and the signals WATA received are made again; a rule out of shadow keeps its days as they were made, and a run that did not finish, or that names no code, is left as it is.
+- **Said until then**: "Older code" beside the day, in a rule's days on paper and in the paper days of the signals received; its hint names the version that made it, and that it is made again once the market is closed. The days of `GET /api/backtests/paper` (and so Claude's `rule_list`) say `stale` and `made_with`; those of `GET /api/backtests/paper/live`, `paper_stale` and `paper_made_with`.
+- **Only the code**: a change of the settings makes nothing again. A day keeps the settings of its night (the signals received are set beside the real day, which was traded under them); the report is made with tonight's.
+
+**On the live path:** nothing. The admin's paper trading task and its pages alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5): every run made since v0.50.1 stays current. On the server, the days on paper of 21, 22, 23 and 26 October are made again the first time the market is closed after the deploy.
+
+**Verification status:**
+- Diagnosed on the server through Claude's MCP endpoint (read-only): the paper run of 23 October (v0.33.0, code 4da7412060b546c7, `stale`) and the report (v0.58.0) traded the same signals at the same moments; their settings differed only by `fill_price: next` and `wait_for_fresh_quote`, which did not exist on 23 October.
+- 3,339 Python tests pass (24 skipped: the live database and queue), six of them new in `tests/test_admin_paper.py`: a day made with older code made again once the market is closed and not while it is open, its old folder gone; newest first, a few a tick, nothing while another run waits; a full queue leaving the rest for the next tick; a day made with today's code, naming none or not finished left as it is; a rule out of shadow keeping its days; a day of the signals received made again under the live settings.
+- 1,174 interface tests pass (two more: the hint's sentence; both tables marking the day made with older code alone, its hint read by screen readers); lint, types and the build are clean.
+- Seen in the browser pane on the development admin, two of its paper days given v0.33.0's digest: "Older code" and its hint beside each, at the pane's width and at 375 px (nothing wider than the page, both tables scrolling in their frames); the admin restarted, its first tick made those two days again (new runs, the old folders removed, the four others untouched) and the marks were gone.
+
 ## v0.58.0 - An accent and a material for the admin, chosen on its Configuration page
 
 **Release date:** 2026-10-28

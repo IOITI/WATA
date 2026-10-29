@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { BacktestPaper, BacktestRun, DataAsset, Session, TaRule } from '@/lib/types'
+import type { BacktestPaper, BacktestRun, DataAsset, LivePaperDay, Session, TaRule } from '@/lib/types'
 import { day, OPTIONS, PAPER_REPORT_ID, PAPER_RULE, paperReport, trade } from '@/test/backtests'
 import { resetCharts } from '@/test/fakeCharts'
 import { stubSystemTheme } from '@/test/systemTheme'
@@ -53,6 +53,7 @@ const REPORT = {
 const ASSETS = [{ ref: 'capital/US100', provider: 'capital', key: 'US100', name: 'US Tech 100', tick: 0.1 }] as unknown as DataAsset[]
 
 let paper: BacktestPaper
+let liveDays: LivePaperDay[]
 let sent: { method: string; path: string }[]
 let runs: Record<string, BacktestRun>
 
@@ -76,7 +77,7 @@ function serve() {
           : { ...paper, rules: { ...paper.rules, [owner]: { ...paper.rules[owner], next_report: next } } }
         return json(paper, 202)
       }
-      if (route === '/api/backtests/paper/live') return json({ days: [], reference: null, warning: null, report: paper.live?.report ?? null, next_report: null })
+      if (route === '/api/backtests/paper/live') return json({ days: liveDays, reference: null, warning: null, report: paper.live?.report ?? null, next_report: null })
       if (route === '/api/backtests') return json({ items: [], storage: { runs: { count: 0, bytes: 0 }, former: { count: 0, bytes: 0 } } })
       if (route === '/api/backtests/options') return json(OPTIONS)
       if (route === '/api/backtests/execution') return json({ detail: 'Not measured here' }, 404)
@@ -172,6 +173,7 @@ beforeEach(() => {
     },
     live: { days: [], reference: null, report: null, next_report: null },
   }
+  liveDays = []
   runs = { [PAPER_REPORT_ID]: paperReport() }
   serve()
 })
@@ -206,6 +208,29 @@ describe('Paper trading', () => {
     expect(screen.getByText('The signals WATA received')).toBeInTheDocument()
     const trail = screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0]
     expect(trail).toHaveTextContent(/Analysis.*Backtests.*Paper trading/)
+  })
+
+  it('marks a day on paper made with older backtest code, the rule\'s and the signals received\'s, until it is made again', async () => {
+    const rule = paper.rules[PAPER_RULE.id]
+    rule.days[1] = { ...rule.days[1], stale: true, made_with: '0.33.0' }
+    rule.days[0] = { ...rule.days[0], stale: false, made_with: '0.59.0' }
+    liveDays = [{
+      day: '2026-10-15', real_percent: null, real_outside: null, paper_percent: 0.51, paper_outside: null, paper_state: 'done',
+      paper_run_id: '20261015-223500-ffffff', paper_trades: 6, paper_stale: true, paper_made_with: '0.33.0',
+    }]
+    renderAt('/backtests/paper')
+
+    const days = await screen.findByRole('region', { name: 'Days on paper of Kernel VWAP' })
+    const marked = within(days).getByText('Older code')
+    // Beside its day alone, the day made with today's code left as it is; why on hover, focus or a tap.
+    expect(within(days).getByRole('row', { name: /^16 Oct 2026/ })).toContainElement(marked)
+    expect(within(days).getByRole('row', { name: /^19 Oct 2026/ })).not.toHaveTextContent('Older code')
+    const said = 'Made with the backtests of v0.33.0: the report is made with today’s. It is made again once the market is closed.'
+    expect(marked.closest('[tabindex="0"]')).toHaveAccessibleDescription(said)
+    // The signals received's day too: they are traded on paper whatever the rules.
+    const live = await screen.findByRole('link', { name: '15 Oct 2026' })
+    const row = live.closest('tr') as HTMLElement
+    expect(within(row).getByText('Older code').closest('[tabindex="0"]')).toHaveAccessibleDescription(said)
   })
 
   it('makes a report now when asked, and says it is being made', async () => {

@@ -14,6 +14,7 @@ import {
   reportPeriod,
   reportState,
   runParents,
+  staleDayHint,
   versionsSentence,
 } from './paperModel'
 
@@ -94,6 +95,16 @@ describe('a report', () => {
     expect(anyUnderWay({ rules: { a: entry({ report: REPORT }) } })).toBe(false)
     expect(anyUnderWay({ rules: {}, live: entry({ next_report: running }) })).toBe(true)
     expect(anyUnderWay({ rules: { a: entry({ next_report: { ...running, state: 'failed' } }) } })).toBe(false)
+  })
+})
+
+describe('a day on paper made with older backtest code', () => {
+  it('names the version that made it, and says it is made again while its owner is traded on paper', () => {
+    expect(staleDayHint('0.33.0', true)).toBe(
+      'Made with the backtests of v0.33.0: the report is made with today’s. It is made again once the market is closed.',
+    )
+    // A rule out of shadow keeps its days as they were made; a run of before names no version.
+    expect(staleDayHint(null, false)).toBe('Made with older backtests: the report is made with today’s.')
   })
 })
 

@@ -1,10 +1,11 @@
-import { Alert, AlertDescription, AlertTitle, Badge, ChangeList } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Badge, ChangeList, Hint } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
 import type { BacktestFate, BacktestStatus } from '@/lib/types'
 
 import { FATE_LABEL, FATE_TONE, STATE_LABEL, STATE_TONE } from './model'
 import type { Change } from './model'
+import { staleDayHint } from './paperModel'
 
 /** What the pages of this section share. */
 
@@ -18,6 +19,15 @@ export function StateBadge({ status }: { status: BacktestStatus }) {
 
 export function FateBadge({ fate }: { fate: BacktestFate }) {
   return <Badge tone={FATE_TONE[fate]}>{FATE_LABEL[fate]}</Badge>
+}
+
+/** A day on paper made with older backtest code, beside its day: which, and what becomes of it, on hover, focus or a tap. */
+export function OlderCodeBadge({ madeWith, madeAgain }: { madeWith: string | null | undefined; madeAgain: boolean }) {
+  return (
+    <Hint content={staleDayHint(madeWith, madeAgain)} wrap>
+      <Badge tone="warning">Older code</Badge>
+    </Hint>
+  )
 }
 
 /** Each setting a run changed, from what it was live (ioiti-ui's ChangeList), or what it means when it changed none. */

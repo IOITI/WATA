@@ -25,6 +25,14 @@ closed by the live rules, for the last few finished days after the rule was
 made, one run per rule and day (the service's index keeps which), and lets
 the oldest go. The runs are the service's own: same folders, same command,
 at the lowest priority, one at a time.
+
+A day kept whose run was made with other backtest code than the server's
+(stale, as a run's page says) is made again, a few a tick and only while no
+other run waits, its old run removed: the report is made with the server's
+code each night, and a day of before set beside it said another day (23 Oct
+2026: +0.51 % on paper, made by v0.33.0 before fills were priced at Saxo's
+next quote; -11.30 % in the report). Only the code: a day keeps the settings
+of its night, which the real day of the signals received was traded under.
 """
 
 import asyncio
@@ -36,7 +44,7 @@ from datetime import date, datetime, timedelta, timezone
 from src.admin.backtest_requests import ask_backtest, local_day, measured_orders
 from src.admin.backtests import LIVE_PAPER, MAX_RAISED_SIGNALS, NO_ENTRY_SIGNAL
 from src.admin.downloads import market_is_open, trading_timezone
-from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible
+from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, UnknownRun
 from src.admin.live_drift import live_days, warning
 from src.admin.processes import QUEUED, RUNNING
 from src.backtest.clock import TradingClock
@@ -54,6 +62,8 @@ REAL_DAYS = KEEP_DAYS
 DRIFT_FILE = "drift.json"
 # A report waiting its turn or running: nothing more is asked for its owner meanwhile.
 UNDER_WAY = (QUEUED, RUNNING)
+# The days made with older backtest code made again in one tick, once no other run waits.
+REMAKE_PER_TICK = CATCH_UP_DAYS
 
 
 def index_asset(config: dict, indice: str) -> dict:
@@ -282,6 +292,52 @@ class PaperTrading:
         if not await self._ask_report(owner, rule, first, last):
             raise NotPossible(f"No signal of entry since {first.isoformat()}: nothing to make a report of")
 
+    # ── the days made with older backtest code ──
+
+    def remakes_due(self) -> list[tuple[str, dict | None, date, str]]:
+        """
+        The days on paper made with other backtest code than the server's, newest first, of those still traded on
+        paper (the rules in shadow, the signals received): each owner, its rule, the day and the run it has now.
+        A rule out of shadow keeps its days as they were made.
+        """
+        shadow = {rule["id"]: rule for rule in self._rules.load()["rules"] if rule.get("mode") == "shadow"}
+        return [(owner, shadow.get(owner), date.fromisoformat(day), run_id)
+                for owner, day, run_id in self._backtests.stale_paper_days() if owner == LIVE_PAPER or owner in shadow]
+
+    async def _remake_stale(self) -> int:
+        """
+        The days made with older backtest code made again with the server's, REMAKE_PER_TICK at most and only while no
+        other run waits (the operator's, a report): each old run removed once the index names another. How many were
+        asked. NotPossible (the queue is full) leaves the rest for the next tick.
+        """
+        if self._backtests.queue()["waiting"]:
+            return 0
+        asked = 0
+        for owner, rule, day, old in self.remakes_due():
+            if asked >= REMAKE_PER_TICK:
+                break
+            try:
+                if owner == LIVE_PAPER:
+                    asked += await self._live_paper(day)
+                else:
+                    rows = await self._queries.rule_signals(rule["id"], day, day, limit=MAX_RAISED_SIGNALS)
+                    self._backtests.create(rule_body(rule, day, day, report=False), journal=rows)
+                    asked += 1
+            except NotPossible as e:
+                logger.info(f"Paper days made with older code wait: {e}")
+                break
+            except InvalidRequest as e:
+                named = repr(rule["name"]) if rule else "the signals received"
+                logger.warning(f"The day on paper of {day.isoformat()} of {named} cannot be made again: {e}")
+                continue
+            # Its new run in its place (or no entry signal that day any more): the old one goes.
+            if self._backtests.paper_index().get(owner, {}).get(day.isoformat()) != old:
+                try:
+                    self._backtests.delete(old)
+                except (UnknownRun, NotPossible):
+                    pass
+        return asked
+
     # ── the drift of the live settings ──
 
     async def drift(self) -> tuple[list[dict], str | None, dict | None]:
@@ -314,7 +370,7 @@ class PaperTrading:
         self._backtests.write_paper_file(DRIFT_FILE, {"said_for": newest})
 
     async def catch_up(self, now: float | None = None) -> int:
-        """The paper runs that are due, asked for, then the reports; how many."""
+        """The paper runs that are due, asked for, then the reports, then the days made with older code; how many."""
         now = self._clock() if now is None else now
         if self._market_is_open(now):
             return 0
@@ -349,6 +405,8 @@ class PaperTrading:
             except InvalidRequest as e:
                 logger.warning(f"The paper report of {repr(rule['name']) if rule else 'the signals received'} cannot be made: {e}")
         self._backtests.prune_paper(KEEP_DAYS, self._today(now))
+        # Last, once the rest is asked and the oldest let go: the days made with older backtest code, made again.
+        asked += await self._remake_stale()
         try:
             await self._say_drift()
         except Exception as e:

@@ -98,6 +98,15 @@ export function versionsSentence(versions: readonly number[] | undefined): strin
   return `Its signals were raised by ${named.slice(0, -1).join(', ')} and ${named[named.length - 1]} of the script: the rule changed meanwhile.`
 }
 
+/**
+ * Why a day on paper made with older backtest code is not to be read beside the report: the version that made it,
+ * and, while paper trading still trades its owner (`madeAgain`), that it is made again with today's.
+ */
+export function staleDayHint(madeWith: string | null | undefined, madeAgain: boolean): string {
+  const made = madeWith ? `Made with the backtests of v${madeWith}` : 'Made with older backtests'
+  return `${made}: the report is made with today’s.${madeAgain ? ' It is made again once the market is closed.' : ''}`
+}
+
 /** Whether any report is being made: the page reads again until it is done. */
 export function anyUnderWay(paper: BacktestPaper | undefined): boolean {
   const entries = [...Object.values(paper?.rules ?? {}), ...(paper?.live ? [paper.live] : [])]

@@ -552,6 +552,157 @@ def test_the_drift_reads_the_days_without_the_reports(paper):
     assert SHADOW in backtests.paper()["rules"] and "next_report" in backtests.paper()["rules"][SHADOW]
 
 
+# ── the days made with older backtest code ──
+
+# The digest of v0.33.0's backtests, which made the day of 23 October 2026 that said +0.51 % (-11.30 % in the report).
+OLDER = "4da7412060b546c7"
+
+
+def _made_with(tmp_path, backtests, run_id: str, code: str | None, day: str = "2026-10-19") -> None:
+    """A day on paper done, its summary naming the code it was made with (none, as before made_with was written)."""
+    folder = folder_of(tmp_path, run_id)
+    (folder / "days.json").write_text(json.dumps([{"day": day, "status": "tested", "day_percent": 0.51, "trades": 6}]))
+    made_with = {"code": code, "version": "0.33.0" if code == OLDER else "0.59.0"} if code else None
+    (folder / "summary.json").write_text(json.dumps({"made_with": made_with} if made_with else {}))
+    (folder / "status.json").write_text(json.dumps({"state": DONE}))
+    if run_id in backtests._waiting:
+        backtests._waiting.remove(run_id)
+
+
+def _older_days(tmp_path, backtests, days=("2026-10-15", "2026-10-16", "2026-10-19")) -> dict:
+    """The rule's days on paper made by v0.33.0, its report made with today's code; the runs they had."""
+    index = backtests.paper_index()[SHADOW]
+    for day in days:
+        _made_with(tmp_path, backtests, index[day], OLDER, day)
+    _finish(tmp_path, backtests, _report_of(backtests))
+    backtests._waiting.clear()
+    return {day: index[day] for day in days}
+
+
+def test_a_day_on_paper_made_with_older_backtest_code_is_made_again_once_the_market_is_closed(tmp_path, paper):
+    backtests, queries, trading = paper
+    asyncio.run(trading.catch_up())
+    older = _older_days(tmp_path, backtests, days=("2026-10-15", "2026-10-19"))
+    _made_with(tmp_path, backtests, backtests.paper_index()[SHADOW]["2026-10-16"], backtests.code, "2026-10-16")
+
+    # Said until it is made again: which days, and the version they were made with.
+    shown = {day["day"]: day for day in backtests.paper()["rules"][SHADOW]["days"]}
+    assert [(shown[day]["stale"], shown[day]["made_with"]) for day in ("2026-10-19", "2026-10-16", "2026-10-15")] == [
+        (True, "0.33.0"), (False, "0.59.0"), (True, "0.33.0")]
+    # The signals received had no entry signal those days: nothing to make again.
+    assert all(day["stale"] is None for day in backtests.paper()["live"]["days"])
+    # Not while the market is open.
+    assert asyncio.run(trading.catch_up(AFTERNOON)) == 0
+    assert backtests.paper_index()[SHADOW]["2026-10-19"] == older["2026-10-19"]
+
+    asked = len(queries.asked)
+    assert asyncio.run(trading.catch_up()) == 2
+
+    # Newest first, from the signals the rule raised those days; the day made with today's code left as it is.
+    assert queries.asked[asked:] == [(date(2026, 10, day), date(2026, 10, day), SHADOW) for day in (19, 15)]
+    index = backtests.paper_index()[SHADOW]
+    for day, run_id in older.items():
+        assert index[day] != run_id and not folder_of(tmp_path, run_id).exists()
+        assert _request(tmp_path, index[day])["paper"] == {"rule": SHADOW, "day": day}
+    assert index["2026-10-16"] == shown["2026-10-16"]["run_id"]
+    # Kept apart from the list of runs, and not asked twice.
+    assert backtests.list_runs() == []
+    assert [day["state"] for day in backtests.paper()["rules"][SHADOW]["days"]] == ["queued", "done", "queued"]
+    assert asyncio.run(trading.catch_up()) == 0
+
+
+def test_days_made_with_older_code_are_made_again_a_few_a_tick_and_only_while_no_other_run_waits(tmp_path, paper, monkeypatch):
+    backtests, queries, trading = paper
+    monkeypatch.setattr(paper_module, "REMAKE_PER_TICK", 2)
+    asyncio.run(trading.catch_up())
+    older = _older_days(tmp_path, backtests)
+    # The operator's report asked meanwhile: it waits, and nothing is made again before it.
+    asyncio.run(trading.ask_report(SHADOW))
+
+    assert asyncio.run(trading.catch_up()) == 0
+    assert backtests.paper_index()[SHADOW] == older
+
+    _finish(tmp_path, backtests, _report_of(backtests))
+    assert asyncio.run(trading.catch_up()) == 2
+    index = backtests.paper_index()[SHADOW]
+    assert [day for day, run_id in sorted(index.items()) if run_id != older[day]] == ["2026-10-16", "2026-10-19"]
+    # The oldest the tick after, once those two are done.
+    for day in ("2026-10-16", "2026-10-19"):
+        _made_with(tmp_path, backtests, index[day], backtests.code, day)
+    assert asyncio.run(trading.catch_up()) == 1
+    assert backtests.paper_index()[SHADOW]["2026-10-15"] != older["2026-10-15"]
+
+
+def test_a_full_queue_leaves_the_days_made_with_older_code_for_later(tmp_path, paper):
+    backtests, _, trading = paper
+    asyncio.run(trading.catch_up())
+    older = _older_days(tmp_path, backtests)
+    backtests.max_queued = 1
+
+    assert asyncio.run(trading.catch_up()) == 1
+
+    # The newest made again; the others keep their run until the next tick.
+    index = backtests.paper_index()[SHADOW]
+    assert index["2026-10-19"] != older["2026-10-19"]
+    assert (index["2026-10-16"], index["2026-10-15"]) == (older["2026-10-16"], older["2026-10-15"])
+    assert folder_of(tmp_path, older["2026-10-16"]).exists()
+
+
+def test_a_day_made_with_today_s_code_or_that_says_none_or_did_not_finish_is_left_as_it_is(tmp_path, paper):
+    backtests, _, trading = paper
+    asyncio.run(trading.catch_up())
+    index = dict(backtests.paper_index()[SHADOW])
+    _made_with(tmp_path, backtests, index["2026-10-15"], backtests.code, "2026-10-15")
+    _made_with(tmp_path, backtests, index["2026-10-16"], None, "2026-10-16")
+    (folder_of(tmp_path, index["2026-10-19"]) / "status.json").write_text(json.dumps({"state": FAILED, "error": "Killed"}))
+    _finish(tmp_path, backtests, _report_of(backtests))
+    backtests._waiting.clear()
+
+    assert backtests.stale_paper_days() == [] and trading.remakes_due() == []
+    assert asyncio.run(trading.catch_up()) == 0
+    assert backtests.paper_index()[SHADOW] == index
+    assert [(day["stale"], day["made_with"]) for day in backtests.paper()["rules"][SHADOW]["days"]] == [
+        (None, None), (None, None), (False, "0.59.0")]
+
+
+def test_a_rule_out_of_shadow_keeps_its_days_as_they_were_made(tmp_path, paper, scripts):  # noqa: F811
+    backtests, _, trading = paper
+    asyncio.run(trading.catch_up())
+    older = _older_days(tmp_path, backtests)
+    with open(RuleStore(scripts).path, "w", encoding="utf-8") as out_file:
+        json.dump({"rules": [{**RULE, "mode": "off"}]}, out_file)
+
+    assert trading.remakes_due() == []
+    asyncio.run(trading.catch_up())
+
+    assert backtests.paper_index()[SHADOW] == older
+    # Still said to be made with older code.
+    assert all(day["stale"] for day in backtests.paper()["rules"][SHADOW]["days"])
+
+
+def test_a_day_of_the_signals_received_made_with_older_code_is_made_again_under_the_live_settings(tmp_path, paper, scripts):  # noqa: F811
+    from src.admin.live_drift import live_days
+
+    backtests, queries, trading = paper
+    with open(RuleStore(scripts).path, "w", encoding="utf-8") as out_file:
+        json.dump({"rules": []}, out_file)
+    queries.journal = [_received(19)]
+    asyncio.run(trading.catch_up())
+    old = backtests.paper_index()[LIVE_PAPER]["2026-10-19"]
+    _made_with(tmp_path, backtests, old, OLDER)
+    backtests._waiting.clear()
+
+    row = next(day for day in live_days(backtests.paper()["live"]["days"], {}, None) if day["day"] == "2026-10-19")
+    assert (row["paper_stale"], row["paper_made_with"]) == (True, "0.33.0")
+
+    assert asyncio.run(trading.catch_up()) == 1
+
+    new = backtests.paper_index()[LIVE_PAPER]["2026-10-19"]
+    assert new != old and not folder_of(tmp_path, old).exists()
+    request = _request(tmp_path, new)
+    assert request["paper"] == {"rule": LIVE_PAPER, "day": "2026-10-19"} and request["source"]["kind"] == "journal"
+
+
 # ── what the service takes as a paper run ──
 
 

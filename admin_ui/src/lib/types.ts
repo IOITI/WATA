@@ -1655,6 +1655,13 @@ export interface BacktestPaperDay {
   trades: number | null
   /** Outside the 5 % to 95 % of its reference run's days; none without a result or a reference. */
   outside: boolean | null
+  /**
+   * Its run made with other backtest code than the server's (stale, as a run's page says): paper trading makes it
+   * again once the market is closed. None while it is not done or when its run names no code; absent before v0.59.0.
+   */
+  stale?: boolean | null
+  /** The version of WATA its run was made with; absent before v0.59.0. */
+  made_with?: string | null
 }
 
 /** What a paper run is: one day, or the report of the days since it began. */
@@ -1718,6 +1725,10 @@ export interface LivePaperDay {
   paper_state: BacktestState | 'no_entry' | null
   paper_run_id: string | null
   paper_trades: number | null
+  /** Its paper run made with older backtest code, made again once the market is closed; absent before v0.59.0. */
+  paper_stale?: boolean | null
+  /** The version of WATA its paper run was made with; absent before v0.59.0. */
+  paper_made_with?: string | null
 }
 
 export interface LivePaper {

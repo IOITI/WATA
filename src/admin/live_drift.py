@@ -37,6 +37,9 @@ def live_days(paper_days: list[dict], real_days: dict[str, float], reference: di
             "paper_state": paper.get("state") if paper else None,
             "paper_run_id": paper.get("run_id") if paper else None,
             "paper_trades": paper.get("trades") if paper else None,
+            # Made with older backtest code, and the version it was made with: made again once the market is closed.
+            "paper_stale": paper.get("stale") if paper else None,
+            "paper_made_with": paper.get("made_with") if paper else None,
         })
     return listed
 

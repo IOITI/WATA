@@ -1539,11 +1539,13 @@ class BacktestService:
             for day, run_id in sorted(days.items(), reverse=True):
                 if run_id == NO_ENTRY:
                     listed.append({"day": day, "run_id": None, "state": "no_entry", "day_percent": 0.0, "trades": 0,
-                                   "outside": None})
+                                   "outside": None, "stale": None, "made_with": None})
                     continue
                 try:
                     status = self._status(run_id)
-                    record = next(iter(read_json(self._file(run_id, "days.json")) or []), None) if status.get("state") == DONE else None
+                    done = status.get("state") == DONE
+                    record = next(iter(read_json(self._file(run_id, "days.json")) or []), None) if done else None
+                    made_with = self._made_with(run_id) if done else {}
                 except UnknownRun:
                     continue
                 result = record.get("day_percent") if record and record.get("status") == "tested" else None
@@ -1553,6 +1555,8 @@ class BacktestService:
                 listed.append({
                     "day": day, "run_id": run_id, "state": status.get("state"), "day_percent": result,
                     "trades": record.get("trades") if record else None, "outside": outside,
+                    # Made with other backtest code than the server's: paper trading makes it again (stale_paper_days).
+                    "stale": self._stale(made_with), "made_with": made_with.get("version"),
                 })
             rules[rule_id] = {"days": listed, "reference": reference,
                               **(self._reports_of(rule_id) if with_reports else {})}
@@ -1561,6 +1565,34 @@ class BacktestService:
             live = {"days": [], "reference": self._reference_range(references[LIVE_PAPER]),
                     **({"report": None, "next_report": None} if with_reports else {})}
         return {"rules": rules, "live": live}
+
+    def _made_with(self, run_id: str) -> dict:
+        """What a finished run was made with: the digest of its code and WATA's version; empty when its summary says none."""
+        return (read_json(self._file(run_id, "summary.json")) or {}).get("made_with") or {}
+
+    def _stale(self, made_with: dict) -> bool | None:
+        """Whether a run was made with other code than the server's; None when it names none."""
+        code = made_with.get("code")
+        return None if code is None else code != self._code
+
+    def stale_paper_days(self) -> list[tuple[str, str, str]]:
+        """
+        The days on paper whose run is done and was made with other backtest code than the server's, newest first:
+        each owner, day and run. Paper trading makes them again, so that its days, its reports and the go-live check
+        rest on the same code (a day of 23 Oct 2026 made by v0.33.0 said +0.51 %, the report -11.30 %).
+        """
+        found = []
+        for owner, days in self.paper_index().items():
+            for day, run_id in days.items():
+                if run_id == NO_ENTRY:
+                    continue
+                try:
+                    if self._status(run_id).get("state") != DONE or not self._stale(self._made_with(run_id)):
+                        continue
+                except UnknownRun:
+                    continue
+                found.append((owner, day, run_id))
+        return sorted(found, key=lambda stale: (stale[1], stale[0]), reverse=True)
 
     def prune_paper(self, keep_days: int, today: date) -> int:
         """

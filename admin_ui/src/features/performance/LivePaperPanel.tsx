@@ -3,6 +3,7 @@ import { Alert, AlertDescription, AlertTitle, Badge, formatDay, Panel, QueryStat
 import { Link } from 'react-router'
 
 import { paperReportHref, reportLine } from '@/features/backtests/paperModel'
+import { OlderCodeBadge } from '@/features/backtests/parts'
 import { api } from '@/lib/api'
 import type { LivePaperDay } from '@/lib/types'
 
@@ -70,13 +71,17 @@ export function LivePaperPanel({ enabled }: { enabled: boolean }) {
                     {live.days.map((day: LivePaperDay) => (
                       <tr key={day.day}>
                         <td className="py-2.5 pr-4 font-medium">
-                          {day.paper_run_id ? (
-                            <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.paper_run_id}`}>
-                              {formatDay(day.day)}
-                            </Link>
-                          ) : (
-                            formatDay(day.day)
-                          )}
+                          <span className="inline-flex items-center gap-2">
+                            {day.paper_run_id ? (
+                              <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.paper_run_id}`}>
+                                {formatDay(day.day)}
+                              </Link>
+                            ) : (
+                              formatDay(day.day)
+                            )}
+                            {/* The signals received are traded on paper whatever the rules: made again. */}
+                            {day.paper_stale && <OlderCodeBadge madeWith={day.paper_made_with} madeAgain />}
+                          </span>
                         </td>
                         <td className="py-2.5 pr-4 text-right">
                           <Result value={day.real_percent} outside={day.real_outside} />
