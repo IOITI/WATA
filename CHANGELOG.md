@@ -2,7 +2,7 @@
 
 ## v0.61.2 - The AI agent never asks one request twice
 
-**Release date:** not yet released
+**Release date:** 2026-10-29
 
 At its start, the AI agent queues again what a stop left under way, reading its conversations in a background thread. It said it was ready before that was done, and a conversation was counted in its queue only after it was written as queued. A conversation created, or a question asked, while that recovery read the conversations could therefore be queued twice. Its request was then asked of Claude twice, and paid for twice. The daily debrief, which starts as soon as the agent is ready, was the most exposed. This was seen on CI on 2026-10-29: the debrief's test got its request asked twice, and its follow-up question got the second answer.
 
