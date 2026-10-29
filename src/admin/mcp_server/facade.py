@@ -23,7 +23,7 @@ import pytz
 from src.admin.downloads import trading_hours
 from src.admin.mcp_server.jobs import Jobs
 from src.admin.mcp_server.limits import McpLimits
-from src.admin.ta_rules import RuleStore
+from src.admin.rule_history import RecordedRuleStore
 from src.backtest.clock import TradingClock
 from src.research.experiments import ExperimentJournal
 
@@ -144,7 +144,7 @@ class ResearchServices:
             # Switched off in the configuration, backtests are off for Claude too.
             backtests=ctx.backtests if ctx.settings.backtests_enabled else None,
             scripts=ctx.ta_scripts,
-            rules=RuleStore(ctx.ta_scripts) if ctx.ta_scripts is not None else None,
+            rules=RecordedRuleStore(ctx.ta_scripts) if ctx.ta_scripts is not None else None,
             queries=ReadQueries(ctx.queries) if ctx.queries is not None else None,
             history=ctx.history,
             research_export=ctx.research,

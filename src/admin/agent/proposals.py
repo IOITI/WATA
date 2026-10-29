@@ -32,6 +32,7 @@ from src.admin import config_catalog
 from src.admin.agent.store import PROPOSAL_ID, stamp
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
 from src.admin.mcp_server.facade import CLAUDE
+from src.admin.rule_history import RecordedRuleStore
 from src.admin.ta_rules import LIVE, RuleNotFound, RuleStore
 from src.admin.ta_scripts import (LIBRARY, MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, InvalidScript, ScriptConflict,
                                     ScriptNotFound)
@@ -115,7 +116,7 @@ class Proposals:
     def __init__(self, store, scripts, clock=time.time, *, backtests=None):
         self._store = store
         self._scripts = scripts
-        self._rules = RuleStore(scripts)
+        self._rules = RecordedRuleStore(scripts)
         self._clock = clock
         # The backtests' service: the live settings and the runs a change of settings rests on (None: off).
         self._backtests = backtests

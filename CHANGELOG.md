@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.62.0 - A backtest's day drawn with the script that made its signals
+
+**Release date:** not yet released
+
+A day of a backtest showed the asset with the run's signals and trades, but not the script that made the signals: why one fired could only be guessed. A day whose signals a script of WATA made, a Pine run or a rule's on paper, is now drawn on Vela, the Charts page's chart. The script is drawn as it ran, its plots, fills, shapes, backgrounds and labels as on the Charts page, with the run's signals and trades over it. A replay of TradingView's alerts keeps the chart it had.
+
+- **On the bars the script ran on** (`GET /api/backtests/{id}/days/{day}/indicator`, `src/admin/backtest_indicator.py`). The replay runs a script per engine day, from one restart to the next, on bars built from its days of history before the restart. Range bars change with where they start: the day's chart of before built them from midnight, so they were not quite the bars the script read. The bars are now built by the replay's own code (`AssetRows`, its builder, `built_bars` and its 40,000-bar limit), read where the runs read them, and the chart ends at the engine's next restart.
+- **The script as it ran.** A Pine run keeps its script and libraries as it ran them (`sources/`, checked against their sha256) and its inputs: drawn exactly. A run of the signals a rule raised keeps the script version of each signal: the version that raised most of the day's signals is drawn, with the rule's definition at the start of that engine day.
+- **What each rule runs is now kept** (`rules.history.jsonl` beside `rules.json`, `src/admin/rule_history.py`): a line each time a rule is made, deleted, or changes what it runs, with what it ran before and since when. Until now only the rule as it is was kept, and a paper day of a rule changed since could not be drawn as it ran. From now on it is. A day of before, of a rule changed since, is drawn with the version that raised its signals and the rule's inputs of now, matched by their variable names, and a note above the chart says so (the report of 21 to 28 Oct of the Kernel + multi VWAP rule, on version 10 since 29 Oct, is such a case). The three writers of the rules keep it: the Signal rules page, the AI agent's applied proposals and Claude's shadow rules. It is kept out of `src/admin/ta_rules.py`, which the TA engine imports.
+- **The run's own layer**: the signals as the day's chart drew them (arrows above or below their bar, ✕ when nothing was bought), and the trades as Vela's trade markers, bought (`#`) and sold with what each made, at the asset's price of their fills. The script and the run's layer are each a row of Vela's legend that hides it. A trade chosen in the table below is brought into view, as before. The bars before the day, the script's warm-up, are shaded.
+- **The inputs reach the script**: by their variable names, which Vela keeps them under, else by their id on the version they were set for. Vela drops a value given under a title.
+- **The Charts page ends its Pine worker when it is left.** Vela's `destroy()` leaves an engine's worker running: one more ran after each visit.
+
+**On the live path:** nothing. The admin alone; `src/admin/ta_rules.py`, which the TA engine imports, is unchanged.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- New Python tests: the rules' history (10), and a day's indicator (14): the engine day and its anchor, bars equal to the replay's for the same rows, the version chosen, exact or not with its notes, the refusals, the route. The whole suite passes: 3,487 tests (38 skipped: the live database and queue, and the tests that need what this machine lacks).
+- The interface: the bars, inputs and marks of the day as Vela takes them, the run's layer as an engine, the day page on a Pine run, a paper run, a TradingView replay and a refusal, and the Charts page ending its worker. 1,216 tests pass, with lint, typecheck and build.
+- Seen in a browser on the fake admin: a Pine backtest of the EMA cross and a rule's paper report. The day was drawn with the script's two EMAs and the run's marks, the signals on the EMAs' crossings. A trade opened from its link was framed, and the dark theme and a phone's width were checked. The built interface was served with the admin's own security policy. Not seen on the server's data yet.
+
 ## v0.61.2 - The AI agent never asks one request twice
 
 **Release date:** 2026-10-29

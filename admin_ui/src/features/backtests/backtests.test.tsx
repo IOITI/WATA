@@ -8,6 +8,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
   BacktestBreakdowns,
+  BacktestDayIndicator,
   BacktestEdge,
   BacktestOptions,
   BacktestReconciliation,
@@ -23,6 +24,7 @@ import type {
 } from '@/lib/types'
 import { day, OPTIONS, run, RUN_ID, SETTINGS, signal, trade } from '@/test/backtests'
 import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
+import { engines, resetVela, velas } from '@/test/fakeVela'
 import { stubSystemTheme } from '@/test/systemTheme'
 import { WithTrail } from '@/test/WithTrail'
 
@@ -35,6 +37,8 @@ import { PendingRemovalsProvider } from './PendingRemovalsProvider'
 import { RunPage } from './RunPage'
 
 vi.mock('lightweight-charts', async () => (await import('@/test/fakeCharts')).fakeLightweightCharts)
+vi.mock('@luxalgo/vela', async () => (await import('@/test/fakeVela')).fakeVelaCore)
+vi.mock('@luxalgo/vela-pinets', async () => (await import('@/test/fakeVela')).fakeVelaPinets)
 // The script's inputs, as PineTS reads them in the page's worker.
 vi.mock('@/features/ta/engine/pineWorkerClient', () => ({
   PineWorkerClient: class {
@@ -152,6 +156,35 @@ function bars(first: number, interval: number): PriceBarRow[] {
   return rows
 }
 
+/** The day's minute bars as the script ran on them: [open ms, open, high, low, close, volume, close ms]. */
+function windowBars(): BacktestDayIndicator['bars'] {
+  return bars(24850, 60).map(([t, open, high, low, close]) => [t * 1000, open, high, low, close, 3, (t + 60) * 1000])
+}
+
+function indicatorOf(found: BacktestRun): BacktestDayIndicator {
+  return {
+    kind: 'pine',
+    script: { id: '8c2df05570d5', version: 1, name: 'EMA cross', source: SOURCE },
+    libraries: [],
+    inputs: found.request.source.kind === 'pine' ? found.request.source.rule.inputs : [],
+    inputs_version: 1,
+    chart: found.request.chart,
+    ticker: 'CAPITAL_US100',
+    timeframe: '1',
+    decimals: 2,
+    window: { begin: '2026-10-13T21:15:00Z', end: '2026-10-14T21:15:00Z', anchor: '2026-10-12T21:15:00Z' },
+    history_days: 1,
+    restart_time: '21:15',
+    bars: windowBars(),
+    exact: true,
+    notes: [],
+  }
+}
+
+/** What the day's indicator route answers instead, for a run: a refusal of the server; or changed. */
+let refusedIndicator: Record<string, string> = {}
+let indicatorChanges: Partial<BacktestDayIndicator> = {}
+
 let runs: Record<string, BacktestRun> = {}
 let research = {
   enabled: false, keep_days: 30, state: 'off', exporting: null, days: 0, first: null, last: null, bytes: 0, error: null,
@@ -265,6 +298,11 @@ function serve() {
             return json(run({ id: STRESS_ID, kind: 'sweep', name: `Stress: ${found.name}`, stress_of: found.id, status: { state: 'queued' } }), 202)
           case 'model-check':
             return json(run({ id: CHECK_ID, name: `Model check: ${found.name}`, model_check_of: found.id, turbos: 'modelled', status: { state: 'queued' } }), 202)
+          case 'days/2026-10-14/indicator':
+            if (refusedIndicator[found.id]) return json({ detail: refusedIndicator[found.id] }, 409)
+            return found.request.source.kind === 'journal'
+              ? json({ detail: "TradingView's alerts made this run's signals: no script of WATA to draw" }, 409)
+              : json({ ...indicatorOf(found), ...indicatorChanges })
           default:
             return json({ detail: `Not served: ${route}` }, 404)
         }
@@ -329,6 +367,7 @@ function renderAt(address: string) {
       </ThemeProvider>
     </QueryClientProvider>,
   )
+  return router
 }
 
 const address = () => screen.getByRole('status', { name: 'address' }).textContent
@@ -341,6 +380,9 @@ const removals = () => sent.filter((request) => request.method === 'POST' && req
 beforeEach(() => {
   undoMs = 50
   resetCharts()
+  resetVela()
+  refusedIndicator = {}
+  indicatorChanges = {}
   sweeps = {}
   edges = {}
   reconciliations = {}
@@ -1018,45 +1060,73 @@ describe('a sweep', () => {
 })
 
 describe('a day of a run', () => {
-  it('draws the asset of the day with its signals and trades, under the run in the trail', async () => {
+  const ms = (iso: string) => Date.parse(iso)
+  const layer = (source: string) =>
+    JSON.parse(source) as { labels: { text: string }[]; trades: { label: string; price: number; side: string }[] }
+
+  it('draws a Pine run\'s day on Vela with its script as it ran and the run\'s signals and trades, under the run in the trail', async () => {
     renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
 
     expect(await screen.findByRole('heading', { name: '14 Oct 2026' })).toBeInTheDocument()
     const trail = within(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0])
     expect(await trail.findByRole('link', { name: 'Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
 
-    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
-    const candles = seriesOf(charts[0], 'Candlestick')!
-    await waitFor(() => expect(candles.markers.length).toBeGreaterThan(0))
-    expect(candles.markers.map((marker) => marker.text)).toEqual(['Short', '#1 short', '+1.72 %', 'Long ✕'])
-    // Minute bars of the asset, as the strategy read them.
-    expect(sent.some((request) => request.path.startsWith('/api/data/assets/capital/US100/bars?from=2026-10-14&to=2026-10-14&interval=60'))).toBe(true)
+    await waitFor(() => expect(velas).toHaveLength(1))
+    const chart = velas[0]
+    // Not live, nothing saved: the bars the script ran on, opened on those of the day.
+    expect(chart.options).toMatchObject({
+      symbol: 'capital:CAPITAL_US100', timeframe: '1', live: false, drawings: false, volume: false,
+      visibleRange: { from: ms('2026-10-14T06:40:00Z'), to: ms('2026-10-14T07:19:00Z') },
+    })
+    expect(chart.deps.engines?.map((engine) => engine.language)).toEqual(['pine', 'wata-run'])
+    expect(chart.settings).toContainEqual(['timezone', 'Europe/Paris'])
+    // A bar cache of its own, the provider of each asset's feed registered on it.
+    expect([...chart.deps.dataFeed!.providers.keys()].sort()).toEqual(['capital', 'dukascopy', 'saxo'])
+
+    await waitFor(() => expect(chart.indicators).toHaveLength(2))
+    const [script, run] = chart.indicators
+    // The script, its libraries inlined, with the run's inputs by their names.
+    expect(script.source).toContain('fastLength = input.int(9, "Fast length", minval = 1)')
+    expect(script.options).toEqual({ id: 'script', inputs: { fastLength: 12 } })
+    expect(chart.deps.dataFeed!.informed).toEqual(['capital:CAPITAL_US100'])
+    // The run's own layer: its signals at their bars, its trades at the asset's price of their fills.
+    expect(run.options).toEqual({ id: 'run', language: 'wata-run', title: 'The run: signals and trades' })
+    expect(layer(run.source).labels.map((label) => label.text)).toEqual(['Short', 'Long ✕'])
+    expect(layer(run.source).trades.map((entry) => [entry.label, entry.side, entry.price])).toEqual([
+      ['#1 short', 'sell', 24855.2],
+      ['+1.72 %', 'buy', 24832.5],
+    ])
+    expect(screen.getByText(/EMA cross, version 1, with Fast length 12/)).toBeInTheDocument()
+    expect(sent.some((request) => request.path === `/api/backtests/${RUN_ID}/days/2026-10-14/indicator`)).toBe(true)
+    // No chart of Lightweight Charts, nor its bars.
+    expect(charts).toHaveLength(0)
+    expect(sent.some((request) => request.path.startsWith('/api/data/assets/capital/US100/bars'))).toBe(false)
+
     // The first day has none before it; the next one is a link.
     expect(screen.getByRole('button', { name: 'Day before' })).toBeDisabled()
     // The 16th had no turbo recorded: the day after the 14th that was traded is the 15th.
     await waitFor(() => expect(screen.getByRole('link', { name: 'Day after' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-15`))
   })
 
-  it('draws the day again in another theme, its chart drawn with the colours it read when it was made', async () => {
+  it('draws the day again in another theme without running its script again', async () => {
     const system = stubSystemTheme(true)
     renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
-    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
-    const first = charts[0]
-    await waitFor(() => expect(seriesOf(first, 'Candlestick')!.markers).toHaveLength(4))
+    await waitFor(() => expect(velas[0]?.indicators).toHaveLength(2))
 
     act(() => system.set(false))
 
-    expect(first.removed).toBe(true)
-    await waitFor(() => {
-      const drawn = charts.filter((chart) => !chart.removed)
-      expect(drawn).toHaveLength(1)
-      expect(seriesOf(drawn[0], 'Candlestick')!.markers.map((marker) => marker.text)).toEqual(['Short', '#1 short', '+1.72 %', 'Long ✕'])
-    })
+    await waitFor(() => expect(velas[0].themes).toContain('light'))
+    expect(velas).toHaveLength(1)
+    expect(velas[0].destroyed).toBe(false)
+    // The run's marks in the new theme's tones; the script as it was.
+    await waitFor(() => expect(velas[0].indicators[1].codes).toHaveLength(1))
+    expect(velas[0].indicators[0].codes).toEqual([])
   })
 
-  it('opens a trade on the chart of its turbo, with the turbos the trader looked at', async () => {
+  it('opens a trade on the chart of its turbo, brings it into view, and ends the chart\'s worker on leaving', async () => {
     const user = userEvent.setup()
-    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+    const router = renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+    await waitFor(() => expect(velas[0]?.indicators).toHaveLength(2))
 
     // A link to the day with the trade opened (another tab opens it so); here, a click opens it in place.
     const trade = await screen.findByRole('link', { name: '#1' })
@@ -1066,18 +1136,69 @@ describe('a day of a run', () => {
     expect(await screen.findByText('Trade #1: short on SG-NDX-S5')).toBeInTheDocument()
     expect(screen.getByText('the position monitor')).toBeInTheDocument()
     expect(screen.getByText('BNP-NDX-S6 BNP')).toBeInTheDocument()
+    // The day's chart shows the trade, a quarter of an hour either side.
+    await waitFor(() => {
+      const shown = velas[0].ranges.at(-1) as { from: number; to: number }
+      expect(shown.from).toBeLessThanOrEqual(ms('2026-10-14T06:51:00Z'))
+      expect(shown.to).toBeGreaterThanOrEqual(ms('2026-10-14T07:07:00Z'))
+    })
 
     // The turbo's ten-second bid, its levels drawn over it, the strategy's asset under it.
-    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(2))
-    const turbo = charts.filter((chart) => !chart.removed)[1]
+    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
+    const turbo = charts.filter((chart) => !chart.removed)[0]
     await waitFor(() => expect(seriesOf(turbo, 'Candlestick')?.markers.map((marker) => marker.text)).toEqual(['Bought 10.48', 'Sold 10.66 (+1.72 %)']))
     expect(turbo.series.filter((series) => series.type === 'Line' && !series.removed).length).toBeGreaterThanOrEqual(4)
     expect(sent.some((request) => request.path.startsWith('/api/data/assets/saxo/5/bars?from=2026-10-14&to=2026-10-14&interval=10'))).toBe(true)
 
-    // The same trade again closes it.
+    // The same trade again closes it, and the day is shown whole again.
     await user.click(screen.getByRole('link', { name: '#1' }))
     expect(address()).toBe(`/backtests/${RUN_ID}/days/2026-10-14`)
     expect(screen.queryByText('Trade #1: short on SG-NDX-S5')).not.toBeInTheDocument()
+    await waitFor(() => expect(velas[0].ranges.at(-1)).toEqual({ from: ms('2026-10-14T06:40:00Z'), to: ms('2026-10-14T07:19:00Z') }))
+
+    await act(() => router.navigate('/backtests'))
+    expect(velas[0].destroyed).toBe(true)
+    expect(engines[0].terminated).toBe(true)
+  })
+
+  it('keeps the chart of the asset for TradingView\'s signals, which no script of WATA made', async () => {
+    runs[RUN_ID] = run({ request: { ...run().request, source: { kind: 'journal', signals: 12, entries: 9 } } })
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+
+    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
+    const candles = seriesOf(charts[0], 'Candlestick')!
+    await waitFor(() => expect(candles.markers.length).toBeGreaterThan(0))
+    expect(candles.markers.map((marker) => marker.text)).toEqual(['Short', '#1 short', '+1.72 %', 'Long ✕'])
+    // Minute bars of the asset, as the strategy read them.
+    expect(sent.some((request) => request.path.startsWith('/api/data/assets/capital/US100/bars?from=2026-10-14&to=2026-10-14&interval=60'))).toBe(true)
+    expect(sent.some((request) => request.path.endsWith('/indicator'))).toBe(false)
+    expect(velas).toHaveLength(0)
+  })
+
+  it('draws the asset alone, saying why, when the script cannot be drawn', async () => {
+    refusedIndicator[RUN_ID] = 'Version 1 of the rule\'s script is gone: nothing to draw'
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+
+    await waitFor(() => expect(charts.filter((chart) => !chart.removed)).toHaveLength(1))
+    expect(await screen.findByText('The script is not drawn: Version 1 of the rule\'s script is gone: nothing to draw')).toBeInTheDocument()
+    await waitFor(() => expect(seriesOf(charts[0], 'Candlestick')!.markers).toHaveLength(4))
+    expect(velas).toHaveLength(0)
+  })
+
+  it('says what was drawn from where when a paper day\'s rule changed since', async () => {
+    runs[RUN_ID] = run({ request: { ...run().request, source: { kind: 'ta_signals', signals: 2, rule: { id: '0123456789ab', name: 'EMA rule' } } } })
+    indicatorChanges = {
+      kind: 'ta_signals', exact: false, inputs_version: 2,
+      inputs: [{ id: 'in_0', var: null, title: 'Fast length', value: 14 }],
+      notes: ['The rule changed on 29 Oct, after this day, before WATA kept what each rule ran: drawn with version 1.'],
+    }
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+
+    expect(await screen.findByText(/The rule changed on 29 Oct, after this day/)).toBeInTheDocument()
+    // An input without a name, set for another version: left out, and said.
+    expect(screen.getByText('Not in this version of the script: Fast length; drawn with its own values.')).toBeInTheDocument()
+    await waitFor(() => expect(velas[0]?.indicators).toHaveLength(2))
+    expect(velas[0].indicators[0].options).toEqual({ id: 'script', inputs: {} })
   })
 })
 

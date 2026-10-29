@@ -183,7 +183,8 @@ the pages that draw candles only.
   `chartData.ts`, which is plain functions with tests.
 - **Five places show it**: an asset's page and an opened row of the Assets View (`features/data/AssetChart.tsx`,
   full and compact), a rule's day beside TradingView (`features/ta/signals/ComparisonPanel.tsx`), a day of a
-  backtest with a trade's turbo (`features/backtests/DayPage.tsx`), and the day of the editor's test
+  backtest with a trade's turbo (`features/backtests/DayPage.tsx`; the day itself on Vela when a script of WATA
+  made its signals), and the day of the editor's test
   (`features/ta/editor/TestResult.tsx`). The last two give it `overlays`: lines over the prices, on their scale.
   On a backtest's day, the price paid, the stop and the day's target, the trailing stop as it moved, told by
   more than their colour: the price paid is thick, a limit thin and dashed, the trailing stop climbs in steps.
@@ -241,7 +242,16 @@ which is the source the AGPL asks to offer.
   page, which reads it from the admin's API. A worker started any other way would get the pages' policy and
   fail to compile.
 - **Vela is confined to `chart/`**: `wataProvider.ts` serves WATA's three providers as Vela's data
-  providers, and `TaChart.tsx` builds the workspace. Tests replace it with `src/test/fakeVela.ts`.
+  providers, `TaChart.tsx` builds the workspace, and `RunDayChart.tsx` a day of a backtest. Tests replace it
+  with `src/test/fakeVela.ts`. Vela's `destroy()` leaves a Pine engine's worker running: both end theirs.
+- **A day of a backtest is drawn on Vela** when a script of WATA made its signals (a Pine run, a rule's on
+  paper; `DayPage.tsx` loads it lazily): Vela's plain chart, not live, on the bars the server says the script
+  ran on (`/api/backtests/<id>/days/<day>/indicator`: from the engine's restart and its days of history),
+  the script drawn as on Charts with the run's inputs, and the run's signals and trades over it as a second
+  indicator (`runMarksEngine.ts`), each hidden from Vela's legend. Its pure parts, with tests, are
+  `runDayModel.ts`: the bars, where a moment falls among them, the inputs (by variable name, else by `in_N` on
+  the version they were set for: Vela loses a value given under a title), the run's marks as Vela's labels and
+  trade markers, the chart's data provider. A replay of TradingView's alerts keeps `PriceChart`.
 - **The chart is live** (`live: true`): without it Vela never calls a provider's `subscribe`, and the chart
   stands still. Its scripts are not run in PineTS's live mode: `pineEngine.ts` gives Vela an engine that cannot
   stream, so each change of the bars runs a script in full again, a second apart at most while quotes come. A

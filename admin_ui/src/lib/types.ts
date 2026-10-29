@@ -2409,6 +2409,32 @@ export interface BacktestSignal {
   live_reason?: string | null
 }
 
+/**
+ * A day of a run with the script that made its signals, as it ran (src/admin/backtest_indicator.py): its source,
+ * libraries and inputs, and the bars it ran on, from the engine's restart and its days of history before it.
+ */
+export interface BacktestDayIndicator {
+  kind: 'pine' | 'ta_signals'
+  script: { id: string; version: number; name: string | null; source: string }
+  libraries: { name: string; id: string; version: number; source: string }[]
+  inputs: TaRuleInput[]
+  /** The version of the script the inputs were set for: their in_N ids name its inputs. */
+  inputs_version: number | null
+  chart: BacktestChart
+  /** The ticker and timeframe the replay hands the runner ("1" for range bars). */
+  ticker: string
+  timeframe: string
+  decimals: number | null
+  window: { begin: string; end: string; anchor: string }
+  history_days: number
+  restart_time: string
+  /** [open ms, open, high, low, close, volume, close ms] */
+  bars: [number, number, number, number, number, number, number][]
+  /** Drawn as it ran; otherwise the notes say what may differ. */
+  exact: boolean
+  notes: string[]
+}
+
 export interface BacktestTurbo {
   instrument_id: number
   uic: number | null

@@ -249,6 +249,16 @@ async def trades(run_id: str, day: date | None = Query(None), service=Depends(ba
     return {"items": await run_in_threadpool(service.trades, run_id, day)}
 
 
+@router.get("/{run_id}/days/{day}/indicator")
+async def day_indicator(run_id: str, day: date, request: Request, service=Depends(backtests)):
+    """
+    A day of a run with the script that made its signals: its source, libraries and inputs as it ran,
+    and the bars it ran on, from the engine's restart and its days of history before it.
+    """
+    # The admin's read-only database, which the asset's rows are read through (none: Dukascopy's files alone).
+    return await service.day_indicator(run_id, day, db=getattr(request.app.state.ctx.queries, "db", None))
+
+
 @router.get("/{run_id}/breakdowns")
 async def breakdowns(run_id: str, service=Depends(backtests)):
     """The trades of a run by hour, weekday, direction, exit, confidence, holding time, turbo price and issuer."""

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,7 +7,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import type { Session, TaScript } from '@/lib/types'
-import { enginesMade, resetVela, workspaces } from '@/test/fakeVela'
+import { engines, enginesMade, resetVela, workspaces } from '@/test/fakeVela'
 
 import { ChartsPage } from './ChartsPage'
 
@@ -121,6 +121,11 @@ describe('the Charts page', () => {
     expect(enginesMade[0].workerUrl).toMatch(/^\/assets\/vela-pine-worker-[0-9a-f]{12}\.js$/)
     // Never PineTS's live mode (chart/pineEngine.ts).
     expect(engine).toMatchObject({ language: 'pine', capabilities: { streaming: false } })
+
+    // Leaving the page ends the chart and its Pine worker, which Vela's destroy() leaves running.
+    cleanup()
+    expect(workspaces[0].destroyed).toBe(true)
+    expect(engines.map((made) => made.terminated)).toEqual([true])
   })
 
   it('lists WATA\'s scripts in Vela\'s picker, and says which could not be prepared', async () => {

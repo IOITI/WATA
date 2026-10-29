@@ -34,6 +34,7 @@ from src.admin.ta_monitor import (
     period_of,
     rules_by_id,
 )
+from src.admin.rule_history import RecordedRuleStore
 from src.admin.ta_history import DAY, HistoryCount, last_restart
 from src.admin.ta_rules import (
     LIVE,
@@ -96,8 +97,8 @@ class Workspace(BaseModel):
 
 
 def rules(store=Depends(scripts)) -> RuleStore:
-    """The signal rules, kept beside the scripts they run."""
-    return RuleStore(store)
+    """The signal rules, kept beside the scripts they run, each change of what one runs kept in their history."""
+    return RecordedRuleStore(store)
 
 
 class AssetRef(BaseModel):

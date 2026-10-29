@@ -13,8 +13,8 @@
 // the whole screen where the browser allows it. Vela keeps its menus inside its own
 // element, and the admin's dialogs and notices are above it.
 //
-// The only file that builds Vela, as PriceChart.tsx is the only one that builds
-// Lightweight Charts.
+// With RunDayChart.tsx (a day of a backtest), the only files that build Vela, as
+// PriceChart.tsx is the only one that builds Lightweight Charts.
 
 import { PineWorkerEngine } from '@luxalgo/vela-pinets'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
@@ -181,6 +181,8 @@ export function TaChart(props: TaChartProps) {
     const providers = Object.fromEntries(
       PROVIDERS.map((provider: ProviderId) => [provider, () => wataProvider(provider, deps)]),
     )
+    // The Pine workers made for the chart: Vela's destroy() leaves them running.
+    const workers: PineWorkerEngine[] = []
     const built = new VelaWorkspace(host.current, {
       layout: false,
       symbol: symbol ?? fallbackSymbol,
@@ -191,8 +193,11 @@ export function TaChart(props: TaChartProps) {
       timeframes: TIMEFRAMES.map((length) => length.pine),
       providers,
       engines: {
-        pine: () =>
-          fullRunEngine(new PineWorkerEngine({ workerUrl: velaWorkerUrl }), undefined, (ticker) => bars.growingBar(ticker)),
+        pine: () => {
+          const worker = new PineWorkerEngine({ workerUrl: velaWorkerUrl })
+          workers.push(worker)
+          return fullRunEngine(worker, undefined, (ticker) => bars.growingBar(ticker))
+        },
       },
       indicators: async () => (await entries).entries.map((script) => script.entry),
       persist: LAYOUT_KEY,
@@ -209,6 +214,7 @@ export function TaChart(props: TaChartProps) {
     return () => {
       unsubscribe()
       built.destroy()
+      for (const worker of workers) worker.terminate()
       workspace.current = null
     }
     // Built once with the page; the effects below follow what changes.

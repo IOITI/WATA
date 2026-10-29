@@ -16,6 +16,7 @@ import type {
   BacktestBreakdowns,
   BacktestCoverage,
   BacktestDay,
+  BacktestDayIndicator,
   BacktestEdge,
   BacktestExecution,
   BacktestFate,
@@ -378,6 +379,11 @@ export const api = {
     request<{ items: BacktestSignal[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/signals${query(params)}`),
   backtestTrades: (runId: string, params: { day?: string } = {}) =>
     request<{ items: BacktestTrade[] }>('GET', `/api/backtests/${encodeURIComponent(runId)}/trades${query(params)}`),
+  backtestDayIndicator: (runId: string, day: string) =>
+    request<BacktestDayIndicator>(
+      'GET',
+      `/api/backtests/${encodeURIComponent(runId)}/days/${encodeURIComponent(day)}/indicator`,
+    ),
   backtestBreakdowns: (runId: string) =>
     request<BacktestBreakdowns>('GET', `/api/backtests/${encodeURIComponent(runId)}/breakdowns`),
   backtestBaseline: (runId: string) =>

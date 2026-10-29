@@ -130,6 +130,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/20261012-213045-a1b2c3/days"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/signals"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/trades"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/days/2026-10-12/indicator"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/breakdowns"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/baseline"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/sweep"),
@@ -3664,6 +3665,7 @@ def test_a_path_that_tries_to_leave_the_runs_folder_finds_no_run(ctx, tmp_path, 
             assert client.get(f"/api/backtests/{run_id}/days").status_code == 404
             assert client.get(f"/api/backtests/{run_id}/breakdowns").status_code == 404
             assert client.get(f"/api/backtests/{run_id}/edge").status_code == 404
+            assert client.get(f"/api/backtests/{run_id}/days/2026-10-14/indicator").status_code == 404
             assert client.patch(f"/api/backtests/{run_id}", json={"name": "x"}, headers=SAME_ORIGIN).status_code in (404, 405)
             assert client.post(f"/api/backtests/{run_id}/cells/0/run", headers=SAME_ORIGIN).status_code in (404, 405)
             assert client.post(f"/api/backtests/{run_id}/stress", headers=SAME_ORIGIN).status_code in (404, 405)

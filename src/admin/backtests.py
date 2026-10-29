@@ -36,6 +36,7 @@ from typing import Callable
 
 import pytz
 
+from src.admin import backtest_indicator
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
 from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
@@ -94,7 +95,7 @@ from src.backtest.sweep import (
     InvalidSweep,
     checked_axes,
 )
-from src.ta_engine.replay import REPLAY_RULE_ID
+from src.ta_engine.replay import REPLAY_RULE_ID, AssetRows
 
 logger = logging.getLogger(__name__)
 
@@ -1652,6 +1653,18 @@ class BacktestService:
         if day is not None:
             rows = [row for row in rows if row.get("day") == day.isoformat()]
         return rows
+
+    async def day_indicator(self, run_id: str, day: date, *, db=None, rows=None) -> dict:
+        """
+        A day of a run with the script that made its signals, as it ran, and the bars it ran on
+        (src/admin/backtest_indicator.py). The asset's rows are read where the runs read them: through
+        ``db``, the admin's read-only database, or from the recorded days' files (``files:<folder>``).
+        """
+        files = self._data.removeprefix("files:") if self._data.startswith("files:") else None
+        return await backtest_indicator.day_indicator(
+            self._directory(run_id), day, scripts=self._scripts,
+            rows=rows or AssetRows(self._prices_root, None if files else db, files_root=files),
+        )
 
     def edge(self, run_id: str) -> dict | None:
         """How the asset moved after the run's entry signals; None for a run made before it was measured."""

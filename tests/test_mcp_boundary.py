@@ -33,6 +33,8 @@ ALLOWED_IMPORTS = (
     "src.admin.asset_bars", "src.admin.backtest_requests", "src.admin.data", "src.admin.downloads",
     "src.admin.errors", "src.admin.prices", "src.admin.processes", "src.admin.studies", "src.admin.ta_compare",
     "src.admin.ta_rules", "src.admin.ta_scripts", "src.admin.auth",
+    # The rule store that keeps what each rule ran: Claude's shadow rules are saved through it.
+    "src.admin.rule_history",
     # Pure: the refusal runs of the Orders page.
     "src.admin.order_requests",
     "src.backtest.clock", "src.ta_engine.runner", "src.ta_engine.replay", "src.ta_engine.bars", "src.ta_engine.rules",

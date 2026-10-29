@@ -17,7 +17,7 @@ import {
   useTheme,
 } from 'ioiti-ui'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
@@ -38,6 +38,12 @@ import { runParents } from './paperModel'
 import { BacktestsDisabled, Measure } from './parts'
 import { SignalsTable, TradesTable } from './runTables'
 import { exitSettings, tradeLevels, tradeOverlays } from './tradeChart'
+
+// Vela, loaded with the day of a run that has a script of WATA's alone.
+const RunDayChart = lazy(() => import('@/features/ta/chart/RunDayChart').then((module) => ({ default: module.RunDayChart })))
+
+/** The runs whose signals a script of WATA's made: a Pine run, and those of a rule (paper trading). */
+const SCRIPTED: readonly string[] = ['pine', 'ta_signals']
 
 function assetRef(chart: BacktestChart): string {
   return `${chart.asset.provider}/${chart.asset.key}`
@@ -295,7 +301,19 @@ export function DayPage() {
     enabled: done,
     staleTime: Infinity,
   })
-  const chartQuery = useDayChart(run?.request.chart, day)
+  // The day drawn on Vela with the script that made its signals, as it ran.
+  const scripted = run ? SCRIPTED.includes(run.request.source.kind) : false
+  const indicatorQuery = useQuery({
+    queryKey: ['backtest-day-indicator', runId, day],
+    queryFn: () => api.backtestDayIndicator(runId, day),
+    enabled: done && scripted,
+    staleTime: Infinity,
+    retry: false,
+  })
+  const indicator = indicatorQuery.data
+  // Today's chart for TradingView's signals, and for a script that cannot be drawn.
+  const plain = Boolean(run) && (!scripted || indicatorQuery.isError)
+  const chartQuery = useDayChart(plain ? run?.request.chart : undefined, day)
   const trades = useMemo(() => tradesQuery.data?.items ?? [], [tradesQuery.data])
   const signals = useMemo(() => signalsQuery.data?.items ?? [], [signalsQuery.data])
   const chart = chartQuery.data
@@ -390,32 +408,64 @@ export function DayPage() {
 
               <Panel
                 title={`${assetLabel(run.request.chart.asset)} · ${barsLabel(run.request.chart.bars)}`}
-                description="The asset the strategy read, as it read it. Arrows: the signals of entry (✕ when nothing was bought) and the purchases (#); dots: the sales, with what each made."
+                description={
+                  plain
+                    ? 'The asset the strategy read, as it read it. Arrows: the signals of entry (✕ when nothing was bought) and the purchases (#); dots: the sales, with what each made.'
+                    : 'The asset as the script read it, with the script drawn as it ran. Arrows: the signals (✕ when nothing was bought); the trades, bought (#) and sold with what each made, at the asset’s price then. The chart’s legend hides either.'
+                }
               >
-                <QueryState isPending={chartQuery.isPending} error={chartQuery.error} hasData={!!chart}>
-                  {chart && (
-                    <div className="flex flex-col gap-2">
-                      {chart.hasCandles ? (
-                        <PriceChart
-                          // The chart draws with the colours it read when it was made: another theme, another chart.
-                          key={theme}
-                          candles={chart.candles}
-                          markers={markers}
-                          decimals={chart.decimals}
-                          showSeconds={chart.showSeconds}
-                          viewKey={`${chart.key}|${selected?.id ?? 'day'}`}
-                          focus={focus}
-                          onHover={() => undefined}
-                          label={`${assetLabel(run.request.chart.asset)} on ${formatDay(day)}`}
-                          className="h-[28rem]"
-                        />
+                {!plain ? (
+                  <QueryState
+                    isPending={indicatorQuery.isPending || signalsQuery.isPending || tradesQuery.isPending}
+                    error={signalsQuery.error ?? tradesQuery.error}
+                    hasData={!!indicator && !!signalsQuery.data && !!tradesQuery.data}
+                  >
+                    {indicator &&
+                      (indicator.bars.length > 0 ? (
+                        <Suspense fallback={<p className="py-6 text-center text-sm text-muted-foreground">Loading the chart…</p>}>
+                          <RunDayChart
+                            answer={indicator}
+                            day={day}
+                            signals={signals}
+                            trades={trades}
+                            selected={selected}
+                            timeZone={timezone}
+                            label={`${assetLabel(run.request.chart.asset)} on ${formatDay(day)}, with the script and the run's signals and trades`}
+                          />
+                        </Suspense>
                       ) : (
                         <p className="py-6 text-center text-sm text-muted-foreground">No bar of the asset that day.</p>
-                      )}
-                      <ChartAttribution />
-                    </div>
-                  )}
-                </QueryState>
+                      ))}
+                  </QueryState>
+                ) : (
+                  <QueryState isPending={chartQuery.isPending} error={chartQuery.error} hasData={!!chart}>
+                    {chart && (
+                      <div className="flex flex-col gap-2">
+                        {chart.hasCandles ? (
+                          <PriceChart
+                            // The chart draws with the colours it read when it was made: another theme, another chart.
+                            key={theme}
+                            candles={chart.candles}
+                            markers={markers}
+                            decimals={chart.decimals}
+                            showSeconds={chart.showSeconds}
+                            viewKey={`${chart.key}|${selected?.id ?? 'day'}`}
+                            focus={focus}
+                            onHover={() => undefined}
+                            label={`${assetLabel(run.request.chart.asset)} on ${formatDay(day)}`}
+                            className="h-[28rem]"
+                          />
+                        ) : (
+                          <p className="py-6 text-center text-sm text-muted-foreground">No bar of the asset that day.</p>
+                        )}
+                        {scripted && indicatorQuery.error && (
+                          <p className="text-xs text-muted-foreground">The script is not drawn: {indicatorQuery.error.message}</p>
+                        )}
+                        <ChartAttribution />
+                      </div>
+                    )}
+                  </QueryState>
+                )}
               </Panel>
 
               {selected && (
