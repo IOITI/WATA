@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.61.1 - The admin's work read as Docker 29 lists it
+
+**Release date:** not yet released
+
+`watadeploy` reads two things from the processes Docker lists in a container (`docker top`): the admin's backtests and studies, and whether the backups are writing a dump. It asked for the command lines alone (`-eo args`), and Docker 29 refuses that: it needs the PID column to tell which processes are the container's ("Couldn't find PID field in ps output"). This was seen on the server in the read-only checks before v0.61.0's install. The deploy took the refusal for a fact it cannot read, so it held the admin and the backups back every time: every apply of the admin needed "Apply anyway". It now asks for `pid,args` and keeps the command line after the PID.
+
+**On the live path:** nothing.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- The test of the real command lines now answers as Docker 29 does: refused without the PID column, the processes listed with it. The code of v0.61.0 fails it.
+- Seen on the server, read-only: `docker top admin1 -eo pid,args` lists the admin's processes, and `-eo args` is refused.
+
 ## v0.61.0 - A deploy restarts only what a release changes
 
 **Release date:** 2026-10-29

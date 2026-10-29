@@ -460,6 +460,12 @@ def test_the_real_docker_commands_are_the_ones_meant(tmp_path):
             return subprocess.CompletedProcess(command, 0, "3\n", "")
         if command[1] == "run" and "-c" in command:
             return subprocess.CompletedProcess(command, 1, "REFUSED ValueError: Missing required x\n", "")
+        if command[1] == "top":
+            # As Docker 29 answers, and only with the PID column asked for.
+            if "pid,args" not in command:
+                return subprocess.CompletedProcess(command, 1, "", "Error response from daemon: Couldn't find PID field in ps output")
+            return subprocess.CompletedProcess(command, 0, "PID                 COMMAND\n1996182             python -u /app/src/admin/__init__.py\n"
+                                               "1996190             python -u -m src.backtest.run --run x\n", "")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     layout = Layout(base=str(tmp_path))
@@ -472,6 +478,7 @@ def test_the_real_docker_commands_are_the_ones_meant(tmp_path):
     assert docker.psql("SELECT 1") == "3"
     assert seen[-1][0][:4] == ["docker", "exec", "postgres", "psql"]
     assert docker.check_config("wata-base:0.59.1") == (False, "ValueError: Missing required x")
+    assert docker.processes("admin1") == ["python -u /app/src/admin/__init__.py", "python -u -m src.backtest.run --run x"]
 
 
 def test_watadeploy_says_the_plan_and_fails_on_a_container_that_did_not_come_back(server, capsys):

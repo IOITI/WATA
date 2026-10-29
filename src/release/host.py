@@ -321,8 +321,12 @@ class Docker:
         return found
 
     def processes(self, container: str) -> list[str] | None:
-        done = self.call(["top", container, "-eo", "args"], check=False, timeout=30)
-        return done.stdout.splitlines()[1:] if done.returncode == 0 else None
+        """The command lines of a container's processes; None when Docker does not say."""
+        # Docker maps the processes by their PID: without that column it refuses ("Couldn't find PID field").
+        done = self.call(["top", container, "-eo", "pid,args"], check=False, timeout=30)
+        if done.returncode != 0:
+            return None
+        return [(line.split(None, 1) + [""])[1] for line in done.stdout.splitlines()[1:] if line.strip()]
 
     def answers(self, container: str, url: str) -> tuple[bool, str]:
         """Whether a server inside ``container`` answers ``url`` at all (any HTTP status), and how."""
