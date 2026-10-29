@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from src.admin.agent import provider as claude
-from src.admin.agent.loop import CALLS_AFTER_LIMIT, RequestRun, Used, digest_of
+from src.admin.agent.loop import CALLS_AFTER_LIMIT, DONE, RequestRun, Used, digest_of
 from src.admin.agent.service import AgentService
 from src.admin.agent.settings import AgentSettings
 from src.admin.agent.store import ConversationStore, stamp
@@ -365,6 +365,84 @@ async def settled(agent, conversation_id, seconds=5.0):
             return agent.store.meta(conversation_id)
         await asyncio.sleep(0.01)
     raise AssertionError("the request did not end")
+
+
+def test_a_request_asked_while_the_start_recovers_is_queued_once_and_asked_once(store):
+    """
+    The start's recovery reads the conversations in a thread and queues again those under way. One written queued
+    while it reads, before it was in the queue, was queued twice and its request asked, and paid for, twice (seen on
+    CI on 2026-10-29: a daily debrief asked twice, its follow-up getting the second answer). Here the recovery reads
+    the store at that worst moment, for a new conversation and for a question asked after.
+    """
+    provider = FakeProvider(answer(text("Once.")), answer(text("And once more.")))
+    agent, _ = service_of(store, provider)
+    written, updated = store.create, store.update_meta
+    recovering = []
+
+    def recover_now():
+        # Once at a time: the recovery writes "queued" itself.
+        if not recovering:
+            recovering.append(True)
+            try:
+                agent._recover()
+            finally:
+                recovering.pop()
+
+    def create_then_recover(meta):
+        found = written(meta)
+        recover_now()
+        return found
+
+    def update_then_recover(conversation_id, **changes):
+        found = updated(conversation_id, **changes)
+        if changes.get("status") == "queued":
+            recover_now()
+        return found
+
+    store.create, store.update_meta = create_then_recover, update_then_recover
+
+    async def scenario():
+        meta = await agent.create(None, "Analyse this run", "10.8.0.2")
+        assert agent._queue.qsize() == 1
+        worker = asyncio.create_task(agent.run())
+        await settled(agent, meta["id"])
+        await agent.ask(meta["id"], "And then?", "10.8.0.2")
+        assert agent._queue.qsize() == 1
+        await settled(agent, meta["id"])
+        worker.cancel()
+        return meta
+
+    meta = asyncio.run(scenario())
+
+    assert len(provider.asked) == 2
+    assert "And then?" in str(provider.asked[1]["messages"])
+    found = store.meta(meta["id"])
+    assert found["status"] == "idle" and found["outcome"] == DONE and found["request"] == 1
+
+
+def test_the_agent_is_ready_once_what_a_stop_left_is_queued_again(store):
+    """A conversation may be created (the daily debrief waits for ready) only once the start's recovery is done."""
+    provider = FakeProvider(answer(text("Taken up again.")))
+    agent, _ = service_of(store, provider)
+    left = conversation(store, status="queued")
+    seen = []
+    recover = agent._recover
+
+    def recovering():
+        seen.append(agent.ready)
+        recover()
+
+    agent._recover = recovering
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        await settled(agent, left)
+        worker.cancel()
+
+    asyncio.run(scenario())
+
+    assert seen == [False] and agent.ready
+    assert len(provider.asked) == 1
 
 
 def test_a_conversation_is_worked_on_in_the_background_and_its_end_announced(store):

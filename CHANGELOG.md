@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.61.2 - The AI agent never asks one request twice
+
+**Release date:** not yet released
+
+At its start, the AI agent queues again what a stop left under way, reading its conversations in a background thread. It said it was ready before that was done, and a conversation was counted in its queue only after it was written as queued. A conversation created, or a question asked, while that recovery read the conversations could therefore be queued twice. Its request was then asked of Claude twice, and paid for twice. The daily debrief, which starts as soon as the agent is ready, was the most exposed. This was seen on CI on 2026-10-29: the debrief's test got its request asked twice, and its follow-up question got the second answer.
+
+- **A conversation is counted as queued before its meta says so** (`_queuing`): for a new conversation, a question asked, a request taken up again, and a research task's next request. The recovery's own check, that a conversation already in the queue is never queued again, then holds.
+- **The agent is ready once the recovery is done**: nothing new is asked of it while it reads what its last stop left.
+
+**On the live path:** nothing. The admin's AI agent alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Two new tests, which failed before the fix. One makes the recovery read the conversations at the worst moment, right after one is written as queued and before it is in the queue, for a new conversation and for a question asked after it: each is queued once and asked once. The other checks that the agent is not ready while it recovers. The whole suite passes: 3,477 tests (23 skipped: the live database and queue, which CI runs).
+- The debrief's test and the new one passed 40 times out of 40 in a row.
+
 ## v0.61.1 - The admin's work read as Docker 29 lists it
 
 **Release date:** 2026-10-29

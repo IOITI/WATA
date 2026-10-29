@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date
 
@@ -131,12 +132,16 @@ class AgentService:
     async def run(self) -> None:
         try:
             await self._tools.start()
-            self._started = True
         except Exception as e:
             self.broken = f"The research tools could not be started: {e}"
             logger.exception("The AI agent could not start its tools")
             return
-        await run_in_threadpool(self._recover)
+        try:
+            await run_in_threadpool(self._recover)
+        except Exception:
+            logger.exception("The AI agent could not take up again what its last stop left under way")
+        # Ready (a conversation may be created: the daily debrief waits for it) once what a stop left is queued again.
+        self._started = True
         workers = [asyncio.create_task(self._worker()) for _ in range(self.settings.max_running)]
         try:
             while True:
@@ -164,6 +169,21 @@ class AgentService:
     def _enqueue(self, conversation_id: str, resumed: bool) -> None:
         self._queued.add(conversation_id)
         self._queue.put_nowait((conversation_id, resumed))
+
+    @contextmanager
+    def _queuing(self, conversation_id: str):
+        """
+        Around writing that a conversation is queued: it is counted as queued
+        before its meta says so. The start's recovery reads the metas in a
+        thread; one queued without being counted yet was queued a second time
+        there, and its request asked, and paid for, twice.
+        """
+        self._queued.add(conversation_id)
+        try:
+            yield
+        except BaseException:
+            self._queued.discard(conversation_id)
+            raise
 
     def _prune(self) -> None:
         if self.memory is not None:
@@ -285,9 +305,10 @@ class AgentService:
         task["requests"] = (task.get("requests") or 1) + 1
         budget = task["budget"]
         prompt = task_going_on(task["spent_usd"], budget["usd"], task["backtests"], budget["backtests"], task["deadline"])
-        meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request + 1,
-                                      requests=(meta.get("requests") or request + 1) + 1, updated_at=stamp(now),
-                                      outcome=None, error=None, retry=False)
+        with self._queuing(conversation_id):
+            meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request + 1,
+                                          requests=(meta.get("requests") or request + 1) + 1, updated_at=stamp(now),
+                                          outcome=None, error=None, retry=False)
         self._asked_now(conversation_id, request + 1, prompt, None, "task", model, effort)
         return meta["task"]
 
@@ -583,7 +604,8 @@ class AgentService:
         if debrief is not None:
             # A daily debrief (src/admin/agent_debrief.py): its day, and what its request may cost.
             meta["debrief"] = debrief
-        await run_in_threadpool(self.store.create, meta)
+        with self._queuing(conversation_id):
+            await run_in_threadpool(self.store.create, meta)
         self._asked_now(conversation_id, 0, prompt, subject, by, model, effort)
         return meta
 
@@ -644,9 +666,11 @@ class AgentService:
             raise NotPossible("The agent is still working on this conversation: wait for its answer, or stop it")
         model, effort = self._choice(model, effort, meta)
         request = meta["request"] + 1
-        meta = self.store.update_meta(conversation_id, status="queued", request=request,
-                                      requests=(meta.get("requests") or request) + 1, updated_at=stamp(self._clock()),
-                                      outcome=None, error=None, retry=False, model=model, effort=effort)
+        with self._queuing(conversation_id):
+            meta = self.store.update_meta(conversation_id, status="queued", request=request,
+                                          requests=(meta.get("requests") or request) + 1,
+                                          updated_at=stamp(self._clock()), outcome=None, error=None, retry=False,
+                                          model=model, effort=effort)
         self._asked_now(conversation_id, request, prompt, None, by, model, effort)
         return meta
 
@@ -664,7 +688,8 @@ class AgentService:
         meta = self.store.meta(conversation_id)
         if meta.get("status") != FAILED:
             raise NotPossible("Only a request that failed is taken up again: ask again instead")
-        meta = self.store.update_meta(conversation_id, status="queued", error=None, updated_at=stamp(self._clock()))
+        with self._queuing(conversation_id):
+            meta = self.store.update_meta(conversation_id, status="queued", error=None, updated_at=stamp(self._clock()))
         self._enqueue(conversation_id, True)
         self._changed(conversation_id)
         return meta
