@@ -133,6 +133,66 @@ def test_a_task_ends_once_its_dollars_are_spent(store):
     assert published.events[-1]["task"] == "ended"
 
 
+def test_a_task_created_while_the_start_recovers_asks_its_requests_one_after_the_other(store):
+    """
+    The start's recovery reads the conversations in a thread, and asks the next request of a task stopped between two
+    of its requests. A task created while it read, queued for its first request, was taken for one of those: its next
+    request was asked at once, before its first had run (seen on CI on 2026-10-29: a task over its budget asked a
+    second request). Here the recovery reads the store right after the task is written.
+    """
+    dear = {"input_tokens": 300_000, "output_tokens": 20_000}
+    provider = FakeProvider(answer(text("A long first look."), usage=dear), answer(text("Never asked.")))
+    agent, _ = agent_of(store, provider)
+    written = store.create
+
+    def create_then_recover(meta):
+        found = written(meta)
+        agent._recover()
+        return found
+
+    store.create = create_then_recover
+
+    async def scenario():
+        meta = await agent.create_task("Look at the exits", None, None, {"usd": 0.5, "backtests": 0, "hours": 1})
+        assert agent._queue.qsize() == 1
+        worker = asyncio.create_task(agent.run())
+        ended = await until_the_task_ends(agent, meta["id"])
+        worker.cancel()
+        return ended
+
+    ended = asyncio.run(scenario())
+
+    assert ended["task"]["ended_because"] == "its budget of $0.50 is spent"
+    assert ended["request"] == 0 and ended["task"]["requests"] == 1 and len(provider.asked) == 1
+
+
+def test_a_task_stopped_between_two_requests_asks_its_next_at_the_start(store):
+    """What the recovery is for: a task left idle between two of its requests goes on once the agent starts."""
+    provider = FakeProvider(
+        answer(call("task_done", "d", conclusion="Nothing more to find.", runs_kept=[]), stop="tool_use"),
+        answer(text("Nothing more to find.")),
+    )
+    agent, _ = agent_of(store, provider)
+    task = {"goal": "Look at the exits", "budget": {"usd": 2.0, "backtests": 0, "hours": 4}, "state": "working",
+            "started_at": stamp(NOW), "deadline": stamp(NOW + 4 * 3600), "spent_usd": 0.1, "backtests": 0,
+            "requests": 1, "by": None, "ended_at": None, "ended_because": None, "conclusion": None}
+    store.create({"id": "20261029-200000-a1b2c3", "title": "Look at the exits", "subject": None, "status": "idle",
+                  "model": None, "effort": None, "created_at": stamp(NOW), "updated_at": stamp(NOW), "by": None,
+                  "request": 0, "requests": 1, "cost_usd": 0.1, "usage": {}, "outcome": "done", "error": None,
+                  "retry": False, "task": task})
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        ended = await until_the_task_ends(agent, "20261029-200000-a1b2c3")
+        worker.cancel()
+        return ended
+
+    ended = asyncio.run(scenario())
+
+    assert ended["task"]["state"] == "done" and ended["request"] == 1 and ended["task"]["requests"] == 2
+    assert "The research task goes on" in asked_text(provider.asked[0])
+
+
 def test_a_task_ends_once_its_hours_are_over(store):
     clock = Clock()
     provider = FakeProvider(answer(text("First look.")))

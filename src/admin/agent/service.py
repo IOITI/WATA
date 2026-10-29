@@ -162,7 +162,10 @@ class AgentService:
             if meta.get("status") in transcript.UNDER_WAY and meta["id"] not in self._queued:
                 self.store.update_meta(meta["id"], status="queued")
                 self._enqueue(meta["id"], True)
-            elif (meta.get("task") or {}).get("state") == TASK_WORKING and meta.get("status") != FAILED:
+            elif ((meta.get("task") or {}).get("state") == TASK_WORKING
+                  and meta.get("status") not in (FAILED, *transcript.UNDER_WAY)):
+                # Between two of its requests only: one queued or under way goes on from its own end. A task created
+                # while this reads was taken for one stopped between two, and its next request asked before its first.
                 model, effort = self._kept_choice(meta)
                 self._task_went_on(meta["id"], meta["request"], DONE, model, effort)
 
