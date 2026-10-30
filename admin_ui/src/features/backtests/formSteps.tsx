@@ -7,6 +7,7 @@ import {
   cn,
   Combobox,
   DateRangePicker,
+  DropdownMenu,
   formatDay,
   formatMoney,
   formatNumber,
@@ -15,33 +16,38 @@ import {
   toIsoDay,
 } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
-import { Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { CalendarRange, ChevronDown, FoldHorizontal, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import type { IPineInput } from 'pinets'
 import { useId } from 'react'
 import type { ReactNode } from 'react'
 
+import { todayIn } from '@/features/prices/chartData'
 import { BarsFields, ScriptChoice, ScriptSettings } from '@/features/ta/signals/RuleFields'
 import type { ScriptInputs } from '@/features/ta/signals/useScriptInputs'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import type { RuleDraft } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
-import type { BacktestCoverage, BacktestCoverageDay, BacktestField, BacktestOptions, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
+import type { BacktestCoverage, BacktestField, BacktestOptions, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
 
 import { executionChanges, executionSentence } from './execution'
 import {
   axisValues,
   changesOf,
+  dayState,
   draftBars,
   fieldError,
+  fittedPeriod,
   parseAsset,
   periodDays,
+  periodLabel,
   periodLimit,
+  periodPresets,
   rangeHint,
   strategyAssets,
   sweepCells,
   walkForwardChoices,
 } from './form'
-import type { AxisDraft, BacktestDraft } from './form'
+import type { AxisDraft, BacktestDraft, DayState } from './form'
 import { assetLabel, settingChanges, showValue } from './model'
 import { SettingChanges } from './parts'
 import { measureSentence, underlyingLabel } from './turboModel'
@@ -262,19 +268,11 @@ function RaisedSignals({ draft, rules, onRule }: { draft: BacktestDraft; rules: 
 
 // ── 3. the period ──
 
-const DAY_STATE: Record<string, { label: string; className: string }> = {
+const DAY_STATE: Record<DayState, { label: string; className: string }> = {
   ready: { label: 'turbos and bars recorded', className: 'bg-positive' },
   turbos: { label: 'turbos recorded, no bars of the asset', className: 'bg-warning' },
   bars: { label: 'bars of the asset, no turbo recorded', className: 'bg-muted-foreground/40' },
   nothing: { label: 'nothing recorded', className: 'border border-border' },
-}
-
-function dayState(day: BacktestCoverageDay): keyof typeof DAY_STATE {
-  const turbos = day.turbos.long + day.turbos.short > 0
-  const bars = day.asset_bars === null || day.asset_bars > 0
-  if (turbos && bars) return 'ready'
-  if (turbos) return 'turbos'
-  return day.asset_bars ? 'bars' : 'nothing'
 }
 
 function isWeekend(day: string): boolean {
@@ -339,6 +337,11 @@ export function PeriodStep({
   }
   const ready = coverage?.days.filter((day) => dayState(day) === 'ready').length ?? 0
   const modelled = draft.turbos === 'modelled'
+  const limit = periodLimit(draft, options)
+  const today = todayIn(options.timezone)
+  const presets = periodPresets(today)
+  const preset = presets.find((entry) => entry.from === draft.from && entry.to === draft.to)
+  const fitted = !modelled && coverage ? fittedPeriod(coverage, draft.from, draft.to) : null
   return (
     <div className="space-y-5 text-sm">
       <Section
@@ -369,21 +372,63 @@ export function PeriodStep({
             : `Local days of ${options.timezone}, ${options.limits.period_days} at most. Only the days the price recorder kept turbos of can be traded.`
         }
       >
-        {/* A range half chosen stays so until its end is picked: given back with an end, the calendar would start a
-            range again at the next day picked, and no range of several days could be chosen. */}
-        <DateRangePicker
-          value={range}
-          onChange={(chosen) => update({ from: chosen.from ? toIsoDay(chosen.from) : '', to: chosen.to ? toIsoDay(chosen.to) : '' })}
-          placeholder="Period"
-          align="start"
-          locale="en-GB"
-          weekStartsOn={1}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* A range half chosen stays so until its end is picked: given back with an end, the calendar would start a
+              range again at the next day picked, and no range of several days could be chosen. */}
+          <DateRangePicker
+            value={range}
+            onChange={(chosen) => update({ from: chosen.from ? toIsoDay(chosen.from) : '', to: chosen.to ? toIsoDay(chosen.to) : '' })}
+            placeholder="Period"
+            align="start"
+            locale="en-GB"
+            weekStartsOn={1}
+          />
+          <DropdownMenu
+            label="Quick ranges"
+            trigger={
+              <Button
+                size="sm"
+                variant="outline"
+                aria-label={preset ? `Quick ranges: ${preset.label}` : 'Quick ranges'}
+                leftIcon={<CalendarRange aria-hidden className="size-3.5" />}
+                rightIcon={<ChevronDown aria-hidden className="size-3.5" />}
+              >
+                {preset?.label ?? 'Quick ranges'}
+              </Button>
+            }
+            items={[{
+              type: 'radio',
+              label: 'Quick ranges',
+              value: preset?.key ?? '',
+              onValueChange: (key) => {
+                const chosen = presets.find((entry) => entry.key === key)
+                if (chosen) update({ from: chosen.from, to: chosen.to })
+              },
+              // A range longer than a run may be is said, not hidden: made-up turbos take years of days.
+              options: presets.map((entry) => {
+                const days = periodDays(entry.from, entry.to)
+                return {
+                  value: entry.key,
+                  label: entry.label,
+                  description: days > limit ? `${days} days: ${limit} at most${modelled ? '' : ' on recorded turbos'}` : periodLabel(entry.from, entry.to, today),
+                  disabled: days > limit,
+                }
+              }),
+            }]}
+          />
+        </div>
         {modelled ? null : coverage ? (
           <>
-            <p className="text-sm">
-              {ready} day{ready === 1 ? '' : 's'} of the {periodDays(draft.from, draft.to)} can be traded.
-            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <p className="text-sm">
+                {ready} day{ready === 1 ? '' : 's'} of the {periodDays(draft.from, draft.to)} can be traded.
+              </p>
+              {fitted && (
+                <Button size="sm" variant="outline" leftIcon={<FoldHorizontal aria-hidden className="size-3.5" />} onClick={() => update(fitted)}>
+                  Fit to the recorded days, {periodLabel(fitted.from, fitted.to, today)}
+                </Button>
+              )}
+            </div>
             <RecordedDays
               coverage={coverage}
               signals={draft.sourceKind === 'journal' ? 'received' : draft.sourceKind === 'ta_signals' ? 'raised' : null}

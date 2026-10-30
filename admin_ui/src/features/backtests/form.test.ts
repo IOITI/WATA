@@ -1,7 +1,7 @@
 import type { IPineInput } from 'pinets'
 import { describe, expect, it } from 'vitest'
 
-import type { TaRule, TaScriptSummary } from '@/lib/types'
+import type { BacktestCoverage, BacktestCoverageDay, TaRule, TaScriptSummary } from '@/lib/types'
 import { FIELDS, OPTIONS, PAPER_RULE, paperReport, run } from '@/test/backtests'
 
 import {
@@ -12,9 +12,12 @@ import {
   draftOfRun,
   fieldError,
   fieldValue,
+  fittedPeriod,
   newBacktestDraft,
   parseAsset,
   periodDays,
+  periodLabel,
+  periodPresets,
   rangeHint,
   requestOf,
   sweepCells,
@@ -258,6 +261,77 @@ describe('a sweep\'s axes', () => {
     expect(windowsOf('10/0')).toBeNull()
     expect(walkForwardChoices('').map((choice) => choice.value)).toEqual(['', '5/1', '10/5', '20/5', '40/10'])
     expect(walkForwardChoices('15/5').at(-1)).toEqual({ value: '15/5', label: 'choose on 15 days, keep 5' })
+  })
+})
+
+describe('the period', () => {
+  const span = (key: string, today: string) => {
+    const preset = periodPresets(today).find((entry) => entry.key === key)!
+    return [preset.from, preset.to]
+  }
+
+  it('offers quick ranges that end today, but last month', () => {
+    expect(periodPresets('2026-10-30').map((preset) => [preset.label, preset.from, preset.to])).toEqual([
+      ['Last 7 days', '2026-10-24', '2026-10-30'],
+      ['Last 30 days', '2026-10-01', '2026-10-30'],
+      ['This month', '2026-10-01', '2026-10-30'],
+      ['Last month', '2026-09-01', '2026-09-30'],
+      ['Last 3 months', '2026-07-31', '2026-10-30'],
+      ['Last 6 months', '2026-05-01', '2026-10-30'],
+      ['Last 12 months', '2025-10-31', '2026-10-30'],
+      ['Last 2 years', '2024-10-31', '2026-10-30'],
+    ])
+  })
+
+  it('counts months back from the end of a shorter month, and across years', () => {
+    expect(span('last-3-months', '2026-05-31')).toEqual(['2026-03-01', '2026-05-31'])
+    expect(span('last-month', '2026-03-31')).toEqual(['2026-02-01', '2026-02-28'])
+    expect(span('last-month', '2026-01-15')).toEqual(['2025-12-01', '2025-12-31'])
+    expect(span('last-3-months', '2026-01-15')).toEqual(['2025-10-16', '2026-01-15'])
+    expect(span('last-12-months', '2024-02-29')).toEqual(['2023-03-01', '2024-02-29'])
+  })
+
+  it('keeps three months to a run on recorded turbos (92 days), and two years to one on made-up turbos (731)', () => {
+    for (let day = Date.UTC(2023, 0, 1); day < Date.UTC(2027, 0, 1); day += 86_400_000) {
+      const today = new Date(day).toISOString().slice(0, 10)
+      const [from, to] = span('last-3-months', today)
+      expect(periodDays(from, to)).toBeLessThanOrEqual(92)
+      const [fromYears, toYears] = span('last-2-years', today)
+      expect(periodDays(fromYears, toYears)).toBeLessThanOrEqual(731)
+    }
+  })
+
+  it('says a span without the years of the current one, and with them otherwise', () => {
+    expect(periodLabel('2026-10-13', '2026-10-30', '2026-10-30')).toBe('13 Oct – 30 Oct')
+    expect(periodLabel('2025-10-31', '2026-10-30', '2026-10-30')).toBe('31 Oct 2025 – 30 Oct 2026')
+  })
+
+  const recorded = (day: string, turbos: number, bars: number | null = 5_000): BacktestCoverageDay => ({
+    day, turbos: { long: turbos, short: turbos }, first: null, last: null, recorded_minutes: 0, asset_bars: bars, signals: null,
+  })
+  const coverage = (days: BacktestCoverageDay[]): BacktestCoverage => ({ days, database: true, timezone: 'Europe/Paris' })
+
+  it('is fitted to its first and last days with turbos and bars recorded, the days between kept', () => {
+    const days = [
+      recorded('2026-10-08', 0, 0),
+      recorded('2026-10-09', 3, 0),
+      recorded('2026-10-12', 3),
+      recorded('2026-10-13', 0, 0),
+      recorded('2026-10-14', 3),
+      recorded('2026-10-15', 0, 4_000),
+      recorded('2026-10-17', 0, 0),
+    ]
+    expect(fittedPeriod(coverage(days), '2026-10-08', '2026-10-18')).toEqual({ from: '2026-10-12', to: '2026-10-14' })
+    // A strategy on no asset (the signals received) needs the turbos alone.
+    expect(fittedPeriod(coverage([recorded('2026-10-12', 0, null), recorded('2026-10-13', 2, null)]), '2026-10-12', '2026-10-13'))
+      .toEqual({ from: '2026-10-13', to: '2026-10-13' })
+  })
+
+  it('is not fitted when it already is, when none of its days can be traded, nor to days outside it', () => {
+    const days = [recorded('2026-10-12', 3), recorded('2026-10-13', 0, 0), recorded('2026-10-14', 3)]
+    expect(fittedPeriod(coverage(days), '2026-10-12', '2026-10-14')).toBeNull()
+    expect(fittedPeriod(coverage([recorded('2026-10-12', 0, 0)]), '2026-10-12', '2026-10-12')).toBeNull()
+    expect(fittedPeriod(coverage(days), '2026-10-20', '2026-10-26')).toBeNull()
   })
 })
 

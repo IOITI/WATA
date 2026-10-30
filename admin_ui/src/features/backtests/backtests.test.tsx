@@ -684,6 +684,41 @@ describe('a new backtest', () => {
     })
   })
 
+  it('takes a quick range of days, and fits the period to the days recorded', async () => {
+    // A Tuesday after the three days the server says were recorded (14 to 16 Oct).
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T10:00:00Z'))
+    try {
+      const user = userEvent.setup()
+      renderAt('/backtests/new')
+      await user.click(await screen.findByRole('button', { name: 'Next' }))
+      await screen.findByText('Cross up')
+      await user.click(screen.getByRole('button', { name: 'Next' }))
+
+      // The last seven days, cut to the three recorded.
+      expect(await screen.findByText('3 days of the 7 can be traded.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Quick ranges: Last 7 days' })).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Fit to the recorded days, 14 Oct – 16 Oct' }))
+      expect(await screen.findByText('3 days of the 3 can be traded.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^14 Oct 2026 – 16 Oct 2026$/ })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^Fit to the recorded days/ })).not.toBeInTheDocument()
+
+      // A quick range: one longer than a run on recorded turbos may be is said, not taken.
+      await user.click(screen.getByRole('button', { name: 'Quick ranges' }))
+      const menu = await screen.findByRole('menu', { name: 'Quick ranges' })
+      const halfYear = within(menu).getByRole('menuitemradio', { name: /^Last 6 months/ })
+      expect(halfYear).toHaveAttribute('aria-disabled', 'true')
+      expect(halfYear).toHaveTextContent('183 days: 92 at most on recorded turbos')
+      await user.click(within(menu).getByRole('menuitemradio', { name: /^Last 30 days/ }))
+      expect(await screen.findByRole('button', { name: 'Quick ranges: Last 30 days' })).toBeInTheDocument()
+      await waitFor(() =>
+        expect(sent.some((request) => request.path.startsWith('/api/backtests/coverage?') && request.path.includes('from=2026-09-21') && request.path.includes('to=2026-10-20'))).toBe(true),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('runs on bars of seconds, of the menu or of a length typed', async () => {
     const user = userEvent.setup()
     renderAt('/backtests/new')

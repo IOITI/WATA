@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.64.0 - Quick ranges of days for a backtest, and its period fitted to the days recorded
+
+**Release date:** not yet released
+
+A new backtest's period was chosen in its calendar alone, and a period reaching before the price recorder's first days, or past its last, only said how many of its days could be traded. Its Days to trade now has two buttons.
+
+- **Quick ranges**, beside the period: Last 7 days, Last 30 days, This month, Last month, Last 3, 6 and 12 months, and Last 2 years, each with the days it gives, the one in use named on the button. A range longer than a run may be is shown greyed out with its length, and cannot be chosen: on recorded turbos a run has 92 days at most, so six months and more say for example "183 days: 92 at most on recorded turbos"; on turbos made up from the index it has two years. Three months are never more than 92 days, whatever the day: a span of months starts the day after the same day that many months before.
+- **Fit to the recorded days**: the period cut to the first and last of its days with turbos and bars recorded, the button showing the days it would keep, and only when that changes the period (a period that starts or ends on a weekend included). The days between stay as they are: a run skips a day with nothing recorded.
+- `admin_ui/src/features/backtests/form.ts` holds them as plain functions with their tests: `periodPresets`, `fittedPeriod`, `periodLabel`, and `dayState`, which the step's squares use too.
+
+**On the live path:** nothing. The admin's interface alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- The quick ranges on every day of four years (three months never over 92 days, two years never over 731), month ends and leap days; the fit of a period, of one already fitted, of one with nothing recorded, and for a strategy without an asset; the step itself, its fit, a quick range and one too long. 1,243 tests pass, with lint, typecheck and build.
+- Seen in a browser on the fake admin, at 1,024 and 375 px: "Last 3 months" gave 31 Jul – 30 Oct, 6 of its 92 days recorded, and the fit made it 23 Oct – 30 Oct.
+
 ## v0.63.1 - A backtest's period chosen in two clicks
 
 **Release date:** 2026-10-30

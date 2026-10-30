@@ -1,3 +1,4 @@
+import { formatDay } from 'ioiti-ui'
 import type { IPineInput } from 'pinets'
 
 import { assetKeywords } from '@/features/data/assets'
@@ -6,6 +7,8 @@ import { draftOfRule, inputValueOf, MAX_RANGE_TICKS, newDraft, ruleFields } from
 import type { RuleDraft } from '@/features/ta/signals/ruleModel'
 import type {
   BacktestAsset,
+  BacktestCoverage,
+  BacktestCoverageDay,
   BacktestField,
   BacktestOptions,
   BacktestRequestBody,
@@ -325,6 +328,81 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/
 
 export function periodDays(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1
+}
+
+// ── the period: its quick ranges, and its days that can be traded ──
+
+export interface PeriodPreset {
+  key: string
+  label: string
+  from: string
+  to: string
+}
+
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function addDays(day: string, days: number): string {
+  const date = new Date(`${day}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return isoDay(date)
+}
+
+/** The same day some months before, or the last of its month when that one is shorter (31 Mar → 28 Feb). */
+function monthsBefore(day: string, months: number): string {
+  const [year, month, date] = day.split('-').map(Number)
+  const length = new Date(Date.UTC(year, month - 1 - months + 1, 0)).getUTCDate()
+  return isoDay(new Date(Date.UTC(year, month - 1 - months, Math.min(date, length))))
+}
+
+/**
+ * The quick ranges of the period, each ending today (of the backtests' timezone), but last month. A span of months
+ * starts the day after the same day that many months before: three months are 92 days at most, a run's limit on
+ * recorded turbos.
+ */
+export function periodPresets(today: string): PeriodPreset[] {
+  const [year, month] = today.split('-').map(Number)
+  const lastMonthEnd = isoDay(new Date(Date.UTC(year, month - 1, 0)))
+  const months = (count: number) => ({ from: addDays(monthsBefore(today, count), 1), to: today })
+  return [
+    { key: 'last-7-days', label: 'Last 7 days', from: addDays(today, -6), to: today },
+    { key: 'last-30-days', label: 'Last 30 days', from: addDays(today, -29), to: today },
+    { key: 'this-month', label: 'This month', from: `${today.slice(0, 7)}-01`, to: today },
+    { key: 'last-month', label: 'Last month', from: `${lastMonthEnd.slice(0, 7)}-01`, to: lastMonthEnd },
+    { key: 'last-3-months', label: 'Last 3 months', ...months(3) },
+    { key: 'last-6-months', label: 'Last 6 months', ...months(6) },
+    { key: 'last-12-months', label: 'Last 12 months', ...months(12) },
+    { key: 'last-2-years', label: 'Last 2 years', ...months(24) },
+  ]
+}
+
+/** "13 Oct – 30 Oct": the years said when a day is not of the current one. */
+export function periodLabel(from: string, to: string, today: string): string {
+  const withYear = from.slice(0, 4) !== today.slice(0, 4) || to.slice(0, 4) !== today.slice(0, 4)
+  return `${formatDay(from, withYear)} – ${formatDay(to, withYear)}`
+}
+
+/** What was recorded of a day: what the period step colours it by, and whether it can be traded ("ready"). */
+export type DayState = 'ready' | 'turbos' | 'bars' | 'nothing'
+
+export function dayState(day: BacktestCoverageDay): DayState {
+  const turbos = day.turbos.long + day.turbos.short > 0
+  const bars = day.asset_bars === null || day.asset_bars > 0
+  if (turbos && bars) return 'ready'
+  if (turbos) return 'turbos'
+  return day.asset_bars ? 'bars' : 'nothing'
+}
+
+/**
+ * The period cut to the first and last of its days with turbos and bars recorded, the days between kept as they are
+ * (a weekend, a day the recorder missed): null when none of its days has them, or when there is nothing to cut.
+ */
+export function fittedPeriod(coverage: BacktestCoverage, from: string, to: string): { from: string; to: string } | null {
+  const ready = coverage.days.filter((day) => day.day >= from && day.day <= to && dayState(day) === 'ready').map((day) => day.day).sort()
+  if (ready.length === 0) return null
+  const fitted = { from: ready[0], to: ready[ready.length - 1] }
+  return fitted.from === from && fitted.to === to ? null : fitted
 }
 
 /** What stops the draft from being sent, in the words of the form. */
