@@ -2,7 +2,7 @@
 
 ## v0.63.0 - The AI agent's conversation, easier to follow while it works
 
-**Release date:** not yet released
+**Release date:** 2026-10-30
 
 The AI agent's conversation drew the model's notes as steps of "What it did", each with a check mark and its text cut short. While the agent worked, its answer's card showed three grey bars, a copy button and "Used 21 tools" under an answer not yet written: nothing said that it was at work, nor on what. And the field to write to it sat in a square band of the page's colour, a box on the glass material's washes. Its notes now read as its words between its steps, what it is doing is said where its answer will be, and the field floats over the conversation without a box. The components are ioiti-ui's, released as 0.6.0 for this.
 
