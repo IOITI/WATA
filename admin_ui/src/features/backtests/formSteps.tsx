@@ -369,11 +369,11 @@ export function PeriodStep({
             : `Local days of ${options.timezone}, ${options.limits.period_days} at most. Only the days the price recorder kept turbos of can be traded.`
         }
       >
+        {/* A range half chosen stays so until its end is picked: given back with an end, the calendar would start a
+            range again at the next day picked, and no range of several days could be chosen. */}
         <DateRangePicker
           value={range}
-          onChange={(chosen) =>
-            update({ from: chosen.from ? toIsoDay(chosen.from) : '', to: chosen.to ? toIsoDay(chosen.to) : chosen.from ? toIsoDay(chosen.from) : '' })
-          }
+          onChange={(chosen) => update({ from: chosen.from ? toIsoDay(chosen.from) : '', to: chosen.to ? toIsoDay(chosen.to) : '' })}
           placeholder="Period"
           align="start"
           locale="en-GB"

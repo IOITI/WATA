@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.63.1 - A backtest's period chosen in two clicks
+
+**Release date:** not yet released
+
+The New backtest form's period could only be one day: each click on its calendar started the range again (seen on 2026-10-30, so since v0.21.0, which made the form). While a range has its first day and not its last, the calendar holds it with no end; the form filled that end with the first day, so the calendar was handed back a range already complete, and took the next click for the start of another one. The form now leaves the end empty until it is picked: the field says "13 Oct 2026 – …" between the two clicks, what was recorded is read once the period is whole, and the review says "Choose the period." until then. The turbo model's "Recorded days", on the Backtests page, had the same fault and has the same fix: "Measure them" waits for the last day. The Dukascopy downloads' period and an asset's chart kept the half-chosen range, and worked.
+
+**On the live path:** nothing. The admin's interface alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Two tests pick a period in two clicks, the form's and the turbo model's: both fail on v0.63.0 and pass. 1,236 tests pass, with lint, typecheck and build.
+- Seen in a browser on the fake admin: 13 then 20 October picked, the field "13 Oct 2026 – 20 Oct 2026", what was recorded read for those eight days.
+
 ## v0.63.0 - The AI agent's conversation, easier to follow while it works
 
 **Release date:** 2026-10-30

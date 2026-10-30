@@ -552,6 +552,26 @@ describe('the list of backtests', () => {
     expect(screen.getByRole('button', { name: 'Measure them' })).toBeDisabled()
   })
 
+  it('measures them on days chosen in two clicks, not before the last one is picked', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    await screen.findByText(/^Not measured yet/)
+    const field = screen.getByRole('button', { name: /^\d{1,2} \w{3} \d{4} – / })
+    await user.click(field)
+    const calendar = await screen.findByRole('dialog', { name: 'Choose date' })
+    await user.click(within(calendar).getByRole('button', { name: / 10 / }))
+    expect(field).toHaveTextContent(/^10 \w{3} \d{4} – …$/)
+    expect(screen.getByRole('button', { name: 'Measure them' })).toBeDisabled()
+    await user.click(within(calendar).getByRole('button', { name: / 20 / }))
+    expect(field).toHaveTextContent(/^10 \w{3} \d{4} – 20 \w{3} \d{4}$/)
+
+    await user.click(screen.getByRole('button', { name: 'Measure them' }))
+    const asked = sent.find((request) => request.method === 'POST' && request.path === '/api/backtests/turbo-model')?.body as { from: string; to: string }
+    expect(asked.from).toMatch(/-10$/)
+    expect(asked.to).toMatch(/-20$/)
+  })
+
   it('shows what the turbos were measured on and how well the model prices them', async () => {
     turboModel = { ...turboModel, state: 'done', measure: MEASURE }
     renderAt('/backtests')
@@ -636,6 +656,31 @@ describe('a new backtest', () => {
       },
       changes: { stoploss_percent: -10, capital: 21.82, signal_delay_seconds: 2.6, order_seconds: 0.4, slippage: 0.005 },
       baseline: { repetitions: 100, seed: 1 },
+    })
+  })
+
+  it('takes a period of several days in two clicks of its calendar', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests/new')
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    await screen.findByText('Cross up')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    // The last seven days by default: the first day picked starts another range, the second ends it.
+    const field = await screen.findByRole('button', { name: /^\d{1,2} \w{3} \d{4} – \d{1,2} \w{3} \d{4}$/ })
+    await user.click(field)
+    const calendar = await screen.findByRole('dialog', { name: 'Choose date' })
+    await user.click(within(calendar).getByRole('button', { name: / 10 / }))
+    expect(field).toHaveTextContent(/^10 \w{3} \d{4} – …$/)
+    await user.click(within(calendar).getByRole('button', { name: / 20 / }))
+    expect(field).toHaveTextContent(/^10 \w{3} \d{4} – 20 \w{3} \d{4}$/)
+
+    // What was recorded is read for the whole period, never for a half-chosen one.
+    await waitFor(() => {
+      const asked = sent.filter((request) => request.path.startsWith('/api/backtests/coverage?')).map((request) => new URLSearchParams(request.path.split('?')[1]))
+      expect(asked.at(-1)?.get('from')).toMatch(/-10$/)
+      expect(asked.at(-1)?.get('to')).toMatch(/-20$/)
+      expect(asked.every((params) => /^\d{4}-\d{2}-\d{2}$/.test(params.get('to') ?? ''))).toBe(true)
     })
   })
 

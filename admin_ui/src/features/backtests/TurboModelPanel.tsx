@@ -33,7 +33,7 @@ export function TurboModelPanel() {
   const model = modelQuery.data
   if (!model) return null
   const state = measureState(model)
-  const range: DateRange = { from: new Date(`${period.from}T12:00:00`), to: new Date(`${period.to}T12:00:00`) }
+  const range: DateRange = { from: new Date(`${period.from}T12:00:00`), to: period.to ? new Date(`${period.to}T12:00:00`) : null }
   return (
     <Panel
       title="Turbos made up from the index"
@@ -99,10 +99,11 @@ export function TurboModelPanel() {
           </Alert>
         )}
         <div className="flex flex-wrap items-center gap-3">
+          {/* Its end empty until it is picked: given back with one, the calendar would start a range again. */}
           <DateRangePicker
             value={range}
             onChange={(chosen) => {
-              if (chosen.from) setPeriod({ from: toIsoDay(chosen.from), to: toIsoDay(chosen.to ?? chosen.from) })
+              if (chosen.from) setPeriod({ from: toIsoDay(chosen.from), to: chosen.to ? toIsoDay(chosen.to) : '' })
             }}
             placeholder="Recorded days"
             align="start"
@@ -113,7 +114,7 @@ export function TurboModelPanel() {
             size="sm"
             leftIcon={<Ruler className="size-3.5" />}
             isLoading={measure.isPending}
-            disabled={model.state === 'running'}
+            disabled={model.state === 'running' || !period.to}
             onClick={() => measure.mutate()}
           >
             {model.measure ? 'Measure them again' : 'Measure them'}
