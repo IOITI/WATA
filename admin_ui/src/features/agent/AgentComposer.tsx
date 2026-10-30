@@ -1,7 +1,7 @@
 // What is asked of the AI agent: a new conversation (about a run or a script when given), or the next request
 // of one, with the model and the effort it goes to (the conversation's last, else the settings'). Sending queues
 // it: the admin works on it whether the page stays open or not. Under the field, beside the limits, the size of
-// the context window the conversation fills.
+// the context window the conversation fills. Floating, at a page's foot, it stands over what scrolls under it.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertDescription, PromptComposer } from 'ioiti-ui'
@@ -17,12 +17,16 @@ import { conversationKey, useAgentState } from './useConversation'
 
 const MAX_PROMPT = 8000
 
-export function AgentComposer({ conversation, subject, onStarted, className }: {
+export function AgentComposer({ conversation, subject, onStarted, onSent, floating, className }: {
   /** The conversation the request goes to; none: a new one. */
   conversation?: AgentConversation | null
   /** What a new conversation is about. */
   subject?: Pick<AgentSubject, 'kind' | 'id' | 'version' | 'day' | 'at'> | null
   onStarted?: (id: string) => void
+  /** A request was sent: the page goes to its foot, where it will be. */
+  onSent?: () => void
+  /** At the foot of a page, over what scrolls under it, with no band behind it. */
+  floating?: boolean
   className?: string
 }) {
   const queryClient = useQueryClient()
@@ -51,6 +55,7 @@ export function AgentComposer({ conversation, subject, onStarted, className }: {
       refresh()
       void queryClient.invalidateQueries({ queryKey: conversationKey(made.id) })
       if (!conversation) onStarted?.(made.id)
+      onSent?.()
     },
   })
   const stop = useMutation({
@@ -91,6 +96,7 @@ export function AgentComposer({ conversation, subject, onStarted, className }: {
         controls={controls}
         footer={footer || undefined}
         maxLength={MAX_PROMPT}
+        floating={floating}
       />
       {(send.error || stop.error) && (
         <Alert tone="danger" role="alert" className="mt-2">

@@ -29,7 +29,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.2",
     "framer-motion": "^13.5.1",
-    "ioiti-ui": "github:IOITI/ioiti-ui#v0.5.4",
+    "ioiti-ui": "github:IOITI/ioiti-ui#v0.6.0",
     "lightweight-charts": "^5.2.1",
     "lucide-react": "^1.55.0",
     "pinescript-v6-validator": "0.4.3",

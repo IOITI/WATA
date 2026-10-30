@@ -1,5 +1,7 @@
 // A conversation with the AI agent, request by request: what was asked (and shared), what the agent did
-// (ioiti-ui's AIAgentActivity), its answer as it streams (AIResponse), what it proposed, how it ended.
+// (ioiti-ui's AIAgentActivity, its notes between its steps, folded once a newer request is asked), what it is
+// doing while nothing of its answer is written, its answer as it streams (AIResponse), what it proposed, how it
+// ended.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -17,6 +19,7 @@ import {
   formatTime,
 } from 'ioiti-ui'
 import { RotateCw } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { useSession } from '@/features/auth/auth-context'
@@ -25,6 +28,7 @@ import type { AgentConversation, AgentProposal, AgentRequest } from '@/lib/types
 
 import {
   activityItems,
+  activitySummary,
   answerOf,
   costText,
   isUnderWay,
@@ -34,15 +38,19 @@ import {
   subjectLink,
   subjectSaid,
   toolsOf,
+  workingOf,
 } from './model'
 import { MEMORY_DONE, memoryLink } from './memoryModel'
 import { ProposalCard } from './ProposalCard'
 import { conversationKey, useAgentState } from './useConversation'
 
-function RequestView({ conversation, request, last, blockedFor, onApplied }: {
+function RequestView({ conversation, request, last, open, onOpenChange, blockedFor, onApplied }: {
   conversation: AgentConversation
   request: AgentRequest
   last: boolean
+  /** Whether what it did is shown, or folded to its line. */
+  open: boolean
+  onOpenChange: (open: boolean) => void
   blockedFor?: (proposal: AgentProposal) => string | null
   onApplied?: (proposal: AgentProposal) => void
 }) {
@@ -96,9 +104,13 @@ function RequestView({ conversation, request, last, blockedFor, onApplied }: {
           isRunning={running}
           title="What it did"
           agentName={asked}
-          summary={`${tools.length} tool call${tools.length === 1 ? '' : 's'}`}
+          summary={activitySummary(request)}
           inputLabel="Given"
           outputLabel="Answered"
+          notesLabel="Its notes"
+          collapsible
+          open={open}
+          onOpenChange={onOpenChange}
         />
       )}
       <AIResponse
@@ -108,10 +120,12 @@ function RequestView({ conversation, request, last, blockedFor, onApplied }: {
         feedback={request.feedback}
         onFeedback={running ? undefined : (value) => feedback.mutate(request.feedback === value ? null : value)}
         onRegenerate={last && !running ? () => ask.mutate(request.prompt) : undefined}
+        thinking={workingOf(request, pending) ?? undefined}
       >
         <AIResponseHeader title="Claude" modelBadge={model} timestamp={request.ended_at ? formatTime(request.ended_at, timezone) : undefined} />
         <AIResponseContent />
-        <AIResponseToolsSummary toolCount={tools.length} tools={tools} />
+        {/* While it works, what it did lists its tools as they run. */}
+        {!running && <AIResponseToolsSummary toolCount={tools.length} tools={tools} />}
         <AIResponseSources />
         <AIResponseActions />
       </AIResponse>
@@ -157,12 +171,21 @@ export function ConversationView({ conversation, blockedFor, onApplied }: {
   blockedFor?: (proposal: AgentProposal) => string | null
   onApplied?: (proposal: AgentProposal) => void
 }) {
+  // What the operator opened or folded, by conversation and request: otherwise what the newest request did is
+  // shown, and what one under way does, the others folded to their line.
+  const [opened, setOpened] = useState<Record<string, boolean>>({})
   return (
     <div className="space-y-8">
-      {conversation.requests.map((request, index) => (
-        <RequestView key={request.index} conversation={conversation} request={request}
-          last={index === conversation.requests.length - 1} blockedFor={blockedFor} onApplied={onApplied} />
-      ))}
+      {conversation.requests.map((request, index) => {
+        const key = `${conversation.id}/${request.index}`
+        const last = index === conversation.requests.length - 1
+        return (
+          <RequestView key={request.index} conversation={conversation} request={request} last={last}
+            open={opened[key] ?? (last || isUnderWay(request.status))}
+            onOpenChange={(open) => setOpened((current) => ({ ...current, [key]: open }))}
+            blockedFor={blockedFor} onApplied={onApplied} />
+        )
+      })}
     </div>
   )
 }

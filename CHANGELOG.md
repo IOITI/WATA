@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.63.0 - The AI agent's conversation, easier to follow while it works
+
+**Release date:** not yet released
+
+The AI agent's conversation drew the model's notes as steps of "What it did", each with a check mark and its text cut short. While the agent worked, its answer's card showed three grey bars, a copy button and "Used 21 tools" under an answer not yet written: nothing said that it was at work, nor on what. And the field to write to it sat in a square band of the page's colour, a box on the glass material's washes. Its notes now read as its words between its steps, what it is doing is said where its answer will be, and the field floats over the conversation without a box. The components are ioiti-ui's, released as 0.6.0 for this.
+
+- **Its notes are its words, not steps** (ioiti-ui's `AIAgentActivity`, `kind: 'note'`). A note is drawn whole, as a paragraph between stretches of the timeline; several in a row are one group, named "Its notes" for a screen reader. The timeline's line stops at them, and a step after them starts a new stretch. A note still being written ends with a blinking caret.
+- **What it is doing, while it works** (`workingOf` in `admin_ui/src/features/agent/model.ts`, given to `AIResponse` as `thinking`). Where its answer will be: three dots, the call it is writing or the step it is running ("Waiting for 3 runs", "Starting a backtest", else "Thinking"), and the time it has worked. Under it, one line at a time, every 4 seconds: the length of the call it is writing or each run's progress while it waits, the last sentences of its latest thought, then a tally ("21 tool calls so far · 3 runs started"). Before anything is known: "Reading the request" and "Planning its first steps". The lines stop turning under the pointer, and a screen reader reads out what it is doing, never each line or second. No copy button under an answer not yet written, and the tools pill once the request has ended.
+- **No box behind the field** (`PromptComposer`'s `floating`). The band of the page's colour behind the conversation's field is gone: the field floats over the conversation with its own shadow, and its own blur on the glass material.
+- **The newest step followed** (`useFollowLatest`). While a request is under way, the conversation's page and the sheet opened from another page stay at its foot as steps and words arrive, unless the operator scrolled up: a "Latest" button then brings the view back. A question sent goes to the foot. A conversation opens on its foot while it works, otherwise on its newest question.
+- **Answered requests fold.** Once a newer question is asked, the activity of the ones before folds to one line ("7 tool calls · 8 notes · 25 s", `activitySummary`); one the operator opened stays open.
+- **Quieter steps.** A step that took less than a tenth of a second says no time: every read said "0.0 s".
+
+**On the live path:** nothing. The admin's interface alone (`admin_ui/src/features/agent/`, and ioiti-ui from 0.5.4 to 0.6.0).
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- ioiti-ui 0.6.0: 501 tests, among them the notes and their stretches, the folding, the indicator's lines on a fake clock and their pause, the floating field and narrow screens; its release check passed on GitHub. Seen in its gallery in the flat, glass and bloom looks, light and dark, at 1,280 and 375 px.
+- The admin's interface: the notes and the folded line, `workingOf` in each state (waiting its turn, writing a call, waiting for runs, thinking, before anything is known), and following the newest step (9 tests on a page made to scroll by hand). 1,234 tests pass, with lint, typecheck and build, on ioiti-ui 0.6.0 as GitHub serves it. The Python tests that read the interface's files, and the release manifest's, pass (382).
+- Seen in a browser on the fake admin (`FAKE_AI=1`): a run's stress test asked of the agent, its notes between the steps, the indicator and its time, the Latest button, a second question folding the first's activity, the field without a box on glass and bloom in both themes, and a phone's width. The fake agent answers in seconds, so the turning lines were watched at length in ioiti-ui's gallery. Not seen on the server yet.
+
 ## v0.62.0 - A backtest's day drawn with the script that made its signals
 
 **Release date:** 2026-10-29

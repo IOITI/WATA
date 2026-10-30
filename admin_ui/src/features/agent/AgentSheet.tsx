@@ -2,6 +2,7 @@
 // day, an entry of the health). A sheet that pushes the page aside on a wide screen (over it on a narrow one),
 // its conversations about this subject, the one open, and what to ask next. Its state is in the address
 // (?agent=<conversation>, ?agent=new, and for a list's row ?about=<kind>:<id>): a link opens it, a reload keeps it.
+// While it works, the sheet follows its newest step (useFollowLatest).
 
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -16,6 +17,7 @@ import {
   QueryState,
 } from 'ioiti-ui'
 import { ExternalLink, Plus } from 'lucide-react'
+import { useRef } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { api } from '@/lib/api'
@@ -23,8 +25,10 @@ import type { AgentProposal, AgentSubject } from '@/lib/types'
 
 import { AgentComposer } from './AgentComposer'
 import { ConversationView } from './ConversationView'
-import { ABOUT_PARAM, AGENT_PARAM, costText, NEW, STATUS_LABEL, subjectOf, subjectSaid, withAgent } from './model'
+import { LatestButton } from './LatestButton'
+import { ABOUT_PARAM, AGENT_PARAM, costText, isUnderWay, NEW, STATUS_LABEL, subjectOf, subjectSaid, withAgent } from './model'
 import { useConversation } from './useConversation'
+import { useFollowLatest } from './useFollowLatest'
 
 // The conversation open in the accent where the look has one, as a tab shown is.
 const CHIP =
@@ -60,6 +64,10 @@ export function AgentSheet({ subject: given, blockedFor, onApplied }: {
     next.delete(ABOUT_PARAM)
     setParams(next, { replace: true })
   }
+  const body = useRef<HTMLDivElement>(null)
+  const drawn = useRef<HTMLDivElement>(null)
+  const shown = chosen ? conversation.data : undefined
+  const follow = useFollowLatest(body, drawn, { id: shown ? shown.id : null, live: !!shown && isUnderWay(shown.status) })
   if (!subject && !chosen) return null
 
   return (
@@ -71,7 +79,7 @@ export function AgentSheet({ subject: given, blockedFor, onApplied }: {
             {subject ? `${subjectSaid(subject)}: ` : ''}it reads it, runs backtests within its limits and proposes changes you apply.
           </FlysheetDescription>
         </FlysheetHeader>
-        <FlysheetBody className="space-y-4">
+        <FlysheetBody ref={body} className="space-y-4">
           <nav aria-label="Conversations about it" className="flex flex-wrap gap-1.5">
             <Link to={withAgent(params, NEW)} replace aria-current={open === NEW ? 'page' : undefined} className={CHIP}>
               <Plus aria-hidden className="size-3" /> New
@@ -85,7 +93,11 @@ export function AgentSheet({ subject: given, blockedFor, onApplied }: {
           </nav>
           {chosen ? (
             <QueryState isPending={conversation.isPending} error={conversation.error} hasData={!!conversation.data}>
-              {conversation.data && <ConversationView conversation={conversation.data} blockedFor={blockedFor} onApplied={onApplied} />}
+              {conversation.data && (
+                <div ref={drawn}>
+                  <ConversationView conversation={conversation.data} blockedFor={blockedFor} onApplied={onApplied} />
+                </div>
+              )}
             </QueryState>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -94,8 +106,10 @@ export function AgentSheet({ subject: given, blockedFor, onApplied }: {
             </p>
           )}
         </FlysheetBody>
-        <FlysheetFooter className="block space-y-2">
-          <AgentComposer conversation={chosen ? conversation.data : null} subject={chosen ? null : subject} onStarted={choose} />
+        <FlysheetFooter className="relative block space-y-2">
+          {follow.away && <LatestButton onClick={follow.jump} />}
+          <AgentComposer conversation={chosen ? conversation.data : null} subject={chosen ? null : subject} onStarted={choose}
+            onSent={follow.follow} />
           {chosen && (
             <ButtonLink to={`/agent/${encodeURIComponent(chosen)}`} size="sm" variant="ghost" leftIcon={<ExternalLink className="size-3.5" />}>
               On its own page

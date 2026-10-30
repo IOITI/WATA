@@ -1,7 +1,7 @@
 // The AI agent's conversations as the pages show them (src/admin/agent/transcript.py projects them): each
-// request's steps as activity, its answer as a response, what it rests on, the requests offered to start
-// from, the text streamed folded in as it comes, why nothing can be asked, the model and effort a request
-// goes with, and what its context window holds. Pure.
+// request's steps as activity (its notes between them), what it is doing while it works, its answer as a
+// response, what it rests on, the requests offered to start from, the text streamed folded in as it comes, why
+// nothing can be asked, the model and effort a request goes with, and what its context window holds. Pure.
 
 import type { AgentActivityItemData, AIResponseSource, AIResponseStatus, ActivityType } from 'ioiti-ui'
 
@@ -307,10 +307,24 @@ export function writingTitle(tool: string | null | undefined): string {
   return (tool && WRITING[tool]) ?? `Writing a call to ${tool ?? 'a tool'}`
 }
 
+/** A step under way, in its present tense: what it was given, where that says more. */
+function doingTitle(tool: string, input: unknown): string {
+  if (tool === 'backtest_wait') return `Waiting for ${runs(((input && typeof input === 'object' ? input : {}) as Input).run_ids)}`
+  return writingTitle(tool)
+}
+
 function seconds(from?: string | null, to?: string | null): number | null {
   if (!from || !to) return null
   const span = (Date.parse(to) - Date.parse(from)) / 1000
   return Number.isFinite(span) && span >= 0 ? span : null
+}
+
+// A step quicker than this says no time: every read would say "0.0 s".
+const SHOWN_FROM_SECONDS = 0.1
+
+function stepSpan(step: AgentStep): number | null {
+  const span = seconds(step.started_at, step.ended_at)
+  return span !== null && span >= SHOWN_FROM_SECONDS ? span : null
 }
 
 export function durationText(span: number | null): string | undefined {
@@ -337,7 +351,10 @@ const STEP_STATUS: Record<NonNullable<AgentStep['state']>, AgentActivityItemData
   cancelled: 'cancelled',
 }
 
-/** A request's steps as the activity shows them, the step being written (pending) last. */
+/**
+ * A request's steps as the activity shows them, the step being written (pending) last. Its notes are notes: its
+ * words between two stretches of its steps, never steps of the timeline.
+ */
 export function activityItems(
   request: AgentRequest,
   pending: AgentPending | null,
@@ -345,7 +362,7 @@ export function activityItems(
 ): AgentActivityItemData[] {
   const items: AgentActivityItemData[] = request.steps.map((step) => {
     if (step.kind === 'note') {
-      return { id: step.id, type: 'thinking', title: step.text ?? '', status: 'success', statusLabel: 'Note',
+      return { id: step.id, kind: 'note', type: 'thinking', title: step.text ?? '', status: 'success',
         timestamp: step.at ? time(step.at) : undefined }
     }
     const state = step.state ?? 'running'
@@ -359,14 +376,14 @@ export function activityItems(
       status: STEP_STATUS[state],
       statusLabel: waiting ? 'Waiting' : state === 'running' ? 'Running' : state === 'done' ? 'Done'
         : state === 'error' ? 'Refused' : 'Stopped',
-      duration: durationText(seconds(step.started_at, step.ended_at)),
+      duration: durationText(stepSpan(step)),
       timestamp: step.started_at ? time(step.started_at) : undefined,
       details: { input: (step.input ?? undefined) as Record<string, unknown> | undefined, output: output(step.output) },
     }
   })
   if (pending && pending.request === request.index) {
     const note = joined(pending.note)
-    if (note) items.push({ id: 'pending-note', type: 'thinking', title: note, status: 'running', statusLabel: 'Thinking' })
+    if (note) items.push({ id: 'pending-note', kind: 'note', type: 'thinking', title: note, status: 'running' })
     if (pending.writing) {
       items.push({ id: 'pending-writing', type: 'writing', title: writingTitle(pending.writing.tool),
         description: pending.writing.chars > 0 ? `${pending.writing.chars.toLocaleString()} characters so far` : undefined,
@@ -376,9 +393,76 @@ export function activityItems(
   return items
 }
 
+/** What a request did, in a line (its activity folded): its tool calls, its notes, and the time it took once ended. */
+export function activitySummary(request: AgentRequest): string {
+  const count = (kind: AgentStep['kind']) => request.steps.filter((step) => step.kind === kind).length
+  const tools = count('tool')
+  const notes = count('note')
+  const took = isUnderWay(request.status) ? undefined : durationText(seconds(request.started_at, request.ended_at))
+  return [`${tools} tool call${tools === 1 ? '' : 's'}`, notes > 0 ? `${notes} note${notes === 1 ? '' : 's'}` : null, took]
+    .filter(Boolean).join(' · ')
+}
+
 /** The blocks of a text streamed, in their order. */
 export function joined(blocks: Record<string, string> | undefined): string {
   return Object.keys(blocks ?? {}).sort((a, b) => Number(a) - Number(b)).map((key) => blocks![key]).join('').trim()
+}
+
+// ── what it is doing ──
+
+/** What the agent is doing on a request under way, said where its answer will be until it writes it. */
+export interface Working {
+  /** What it does now. */
+  label: string
+  /** What it is about, said in turn under it: the step's progress, its latest thought, how much it did. */
+  lines: string[]
+  /** When it began: the time it has taken. */
+  since?: string
+}
+
+const THOUGHT_SENTENCES = 3
+const LINE_CHARS = 160
+
+/** The last sentences of a text, each cut to a line: a sentence ends where a stop is followed by a space. */
+export function lastSentences(text: string, count = THOUGHT_SENTENCES): string[] {
+  return text.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/).filter(Boolean).slice(-count)
+    .map((sentence) => (sentence.length > LINE_CHARS ? `${sentence.slice(0, LINE_CHARS - 1).trimEnd()}…` : sentence))
+}
+
+/**
+ * What a request under way is doing, from its own state: the call being written, else the step running, else
+ * thinking; under it the step's progress (a wait's runs one by one) or the call's length so far, the last
+ * sentences of its latest thought (the note streamed, else the last one), and what it did so far. Before any of
+ * that, the first things a request does. None once it ended.
+ */
+export function workingOf(request: AgentRequest, pending: AgentPending | null): Working | null {
+  if (!isUnderWay(request.status)) return null
+  if (request.status === 'queued') return { label: OUTCOME_LABEL.queued, lines: [], since: request.asked_at ?? undefined }
+  const mine = pending && pending.request === request.index ? pending : null
+  const tools = request.steps.filter((step) => step.kind === 'tool')
+  const running = tools.findLast((step) => step.state === 'running')
+  let label = 'Thinking'
+  let doing: string[] = []
+  if (mine?.writing) {
+    label = writingTitle(mine.writing.tool)
+    if (mine.writing.chars > 0) doing = [`${mine.writing.chars.toLocaleString()} characters of its call written`]
+  } else if (running) {
+    label = doingTitle(running.tool ?? '', running.input)
+    doing = (running.progress ?? '').split('; ').map((part) => part.trim()).filter(Boolean)
+  }
+  const thought = joined(mine?.note) || (request.steps.findLast((step) => step.kind === 'note')?.text ?? '')
+  const started = request.runs.length
+  const tally = tools.length > 0
+    ? [`${tools.length} tool call${tools.length === 1 ? '' : 's'} so far`, started ? `${started} run${started === 1 ? '' : 's'} started` : null]
+      .filter(Boolean).join(' · ')
+    : null
+  const lines = [...doing, ...lastSentences(thought), ...(tally ? [tally] : [])]
+  return {
+    label,
+    lines: lines.length > 0 ? lines
+      : [request.shared ? 'Reading the request and what was shared' : 'Reading the request', 'Planning its first steps'],
+    since: request.started_at ?? request.asked_at ?? undefined,
+  }
 }
 
 /** A request's answer as the response shows it: its text, streamed while it comes, or how it ended. */
@@ -428,7 +512,7 @@ export function toolsOf(request: AgentRequest): { name: string; status: 'success
     .map((step) => ({
       name: step.tool ?? '?',
       status: step.state === 'error' ? 'error' : step.state === 'running' ? 'running' : 'success',
-      duration: durationText(seconds(step.started_at, step.ended_at)),
+      duration: durationText(stepSpan(step)),
     }))
 }
 

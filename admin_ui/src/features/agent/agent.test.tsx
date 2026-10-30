@@ -243,7 +243,8 @@ describe('the AI agent', () => {
     const user = userEvent.setup()
     renderAt(`/agent/${ID}`)
 
-    expect(await screen.findByText('Reading the run first.')).toBeInTheDocument()
+    // Its note is its words between its steps, not a step.
+    expect(await screen.findByRole('group', { name: 'Its notes' })).toHaveTextContent('Reading the run first.')
     expect(screen.getByText(`Read run ${RUN}`)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '21 days' })).toHaveAttribute('href', `/backtests/${RUN}`)
     const proposal = screen.getByRole('region', { name: 'Proposal: A slower fast line' })
@@ -289,6 +290,32 @@ describe('the AI agent', () => {
 
     await waitFor(() => expect(sent.some((request) => request.method === 'POST'
       && request.path === `/api/agent/conversations/${PROPOSING_ID}/proposals/${NEW_SCRIPT.id}/apply`)).toBe(true))
+  })
+
+  it('says what a request under way is doing where its answer will be, without its tools or a copy yet', async () => {
+    renderAt(`/agent/${RUNNING_ID}`)
+
+    const working = await screen.findByText('Thinking')
+    expect(working.closest('[role="status"]')).toHaveTextContent(/^Thinking$/)
+    // Its latest thought, said again where the answer will be, beside its note.
+    expect(screen.getAllByText('Reading the run first.')).toHaveLength(2)
+    expect(screen.queryByRole('status', { name: 'Generating response' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Used 1 tool/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy response' })).toBeNull()
+  })
+
+  it('folds what an earlier request did to its line, and opens it at a click', async () => {
+    const user = userEvent.setup()
+    renderAt(`/agent/${TASK_ID}`)
+
+    const folds = await screen.findAllByRole('button', { name: /What it did/ })
+    expect(folds.map((fold) => fold.getAttribute('aria-expanded'))).toEqual(['false', 'true'])
+    expect(folds[0]).toHaveTextContent('1 tool call · 1 note · 5 min')
+    expect(screen.getAllByText(`Read run ${RUN}`)).toHaveLength(1)
+
+    await user.click(folds[0])
+    expect(folds[0]).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getAllByText(`Read run ${RUN}`)).toHaveLength(2)
   })
 
   it('stops a request under way from its conversation', async () => {

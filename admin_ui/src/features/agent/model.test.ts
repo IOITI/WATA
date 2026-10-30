@@ -4,6 +4,7 @@ import type { AgentContext, AgentConversation, AgentModel, AgentRequest, AgentSt
 
 import {
   activityItems,
+  activitySummary,
   answerOf,
   aboutParam,
   askAbout,
@@ -17,6 +18,7 @@ import {
   foldDelta,
   foldWriting,
   headlineSaid,
+  lastSentences,
   limitsSaid,
   modelSaid,
   outcomeSaid,
@@ -34,6 +36,7 @@ import {
   tokensText,
   toolsOf,
   unreadBy,
+  workingOf,
   writersOf,
   writingTitle,
 } from './model'
@@ -71,7 +74,7 @@ describe('a step', () => {
     expect(stepTitle('unknown_tool', {})).toBe('unknown_tool')
   })
 
-  it('becomes an activity item with its state in words, its time and what it was given and answered', () => {
+  it('becomes an activity item with its state in words, its time and what it was given and answered; a note a note', () => {
     const items = activityItems(request({
       steps: [
         { kind: 'note', id: 'n', at: '2026-10-28T08:00:02Z', text: 'Reading the run first.' },
@@ -84,12 +87,13 @@ describe('a step', () => {
       ],
     }), null, time)
 
-    expect(items.map((item) => [item.title, item.status, item.statusLabel])).toEqual([
-      ['Reading the run first.', 'success', 'Note'],
-      ['Read run r1', 'success', 'Done'],
-      ['Waited for run r2', 'running', 'Waiting'],
-      ['Saved the script "X"', 'error', 'Refused'],
+    expect(items.map((item) => [item.title, item.kind ?? 'step', item.status, item.statusLabel])).toEqual([
+      ['Reading the run first.', 'note', 'success', undefined],
+      ['Read run r1', 'step', 'success', 'Done'],
+      ['Waited for run r2', 'step', 'running', 'Waiting'],
+      ['Saved the script "X"', 'step', 'error', 'Refused'],
     ])
+    expect(items[0].timestamp).toBe('08:00:02')
     expect(items[1]).toMatchObject({ duration: '1.5 s', timestamp: '08:00:03', details: { output: { trades: 42 } } })
     expect(items[2].description).toBe('r2: 2nd in line')
     expect(items[3].description).toBe('A new script needs a name')
@@ -100,7 +104,33 @@ describe('a step', () => {
       writing: { tool: 'backtest_start', chars: 1240 } }, time)
 
     expect(items.map((item) => item.title)).toEqual(['Looking at the edge', 'Starting a backtest'])
+    // The thought being written is a note, its call a step.
+    expect(items[0]).toMatchObject({ kind: 'note', status: 'running' })
+    expect(items[1].kind).toBeUndefined()
     expect(items[1]).toMatchObject({ description: '1,240 characters so far', statusLabel: 'Writing' })
+  })
+
+  it('says no time for a step quicker than a tenth of a second, where every read said "0.0 s"', () => {
+    const steps: AgentRequest['steps'] = [
+      { kind: 'tool', id: 'a', tool: 'status', state: 'done', started_at: '2026-10-28T08:00:00Z', ended_at: '2026-10-28T08:00:00.040Z' },
+      { kind: 'tool', id: 'b', tool: 'rule_list', state: 'done', started_at: '2026-10-28T08:00:00Z', ended_at: '2026-10-28T08:00:00.100Z' },
+    ]
+
+    expect(activityItems(request({ steps }), null, time).map((item) => item.duration)).toEqual([undefined, '0.1 s'])
+    expect(toolsOf(request({ steps })).map((tool) => tool.duration)).toEqual([undefined, '0.1 s'])
+  })
+
+  it('folds into a line: its tool calls, its notes, and the time it took once it ended', () => {
+    const steps: AgentRequest['steps'] = [
+      { kind: 'note', id: 'n0', text: 'First.' },
+      { kind: 'tool', id: 'a', tool: 'status', state: 'done' },
+      { kind: 'note', id: 'n1', text: 'Then.' },
+      { kind: 'tool', id: 'b', tool: 'rule_list', state: 'done' },
+    ]
+
+    expect(activitySummary(request({ steps, status: 'done', ended_at: '2026-10-28T08:14:01Z' })))
+      .toBe('2 tool calls · 2 notes · 14 min')
+    expect(activitySummary(request({ steps: steps.slice(1, 2) }))).toBe('1 tool call')
   })
 
   it('says each tool while its call is written, without what it is not given yet', () => {
@@ -333,3 +363,62 @@ describe('the tools of the live trading, the proposals and the tasks, as their s
     expect(writingTitle('propose_new_script')).toBe('Proposing a new script')
   })
 })
+
+describe('what it is doing', () => {
+  const wait: AgentRequest['steps'][number] = {
+    kind: 'tool', id: 'w', tool: 'backtest_wait', input: { run_ids: ['a', 'b', 'c'] }, started_at: '2026-10-28T08:03:00Z',
+    state: 'running', progress: 'a: done; b: done; c: signals, 288 of 356',
+  }
+
+  it('is nothing once a request ended, and its turn while it waits for one', () => {
+    expect(workingOf(request({ status: 'done' }), null)).toBeNull()
+    expect(workingOf(request({ status: 'queued', started_at: null }), null))
+      .toEqual({ label: 'Waiting its turn', lines: [], since: '2026-10-28T08:00:00Z' })
+  })
+
+  it('says a wait run by run, then its latest thought sentence by sentence, then what it did so far', () => {
+    const working = workingOf(request({
+      status: 'waiting', runs: ['a', 'b', 'c'],
+      steps: [
+        { kind: 'note', id: 'n0', text: 'An old thought.' },
+        { kind: 'tool', id: 't', tool: 'backtest_start', state: 'done' },
+        { kind: 'note', id: 'n1', text: 'The paper run returned -9.01% over 35 trades. Its late days carry it.\nI stress it next.' },
+        wait,
+      ],
+    }), null)
+
+    expect(working).toEqual({
+      label: 'Waiting for 3 runs',
+      lines: ['a: done', 'b: done', 'c: signals, 288 of 356', 'The paper run returned -9.01% over 35 trades.',
+        'Its late days carry it.', 'I stress it next.', '2 tool calls so far · 3 runs started'],
+      since: '2026-10-28T08:00:01Z',
+    })
+  })
+
+  it('says the call it writes, and the thought it streams before what was kept', () => {
+    const working = workingOf(request({ steps: [{ kind: 'note', id: 'n', text: 'Kept.' }] }),
+      { request: 0, text: {}, note: { 0: 'Streamed so far, still' }, writing: { tool: 'backtest_start', chars: 1240 } })
+
+    expect(working?.label).toBe('Starting a backtest')
+    expect(working?.lines).toEqual(['1,240 characters of its call written', 'Streamed so far, still'])
+  })
+
+  it('thinks between its steps, and says the first things a request does before anything is known', () => {
+    const done = workingOf(request({ steps: [{ kind: 'tool', id: 't', tool: 'status', state: 'done' }] }), null)
+    expect(done).toMatchObject({ label: 'Thinking', lines: ['1 tool call so far'] })
+    // The stream of another request says nothing of this one.
+    expect(workingOf(request(), { request: 1, text: {}, note: { 0: 'Elsewhere' }, writing: null })?.lines)
+      .toEqual(['Reading the request and what was shared', 'Planning its first steps'])
+    expect(workingOf(request({ shared: null }), null)?.lines).toEqual(['Reading the request', 'Planning its first steps'])
+  })
+
+  it('cuts a thought into its last sentences, a figure with its point kept whole, each to a line', () => {
+    expect(lastSentences('One. Two! Three? Four… and five')).toEqual(['Two!', 'Three?', 'Four… and five'])
+    expect(lastSentences('It made +1.25 % on 2.5 days.')).toEqual(['It made +1.25 % on 2.5 days.'])
+    const long = lastSentences(`${'x'.repeat(300)}.`)[0]
+    expect(long).toHaveLength(160)
+    expect(long.endsWith('…')).toBe(true)
+    expect(lastSentences('   ')).toEqual([])
+  })
+})
+
