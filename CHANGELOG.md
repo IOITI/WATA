@@ -2,7 +2,7 @@
 
 ## v0.64.0 - Quick ranges of days for a backtest, and its period fitted to the days recorded
 
-**Release date:** not yet released
+**Release date:** 2026-10-30
 
 A new backtest's period was chosen in its calendar alone, and a period reaching before the price recorder's first days, or past its last, only said how many of its days could be traded. Its Days to trade now has two buttons.
 
