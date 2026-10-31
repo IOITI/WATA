@@ -51,8 +51,14 @@ SWEEP = "A sweep's combinations each ran with inputs of their own: run one on it
 
 
 def _instant(value) -> float | None:
+    """
+    A moment as epoch seconds: an ISO time (a run's files), a datetime (the journal's rows as the
+    database gives them, which a rule's day reads) or seconds; None for anything else.
+    """
     if isinstance(value, bool):
         return None
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp()
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str):
@@ -229,62 +235,13 @@ async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, r
         history_days = settings.get("history_days", 1)
         exact = True
     elif source.get("kind") == TA_SIGNALS:
-        rule_id = (source.get("rule") or {}).get("id")
         raised = read_json(os.path.join(folder, RAISED_FILE)) or []
-        rules = rules or RuleStore(scripts)
-        history = history or RuleHistory(scripts.root)
-        try:
-            rule_now = rules.rule(rule_id)
-        except (RuleNotFound, InvalidRule):
-            rule_now = None
-        definition, known = history.definition_at(rule_now, rule_id, begin)
-        version, raised_versions, chosen = day_version(raised, begin, end, (definition or {}).get("script", {}).get("version"))
-        if version is None:
-            raise NotPossible("The rule is gone, and no signal of it says which script it ran: nothing to draw")
-        own = [row for row in raised if isinstance(row.get("script_id"), str)]
-        script_id = (definition or {}).get("script", {}).get("id") or (own[-1]["script_id"] if own else None)
-        if chosen == "raised" and own:
-            script_id = next(row["script_id"] for row in own if row.get("script_version") == version)
-        if script_id is None:
-            raise NotPossible("The rule is gone, and no signal of it says which script it ran: nothing to draw")
-        script, libraries, pinned, libraries_said = _rule_parts(scripts, script_id, version, definition)
-
-        of_day = [row for row in raised if begin < (_instant(row.get("bar_closed_at")) or 0) <= end]
-        last = of_day[-1] if of_day else None
-        try:
-            if last is not None:
-                provider, key = str(last["asset"]).split("/", 1)
-                chart = {"asset": {"provider": provider, "key": key}, "side": last["side"], "bars": bars_of_label(last["bars"])}
-            elif definition is not None:
-                chart = {"asset": definition["asset"], "side": definition["side"], "bars": definition["bars"]}
-            else:
-                chart = request["chart"]
-        except (KeyError, ValueError, InvalidRule):
-            chart = request["chart"]
-        inputs = (definition or {}).get("inputs") or []
-        inputs_version = (definition or {}).get("script", {}).get("version")
-        history_days = (definition or {}).get("history_days", settings.get("history_days", 1))
-        exact = known and pinned
-        if len(raised_versions) > 1:
-            notes.append(f"Its signals that day were raised by versions {', '.join(map(str, raised_versions))} of the "
-                         f"script: drawn with version {version}, which raised most of them.")
-        elif chosen != "raised":
-            notes.append(f"No signal of the rule that day says which script it ran: drawn with version {version}"
-                         + (", the nearest one raised." if chosen != "rule" else ", the rule's."))
-        if definition is None:
-            notes.append("The rule is gone, and WATA kept no record of its inputs then: drawn with the script's own.")
-        elif not known:
-            changed = _instant((rule_now or {}).get("run_changed_at"))
-            notes.append(
-                ("The rule changed " + (f"on {_said(changed)}, " if changed else "") + "after this day, before WATA kept "
-                 "what each rule ran: ")
-                + f"drawn with version {version}, which raised its signals, and the rule's inputs of now, matched by name."
-            )
-        elif not pinned:
-            notes.append(f"The rule ran version {inputs_version} when this engine day began: drawn with version {version}, "
-                         "which raised its signals, and the rule's inputs of then, matched by name.")
-        if libraries_said:
-            notes.append(libraries_said)
+        parts = rule_day_parts(scripts, (source.get("rule") or {}).get("id"), raised, begin, end, rules=rules,
+                               history=history, chart=request.get("chart"), history_days=settings.get("history_days", 1))
+        script, libraries, chart = parts["script"], parts["libraries"], parts["chart"]
+        inputs, inputs_version, history_days, exact = (parts["inputs"], parts["inputs_version"], parts["history_days"],
+                                                       parts["exact"])
+        notes.extend(parts["notes"])
     elif source.get("kind") == "journal":
         raise NotPossible(NO_SCRIPT)
     else:
@@ -292,9 +249,17 @@ async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, r
 
     anchor = begin - int(history_days) * DAY
     bars, decimals = await window_bars(rows, chart, anchor, end)
+    return _drawn(source["kind"], script, libraries, inputs, inputs_version, chart, decimals, begin, end, anchor,
+                  history_days, restart_time, bars, exact, notes)
+
+
+def _drawn(kind: str, script: dict, libraries: list[dict], inputs: list, inputs_version, chart: dict, decimals,
+           begin: int, end: int, anchor: int, history_days, restart_time: str, bars: list, exact: bool,
+           notes: list[str]) -> dict:
+    """What a day is drawn with, a run's or a rule's: the script and its inputs, and the bars it ran on."""
     engine_rule = EngineRule({"asset": chart["asset"], "side": chart["side"], "bars": chart["bars"], "inputs": []}, "")
     return {
-        "kind": source["kind"],
+        "kind": kind,
         "script": script,
         "libraries": libraries,
         "inputs": inputs,
@@ -310,3 +275,118 @@ async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, r
         "exact": exact,
         "notes": notes,
     }
+
+
+def rule_day_parts(scripts: ScriptStore, rule_id: str | None, raised: list[dict], begin: int, end: int, *,
+                   rules: RuleStore | None = None, history: RuleHistory | None = None, chart: dict | None = None,
+                   history_days=1, moment: int | None = None) -> dict:
+    """
+    What a signal rule ran on the engine day [begin, end), from the signals it raised (``raised``,
+    the journal's rows: ``script_id``, ``script_version``, ``bar_closed_at``, ``asset``, ``side``, ``bars``)
+    and its history at ``moment`` (``begin`` unless said): the version of its script that raised most
+    of that day's signals, its libraries and inputs then, its asset, side and bars, and what to say
+    when that is not known exactly. A paper run's day and a rule's page draw a day with it; ``chart``
+    and ``history_days`` stand for what nothing else says.
+    """
+    rules = rules or RuleStore(scripts)
+    history = history or RuleHistory(scripts.root)
+    try:
+        rule_now = rules.rule(rule_id)
+    except (RuleNotFound, InvalidRule):
+        rule_now = None
+    definition, known = history.definition_at(rule_now, rule_id, begin if moment is None else moment)
+    version, raised_versions, chosen = day_version(raised, begin, end, (definition or {}).get("script", {}).get("version"))
+    if version is None:
+        raise NotPossible("The rule is gone, and no signal of it says which script it ran: nothing to draw")
+    own = [row for row in raised if isinstance(row.get("script_id"), str)]
+    script_id = (definition or {}).get("script", {}).get("id") or (own[-1]["script_id"] if own else None)
+    if chosen == "raised" and own:
+        script_id = next(row["script_id"] for row in own if row.get("script_version") == version)
+    if script_id is None:
+        raise NotPossible("The rule is gone, and no signal of it says which script it ran: nothing to draw")
+    script, libraries, pinned, libraries_said = _rule_parts(scripts, script_id, version, definition)
+
+    of_day = [row for row in raised if begin < (_instant(row.get("bar_closed_at")) or 0) <= end]
+    last = of_day[-1] if of_day else None
+    try:
+        if last is not None:
+            provider, key = str(last["asset"]).split("/", 1)
+            drawn_on = {"asset": {"provider": provider, "key": key}, "side": last["side"], "bars": bars_of_label(last["bars"])}
+        elif definition is not None:
+            drawn_on = {"asset": definition["asset"], "side": definition["side"], "bars": definition["bars"]}
+        else:
+            drawn_on = chart
+    except (KeyError, ValueError, InvalidRule):
+        drawn_on = chart
+    if drawn_on is None:
+        raise NotPossible("Nothing says which bars the rule ran on: nothing to draw")
+    inputs = (definition or {}).get("inputs") or []
+    inputs_version = (definition or {}).get("script", {}).get("version")
+    notes = []
+    if len(raised_versions) > 1:
+        notes.append(f"Its signals that day were raised by versions {', '.join(map(str, raised_versions))} of the "
+                     f"script: drawn with version {version}, which raised most of them.")
+    elif chosen != "raised":
+        notes.append(f"No signal of the rule that day says which script it ran: drawn with version {version}"
+                     + (", the nearest one raised." if chosen != "rule" else ", the rule's."))
+    if definition is None:
+        notes.append("The rule is gone, and WATA kept no record of its inputs then: drawn with the script's own.")
+    elif not known:
+        changed = _instant((rule_now or {}).get("run_changed_at"))
+        notes.append(
+            ("The rule changed " + (f"on {_said(changed)}, " if changed else "") + "after this day, before WATA kept "
+             "what each rule ran: ")
+            + f"drawn with version {version}, which raised its signals, and the rule's inputs of now, matched by name."
+        )
+    elif not pinned:
+        notes.append(f"The rule ran version {inputs_version} when this engine day began: drawn with version {version}, "
+                     "which raised its signals, and the rule's inputs of then, matched by name.")
+    if libraries_said:
+        notes.append(libraries_said)
+    return {
+        "script": script,
+        "libraries": libraries,
+        "chart": drawn_on,
+        "inputs": inputs,
+        "inputs_version": inputs_version,
+        "history_days": (definition or {}).get("history_days", history_days),
+        "exact": known and pinned,
+        "notes": notes,
+    }
+
+
+async def rule_day_indicator(day: date, rule: dict, raised: list[dict], *, scripts: ScriptStore, rows, zone: str,
+                             restart_time: str, history_days, rules: RuleStore | None = None,
+                             history: RuleHistory | None = None) -> dict:
+    """
+    A day of a signal rule with its script, as the engine ran it, for the rule's page
+    (GET /api/ta/rules/{id}/days/{day}/indicator): the engine day holding the day's noon in the
+    trading timezone, its bars from ``history_days`` before its restart (the rule's own, else the
+    engine's), the script, libraries and inputs it ran then (``rule_day_parts``), and the signals it
+    raised that engine day (``raised``, the journal's rows, oldest first in the answer).
+    """
+    if day.weekday() >= 5:
+        raise InvalidRequest(f"{day.isoformat()} is a {day.strftime('%A')}: the market is closed, and the engine has no day")
+    # Oldest first, as a run keeps them: the latest is the last.
+    raised = sorted(raised, key=lambda row: (_instant(row.get("bar_closed_at")) or 0, row.get("id") or 0))
+    begin, end = day_window(day, zone, restart_time)
+    made = _instant(rule.get("created_at"))
+    if made is not None and made >= end:
+        raise InvalidRequest(f"The rule was made on {_said(made)}: {day.isoformat()} comes before it")
+    parts = rule_day_parts(
+        scripts, rule["id"], raised, begin, end, rules=rules, history=history,
+        chart={"asset": rule["asset"], "side": rule["side"], "bars": rule["bars"]}, history_days=history_days,
+        # A rule made during the day is drawn as it was made.
+        moment=begin if made is None or made < begin else int(made) + 1,
+    )
+    chart = parts["chart"]
+    anchor = begin - int(parts["history_days"]) * DAY
+    bars, decimals = await window_bars(rows, chart, anchor, end)
+    if not any(bar[0] >= begin * 1000 for bar in bars):
+        raise NotPossible(f"No bar of {chart['asset']['provider']}/{chart['asset']['key']} that engine day: "
+                          "its feed recorded nothing then")
+    answer = _drawn("rule", parts["script"], parts["libraries"], parts["inputs"], parts["inputs_version"], chart, decimals,
+                    begin, end, anchor, parts["history_days"], restart_time, bars, parts["exact"], parts["notes"])
+    answer["day"] = day.isoformat()
+    answer["signals"] = [row for row in raised if begin < (_instant(row.get("bar_closed_at")) or 0) <= end]
+    return answer

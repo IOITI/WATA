@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 
 import { api } from '@/lib/api'
 
-import { barsLabel, MODE_LABEL } from './ruleModel'
+import { barsLabel, MODE_LABEL, rulePath } from './ruleModel'
 
 /** What a signal rule is: its mode, its script and version, what it runs on. */
 export function RulePeek({ id }: { id: string }) {
@@ -34,10 +34,10 @@ export function RulePeek({ id }: { id: string }) {
   )
 }
 
-/** A rule's name, previewed on hover, keyboard focus or a tap: rules have no page of their own. */
+/** A rule's name, previewed on hover, keyboard focus or a tap, with the way to its page. */
 export function RulePeekName({ id, name }: { id: string; name: string }) {
   return (
-    <PeekCard renderContent={() => <RulePeek id={id} />} href="/ta/signals" hrefLabel="The signal rules" linkComponent={RouterLink}>
+    <PeekCard renderContent={() => <RulePeek id={id} />} href={rulePath(id)} hrefLabel="Its page" linkComponent={RouterLink}>
       <button type="button" className="underline decoration-dotted underline-offset-4">
         {name}
       </button>

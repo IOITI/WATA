@@ -21,6 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from src.admin import proposed_actions
 from src.admin.agent.proposals import RULE_LIVE, RULE_OUT
 from src.admin.auth import client_ip, require_session
+from src.admin.backtest_indicator import rule_day_indicator
 from src.admin.health import DOWN, ta_engine_health
 from src.admin.routers.actions import _allowed_indices, require_actions_enabled
 from src.admin.ta_compare import compare, default_tolerance
@@ -36,7 +37,7 @@ from src.admin.ta_monitor import (
     period_of,
     rules_by_id,
 )
-from src.admin.rule_history import RecordedRuleStore
+from src.admin.rule_history import RecordedRuleStore, RuleHistory, rule_timeline
 from src.admin.ta_history import DAY, HistoryCount, last_restart
 from src.admin.ta_rules import (
     LIVE,
@@ -60,6 +61,7 @@ from src.admin.script_origins import UNREAD_LICENCE, needs_licence_check, with_o
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
 from src.admin.errors import ServiceUnavailable
 from src.capital_feed.settings import CapitalSettings
+from src.ta_engine.replay import AssetRows
 from src.ta_engine.settings import TaEngineSettings
 from src.trade.signal_sources import ENGINE, source_of, sources_from
 
@@ -487,6 +489,55 @@ async def compare_rule(
         "indice": rule["indice"],
         **compare(wata, others, tolerance if tolerance is not None else default_tolerance(rule["bars"])),
     }
+
+
+# The audit entries a rule's history is looked for in: the newest, as many as the trail reads at most.
+AUDIT_LOOKED_AT = 1000
+
+
+@router.get("/rules/{rule_id}/history")
+async def rule_history(rule_id: str, request: Request, store=Depends(scripts), rule_store: RuleStore = Depends(rules)):
+    """
+    What a rule ran over time, newest first: its making, each change of what it runs, and its
+    switches into and out of live with the changes made to it while live, as the audit trail
+    recorded them, without anyone's address (src/admin/rule_history.py rule_timeline).
+    """
+    rule = await run_in_threadpool(rule_store.rule, rule_id)
+    lines = await run_in_threadpool(RuleHistory(store.root).lines)
+    audit_log = request.app.state.ctx.audit_log
+    audit = await run_in_threadpool(audit_log.read, AUDIT_LOOKED_AT) if audit_log is not None else []
+    names = {meta["id"]: meta["name"] for meta in await run_in_threadpool(store.scripts)}
+    return {
+        "rule_id": rule_id,
+        "mode": rule["mode"],
+        "mode_since": rule.get("mode_changed_at"),
+        "events": rule_timeline(lines, audit, rule, names),
+    }
+
+
+# The signals of a rule a day of its page is drawn with: those of a day either side of it, at most.
+RAISED_LOOKED_AT = 2000
+
+
+@router.get("/rules/{rule_id}/days/{day}/indicator")
+async def rule_day(rule_id: str, day: date, request: Request, store=Depends(scripts), rule_store: RuleStore = Depends(rules)):
+    """
+    A day of the rule with its script, as the engine ran it (src/admin/backtest_indicator.py
+    rule_day_indicator): the source, libraries and inputs it ran then, the bars of that engine
+    day from its days of history before the restart, read through the admin's read-only database,
+    and the signals it raised that engine day.
+    """
+    ctx = request.app.state.ctx
+    rule = await run_in_threadpool(rule_store.rule, rule_id)
+    engine = _engine_settings(ctx.config_manager)
+    # The engine day holding the day's noon began the evening before: its signals are read a day either side.
+    raised = await ctx.queries.ta_signals(start=day - timedelta(days=1), end=day + timedelta(days=1), rule_id=rule_id,
+                                          limit=RAISED_LOOKED_AT)
+    # The rows where the runs read them: the admin's read-only database, or the recorded days' files.
+    db = getattr(ctx.queries, "db", None)
+    rows = ctx.backtests.asset_rows(db) if ctx.backtests is not None else AssetRows(ctx.settings.price_history_path, db)
+    return await rule_day_indicator(day, rule, raised, scripts=store, rows=rows, zone=ctx.settings.timezone,
+                                    restart_time=engine.restart_time, history_days=engine.history_days, rules=rule_store)
 
 
 def _moment(seconds: float) -> datetime:

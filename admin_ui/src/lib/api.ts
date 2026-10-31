@@ -102,6 +102,7 @@ import type {
   ResearchFiles,
   ResearchLockbox,
   RestartPlan,
+  RuleDayIndicator,
   SaxoProviderDetails,
   SaxoStatus,
   ServicesState,
@@ -114,6 +115,7 @@ import type {
   TaMonitor,
   TaMonitorNow,
   TaRuleFields,
+  TaRuleHistory,
   TaRuleMode,
   TaRules,
   TaRuleSaved,
@@ -532,6 +534,11 @@ export const api = {
     request<TaMonitor>('GET', `/api/ta/monitor${query({ hours: params.hours, rule: params.rule ?? undefined })}`),
   taComparison: (id: string, day: string, tolerance?: number) =>
     request<TaComparison>('GET', `/api/ta/rules/${encodeURIComponent(id)}/comparison${query({ day, tolerance })}`),
+  /** What a rule ran over time: its making, its changes, its switches into and out of live. */
+  taRuleHistory: (id: string) => request<TaRuleHistory>('GET', `/api/ta/rules/${encodeURIComponent(id)}/history`),
+  /** A day of a rule with its script as the engine ran it, and its signals of that engine day. */
+  taRuleDay: (id: string, day: string) =>
+    request<RuleDayIndicator>('GET', `/api/ta/rules/${encodeURIComponent(id)}/days/${encodeURIComponent(day)}/indicator`),
 
   // ── Claude's research through the MCP endpoint: watched, paused, its tokens revoked ──
   mcp: () => request<McpState>('GET', '/api/mcp'),

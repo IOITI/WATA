@@ -9,6 +9,7 @@ import { useMemo } from 'react'
 import { Link } from 'react-router'
 
 import { useSession } from '@/features/auth/auth-context'
+import { rulePath } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
 import type { AgentArtefact } from '@/lib/types'
 
@@ -32,7 +33,7 @@ function what(row: AgentArtefact): { text: string; to: string | null } {
     case 'script':
       return { text: `${row.name ?? row.id} v${row.version ?? '?'}`, to: `/ta/indicators/${encodeURIComponent(row.id)}` }
     case 'rule':
-      return { text: `${row.name ?? row.id}${row.mode ? ` (${row.mode})` : ''}`, to: '/ta/signals' }
+      return { text: `${row.name ?? row.id}${row.mode ? ` (${row.mode})` : ''}`, to: rulePath(row.id) }
     case 'experiment':
       return { text: `Experiment ${row.id}`, to: '/backtests/experiments' }
     case 'proposal':
@@ -47,7 +48,7 @@ function what(row: AgentArtefact): { text: string; to: string | null } {
       if (result?.script_id && result.name) return { text: `A new script: ${result.name}`, to: `/ta/indicators/${encodeURIComponent(result.script_id)}` }
       if (result?.script_id) return { text: `A new version: v${result.version}`, to: `/ta/indicators/${encodeURIComponent(result.script_id)}` }
       if (result?.revision) return { text: 'Settings saved to config.json', to: '/config/versions' }
-      if (result?.rule_id) return { text: `A rule changed: it runs v${result.script_version}`, to: '/ta/signals' }
+      if (result?.rule_id) return { text: `A rule changed: it runs v${result.script_version}`, to: rulePath(result.rule_id) }
       return { text: `Proposal ${row.id}`, to: `/agent/${encodeURIComponent(row.conversation)}#proposal-${row.id}` }
     }
   }

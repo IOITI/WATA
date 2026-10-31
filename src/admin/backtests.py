@@ -1677,11 +1677,16 @@ class BacktestService:
         (src/admin/backtest_indicator.py). The asset's rows are read where the runs read them: through
         ``db``, the admin's read-only database, or from the recorded days' files (``files:<folder>``).
         """
+        return await backtest_indicator.day_indicator(self._directory(run_id), day, scripts=self._scripts,
+                                                      rows=rows or self.asset_rows(db))
+
+    def asset_rows(self, db=None) -> AssetRows:
+        """
+        The assets' ten-second rows where the runs read them: through ``db``, the admin's read-only
+        database, or from the recorded days' files (``files:<folder>``). A rule's day is drawn on them too.
+        """
         files = self._data.removeprefix("files:") if self._data.startswith("files:") else None
-        return await backtest_indicator.day_indicator(
-            self._directory(run_id), day, scripts=self._scripts,
-            rows=rows or AssetRows(self._prices_root, None if files else db, files_root=files),
-        )
+        return AssetRows(self._prices_root, None if files else db, files_root=files)
 
     def edge(self, run_id: str) -> dict | None:
         """How the asset moved after the run's entry signals; None for a run made before it was measured."""

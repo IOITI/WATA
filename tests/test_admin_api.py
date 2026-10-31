@@ -170,6 +170,8 @@ AUTHENTICATED_ROUTES = [
     ("DELETE", "/api/ta/rules/0123456789ab"),
     ("POST", "/api/ta/rules/0123456789ab/mode"),
     ("GET", "/api/ta/rules/0123456789ab/comparison"),
+    ("GET", "/api/ta/rules/0123456789ab/history"),
+    ("GET", "/api/ta/rules/0123456789ab/days/2026-10-12/indicator"),
     ("GET", "/api/ta/signals"),
     ("GET", "/api/ta/engine"),
     ("GET", "/api/ta/monitor/now"),

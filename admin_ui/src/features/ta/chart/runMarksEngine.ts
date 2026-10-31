@@ -18,7 +18,7 @@ export function runModel(layer: RunLayer, instanceId: string): IndicatorModel {
   return {
     id: instanceId,
     title: layer.title,
-    shorttitle: 'The run',
+    shorttitle: layer.short ?? 'The run',
     overlay: true,
     paneHint: 'price',
     series: [],

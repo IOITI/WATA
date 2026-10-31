@@ -11,6 +11,9 @@ import { timeframeOf } from '../engine/timeframes'
 
 export const MODE_LABEL: Record<TaRuleMode, string> = { off: 'Off', shadow: 'Shadow', live: 'Live' }
 
+/** A rule's own page: its state, evidence, history and actions (SignalRulePage.tsx). */
+export const rulePath = (id: string) => `/ta/signals/${encodeURIComponent(id)}`
+
 /** The server's refusal of a rule not ready, which the page may not have seen coming (its view is 10 s old at most). */
 export const notReadyRefusal = (error: Error | null) =>
   error instanceof ApiError && error.status === 409 && error.message.startsWith('Not ready to go live')
@@ -22,6 +25,15 @@ export const conflictText = (error: Error | null) =>
     : error instanceof ApiError && error.status === 403
       ? 'Operator actions are disabled in the configuration (admin.actions_enabled): no rule goes live.'
       : error?.message ?? null
+
+/** What the TA engine says of a rule it runs (its state in ta_engine_state), in words and a tone. */
+export const ENGINE_STATE: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
+  loading: { label: 'Loading', tone: 'warning' },
+  waiting: { label: 'Waiting for bars', tone: 'warning' },
+  running: { label: 'Running', tone: 'success' },
+  error: { label: 'Failing', tone: 'danger' },
+  off: { label: 'Off', tone: 'neutral' },
+}
 
 export const MODE_TONE: Record<TaRuleMode, 'neutral' | 'warning' | 'danger'> = {
   off: 'neutral',

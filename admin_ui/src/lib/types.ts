@@ -2416,7 +2416,8 @@ export interface BacktestSignal {
  * libraries and inputs, and the bars it ran on, from the engine's restart and its days of history before it.
  */
 export interface BacktestDayIndicator {
-  kind: 'pine' | 'ta_signals'
+  /** A Pine run's, a paper run's (the signals a rule raised), or a rule's own day on its page. */
+  kind: 'pine' | 'ta_signals' | 'rule'
   script: { id: string; version: number; name: string | null; source: string }
   libraries: { name: string; id: string; version: number; source: string }[]
   inputs: TaRuleInput[]
@@ -2787,6 +2788,58 @@ export interface TaHistory {
   now: number
   /** The oldest first; each ends at a restart, the last at the last one. */
   engine_days: { start: string; end: string; bars: number }[]
+}
+
+/** A script a rule ran, as its history names it: the script's name now (null once it is gone). */
+export interface TaRuleRanScript {
+  id: string | null
+  name: string | null
+  version: number | null
+}
+
+/** What a rule ran when it was made (src/admin/rule_history.py runs_of): its inputs counted. */
+export interface TaRuleRuns {
+  script: TaRuleRanScript | null
+  libraries: { name: string; version: number }[]
+  asset: { provider: string; key: string } | null
+  side: string | null
+  bars: TaRuleBars | null
+  history_days: number | null
+  inputs: number
+}
+
+/** A field of what a rule runs that a change changed (changes_between); an input by its name. */
+export type TaRuleChange =
+  | { what: 'script'; before: TaRuleRanScript | null; after: TaRuleRanScript | null }
+  | { what: 'libraries'; before: { name: string; version: number }[]; after: { name: string; version: number }[] }
+  | { what: 'asset'; before: { provider: string; key: string } | null; after: { provider: string; key: string } | null }
+  | { what: 'side'; before: string | null; after: string | null }
+  | { what: 'bars'; before: TaRuleBars | null; after: TaRuleBars | null }
+  | { what: 'history_days'; before: number | null; after: number | null }
+  | { what: 'input'; id: string; name: string; before: number | string | boolean | null; after: number | string | boolean | null }
+
+/** An event of a rule's history (rule_timeline), newest first. */
+export type TaRuleEvent =
+  | { at: string; kind: 'made'; by: string | null; runs: TaRuleRuns | null }
+  /** `live`: made to the live rule, with what else changed then that it does not run (its name, alerts...). */
+  | { at: string; kind: 'changed'; changes: TaRuleChange[]; live: boolean; also: string[] }
+  | { at: string; kind: 'live'; unmet: string[]; licence: string | null; proposed: string | null }
+  | { at: string; kind: 'left_live'; to: string; proposed: string | null }
+  /** A change of the live rule that changed nothing it runs. */
+  | { at: string; kind: 'changed_live'; fields: string[] }
+
+/** What a rule ran over time (GET /api/ta/rules/{id}/history). */
+export interface TaRuleHistory {
+  rule_id: string
+  mode: TaRuleMode
+  mode_since: string | null
+  events: TaRuleEvent[]
+}
+
+/** A day of a rule with its script as the engine ran it, and its signals of that engine day. */
+export interface RuleDayIndicator extends BacktestDayIndicator {
+  day: string
+  signals: TaSignal[]
 }
 
 export interface TaRuleSaved {

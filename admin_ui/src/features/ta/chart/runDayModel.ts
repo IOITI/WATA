@@ -21,10 +21,15 @@ export type RunColors = Record<MarkerTone, string> & { warmUp: string }
 /** What the host engine draws: the run's signals as labels, its trades as Vela's trade markers. */
 export interface RunLayer {
   title: string
+  /** Its name in Vela's legend: the run's unless said (a rule's page says "The rule"). */
+  short?: string
   labels: DrawingLabel[]
   trades: TradeExecution[]
   backgrounds: Background[]
 }
+
+/** A layer made on the bars it is drawn on: the run's (runLayer), or a rule's journal on its page. */
+export type LayerOf = (rows: readonly Row[], colors: RunColors, dayStart: number) => RunLayer
 
 export function velaBars(rows: readonly Row[]): OHLCV[] {
   return rows.map(([time, open, high, low, close, volume]) => ({ time, open, high, low, close, volume }))

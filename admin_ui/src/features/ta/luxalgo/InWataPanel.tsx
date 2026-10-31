@@ -9,7 +9,7 @@ import { Link } from 'react-router'
 import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { VERDICT_SAID, verdictTone } from '@/features/agent/model'
-import { MODE_LABEL } from '@/features/ta/signals/ruleModel'
+import { MODE_LABEL, rulePath } from '@/features/ta/signals/ruleModel'
 import { api } from '@/lib/api'
 import type { LuxAlgoKnown, LuxAlgoVerdict } from '@/lib/types'
 
@@ -103,7 +103,7 @@ export function InWataPanel({ slug, known }: { slug: string; known: LuxAlgoKnown
             <ul className="flex flex-col gap-1">
               {known.rules.map((rule) => (
                 <li key={rule.id} className="flex flex-wrap items-center gap-2">
-                  <Link to="/ta/signals" className="underline-offset-4 hover:underline">
+                  <Link to={rulePath(rule.id)} className="underline-offset-4 hover:underline">
                     {rule.name}
                   </Link>
                   <Badge variant="outline">{MODE_LABEL[rule.mode]}</Badge>

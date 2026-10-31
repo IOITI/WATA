@@ -12,7 +12,15 @@ import pytest
 from src.admin.agent.proposals import Proposals
 from src.admin.agent.store import ConversationStore
 from src.admin.mcp_server.facade import ResearchServices
-from src.admin.rule_history import HISTORY_FILE, RecordedRuleStore, RuleHistory, definition_at, run_fields
+from src.admin.rule_history import (
+    HISTORY_FILE,
+    RecordedRuleStore,
+    RuleHistory,
+    changes_between,
+    definition_at,
+    rule_timeline,
+    run_fields,
+)
 from tests.test_admin_api import SAME_ORIGIN  # noqa: F401
 from tests.test_admin_ta_rules import (  # noqa: F401 (fixtures)
     STRATEGY,
@@ -177,3 +185,97 @@ def test_the_file_is_one_object_a_line(recorded, scripts, cross):
 
     with open(os.path.join(scripts.root, HISTORY_FILE), encoding="utf-8") as history_file:
         assert [json.loads(line)["rule_id"] for line in history_file.read().splitlines()] == [recorded.load()["rules"][0]["id"]]
+
+
+# ── a rule's page: what it ran over time ──
+
+
+def test_a_rule_s_history_says_what_it_ran_and_its_switches_into_and_out_of_live_newest_first(api, cross):
+    client, _ = api
+    made = client.post("/api/ta/rules", json=body(cross, client.get("/api/ta/rules").json()["revision"]),
+                       headers=SAME_ORIGIN).json()
+    rule_id = made["rule"]["id"]
+    faster = [{"id": "in_0", "var": "fast", "title": "Fast", "value": 20}]
+    tuned = client.put(f"/api/ta/rules/{rule_id}", json=body(cross, made["revision"], inputs=faster),
+                       headers=SAME_ORIGIN).json()
+    # Taken live short of its readiness, changed while live (what it runs and its name), back in shadow.
+    live = client.post(f"/api/ta/rules/{rule_id}/mode", json={"mode": "live", "revision": tuned["revision"], "force": True},
+                       headers=SAME_ORIGIN).json()
+    asked = client.put(f"/api/ta/rules/{rule_id}", json=body(cross, live["revision"], inputs=faster, side="ask",
+                                                              name="Cross, asked"), headers=SAME_ORIGIN).json()
+    client.post(f"/api/ta/rules/{rule_id}/mode", json={"mode": "shadow", "revision": asked["revision"]}, headers=SAME_ORIGIN)
+
+    answer = client.get(f"/api/ta/rules/{rule_id}/history")
+
+    assert answer.status_code == 200 and answer.json()["mode"] == "shadow"
+    left, while_live, went_live, changed, made_event = answer.json()["events"]
+    assert made_event["kind"] == "made" and made_event["by"] is None
+    assert made_event["runs"]["script"] == {"id": cross["id"], "name": "Cross", "version": 1}
+    assert (made_event["runs"]["inputs"], made_event["runs"]["bars"]) == (1, {"type": "time", "timeframe": "1"})
+    assert changed["kind"] == "changed" and changed["live"] is False
+    assert changed["changes"] == [{"what": "input", "id": "in_0", "name": "Fast", "before": 12, "after": 20}]
+    assert went_live["kind"] == "live" and went_live["unmet"] == ["0 weekday(s) in shadow of 5", "no signal journaled yet"]
+    assert (went_live["licence"], went_live["proposed"]) == (None, None)
+    # The live rule's change said once: what it runs from its line, its name from the audit trail.
+    assert while_live["kind"] == "changed" and while_live["live"] is True and while_live["also"] == ["name"]
+    assert while_live["changes"] == [{"what": "side", "before": "bid", "after": "ask"}]
+    assert (left["kind"], left["to"], left["proposed"]) == ("left_live", "shadow", None)
+    # Nobody's address: the audit trail's are left out.
+    assert all("ip" not in event for event in answer.json()["events"]) and "testclient" not in answer.text
+
+
+def test_the_history_of_a_rule_that_is_not_there_is_not_found(api):
+    client, _ = api
+
+    assert client.get("/api/ta/rules/0123456789ab/history").status_code == 404
+
+
+def test_a_rule_made_before_its_history_and_a_switch_the_ai_agent_proposed_are_read_back():
+    rule = {"id": "a1b2c3d4e5f6", "created_at": "2026-10-01T08:00:00+00:00", "made_by": "claude"}
+    audit = [
+        {"at": "2026-10-20T09:00:00+00:00", "ip": "10.8.0.2",
+         "action": "signal rule live WITHOUT its readiness (no signal journaled yet), the licence of its script "
+                   "(CC BY-NC-SA 4.0) checked by the operator",
+         "detail": "rule 'Lux' (a1b2c3d4e5f6): indice=us100 asset=capital/US100 bid bars=R60 script='Lux' v2 "
+                   "Proposed by the AI agent: 'Take Lux live'"},
+        {"at": "2026-10-19T09:00:00+00:00", "ip": "10.8.0.2", "action": "signal rule live",
+         "detail": "rule 'Other' (ffffffffffff): indice=us100"},
+        {"at": "2026-10-21T09:00:00+00:00", "ip": "10.8.0.2", "action": "live signal rule changed",
+         "detail": "rule 'Lux' (a1b2c3d4e5f6): indice=us100 changed=name,alerts"},
+    ]
+
+    events = rule_timeline([], audit, rule, {})
+
+    assert events == [
+        # A change of the live rule that changed nothing it runs: said from the audit trail alone.
+        {"at": "2026-10-21T09:00:00+00:00", "kind": "changed_live", "fields": ["name", "alerts"]},
+        {"at": "2026-10-20T09:00:00+00:00", "kind": "live", "unmet": ["no signal journaled yet"],
+         "licence": "CC BY-NC-SA 4.0", "proposed": "Take Lux live"},
+        # Made before WATA kept what each rule ran: when and by whom, not what it ran then.
+        {"at": "2026-10-01T08:00:00+00:00", "kind": "made", "by": "claude", "runs": None},
+    ]
+
+
+def test_a_change_says_each_field_it_changed_and_each_input_by_its_name():
+    before = {
+        "script": {"id": "s1", "version": 1, "sha256": "a"}, "libraries": [{"name": "Maths", "id": "m", "version": 1}],
+        "asset": {"provider": "capital", "key": "US100"}, "side": "bid", "bars": {"type": "time", "timeframe": "1"},
+        "inputs": [{"id": "in_0", "var": "fast", "title": "Fast", "value": 12},
+                   {"id": "in_2", "var": "slow", "title": None, "value": 30}],
+    }
+    after = {
+        **before, "script": {"id": "s1", "version": 2, "sha256": "b"}, "libraries": [{"name": "Maths", "id": "m", "version": 2}],
+        "bars": {"type": "range", "ticks": 60}, "history_days": 0,
+        "inputs": [{"id": "in_0", "var": "fast", "title": "Fast", "value": 12},
+                   {"id": "in_10", "var": "band", "title": None, "value": 2.5}],
+    }
+
+    assert changes_between(before, after, {"s1": "Cross"}) == [
+        {"what": "script", "before": {"id": "s1", "name": "Cross", "version": 1},
+         "after": {"id": "s1", "name": "Cross", "version": 2}},
+        {"what": "libraries", "before": [{"name": "Maths", "version": 1}], "after": [{"name": "Maths", "version": 2}]},
+        {"what": "bars", "before": {"type": "time", "timeframe": "1"}, "after": {"type": "range", "ticks": 60}},
+        {"what": "history_days", "before": None, "after": 0},
+        {"what": "input", "id": "in_2", "name": "slow", "before": 30, "after": None},
+        {"what": "input", "id": "in_10", "name": "band", "before": None, "after": 2.5},
+    ]

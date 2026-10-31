@@ -27,9 +27,14 @@ const TRADER: Record<string, { label: string; tone: BadgeTone }> = {
   ignored: { label: 'Nothing to do', tone: 'neutral' },
 }
 
-export function SignalJournal({ rules, timeZone }: { rules: TaRule[]; timeZone: string }) {
+export function SignalJournal({ rules, timeZone, fixed = false }: {
+  rules: TaRule[]
+  timeZone: string
+  /** Held to the one rule given (a rule's page): no rule to choose, and no column naming it. */
+  fixed?: boolean
+}) {
   const [range, setRange] = useState<DateRange>(() => lastDays(7))
-  const [ruleId, setRuleId] = useState('')
+  const [ruleId, setRuleId] = useState(() => (fixed ? (rules[0]?.id ?? '') : ''))
   const params = { ...rangeParams(range), rule: ruleId || undefined }
   const signalsQuery = useQuery({
     queryKey: ['ta-signals', params],
@@ -123,6 +128,8 @@ export function SignalJournal({ rules, timeZone }: { rules: TaRule[]; timeZone: 
     ],
     [timeZone],
   )
+  // Held to one rule, the column naming it says nothing.
+  const shown = useMemo(() => (fixed ? columns.filter((column) => column.id !== 'rule') : columns), [columns, fixed])
 
   return (
     <Panel
@@ -131,14 +138,16 @@ export function SignalJournal({ rules, timeZone }: { rules: TaRule[]; timeZone: 
     >
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <DateRangeFilter value={range} onChange={setRange} />
-        <div className="w-56">
-          <Select
-            aria-label="Rule"
-            value={ruleId}
-            onChange={(event) => setRuleId(event.target.value)}
-            options={[{ value: '', label: 'Every rule' }, ...rules.map((rule) => ({ value: rule.id, label: rule.name }))]}
-          />
-        </div>
+        {!fixed && (
+          <div className="w-56">
+            <Select
+              aria-label="Rule"
+              value={ruleId}
+              onChange={(event) => setRuleId(event.target.value)}
+              options={[{ value: '', label: 'Every rule' }, ...rules.map((rule) => ({ value: rule.id, label: rule.name }))]}
+            />
+          </div>
+        )}
       </div>
       <QueryState isPending={signalsQuery.isPending} error={signalsQuery.error} hasData={!!signalsQuery.data}>
         <AdvancedDataTable<TaSignal>
@@ -146,7 +155,7 @@ export function SignalJournal({ rules, timeZone }: { rules: TaRule[]; timeZone: 
           emptyTitle="No signal in this period"
           emptyDescription="The engine journals one each time an alert of a rule becomes a signal."
           data={signalsQuery.data?.items ?? []}
-          columns={columns}
+          columns={shown}
           getRowId={(row) => String(row.id)}
           defaultPageSize={20}
           // Records: nothing to do with several at once.

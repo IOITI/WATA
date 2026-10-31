@@ -1,7 +1,8 @@
 // A day of a backtest on Vela: the bars its script ran on (from the engine's restart, with its days of
 // history before it), the script drawn as it ran (its plots, fills, shapes, backgrounds and labels, as on
 // the Charts page), and the run's signals and trades over it (runMarksEngine.ts), each a row of Vela's
-// legend that can be hidden. Not live, nothing saved.
+// legend that can be hidden. Not live, nothing saved. A signal rule's page draws a day of the rule with it,
+// its journal's signals the second layer (`layer`).
 //
 // With TaChart.tsx, the only files that build Vela. Its Pine worker is ended with the chart: Vela's
 // destroy() leaves an engine's worker running.
@@ -21,7 +22,7 @@ import { prepareScript } from '../engine/prepare'
 import type { LibraryResolver } from '../engine/prepare'
 import { PROVIDERS } from '../engine/tickers'
 import { dayStartIn, inputOverrides, runLayer, runProvider, runSymbol, visibleRangeOf } from './runDayModel'
-import type { RunColors } from './runDayModel'
+import type { LayerOf, RunColors } from './runDayModel'
 import { RUN_LANGUAGE, runMarksEngine } from './runMarksEngine'
 import { sharedAssets, wataProvider } from './wataProvider'
 
@@ -36,6 +37,13 @@ export interface RunDayChartProps {
   timeZone: string
   label: string
   className?: string
+  /** What the second layer draws, in place of the run's signals and trades (a rule's page: its journal). */
+  layer?: LayerOf
+}
+
+/** The second layer: the one given, else the run's signals and trades. */
+function layerOf(layer: LayerOf | undefined, signals: readonly BacktestSignal[], trades: readonly BacktestTrade[]): LayerOf {
+  return layer ?? ((rows, colors, dayStart) => runLayer(signals, trades, rows, colors, dayStart))
 }
 
 /** A token of the theme, as a colour the canvas takes: it knows no CSS variable. */
@@ -65,7 +73,7 @@ function librariesOf(answer: BacktestDayIndicator): LibraryResolver {
   return async (name) => answer.libraries.find((library) => library.name === name) ?? null
 }
 
-export function RunDayChart({ answer, day, signals, trades, selected, timeZone, label, className }: RunDayChartProps) {
+export function RunDayChart({ answer, day, signals, trades, selected, timeZone, label, className, layer }: RunDayChartProps) {
   const host = useRef<HTMLDivElement>(null)
   const chartRef = useRef<Vela | null>(null)
   const runRef = useRef<IndicatorHandle | null>(null)
@@ -80,9 +88,9 @@ export function RunDayChart({ answer, day, signals, trades, selected, timeZone, 
     [answer.inputs, answer.inputs_version, answer.script.version],
   )
   // What the chart is built with, read when it is: a later change is given to it below.
-  const latest = useRef({ selected, theme, signals, trades })
+  const latest = useRef({ selected, theme, signals, trades, layer })
   useEffect(() => {
-    latest.current = { selected, theme, signals, trades }
+    latest.current = { selected, theme, signals, trades, layer }
   })
 
   // Built once for a day: what changes afterwards is given to it below.
@@ -134,12 +142,9 @@ export function RunDayChart({ answer, day, signals, trades, selected, timeZone, 
         const prepared = await prepareScript(answer.script.source, librariesOf(answer))
         if (cancelled) return
         chart.addIndicator(prepared.source, { id: 'script', inputs: overrides.values })
-        const { signals: raised, trades: made } = latest.current
-        runRef.current = chart.addIndicator(JSON.stringify(runLayer(raised, made, answer.bars, runColors(), dayStart)), {
-          id: 'run',
-          language: RUN_LANGUAGE,
-          title: 'The run: signals and trades',
-        })
+        const { signals: raised, trades: made, layer: given } = latest.current
+        const drawn = layerOf(given, raised, made)(answer.bars, runColors(), dayStart)
+        runRef.current = chart.addIndicator(JSON.stringify(drawn), { id: 'run', language: RUN_LANGUAGE, title: drawn.title })
       } catch (failure) {
         if (!cancelled) setError(failure instanceof Error ? failure.message : String(failure))
       }
@@ -161,8 +166,8 @@ export function RunDayChart({ answer, day, signals, trades, selected, timeZone, 
     if (!chart) return
     chart.setTheme(theme)
     chart.renderer.set('tradeMarkers', { colors: tradeColors() })
-    void runRef.current?.updateCode(JSON.stringify(runLayer(signals, trades, answer.bars, runColors(), dayStart)))
-  }, [theme, signals, trades, answer.bars, dayStart])
+    void runRef.current?.updateCode(JSON.stringify(layerOf(layer, signals, trades)(answer.bars, runColors(), dayStart)))
+  }, [theme, signals, trades, layer, answer.bars, dayStart])
 
   // A trade chosen below is brought into view, and the day again once it is closed.
   useEffect(() => {

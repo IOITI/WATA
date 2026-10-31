@@ -249,6 +249,8 @@ describe('the Signal rules page', () => {
     renderPage()
 
     expect(await screen.findByText('Cross on US100', { selector: 'span' })).toBeInTheDocument()
+    // Each rule's name leads to its own page.
+    expect(screen.getByRole('link', { name: 'Cross on US100' })).toHaveAttribute('href', '/ta/signals/aaaaaaaaaaaa')
     expect(screen.getByText('“Up” → long')).toBeInTheDocument()
     expect(screen.getByText('Failing')).toBeInTheDocument()
     expect(screen.getByText('The script does not run: Undeclared identifier (script, line 4)')).toBeInTheDocument()

@@ -7,7 +7,7 @@ import { sourceLabel, STATE_LABEL } from '@/features/backtests/model'
 import { assetHref, assetKeywords, PROVIDER_LABELS } from '@/features/data/assets'
 import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { instrumentLabel } from '@/features/prices/chartData'
-import { barsLabel, MODE_LABEL } from '@/features/ta/signals/ruleModel'
+import { barsLabel, MODE_LABEL, rulePath } from '@/features/ta/signals/ruleModel'
 import { KIND_LABEL } from '@/features/ta/templates'
 import type { AgentConversationListed, AgentMemoryEntry, BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
 
@@ -59,14 +59,14 @@ export function memoryItems(entries: readonly AgentMemoryEntry[]): SpotlightSear
   }))
 }
 
-/** A rule has no page of its own: it leads to the list it is changed from. */
+/** A rule leads to its own page. */
 export function ruleItems(rules: readonly TaRule[]): SpotlightSearchItem[] {
   return rules.map((rule) => ({
     id: `rule-${rule.id}`,
     title: rule.name,
     category: 'Signal rule',
     description: `${MODE_LABEL[rule.mode]} · ${rule.asset.key} · ${barsLabel(rule.bars)}`,
-    href: '/ta/signals',
+    href: rulePath(rule.id),
     keywords: [rule.indice, rule.script_name ?? ''],
   }))
 }

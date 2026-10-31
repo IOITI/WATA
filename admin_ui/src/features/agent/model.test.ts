@@ -475,7 +475,7 @@ describe('what it shows on the pages', () => {
     expect(verdictLink('run:20261027-101010-abcdef')).toBe('/backtests/20261027-101010-abcdef')
     expect(verdictLink('day:2026-10-28')).toBe('/report?day=2026-10-28')
     expect(verdictLink('position:5001')).toBe('/positions?find=5001')
-    expect(verdictLink('rule:a1b2c3d4e5f6')).toBe('/ta/signals')
+    expect(verdictLink('rule:a1b2c3d4e5f6')).toBe('/ta/signals/a1b2c3d4e5f6')
     expect(verdictSubject('day:2026-10-28')).toBe('the day of 2026-10-28')
     expect(verdictTone('negative')).toBe('danger')
     expect(verdictBefore({ at: '2026-10-28T10:00:00Z' }, '2026-10-29T08:00:00Z')).toBe(true)
@@ -505,6 +505,9 @@ describe('an action proposed', () => {
       .toBe('Take Cross out of live')
     expect(actionPage({ kind: 'resume_entries' })).toEqual({ to: '/', label: 'the dashboard' })
     expect(actionPage({ kind: 'close_position', position_id: '5001' }).to).toBe('/positions?find=5001')
+    // Going live, or leaving it, is done by hand on the rule's own page.
+    expect(actionPage({ kind: 'rule_live', rule: { id: 'a1b2c3d4e5f6', name: 'Cross', mode: 'shadow', indice: 'us100' } }))
+      .toEqual({ to: '/ta/signals/a1b2c3d4e5f6', label: 'Cross' })
   })
 
   it('is applied from its card while fresh only', () => {
@@ -541,7 +544,7 @@ describe('a signal rule asked about', () => {
   it('is read from the address and offered its dossier first', () => {
     expect(subjectOf('rule:a1b2c3d4e5f6')).toEqual({ kind: 'rule', id: 'a1b2c3d4e5f6', label: 'a1b2c3d4e5f6' })
     expect(presetsFor('rule')[0].label).toBe('Is it ready to go live?')
-    expect(subjectLink({ kind: 'rule', id: 'x', label: 'Cross' })).toBe('/ta/signals')
+    expect(subjectLink({ kind: 'rule', id: 'x', label: 'Cross' })).toBe('/ta/signals/x')
     expect(subjectSaid({ kind: 'draft', id: 'x', label: 'a draft of Cross' })).toBe('To review: a draft of Cross')
   })
 })

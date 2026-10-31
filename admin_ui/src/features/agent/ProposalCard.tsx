@@ -31,7 +31,7 @@ import { ReviewChanges } from '@/features/config/ReviewChanges'
 import { ScriptDiff } from '@/features/ta/editor/ScriptDiff'
 import { LuxAlgoBadge } from '@/features/ta/luxalgo/LuxAlgoBadge'
 import { licenceTerms, originSaid } from '@/features/ta/luxalgo/luxalgoModel'
-import { barsLabel } from '@/features/ta/signals/ruleModel'
+import { barsLabel, rulePath } from '@/features/ta/signals/ruleModel'
 import { api, ApiError } from '@/lib/api'
 import type { AgentInputChange, AgentProposal, ScriptOrigin } from '@/lib/types'
 
@@ -292,7 +292,7 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
               <>A new version of <Link className="underline" to={`/ta/indicators/${encodeURIComponent(proposal.script!.id)}`}>{proposal.script!.name}</Link></>
             )}
             {kind === 'rule' && (
-              <>A change to the rule <Link className="underline" to="/ta/signals">{proposal.rule!.name}</Link> ({proposal.rule!.mode})</>
+              <>A change to the rule <Link className="underline" to={rulePath(proposal.rule!.id)}>{proposal.rule!.name}</Link> ({proposal.rule!.mode})</>
             )}
             {kind === 'settings' && <>A change of settings in config.json</>}
             {kind === 'action' && <>An action on live trading: {actionSaid(proposal.action!)}</>}
@@ -342,7 +342,7 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
           {kind === 'settings' && <SettingsSaved proposal={proposal} />}
           {kind === 'action' && <>Done, through the page&apos;s own route, as its audit entry says.</>}
           {kind === 'new_rule' && (
-            <>Created as <Link className="underline" to="/ta/signals">{proposal.result.name}</Link>, {proposal.result.mode === 'shadow' ? 'in shadow' : 'off'}.</>
+            <>Created as <Link className="underline" to={proposal.result.rule_id ? rulePath(proposal.result.rule_id) : '/ta/signals'}>{proposal.result.name}</Link>, {proposal.result.mode === 'shadow' ? 'in shadow' : 'off'}.</>
           )}
           {proposal.settled_at && <span className="text-muted-foreground"> {formatDateTime(proposal.settled_at, timezone, false)}.</span>}
         </p>

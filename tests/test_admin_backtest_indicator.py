@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from src.admin.backtest_indicator import NO_SCRIPT, bars_of_label, day_version, day_window
+from src.admin.backtest_indicator import NO_SCRIPT, bars_of_label, day_version, day_window, rule_day_indicator
 from src.admin.errors import InvalidRequest, NotPossible
 from src.admin.processes import DONE
 from src.admin.rule_history import HISTORY_FILE, RecordedRuleStore, run_fields
@@ -346,3 +346,88 @@ def test_the_route_answers_with_the_day_and_refuses_what_is_not_a_run(tmp_path, 
         assert client.get(f"/api/backtests/{run_id}/days/2026-10-20/indicator").status_code == 422
         assert client.get(f"/api/backtests/{run_id}/days/not-a-day/indicator").status_code == 422
         assert client.get("/api/backtests/20261019-200000-ffffff/days/2026-10-14/indicator").status_code == 404
+
+
+# ── a day of a signal rule, on its page ──
+
+
+def rule_day(scripts, rule: dict, raised: list[dict], rows: Rows, day: date = DAY) -> dict:
+    return asyncio.run(rule_day_indicator(day, rule, raised, scripts=scripts, rows=rows, zone="Europe/Paris",
+                                          restart_time="21:15", history_days=1))
+
+
+def test_a_rule_s_day_is_drawn_as_the_engine_ran_it_with_its_signals_of_that_engine_day(scripts):
+    rule = made_rule(scripts)
+    # As the journal gives them, newest first: one of the evening before the restart, two of the engine day.
+    raised = [signal(rule, 1, NOON + 600), signal(rule, 1, NOON), signal(rule, 1, BEGIN - 3600)]
+    rows = Rows(walk(BEGIN - 86_400, 50) + walk(NOON - 3600, 400), decimals=1)
+
+    answer = rule_day(scripts, rule, raised, rows)
+
+    assert answer["kind"] == "rule" and answer["day"] == "2026-10-14"
+    assert answer["exact"] is True and answer["notes"] == []
+    assert (answer["script"]["version"], answer["inputs"]) == (1, rule["inputs"])
+    assert rows.asked == [("capital", "US100", BEGIN - 86_400, END)]
+    assert [entry["bar_closed_at"] for entry in answer["signals"]] == [iso(NOON), iso(NOON + 600)]
+
+
+def as_the_database_gives_it(row: dict) -> dict:
+    """A signal of the journal as the database gives it: its moments as datetimes, not text."""
+    return {key: datetime.fromisoformat(value.replace("Z", "+00:00")) if key.endswith(("_at", "_time")) and isinstance(value, str)
+            else value for key, value in row.items()}
+
+
+def test_a_rule_s_day_reads_the_journal_s_moments_as_the_database_gives_them(scripts):
+    # A paper run keeps its signals as text (ta_signals.json); a rule's day reads them from the database.
+    rule = made_rule(scripts)
+    raised = [as_the_database_gives_it(row) for row in (signal(rule, 1, NOON + 600), signal(rule, 1, NOON))]
+    rows = Rows(walk(BEGIN - 86_400, 50) + walk(NOON - 3600, 400), decimals=1)
+
+    answer = rule_day(scripts, rule, raised, rows)
+
+    assert [entry["bar_closed_at"].timestamp() for entry in answer["signals"]] == [NOON, NOON + 600]
+    assert answer["notes"] == []
+
+
+def test_a_rule_made_during_a_day_is_drawn_as_it_was_made(scripts):
+    # Made in the afternoon, after the engine day began the evening before: what it ran is known from then.
+    rule = made_rule(scripts, created_at=iso(NOON - 3600))
+    rows = Rows(walk(BEGIN - 86_400, 50) + walk(NOON - 3600, 400), decimals=1)
+
+    answer = rule_day(scripts, rule, [signal(rule, 1, NOON)], rows)
+
+    assert answer["exact"] is True and answer["notes"] == []
+
+
+def test_a_rule_s_weekend_a_day_before_it_and_a_day_without_bars_are_refused_saying_why(scripts):
+    rule = made_rule(scripts)
+    rows = Rows(walk(BEGIN - 86_400, 50), decimals=1)
+
+    with pytest.raises(InvalidRequest, match="is a Saturday: the market is closed"):
+        rule_day(scripts, rule, [], rows, day=date(2026, 10, 17))
+    with pytest.raises(InvalidRequest, match="The rule was made on .*: 2026-09-30 comes before it"):
+        rule_day(scripts, rule, [], rows, day=date(2026, 9, 30))
+    # Bars of its history only: nothing that engine day.
+    with pytest.raises(NotPossible, match="No bar of capital/US100 that engine day"):
+        rule_day(scripts, rule, [], rows)
+
+
+def test_the_route_draws_a_rule_s_day_from_the_journal_and_refuses_what_is_not_one(tmp_path, scripts, config, monkeypatch):
+    import src.admin.routers.ta as ta_router
+    from tests.test_admin_api import make_ctx, signed_in
+
+    rule = made_rule(scripts)
+    ctx = make_ctx(config, tmp_path)
+    ctx.ta_scripts = scripts
+    ctx.queries.ta_signal_rows = [signal(rule, 1, NOON)]
+    rows = Rows(walk(BEGIN - 86_400, 50) + walk(NOON - 3600, 400), decimals=1)
+    monkeypatch.setattr(ta_router, "AssetRows", lambda root, db: rows)
+
+    with signed_in(ctx, tmp_path) as client:
+        answer = client.get(f"/api/ta/rules/{rule['id']}/days/2026-10-14/indicator")
+        assert answer.status_code == 200
+        assert answer.json()["script"]["source"] == STRATEGY and len(answer.json()["signals"]) == 1
+        # Its signals of a day either side: the engine day began the evening before.
+        assert ("ta_signals", date(2026, 10, 13), date(2026, 10, 15), rule["id"], 2000) in ctx.queries.calls
+        assert client.get(f"/api/ta/rules/{rule['id']}/days/2026-10-17/indicator").status_code == 422
+        assert client.get("/api/ta/rules/0123456789ab/days/2026-10-14/indicator").status_code == 404

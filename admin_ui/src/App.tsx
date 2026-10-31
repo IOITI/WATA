@@ -56,6 +56,9 @@ const LuxAlgoConceptPage = lazy(() =>
 const SignalRulesPage = lazy(() =>
   import('@/features/ta/signals/SignalRulesPage').then((module) => ({ default: module.SignalRulesPage })),
 )
+const SignalRulePage = lazy(() =>
+  import('@/features/ta/signals/SignalRulePage').then((module) => ({ default: module.SignalRulePage })),
+)
 const MonitorPage = lazy(() => import('@/features/ta/monitor/MonitorPage').then((module) => ({ default: module.MonitorPage })))
 
 // A run's pages: the performance charts, and a day's candles (Lightweight Charts).
@@ -225,6 +228,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <SignalRulesPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/signals/:id"
+          element={
+            <ChartPage>
+              <SignalRulePage />
             </ChartPage>
           }
         />

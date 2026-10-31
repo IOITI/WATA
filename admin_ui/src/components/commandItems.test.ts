@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import type { DataAsset } from '@/lib/types'
+import type { DataAsset, TaRule } from '@/lib/types'
 import { run } from '@/test/backtests'
 
-import { assetItems, idItems, pageItems, runItems } from './commandItems'
+import { assetItems, idItems, pageItems, ruleItems, runItems } from './commandItems'
 import { MENU } from './navigation'
 
 describe('what the palette goes to', () => {
@@ -22,6 +22,17 @@ describe('what the palette goes to', () => {
 
     expect(item.href).toBe(`/backtests/${run().id}`)
     expect(item.description).toBe('EMA cross v1 · Capital.com US100 · 1 min · 14 Oct 2026 to 16 Oct 2026 · Done')
+  })
+
+  it('leads a signal rule to its own page', () => {
+    const rule = {
+      id: 'aaaaaaaaaaaa', name: 'Cross on US100', mode: 'shadow', asset: { provider: 'capital', key: 'US100' },
+      bars: { type: 'time', timeframe: '1' }, indice: 'us100', script_name: 'Cross',
+    } as TaRule
+    const [item] = ruleItems([rule])
+
+    expect(item.href).toBe('/ta/signals/aaaaaaaaaaaa')
+    expect(item.description).toBe('Shadow · US100 · 1 min')
   })
 
   it('finds a turbo by its knock-out level as typed, and leaves out the turbos no longer quoted', () => {

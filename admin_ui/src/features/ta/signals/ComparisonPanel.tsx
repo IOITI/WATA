@@ -20,7 +20,12 @@ import { dayIn, nextWeekday } from '../data/wataBars'
 import { tickerText } from '../engine/tickers'
 import { barsLabel, comparisonMarkers } from './ruleModel'
 
-export function ComparisonPanel({ rules, timeZone }: { rules: TaRule[]; timeZone: string }) {
+export function ComparisonPanel({ rules, timeZone, fixed = false }: {
+  rules: TaRule[]
+  timeZone: string
+  /** Held to the one rule given (a rule's page): no rule to choose. */
+  fixed?: boolean
+}) {
   const [ruleId, setRuleId] = useState(() => rules.find((rule) => rule.mode !== 'off')?.id ?? rules[0]?.id ?? '')
   const [today] = useState(() => dayIn(Date.now(), timeZone))
   const [day, setDay] = useState(today)
@@ -87,10 +92,12 @@ export function ComparisonPanel({ rules, timeZone }: { rules: TaRule[]; timeZone
       }
     >
       <div className="mb-4 flex flex-wrap items-end gap-3 text-sm">
-        <label className="flex w-64 flex-col gap-1">
-          <span className="text-xs text-text-secondary">Rule</span>
-          <Select value={ruleId} onChange={(event) => setRuleId(event.target.value)} options={rules.map((entry) => ({ value: entry.id, label: entry.name }))} />
-        </label>
+        {!fixed && (
+          <label className="flex w-64 flex-col gap-1">
+            <span className="text-xs text-text-secondary">Rule</span>
+            <Select value={ruleId} onChange={(event) => setRuleId(event.target.value)} options={rules.map((entry) => ({ value: entry.id, label: entry.name }))} />
+          </label>
+        )}
         {/* Day after day, the weekends stepped over: the agreement of one day says little. */}
         <div className="flex items-end gap-1">
           <Button variant="outline" size="icon" className="size-10" aria-label="The weekday before" title="The weekday before" onClick={() => setDay(nextWeekday(day, -1))}>

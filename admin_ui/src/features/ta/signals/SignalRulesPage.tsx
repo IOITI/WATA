@@ -4,7 +4,7 @@
 // engine (src/ta_engine) runs them; this page makes and switches them, and shows
 // what the engine did.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   AdvancedDataTable,
   Alert,
@@ -41,22 +41,16 @@ import { api } from '@/lib/api'
 import type { TaEngine, TaRule, TaRuleMode, TaRules } from '@/lib/types'
 
 import { ComparisonPanel } from './ComparisonPanel'
+import { DeleteRuleDialog } from './DeleteRuleDialog'
 import { RuleDialog } from './RuleDialog'
 import type { RuleDialogStart } from './RuleDialog'
-import { barsLabel, conflictText, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, updatesOf } from './ruleModel'
+import { barsLabel, conflictText, ENGINE_STATE, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, rulePath, updatesOf } from './ruleModel'
 import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
 import { liveReadiness } from './readiness'
 import { RuleModeDialog } from './RuleModeDialog'
 import { SignalJournal } from './SignalJournal'
-
-const STATE_LABEL: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
-  loading: { label: 'Loading', tone: 'warning' },
-  waiting: { label: 'Waiting for bars', tone: 'warning' },
-  running: { label: 'Running', tone: 'success' },
-  error: { label: 'Failing', tone: 'danger' },
-  off: { label: 'Off', tone: 'neutral' },
-}
+import { useRuleActions } from './useRuleActions'
 
 function EnginePanel({ engine, timeZone }: { engine: TaEngine; timeZone: string }) {
   const figures = (engine.engine?.figures ?? {}) as { live?: number; shadow?: number; covered_until?: number | null; runner?: { pinets?: string; node?: string } }
@@ -108,13 +102,6 @@ function EnginePanel({ engine, timeZone }: { engine: TaEngine; timeZone: string 
   )
 }
 
-interface ModeChange {
-  rule: TaRule
-  mode: TaRuleMode
-  /** Live although the server's readiness checks are not all met: recorded so in the audit trail. */
-  force?: boolean
-}
-
 /** What the selection basket does to the rules selected: never live, which is one rule at a time. */
 type BulkAction = 'off' | 'shadow' | 'delete'
 
@@ -144,7 +131,6 @@ function rulesCounted(count: number): string {
 export function SignalRulesPage() {
   const { timezone, actions_enabled: actionsEnabled, backtests_enabled: backtestsEnabled } = useSession()
   const toast = useToast()
-  const queryClient = useQueryClient()
   const rulesQuery = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules, refetchOnWindowFocus: false })
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts })
   const engineQuery = useQuery({ queryKey: ['ta-engine'], queryFn: api.taEngine, refetchInterval: 10_000 })
@@ -192,41 +178,11 @@ export function SignalRulesPage() {
     setDialog(null)
     if (askedScript || askedRun) setParams({}, { replace: true })
   }
-  const [changing, setChanging] = useState<ModeChange | null>(null)
-  const [deleting, setDeleting] = useState<TaRule | null>(null)
+  const { changing, setChanging, deleting, setDeleting, askMode, askDelete, modeMutation, deleteMutation, refresh } =
+    useRuleActions(rules?.revision)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   // The rules the deletion of several is about, while it is asked.
   const [deletingMany, setDeletingMany] = useState<TaRule[] | null>(null)
-
-  const refresh = () => Promise.all([['ta-rules'], ['ta-engine']].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
-
-  const modeMutation = useMutation({
-    mutationFn: ({ rule, mode, force }: ModeChange) => api.setTaRuleMode(rule.id, mode, rules!.revision, force),
-    onSuccess: async (saved, { force }) => {
-      setChanging(null)
-      toast({
-        title: `${saved.rule.name}: ${MODE_LABEL[saved.rule.mode].toLowerCase()}`,
-        description:
-          saved.rule.mode === 'live'
-            ? `Its signals go to the trader from its next bar.${force ? ' Gone live without its readiness, as the audit trail records.' : ''}`
-            : saved.rule.mode === 'shadow'
-              ? 'Its signals are journaled, never sent.'
-              : 'The engine stops running it.',
-        variant: 'success',
-      })
-      await refresh()
-    },
-    onError: () => void refresh(),
-  })
-  const deleteMutation = useMutation({
-    mutationFn: (rule: TaRule) => api.deleteTaRule(rule.id, rules!.revision),
-    onSuccess: async () => {
-      setDeleting(null)
-      toast({ title: 'Signal rule deleted', variant: 'success' })
-      await refresh()
-    },
-    onError: () => void refresh(),
-  })
 
   // A rule deleted meanwhile, or gone live, is no longer selected.
   const chosen = useMemo(() => (rules?.rules ?? []).filter((rule) => selected.has(rule.id) && selectableRule(rule)), [rules, selected])
@@ -274,16 +230,6 @@ export function SignalRulesPage() {
     : null
   const allIn = (mode: TaRuleMode) => chosen.length > 0 && chosen.every((rule) => rule.mode === mode)
 
-  const askMode = (rule: TaRule, mode: TaRuleMode) => {
-    if (mode === rule.mode) return
-    // Off and shadow change nothing that trades: at once. Live, and leaving it, are said first.
-    if (mode !== 'live' && rule.mode !== 'live') modeMutation.mutate({ rule, mode })
-    else {
-      modeMutation.reset()
-      setChanging({ rule, mode })
-    }
-  }
-
   const columns = useMemo<ColumnDef<TaRule>[]>(
     () => [
       {
@@ -295,7 +241,9 @@ export function SignalRulesPage() {
           const updates = updatesOf(row)
           return (
             <div className="min-w-0 max-w-80 whitespace-normal">
-              <span className="font-medium">{row.name}</span>
+              <Link className="font-medium underline-offset-2 hover:underline" to={rulePath(row.id)}>
+                {row.name}
+              </Link>
               {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
               <p className="text-xs text-muted-foreground">
                 <Link className="underline-offset-2 hover:underline" to={`/ta/indicators/${row.script.id}`}>
@@ -379,7 +327,7 @@ export function SignalRulesPage() {
         cell: ({ row }) => {
           const state = states[row.id]
           if (!state) return <span className="text-xs text-muted-foreground">{row.mode === 'off' ? 'Off' : 'Not seen yet'}</span>
-          const shown = STATE_LABEL[state.state] ?? { label: state.state, tone: 'neutral' as const }
+          const shown = ENGINE_STATE[state.state] ?? { label: state.state, tone: 'neutral' as const }
           return (
             <div className="min-w-0 max-w-72 whitespace-normal text-xs">
               <Badge tone={shown.tone}>{shown.label}</Badge>
@@ -466,10 +414,7 @@ export function SignalRulesPage() {
                 size="icon"
                 aria-label={`Delete ${row.name}`}
                 disabled={row.mode === 'live'}
-                onClick={() => {
-                  deleteMutation.reset()
-                  setDeleting(row)
-                }}
+                onClick={() => askDelete(row)}
               >
                 <Trash2 className="size-4" />
               </Button>
@@ -625,31 +570,13 @@ export function SignalRulesPage() {
         )}
       </SettleModal>
 
-      <SettleModal
-        open={deleting !== null}
-        onClose={() => setDeleting(null)}
-        title={`Delete ${deleting?.name ?? ''}`}
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => setDeleting(null)} disabled={deleteMutation.isPending}>
-              Cancel
-            </Button>
-            <Button variant="destructive" size="sm" isLoading={deleteMutation.isPending} onClick={() => deleting && deleteMutation.mutate(deleting)}>
-              Delete
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-text-secondary">
-          The engine stops running it. Its signals stay in the journal; the script stays on the Indicators page.
-        </p>
-        {deleteMutation.error && (
-          <Alert tone="danger" role="alert" className="mt-3">
-            <AlertDescription>{conflictText(deleteMutation.error)}</AlertDescription>
-          </Alert>
-        )}
-      </SettleModal>
+      <DeleteRuleDialog
+        rule={deleting}
+        pending={deleteMutation.isPending}
+        error={deleteMutation.error}
+        onCancel={() => setDeleting(null)}
+        onDelete={(rule) => deleteMutation.mutate(rule)}
+      />
     </div>
   )
 }

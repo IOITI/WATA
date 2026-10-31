@@ -29,6 +29,8 @@ import type {
   BacktestHeadline,
 } from '@/lib/types'
 
+import { rulePath } from '@/features/ta/signals/ruleModel'
+
 /** A conversation the agent is working on: a request queued, under way, or waiting for its runs. */
 export const UNDER_WAY: readonly AgentStatus[] = ['queued', 'running', 'waiting']
 
@@ -93,7 +95,7 @@ export function subjectLink(subject: AgentSubject): string {
     case 'briefing':
       return '/'
     case 'rule':
-      return '/ta/signals'
+      return rulePath(subject.id)
     case 'change':
       return '/config'
     case 'draft':
@@ -631,7 +633,7 @@ export function actionPage(action: AgentAction): { to: string; label: string } {
   if (action.kind === 'pause_entries' || action.kind === 'resume_entries') return { to: '/', label: 'the dashboard' }
   if (action.kind === 'close_position') return { to: `/positions?find=${encodeURIComponent(action.position_id ?? '')}`, label: 'the position' }
   if (action.kind === 'restart') return { to: '/system', label: 'System' }
-  return { to: '/ta/signals', label: 'Signal rules' }
+  return action.rule ? { to: rulePath(action.rule.id), label: action.rule.name } : { to: '/ta/signals', label: 'Signal rules' }
 }
 
 /** Whether an action proposed may still be applied from its card: the situation may have changed since. */
@@ -957,11 +959,11 @@ export function verdictTone(tone: AgentVerdictTone): 'success' | 'warning' | 'da
   return tone === 'positive' ? 'success' : tone === 'mixed' ? 'warning' : tone === 'negative' ? 'danger' : 'neutral'
 }
 
-/** Where the thing a verdict is on is shown: a run's page, the signal rules, a day of the Report, a position. */
+/** Where the thing a verdict is on is shown: a run's page, a rule's, a day of the Report, a position. */
 export function verdictLink(about: string): string {
   const [kind, id] = [about.slice(0, about.indexOf(':')), about.slice(about.indexOf(':') + 1)]
   if (kind === 'run') return `/backtests/${encodeURIComponent(id)}`
-  if (kind === 'rule') return '/ta/signals'
+  if (kind === 'rule') return rulePath(id)
   if (kind === 'day') return `/report?day=${encodeURIComponent(id)}`
   if (kind === 'luxalgo') return `/ta/luxalgo/indicators/${encodeURIComponent(id)}`
   return `/positions?find=${encodeURIComponent(id)}`

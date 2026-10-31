@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.73.0 - A page for each signal rule
+
+**Release date:** not yet released
+
+A rule goes from shadow to live on evidence, and that evidence was spread over the Signal rules list, its journal and comparison panels, Paper trading, the Engine monitor and the AI agent. Each rule now has its own page, `/ta/signals/<id>`, where it is all gathered, and every link to a rule leads there: its name on the list, the hover card, ⌘K, the AI agent's subjects, verdicts, proposals and artefacts, and LuxAlgo's In WATA.
+- **What it runs**: its script and version (and a newer one saved), libraries, asset, side and bars, days of history, what its alerts become, when it was made (and by Claude) and since when it is in its mode.
+- **Going live**: in shadow, its readiness check by check (a week in shadow, signals journaled, its days on paper inside its reference's range, the engine running it, its script's latest version) and in a few words; live, since when and its signals of the last 7 days (sent, bought, closing positions, not taken).
+- **Its day**: a day of the rule drawn as the engine ran it, its script on the engine day's bars from its days of history before the restart, with the signals it raised on the bars they were raised on (✕ for one the trader did not take); ◀ ▶ from one weekday to the next, the day in the address. A weekend, a day before the rule was made, or a day without bars is refused saying so.
+- **On paper**: its report since it was made, its reference run and its days on paper, as Paper trading shows them.
+- **Signals** and **Beside TradingView**: the journal and the comparison, held to the rule.
+- **Engine**: its state, last bar, last run (continued or run whole) and last signal, and the way to the Engine monitor for it.
+- **History**: its making, each change of what it runs (its script, libraries, bars, asset, side, days of history, each input by its name: before → after), and its switches into and out of live with what its readiness still missed, the licence checked and the AI agent's proposal, as the audit trail recorded them. A change to the live rule is said once. No one's address is shown.
+- Its mode, edit and deletion are there as on the list: off and shadow at once, live and leaving it through the same confirmation, a deletion asked first and back to the list.
+
+**On the live path:** nothing. The admin alone: its interface and two routes, `GET /api/ta/rules/{id}/history` and `GET /api/ta/rules/{id}/days/{day}/indicator`.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5). A paper run's day is drawn by the same code as before, now shared with a rule's day.
+
+**Verification status:**
+- Tests: the history through the routes (made, changed, taken live short of its readiness, changed while live and said once, out of live, nobody's address) and its sentences; a rule's day (its signals of the engine day, a rule made during the day, a weekend, a day before the rule, no bar, the journal's moments as the database gives them); the page (its parts, its day drawn with its signals, a weekday back, a day refused, going live through its confirmation, a deletion back to the list, the 404); the links to it. The 3,749 Python tests and the interface's 1,349 pass, with lint, typecheck and build.
+- Seen in the browser pane on the development admin: a rule in shadow's page, its readiness, its day of 30 October drawn on Vela with its 10 signals, a weekday back to its 9 of the 29th, a day before it refused saying so, its history, the 404, and at 375 px in the dark theme nothing wider than the screen. A rule made on a Saturday says its first day is the Monday.
+- Found there and fixed before release: the journal's moments come from the database as datetimes, which the day's window did not read, so no signal of the day was drawn; a test now gives it rows as the database does.
+
 ## v0.72.2 - LuxAlgo's write-ups in one card, and room under an indicator's chart
 
 **Release date:** 2026-10-31
