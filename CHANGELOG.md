@@ -2,7 +2,7 @@
 
 ## v0.72.2 - LuxAlgo's write-ups in one card, and room under an indicator's chart
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 Two corrections you asked for on an indicator's page of LuxAlgo's Library:
 - **Room under the chart:** the chart's panel touched the tabs below it (How it works, Pine source, In WATA). They now stand apart as the page's other parts do, and so do a concept's link to LuxAlgo's site and its write-up.
