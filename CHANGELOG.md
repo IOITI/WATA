@@ -2,7 +2,7 @@
 
 ## v0.76.0 - Exits judged on the index between Saxo's quotes
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 Saxo quotes a turbo about every 30 s and fills an order at its live price, while Capital.com's US100 moves several times a second: the position monitor judged every exit on a price up to 30 s old. With `trade.config.position_management.index_between_quotes` (off unless you switch it on, on the Configuration page's Exits, "Between Saxo's quotes"), it also judges each position between Saxo's quotes on its bid estimated from the index.
 - **The estimate**: Saxo's last bid, moved as the index moved since, at the turbo's own euros per index point. That figure is learned from its own quotes (the median of its last moves of 8 points or more, from the fifth on); until then, 0.0086 € a point (0.01 $), believed only for a turbo priced like those measured. It is never read from the knock-out level: a TurboXL's financing level is not its barrier.
