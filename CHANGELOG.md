@@ -2,7 +2,7 @@
 
 ## v0.74.0 - A runs list you can trust, and runs made again on today's code
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 The list of backtests said what each run made, not whether it could be believed: that was on each run's page alone. A change of backtest code marked runs "made with other code", and nothing made them again but asking each anew.
 - **A Verdict column**: "Passes", "N open" or "Fails", from the very checks of the run's page (enough trades and days, random entries beaten, an edge, a stress step, a sweep's held-out days and overfitting, today's code), and how many passed; on hover, those that failed or are open; a click opens the run's verdict. A stress test or a model check names the run it judges. The list is narrowed to a verdict from its filters.
