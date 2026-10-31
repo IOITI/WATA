@@ -15,6 +15,8 @@ What to give a Claude desktop project so that its chats know WATA, its trading s
 
 Without the tools, Claude can still discuss and write Pine. With them, it runs studies and backtests on the live server's data. That is research only: nothing there trades, changes the configuration or takes a rule live.
 
+4. Optionally, LuxAlgo's Library beside them: in Claude desktop's Settings, Connectors, add a custom connector with LuxAlgo's address for Claude (`https://claude.mcp.luxalgo.com/mcp`), and turn it on in the project's chats. LuxAlgo makes Vela, the chart WATA draws with: its Library holds trading concepts and indicators with their Pine source, its trackers US public records, and its prop-firm tools simulations. Signed out, it gives an indicator's first lines alone; a free LuxAlgo account gives them whole. Its journal and account tools are not for this project.
+
 ## Keeping it current
 
 - **The memory is `knowledge/06-research-memory.md`.** At the end of a research chat, say "update the research memory". Claude writes the entries to add, in that file's format. Add them, then upload the file again in place of the old one.

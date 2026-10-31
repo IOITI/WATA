@@ -787,3 +787,38 @@ def test_the_comparison_of_a_day_reads_both_sides(api, cross):
     assert ("ta_other_signals", "us100", date(2026, 10, 15)) in ctx.queries.calls
     assert client.get(f"/api/ta/rules/{rule['id']}/comparison?day=2026-10-15&tolerance=30").json()["paired"] == 0
     assert client.get(f"/api/ta/rules/{rule['id']}/comparison").status_code == 422
+
+
+def test_a_rule_whose_script_is_luxalgos_goes_live_only_once_its_licence_is_checked(api, cross, ready, tmp_path):
+    from src.admin.script_origins import ScriptOrigins, luxalgo_origin
+
+    client, ctx = api
+    ctx.script_origins = ScriptOrigins(str(tmp_path / "origins"))
+    found = {"slug": "tri-star", "name": "Tri-star", "licence": "CC BY-NC-SA 4.0", "owner": "LuxAlgo"}
+    ctx.script_origins.record(cross["id"], luxalgo_origin(found, "operator", 1_800_000_000))
+    rule, revision = _new_rule(client, cross)
+    path = f"/api/ta/rules/{rule['id']}/mode"
+
+    refused = client.post(path, json={"mode": "live", "revision": revision}, headers=SAME_ORIGIN)
+    anyway = client.post(path, json={"mode": "live", "revision": revision, "force": True}, headers=SAME_ORIGIN)
+    checked = client.post(path, json={"mode": "live", "revision": revision, "licence_checked": True}, headers=SAME_ORIGIN)
+
+    assert refused.status_code == 409 and "under CC BY-NC-SA 4.0" in refused.json()["detail"]
+    assert anyway.status_code == 409
+    assert checked.status_code == 200 and checked.json()["rule"]["mode"] == "live"
+    assert "the licence of its script (CC BY-NC-SA 4.0) checked by the operator" in ctx.audit_log.read(1)[0]["action"]
+
+
+def test_a_licence_that_allows_trading_asks_for_no_check(api, cross, ready, tmp_path):
+    from src.admin.script_origins import ScriptOrigins, luxalgo_origin
+
+    client, ctx = api
+    ctx.script_origins = ScriptOrigins(str(tmp_path / "origins"))
+    found = {"slug": "old-one", "name": "Old one", "licence": "Mozilla Public License 2.0", "owner": "LuxAlgo"}
+    ctx.script_origins.record(cross["id"], luxalgo_origin(found, "operator", 1_800_000_000))
+    rule, revision = _new_rule(client, cross)
+
+    response = client.post(f"/api/ta/rules/{rule['id']}/mode", json={"mode": "live", "revision": revision},
+                           headers=SAME_ORIGIN)
+
+    assert response.status_code == 200

@@ -4,7 +4,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Button, Hint, SpotlightSearch } from 'ioiti-ui'
 import { Paperclip } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { useSession } from '@/features/auth/auth-context'
@@ -14,11 +14,15 @@ import type { AgentSubject } from '@/lib/types'
 
 import { attachItems } from './attachItems'
 import { ACCEPT, fullSaid, MAX_ATTACHED } from './attachments'
+import { useAgentState } from './useConversation'
 
 const DAY_MS = 86_400_000
 // The positions and trading days offered: those of the last month; the signals: those of the last week.
 const POSITION_DAYS = 30
 const SIGNAL_DAYS = 7
+// LuxAlgo's Library is searched from three characters typed, once typing paused.
+const LUXALGO_FROM_CHARS = 3
+const LUXALGO_WAIT_MS = 400
 
 function daysBefore(days: number): string {
   return new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10)
@@ -50,6 +54,19 @@ export function AttachMenu({ attached, room, onAttach, onFiles, disabled = false
   })
   const journal = useQuery({ queryKey: ['agent-attach', 'journal'], queryFn: () => api.journal({ from: daysBefore(SIGNAL_DAYS) }), enabled: open })
   const days = useQuery({ queryKey: ['agent-attach', 'days'], queryFn: () => api.performance({ from: daysBefore(POSITION_DAYS) }), enabled: open })
+  // LuxAlgo's indicators for what is typed, once it stopped changing for a moment: each search is a call to LuxAlgo.
+  const luxalgo = !!useAgentState().data?.luxalgo
+  const [searched, setSearched] = useState('')
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearched(query.trim()), LUXALGO_WAIT_MS)
+    return () => window.clearTimeout(timer)
+  }, [query])
+  const found = useQuery({
+    queryKey: ['agent-attach', 'luxalgo', searched],
+    queryFn: () => api.luxalgoSearch({ query: searched, type: 'indicators', limit: 8 }),
+    enabled: open && luxalgo && searched.length >= LUXALGO_FROM_CHARS,
+    staleTime: 60 * 60 * 1000,
+  })
 
   // Once the picker has gone: a dialog of the browser over it would leave it open behind.
   const chooseFiles = useCallback(() => {
@@ -61,11 +78,12 @@ export function AttachMenu({ attached, room, onAttach, onFiles, disabled = false
       scripts: scripts.data?.items, rules: rules.data?.rules,
       positions: [...(opened.data?.items ?? []), ...(closed.data?.items ?? [])],
       journal: journal.data?.items, days: [...(days.data?.daily ?? [])].reverse(), health: health.data,
+      luxalgo: searched === query.trim() ? found.data?.results : undefined,
     },
     attached, query, timeZone: timezone,
     onAttach, onFile: chooseFiles,
   }), [runs.data, hiddenRuns, scripts.data, rules.data, opened.data, closed.data, journal.data, days.data, health.data,
-    attached, query, timezone, onAttach, chooseFiles])
+    searched, found.data, attached, query, timezone, onAttach, chooseFiles])
   const full = room <= 0 ? fullSaid(MAX_ATTACHED) : null
 
   return (

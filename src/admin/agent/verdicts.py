@@ -1,6 +1,7 @@
 """
-What the agent concluded on a backtest run, a signal rule, a trading day or a
-position, in one line (set_verdict): the admin's pages show it on that thing,
+What the agent concluded on a backtest run, a signal rule, a trading day, a
+position or an indicator of LuxAlgo's Library, in one line (set_verdict): the
+admin's pages show it on that thing,
 beside a link to the conversation it came from. The latest replaces the one
 before; each goes with its conversation (``verdicts.json`` beside the
 conversations, written whole).
@@ -12,12 +13,13 @@ import re
 import threading
 
 FILE = "verdicts.json"
-KINDS = ("run", "rule", "day", "position")
+KINDS = ("run", "rule", "day", "position", "luxalgo")
 TONES = ("positive", "mixed", "negative", "neutral")
 MAX_LINE = 200
 # What a page asks for at once.
 MAX_ASKED = 200
-ABOUT = re.compile(r"^(run|rule|day|position):([A-Za-z0-9_.-]{1,64})$")
+# A LuxAlgo indicator is named by its slug, up to 121 characters (src/admin/luxalgo.py SLUG).
+ABOUT = re.compile(r"^(run|rule|day|position|luxalgo):([A-Za-z0-9_.-]{1,121})$")
 
 
 class VerdictStore:
@@ -51,6 +53,10 @@ class VerdictStore:
             verdicts[about] = verdict
             self._write(verdicts)
         return verdict
+
+    def all(self) -> dict[str, dict]:
+        """Every verdict kept, by what it is on."""
+        return self._read()
 
     def of(self, asked: list[str]) -> dict[str, dict]:
         """The verdicts on these things that have one."""

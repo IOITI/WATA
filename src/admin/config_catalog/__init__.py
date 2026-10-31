@@ -139,6 +139,8 @@ BLOCKS = (
     Block("ta", "signals", "Signals sent", (
         f"{_TA}.max_signal_age_seconds", f"{_TA}.stale_feed_seconds", f"{_TA}.request_timeout_seconds"),
         "What a live rule's signal must be to reach the trader."),
+    Block("ta", "luxalgo", "LuxAlgo", ("admin.luxalgo_enabled",),
+          "LuxAlgo's public MCP tools, for the AI agent and the LuxAlgo Library page."),
     Block("ta", "runners", "Pine runners", (
         f"{_TA}.run_timeout_seconds", f"{_TA}.runner_memory_mb", f"{_TA}.shadow_runner_memory_mb",
         f"{_TA}.shadow_seconds_per_tick"), "The confined Node processes that run the scripts, live and shadow apart."),

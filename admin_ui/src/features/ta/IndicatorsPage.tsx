@@ -28,6 +28,7 @@ import { api, ApiError, taScriptSourceUrl } from '@/lib/api'
 import type { TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
+import { LuxAlgoBadge } from './luxalgo/LuxAlgoBadge'
 import { importScript, librariesFirst, MAX_SCRIPT_BYTES } from './importScripts'
 import { importersOf, KIND_LABEL, librariesOf } from './templates'
 
@@ -75,7 +76,8 @@ function scriptColumns(
     {
       id: 'name',
       header: 'Script',
-      accessorFn: (row) => `${row.name} ${row.description} ${row.library_name ?? ''}${madeByClaude(row) ? ' Claude' : ''}`,
+      accessorFn: (row) =>
+        `${row.name} ${row.description} ${row.library_name ?? ''}${madeByClaude(row) ? ' Claude' : ''}${row.origin ? ' LuxAlgo' : ''}`,
       sortable: true,
       cell: ({ row }) => (
         // Its floor in the table only: a card on a phone is narrower.
@@ -84,6 +86,7 @@ function scriptColumns(
             {row.name}
           </Link>
           {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
+          {row.origin && <LuxAlgoBadge origin={row.origin} className="ml-2" />}
           {row.description && <p className="text-xs text-muted-foreground">{row.description}</p>}
         </div>
       ),

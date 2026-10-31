@@ -41,6 +41,39 @@ which Claude Code saves to a file, and read it with pandas or DuckDB in
 `.venv-lab`. Nothing behind the tools trades, edits the configuration or takes
 a rule live.
 
+## LuxAlgo's Library beside it (the `luxalgo` MCP server)
+
+`.mcp.json` names LuxAlgo's public MCP server (`https://mcp.luxalgo.com/mcp`),
+which Claude Code asks the user to approve once. LuxAlgo makes Vela, the chart
+WATA draws with. Its use here is its Library (800+ concepts and its indicators
+with their Pine source, `library_*`), its market trackers of US public records
+(`trackers_*`) and its prop-firm tools (`propfirms_*`). Its journal and account
+need a LuxAlgo sign-in and are not WATA's: never call them, and its four
+journal writes are denied in `.claude/settings.json`. Its Edge stats cover
+Bitcoin and Ether only.
+
+- Each of its tools asks for a `context`: one abstract sentence of 15 to 25
+  words on the call's purpose, for its analytics. Never put in it, or in any
+  argument, what WATA keeps to itself (an account's value, an id, a key, the
+  user's words).
+- From an idea to a test: `library_search`, `library_get_indicator`,
+  `library_get_source_code`, then `pine_save` on the `wata` server with the
+  source whole, its header kept (licence and ©), then `pine_run`, the
+  backtests and the bar of "What not to believe" as for any script. The
+  admin's LuxAlgo Library page takes one as the user's own script the same way.
+- Signed out, `library_get_source_code` gives an indicator's first 40 lines
+  (`complete: false`): never save a part of a script. Ask the user to sign in
+  (Claude Code's `/mcp` for this server, or the admin's page for the admin's
+  own calls).
+- Its indicators are mostly CC BY-NC-SA 4.0 (non-commercial, attribution,
+  share-alike): say an indicator's licence when proposing it, and that its
+  terms are the user's to check before trading it.
+- Its alerts are seldom WATA's: map their titles, or add `alertcondition()`
+  lines in a version of WATA's own.
+- A tracker's rows are background to a question, never a signal; a prop-firm
+  simulation is given figures read from WATA's runs (win rate, average win
+  and loss in R, trades a day).
+
 ## First, look
 
 ```bash

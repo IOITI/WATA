@@ -217,6 +217,23 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/agent/memory/restore"),
     ("POST", "/api/agent/memory/pause"),
     ("POST", "/api/agent/memory/resume"),
+    ("GET", "/api/luxalgo/status"),
+    ("GET", "/api/luxalgo/known"),
+    ("GET", "/api/luxalgo/compat"),
+    ("POST", "/api/luxalgo/compat"),
+    ("GET", "/api/agent/routines/templates"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/propfirms"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/propfirms"),
+    ("GET", "/api/luxalgo/families"),
+    ("GET", "/api/luxalgo/indicators"),
+    ("GET", "/api/luxalgo/search"),
+    ("GET", "/api/luxalgo/indicators/tri-star"),
+    ("GET", "/api/luxalgo/indicators/tri-star/source"),
+    ("GET", "/api/luxalgo/concepts/tri-star"),
+    ("POST", "/api/luxalgo/indicators/tri-star/import"),
+    ("POST", "/api/luxalgo/sign-in"),
+    ("POST", "/api/luxalgo/sign-in/pasted"),
+    ("DELETE", "/api/luxalgo/sign-in"),
 ]
 
 
@@ -741,8 +758,10 @@ def test_every_route_requires_a_session(anonymous, method, path):
 
 def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
     app = create_app(ctx, static_dir=str(tmp_path / "no-interface"))
-    # Saxo sends the browser back there from its own site: the state admits it (src/admin/routers/saxo.py).
-    public = {("POST", "/api/session"), ("GET", "/api/healthz"), ("GET", "/api/saxo/callback")}
+    # Saxo and LuxAlgo send the browser back there from their own sites: the state admits it
+    # (src/admin/routers/saxo.py, src/admin/routers/luxalgo.py).
+    public = {("POST", "/api/session"), ("GET", "/api/healthz"), ("GET", "/api/saxo/callback"),
+              ("GET", "/api/luxalgo/callback")}
     declared = {
         (
             method,
@@ -764,7 +783,8 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{proposal_id}", "p0a1b2c3d")
             .replace("{entry}", "range-ticks")
             .replace("{routine_id}", "r0a1b2c3d")
-            .replace("{file_id}", "f0123456789"),
+            .replace("{file_id}", "f0123456789")
+            .replace("{slug}", "tri-star"),
         )
         for route in app.routes
         if route.path.startswith("/api")

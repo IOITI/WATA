@@ -53,6 +53,30 @@ describe('checkScript', () => {
     expect(pine[0].line).toBeLessThanOrEqual(6)
   })
 
+  it("does not take a field read on a method's result for an undefined name, as LuxAlgo's code reads one", async () => {
+    // From LuxAlgo's AI SuperTrend Clustering Oscillator: PineTS runs it, and pinescript-v6-validator 0.4.3 flagged it.
+    const source = [
+      '//@version=6',
+      'indicator("x")',
+      'type vector',
+      '    array<float> out',
+      'var clusters = array.new<vector>(0)',
+      'clusters.push(vector.new(array.new<float>(0)))',
+      'clusters.get(0).out.push(close)',
+      'm = clusters.get(0).out.size()',
+      'plot(m)',
+      '',
+    ].join('\n')
+    expect(validatePineScript(source).map((finding) => finding.message)).toContain("Undefined namespace or variable 'out'")
+
+    const result = await checkScript(source, options())
+
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.source === 'TradingView rules')).toEqual([])
+    // A name truly unknown is still said.
+    const unknown = await checkScript('//@version=6\nindicator("x")\nplot(nothing.here)\n', options())
+    expect(unknown.diagnostics.some((diagnostic) => /nothing/.test(diagnostic.message))).toBe(true)
+  })
+
   it('marks what TradingView would refuse, and leaves v5 scripts to PineTS', async () => {
     const v6 = await checkScript('//@version=6\nindicator("x")\nplot(close, colour = color.red)\n', options())
     expect(v6.diagnostics).toContainEqual(

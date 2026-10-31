@@ -111,6 +111,17 @@ ADMIN_PARAMS = (
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
+        path="admin.luxalgo_enabled", group="ta", label="LuxAlgo's Library and tools", kind="bool", optional=True,
+        default=False,
+        help="LuxAlgo's public MCP tools (mcp.luxalgo.com): its Library of concepts and indicators with their Pine "
+             "source, the market trackers and the prop-firm tools, read by the admin for the AI agent and the "
+             "LuxAlgo Library page.",
+        readers=(ADMIN,), risk=NONE,
+        effects=("The AI agent may search LuxAlgo's Library, bring an indicator in as one of its scripts and read the "
+                 "trackers and the prop-firm tools; the page lists the Library and imports an indicator as your "
+                 "script. Never LuxAlgo's journal or account.",),
+    ),
+    Param(
         path="admin.mcp_enabled", group="claude", label="Claude's endpoint (MCP)", kind="bool", optional=True,
         default=False,
         help="Opens /mcp on the admin's address, for Claude Code on your Mac with a token.",

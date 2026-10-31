@@ -6,7 +6,7 @@ import { Alert, AlertTitle, Button, ButtonLink, formatDateTime, Hint, Input, Pag
 import { RouterLeaveGuard } from 'ioiti-ui/react-router'
 import { ChartSpline, FlaskConical, History, Radar, Save, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
 import { AgentSheet } from '@/features/agent/AgentSheet'
@@ -15,6 +15,8 @@ import { useAgentState } from '@/features/agent/useConversation'
 import { useSession } from '@/features/auth/auth-context'
 import { isSignIn } from '@/features/auth/returnPath'
 import { api, ApiError, isNotFound } from '@/lib/api'
+import { LuxAlgoBadge } from '@/features/ta/luxalgo/LuxAlgoBadge'
+import { indicatorPath, originSaid } from '@/features/ta/luxalgo/luxalgoModel'
 import type { TaScript, TaScriptKind } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
@@ -185,9 +187,25 @@ function ScriptEditor({ id }: { id: string | undefined }) {
       <PageHeader
         title={title}
         description={
-          script
-            ? `${KIND_LABEL[script.kind]} · Pine v${script.pine_version} · version ${script.version}, saved ${formatDateTime(script.updated_at, timezone, false)}`
-            : `A new ${KIND_LABEL[newKind].toLowerCase()}: it is kept once saved.`
+          script ? (
+            <>
+              {`${KIND_LABEL[script.kind]} · Pine v${script.pine_version} · version ${script.version}, saved ${formatDateTime(script.updated_at, timezone, false)}`}
+              {script.origin && (
+                <span className="mt-1 flex flex-wrap items-center gap-x-2">
+                  <LuxAlgoBadge origin={script.origin} />
+                  {script.origin.slug ? (
+                    <Link to={indicatorPath(script.origin.slug)} className="underline-offset-4 hover:underline">
+                      {originSaid(script.origin)}
+                    </Link>
+                  ) : (
+                    originSaid(script.origin)
+                  )}
+                </span>
+              )}
+            </>
+          ) : (
+            `A new ${KIND_LABEL[newKind].toLowerCase()}: it is kept once saved.`
+          )
         }
         actions={
           <>

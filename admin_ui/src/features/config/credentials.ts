@@ -16,6 +16,12 @@ export const WHERE_LABEL: Record<Credential['where'], { label: string; tone: Bad
 
 /** A sentence on where the services read it now. */
 export function whereSaid(credential: Credential, timeZone: string): string {
+  if (credential.signed_in) {
+    // Kept by signing in from its page (LuxAlgo's account), renewed by the admin.
+    if (credential.where !== 'database') return 'Not signed in: sign in on its page.'
+    const when = formatDateTime(credential.set_at, timeZone)
+    return credential.set_by === 'renewal' ? `Signed in, renewed ${when}.` : `Signed in ${when}${credential.set_by ? ` from ${credential.set_by}` : ''}.`
+  }
   switch (credential.where) {
     case 'database': {
       const by = credential.set_by ? ` from ${credential.set_by}` : ''
@@ -72,6 +78,11 @@ export const CREDENTIAL_BRANDS: Record<string, Brand> = {
   'anthropic.api': 'claude',
 }
 
+/** Where a credential kept by signing in is signed in and out. */
+export const SIGNED_IN_FROM: Record<string, string> = {
+  'luxalgo.oauth': '/ta/luxalgo',
+}
+
 /** How each credential is obtained, step by step. */
 export const HELPERS: Record<string, string[]> = {
   'telegram.bot': [
@@ -91,6 +102,11 @@ export const HELPERS: Record<string, string[]> = {
     'Set a spending limit on its workspace there: the agent’s own budget (below) is an estimate.',
     'Copy the key (it is shown once: sk-ant-…) and set it here. The agent opens it at each request: nothing to restart.',
     'Test the connection, then switch the agent on below and restart the admin.',
+  ],
+  'luxalgo.oauth': [
+    'A free LuxAlgo account is enough (luxalgo.com): signed in, LuxAlgo gives its indicators’ sources whole.',
+    'On Technical Analysis › LuxAlgo Library, Sign in to LuxAlgo: its page opens in another tab and comes back to the admin once you say yes there.',
+    'The admin renews the sign-in itself. Sign out there revokes it at LuxAlgo when LuxAlgo accepts, and removes it here.',
   ],
   'heartbeat.url': [
     'An outside watcher (healthchecks.io, Better Stack...) gives a ping address and alerts when the pings stop.',

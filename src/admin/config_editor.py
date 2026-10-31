@@ -69,6 +69,7 @@ EDITABLE_PATHS = (
     "admin.mcp_enabled",
     "admin.mcp",
     "admin.ai_agent",
+    "admin.luxalgo_enabled",
 )
 
 # Inside the editable sections, but they say where the services connect and

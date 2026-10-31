@@ -1,10 +1,12 @@
 // Switching a signal rule to live, or taking it out of live: the confirmation of the Signal rules page, and the AI
 // agent's proposal of the same (its card), sent with the proposal it applies so that the audit trail says so. Going
 // live says what the rule's alerts become, the web server's one signal per indice, and its readiness: short of it,
-// only "Go live anyway" goes past, which the audit trail records with what was missing.
+// only "Go live anyway" goes past, which the audit trail records with what was missing. A script taken from LuxAlgo
+// under a non-commercial licence, or one WATA could not read, goes live only once its licence is said to be checked:
+// "Go live anyway" does not skip that, and the server refuses it otherwise.
 
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Checkbox, CheckList, useToast } from 'ioiti-ui'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, AlertDescription, Checkbox, CheckList, useToast } from 'ioiti-ui'
 import type { Check } from 'ioiti-ui'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
@@ -13,6 +15,7 @@ import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { api } from '@/lib/api'
 import type { TaRule, TaRuleMode } from '@/lib/types'
 
+import { goLiveSaid, licenceToCheck } from '../luxalgo/luxalgoModel'
 import { holdingBack } from './readiness'
 import { barsLabel, conflictText, MODE_LABEL, mappedAlerts, notReadyRefusal } from './ruleModel'
 
@@ -36,9 +39,12 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
   const queryClient = useQueryClient()
   // "Go live anyway", ticked in the confirmation of a rule not ready.
   const [anyway, setAnyway] = useState(false)
+  // "I checked the terms of its licence", for a script of LuxAlgo's under a licence that asks it.
+  const [licenceChecked, setLicenceChecked] = useState(false)
   const refresh = () => Promise.all([['ta-rules'], ['ta-engine']].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
   const mutation = useMutation({
-    mutationFn: ({ force }: { force: boolean }) => api.setTaRuleMode(change!.rule.id, change!.mode, revision!, force, proposal),
+    mutationFn: ({ force, checked }: { force: boolean; checked: boolean }) =>
+      api.setTaRuleMode(change!.rule.id, change!.mode, revision!, force, proposal, checked),
     onSuccess: async (saved, { force }) => {
       close()
       onDone?.()
@@ -61,11 +67,21 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
   })
   const close = () => {
     setAnyway(false)
+    setLicenceChecked(false)
     mutation.reset()
     onClose()
   }
   const goingLive = change?.mode === 'live'
   const notReady = goingLive && (holdingBack(readiness).length > 0 || notReadyRefusal(mutation.error))
+  // The version the rule pins, for where it came from: LuxAlgo's indicators come under their own licences.
+  const pinned = useQuery({
+    queryKey: ['ta-script-version', change?.rule.script.id, change?.rule.script.version],
+    queryFn: () => api.taScriptVersion(change!.rule.script.id, change!.rule.script.version),
+    enabled: goingLive,
+    staleTime: 60_000,
+  })
+  const origin = goingLive ? pinned.data?.origin : undefined
+  const licence = licenceToCheck(origin)
 
   return (
     <ConfirmLiveAction
@@ -75,7 +91,7 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
       confirmLabel={goingLive ? 'Slide to go live' : `Switch to ${change ? MODE_LABEL[change.mode].toLowerCase() : ''}`}
       doneLabel={goingLive ? 'Live' : 'Done'}
       pending={mutation.isPending}
-      blocked={notReady && !anyway}
+      blocked={(notReady && !anyway) || (goingLive && pinned.isPending) || (!!licence && !licenceChecked)}
       error={conflictText(mutation.error)}
       warning={
         goingLive
@@ -96,6 +112,18 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
               ))}
             </ul>
             <p>The trader applies its usual rules to each of them. The switch is recorded in the audit trail.</p>
+            {origin && (
+              <Alert tone="neutral">
+                <AlertDescription>{goLiveSaid(origin)}</AlertDescription>
+              </Alert>
+            )}
+            {licence && (
+              <Checkbox
+                label={`I checked the terms of its licence (${licence})`}
+                checked={licenceChecked}
+                onChange={(event) => setLicenceChecked(event.target.checked)}
+              />
+            )}
             <div className="space-y-2 pt-2">
               <p className="font-medium">Is it ready?</p>
               <CheckList checks={readiness} label="Is it ready?" />
@@ -119,7 +147,7 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
           </p>
         ))
       }
-      onConfirm={() => change && mutation.mutate({ force: notReady && anyway })}
+      onConfirm={() => change && mutation.mutate({ force: notReady && anyway, checked: !!licence && licenceChecked })}
       onClose={close}
     />
   )

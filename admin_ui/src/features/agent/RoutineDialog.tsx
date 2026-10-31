@@ -7,23 +7,26 @@ import { Alert, AlertDescription, Button, Field, Hint, Input, NumberInput, Selec
 import { useState } from 'react'
 
 import { ApiError, api } from '@/lib/api'
-import type { AgentChoice, AgentRoutine, AgentRoutineDraft, AgentState } from '@/lib/types'
+import type { AgentChoice, AgentRoutine, AgentRoutineDraft, AgentRoutineTemplate, AgentState } from '@/lib/types'
 
 import { ChoiceMenus } from './ChoiceMenus'
 import { choiceOf } from './model'
-import { draftOf, routineDefaults, routineProblem, WEEKDAYS } from './routineModel'
+import { draftOf, fromTemplate, routineDefaults, routineProblem, WEEKDAYS } from './routineModel'
 
-export function RoutineDialog({ open, routine, revision, state, onClose }: {
+export function RoutineDialog({ open, routine, template = null, revision, state, onClose }: {
   open: boolean
   /** The routine changed; none: a new one. */
   routine: AgentRoutine | null
+  /** What a new one starts from, when added from a template. */
+  template?: AgentRoutineTemplate | null
   revision: string
   state: AgentState | undefined
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
   const limits = state?.tasks
-  const [draft, setDraft] = useState<AgentRoutineDraft>(() => (routine ? draftOf(routine) : routineDefaults(limits)))
+  const [draft, setDraft] = useState<AgentRoutineDraft>(() => (
+    routine ? draftOf(routine) : template ? fromTemplate(template) : routineDefaults(limits)))
   const change = (changes: Partial<AgentRoutineDraft>) => setDraft((current) => ({ ...current, ...changes }))
   const fallback = choiceOf(state, null)
   const choice: AgentChoice | null = draft.model && draft.effort
@@ -43,7 +46,7 @@ export function RoutineDialog({ open, routine, revision, state, onClose }: {
     <SettleModal
       open={open}
       onClose={save.isPending ? () => {} : onClose}
-      title={routine ? `Change ${routine.name}` : 'A new routine'}
+      title={routine ? `Change ${routine.name}` : template ? `Add the ${template.name}` : 'A new routine'}
       description="A research task that comes back by itself, the market closed, within its budget and the month's."
       size="lg"
       footer={

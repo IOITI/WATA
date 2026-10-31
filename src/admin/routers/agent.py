@@ -35,7 +35,7 @@ from src.admin.agent.service import MAX_ATTACHED
 from src.admin.agent.uploads import LARGEST, UnknownFile
 from src.admin.agent.verdicts import MAX_ASKED
 from src.admin.agent_jobs import read_config
-from src.admin.agent_routines import RoutineConflict, checked_fields, next_turn
+from src.admin.agent_routines import RoutineConflict, checked_fields, next_turn, templates_for
 from src.admin.agent_telegram import ANSWER, TASK
 from src.admin.auth import client_ip, require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
@@ -434,6 +434,14 @@ async def routines_list(request: Request):
     return {**loaded, "max": ctx.agent.settings.max_routines,
             "routines": [{**routine, "next": next_turn(routine["schedule"], config, now)}
                          for routine in loaded["routines"]]}
+
+
+@router.get("/routines/templates")
+async def routine_templates(request: Request):
+    """Routines ready to add: the LuxAlgo scout while the agent has LuxAlgo's tools."""
+    ctx = request.app.state.ctx
+    _routines(request)
+    return {"templates": templates_for(ctx.agent.settings, luxalgo=ctx.luxalgo is not None)}
 
 
 @router.post("/routines", status_code=201)

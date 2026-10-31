@@ -37,6 +37,8 @@ ALLOWED_IMPORTS = (
     "src.admin.rule_history",
     # Pure: the refusal runs of the Orders page.
     "src.admin.order_requests",
+    # Pure: a run's trades as R-multiples, for LuxAlgo's prop-firm simulator (backtest_result part r_series).
+    "src.admin.propfirm_check",
     "src.backtest.clock", "src.ta_engine.runner", "src.ta_engine.replay", "src.ta_engine.bars", "src.ta_engine.rules",
     "src.ta_engine.signals", "src.price_history.process",
     # The study child reads the configuration for the database's address, as a backtest's child does.

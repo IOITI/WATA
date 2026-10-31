@@ -22,12 +22,12 @@ logger = logging.getLogger(__name__)
 
 ROLE = "admin"
 # What the admin opens when it uses it, never at its start: a change of them asks no restart of the admin.
-OPENED_ON_DEMAND = ("webhook.token", "internal.token", "anthropic.api")
+OPENED_ON_DEMAND = ("webhook.token", "internal.token", "anthropic.api", "luxalgo.oauth")
 # The credentials whose old place the admin can read itself (config.json, the token file), or that never had
 # one (the Claude API key): missing until set. The others' are in the environment of another container (.env),
 # which the admin never has.
 OLD_PLACE_SEEN = ("telegram.bot", "webhook.token", "internal.token", "saxo.live.app", "saxo.simulation.app",
-                  "anthropic.api")
+                  "anthropic.api", "luxalgo.oauth")
 
 
 class AdminVault:
@@ -97,6 +97,7 @@ class AdminVault:
                     for part in credential.parts
                 ],
                 "generated": credential.generated,
+                "signed_in": credential.signed_in,
                 "old_place": credential.old_place,
                 "where": where,
                 "public": row["public"] if row else {},
@@ -140,12 +141,26 @@ class AdminVault:
         credential = self._known(name)
         if credential.generated:
             raise InvalidRequest(f"{credential.label} is made by WATA: rotate it")
+        if credential.signed_in:
+            raise InvalidRequest(f"{credential.label} is kept by signing in from its page, never typed")
         try:
             value = catalog.checked(name, parts)
         except ValueError as e:
             raise InvalidRequest(str(e)) from None
         readers = await self._put(name, value, by)
         return {"name": name, "fingerprint": catalog.fingerprint(name, value), "services": readers}
+
+    async def keep_sign_in(self, name: str, parts: dict, by: str | None) -> dict:
+        """What a sign-in obtained (src/admin/luxalgo_auth.py), checked and sealed: its tokens renewed too."""
+        credential = self._known(name)
+        if not credential.signed_in:
+            raise InvalidRequest(f"{credential.label} is not kept by signing in")
+        try:
+            value = catalog.checked(name, parts)
+        except ValueError as e:
+            raise InvalidRequest(str(e)) from None
+        await self._put(name, value, by)
+        return {"name": name, "fingerprint": catalog.fingerprint(name, value)}
 
     async def rotate(self, name: str, by: str | None) -> dict:
         """A new token, the one before still accepted for a while; the services that read it."""

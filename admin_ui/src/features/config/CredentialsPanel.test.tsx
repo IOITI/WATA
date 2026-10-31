@@ -190,6 +190,10 @@ describe('what is said of a credential', () => {
     const [telegram, webhook] = credentials().items
 
     expect(whereSaid(webhook, 'Europe/Paris')).toMatch(/^Set .* from 10\.77\.0\.2, ending …fghi\.$/)
+    // A sign-in, kept from its page: never "set", renewed by the admin.
+    expect(whereSaid(credential('luxalgo.oauth', { where: 'missing', signed_in: true }), 'UTC')).toBe('Not signed in: sign in on its page.')
+    expect(whereSaid(credential('luxalgo.oauth', { where: 'database', signed_in: true, set_by: 'renewal', set_at: '2026-10-31T09:00:00+00:00' }), 'UTC'))
+      .toMatch(/^Signed in, renewed .*\.$/)
     expect(whereSaid(telegram, 'Europe/Paris')).toBe(
       'Read at its old place until it is set here: config.json (telegram.bot_token, telegram.chat_id).',
     )

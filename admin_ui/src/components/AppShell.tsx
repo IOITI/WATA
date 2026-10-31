@@ -4,6 +4,7 @@ import type { Menu } from 'ioiti-ui'
 import { RouterAppShell, RouterLink } from 'ioiti-ui/react-router'
 import {
   Activity,
+  BookOpen,
   Bot,
   BrainCircuit,
   ChartCandlestick,
@@ -66,6 +67,7 @@ const ICONS: Record<string, ReactNode> = {
   providers: <Database />,
   assets: <ChartLine />,
   'ta-indicators': <SquareFunction />,
+  'ta-luxalgo': <BookOpen />,
   'ta-charts': <ChartSpline />,
   'ta-signals': <Radar />,
   'ta-monitor': <Gauge />,

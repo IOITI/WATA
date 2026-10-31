@@ -72,14 +72,16 @@ def fitted(answer, limit: int = CONTEXT_CHARS):
     return tried(0, largest(lambda listed: fits(tried(0, listed)), len(alerts)))
 
 
-def _script_line(meta: dict, users: list[str]) -> dict:
-    return {
+def _script_line(meta: dict, users: list[str], origin: dict | None = None) -> dict:
+    line = {
         "id": meta["id"], "name": meta["name"], "kind": meta["kind"], "version": meta["version"],
         "updated_at": meta["updated_at"], "made_by": meta.get("made_by"),
         "description": (meta.get("description") or "")[:200],
         "imports": [entry["name"] for entry in meta.get("imports") or []],
         "used_by_rules": users,
     }
+    # Taken from LuxAlgo's Library, or derived from one of its indicators: its licence goes with it.
+    return {**line, "origin": origin} if origin else line
 
 
 def register(server, research) -> None:
@@ -87,18 +89,20 @@ def register(server, research) -> None:
 
     def loaded():
         rules = research.rules.load()["rules"] if research.rules is not None else []
-        return research.scripts.scripts(), rules
+        scripts = research.scripts.scripts()
+        return scripts, rules, {meta["id"]: research.origin_of(meta["id"], meta["version"]) for meta in scripts}
 
     @research_tool(server, calls, name="pine_list", title="Pine scripts", read_only=True)
     async def pine_list(kind: str = "", made_by: str = "", offset: int = 0, limit: int = DEFAULT_PAGE) -> dict:
         """The Pine scripts WATA keeps (the Technical Analysis pages' Indicators), the last saved first: id, name,
         kind (indicator, strategy, library), current version, who made it (made_by "claude" for Claude's), the
-        libraries it imports, and the signal rules that run it. made_by="claude" lists Claude's own."""
+        libraries it imports, the signal rules that run it, and where it came from when it was taken from LuxAlgo's
+        Library or made from one of its indicators (origin, with its licence). made_by="claude" lists Claude's own."""
         if kind not in KINDS:
             raise Refused("kind is indicator, strategy or library (or empty for all)")
-        scripts, rules = await run_in_threadpool(loaded)
+        scripts, rules, origins = await run_in_threadpool(loaded)
         chosen = [
-            _script_line(meta, rule_users(rules, meta["id"])) for meta in scripts
+            _script_line(meta, rule_users(rules, meta["id"]), origins.get(meta["id"])) for meta in scripts
             if (not kind or meta["kind"] == kind) and (not made_by or meta.get("made_by") == made_by)
         ]
         return compacted(page(chosen, offset, limit))
@@ -106,18 +110,18 @@ def register(server, research) -> None:
     @research_tool(server, calls, name="pine_get", title="A Pine script's source", read_only=True, export=True)
     async def pine_get(script_id: str, version: int = 0) -> dict:
         """One script: its source (the current version, or ``version``), its versions (when, who saved them), the
-        libraries it imports and the rules that run it. A long source is saved to a file on the Mac by Claude Code:
-        read it there."""
+        libraries it imports, the rules that run it and where it came from (origin: LuxAlgo's Library, its licence).
+        A long source is saved to a file on the Mac by Claude Code: read it there."""
         def read():
             meta = research.scripts.script(script_id)
             number = version or meta["version"]
             source = meta["source"] if number == meta["version"] else research.scripts.version(script_id, number)["source"]
             rules = research.rules.load()["rules"] if research.rules is not None else []
-            return meta, number, source, rule_users(rules, script_id)
+            return meta, number, source, rule_users(rules, script_id), research.origin_of(script_id, number, lambda: source)
 
-        meta, number, source, users = await run_in_threadpool(read)
+        meta, number, source, users, origin = await run_in_threadpool(read)
         return compacted({
-            **_script_line(meta, users),
+            **_script_line(meta, users, origin),
             "description": meta.get("description") or "",
             "pine_version": meta.get("pine_version"),
             "library_name": meta.get("library_name"),

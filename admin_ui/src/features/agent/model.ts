@@ -98,6 +98,8 @@ export function subjectLink(subject: AgentSubject): string {
       return '/config'
     case 'draft':
       return '/ta/indicators'
+    case 'luxalgo':
+      return `/ta/luxalgo/indicators/${encodeURIComponent(subject.id)}`
     default:
       return '/system'
   }
@@ -127,6 +129,9 @@ export function subjectSaid(subject: AgentSubject): string {
     case 'change':
     case 'draft':
       return `To review: ${subject.label}`
+    case 'luxalgo':
+      // Its label names LuxAlgo already: "LuxAlgo's Tri-star".
+      return subject.label
     default:
       return `Incident: ${subject.label}`
   }
@@ -153,16 +158,17 @@ export function aboutParam(subject: Pick<AgentSubject, 'kind' | 'id' | 'day' | '
   return `${subject.kind}:${subject.id}${extra ? `@${extra}` : ''}`
 }
 
-const ABOUT_KINDS = ['position', 'signal', 'day', 'incident', 'rule'] as const
+const ABOUT_KINDS = ['position', 'signal', 'day', 'incident', 'rule', 'luxalgo'] as const
 
 /** The subject the address names, or null; its label until the admin names it. */
 export function subjectOf(about: string | null): AgentSubject | null {
-  const match = about ? /^(position|signal|day|incident|rule):([^@]{1,64})(?:@(.{1,16}))?$/.exec(about) : null
+  // A LuxAlgo indicator's slug runs to 121 characters.
+  const match = about ? /^(position|signal|day|incident|rule|luxalgo):([^@]{1,121})(?:@(.{1,16}))?$/.exec(about) : null
   if (!match || !(ABOUT_KINDS as readonly string[]).includes(match[1])) return null
   const [, kind, id, extra] = match
   if (kind === 'signal') return extra ? { kind, id, day: extra, label: `the signal of ${extra}` } : null
   if (kind === 'incident') return extra ? { kind, id, at: extra, label: `${id.replace(/_/g, ' ')} at ${extra} UTC` } : null
-  return { kind: kind as 'position' | 'day' | 'rule', id, label: id }
+  return { kind: kind as 'position' | 'day' | 'rule' | 'luxalgo', id, label: id }
 }
 
 /** The address that opens the agent on a new conversation about ``subject``, from the page it is on. */
@@ -269,6 +275,20 @@ const TITLES: Record<string, (input: Input) => string> = {
   memory_read: (input) => `Read ${entries(input.names)} from its memory`,
   memory_save: (input) => `Saved ${short(input.name)} to its memory`,
   memory_forget: (input) => `Forgot ${short(input.name)} from its memory`,
+  luxalgo_tools: (input) =>
+    typeof input.tool === 'string' && input.tool ? `Read how LuxAlgo's ${input.tool} is called` : "Listed LuxAlgo's tools",
+  luxalgo_call: (input) => `Asked LuxAlgo: ${luxalgoAsked(input)}`,
+  luxalgo_save_script: (input) => `Took LuxAlgo's ${short(input.slug)} as its script`,
+  luxalgo_known: (input) => `Read what WATA knows of ${Array.isArray(input.slugs) && input.slugs.length === 1
+    ? `LuxAlgo's ${short(input.slugs[0])}` : `${Array.isArray(input.slugs) ? input.slugs.length : 'some'} LuxAlgo indicators`}`,
+}
+
+// A call of LuxAlgo's tools, said from its tool and its main argument.
+function luxalgoAsked(input: Input): string {
+  const tool = typeof input.tool === 'string' ? input.tool : '?'
+  const given = (input.arguments && typeof input.arguments === 'object' ? input.arguments : {}) as Input
+  const about = [given.query, given.slug, given.dataset, given.ticker, given.key].find((value) => typeof value === 'string' && value)
+  return about ? `${tool} (${short(about)})` : tool
 }
 
 const TYPES: Record<string, ActivityType> = {
@@ -297,6 +317,7 @@ const TYPES: Record<string, ActivityType> = {
   task_done: 'writing',
   memory_save: 'writing',
   memory_forget: 'writing',
+  luxalgo_save_script: 'writing',
   data_position: 'database_query',
   data_orders: 'database_query',
   data_signals: 'database_query',
@@ -361,6 +382,10 @@ const WRITING: Record<string, string> = {
   memory_read: 'Reading its memory',
   memory_save: 'Saving to its memory',
   memory_forget: 'Forgetting an entry of its memory',
+  luxalgo_tools: "Reading LuxAlgo's tools",
+  luxalgo_call: 'Asking LuxAlgo',
+  luxalgo_save_script: "Taking one of LuxAlgo's indicators",
+  luxalgo_known: "Reading what WATA knows of LuxAlgo's indicators",
 }
 
 export function stepTitle(tool: string, input: unknown): string {
@@ -632,14 +657,32 @@ export interface Preset {
   prompt: string
 }
 
-/** Requests to start from, by what the conversation is about. */
-export function presetsFor(kind: AgentSubject['kind'] | null): Preset[] {
+// What is offered while the agent has LuxAlgo's tools (its state's `luxalgo`).
+const SIMILAR_IN_LUXALGO: Preset = {
+  label: 'Find similar in LuxAlgo',
+  prompt: "Find LuxAlgo indicators like this one: name the concepts it uses, search LuxAlgo's Library and concepts, read what WATA already knows of the closest (luxalgo_known), compare them with it, test the most promising within your limits, and say what you found.",
+}
+const FUNDED_CHALLENGE: Preset = {
+  label: 'Would it pass a funded challenge?',
+  prompt: "Would this run's strategy pass a funded-account challenge? Read its trades as R-multiples (backtest_result, part r_series) and send them with luxalgo_call propfirms_validate_strategy: futures, a risk of 0.5 % of the balance per trade, the bar of a pass per attempt of one in two. Say which challenges it passes, what that rests on and LuxAlgo's flags: a screen of distributions, not a ranking.",
+}
+const LUXALGO_PRESETS: Preset[] = [
+  { label: 'Worth testing on WATA?', prompt: "Is this indicator worth testing on WATA? Read it and what WATA already knows of it, take it whole if LuxAlgo gives its source whole, count its signals on the last five recorded days with pine_signals (adding alertcondition() lines in a version of your own if it has none), and say whether it deserves a backtest and why. Start no backtest." },
+  { label: 'Test it', prompt: "Test this indicator on WATA: take it whole, add WATA alerts if it has none, open an experiment, backtest it within your limits on the recorded turbos and judge it by the bar. Set your verdict on the indicator, and propose it as a new script of mine if it holds." },
+  { label: 'Make it a signal rule', prompt: "Make this indicator a signal rule of mine: take it whole, map its alerts to WATA's actions (adding alertcondition() lines in a version of your own if it needs them), check its signals on recorded days, and propose a new rule in shadow. Never live." },
+]
+
+/** Requests to start from, by what the conversation is about; ``luxalgo``: the agent has LuxAlgo's tools. */
+export function presetsFor(kind: AgentSubject['kind'] | null, options: { luxalgo?: boolean } = {}): Preset[] {
+  const luxalgo = !!options.luxalgo
+  if (kind === 'luxalgo') return LUXALGO_PRESETS
   if (kind === 'run') {
     return [
       { label: 'Analyse it', prompt: 'Can this run be believed? Read its verdict checks, the edge of its entries, random entries, stress, regimes and trades. Say what it rests on and what to try next.' },
       { label: 'Find better settings', prompt: 'Look for settings that could do better than this run. Test the most promising with backtests within your limits, on the same days, compare them with this run, and say which holds and why.' },
       { label: 'Stress it', prompt: 'Stress this run and try its neighbours: does its result survive worse fills and settings near its own?' },
       { label: 'Improve its script', prompt: "Read this run's script and look for a change that could do better: save it as your own script, backtest it against this run on the same days, and propose it if it holds." },
+      ...(luxalgo ? [FUNDED_CHALLENGE] : []),
     ]
   }
   if (kind === 'script') {
@@ -647,6 +690,7 @@ export function presetsFor(kind: AgentSubject['kind'] | null): Preset[] {
       { label: 'Review it', prompt: "Review this Pine script for bugs, repainting and WATA's rules for scripts. Propose the fixes as a new version." },
       { label: 'Explain it', prompt: 'Explain what this script does: its inputs, which alerts it raises and when.' },
       { label: 'Improve it', prompt: 'Suggest improvements to this script, backtest the most promising against the current version on the recorded days, and propose it if it holds.' },
+      ...(luxalgo ? [SIMILAR_IN_LUXALGO] : []),
     ]
   }
   if (kind === 'position') {
@@ -679,6 +723,7 @@ export function presetsFor(kind: AgentSubject['kind'] | null): Preset[] {
       { label: 'Is it ready to go live?', prompt: "Write this rule's go-live dossier: its paper days against its reference, its report against the bar, its reference run under worse fills, its signals beside TradingView's, the engine running it and its readiness. Set your verdict on the rule." },
       { label: 'Why did a paper day leave its range?', prompt: "Why did this rule's latest paper day outside its reference's range go so? Read its trades and signals that day, and say whether it is the rule, the market or the fills." },
       { label: 'Improve it', prompt: "Look for a change of this rule's script or inputs that could do better: test it on the recorded days against the rule as it runs, and propose it if it holds." },
+      ...(luxalgo ? [SIMILAR_IN_LUXALGO] : []),
     ]
   }
   return [
@@ -918,13 +963,17 @@ export function verdictLink(about: string): string {
   if (kind === 'run') return `/backtests/${encodeURIComponent(id)}`
   if (kind === 'rule') return '/ta/signals'
   if (kind === 'day') return `/report?day=${encodeURIComponent(id)}`
+  if (kind === 'luxalgo') return `/ta/luxalgo/indicators/${encodeURIComponent(id)}`
   return `/positions?find=${encodeURIComponent(id)}`
 }
 
 /** What a verdict is on, in words. */
 export function verdictSubject(about: string): string {
   const [kind, id] = [about.slice(0, about.indexOf(':')), about.slice(about.indexOf(':') + 1)]
-  return { run: `run ${id}`, rule: 'its signal rule', day: `the day of ${id}`, position: `position ${id}` }[kind] ?? about
+  return {
+    run: `run ${id}`, rule: 'its signal rule', day: `the day of ${id}`, position: `position ${id}`,
+    luxalgo: `LuxAlgo's ${id}`,
+  }[kind] ?? about
 }
 
 /** A verdict on a thing changed since (a rule that runs something else): said to be from before. */

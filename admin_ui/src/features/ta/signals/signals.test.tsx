@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { BacktestPaper, Session, TaEngine, TaHistory, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
+import type { BacktestPaper, ScriptOrigin, Session, TaEngine, TaHistory, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
 import { run as backtest } from '@/test/backtests'
 import { WithTrail } from '@/test/WithTrail'
 
@@ -126,6 +126,9 @@ let rules: TaRule[] = []
 let paper: BacktestPaper = { rules: {} }
 let sent: { method: string; path: string; body: unknown }[] = []
 
+// Where the version a rule pins came from: LuxAlgo's Library, in the test that says so.
+let pinnedOrigin: ScriptOrigin | undefined
+
 function serve({ modeError }: { modeError?: { status: number; detail: string } } = {}) {
   sent = []
   const json = (body: unknown, status = 200) =>
@@ -159,7 +162,9 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
       const one = /^\/api\/ta\/rules\/([0-9a-f]+)$/.exec(url.pathname)
       if (one && method === 'DELETE') return json(null, 204)
       if (url.pathname === '/api/ta/scripts') return json({ items: [CROSS] })
-      if (url.pathname === `/api/ta/scripts/${CROSS.id}/versions/1`) return json({ ...CROSS.versions[0], source: SOURCE })
+      if (url.pathname === `/api/ta/scripts/${CROSS.id}/versions/1`) {
+        return json({ ...CROSS.versions[0], source: SOURCE, ...(pinnedOrigin ? { origin: pinnedOrigin } : {}) })
+      }
       if (url.pathname === '/api/ta/engine') return json(ENGINE)
       if (url.pathname === '/api/ta/signals') return json({ items: [SIGNAL] })
       if (url.pathname.endsWith('/comparison')) {
@@ -340,6 +345,51 @@ describe('the Signal rules page', () => {
     expect(within(dialog).getByRole('checkbox', { name: 'Go live anyway' })).not.toBeChecked()
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(sent.filter((request) => request.method === 'POST')).toEqual([])
+  })
+
+  it("says, going live, that a rule's script is LuxAlgo's and under which licence", async () => {
+    pinnedOrigin = { provider: 'luxalgo', slug: 'tri-star', name: 'Tri-star', licence: 'CC BY-NC-SA 4.0', owner: 'LuxAlgo' }
+    try {
+      const user = userEvent.setup()
+      renderPage()
+      await user.selectOptions(await screen.findByRole('combobox', { name: 'Mode of Cross on US100' }), 'live')
+      const dialog = await screen.findByRole('dialog', { name: 'Switch Cross on US100 to live' })
+      expect(
+        await within(dialog).findByText(
+          "Its script comes from LuxAlgo's Library (Tri-star), under CC BY-NC-SA 4.0: its terms are yours to check before trading it.",
+        ),
+      ).toBeInTheDocument()
+    } finally {
+      pinnedOrigin = undefined
+    }
+  })
+
+  it("asks, going live, that a non-commercial licence was checked, and tells the server so", async () => {
+    pinnedOrigin = { provider: 'luxalgo', slug: 'tri-star', name: 'Tri-star', licence: 'CC BY-NC-SA 4.0', owner: 'LuxAlgo' }
+    try {
+      const user = userEvent.setup()
+      renderPage()
+      await user.selectOptions(await screen.findByRole('combobox', { name: 'Mode of Cross on US100' }), 'live')
+      const dialog = await screen.findByRole('dialog', { name: 'Switch Cross on US100 to live' })
+      const licence = await within(dialog).findByRole('checkbox', { name: 'I checked the terms of its licence (CC BY-NC-SA 4.0)' })
+      await user.click(within(dialog).getByRole('checkbox', { name: 'Go live anyway' }))
+      const slider = within(dialog).getByRole('slider')
+      // Going live anyway does not skip the licence: the slide waits for its tick.
+      slider.focus()
+      fireEvent.keyDown(slider, { key: 'Enter' })
+      expect(sent.filter((request) => request.path.endsWith('/mode'))).toEqual([])
+
+      await user.click(licence)
+      slider.focus()
+      fireEvent.keyDown(slider, { key: 'Enter' })
+      await waitFor(() =>
+        expect(sent.find((request) => request.path.endsWith('/mode'))?.body).toEqual({
+          mode: 'live', revision: 'r1', force: true, licence_checked: true,
+        }),
+      )
+    } finally {
+      pinnedOrigin = undefined
+    }
   })
 
   it('takes a rule not ready live only once the operator goes live anyway, and tells the server so', async () => {

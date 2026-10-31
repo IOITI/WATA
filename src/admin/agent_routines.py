@@ -50,6 +50,50 @@ TRADING_DAY, WEEK = "trading_day", "week"
 _TIME = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
+# Routines ready to add (GET /api/agent/routines/templates): the operator changes what they like before saving.
+# Their goals name the agent's tools, so that a template is offered only while those tools are given.
+LUXALGO_SCOUT = "luxalgo_scout"
+SCOUT_GOAL = """\
+Scout LuxAlgo's Library for indicators worth testing on WATA.
+1. Read the 24 newest indicators (luxalgo_call library_list_indicators, newest first), then what WATA already \
+knows of them (luxalgo_known, 20 slugs a call). Leave out those with a verdict of the last 60 days, those WATA's \
+check found not to compile, strategies, and those that cannot suit intraday bars of the Nasdaq 100 (daily or \
+weekly only, made for another market's session, crypto only).
+2. Shortlist three at most for the operator's style, as your memory's preferences say.
+3. Take the best one or two whole with luxalgo_save_script (refused when LuxAlgo gives a part of it: say so and go \
+on), and count their signals on the last five recorded days with pine_signals, adding alertcondition() lines in a \
+version of your own when they have none.
+4. Backtest the most promising within the task's budget, as an experiment of the family luxalgo-scout, and judge it \
+by the bar.
+5. Set a verdict on each indicator you judged (luxalgo:<slug>): negative when it cannot work on WATA or fails \
+the bar, mixed when it deserves more days, positive only when it clears the bar. None on one you could not take \
+whole: the next scout would leave it out for 60 days.
+6. End with task_done, and answer in eight lines at most: what you looked at, what you took, what its runs said, \
+with links. Never propose to take a rule live."""
+TEMPLATES = {
+    LUXALGO_SCOUT: {
+        "name": "LuxAlgo scout", "goal": SCOUT_GOAL,
+        # Saturday morning: the week's indicators, the market closed.
+        "schedule": {"every": WEEK, "weekday": 5, "time": "10:00"},
+        "budget": {"usd": 2.0, "backtests": 2, "hours": 1.5}, "telegram": True,
+    },
+}
+
+
+def templates_for(settings, *, luxalgo: bool) -> list[dict]:
+    """The templates this admin's agent can run, each budget held to what a task may be given."""
+    if not luxalgo:
+        return []
+    found = []
+    for key, template in TEMPLATES.items():
+        budget = template["budget"]
+        found.append({**template, "key": key, "budget": {
+            "usd": min(budget["usd"], settings.max_task_usd), "backtests": min(budget["backtests"],
+                                                                                settings.max_task_backtests),
+            "hours": min(budget["hours"], settings.max_task_hours)}})
+    return found
+
+
 class RoutineConflict(Exception):
     """The routines changed since they were read."""
 

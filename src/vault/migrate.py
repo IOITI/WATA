@@ -278,7 +278,7 @@ def _needed(config_manager) -> list[str]:
     environment = config_manager.get_config_value("saxo_auth.env", "live")
     return [
         credential.name for credential in catalog.CREDENTIALS
-        if credential.name not in ("heartbeat.url", "anthropic.api")
+        if credential.name not in ("heartbeat.url", "anthropic.api") and not credential.signed_in
         and not (credential.name.startswith("saxo.") and credential.name != f"saxo.{environment}.app")
         and not (credential.name == "capital.login" and not catalog.old_value("capital.login", config_manager, {}))
     ]

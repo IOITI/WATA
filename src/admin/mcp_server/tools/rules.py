@@ -19,9 +19,9 @@ from src.admin.ta_rules import bars_label
 
 
 def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict | None,
-              readiness: list[str] | None = None) -> dict:
+              readiness: list[str] | None = None, origin: dict | None = None) -> dict:
     script = scripts_by_id.get(rule["script"]["id"]) or {}
-    return {
+    line = {
         "id": rule["id"], "name": rule["name"], "mode": rule["mode"], "made_by": rule.get("made_by"),
         "indice": rule["indice"], "asset": f"{rule['asset']['provider']}/{rule['asset']['key']}", "side": rule["side"],
         "bars": bars_label(rule["bars"]),
@@ -38,6 +38,10 @@ def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict |
         # What keeps it from going live, as the Signal rules page's checks say (the operator's alone to switch).
         "readiness": readiness,
     }
+    if origin:
+        # Its script taken from LuxAlgo's Library or made from one of its indicators: under that licence.
+        line["script"]["origin"] = origin
+    return line
 
 
 def register(server, research) -> None:
@@ -55,16 +59,18 @@ def register(server, research) -> None:
         range, the engine running it without fault), empty once ready; going live stays the operator's."""
         def read():
             paper = research.backtests.paper() if research.backtests is not None else {}
-            return research.rules.load()["rules"], {meta["id"]: meta for meta in research.scripts.scripts()}, paper
+            rules = research.rules.load()["rules"]
+            origins = {rule["id"]: research.origin_of(rule["script"]["id"], rule["script"]["version"]) for rule in rules}
+            return rules, {meta["id"]: meta for meta in research.scripts.scripts()}, paper, origins
 
-        rules, scripts_by_id, paper = await run_in_threadpool(read)
+        rules, scripts_by_id, paper, origins = await run_in_threadpool(read)
         states = await research.queries.ta_rule_states()
         papers = paper.get("rules") or {}
         now = datetime.fromtimestamp(research.clock(), timezone.utc)
         return compacted({
             "rules": [rule_line(rule, scripts_by_id, states.get(rule["id"]), papers.get(rule["id"]),
                                 unmet_readiness(rule, states.get(rule["id"]), papers.get(rule["id"]), now,
-                                                research.timezone))
+                                                research.timezone), origins.get(rule["id"]))
                       for rule in rules],
             "shadow_rules_switch": research.limits.shadow_rules,
         })

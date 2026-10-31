@@ -11,7 +11,10 @@ agent's package, which reaches no service (tests/test_agent_boundary.py):
 - what changed: config.json's saves key by key (masked as its journal writes
   them), the operator's actions from the audit, the last deploy;
 - the TA engine's last minutes, as the Engine monitor's Now panel reads them;
-- what waits to be deployed, and why each container is held.
+- what waits to be deployed, and why each container is held;
+- LuxAlgo's MCP tools, through the admin's client (src/admin/luxalgo.py: its
+  allowlist, its fixed context, its limits), and the origin of an indicator
+  it brings in, kept beside the scripts (src/admin/script_origins.py).
 
 What must not reach Anthropic is left out here: an operator's address, a
 credential's last characters, a sign-in. The values config.json's journal
@@ -207,3 +210,40 @@ def ops_reads(ctx):
         release=release if ctx.release is not None else None,
     )
 
+
+def luxalgo_reads(ctx):
+    """LuxAlgo's tools for the agent (src/admin/agent/tools.py LuxAlgoReads), None while admin.luxalgo_enabled is off."""
+    if getattr(ctx, "luxalgo", None) is None or getattr(ctx, "script_origins", None) is None:
+        return None
+    import time
+
+    from src.admin.agent.tools import LuxAlgoReads
+    from src.admin.script_origins import luxalgo_origin
+
+    async def keep(script_id: str, found: dict, by: str) -> dict:
+        origin = luxalgo_origin(found, by, time.time())
+        return await run_in_threadpool(ctx.script_origins.record, script_id, origin)
+
+    async def source(slug: str) -> dict:
+        found = await ctx.luxalgo.source(slug)
+        if getattr(ctx, "luxalgo_checks", None) is not None:
+            # Read whole: checked for running on WATA, once per source.
+            ctx.luxalgo_checks.noticed(slug, found["source"])
+        return found
+
+    async def indicator(slug: str) -> dict | None:
+        from src.admin.luxalgo import LuxAlgoUnknown
+
+        try:
+            found = await ctx.luxalgo.read("library_get_indicator", {"slug": slug})
+        except LuxAlgoUnknown:
+            return None
+        return found if isinstance(found, dict) else {"slug": slug}
+
+    async def known(slugs: list[str]) -> dict:
+        from src.admin.luxalgo_knowledge import known as known_of
+
+        return await run_in_threadpool(known_of, ctx, slugs)
+
+    return LuxAlgoReads(tools=ctx.luxalgo.tools, call=ctx.luxalgo.call, source=source, keep=keep,
+                        indicator=indicator, known=known)

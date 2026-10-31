@@ -1,7 +1,7 @@
 // The AI agent's routines as the Routines page shows them (src/admin/agent_routines.py): when each comes back,
 // what the form starts from, and what they would cost in a month if each spent its whole budget. Pure.
 
-import type { AgentRoutine, AgentRoutineDraft } from '@/lib/types'
+import type { AgentRoutine, AgentRoutineDraft, AgentRoutineTemplate } from '@/lib/types'
 
 export const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const
 
@@ -21,6 +21,12 @@ export function routineDefaults(limits: { usd: number; backtests: number; hours:
     budget: { usd: Math.min(3, limits?.usd ?? 3), backtests: Math.min(10, limits?.backtests ?? 10), hours: Math.min(2, limits?.hours ?? 2) },
     model: null, effort: null, telegram: true, enabled: true,
   }
+}
+
+/** A template as the form starts from it: the operator changes what they like before saving. */
+export function fromTemplate(template: AgentRoutineTemplate): AgentRoutineDraft {
+  const { name, goal, schedule, budget, telegram } = template
+  return { name, goal, schedule, budget, model: null, effort: null, telegram, enabled: true }
 }
 
 /** A routine as its form edits it. */

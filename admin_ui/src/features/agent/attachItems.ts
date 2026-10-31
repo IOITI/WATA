@@ -15,6 +15,7 @@ import type {
   DailyPerformance,
   Health,
   JournalEntry,
+  LuxAlgoSearchResult,
   Position,
   TaRule,
   TaScriptSummary,
@@ -30,6 +31,8 @@ export interface AttachLists {
   journal?: readonly JournalEntry[]
   days?: readonly DailyPerformance[]
   health?: Health | null
+  /** LuxAlgo's indicators found for what is typed, while the agent has LuxAlgo's tools. */
+  luxalgo?: readonly LuxAlgoSearchResult[]
 }
 
 /** How the categories are named, in the order they are listed. */
@@ -42,6 +45,7 @@ export const CATEGORY = {
   signal: 'Signals',
   day: 'Trading days',
   incident: 'Incidents',
+  luxalgo: 'LuxAlgo Library',
 } as const
 
 function positionLabel(position: Position): string {
@@ -139,6 +143,16 @@ export function attachItems({ lists, attached, query, timeZone, onAttach, onFile
         description: service.detail, keywords: [service.id],
       })
     }
+  }
+  // Found by LuxAlgo for the words typed: each holds them among its words, as typed dates do.
+  const words = typed.toLowerCase().split(/\s+/).filter(Boolean)
+  for (const found of lists.luxalgo ?? []) {
+    if (found.kind !== 'indicator') continue
+    offer({ kind: 'luxalgo', id: found.slug, label: `LuxAlgo's ${found.name}` }, {
+      id: `luxalgo-${found.slug}`, title: found.name, category: CATEGORY.luxalgo,
+      description: found.description ? found.description.slice(0, 140) : 'An indicator of LuxAlgo\'s Library',
+      keywords: [...words, found.slug],
+    })
   }
   return items
 }

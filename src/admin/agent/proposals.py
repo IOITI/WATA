@@ -157,13 +157,15 @@ def _lines_changed(before: str, after: str) -> dict:
 
 
 class Proposals:
-    def __init__(self, store, scripts, clock=time.time, *, backtests=None):
+    def __init__(self, store, scripts, clock=time.time, *, backtests=None, origins=None):
         self._store = store
         self._scripts = scripts
         self._rules = RecordedRuleStore(scripts)
         self._clock = clock
         # The backtests' service: the live settings and the runs a change of settings rests on (None: off).
         self._backtests = backtests
+        # Where scripts came from (src/admin/script_origins.py): a new script keeps its draft's.
+        self._origins = origins
 
     # ── made by the agent ──
 
@@ -566,6 +568,12 @@ class Proposals:
             raise NotPossible(f"{e}: ask the agent for another name") from None
         except InvalidScript as e:
             raise NotPossible(str(e)) from None
+        if self._origins is not None:
+            try:
+                # Taken from LuxAlgo's Library, say: the operator's script says so too.
+                self._origins.carry(proposal["draft"]["id"], made["id"])
+            except (OSError, ValueError):
+                pass
         return {"script_id": made["id"], "version": made["version"], "name": made["name"]}
 
     def _apply_new_rule(self, proposals: dict, proposal: dict) -> dict:

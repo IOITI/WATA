@@ -101,6 +101,8 @@ logger = logging.getLogger(__name__)
 
 # 20261019-213045-a1b2c3: made here, and the only shape a folder is ever looked for with.
 RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
+# What an admin feature keeps beside a run's results: its check against funded challenges (src/admin/propfirm_check.py).
+KEPT_FILES = ("propfirms.json",)
 RUNS_FOLDER = "runs"
 # What the former backtester left at the root of the folder: its runs, its measures of the turbo.
 FORMER_FOLDERS = ("_calibration", "_fetch")
@@ -1639,6 +1641,21 @@ class BacktestService:
 
     def days(self, run_id: str) -> list[dict]:
         return self._done_file(run_id, "days.json")
+
+    def settings_of(self, run_id: str) -> dict:
+        """The settings a run was made with (those of its settings.json)."""
+        return (read_json(self._file(run_id, "settings.json")) or {}).get("settings") or {}
+
+    def kept(self, run_id: str, name: str):
+        """A file an admin feature keeps beside a run's results (KEPT_FILES), None while it has none."""
+        if name not in KEPT_FILES:
+            raise InvalidRequest(f"A run keeps no {name}")
+        return read_json(self._file(run_id, name))
+
+    def keep(self, run_id: str, name: str, content) -> None:
+        if name not in KEPT_FILES:
+            raise InvalidRequest(f"A run keeps no {name}")
+        write_json(self._file(run_id, name), content)
 
     def signals(self, run_id: str, day: date | None = None, fate: str | None = None) -> list[dict]:
         rows = self._done_file(run_id, "signals.json")

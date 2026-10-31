@@ -124,6 +124,8 @@ class ResearchServices:
     memory: Any = None
     # What each container runs and what waits for the newest release, in short: read here, never applied.
     release: Callable[[], dict | None] | None = None
+    # Where each script came from (src/admin/script_origins.py: LuxAlgo's Library), read here.
+    origins: Any = None
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
@@ -152,6 +154,7 @@ class ResearchServices:
             studies=ctx.studies,
             memory=getattr(ctx, "agent_memory", None),
             release=ctx.release.summary if getattr(ctx, "release", None) is not None else None,
+            origins=getattr(ctx, "script_origins", None),
         )
 
     def service(self):
@@ -161,6 +164,12 @@ class ResearchServices:
 
             raise Refused("Backtests are switched off in the configuration (admin.backtests_enabled)")
         return self.backtests
+
+    def origin_of(self, script_id: str, version: int, source: Callable[[], str] | None = None) -> dict | None:
+        """Where a script's version came from: as recorded, or as its header says. None when unknown."""
+        if self.origins is None or self.scripts is None:
+            return None
+        return self.origins.of(script_id, version, source or (lambda: self.scripts.source(script_id, version)))
 
     def now_iso(self) -> str:
         return datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

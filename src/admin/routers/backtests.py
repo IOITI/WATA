@@ -12,13 +12,14 @@ account's last value, which the money of a run starts from. The service never re
 reads the recorded turbos through a read-only connection of its own.
 """
 
+import time
 from datetime import date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from src.admin import backtest_requests
+from src.admin import backtest_requests, propfirm_check
 from src.admin.auth import require_session
 from src.admin.errors import InvalidRequest
 from src.admin.live_drift import live_days
@@ -55,6 +56,14 @@ class ResearchSwitch(BaseModel):
 class TurboMeasure(BaseModel):
     first: date = Field(alias="from")
     last: date = Field(alias="to")
+
+
+class PropFirmAsked(BaseModel):
+    # The share of the balance risked on a trade, the product the challenges trade, and the accounts' sizes.
+    risk_percent: float = Field(default=0.5, ge=0.1, le=5.0)
+    product_type: str = Field(default="futures", pattern="^(futures|cfd)$")
+    account_min: float | None = Field(default=None, ge=1_000, le=1_000_000)
+    account_max: float | None = Field(default=None, ge=1_000, le=1_000_000)
 
 
 def research(request: Request):
@@ -298,6 +307,53 @@ async def reference(run_id: str, service=Depends(backtests)):
 async def stress(run_id: str, service=Depends(backtests)):
     """The run made again with each order filled later and at a worse price."""
     return service.stress(run_id)
+
+
+@router.get("/{run_id}/propfirms")
+async def propfirms(run_id: str, service=Depends(backtests)):
+    """The run's last check against funded challenges (LuxAlgo's simulator), and its figures as it would send them."""
+    def read() -> dict:
+        kept = service.kept(run_id, propfirm_check.FILE)
+        try:
+            said = propfirm_check.figures(service.trades(run_id), service.days(run_id), service.settings_of(run_id))
+        except propfirm_check.NotCheckable as e:
+            return {"kept": kept, "figures": None, "refused": str(e)}
+        return {"kept": kept, "figures": said, "refused": None}
+
+    return await run_in_threadpool(read)
+
+
+@router.post("/{run_id}/propfirms")
+async def check_propfirms(run_id: str, body: PropFirmAsked, request: Request, service=Depends(backtests)):
+    """
+    The run's trades as R-multiples, with its trades a day and the risk asked, sent to LuxAlgo's prop-firm
+    simulator: which funded challenges such a strategy would pass, against the bar of a pass per attempt of one
+    in two. Its answer is kept in the run's folder. Only those figures leave.
+    """
+    ctx = request.app.state.ctx
+    if ctx.luxalgo is None:
+        raise HTTPException(status_code=409, detail="LuxAlgo's tools are switched off (admin.luxalgo_enabled)")
+
+    def figures() -> dict:
+        return propfirm_check.figures(service.trades(run_id), service.days(run_id), service.settings_of(run_id))
+
+    try:
+        said = await run_in_threadpool(figures)
+        arguments = propfirm_check.request_of(said, risk_percent=body.risk_percent, product_type=body.product_type,
+                                              account_min=body.account_min, account_max=body.account_max)
+    except propfirm_check.NotCheckable as e:
+        raise InvalidRequest(str(e)) from None
+    from src.admin.luxalgo import LuxAlgoRefused
+
+    try:
+        answer = await ctx.luxalgo.read("propfirms_validate_strategy", arguments, structured=True)
+    except LuxAlgoRefused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    kept = {"asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "bar": propfirm_check.BAR,
+            "asked": {key: value for key, value in arguments.items() if key != "rSeries"},
+            "figures": {key: value for key, value in said.items() if key != "r_series"}, "answer": answer}
+    await run_in_threadpool(service.keep, run_id, propfirm_check.FILE, kept)
+    return kept
 
 
 @router.post("/{run_id}/model-check", status_code=202)

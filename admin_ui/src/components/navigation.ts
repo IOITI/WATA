@@ -29,6 +29,8 @@ export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'providers', path: '/data/providers', label: 'Providers', section: 'Data' },
   { id: 'assets', path: '/data/assets', label: 'Assets View', section: 'Data' },
   { id: 'ta-indicators', path: '/ta/indicators', label: 'Indicators', section: 'Technical Analysis' },
+  // LuxAlgo's concepts and indicators, read through the admin; an indicator taken becomes one of the Indicators.
+  { id: 'ta-luxalgo', path: '/ta/luxalgo', label: 'LuxAlgo Library', section: 'Technical Analysis' },
   { id: 'ta-charts', path: '/ta/charts', label: 'Charts', section: 'Technical Analysis' },
   // "Signal rules": the Trading section's Signals page sends signals by hand.
   { id: 'ta-signals', path: '/ta/signals', label: 'Signal rules', section: 'Technical Analysis' },

@@ -84,6 +84,9 @@ class AdminSettings:
     # beside the scripts' folder (which the signal engine mounts alone).
     ai_agent: AgentSettings = field(default_factory=AgentSettings)
     agent_path: str = "/app/var/lib/admin/agent"
+    # LuxAlgo's public MCP tools (src/admin/luxalgo.py): its Library, market trackers and prop-firm tools, for the AI
+    # agent and the Technical Analysis pages. Off unless asked for.
+    luxalgo_enabled: bool = False
 
     @classmethod
     def from_config(cls, config_manager) -> "AdminSettings":
@@ -91,6 +94,9 @@ class AdminSettings:
         mcp_enabled = admin_config.get("mcp_enabled", cls.mcp_enabled)
         if not isinstance(mcp_enabled, bool):
             raise ValueError("Config field 'admin.mcp_enabled' must be true or false")
+        luxalgo_enabled = admin_config.get("luxalgo_enabled", cls.luxalgo_enabled)
+        if not isinstance(luxalgo_enabled, bool):
+            raise ValueError("Config field 'admin.luxalgo_enabled' must be true or false")
         return cls(
             config_path=config_manager.config_path,
             log_path=config_manager.get_logging_config()["persistant"]["log_path"],
@@ -118,6 +124,7 @@ class AdminSettings:
             mcp_limits=McpLimits.from_config(admin_config.get("mcp")),
             ai_agent=AgentSettings.from_config(admin_config.get("ai_agent")),
             agent_path=admin_config.get("persistant", {}).get("agent_path", cls.agent_path),
+            luxalgo_enabled=luxalgo_enabled,
         )
 
 
@@ -180,6 +187,15 @@ class AdminContext:
     dossiers: Any = None
     # Its routines, research tasks that come back by themselves (src/admin/agent_routines.py): with the agent.
     routines: Any = None
+    # LuxAlgo's MCP tools (src/admin/luxalgo.py) and the admin's sign-in to a LuxAlgo account
+    # (src/admin/luxalgo_auth.py), while admin.luxalgo_enabled.
+    luxalgo: Any = None
+    luxalgo_sign_in: Any = None
+    # Where each Pine script came from (src/admin/script_origins.py: LuxAlgo's Library), beside the scripts.
+    script_origins: Any = None
+    # What WATA's check found of LuxAlgo's indicators, and the checks asked (src/admin/luxalgo_compat.py).
+    luxalgo_compat: Any = None
+    luxalgo_checks: Any = None
     # Its memory (src/admin/agent_memory.py), beside its conversations: there whether the agent is on or not, read by
     # the Memory page and by Claude Code's endpoint too.
     agent_memory: Any = None
@@ -225,13 +241,14 @@ def agent_of(ctx):
     The AI agent over the admin's services, given what it may read of the admin
     itself (src/admin/agent_ops.py): its health, its services' logs when
     admin.ai_agent.read_logs allows, trading now, what changed, the TA engine's
-    last minutes, what waits to be deployed (never a service: src/admin/agent/
-    reaches none, tests/test_agent_boundary.py).
+    last minutes, what waits to be deployed, and LuxAlgo's tools while
+    admin.luxalgo_enabled (never a service: src/admin/agent/ reaches none,
+    tests/test_agent_boundary.py).
     """
     from src.admin.agent.service import build_agent
-    from src.admin.agent_ops import ops_reads
+    from src.admin.agent_ops import luxalgo_reads, ops_reads
 
-    return build_agent(ctx, ops=ops_reads(ctx))
+    return build_agent(ctx, ops=ops_reads(ctx), luxalgo=luxalgo_reads(ctx))
 
 
 def build_context(config_manager) -> AdminContext:
@@ -257,6 +274,7 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.vault import AdminVault
     from src.admin.ta_rules import RuleStore
     from src.admin.saxo import AdminSaxo
+    from src.admin.script_origins import ScriptOrigins
     from src.admin.services import WataServices
     from src.admin.ta_scripts import ScriptStore
     from src.database.postgres import AsyncDbRiskStateManager, PostgresConnectionManager
@@ -320,8 +338,8 @@ def build_context(config_manager) -> AdminContext:
             raise ServiceUnavailable("web_server: no internal token is set (Credentials)")
         return value["token"]
     studies = None
-    # Claude Code's endpoint and the AI agent run the same Pine studies.
-    if settings.mcp_enabled or settings.ai_agent.enabled:
+    # Claude Code's endpoint and the AI agent run the same Pine studies, and LuxAlgo's indicators are checked with them.
+    if settings.mcp_enabled or settings.ai_agent.enabled or settings.luxalgo_enabled:
         from src.admin.backtests import SIGNAL_CACHE_FOLDER
         from src.admin.studies import StudyService
 
@@ -372,6 +390,7 @@ def build_context(config_manager) -> AdminContext:
         service_control=service_control,
         release=Release(),
         vault=vault,
+        script_origins=ScriptOrigins(settings.ta_path),
         agent_memory=memory_of(settings.agent_path),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
@@ -380,6 +399,15 @@ def build_context(config_manager) -> AdminContext:
         closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
                  service_control.close, *([studies.close] if studies is not None else [])],
     )
+    if settings.luxalgo_enabled:
+        from src.admin.luxalgo import LuxAlgo
+        from src.admin.luxalgo_auth import LuxAlgoSignIn
+        from src.admin.luxalgo_compat import CompatChecker, CompatStore
+
+        ctx.luxalgo_sign_in = LuxAlgoSignIn(vault=vault)
+        ctx.luxalgo = LuxAlgo(bearer=ctx.luxalgo_sign_in.bearer)
+        ctx.luxalgo_compat = CompatStore(settings.ta_path)
+        ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies)
     if settings.ai_agent.enabled:
         from src.admin import agent_briefing, agent_debrief, agent_dossier, agent_routines, agent_telegram, agent_triage
 

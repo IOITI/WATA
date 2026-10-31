@@ -25,7 +25,7 @@ from src.admin.agent import provider as claude
 from src.admin.agent import transcript
 from src.admin.agent.prompts import files_note, system_prompt, wrap_up_note
 from src.admin.agent.store import stamp
-from src.admin.agent.tools import MEMORY_SAVE, STARTS
+from src.admin.agent.tools import LUXALGO_CALL, MEMORY_SAVE, STARTS
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,9 @@ DONE, STOPPED, FAILED, DECLINED, LIMIT, CUT = "done", "stopped", "failed", "decl
 
 
 def prompt_for(tools: list[dict]) -> str:
-    """The system prompt that goes with these tools: the memory's rules with the memory's tools."""
-    return system_prompt(any(tool.get("name") == MEMORY_SAVE for tool in tools))
+    """The system prompt that goes with these tools: the memory's rules with the memory's tools, LuxAlgo's with its."""
+    names = {tool.get("name") for tool in tools}
+    return system_prompt(MEMORY_SAVE in names, LUXALGO_CALL in names)
 
 
 def digest_of(tools: list[dict]) -> str:

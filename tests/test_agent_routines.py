@@ -165,3 +165,30 @@ def test_the_pages_make_change_run_and_remove_routines(config_path, tmp_path):
     assert ran.status_code == 201 and ran.json()["conversation"] == agent.tasks[0]["id"]
     assert again.status_code == 409 and "still works" in again.json()["detail"]
     assert now["routines"][0]["next"] is not None and removed.status_code == 200
+
+
+def test_the_luxalgo_scout_is_offered_as_a_template_while_luxalgo_is_on(config_path, tmp_path):
+    from dataclasses import replace
+
+    ctx = with_agent(make_ctx(config_path, tmp_path), tmp_path, FakeProvider())
+    ctx.agent.settings = replace(ctx.agent.settings, max_task_usd=1.5)
+    ctx.routines = Routines(agent=FakeAgent(), store=RoutineStore(str(tmp_path / "agent")), config_path=config_path)
+    client = signed_in(ctx, tmp_path)
+    try:
+        off = client.get("/api/agent/routines/templates").json()
+        ctx.luxalgo = object()
+        on = client.get("/api/agent/routines/templates").json()
+        listed = client.get("/api/agent/routines").json()
+        [scout] = on["templates"]
+        made = client.post("/api/agent/routines", headers=SAME_ORIGIN, json={
+            **{key: scout[key] for key in ("name", "goal", "schedule", "budget", "telegram")},
+            "revision": listed["revision"]})
+    finally:
+        client.__exit__(None, None, None)
+
+    assert off == {"templates": []}
+    assert scout["key"] == "luxalgo_scout" and scout["schedule"] == {"every": "week", "weekday": 5, "time": "10:00"}
+    # Its budget is held to what a task may be given.
+    assert scout["budget"] == {"usd": 1.5, "backtests": 2, "hours": 1.5}
+    assert "luxalgo_known" in scout["goal"] and "Never propose to take a rule live" in scout["goal"]
+    assert made.status_code == 201 and made.json()["routine"]["name"] == "LuxAlgo scout"

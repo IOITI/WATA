@@ -29,9 +29,11 @@ import { RunPeekLink } from '@/features/backtests/RunPeek'
 import { serviceNames } from '@/features/config/editor-context'
 import { ReviewChanges } from '@/features/config/ReviewChanges'
 import { ScriptDiff } from '@/features/ta/editor/ScriptDiff'
+import { LuxAlgoBadge } from '@/features/ta/luxalgo/LuxAlgoBadge'
+import { licenceTerms, originSaid } from '@/features/ta/luxalgo/luxalgoModel'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { api, ApiError } from '@/lib/api'
-import type { AgentInputChange, AgentProposal } from '@/lib/types'
+import type { AgentInputChange, AgentProposal, ScriptOrigin } from '@/lib/types'
 
 import { ActionProposal } from './ActionProposal'
 import { actionSaid, headlineSaid, settingSaid } from './model'
@@ -65,6 +67,7 @@ function ScriptChange({ proposal }: { proposal: AgentProposal }) {
             <p>As proposed</p>
           </div>
           <ScriptDiff before={before.data.source} after={after.data.source} className="max-h-[28rem] min-h-40" />
+          {after.data.origin && <OriginLine origin={after.data.origin} />}
         </div>
       )}
     </QueryState>
@@ -81,10 +84,25 @@ function NewScript({ proposal }: { proposal: AgentProposal }) {
   return (
     <QueryState isPending={source.isPending} error={source.error} hasData={!!source.data}>
       {source.data && (
-        <CodeBlock code={source.data.source} language="text" lineNumbers maxHeight="28rem" copyable
-          label={`${proposal.new_script?.name ?? draft.name}, from ${draft.name} v${draft.version}`} />
+        <div className="space-y-1.5">
+          <CodeBlock code={source.data.source} language="text" lineNumbers maxHeight="28rem" copyable
+            label={`${proposal.new_script?.name ?? draft.name}, from ${draft.name} v${draft.version}`} />
+          {source.data.origin && <OriginLine origin={source.data.origin} />}
+        </div>
       )}
     </QueryState>
+  )
+}
+
+/** A script proposed from one of LuxAlgo's indicators: under its licence, whose terms the operator checks. */
+function OriginLine({ origin }: { origin: ScriptOrigin }) {
+  const terms = licenceTerms(origin.licence)
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+      <LuxAlgoBadge origin={origin} />
+      {originSaid(origin)}
+      {terms ? ` Its licence asks for ${terms}.` : ''} Its terms are yours to check before trading it.
+    </p>
   )
 }
 

@@ -141,6 +141,12 @@ const ROUTINE = {
   runs: [], next: '2026-10-31T09:00:00Z',
 }
 
+// A routine ready to add (src/admin/agent_routines.py's TEMPLATES).
+const SCOUT = {
+  key: 'luxalgo_scout', name: 'LuxAlgo scout', goal: "Read LuxAlgo's newest indicators with luxalgo_known.",
+  schedule: { every: 'week' as const, weekday: 5, time: '10:00' }, budget: { usd: 2, backtests: 2, hours: 1.5 }, telegram: true,
+}
+
 // A conversation that proposed a change of settings and a new script.
 const PROPOSING_ID = '20261028-110000-0c0d0e'
 const SETTINGS: AgentProposal = {
@@ -242,6 +248,7 @@ function serve() {
     if (route === `/api/agent/conversations/${DRAFT_ID}`) return json(DRAFTED)
     if (route === `/api/agent/conversations/${ASKING_ID}`) return json(ASKING)
     if (route === `/api/agent/conversations/${ASKING_ID}/task/answer`) return json({ ...LISTED, id: ASKING_ID, status: 'queued' })
+    if (route === '/api/agent/routines/templates') return json({ templates: [SCOUT] })
     if (route === '/api/agent/routines') return json({ revision: 'rv1', max: 10, routines: [ROUTINE] })
     if (route === `/api/agent/routines/${ROUTINE.id}/run`) return json({ conversation: ASKING_ID }, 201)
     if (route === `/api/agent/conversations/${DRAFT_ID}/proposals/${CONVERSATION.proposals[0].id}/apply`) {
@@ -663,6 +670,21 @@ describe('the AI agent', () => {
 
     await waitFor(() => expect(sent.find((request) => request.path === `/api/agent/conversations/${ASKING_ID}/task/answer`)?.body)
       .toEqual({ answer: 'Slow' }))
+  })
+
+  it('adds a routine from a template, its form filled in to change before saving', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent/routines')
+
+    await user.click(await screen.findByRole('button', { name: 'From a template' }))
+    await user.click(await screen.findByRole('menuitem', { name: /LuxAlgo scout/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add the LuxAlgo scout' })
+    expect(within(dialog).getByRole('textbox', { name: 'Its name' })).toHaveValue('LuxAlgo scout')
+    expect(within(dialog).getByRole('textbox', { name: 'Its goal' })).toHaveValue(SCOUT.goal)
+    await user.click(within(dialog).getByRole('button', { name: 'Make the routine' }))
+
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/agent/routines')?.body)
+      .toMatchObject({ name: 'LuxAlgo scout', schedule: SCOUT.schedule, budget: SCOUT.budget, telegram: true, enabled: true, revision: 'rv1' }))
   })
 
   it('lists the routines with when each comes back, and runs one now', async () => {

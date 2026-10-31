@@ -64,13 +64,14 @@ PRUNE_EVERY_SECONDS = 6 * 3600
 COUNTS_KEPT = 64
 # What a token count is given to end on: a request is counted as the operator's next one would be sent.
 _NEXT = {"type": "text", "text": "."}
-SUBJECT_KINDS = ("run", "script", "position", "signal", "day", "incident", "briefing", "rule", "change", "draft")
-RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT, BRIEFING, RULE, CHANGE, DRAFT = SUBJECT_KINDS
+SUBJECT_KINDS = ("run", "script", "position", "signal", "day", "incident", "briefing", "rule", "change", "draft",
+                 "luxalgo")
+RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT, BRIEFING, RULE, CHANGE, DRAFT, LUXALGO = SUBJECT_KINDS
 # What the operator attaches to a request: a file of their computer (src/admin/agent/uploads.py), or one of these
 # (the day ahead, a change and a draft are the admin's own subjects); five at most in a conversation, the subject of
 # the page it was asked from counted.
 FILE = "file"
-ATTACHABLE = (RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT, RULE)
+ATTACHABLE = (RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT, RULE, LUXALGO)
 MAX_ATTACHED = 5
 # What a change reviewed before it is saved may hold, as shared; a draft's diff from its version, as shared.
 MAX_CHANGE_CHARS = 64_000
@@ -86,6 +87,10 @@ LOG_OF = {
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MOMENT = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 _HEALTH_ID = re.compile(r"^[a-z_]{2,32}$")
+# An indicator of LuxAlgo's Library, by its slug (src/admin/luxalgo.py SLUG).
+_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
+# What a LuxAlgo indicator's write-up shares at most: the rest is LuxAlgo's to give again.
+LUXALGO_WRITE_UP_CHARS = 6_000
 # What a conversation about a day or a signal reads of the day's signals and trades at most.
 SHARED_ROWS = 200
 # What an incident is shared of the changes before its moment.
@@ -493,9 +498,26 @@ class AgentService:
             return memory_index(memory.entries(), memory.pause()), seq
         return memory_changes(memory.changes_since(seen, conversation_id)), seq
 
+    async def _luxalgo_subject(self, slug: str) -> dict:
+        """An indicator of LuxAlgo's Library, as LuxAlgo has it now, while the agent has LuxAlgo's tools."""
+        luxalgo = getattr(self._tools, "luxalgo", None)
+        if luxalgo is None or luxalgo.indicator is None:
+            raise NotPossible("LuxAlgo's tools are switched off (admin.luxalgo_enabled)")
+        if not _SLUG.match(slug):
+            raise InvalidRequest("A LuxAlgo indicator is named by its slug: lowercase letters, digits and dashes")
+        try:
+            found = await luxalgo.indicator(slug)
+        except Exception as e:
+            raise NotPossible(f"LuxAlgo could not be asked for {slug}: {e}"[:300]) from None
+        if found is None:
+            raise InvalidRequest(f"LuxAlgo's Library has no indicator {slug}")
+        return {"kind": LUXALGO, "id": slug, "label": f"LuxAlgo's {found.get('name') or slug}"}
+
     async def _shared(self, session, subject: dict, request: int) -> str:
         """What the operator shares at a conversation's start, as the tools read it."""
         kind = subject["kind"]
+        if kind == LUXALGO:
+            return await _shared_luxalgo(session, subject, request)
         if kind == BRIEFING:
             return await self._shared_briefing(session, subject, request)
         if kind == CHANGE:
@@ -673,6 +695,8 @@ class AgentService:
                         "effort": settings.debrief_effort, "max_usd": settings.debrief_max_usd,
                         "telegram": settings.debrief_telegram},
             "memory": self.memory is not None,
+            # Whether it has LuxAlgo's tools (admin.luxalgo_enabled): the pages offer what they make possible.
+            "luxalgo": getattr(self._tools, "luxalgo", None) is not None,
         }
 
     # ── the models a request may choose ──
@@ -745,7 +769,10 @@ class AgentService:
         kind, subject_id = subject.get("kind"), subject.get("id")
         if kind not in SUBJECT_KINDS or not isinstance(subject_id, str) or not subject_id:
             raise InvalidRequest("A conversation is about a run, a script, a position, a signal, a day, an incident, "
-                                 "the day ahead, a signal rule or a change reviewed before it is saved")
+                                 "the day ahead, a signal rule, a change reviewed before it is saved or an "
+                                 "indicator of LuxAlgo's Library")
+        if kind == LUXALGO:
+            return await self._luxalgo_subject(subject_id)
         if kind in (RUN, SCRIPT, RULE):
             return await run_in_threadpool(self._stored_subject, kind, subject_id, subject.get("version"))
         if kind in (CHANGE, DRAFT):
@@ -1257,6 +1284,46 @@ async def _shared_trading(session, subject: dict, request: int, paper: str | Non
     return subject_text("the incident", label, shared)
 
 
+async def _shared_luxalgo(session, subject: dict, request: int) -> str:
+    """
+    An indicator of LuxAlgo's Library: its write-up and concepts, whether its
+    source comes whole and under which licence (the source itself is taken
+    with luxalgo_save_script), and what WATA already knows of it.
+    """
+    slug = subject["id"]
+
+    async def read(tool: str, arguments: dict) -> dict | str:
+        answer = await session.call(tool, arguments, request)
+        if answer.is_error:
+            return f"(not read: {answer.text[:500]})"
+        try:
+            return json.loads(answer.text)
+        except ValueError:
+            return answer.text
+
+    found = await read("luxalgo_call", {"tool": "library_get_indicator", "arguments": {"slug": slug}})
+    if isinstance(found, dict):
+        write_up = str(found.get("body_markdown") or "")
+        if len(write_up) > LUXALGO_WRITE_UP_CHARS:
+            write_up = f"{write_up[:LUXALGO_WRITE_UP_CHARS]}… (cut: read it whole with luxalgo_call)"
+        found = {**{key: found.get(key) for key in ("slug", "name", "author", "family", "date_displayed", "url",
+                                                    "concepts")}, "write_up": write_up}
+    source = await read("luxalgo_call", {"tool": "library_get_source_code", "arguments": {"slug": slug}})
+    if isinstance(source, dict):
+        from src.admin.luxalgo import licence_of
+
+        text = str(source.get("source") or "")
+        source = {"available": source.get("available"), "complete": source.get("complete"),
+                  "lines": len(text.splitlines()), "total_lines": source.get("total_lines") or len(text.splitlines()),
+                  **licence_of(text), "chart_url": source.get("chart_url")}
+    parts = [("The indicator", found), ("Its source (take it whole with luxalgo_save_script)", source)]
+    if session.offers("luxalgo_known"):
+        parts.append(("What WATA already knows of it", await read("luxalgo_known", {"slugs": [slug]})))
+    return subject_text("the indicator of LuxAlgo's Library", f"{subject.get('label') or slug} ({slug})", "\n\n".join(
+        f"{name}:\n{json.dumps(value, ensure_ascii=False, default=str) if not isinstance(value, str) else value}"
+        for name, value in parts))
+
+
 def _seconds(moment: str) -> float:
     """A moment as the store writes it (YYYY-MM-DDTHH:MM:SSZ), in seconds."""
     return datetime.strptime(moment, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
@@ -1288,11 +1355,12 @@ def _title(prompt: str) -> str:
     return first if len(first) <= MAX_TITLE else f"{first[:MAX_TITLE - 1]}…"
 
 
-def build_agent(ctx, ops=None) -> AgentService:
+def build_agent(ctx, ops=None, luxalgo=None) -> AgentService:
     """
     The agent over the admin's own services: their research side (as the MCP
-    endpoint has it), the key opened on demand, and what the admin lets it read
-    of itself (``ops``: its health, its logs; src/admin/context.py agent_of).
+    endpoint has it), the key opened on demand, what the admin lets it read
+    of itself (``ops``: its health, its logs; src/admin/context.py agent_of)
+    and LuxAlgo's tools when they are on (``luxalgo``).
     """
     from src.admin.agent.verdicts import VerdictStore
     from src.admin.mcp_server.calls import CallLog
@@ -1303,7 +1371,7 @@ def build_agent(ctx, ops=None) -> AgentService:
     verdicts = VerdictStore(settings.agent_path)
     backtests = ctx.backtests if settings.backtests_enabled else None
     memory = getattr(ctx, "agent_memory", None) if settings.ai_agent.memory else None
-    proposals = Proposals(store, ctx.ta_scripts, backtests=backtests)
+    proposals = Proposals(store, ctx.ta_scripts, backtests=backtests, origins=getattr(ctx, "script_origins", None))
     # Its calls written apart: System › Claude keeps Claude Code's.
     research = replace(ResearchServices.from_context(ctx),
                        calls=CallLog(os.path.join(settings.log_path, "wata-admin", "agent.jsonl")))
@@ -1315,7 +1383,7 @@ def build_agent(ctx, ops=None) -> AgentService:
     return AgentService(
         settings=settings.ai_agent, store=store, provider=claude.ClaudeProvider(key),
         tools=AgentTools(research, proposals, ops=ops, memory=memory, verdicts=verdicts,
-                         actions=settings.ai_agent.action_proposals), proposals=proposals,
+                         actions=settings.ai_agent.action_proposals, luxalgo=luxalgo), proposals=proposals,
         backtests=backtests, scripts=ctx.ta_scripts, key=key,
         publish=ctx.events.publish, queries=research.queries, memory=memory, verdicts=verdicts,
     )

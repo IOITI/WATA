@@ -81,6 +81,13 @@ describe('a step', () => {
     expect(stepTitle('memory_read', { names: ['a', 'b', 'c'] })).toBe('Read 3 entries from its memory')
     expect(stepTitle('memory_save', { name: 'range-ticks' })).toBe('Saved range-ticks to its memory')
     expect(stepTitle('memory_forget', { name: 'old-note' })).toBe('Forgot old-note from its memory')
+    expect(stepTitle('luxalgo_tools', {})).toBe("Listed LuxAlgo's tools")
+    expect(stepTitle('luxalgo_tools', { tool: 'propfirms_simulate' })).toBe("Read how LuxAlgo's propfirms_simulate is called")
+    expect(stepTitle('luxalgo_call', { tool: 'library_search', arguments: { query: 'supertrend' } }))
+      .toBe('Asked LuxAlgo: library_search (supertrend)')
+    expect(stepTitle('luxalgo_call', { tool: 'propfirms_list_simulatable', arguments: {} })).toBe('Asked LuxAlgo: propfirms_list_simulatable')
+    expect(stepTitle('luxalgo_save_script', { slug: 'tri-star' })).toBe("Took LuxAlgo's tri-star as its script")
+    expect(writingTitle('luxalgo_save_script')).toBe("Taking one of LuxAlgo's indicators")
     expect(stepTitle('unknown_tool', {})).toBe('unknown_tool')
   })
 
@@ -505,6 +512,28 @@ describe('an action proposed', () => {
     expect(actionFresh({ fresh_until: '2026-10-28T14:30:00Z' }, now)).toBe(true)
     expect(actionFresh({ fresh_until: '2026-10-28T14:10:00Z' }, now)).toBe(false)
     expect(actionFresh({}, now)).toBe(false)
+  })
+})
+
+describe("one of LuxAlgo's indicators asked about", () => {
+  it('is read from the address, led to its page and named', () => {
+    expect(subjectOf('luxalgo:ai-supertrend-clustering')).toEqual({ kind: 'luxalgo', id: 'ai-supertrend-clustering', label: 'ai-supertrend-clustering' })
+    expect(aboutParam({ kind: 'luxalgo', id: 'tri-star' })).toBe('luxalgo:tri-star')
+    expect(subjectLink({ kind: 'luxalgo', id: 'tri-star', label: "LuxAlgo's Tri-star" })).toBe('/ta/luxalgo/indicators/tri-star')
+    expect(verdictLink('luxalgo:tri-star')).toBe('/ta/luxalgo/indicators/tri-star')
+    expect(verdictSubject('luxalgo:tri-star')).toBe("LuxAlgo's tri-star")
+    expect(subjectSaid({ kind: 'luxalgo', id: 'tri-star', label: "LuxAlgo's Tri-star" })).toBe("LuxAlgo's Tri-star")
+  })
+
+  it('is offered its tests, and a script or a run what LuxAlgo adds while the agent has its tools', () => {
+    expect(presetsFor('luxalgo').map((preset) => preset.label)).toEqual(['Worth testing on WATA?', 'Test it', 'Make it a signal rule'])
+    expect(presetsFor('luxalgo').map((preset) => preset.prompt).join(' ')).not.toMatch(/go live|take it live/i)
+    for (const kind of ['script', 'rule'] as const) {
+      expect(presetsFor(kind).map((preset) => preset.label)).not.toContain('Find similar in LuxAlgo')
+      expect(presetsFor(kind, { luxalgo: true }).map((preset) => preset.label)).toContain('Find similar in LuxAlgo')
+    }
+    expect(presetsFor('run').map((preset) => preset.label)).not.toContain('Would it pass a funded challenge?')
+    expect(presetsFor('run', { luxalgo: true }).map((preset) => preset.label)).toContain('Would it pass a funded challenge?')
   })
 })
 

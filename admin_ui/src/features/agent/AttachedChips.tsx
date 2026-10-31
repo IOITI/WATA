@@ -5,6 +5,7 @@
 import { AttachmentChip } from 'ioiti-ui'
 import {
   Activity,
+  BookOpen,
   CalendarDays,
   ChartCandlestick,
   FileSpreadsheet,
@@ -33,6 +34,7 @@ const KIND_ICON: Partial<Record<AgentSubject['kind'], ReactNode>> = {
   signal: <Radio />,
   day: <CalendarDays />,
   incident: <Activity />,
+  luxalgo: <BookOpen />,
 }
 
 function fileIcon(name: string, type: AgentFile['type'] | null): ReactNode {

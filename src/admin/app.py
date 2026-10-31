@@ -24,8 +24,8 @@ from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, agent, backtests, config, credentials, data, release, research, saxo, services, session, system, ta,
-    trading,
+    actions, agent, backtests, config, credentials, data, luxalgo, release, research, saxo, services, session, system,
+    ta, trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -237,6 +237,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.routines is not None:
             # The agent's routines, each at its turn, the market closed.
             background.append(asyncio.create_task(ctx.routines.keep()))
+        if ctx.luxalgo_checks is not None and ctx.luxalgo_checks.available:
+            # LuxAlgo's indicators checked for running on WATA, one at a time while no study runs.
+            background.append(asyncio.create_task(ctx.luxalgo_checks.run()))
         if ctx.vault is not None:
             # Its own credentials laid over its configuration: the Telegram bot of its direct fallback.
             background.append(asyncio.create_task(_load_own_credentials(ctx)))
@@ -313,8 +316,10 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
     for module in (session, saxo, trading, system, services, release, actions, config, credentials, data, backtests, ta,
-                   research, agent):
+                   research, agent, luxalgo):
         app.include_router(module.router)
+    # LuxAlgo sends the browser back there from its own site: the state admits it (src/admin/routers/luxalgo.py).
+    app.include_router(luxalgo.callback_router)
 
     if mcp is not None:
         # The gate is an ASGI application, so these routes take every method and the gate answers each.

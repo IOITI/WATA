@@ -91,7 +91,8 @@ export function AgentComposer({ conversation, subject, onStarted, onSent, floati
   // About one thing, the field names it; about several, it names none of them.
   const placeholder = !fixed && attachments.pending.length > 0 ? 'Ask about what is attached…'
     : held.length > 1 ? 'Ask the agent…'
-      : kind === 'run' ? 'Ask about this run…' : kind === 'script' ? 'Ask about this script…' : 'Ask the agent…'
+      : kind === 'run' ? 'Ask about this run…' : kind === 'script' ? 'Ask about this script…'
+        : kind === 'luxalgo' ? 'Ask about this indicator…' : 'Ask the agent…'
 
   const controls = choice && model ? (
     <>
@@ -120,7 +121,7 @@ export function AgentComposer({ conversation, subject, onStarted, onSent, floati
         disabled={!!refusal}
         disabledReason={refusal}
         placeholder={placeholder}
-        suggestions={fresh ? [...presetsFor(kind), ...(compare ? [compare] : [])] : []}
+        suggestions={fresh ? [...presetsFor(kind, { luxalgo: !!state.data?.luxalgo }), ...(compare ? [compare] : [])] : []}
         controls={controls}
         attachments={chips}
         onFiles={attachments.addFiles}

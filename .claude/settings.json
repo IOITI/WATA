@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "mcp__luxalgo__journal_add_trade",
+      "mcp__luxalgo__journal_update_trade",
+      "mcp__luxalgo__journal_write_note",
+      "mcp__luxalgo__journal_update_note"
+    ]
+  }
+}

@@ -4,6 +4,8 @@ import {
   AlertDescription,
   Badge,
   Button,
+  ButtonLink,
+  formatDateTime,
   FormDescription,
   FormItem,
   FormLabel,
@@ -28,6 +30,7 @@ import {
   CREDENTIAL_BRANDS,
   HELPERS,
   KEPT_ELSEWHERE,
+  SIGNED_IN_FROM,
   WHERE_LABEL,
   checksSaid,
   fromSaxoAppObject,
@@ -284,7 +287,10 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
         {Object.entries(credential.public).map(([key, value]) => (
           <div key={key}>
             <dt className="text-muted-foreground">{credential.parts.find((part) => part.key === key)?.label ?? 'Server'}</dt>
-            <dd className="mt-1 break-all font-mono">{value}</dd>
+            <dd className="mt-1 break-all font-mono">
+              {/* A sign-in's lapse, kept in seconds since 1970: renewed by the admin before. */}
+              {key === 'expires_at' && /^\d+$/.test(value) ? formatDateTime(new Date(Number(value) * 1000).toISOString(), timeZone) : value}
+            </dd>
           </div>
         ))}
       </dl>
@@ -297,7 +303,11 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
         </ul>
       )}
       <div className="flex flex-wrap gap-2">
-        {credential.generated ? (
+        {credential.signed_in ? (
+          <ButtonLink to={SIGNED_IN_FROM[credential.name] ?? '/'} size="sm" variant="outline">
+            Sign in or out on its page
+          </ButtonLink>
+        ) : credential.generated ? (
           <Button size="sm" variant="outline" leftIcon={<RotateCw className="size-3.5" />} disabled={blocked} onClick={() => setRotating(true)}>
             {credential.where === 'database' ? 'Rotate' : 'Make it here'}
           </Button>
@@ -321,7 +331,7 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
             Test the connection
           </Button>
         )}
-        {credential.where === 'database' && !credential.generated && (
+        {credential.where === 'database' && !credential.generated && !credential.signed_in && (
           <Button size="sm" variant="ghost" leftIcon={<Trash2 className="size-3.5" />} disabled={blocked} onClick={() => setRemoving(true)}>
             Remove
           </Button>

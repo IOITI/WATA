@@ -9,6 +9,7 @@ import {
   AlertDescription,
   Badge,
   Button,
+  DropdownMenu,
   formatDateTime,
   Hint,
   PageHeader,
@@ -16,13 +17,13 @@ import {
   UndoToast,
 } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
-import { Pause, Pencil, Play, Plus, Trash2, Zap } from 'lucide-react'
+import { ChevronDown, Pause, Pencil, Play, Plus, Trash2, Zap } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import type { AgentRoutine } from '@/lib/types'
+import type { AgentRoutine, AgentRoutineTemplate } from '@/lib/types'
 
 import { costText } from './model'
 import { RoutineDialog } from './RoutineDialog'
@@ -37,7 +38,9 @@ export function RoutinesPage() {
   const queryClient = useQueryClient()
   const state = useAgentState()
   const list = useQuery({ queryKey: ['agent-routines'], queryFn: api.agentRoutines, enabled: !!state.data?.enabled })
-  const [editing, setEditing] = useState<{ routine: AgentRoutine | null } | null>(null)
+  // Ready-made routines: the LuxAlgo scout while the agent has LuxAlgo's tools.
+  const templates = useQuery({ queryKey: ['agent-routine-templates'], queryFn: api.agentRoutineTemplates, enabled: !!state.data?.enabled })
+  const [editing, setEditing] = useState<{ routine: AgentRoutine | null; template?: AgentRoutineTemplate } | null>(null)
   // Hidden at once, removed once the Undo's time is over: nothing is sent before.
   const [hidden, setHidden] = useState<AgentRoutine | null>(null)
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ['agent-routines'] })
@@ -142,11 +145,30 @@ export function RoutinesPage() {
         title="Routines"
         description="Research tasks that come back by themselves, each trading day or each week, the market closed."
         actions={state.data?.enabled && (
-          <Hint content={full ? `${list.data?.max} routines at most (max_routines): remove one first` : undefined} wrap={full}>
-            <Button size="sm" leftIcon={<Plus className="size-3.5" />} disabled={full} onClick={() => setEditing({ routine: null })}>
-              New routine
-            </Button>
-          </Hint>
+          <div className="flex flex-wrap items-center gap-2">
+            {!!templates.data?.templates.length && (
+              <Hint content={full ? `${list.data?.max} routines at most (max_routines): remove one first` : undefined} wrap={full}>
+                <DropdownMenu
+                  label="Routines ready to add"
+                  trigger={
+                    <Button size="sm" variant="outline" disabled={full} rightIcon={<ChevronDown aria-hidden className="size-3.5" />}>
+                      From a template
+                    </Button>
+                  }
+                  items={templates.data.templates.map((template) => ({
+                    label: template.name,
+                    description: `${scheduleSaid(template.schedule)}, ${costText(template.budget.usd)} a turn at most`,
+                    onSelect: () => setEditing({ routine: null, template }),
+                  }))}
+                />
+              </Hint>
+            )}
+            <Hint content={full ? `${list.data?.max} routines at most (max_routines): remove one first` : undefined} wrap={full}>
+              <Button size="sm" leftIcon={<Plus className="size-3.5" />} disabled={full} onClick={() => setEditing({ routine: null })}>
+                New routine
+              </Button>
+            </Hint>
+          </div>
         )}
       />
       <QueryState isPending={state.isPending} error={state.error} hasData={!!state.data}>
@@ -184,8 +206,8 @@ export function RoutinesPage() {
         )}
       </QueryState>
       {editing && (
-        <RoutineDialog key={editing.routine?.id ?? 'new'} open routine={editing.routine} revision={revision} state={state.data}
-          onClose={() => setEditing(null)} />
+        <RoutineDialog key={editing.routine?.id ?? editing.template?.key ?? 'new'} open routine={editing.routine}
+          template={editing.template} revision={revision} state={state.data} onClose={() => setEditing(null)} />
       )}
       {hidden && (
         <UndoToast

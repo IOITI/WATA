@@ -56,6 +56,7 @@ from src.admin.ta_rules import (
     checked_history_days,
 )
 from src.admin.ta_readiness import unmet_readiness
+from src.admin.script_origins import UNREAD_LICENCE, needs_licence_check, with_origin
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
 from src.admin.errors import ServiceUnavailable
 from src.capital_feed.settings import CapitalSettings
@@ -167,6 +168,9 @@ class RuleMode(BaseModel):
     force: bool = False
     # The AI agent's proposal this switch applies, from its card (src/admin/proposed_actions.py).
     proposal: str | None = Field(None, max_length=proposed_actions.MAX_REF)
+    # The operator checked the licence of a script taken from LuxAlgo (src/admin/script_origins.py
+    # needs_licence_check): "Go live anyway" does not stand for it.
+    licence_checked: bool = False
 
 
 # What the audit trail says changed in a live rule.
@@ -177,8 +181,13 @@ _RULE_FIELDS = (
 
 
 @router.get("/scripts")
-async def list_scripts(store=Depends(scripts)):
-    return {"items": await run_in_threadpool(store.scripts)}
+async def list_scripts(request: Request, store=Depends(scripts)):
+    origins = request.app.state.ctx.script_origins
+
+    def listed() -> list[dict]:
+        return [with_origin(origins, store, meta) for meta in store.scripts()]
+
+    return {"items": await run_in_threadpool(listed)}
 
 
 @router.post("/scripts", status_code=201)
@@ -187,8 +196,9 @@ async def create_script(body: ScriptCreate, store=Depends(scripts)):
 
 
 @router.get("/scripts/{script_id}")
-async def get_script(script_id: str, store=Depends(scripts)):
-    return await run_in_threadpool(store.script, script_id)
+async def get_script(script_id: str, request: Request, store=Depends(scripts)):
+    origins = request.app.state.ctx.script_origins
+    return await run_in_threadpool(lambda: with_origin(origins, store, store.script(script_id)))
 
 
 @router.put("/scripts/{script_id}")
@@ -213,8 +223,16 @@ async def duplicate_script(script_id: str, body: ScriptCopy, store=Depends(scrip
 
 
 @router.get("/scripts/{script_id}/versions/{number}")
-async def get_version(script_id: str, number: int, store=Depends(scripts)):
-    return await run_in_threadpool(store.version, script_id, number)
+async def get_version(script_id: str, number: int, request: Request, store=Depends(scripts)):
+    origins = request.app.state.ctx.script_origins
+
+    def read() -> dict:
+        found = store.version(script_id, number)
+        # What a rule pins: the go-live confirmation says when it is LuxAlgo's.
+        origin = origins.of(script_id, number, lambda: found["source"]) if origins is not None else None
+        return {**found, "origin": origin} if origin else found
+
+    return await run_in_threadpool(read)
 
 
 @router.get("/scripts/{script_id}/source.pine")
@@ -391,6 +409,16 @@ async def _unmet_readiness(request: Request, rule: dict) -> list[str]:
     return unmet_readiness(rule, states.get(rule["id"]), paper, datetime.now(timezone.utc), ctx.settings.timezone)
 
 
+def _licence_to_check(ctx, store, rule: dict) -> str | None:
+    """The licence the operator says they checked before a rule goes live, None when its script asks for none."""
+    origins = getattr(ctx, "script_origins", None)
+    if origins is None:
+        return None
+    pinned = rule["script"]
+    origin = origins.of(pinned["id"], pinned["version"], lambda: store.version(pinned["id"], pinned["version"])["source"])
+    return (origin or {}).get("licence") or UNREAD_LICENCE if needs_licence_check(origin) else None
+
+
 @router.post("/rules/{rule_id}/mode")
 async def set_rule_mode(
     rule_id: str,
@@ -409,8 +437,14 @@ async def set_rule_mode(
     if found and found["proposal"]["action"].get("rule", {}).get("id") != rule_id:
         raise HTTPException(status_code=422, detail="The proposal switches another rule")
     unmet = []
+    licence = None
     if body.mode == LIVE and current["mode"] != LIVE:
         await _check_can_go_live(request, current)
+        licence = await run_in_threadpool(_licence_to_check, ctx, store, current)
+        if licence and not body.licence_checked:
+            raise RuleConflict(
+                f"Its script comes from LuxAlgo's Library under {licence}: say you checked the terms of that licence "
+                "to take it live")
         unmet = await _unmet_readiness(request, current)
         if unmet and not body.force:
             raise RuleConflict(
@@ -423,6 +457,8 @@ async def set_rule_mode(
         action = "signal rule live" if rule["mode"] == LIVE else f"signal rule no longer live ({rule['mode']})"
         if rule["mode"] == LIVE and unmet:
             action += f" WITHOUT its readiness ({'; '.join(unmet)})"
+        if rule["mode"] == LIVE and licence:
+            action += f", the licence of its script ({licence}) checked by the operator"
         ctx.audit(request, action, proposed_actions.joined(_rule_line(rule, answer["rule"]["script_name"]),
                                                            proposed_actions.said(found)))
     await proposed_actions.settled(ctx, found, client_ip(request, ctx.trusted_proxies),

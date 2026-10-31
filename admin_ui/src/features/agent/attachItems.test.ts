@@ -82,4 +82,18 @@ describe('what the attach picker offers', () => {
     expect(items('5001').made.filter((item) => item.id.endsWith('5001'))).toHaveLength(1)
     expect(items('2026-10-28').made.filter((item) => item.id.endsWith('2026-10-28'))).toHaveLength(1)
   })
+
+  it("offers LuxAlgo's indicators found for the words typed, in their own category", () => {
+    const onAttach = vi.fn()
+    const made = attachItems({
+      lists: { luxalgo: [{ kind: 'indicator', slug: 'ai-supertrend', name: 'AI Supertrend', family: 'trend', description: 'Clusters.' }] },
+      attached: new Set(), query: 'super trend', timeZone: 'Europe/Paris', onAttach, onFile: vi.fn(),
+    })
+    const found = made.find((item) => item.id === 'luxalgo-ai-supertrend')!
+    expect(found).toMatchObject({ title: 'AI Supertrend', category: CATEGORY.luxalgo, description: 'Clusters.' })
+    // The picker keeps the entries holding every word typed: LuxAlgo found it for them.
+    expect(found.keywords).toEqual(expect.arrayContaining(['super', 'trend']))
+    found.action!()
+    expect(onAttach).toHaveBeenCalledWith({ kind: 'luxalgo', id: 'ai-supertrend', label: "LuxAlgo's AI Supertrend" })
+  })
 })

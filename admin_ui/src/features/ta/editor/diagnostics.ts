@@ -52,6 +52,18 @@ export function checkSummary(diagnostics: Diagnostic[]): string {
 
 // The validator's advice that a v5 script move to v6: not a fault of the script.
 const NOT_FAULTS = [/Recommend using \/\/@version=6/]
+// pinescript-v6-validator 0.4.3 takes a field read on a call's or an index's result for a namespace of its own, as in
+// LuxAlgo's `clusters.get(idx).out.push(value)`, which PineTS runs: not a fault either.
+const UNDEFINED_NAME = /^Undefined namespace or variable '([A-Za-z_]\w*)'/
+
+/** Whether a finding names a field read on what a call or an index gave (`).out`, `].out`). */
+function fieldOfAResult(source: string, finding: { line: number; column: number; message: string }): boolean {
+  const name = UNDEFINED_NAME.exec(finding.message)?.[1]
+  if (!name) return false
+  const text = source.split('\n')[finding.line - 1] ?? ''
+  if (text.slice(finding.column, finding.column + name.length) !== name) return false
+  return /[)\]]\s*\.\s*$/.test(text.slice(0, finding.column))
+}
 
 /** Strings given where WATA must find an asset: request.security's symbol and input.symbol's default. */
 export function tickerChecks(source: string): Diagnostic[] {
@@ -98,7 +110,7 @@ export function ruleFindings(source: string, version: number, validate?: CheckOp
   const diagnostics: Diagnostic[] = []
   if (version === 6 && validate) {
     for (const finding of validate(source)) {
-      if (NOT_FAULTS.some((pattern) => pattern.test(finding.message))) continue
+      if (NOT_FAULTS.some((pattern) => pattern.test(finding.message)) || fieldOfAResult(source, finding)) continue
       diagnostics.push({
         line: Math.max(1, finding.line),
         column: Math.max(1, finding.column + 1),

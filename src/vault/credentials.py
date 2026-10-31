@@ -49,6 +49,8 @@ class Credential:
     fingerprint: str | None = None
     # Made by WATA (a token), never typed: rotated, the value before kept for a while.
     generated: bool = False
+    # Obtained by signing in from its page (an OAuth sign-in), never typed: signed out to remove it.
+    signed_in: bool = False
     # Where it was kept before PostgreSQL, said on the page while its row is absent.
     old_place: str = ""
 
@@ -126,6 +128,30 @@ CREDENTIALS = (
                  expected="the key as Anthropic's Console gives it once: sk-ant- then letters, digits, - and _"),
         ),
         fingerprint="key",
+    ),
+    Credential(
+        name="luxalgo.oauth",
+        label="LuxAlgo account",
+        # The admin alone calls LuxAlgo's MCP tools (src/admin/luxalgo.py), signed in from the LuxAlgo Library page
+        # (src/admin/luxalgo_auth.py): whole Pine sources need an account, free included.
+        readers=("admin",),
+        parts=(
+            Part("client_id", "Client id", secret=False, pattern=re.compile(r"^[A-Za-z0-9._~-]{4,256}$"),
+                 expected="the client LuxAlgo registered for the admin"),
+            Part("redirect_uri", "Return address", secret=False,
+                 pattern=re.compile(r"^https?://[^\s/?#]+/api/luxalgo/callback$"), max_length=512,
+                 expected="the admin's own address, ending /api/luxalgo/callback"),
+            Part("access_token", "Access token", secret=True, pattern=re.compile(r"^[A-Za-z0-9._~+/=-]{8,4096}$"),
+                 max_length=4096, expected="as LuxAlgo gives it"),
+            Part("refresh_token", "Refresh token", secret=True, pattern=re.compile(r"^[A-Za-z0-9._~+/=-]{8,4096}$"),
+                 max_length=4096, expected="as LuxAlgo gives it"),
+            Part("expires_at", "Expires", secret=False, pattern=re.compile(r"^\d{9,12}$"),
+                 expected="when the access token lapses, in seconds since 1970"),
+            Part("account", "Account", secret=False, pattern=re.compile(r"^.{1,254}$"), max_length=254,
+                 expected="the account signed in"),
+        ),
+        fingerprint="refresh_token",
+        signed_in=True,
     ),
 )
 

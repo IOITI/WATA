@@ -46,6 +46,13 @@ const ScriptEditorPage = lazy(() =>
   import('@/features/ta/ScriptEditorPage').then((module) => ({ default: module.ScriptEditorPage })),
 )
 const ChartsPage = lazy(() => import('@/features/ta/ChartsPage').then((module) => ({ default: module.ChartsPage })))
+const LuxAlgoPage = lazy(() => import('@/features/ta/luxalgo/LuxAlgoPage').then((module) => ({ default: module.LuxAlgoPage })))
+const LuxAlgoIndicatorPage = lazy(() =>
+  import('@/features/ta/luxalgo/LuxAlgoIndicatorPage').then((module) => ({ default: module.LuxAlgoIndicatorPage })),
+)
+const LuxAlgoConceptPage = lazy(() =>
+  import('@/features/ta/luxalgo/LuxAlgoConceptPage').then((module) => ({ default: module.LuxAlgoConceptPage })),
+)
 const SignalRulesPage = lazy(() =>
   import('@/features/ta/signals/SignalRulesPage').then((module) => ({ default: module.SignalRulesPage })),
 )
@@ -202,6 +209,9 @@ const router = createBrowserRouter(
             </ChartPage>
           }
         />
+        <Route path="ta/luxalgo" element={<LuxAlgoPage />} />
+        <Route path="ta/luxalgo/indicators/:slug" element={<LuxAlgoIndicatorPage />} />
+        <Route path="ta/luxalgo/concepts/:slug" element={<LuxAlgoConceptPage />} />
         <Route
           path="ta/charts"
           element={

@@ -13,6 +13,7 @@ import type {
   AgentConversationListed,
   AgentProposal,
   AgentRoutine,
+  AgentRoutineTemplate,
   AgentRoutineDraft,
   AgentState,
   AgentVerdict,
@@ -65,6 +66,17 @@ import type {
   JsonObject,
   LogServices,
   LogTail,
+  LuxAlgoChecks,
+  LuxAlgoCompat,
+  LuxAlgoConcept,
+  LuxAlgoFamily,
+  LuxAlgoKnownShort,
+  LuxAlgoImported,
+  LuxAlgoIndicator,
+  LuxAlgoIndicatorList,
+  LuxAlgoSearchResult,
+  LuxAlgoSource,
+  LuxAlgoStatus,
   McpState,
   McpToken,
   OrdersPage,
@@ -74,6 +86,9 @@ import type {
   PositionDetail,
   Position,
   PriceAvailability,
+  PropFirmAsked,
+  PropFirmKept,
+  PropFirmState,
   PriceBars,
   PriceContext,
   PriceCoverage,
@@ -428,6 +443,11 @@ export const api = {
   /** The run made again as a sweep, with each order filled later and at a worse price. */
   stressBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/stress`),
   modelCheckBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/model-check`),
+  /** The run's last check against funded challenges, and its figures as they would be sent. */
+  propFirms: (runId: string) => request<PropFirmState>('GET', `/api/backtests/${encodeURIComponent(runId)}/propfirms`),
+  /** The run's trades as R-multiples sent to LuxAlgo's prop-firm simulator: only figures leave. */
+  checkPropFirms: (runId: string, body: PropFirmAsked) =>
+    request<PropFirmKept>('POST', `/api/backtests/${encodeURIComponent(runId)}/propfirms`, { body }),
 
   // ── Dukascopy's history: what is there, its downloads, keeping it up to date ──
   // `label`: another Dukascopy instrument than the history kept up to date, which is meant when it is left out.
@@ -438,6 +458,29 @@ export const api = {
   stopFetchingHistory: () => request<PriceFetchStatus>('POST', '/api/data/providers/dukascopy/fetch/stop'),
   keepHistory: (body: { enabled: boolean; days: number }) =>
     request<PriceKeepStatus>('PUT', '/api/data/providers/dukascopy/keep', { body }),
+
+  // ── LuxAlgo's Library, through the admin (src/admin/routers/luxalgo.py) ──
+  luxalgoStatus: () => request<LuxAlgoStatus>('GET', '/api/luxalgo/status'),
+  luxalgoFamilies: () => request<{ families: LuxAlgoFamily[] }>('GET', '/api/luxalgo/families'),
+  luxalgoIndicators: (params: { family?: string | null; concept?: string | null; page?: number; page_size?: number; sort?: string }) =>
+    request<LuxAlgoIndicatorList>('GET', `/api/luxalgo/indicators${query(params)}`),
+  luxalgoSearch: (params: { query: string; type?: 'all' | 'concepts' | 'indicators'; family?: string | null; limit?: number }) =>
+    request<{ results: LuxAlgoSearchResult[] }>('GET', `/api/luxalgo/search${query(params)}`),
+  luxalgoIndicator: (slug: string) => request<LuxAlgoIndicator>('GET', `/api/luxalgo/indicators/${encodeURIComponent(slug)}`),
+  luxalgoSource: (slug: string) => request<LuxAlgoSource>('GET', `/api/luxalgo/indicators/${encodeURIComponent(slug)}/source`),
+  luxalgoConcept: (slug: string) => request<LuxAlgoConcept>('GET', `/api/luxalgo/concepts/${encodeURIComponent(slug)}`),
+  /** Every indicator WATA touched, in short: what the Library's cards say. */
+  luxalgoKnown: () => request<{ items: LuxAlgoKnownShort[] }>('GET', '/api/luxalgo/known'),
+  luxalgoCompat: () => request<{ items: LuxAlgoCompat[]; checks: LuxAlgoChecks }>('GET', '/api/luxalgo/compat'),
+  /** Indicators to check for running on WATA: one at a time, while no Pine study runs. */
+  checkLuxalgo: (slugs: string[]) => request<LuxAlgoChecks>('POST', '/api/luxalgo/compat', { body: { slugs } }),
+  /** The whole source made one of your scripts, its origin kept: 409 for a part of it, or a name taken. */
+  takeLuxalgoIndicator: (slug: string, name?: string) =>
+    request<LuxAlgoImported>('POST', `/api/luxalgo/indicators/${encodeURIComponent(slug)}/import`, { body: { name: name || null } }),
+  /** LuxAlgo's sign-in page, coming back to this admin: a credential, so refused (403) while config edits are off. */
+  beginLuxalgoSignIn: () => request<{ url: string }>('POST', '/api/luxalgo/sign-in'),
+  pasteLuxalgoSignIn: (address: string) => request<LuxAlgoStatus>('POST', '/api/luxalgo/sign-in/pasted', { body: { address } }),
+  luxalgoSignOut: () => request<LuxAlgoStatus>('DELETE', '/api/luxalgo/sign-in'),
 
   // ── Technical Analysis: Pine scripts and the layouts of the charts ──
   taScripts: () => request<{ items: TaScriptSummary[] }>('GET', '/api/ta/scripts'),
@@ -467,9 +510,13 @@ export const api = {
    * Live is an operator action: refused (403) while actions are disabled, and (409) while the rule is not ready
    * unless `force` goes live anyway, which the audit trail records with what was missing.
    */
-  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string, force = false, proposal?: string) =>
+  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string, force = false, proposal?: string, licenceChecked = false) =>
     request<TaRuleSaved>('POST', `/api/ta/rules/${encodeURIComponent(id)}/mode`, {
-      body: { mode, revision, ...(force ? { force } : {}), ...(proposal ? { proposal } : {}) },
+      body: {
+        mode, revision, ...(force ? { force } : {}), ...(proposal ? { proposal } : {}),
+        // The operator checked the licence of a script taken from LuxAlgo (refused live without it).
+        ...(licenceChecked ? { licence_checked: true } : {}),
+      },
     }),
   deleteTaRule: (id: string, revision: string) =>
     request<void>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}${query({ revision })}`),
@@ -565,6 +612,8 @@ export const api = {
   answerAgentTask: (id: string, answer: string) =>
     request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/task/answer`, { body: { answer } }),
   agentRoutines: () => request<{ revision: string; max: number; routines: AgentRoutine[] }>('GET', '/api/agent/routines'),
+  /** Routines ready to add: the LuxAlgo scout while the agent has LuxAlgo's tools. */
+  agentRoutineTemplates: () => request<{ templates: AgentRoutineTemplate[] }>('GET', '/api/agent/routines/templates'),
   saveAgentRoutine: (routine: AgentRoutineDraft, revision: string, id?: string) =>
     request<{ revision: string; routine: AgentRoutine }>(id ? 'PUT' : 'POST',
       id ? `/api/agent/routines/${encodeURIComponent(id)}` : '/api/agent/routines', { body: { ...routine, revision } }),

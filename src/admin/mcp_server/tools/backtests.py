@@ -9,7 +9,7 @@ from datetime import date, datetime
 
 from starlette.concurrency import run_in_threadpool
 
-from src.admin import backtest_requests
+from src.admin import backtest_requests, propfirm_check
 from src.admin.mcp_server import guards
 from src.admin.mcp_server.budget import Refused, research_tool
 from src.admin.mcp_server.facade import CLAUDE
@@ -17,7 +17,7 @@ from src.admin.mcp_server.gate import current_caller
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, csv_text, page
 from src.research.requests import body_of, neighbour_values, trials_of, value_of
 
-PARTS = ("summary", "edge", "breakdowns", "baseline", "sweep", "reconciliation", "model_check", "settings")
+PARTS = ("summary", "edge", "breakdowns", "baseline", "sweep", "reconciliation", "model_check", "settings", "r_series")
 TRADE_ORDERS = ("time", "worst", "best")
 FATES = ("executed", "refused", "failed", "unpriced", "closed", "ignored", "not_a_signal")
 FORMATS = ("json", "csv")
@@ -217,7 +217,9 @@ def register(server, research) -> None:
         entries' totals. sweep: each combination's figures on the tuning and held-out days, with the walk-forward,
         the probability of overfitting and the deflated Sharpe in summary. reconciliation: a journal replay set
         beside WATA's real trades. model_check: a model check's trades paired by signal with the recorded run's
-        (backtest_derive kind model_check). settings: every setting the run used."""
+        (backtest_derive kind model_check). settings: every setting the run used. r_series: its trades as
+        R-multiples (each result over its stop-loss), in the order they closed, with its trades a day: what LuxAlgo's
+        prop-firm simulator takes."""
         if part not in PARTS:
             raise Refused(f"part is one of {', '.join(PARTS)}")
         if part == "summary":
@@ -262,6 +264,16 @@ def register(server, research) -> None:
                 "summary": found.get("summary"), "pairs": (found.get("pairs") or [])[:50],
                 "backtest_only": (found.get("backtest_only") or [])[:25], "live_only": (found.get("live_only") or [])[:25],
             })
+        if part == "r_series":
+            service = research.service()
+
+            def read() -> dict:
+                return propfirm_check.figures(service.trades(run_id), service.days(run_id), service.settings_of(run_id))
+
+            try:
+                return compacted(await run_in_threadpool(read))
+            except propfirm_check.NotCheckable as e:
+                raise Refused(str(e)) from None
         if part == "model_check":
             found = await run_in_threadpool(research.service().model_check_result, run_id)
             if not found:

@@ -338,6 +338,7 @@
     "backtests_signal_cache_mb": 1024,
     "trusted_proxy_hosts": ["traefik"],
     "mcp_enabled": false,
+    "luxalgo_enabled": false,
     "mcp": {
       "max_waiting_runs": 3,
       "runs_per_day": 60,

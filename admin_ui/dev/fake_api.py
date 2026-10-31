@@ -33,6 +33,12 @@ Set FAKE_AI=1 for the AI agent of the pages (AI agent in the menu, "Ask the AI
 agent" on a run or a script): its real service, tools and files, with a key
 set, and answers made up in fake_ai.py, streamed as Claude's would be. Nothing
 reaches Anthropic.
+
+Set FAKE_LUXALGO=1 for LuxAlgo's tools (Technical Analysis › LuxAlgo Library,
+and the agent's LuxAlgo tools): a Library made up in fake_luxalgo.py, its
+sign-in coming straight back. FAKE_LUXALGO=real reads LuxAlgo's own public
+tools instead (src/admin/luxalgo.py's allowlist), and signs in on LuxAlgo's
+page for real.
 """
 
 import asyncio
@@ -79,6 +85,9 @@ from src.admin.data import PriceHistory
 from src.admin.downloads import HistoryDownloads, config_hours
 from src.admin.events import EventHub
 from src.admin.live_prices import LivePrices
+from src.admin.luxalgo import LuxAlgo
+from src.admin.luxalgo_auth import LuxAlgoSignIn
+from src.admin.luxalgo_compat import CompatChecker, CompatStore
 from src.admin.mcp_server.calls import CallLog
 from src.admin.mcp_server.pause import McpPause
 from src.admin.mcp_server.tokens import TokenStore
@@ -86,6 +95,7 @@ from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.paper import PaperTrading
 from src.admin.release import Release
 from src.admin.ta_rules import RuleStore
+from src.admin.script_origins import ScriptOrigins
 from src.admin.service_control import RestartRefused
 from src.admin.vault import AdminVault
 from src.vault import keys
@@ -1522,6 +1532,9 @@ def build_dev_context(work_dir: str) -> AdminContext:
     if mcp:
         config["admin"]["mcp_enabled"] = True
         config["admin"]["mcp"]["shadow_rules"] = True
+    luxalgo = os.getenv("FAKE_LUXALGO")
+    if luxalgo:
+        config["admin"]["luxalgo_enabled"] = True
     ai = os.getenv("FAKE_AI") == "1"
     if ai:
         config["admin"]["ai_agent"]["enabled"] = True
@@ -1576,8 +1589,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
     settings.mcp_tokens_path = os.path.join(work_dir, "lib", "admin", "mcp_tokens.json")
     mcp_tokens = TokenStore(settings.mcp_tokens_path)
     studies = None
-    # Claude Code's endpoint and the AI agent run the same Pine studies.
-    if mcp or ai:
+    # Claude Code's endpoint and the AI agent run the same Pine studies, and LuxAlgo's indicators are checked with them.
+    if mcp or ai or luxalgo:
         studies = StudyService(
             root=os.path.join(settings.backtests_path, "_studies"), ta_root=ta_scripts.root,
             prices_root=prices_root, signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
@@ -1625,6 +1638,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         version="dev",
         closers=closers,
         agent_memory=memory_of(settings.agent_path),
+        script_origins=ScriptOrigins(ta_scripts.root),
     )
     ctx.restarts = RestartPlans(ctx.service_control, FakeReadiness(), lambda: situation_of(ctx), events, poll_seconds=1)
     # The credentials, sealed with keys made for this run: the admin's own and every public one, as the
@@ -1639,6 +1653,20 @@ def build_dev_context(work_dir: str) -> AdminContext:
     table = FakeCredentialTable()
     ctx.vault = AdminVault(reader=table, writer=table, config_manager=config_manager, keys_dir=view,
                            feed_state=queries.capital_feed_state)
+    if luxalgo == "real":
+        ctx.luxalgo_sign_in = LuxAlgoSignIn(vault=ctx.vault)
+        ctx.luxalgo = LuxAlgo(bearer=ctx.luxalgo_sign_in.bearer)
+        print("LuxAlgo's tools are on, read from LuxAlgo's own public address")
+    elif luxalgo:
+        import fake_luxalgo
+
+        ctx.luxalgo_sign_in = fake_luxalgo.FakeSignIn()
+        ctx.luxalgo = LuxAlgo(bearer=ctx.luxalgo_sign_in.bearer, server=fake_luxalgo.server(ctx.luxalgo_sign_in))
+        print("LuxAlgo's tools are on, over a Library made up (fake_luxalgo.py)")
+    if luxalgo:
+        # Whether its indicators run on WATA, checked with the Pine studies above.
+        ctx.luxalgo_compat = CompatStore(ta_scripts.root)
+        ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies)
     if ai and os.getenv("FAKE_NO_KEYS") != "1":
         import fake_ai
 

@@ -44,6 +44,7 @@ _SHARED = re.compile(r"The operator shares the (backtest run|Pine script) .*?\((
 _SHARED_TRADING = re.compile(r"The operator shares the (position|signal|trading day|incident) ([^\n]*?), as your tools")
 _SHARED_RULE = re.compile(r"The operator shares the signal rule .*?\(([0-9a-f]{12})\), as your tools")
 _SHARED_REVIEW = re.compile(r"The operator shares (a change, to review before it is saved:|an unsaved draft of the script,) ")
+_SHARED_LUXALGO = re.compile(r"The operator shares the indicator of LuxAlgo's Library .*?\(([a-z0-9][a-z0-9-]{0,120})\), as your tools")
 _DRAFT_OF = re.compile(r"What changed from version (\d+) of script ([0-9a-f]{12})")
 _TASK = "A research task the operator left you"
 _TASK_GOES_ON = "The research task goes on"
@@ -104,7 +105,10 @@ class FakeClaude:
                 said = block.get("text", "") if block.get("type") == "text" else ""
                 found, trading = _SHARED.search(said), _SHARED_TRADING.search(said)
                 rule, review, draft = _SHARED_RULE.search(said), _SHARED_REVIEW.search(said), _DRAFT_OF.search(said)
-                if found and subject is None:
+                luxalgo = _SHARED_LUXALGO.search(said)
+                if luxalgo and subject is None:
+                    subject = ("luxalgo", luxalgo.group(1))
+                elif found and subject is None:
                     subject = ("run" if found.group(1) == "backtest run" else "script", found.group(2))
                 elif rule and subject is None:
                     # Before the trading ones: "the signal rule" starts as "the signal" does.
@@ -237,6 +241,8 @@ class FakeClaude:
             return await self._dossier(subject[1], subject[2], done, on_event)
         if subject and subject[0] == "draft":
             return await self._draft(subject[1], subject[2], done, on_event)
+        if subject and subject[0] == "luxalgo":
+            return await self._luxalgo(subject[1], done, on_event)
         if subject and subject[0] == "change":
             return await self._turn(on_event, "The change is shared whole: I weigh what a backtest can test.", text=(
                 "**It cannot be told yet** (made up by the development admin): the setting it changes rests on 12 "
@@ -397,6 +403,27 @@ class FakeClaude:
         return await self._turn(on_event, "I reviewed the draft.", text=(
             "## The draft\n\nIt **compiles**, and its alerts are unchanged (made up). I propose one line fixed: put "
             "it in your editor below, then save it there, or not."))
+
+    async def _luxalgo(self, slug: str, done: dict, on_event) -> list:
+        """One of LuxAlgo's indicators: taken whole, its verdict set (no backtest: the development admin's runs are its own)."""
+        if "luxalgo_save_script" not in done:
+            return await self._turn(on_event, "What WATA knows of it says nothing yet: I take it whole as my script.", [
+                ("luxalgo_save_script", {"slug": slug})])
+        saved = done["luxalgo_save_script"]
+        taken = json.loads(saved) if isinstance(saved, str) and saved.startswith("{") else {}
+        if "set_verdict" not in done:
+            line = ("Compiles on WATA and raises its alerts on recorded bars; not backtested yet (made up)." if taken.get("saved")
+                    else "Not taken: LuxAlgo gave a part of its source (made up).")
+            return await self._turn(on_event, "I set what I found on the indicator, for the Library's card.", [
+                ("set_verdict", {"about": f"luxalgo:{slug}", "tone": "mixed" if taken.get("saved") else "neutral", "line": line})])
+        if not taken.get("saved"):
+            return await self._turn(on_event, "Its source came cut.", text=(
+                "## Not taken\n\nLuxAlgo gave a part of its source: sign in to LuxAlgo on the Library's page, then ask again."))
+        return await self._turn(on_event, "I have what I need.", text=(
+            f"## Worth a backtest\n\nI took it as my script **{taken.get('name')}** ({taken.get('origin', {}).get('licence')}, "
+            "its terms yours to check before trading it). It compiles on WATA and declares its alerts: a backtest on "
+            "the recorded turbos is the next step (made up by the development admin).\n\n"
+            "- Its verdict is on its page and its card\n- Nothing goes live from here\n"))
 
     async def _trading(self, subject, on_event) -> list:
         kind, label = subject

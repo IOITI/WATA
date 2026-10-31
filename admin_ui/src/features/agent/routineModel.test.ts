@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { monthCommitted, routineDefaults, routineProblem, scheduleSaid } from './routineModel'
+import { fromTemplate, monthCommitted, routineDefaults, routineProblem, scheduleSaid } from './routineModel'
 
 describe('a routine', () => {
   it('says when it comes back', () => {
@@ -14,6 +14,18 @@ describe('a routine', () => {
     expect(routineProblem(draft)).toBe('Give it a name')
     expect(routineProblem({ ...draft, name: 'Weekly', goal: 'Check', schedule: { every: 'week', weekday: 1, time: '25:00' } }))
       .toBe('Its time is HH:MM')
+  })
+
+  it('starts from a template whole, on, with the default model and effort', () => {
+    const template = {
+      key: 'luxalgo_scout', name: 'LuxAlgo scout', goal: 'Read the newest.', telegram: true,
+      schedule: { every: 'week' as const, weekday: 5, time: '10:00' }, budget: { usd: 2, backtests: 2, hours: 1.5 },
+    }
+    expect(fromTemplate(template)).toEqual({
+      name: 'LuxAlgo scout', goal: 'Read the newest.', schedule: template.schedule, budget: template.budget,
+      model: null, effort: null, telegram: true, enabled: true,
+    })
+    expect(routineProblem(fromTemplate(template))).toBeNull()
   })
 
   it('counts what the routines switched on would spend in a month at most', () => {

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "luxalgo": {
+      "type": "http",
+      "url": "https://mcp.luxalgo.com/mcp"
+    }
+  }
+}

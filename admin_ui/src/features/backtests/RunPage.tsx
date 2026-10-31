@@ -34,6 +34,7 @@ import { AgentSheet } from '@/features/agent/AgentSheet'
 import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
+import { useLuxAlgoStatus } from '@/features/ta/luxalgo/useLuxAlgo'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { RulePeekName } from '@/features/ta/signals/RulePeek'
 import { api, isNotFound } from '@/lib/api'
@@ -57,6 +58,7 @@ import { DaysTable, SignalsTable, TradesTable } from './runTables'
 import { ModelCheckPanel } from './ModelCheckPanel'
 import { paperRunLine, runParents } from './paperModel'
 import { choiceTrust } from './robustness'
+import { PropFirmPanel } from './PropFirmPanel'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { underlyingLabel } from './turboModel'
@@ -68,7 +70,7 @@ import { RunPeekLink } from './RunPeek'
 const ANCHORED = 'scroll-mt-14'
 
 /** The parts of a done run's page, in their order: what the index lists, each an anchor. */
-function runSections(run: BacktestRun): PageSection[] {
+function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
   const summary = run.summary
   if (run.status.state !== 'done' || !summary) return []
   const judged = !run.stress_of && !run.model_check_of
@@ -92,6 +94,7 @@ function runSections(run: BacktestRun): PageSection[] {
     { id: 'curves', label: 'Day after day' },
     { id: 'why', label: 'Why' },
     { id: 'breakdowns', label: 'Where it comes from' },
+    ...(luxalgo && judged ? [{ id: 'propfirms', label: 'Funded challenges' }] : []),
     { id: 'tables', label: 'Trades, signals, days' },
     { id: 'setup', label: 'What it ran' },
   ]
@@ -280,7 +283,9 @@ export function RunPage() {
   const figures = summary?.figures
   const money = summary?.money
   const paperLine = run ? paperRunLine(run) : null
-  const sections = useMemo(() => (run ? runSections(run) : []), [run])
+  // LuxAlgo's prop-firm simulator, while the admin reads LuxAlgo (admin.luxalgo_enabled).
+  const luxalgo = !!useLuxAlgoStatus().data?.enabled
+  const sections = useMemo(() => (run ? runSections(run, luxalgo) : []), [run, luxalgo])
   // Numbered as the nav shows them, each a link to its place (`#edge`), which can be opened in another tab.
   const parts = useMemo(
     () => sections.map((section, index) => ({ ...section, index: String(index + 1).padStart(2, '0'), href: `#${section.id}` })),
@@ -539,6 +544,11 @@ export function RunPage() {
                   <div id="breakdowns" className={ANCHORED}>
                     <BreakdownsPanel runId={run.id} />
                   </div>
+                  {luxalgo && !run.stress_of && !run.model_check_of && (
+                    <div id="propfirms" className={ANCHORED}>
+                      <PropFirmPanel run={run} />
+                    </div>
+                  )}
                   <Panel id="tables" className={ANCHORED}>
                     <AnimatedTabs
                       tabs={[

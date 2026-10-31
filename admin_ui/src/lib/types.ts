@@ -869,6 +869,8 @@ export interface Credential {
   parts: CredentialPart[]
   /** Made by WATA (a token): rotated, never typed. */
   generated: boolean
+  /** Kept by signing in from its page (LuxAlgo's account): never typed. */
+  signed_in?: boolean
   old_place: string
   /** database; old place (read there until it has its row); missing; unknown (in another container's .env, maybe). */
   where: 'database' | 'old place' | 'missing' | 'unknown'
@@ -2665,6 +2667,27 @@ export interface TaScriptSummary {
   updated_at: string
   /** "claude" for a script Claude made through the admin's MCP endpoint. */
   made_by?: string | null
+  /** Where it came from, when it was taken from LuxAlgo's Library or its header says LuxAlgo's. */
+  origin?: ScriptOrigin
+}
+
+/** Where a script came from (src/admin/script_origins.py): LuxAlgo's Library, under its licence. */
+export interface ScriptOrigin {
+  provider: 'luxalgo'
+  slug?: string
+  name?: string
+  /** Its page on LuxAlgo's site, and its chart on Vela. */
+  url?: string
+  chart_url?: string | null
+  licence: string
+  owner?: string | null
+  taken_at?: string
+  /** "operator", or agent:<conversation>. */
+  by?: string | null
+  /** No record: its header says it is LuxAlgo's. */
+  derived?: boolean
+  /** The script it was carried from (a proposal applied). */
+  from_script?: string
 }
 
 export interface TaScript extends TaScriptSummary {
@@ -2673,6 +2696,8 @@ export interface TaScript extends TaScriptSummary {
 
 export interface TaVersion extends TaVersionEntry {
   source: string
+  /** Where this version came from, when it is LuxAlgo's. */
+  origin?: ScriptOrigin
 }
 
 // ── Technical Analysis: the signal rules (src/admin/ta_rules.py) and what the TA engine did ──
@@ -3252,6 +3277,8 @@ export interface AgentState {
   debrief?: AgentDebriefState
   /** Whether it uses its memory (admin.ai_agent.memory). */
   memory?: boolean
+  /** Whether it has LuxAlgo's tools (admin.luxalgo_enabled). */
+  luxalgo?: boolean
   /** Whether a Telegram bot is set, which "Tell me on Telegram" needs; null when it cannot be told. */
   telegram?: boolean | null
 }
@@ -3358,7 +3385,7 @@ export interface AgentLastCall {
 }
 
 export interface AgentSubject {
-  kind: 'run' | 'script' | 'position' | 'signal' | 'day' | 'incident' | 'briefing' | 'rule' | 'change' | 'draft'
+  kind: 'run' | 'script' | 'position' | 'signal' | 'day' | 'incident' | 'briefing' | 'rule' | 'change' | 'draft' | 'luxalgo'
   id: string
   label: string
   version?: number | null
@@ -3498,6 +3525,11 @@ export interface AgentRoutine {
 }
 
 export type AgentRoutineDraft = Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'model' | 'effort' | 'telegram' | 'enabled'>
+
+/** A routine ready to add: the operator changes what they like before saving. */
+export interface AgentRoutineTemplate extends Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'telegram'> {
+  key: string
+}
 
 export type AgentVerdictTone = 'positive' | 'mixed' | 'negative' | 'neutral'
 
@@ -3742,5 +3774,257 @@ export interface AgentMemoryDraft {
   description: string
   body: string
   locked: boolean
+}
+
+// ── LuxAlgo's Library (src/admin/routers/luxalgo.py), read through the admin ──
+
+export interface LuxAlgoStatus {
+  enabled: boolean
+  signed_in: boolean
+  account: string | null
+  /** When the access token lapses, in seconds since 1970: the admin renews it before. */
+  expires_at: number | null
+  /** Why LuxAlgo would not renew the sign-in, until signed in again. */
+  refused: string | null
+}
+
+export interface LuxAlgoFamily {
+  key: string
+  name: string
+  concept_count?: number
+  url?: string
+}
+
+export interface LuxAlgoIndicatorLine {
+  slug: string
+  name: string
+  family: string
+  description?: string
+  date_displayed?: string
+  url?: string
+}
+
+export interface LuxAlgoIndicatorList {
+  total: number
+  page: number
+  page_size: number
+  indicators: LuxAlgoIndicatorLine[]
+}
+
+export interface LuxAlgoSearchResult {
+  kind: 'concept' | 'indicator'
+  slug: string
+  name: string
+  family?: string
+  description?: string
+  url?: string
+}
+
+/** A script of WATA's taken from an indicator. */
+export interface LuxAlgoTaken {
+  id: string
+  name: string
+  made_by?: string | null
+  version?: number
+  taken_at?: string | null
+  by?: string | null
+}
+
+export interface LuxAlgoIndicator {
+  slug: string
+  name: string
+  author?: string
+  family: string
+  body_markdown?: string
+  date_displayed?: string
+  url?: string
+  concepts?: { slug: string; name: string; primary?: boolean }[]
+  code?: { available: boolean }
+  /** What WATA knows of it (src/admin/luxalgo_knowledge.py). */
+  known: LuxAlgoKnown
+}
+
+/** A verdict as what WATA knows of an indicator says it. */
+export interface LuxAlgoVerdict {
+  tone: AgentVerdictTone
+  line: string
+  at?: string
+  conversation?: string
+}
+
+/** What WATA's check found of an indicator (src/admin/luxalgo_compat.py). */
+export interface LuxAlgoCompat {
+  slug?: string
+  name?: string | null
+  /** runs: compiles and raises alerts; no_alerts: compiles, declares none; fails: does not compile; cut: read in part. */
+  state: 'runs' | 'no_alerts' | 'fails' | 'cut'
+  checked_at: string
+  compiles?: boolean
+  error?: string | null
+  rules_errors?: string[]
+  alertconditions?: string[]
+  alert_calls?: number
+  strategy?: boolean
+  plots?: number
+  inputs?: number
+  /** Why a source was not checked whole. */
+  why?: string
+}
+
+export interface LuxAlgoKnownRun {
+  id: string
+  name?: string | null
+  script_id: string
+  state?: BacktestState | null
+  headline?: BacktestHeadline | null
+  made_by?: string | null
+  verdict?: LuxAlgoVerdict | null
+}
+
+export interface LuxAlgoKnownRule {
+  id: string
+  name: string
+  mode: TaRuleMode
+  made_by?: string | null
+  script_id: string
+  verdict?: LuxAlgoVerdict | null
+  paper: { days: number; outside: number; last: { day: string; day_percent: number | null; trades: number | null; outside: boolean | null }[] }
+}
+
+/** What WATA knows of one of LuxAlgo's indicators: what it took, ran, runs, judged and checked. */
+export interface LuxAlgoKnown {
+  slug: string
+  scripts: LuxAlgoTaken[]
+  verdict: LuxAlgoVerdict | null
+  compat: LuxAlgoCompat | null
+  runs: LuxAlgoKnownRun[]
+  more_runs?: number
+  rules: LuxAlgoKnownRule[]
+}
+
+/** The same, in short, for the Library's cards. */
+export interface LuxAlgoKnownShort {
+  slug: string
+  scripts: LuxAlgoTaken[]
+  verdict: LuxAlgoVerdict | null
+  compat: LuxAlgoCompat | null
+  runs: number
+  rules: { id: string; mode: TaRuleMode }[]
+}
+
+/** The checks asked and under way. */
+export interface LuxAlgoChecks {
+  available: boolean
+  queued?: string[]
+  checking?: string | null
+  this_hour?: number
+  an_hour?: number
+  added?: number
+}
+
+export interface LuxAlgoSource {
+  slug: string
+  name: string
+  available: boolean
+  /** Signed out, LuxAlgo gives its first lines alone. */
+  complete: boolean
+  source?: string
+  shown_lines?: number
+  total_lines?: number
+  reason?: string
+  chart_url?: string
+  licence?: string
+  owner?: string | null
+}
+
+export interface LuxAlgoConcept {
+  slug: string
+  name: string
+  family?: string
+  /** Its school within the family ("Trend-following systems"). */
+  cluster?: string
+  /** Its write-up, its title first. */
+  content_markdown?: string
+  url?: string
+}
+
+export interface LuxAlgoImported {
+  id: string
+  name: string
+  version: number
+  kind: TaScriptKind
+  origin: ScriptOrigin
+}
+
+// ── a run checked against funded challenges (src/admin/propfirm_check.py, LuxAlgo's simulator) ──
+
+/** What a run says of itself for the simulator: its trades as R-multiples. */
+export interface PropFirmFigures {
+  stoploss_percent: number
+  trades: number
+  days: number
+  trades_per_day: number
+  win_rate: number
+  average_win_r: number | null
+  average_loss_r: number | null
+  r_series?: number[]
+  notes: string[]
+}
+
+/** One challenge as LuxAlgo's simulator screens it. */
+export interface PropFirmChallenge {
+  firmId?: string
+  firmName?: string
+  challengeId?: string
+  name: string
+  productType?: string
+  accountSize?: number
+  currency?: string
+  price?: number
+  passPerAttempt: number
+  passCiLow?: number
+  passCiHigh?: number
+  fundedProbability?: number
+  expectedAttempts?: number
+  expectedCost?: number
+  evTotal?: number
+  pEvPositive?: number
+  meetsBar?: boolean
+  flagIds?: string[]
+  inferredFields?: string[]
+}
+
+export interface PropFirmAnswer {
+  bar?: { minPassPerAttempt: number; requirePositiveEv?: boolean }
+  passing?: PropFirmChallenge[]
+  belowBar?: PropFirmChallenge[]
+  excludedNotSimulatable?: number
+  note?: string
+  disclaimer?: string
+  meta?: { seed?: number; paths?: number; engineVersion?: string }
+  /** LuxAlgo's words, when it gave no structured answer. */
+  text?: string
+}
+
+export interface PropFirmKept {
+  asked_at: string
+  bar: number
+  asked: { tradesPerDay: number; riskMode: string; riskValue: number; productType: string; accountSizeMin?: number; accountSizeMax?: number }
+  figures: Omit<PropFirmFigures, 'r_series'>
+  answer: PropFirmAnswer
+}
+
+export interface PropFirmState {
+  kept: PropFirmKept | null
+  figures: PropFirmFigures | null
+  /** Why the run cannot be checked. */
+  refused: string | null
+}
+
+export interface PropFirmAsked {
+  risk_percent: number
+  product_type: 'futures' | 'cfd'
+  account_min?: number | null
+  account_max?: number | null
 }
 
