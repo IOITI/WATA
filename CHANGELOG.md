@@ -2,7 +2,7 @@
 
 ## v0.75.0 - A page per script, in tabs
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 A script's page was its editor: its runs, the rules that run it and its versions were each on another page, or in a dialog. Its page now has four tabs, each with its address.
 - **Editor**: as before. A draft, its undo and the test's choices stay while another tab is shown.
