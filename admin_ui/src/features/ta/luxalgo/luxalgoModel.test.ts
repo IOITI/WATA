@@ -5,6 +5,9 @@ import type { LuxAlgoCompat, LuxAlgoKnownShort, LuxAlgoSource, ScriptOrigin } fr
 import {
   canTake,
   cardBadges,
+  familyTint,
+  previewImage,
+  sourceLinesSaid,
   checkedOf,
   compatSaid,
   conceptPath,
@@ -162,5 +165,41 @@ describe('going live on a script of LuxAlgo', () => {
     expect(licenceToCheck({ ...ORIGIN, licence: '' })).toBe(UNREAD_LICENCE)
     expect(licenceToCheck({ ...ORIGIN, licence: 'Mozilla Public License 2.0' })).toBeNull()
     expect(licenceToCheck(undefined)).toBeNull()
+  })
+})
+
+describe("LuxAlgo's pictures", () => {
+  const CARD = 'https://luxalgo-production.s3.amazonaws.com/library/cards/tri-star-6cd8deca7e.png'
+
+  it('are taken from its image host alone, the one the admin lets pictures come from', () => {
+    expect(previewImage(CARD)).toBe(CARD)
+    expect(previewImage('https://luxalgo-production.s3.amazonaws.com/library/n010tbbucqa84lksw1nz7t9q.png')).not.toBeNull()
+    for (const elsewhere of [
+      'http://luxalgo-production.s3.amazonaws.com/library/cards/x.png',
+      'https://example.com/library/cards/x.png',
+      'https://luxalgo-production.s3.amazonaws.com/other/x.png',
+      `${CARD}?tracking=1`,
+      'https://luxalgo-production.s3.amazonaws.com/library/cards/x.svg',
+      'not a url',
+      '',
+    ]) {
+      expect(previewImage(elsewhere)).toBeNull()
+    }
+    expect(previewImage(undefined)).toBeNull()
+  })
+
+  it('stand in with a tint of the family, the same each time', () => {
+    expect(familyTint('trend')).toBe(familyTint('trend'))
+    expect(familyTint('trend')).not.toBe(familyTint('volatility'))
+    expect(familyTint(undefined)).toMatch(/^linear-gradient\(135deg, hsl\(/)
+  })
+})
+
+describe('how much of its source LuxAlgo gives', () => {
+  it('is said in a few words', () => {
+    expect(sourceLinesSaid(undefined)).toBe('Being read')
+    expect(sourceLinesSaid({ ...SOURCE, total_lines: 1234 })).toBe('Whole, 1,234 lines')
+    expect(sourceLinesSaid({ ...SOURCE, complete: false, shown_lines: 40, total_lines: 311 })).toBe('40 of 311 lines, signed out')
+    expect(sourceLinesSaid({ ...SOURCE, available: false, source: undefined })).toBe('None published')
   })
 })

@@ -13,6 +13,9 @@ import type {
 
 export const LUXALGO_PATH = '/ta/luxalgo'
 const SITE = 'https://www.luxalgo.com'
+// LuxAlgo's image host, the one the admin's policy lets pictures come from (src/admin/app.py, LUXALGO_IMAGES).
+const IMAGE_HOST = 'luxalgo-production.s3.amazonaws.com'
+const IMAGE_PATH = /^\/library\/[A-Za-z0-9/_.-]{1,200}\.(?:png|jpe?g|webp|gif)$/i
 
 export const indicatorPath = (slug: string) => `${LUXALGO_PATH}/indicators/${encodeURIComponent(slug)}`
 export const conceptPath = (slug: string) => `${LUXALGO_PATH}/concepts/${encodeURIComponent(slug)}`
@@ -44,6 +47,15 @@ export function sourceSaid(source: LuxAlgoSource): string | null {
   if (source.complete) return null
   const shown = source.shown_lines ? `${source.shown_lines} of its ${source.total_lines ?? 'many'} lines` : 'its first lines'
   return `LuxAlgo gives ${shown} to an admin not signed in: sign in to LuxAlgo on the Library's page to read it whole and take it.`
+}
+
+/** How much of its source LuxAlgo gives, in a few words: the page's glance at it. */
+export function sourceLinesSaid(source: LuxAlgoSource | undefined): string {
+  if (!source) return 'Being read'
+  if (!source.available || !source.source) return 'None published'
+  const lines = source.total_lines ?? source.source.split('\n').length
+  if (source.complete) return `Whole, ${lines.toLocaleString('en-GB')} lines`
+  return `${source.shown_lines ?? 'Its first'} of ${lines.toLocaleString('en-GB')} lines, signed out`
 }
 
 /** A source can be taken as one of the operator's scripts: whole, never a part. */
@@ -179,4 +191,26 @@ export function knowsNothing(known: Pick<LuxAlgoKnown, 'scripts' | 'runs' | 'rul
 /** The checked indicators a filter keeps: every one, or those of one state. */
 export function checkedOf(items: LuxAlgoCompat[], state: LuxAlgoCompat['state'] | null): LuxAlgoCompat[] {
   return state ? items.filter((item) => item.state === state) : items
+}
+
+// ── LuxAlgo's pictures ──
+
+/** LuxAlgo's preview picture of an indicator, when its answer names one on LuxAlgo's image host; null otherwise. */
+export function previewImage(url: string | null | undefined): string | null {
+  if (!url) return null
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:' || parsed.host !== IMAGE_HOST || parsed.search || parsed.hash) return null
+  return IMAGE_PATH.test(parsed.pathname) ? parsed.href : null
+}
+
+/** The tint of a picture's stand-in: a hue of its own for each family, light enough for both themes. */
+export function familyTint(family: string | null | undefined): string {
+  let hue = 210
+  for (const char of family ?? '') hue = (hue * 31 + char.charCodeAt(0)) % 360
+  return `linear-gradient(135deg, hsl(${hue} 70% 55% / 0.22), hsl(${(hue + 40) % 360} 70% 55% / 0.06))`
 }

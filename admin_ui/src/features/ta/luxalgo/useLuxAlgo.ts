@@ -1,10 +1,10 @@
 // What the LuxAlgo Library's pages read of the admin alike: whether LuxAlgo's tools are on and the admin signed in,
-// and the Library's families.
+// the Library's families, and WATA's checks of its indicators.
 
 import { useQuery } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
-import type { LuxAlgoFamily } from '@/lib/types'
+import type { LuxAlgoCompat, LuxAlgoFamily } from '@/lib/types'
 
 export function useLuxAlgoStatus() {
   return useQuery({ queryKey: ['luxalgo', 'status'], queryFn: api.luxalgoStatus })
@@ -26,4 +26,10 @@ export function useLuxAlgoChecks() {
     queryFn: api.luxalgoCompat,
     refetchInterval: (query) => (query.state.data?.checks.queued?.length || query.state.data?.checks.checking ? 5_000 : false),
   })
+}
+
+/** WATA's newest check of one indicator: the checks' own, once one asked here is done, else what the page read. */
+export function useIndicatorCheck(slug: string, read: LuxAlgoCompat | null | undefined): LuxAlgoCompat | null {
+  const checks = useLuxAlgoChecks()
+  return checks.data?.items.find((item) => item.slug === slug) ?? read ?? null
 }

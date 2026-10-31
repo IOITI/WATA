@@ -3802,6 +3802,8 @@ export interface LuxAlgoIndicatorLine {
   description?: string
   date_displayed?: string
   url?: string
+  /** LuxAlgo's preview picture of it, on its image host (luxalgoModel.ts previewImage). */
+  image_url?: string
 }
 
 export interface LuxAlgoIndicatorList {
@@ -3838,6 +3840,8 @@ export interface LuxAlgoIndicator {
   body_markdown?: string
   date_displayed?: string
   url?: string
+  /** LuxAlgo's preview picture of it, on its image host. */
+  image_url?: string
   concepts?: { slug: string; name: string; primary?: boolean }[]
   code?: { available: boolean }
   /** What WATA knows of it (src/admin/luxalgo_knowledge.py). */

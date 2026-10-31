@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.72.0 - LuxAlgo's indicators seen: their pictures in the Library, a chart on each page, the source in colour
+
+**Release date:** not yet released
+
+You found four things to correct in the LuxAlgo Library and the AI agent's menu.
+
+- **The trail of an indicator's page** said LuxAlgo Library twice (Home › Technical Analysis › LuxAlgo Library › LuxAlgo Library › its name): the page named its menu entry again as its parent. It now reads Home › Technical Analysis › LuxAlgo Library › its name, and so does a concept's.
+- **AI agent › Routines** has its icon in the menu (a calendar with a clock). Every entry of the menu is held to have one.
+- **LuxAlgo's pictures**: each card of the Library shows LuxAlgo's preview picture of the indicator, and an indicator's page shows it beside its facts. They are loaded by your browser from LuxAlgo's image host, your choice: the admin's policy lets pictures come from that one host, and nothing else from anywhere else; no referrer is sent. This changes v0.70.0's "nothing of LuxAlgo's is loaded into the page" for the pictures alone. A search names no picture: those cards have a stand-in, tinted by the indicator's family.
+- **An indicator's page, redesigned, chart first**:
+  - **On a chart**: an indicator whose source LuxAlgo gives whole runs on a chart of WATA's own bars, from its source, with its own inputs, without being taken or saved. Choose the index (the Charts page's first) and the bars (1, 5, 15 or 60 minutes, 5 at first); where it cannot run (a library WATA does not hold, a ticker it has none of, an error of the script) the chart says why. Signed out, most sources come cut: the page then shows LuxAlgo's picture of it, and how to sign in.
+  - **Tabs**, each with its address: How it works (LuxAlgo's write-up), Pine source (read only, in the editor's colours, with line numbers, search and Copy), In WATA (what WATA knows of it).
+  - **At a glance**: its picture, family, date, author, licence, how much of its source LuxAlgo gives, WATA's check, its concepts, and its pages on Vela and LuxAlgo's site.
+  - Under its title, its licence, WATA's check and whether it was taken, as badges.
+
+**On the live path:** nothing changes: the admin alone (its interface, and its security policy's `img-src`).
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
 ## v0.71.0 - The AI agent and LuxAlgo's Library, together: asked about an indicator, what WATA knows of it, whether it runs here, a weekly scout, and funded challenges
 
 **Release date:** 2026-10-31

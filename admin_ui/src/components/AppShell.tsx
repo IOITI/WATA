@@ -2,41 +2,12 @@ import { useQuery } from '@tanstack/react-query'
 import { Hint, SidebarFooterButton, StateChip, StatusBadge, ThemeToggle } from 'ioiti-ui'
 import type { Menu } from 'ioiti-ui'
 import { RouterAppShell, RouterLink } from 'ioiti-ui/react-router'
-import {
-  Activity,
-  BookOpen,
-  Bot,
-  BrainCircuit,
-  ChartCandlestick,
-  ChartLine,
-  ChartSpline,
-  ClipboardList,
-  Database,
-  Eye,
-  FileText,
-  FlaskConical,
-  Gauge,
-  KeyRound,
-  LayoutDashboard,
-  LogOut,
-  Package,
-  Radar,
-  Radio,
-  Receipt,
-  Rocket,
-  RotateCw,
-  ScrollText,
-  SlidersHorizontal,
-  SquareFunction,
-  Timer,
-  TrendingUp,
-  Undo2,
-} from 'lucide-react'
+import { KeyRound, LogOut, Rocket, RotateCw } from 'lucide-react'
 import { useEffect } from 'react'
-import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { CommandPalette } from '@/components/CommandPalette'
+import { MENU_ICONS } from '@/components/menuIcons'
 import { isWidePage, MENU, MENU_SECTIONS } from '@/components/navigation'
 import type { MenuSection } from '@/components/navigation'
 import { useAuth, useSession } from '@/features/auth/auth-context'
@@ -52,38 +23,11 @@ import { restartNeededHint } from '@/features/system/restarts'
 import { api } from '@/lib/api'
 import { SAXO_SERVICE_ID } from '@/lib/types'
 
-// The menu itself is in navigation.ts, which the trail of the top bar reads too.
-const ICONS: Record<string, ReactNode> = {
-  dashboard: <LayoutDashboard />,
-  positions: <ChartCandlestick />,
-  orders: <Receipt />,
-  signals: <Radio />,
-  watchlist: <Eye />,
-  performance: <TrendingUp />,
-  report: <FileText />,
-  exits: <Undo2 />,
-  timing: <Timer />,
-  backtests: <FlaskConical />,
-  providers: <Database />,
-  assets: <ChartLine />,
-  'ta-indicators': <SquareFunction />,
-  'ta-luxalgo': <BookOpen />,
-  'ta-charts': <ChartSpline />,
-  'ta-signals': <Radar />,
-  'ta-monitor': <Gauge />,
-  agent: <Bot />,
-  'agent-memory': <BrainCircuit />,
-  'agent-artefacts': <Package />,
-  system: <Activity />,
-  logs: <ScrollText />,
-  audit: <ClipboardList />,
-  config: <SlidersHorizontal />,
-}
-
+// The menu itself is in navigation.ts, which the trail of the top bar reads too; its icons in menuIcons.tsx.
 // Each entry a link: it can be opened in another tab as well as followed.
 const SIDEBAR_MENU: Menu<MenuSection> = {
   sections: MENU_SECTIONS,
-  entries: MENU.map((entry) => ({ ...entry, icon: ICONS[entry.id] })),
+  entries: MENU.map((entry) => ({ ...entry, icon: MENU_ICONS[entry.id] })),
 }
 
 /**

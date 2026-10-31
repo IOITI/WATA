@@ -37,13 +37,19 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # holds a live-events stream that would otherwise keep the server from stopping.
 SHUTDOWN_GRACE_SECONDS = 5
 
-# The interface loads nothing from other origins. Inline styles are allowed
+# LuxAlgo's preview pictures of its indicators (the LuxAlgo Library's cards and an
+# indicator's page), which the browser loads from LuxAlgo's image host: the one
+# thing of another origin the interface loads (the operator's choice, 2026-10-31).
+# Referrer-Policy keeps the admin's addresses out of those requests.
+LUXALGO_IMAGES = "https://luxalgo-production.s3.amazonaws.com"
+
+# The interface loads nothing else from other origins. Inline styles are allowed
 # because the animation library sets them on elements.
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    f"img-src 'self' data: {LUXALGO_IMAGES}",
     "font-src 'self'",
     "connect-src 'self'",
     "frame-ancestors 'none'",

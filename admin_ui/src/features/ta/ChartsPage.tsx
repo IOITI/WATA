@@ -11,12 +11,9 @@ import { api } from '@/lib/api'
 
 import { TaChart } from './chart/TaChart'
 import { LAYOUT_KEY, layoutFor } from './chart/workspace'
-import { assetTicker, chartsPath, chartsView, testableAssets, velaSymbol } from './chartLinks'
+import { chartsPath, chartsView, fallbackSymbol, velaSymbol } from './chartLinks'
 import { useLibraryResolver } from './editor/useScriptCheck'
 import { parseTicker, tickerText } from './engine/tickers'
-
-/** What a chart opens on without a word from its address or its layout: the live index first. */
-const PREFERENCE = ['capital', 'dukascopy', 'saxo'] as const
 
 export function ChartsPage() {
   const { timezone } = useSession()
@@ -34,15 +31,7 @@ export function ChartsPage() {
   })
   const assetsQuery = useQuery({ queryKey: ['data-assets', 'all'], queryFn: () => api.dataAssets('all'), staleTime: 60_000 })
 
-  const fallback = useMemo(() => {
-    const assets = testableAssets(assetsQuery.data?.items ?? [])
-    for (const provider of PREFERENCE) {
-      const asset = assets.find((candidate) => candidate.provider === provider && candidate.role !== 'turbo')
-      const ticker = asset ? assetTicker(asset) : null
-      if (ticker) return velaSymbol(ticker)
-    }
-    return 'capital:CAPITAL_US100'
-  }, [assetsQuery.data])
+  const fallback = useMemo(() => fallbackSymbol(assetsQuery.data?.items ?? []), [assetsQuery.data])
 
   // What the page opened on goes into the saved layout before the chart is built; later
   // addresses are followed by the chart itself.

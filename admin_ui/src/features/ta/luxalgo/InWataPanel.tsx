@@ -14,7 +14,7 @@ import { api } from '@/lib/api'
 import type { LuxAlgoKnown, LuxAlgoVerdict } from '@/lib/types'
 
 import { COMPAT_LABEL, COMPAT_TONE, compatSaid, knowsNothing } from './luxalgoModel'
-import { useLuxAlgoChecks } from './useLuxAlgo'
+import { useIndicatorCheck, useLuxAlgoChecks } from './useLuxAlgo'
 
 function Verdict({ verdict }: { verdict?: LuxAlgoVerdict | null }) {
   if (!verdict) return null
@@ -30,8 +30,7 @@ export function InWataPanel({ slug, known }: { slug: string; known: LuxAlgoKnown
   const toast = useToast()
   const queryClient = useQueryClient()
   const checks = useLuxAlgoChecks()
-  // Its newest check, once one asked here is done: the indicator's own answer is read once.
-  const compat = checks.data?.items.find((item) => item.slug === slug) ?? known.compat
+  const compat = useIndicatorCheck(slug, known.compat)
   const available = !!checks.data?.checks.available
   const queued = !!checks.data?.checks.queued?.includes(slug) || checks.data?.checks.checking === slug
   const check = useMutation({

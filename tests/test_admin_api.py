@@ -940,6 +940,11 @@ def test_responses_carry_security_headers(anonymous):
 
     assert response.status_code == 200
     assert "default-src 'self'" in response.headers["content-security-policy"]
+    # The one other origin anything is loaded from: LuxAlgo's preview pictures, images alone.
+    directives = dict(part.strip().split(" ", 1) for part in response.headers["content-security-policy"].split(";"))
+    assert directives["img-src"] == "'self' data: https://luxalgo-production.s3.amazonaws.com"
+    assert [name for name, sources in directives.items() if "https:" in sources] == ["img-src"]
+    assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["cache-control"] == "no-store"

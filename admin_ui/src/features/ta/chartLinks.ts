@@ -57,4 +57,18 @@ export function testableAssets(assets: DataAsset[]): DataAsset[] {
   return assets.filter((asset) => assetTicker(asset) && !(asset.role === 'turbo' && asset.status === 'ended'))
 }
 
+/** What a chart opens on without a word from its address or its layout: the live index first. */
+const PREFERENCE: ProviderId[] = ['capital', 'dukascopy', 'saxo']
+
+/** The Vela symbol a chart opens on among the assets: the first index of the preferred provider. */
+export function fallbackSymbol(assets: DataAsset[]): string {
+  const testable = testableAssets(assets)
+  for (const provider of PREFERENCE) {
+    const asset = testable.find((candidate) => candidate.provider === provider && candidate.role !== 'turbo')
+    const ticker = asset ? assetTicker(asset) : null
+    if (ticker) return velaSymbol(ticker)
+  }
+  return 'capital:CAPITAL_US100'
+}
+
 export { velaSymbol }

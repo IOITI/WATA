@@ -32,7 +32,6 @@ export function LuxAlgoConceptPage() {
     <div className="space-y-6">
       <PageHeader
         title={found?.name ?? 'Concept'}
-        parents={[{ label: 'LuxAlgo Library', href: LUXALGO_PATH }]}
         description={
           found?.family
             ? `A concept of ${familyName(families.data?.families, found.family)}${found.cluster ? ` (${found.cluster})` : ''}.`

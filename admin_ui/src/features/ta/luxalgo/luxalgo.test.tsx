@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from 'ioiti-ui'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
   AgentState,
+  DataAsset,
   LuxAlgoCompat,
   LuxAlgoIndicator,
   LuxAlgoKnown,
@@ -17,12 +18,22 @@ import type {
   Session,
   TaScriptSummary,
 } from '@/lib/types'
+import { engines, resetVela, velas } from '@/test/fakeVela'
 import { WithTrail } from '@/test/WithTrail'
 
 import { IndicatorsPage } from '../IndicatorsPage'
 import { LuxAlgoConceptPage } from './LuxAlgoConceptPage'
 import { LuxAlgoIndicatorPage } from './LuxAlgoIndicatorPage'
 import { LuxAlgoPage } from './LuxAlgoPage'
+
+vi.mock('@luxalgo/vela', async () => (await import('@/test/fakeVela')).fakeVelaCore)
+vi.mock('@luxalgo/vela-pinets', async () => (await import('@/test/fakeVela')).fakeVelaPinets)
+// CodeMirror needs a laid-out page: the editor is a plain text box here (the browser checks see the real one).
+vi.mock('@/features/ta/editor/PineEditor', () => ({
+  PineEditor: ({ value, label, readOnly }: { value: string; label: string; readOnly?: boolean }) => (
+    <textarea aria-label={label} value={value} readOnly={readOnly} onChange={() => undefined} />
+  ),
+}))
 
 const SESSION: Session = {
   authenticated: true,
@@ -46,6 +57,7 @@ const INDICATOR: LuxAlgoIndicator = {
   date_displayed: '2026-04-19',
   url: 'https://www.luxalgo.com/library/indicator/tri-star/',
   concepts: [{ slug: 'tri-star', name: 'tri-star', primary: true }],
+  image_url: 'https://luxalgo-production.s3.amazonaws.com/library/cards/tri-star-6cd8deca7e.png',
   code: { available: true },
   known: { slug: 'tri-star', scripts: [], verdict: null, compat: null, runs: [], rules: [] },
 }
@@ -55,6 +67,13 @@ const PART: LuxAlgoSource = {
   licence: 'CC BY-NC-SA 4.0', owner: 'LuxAlgo',
 }
 const WHOLE: LuxAlgoSource = { ...PART, complete: true, source: `${HEADER}//@version=6\nindicator("Tri-star")\nplot(close)` }
+
+// The assets a chart can be drawn on: an index of two providers, and a turbo, which is not offered.
+const ASSETS = [
+  { provider: 'capital', key: 'US100', ref: 'capital/US100', role: 'underlying', status: 'live', description: 'US Tech 100', symbol: 'US100' },
+  { provider: 'dukascopy', key: 'us100', ref: 'dukascopy/us100', role: 'underlying', status: 'history', description: 'Nasdaq 100', symbol: 'us100' },
+  { provider: 'saxo', key: '12', ref: 'saxo/12', role: 'turbo', status: 'live', description: 'Turbo long', symbol: 'T1' },
+] as unknown as DataAsset[]
 
 let status: LuxAlgoStatus = SIGNED_OUT
 let source: LuxAlgoSource = PART
@@ -99,7 +118,10 @@ function serve() {
         const page = Number(url.searchParams.get('page') ?? 0)
         return json({
           total: 30, page, page_size: 24,
-          indicators: [{ slug: page ? 'older-one' : 'tri-star', name: page ? 'Older one' : 'Tri-star', family: 'patterns', description: 'Three doji.' }],
+          indicators: [{
+            slug: page ? 'older-one' : 'tri-star', name: page ? 'Older one' : 'Tri-star', family: 'patterns', description: 'Three doji.',
+            image_url: page ? undefined : INDICATOR.image_url,
+          }],
         })
       }
       if (url.pathname === '/api/luxalgo/search') {
@@ -108,6 +130,7 @@ function serve() {
           { kind: 'indicator', slug: 'ai-supertrend', name: 'AI Supertrend', family: 'trend', description: 'Clusters.' },
         ] })
       }
+      if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', items: ASSETS })
       if (url.pathname === '/api/luxalgo/indicators/tri-star') return json(indicator)
       if (url.pathname === '/api/luxalgo/known') return json({ items: known })
       if (url.pathname === '/api/luxalgo/compat' && method === 'POST') {
@@ -189,6 +212,7 @@ afterEach(() => {
   known = []
   checked = []
   agent = null
+  resetVela()
   vi.unstubAllGlobals()
 })
 
@@ -197,6 +221,10 @@ describe('the LuxAlgo Library page', () => {
     const user = userEvent.setup()
     renderAt('/ta/luxalgo')
     expect(await screen.findByRole('link', { name: 'Tri-star' })).toHaveAttribute('href', '/ta/luxalgo/indicators/tri-star')
+    // LuxAlgo's picture of it, loaded from LuxAlgo's image host.
+    const card = screen.getByRole('link', { name: 'Tri-star' }).closest('li')!
+    expect(card.querySelector('img')).toHaveAttribute('src', INDICATOR.image_url)
+    expect(card.querySelector('img')).toHaveAttribute('alt', "LuxAlgo's picture of Tri-star")
     expect(screen.getByText(/A free LuxAlgo account is enough/)).toBeInTheDocument()
     expect(screen.getByText('Page 1 of 2')).toBeInTheDocument()
 
@@ -214,6 +242,8 @@ describe('the LuxAlgo Library page', () => {
     await user.click(screen.getByRole('button', { name: 'Search' }))
     expect(await screen.findByRole('link', { name: 'Supertrend' })).toHaveAttribute('href', '/ta/luxalgo/concepts/supertrend')
     expect(screen.getByRole('link', { name: 'AI Supertrend' })).toHaveAttribute('href', '/ta/luxalgo/indicators/ai-supertrend')
+    // A search names no picture: its card has a stand-in.
+    expect(screen.getByRole('link', { name: 'AI Supertrend' }).closest('li')!.querySelector('img')).toBeNull()
     expect(sent.some((request) => request.path === '/api/luxalgo/search?query=supertrend&limit=40')).toBe(true)
   })
 
@@ -283,11 +313,67 @@ describe("an indicator's page", () => {
     expect(await screen.findByRole('link', { name: /Open on Vela/ })).toHaveAttribute('href', PART.chart_url)
   })
 
-  it('refuses to take a part of its source, and says why', async () => {
+  it('refuses to take a part of its source, says why, and shows LuxAlgo\'s picture where the chart would be', async () => {
+    const user = userEvent.setup()
     renderAt('/ta/luxalgo/indicators/tri-star')
-    // In the source's panel, and in the hint of the button it disables.
-    expect((await screen.findAllByText(/LuxAlgo gives 3 of its 201 lines to an admin not signed in/)).length).toBe(2)
+    // In the hint of the button it disables.
+    expect((await screen.findAllByText(/LuxAlgo gives 3 of its 201 lines to an admin not signed in/)).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Take as my script' })).toBeDisabled()
+    const chart = screen.getByRole('heading', { name: 'On a chart' }).closest('section')!
+    expect(within(chart).getByRole('img', { name: "LuxAlgo's picture of Tri-star" })).toHaveAttribute('src', INDICATOR.image_url)
+    expect(within(chart).getByText(/Sign in to LuxAlgo to run it on WATA's bars/)).toBeInTheDocument()
+    expect(velas).toHaveLength(0)
+    const glance = screen.getByRole('heading', { name: 'At a glance' }).closest('section')!
+    expect(within(glance).getByText('3 of 201 lines, signed out')).toBeInTheDocument()
+
+    // Its first lines in the source's tab, read only, with the note (said in the hint already).
+    const noted = screen.getAllByText(/sign in to LuxAlgo on the Library's page to read it whole/).length
+    await user.click(screen.getByRole('link', { name: 'Pine source' }))
+    expect(screen.getByTestId('address')).toHaveTextContent('/ta/luxalgo/indicators/tri-star?tab=source')
+    const code = await screen.findByRole('textbox', { name: 'Pine source of Tri-star' })
+    expect(code).toHaveValue(PART.source)
+    expect(code).toHaveAttribute('readonly')
+    expect(screen.getAllByText(/sign in to LuxAlgo on the Library's page to read it whole/)).toHaveLength(noted + 1)
+  })
+
+  it('runs a whole source on a chart of WATA\'s bars, taking nothing, and says where it fails', async () => {
+    status = { ...SIGNED_OUT, signed_in: true, account: 'me@example.com' }
+    source = WHOLE
+    const user = userEvent.setup()
+    renderAt('/ta/luxalgo/indicators/tri-star')
+    await waitFor(() => expect(velas).toHaveLength(1))
+    const [first] = velas
+    // On the index the Charts page opens on, five-minute bars, not live.
+    expect(first.options).toMatchObject({ symbol: 'capital:CAPITAL_US100', timeframe: '5', live: false })
+    await waitFor(() => expect(first.indicators[0]?.source).toContain('indicator("Tri-star")'))
+    expect(first.indicators[0].options).toMatchObject({ id: 'luxalgo', title: 'Tri-star' })
+    // The indices alone are offered, no turbo.
+    const asset = screen.getByRole('combobox', { name: /^Asset/ })
+    expect(within(asset).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'US Tech 100 · Capital.com', 'Nasdaq 100 · Dukascopy',
+    ])
+
+    // Another length of bars: built again, the chart before ended with its worker.
+    await user.selectOptions(screen.getByRole('combobox', { name: /^Bars/ }), '15')
+    await waitFor(() => expect(velas).toHaveLength(2))
+    expect(velas[1].options.timeframe).toBe('15')
+    expect(first.destroyed).toBe(true)
+    expect(engines[0].terminated).toBe(true)
+    act(() => velas[1].emit('indicator:error', { error: new Error('Undeclared identifier') }))
+    expect(await screen.findByText('It did not run on these bars: Undeclared identifier')).toBeInTheDocument()
+    // Nothing was sent to take or save it.
+    expect(sent.filter((request) => request.method !== 'GET')).toEqual([])
+    const glance = screen.getByRole('heading', { name: 'At a glance' }).closest('section')!
+    expect(within(glance).getByText('Whole, 201 lines')).toBeInTheDocument()
+    expect(within(glance).getByRole('link', { name: /Open on Vela/ })).toHaveAttribute('href', WHOLE.chart_url)
+  })
+
+  it('names its place in the trail once', async () => {
+    renderAt('/ta/luxalgo/indicators/tri-star')
+    await screen.findByRole('heading', { name: 'Tri-star', level: 1 })
+    const trail = screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0]
+    expect(trail).toHaveTextContent(/Technical Analysis.*LuxAlgo Library.*Tri-star/)
+    expect(within(trail).getAllByText('LuxAlgo Library')).toHaveLength(1)
   })
 
   it('takes a whole source as your script and opens it', async () => {
@@ -312,7 +398,7 @@ describe("an indicator's page", () => {
   it('says what WATA knows of it, and checks it again when asked', async () => {
     indicator = { ...INDICATOR, known: KNOWN }
     const user = userEvent.setup()
-    renderAt('/ta/luxalgo/indicators/tri-star')
+    renderAt('/ta/luxalgo/indicators/tri-star?tab=wata')
     const panel = (await screen.findByRole('heading', { name: 'In WATA' })).closest('section')!
     expect(within(panel).getByRole('link', { name: 'Tri-star, mine' })).toHaveAttribute('href', '/ta/indicators/0123456789ab')
     expect(within(panel).getByRole('link', { name: 'Tri-star, a week' })).toHaveAttribute('href', '/backtests/20261030-101010-abcdef')
@@ -350,6 +436,10 @@ describe("a concept's page", () => {
     // Its own title is the page's heading alone.
     expect(screen.getAllByRole('heading', { name: 'Tri-star' })).toHaveLength(1)
     expect(screen.getByRole('link', { name: 'Tri-star' })).toHaveAttribute('href', '/ta/luxalgo/indicators/tri-star')
+
+    const trail = screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0]
+    expect(trail).toHaveTextContent(/Technical Analysis.*LuxAlgo Library.*Tri-star/)
+    expect(within(trail).getAllByText('LuxAlgo Library')).toHaveLength(1)
 
     await user.click(screen.getByRole('link', { name: 'Its indicators' }))
     expect(await screen.findByText('Indicators of tri-star')).toBeInTheDocument()
