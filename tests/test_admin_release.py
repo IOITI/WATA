@@ -132,6 +132,8 @@ def test_what_waits_is_said_once_a_day_after_the_close(release):
 
 @pytest.fixture
 def client_with(config_path, tmp_path):
+    opened = []
+
     def made(ctx_status=None, **overrides):
         ctx = make_ctx(config_path, tmp_path, **overrides)
         path = tmp_path / "release" / "status.json"
@@ -140,10 +142,15 @@ def client_with(config_path, tmp_path):
         ctx.release = Release(str(path), str(tmp_path / "requests"), str(tmp_path / "announced.json"))
         client = make_client(ctx, tmp_path / "no-interface")
         client.__enter__()
+        opened.append(client)
         assert client.post("/api/session", json={"password": PASSWORD}, headers=SAME_ORIGIN).status_code == 204
         return ctx, client
 
-    return made
+    yield made
+    # Each admin closed with its test: one left open ran its release watcher for the rest of the session, whose
+    # asyncio.sleep(5) landed in another test's patched sleep (tests/test_async_services.py, CI of 2026-10-31).
+    for client in opened:
+        client.__exit__(None, None, None)
 
 
 def test_the_page_reads_the_status_and_what_holds_each_waiting_container_back(client_with, monkeypatch):
