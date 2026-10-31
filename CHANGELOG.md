@@ -2,7 +2,7 @@
 
 ## v0.73.0 - A page for each signal rule
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 A rule goes from shadow to live on evidence, and that evidence was spread over the Signal rules list, its journal and comparison panels, Paper trading, the Engine monitor and the AI agent. Each rule now has its own page, `/ta/signals/<id>`, where it is all gathered, and every link to a rule leads there: its name on the list, the hover card, ⌘K, the AI agent's subjects, verdicts, proposals and artefacts, and LuxAlgo's In WATA.
 - **What it runs**: its script and version (and a newer one saved), libraries, asset, side and bars, days of history, what its alerts become, when it was made (and by Claude) and since when it is in its mode.
