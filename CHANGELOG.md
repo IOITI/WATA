@@ -2,7 +2,7 @@
 
 ## v0.69.0 - Things attached to a conversation with the AI agent: WATA's own, and files of your computer
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 A conversation was about one thing, chosen on that thing's own page, and the AI agent's page started with nothing: it said to go to the item first. A conversation, any of its later requests and a research task can now be given what to work on, from where they are asked.
 
@@ -41,7 +41,7 @@ A conversation was about one thing, chosen on that thing's own page, and the AI 
 
 ## v0.68.0 - The AI agent's research comes back: routines, and questions it asks you mid-task
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 A research task was asked by hand, once, and went on alone without a way to ask anything: it guessed, or stopped. The agent now has routines that come back by themselves, and a task may stop on a question to you.
 
@@ -71,7 +71,7 @@ A research task was asked by hand, once, and went on alone without a way to ask 
 
 ## v0.67.0 - The AI agent on signal rules: a go-live dossier, new rules proposed, and changes reviewed before they are saved
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 The AI agent could not be asked about a signal rule from its row, said nothing of whether a rule in shadow was ready to go live, and saw a change of the configuration, a rule or a script only once it was saved. It now argues a rule's case for going live, proposes rules of your own, and reviews a change before you save it.
 
@@ -103,7 +103,7 @@ The AI agent could not be asked about a signal rule from its row, said nothing o
 
 ## v0.66.0 - The AI agent watches live trading: a morning briefing, alerts triaged, and actions it may propose
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 The AI agent worked when asked, and once a day after the close. It now writes a briefing before the open, looks into an alert as it fires, and may propose an action on live trading, which only the operator's click applies, through the page's own confirmation.
 
@@ -143,7 +143,7 @@ The AI agent worked when asked, and once a day after the close. It now writes a 
 
 ## v0.65.0 - The AI agent reads more of the admin, says its answers on Telegram, and shows its verdicts and charts
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 The AI agent read the health and the logs of the admin, and nothing else of how WATA traded at that moment; what it concluded stayed in its conversations, and only the daily debrief reached Telegram. It now reads trading as the dashboard does and what changed before an incident, says what it was asked to on Telegram once written, and leaves its verdict where the thing it judged is shown.
 
