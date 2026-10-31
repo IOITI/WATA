@@ -2,7 +2,7 @@
 
 ## v0.72.0 - LuxAlgo's indicators seen: their pictures in the Library, a chart on each page, the source in colour
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 You found four things to correct in the LuxAlgo Library and the AI agent's menu.
 
