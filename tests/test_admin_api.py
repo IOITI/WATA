@@ -192,8 +192,21 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/apply"),
     ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/preview"),
     ("POST", "/api/agent/tasks"),
+    ("POST", "/api/agent/files"),
+    ("DELETE", "/api/agent/files/f0123456789"),
+    ("GET", "/api/agent/conversations/20261028-101500-a1b2c3/files/f0123456789"),
     ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/task/stop"),
     ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/proposals/p0a1b2c3d/dismiss"),
+    ("GET", "/api/agent/verdicts"),
+    ("POST", "/api/agent/reviews/config"),
+    ("POST", "/api/agent/reviews/rule"),
+    ("POST", "/api/agent/reviews/script"),
+    ("GET", "/api/agent/routines"),
+    ("POST", "/api/agent/routines"),
+    ("PUT", "/api/agent/routines/r0a1b2c3d"),
+    ("DELETE", "/api/agent/routines/r0a1b2c3d"),
+    ("POST", "/api/agent/routines/r0a1b2c3d/run"),
+    ("POST", "/api/agent/conversations/20261028-101500-a1b2c3/task/answer"),
     ("GET", "/api/agent/artefacts"),
     ("GET", "/api/agent/memory"),
     ("POST", "/api/agent/memory"),
@@ -533,9 +546,9 @@ class FakeQueries:
         self.calls.append(("exits", start, end))
         return {"summary": {"trade_count": 0}, "by_reason": [], "by_hour": [], "by_holding_time": []}
 
-    async def report(self, milestones_eur=None):
-        self.calls.append(("report", milestones_eur))
-        return {"report_date": "2026-10-12", "has_trade_history": False, "balance_history": []}
+    async def report(self, milestones_eur=None, today=None):
+        self.calls.append(("report", milestones_eur, *([today] if today is not None else [])))
+        return {"report_date": str(today or "2026-10-12"), "has_trade_history": False, "balance_history": []}
 
     async def list_orders(self, start=None, end=None, limit=500):
         self.calls.append(("list_orders", start, end, limit))
@@ -749,7 +762,9 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{number}", "1")
             .replace("{conversation_id}", "20261028-101500-a1b2c3")
             .replace("{proposal_id}", "p0a1b2c3d")
-            .replace("{entry}", "range-ticks"),
+            .replace("{entry}", "range-ticks")
+            .replace("{routine_id}", "r0a1b2c3d")
+            .replace("{file_id}", "f0123456789"),
         )
         for route in app.routes
         if route.path.startswith("/api")
@@ -1799,6 +1814,10 @@ def test_journal_exits_and_report_pass_their_filters(client, ctx):
     assert (exits["from"], exits["to"], exits["timezone"]) == ("2026-09-01", "2026-09-30", "Europe/Paris")
     assert report["report_date"] == "2026-10-12"
     assert ctx.queries.calls[-1] == ("report", None)
+    # As of a day the AI agent links to; a day to come is refused.
+    assert client.get("/api/report?day=2026-10-07").json()["report_date"] == "2026-10-07"
+    assert ctx.queries.calls[-1][2].isoformat() == "2026-10-07"
+    assert client.get("/api/report?day=2099-01-01").status_code == 422
 
 
 def test_watchlist_lists_what_would_be_bought_per_indice_and_direction(client):

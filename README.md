@@ -1185,6 +1185,15 @@ Forty-three tools, in groups: `status`; the data (`data_assets`, `data_coverage`
 
 The admin can hand a backtest run or a Pine script to Claude, through the Claude API, from its own pages. "Ask the AI agent" on a run's page, or in the script editor, opens a panel beside it: ask Claude to analyse it, to run backtests with other settings, to say what it would change. The same panel asks **why**, beside the live trading: a position (Positions, and a refusal of Saxo on Orders), a signal of the journal (Signals), a trading day (Report) and an entry of the health that is not OK (System). The **AI agent** section of the menu lists every conversation with what it did and cost, and what it made; it also starts **research tasks** the agent works on alone, and keeps its **daily debriefs**. The agent works on the server: a request goes on when the page is closed, and after a restart of the admin.
 
+### What you give it
+
+A new conversation, any later request of one, and a research task can be given things to work on: the **paperclip** beside the field attaches them, and a file can also be dropped on the field or pasted into it (a screenshot). Five at most in a conversation, the page's own subject counted.
+
+- **WATA's things**, searched as the ⌘K palette searches: backtest runs, scripts (at their current version), signal rules, positions (a number typed finds one), the last week's signals, the last month's trading days (a date typed finds one), the health's entries that are not OK. Each is shared with the agent as its own page shares it.
+- **Files of your computer**: an image (PNG, JPEG, GIF, WebP), scaled in the browser to the largest the Claude API reads (2576 px on its long edge); a PDF of 5 MB at most; a text (CSV, TSV, .pine, .txt, .json, .md) of 200 kB at most, cleaned of what looks like a secret before it is kept. Each is uploaded as it is chosen, kept with its conversation and sent with each of its requests; an image or a PDF goes to Anthropic as it is. A model the Models API says reads no image is not sent one.
+
+Each request shows what it shared, and a conversation is listed beside each thing it holds: the panel beside a run lists those that attached it later.
+
 ### What it may do
 
 It has the research tools of Claude Code's endpoint (above), under the same limits, run inside the admin: it reads the runs, the scripts, the recorded prices and WATA's own signals, trades and orders (a position whole, with Saxo's answer to each request; a period's refusals by code and hour; never a request's body); it runs Pine studies, saves scripts of its own, keeps shadow rules of its own once Claude's are switched on (never live), and keeps the experiment journal; it starts backtests (stress tests and checks included) up to each request's limit. It reads the admin's health, and, unless `read_logs` is off, a service's log lines around a moment, cleaned of secrets as the Logs page shows them. Its runs and scripts carry the "Claude" badge, and its runs say which conversation made them.
@@ -1212,6 +1221,27 @@ The agent keeps what a later conversation needs as **entries of its memory** (`m
 
 - **A research task** (AI agent › New research task): a goal, and a budget of dollars, backtests and hours (each at most `max_task_usd`, `max_task_backtests`, `max_task_hours`). The agent works on it alone, request after request, each within what is left, until it says it is done with its conclusion, the runs it kept and what to try next, or its dollars or hours are spent. Its conversation shows what it spent of each and its conclusion; **Stop the task** ends it between two tool calls. What it proposes waits for you, as in any conversation. The bell says when it ends, not at each of its requests.
 - **The daily debrief** (`debrief_enabled`, off by default): each trading day, once the market is closed, an account of the day (its trades, its signals, what Saxo refused, the day traded on paper) written by `debrief_model` within `debrief_max_usd`, starting no backtest, kept as a conversation marked "Daily debrief"; its first lines go to Telegram (`debrief_telegram`). A day without a signal, a trade or a request to Saxo costs nothing. The pause, a missing key or a spent month hold it back, and it is written once they no longer do.
+
+### Watching live trading with you
+
+- **What it reads of the admin**: besides the health and the logs, trading as the dashboard reads it (the US market's day, a release's window, the pause, Saxo's login, the day's figures against their limits, the open positions), what changed in a window (config.json's saves key by key, masked; your actions, without your address; the last deploy), the Engine monitor's last minutes, and what waits to be deployed. An incident it is asked about comes with what changed in the two hours before it.
+- **The morning briefing** (`briefing_enabled`, off by default): before each trading day's start (`briefing_minutes_before`, 30 by default, in the market's own hours), the day ahead in a few lines, kept marked "Morning briefing" and said on Telegram. A day the US market is closed gets one line, without a call to the API.
+- **Alert triage** (`triage_enabled`, off by default, read at the admin's start): as an alert fires (a sale Saxo keeps refusing, a service of the trading path down in trading hours, the live trading leaving its paper range, Saxo's login, the account guard's pause), the agent opens the incident, reads what bears on it and says its diagnosis on Telegram, with at most one action proposed. Once an hour an alert, `triage_max_per_day` in all, one at a time; never a service's state during a deploy or a restart. While it is on, the admin watches its state whether a page is open or not.
+- **Actions it may propose** (`action_proposals`, on): pausing or resuming new entries, closing a position, restarting services, taking one of your rules live or out of live. Each is a card under its answer whose button opens the page's own confirmation (the dashboard's pause, the position's close, System's restart with what holds it back, the rule's switch with its readiness): the route keeps every check, and its audit entry says the agent proposed it. After 30 minutes the card leads to the page instead.
+- **Its verdict where you look**: once it concluded on a run, a rule, a day or a position, a line on that page (the run's, the rule's row, the Report's day, the position's row), with a link to the conversation. The Report opens on the day the agent's links name.
+- **Charts** under its answers, from the figures its tools gave, where they come from said under each.
+- **"Tell me on Telegram"**, beside the model, and on a research task's form: its answer's first lines, or the task's conclusion, said once written.
+
+### Signal rules, and changes before they are saved
+
+- **Ask about a rule** from its row on Signal rules. "Is it ready to go live?" writes its go-live dossier (paper days against its reference, its report, its reference under worse fills, TradingView's signals beside its own, the engine, its readiness) and sets its verdict on the rule's row and its go-live dialog. With `dossier_when_ready` (off by default) it writes it itself, once a rule of yours meets its readiness.
+- **New rules**: it may propose a rule of yours, in shadow or off, running one of your scripts, resting on runs: you create it, or not.
+- **Review before save**: "Ask the AI agent first" on the Configuration page's review and on a rule's review step, "Ask about this draft" in the script editor. It tests what a backtest can test against what runs now, and says whether the data supports the change; nothing is saved, and a fix of a draft is put in your editor, unsaved.
+
+### Routines, and questions
+
+- **Routines** (AI agent › Routines): research tasks that come back each trading day once its hours are over, or each week at a day and time, the market closed, within their budget and the month's (`max_routines`, 10). Run now, switch off, change or remove one.
+- **A research task may ask you** a question when your answer would change what it does next: on the bell, on Telegram and on its page, with its choices. Its hours wait with it; unanswered for two days, it ends.
 
 ### Choosing the model, and the context window
 
@@ -1251,6 +1281,19 @@ A model reads the notes of some others only: Opus 5.5 reads Sonnet 5.5's and Hai
 | `debrief_max_usd` | `0.5` | What one debrief may cost (0.1 to 5) |
 | `debrief_telegram` | `true` | Its first lines said on Telegram once written |
 | `memory` | `true` | Whether it keeps and reads its memory (AI agent › Memory): off, its entries are kept and Claude Code still reads them |
+| `briefing_enabled` | `false` | A briefing of the day ahead before each trading start |
+| `briefing_model`, `briefing_effort` | `claude-haiku-5-5`, `low` | What writes it |
+| `briefing_max_usd` | `0.3` | What one briefing may cost (0.05 to 2) |
+| `briefing_minutes_before` | `30` | How long before the trading start it is written (5 to 240) |
+| `briefing_telegram` | `true` | Its first lines said on Telegram |
+| `triage_enabled` | `false` | Alerts triaged as they fire (read at the admin's start) |
+| `triage_model`, `triage_effort` | `claude-sonnet-5-5`, `medium` | What triages them |
+| `triage_max_usd` | `0.5` | What one triage may cost (0.1 to 5) |
+| `triage_max_per_day` | `6` | Triages a day at most (1 to 30) |
+| `triage_telegram` | `true` | Its diagnosis said on Telegram |
+| `action_proposals` | `true` | Whether it may propose actions on live trading, applied by your click alone |
+| `dossier_when_ready` | `false` | A go-live dossier written by itself once a rule of yours in shadow is ready |
+| `max_routines` | `10` | Routines kept at most (1 to 50) |
 
 `admin.persistant.agent_path` (`/app/var/lib/admin/agent`) is where its conversations are kept, inside the admin's own folder.
 

@@ -7,8 +7,13 @@ import {
   activitySummary,
   answerOf,
   aboutParam,
+  actionFresh,
+  actionPage,
+  actionSaid,
   askAbout,
   askRefusal,
+  chartPoints,
+  chartValue,
   choiceOf,
   contextItems,
   contextTone,
@@ -33,9 +38,14 @@ import {
   stepTitle,
   taskDefaults,
   taskShares,
+  tellSaid,
   tokensText,
   toolsOf,
   unreadBy,
+  verdictBefore,
+  verdictLink,
+  verdictSubject,
+  verdictTone,
   workingOf,
   writersOf,
   writingTitle,
@@ -177,6 +187,11 @@ describe('an answer', () => {
       ['Run r9', '/backtests/r9'],
       ['Slower line', '#proposal-p1'],
     ])
+    // Each kind of proposal says itself, a change of settings no longer called a rule's.
+    const settings = sourcesOf(request({ proposals: ['p3'] }), [
+      { id: 'p3', kind: 'settings', request: 0, created_at: 'x', status: 'proposed', title: 'Tighter stop', rationale: 'r' },
+    ])
+    expect(settings.at(-1)?.snippet).toBe('A change of settings, proposed')
   })
 
   it('counts the tools it used with their states', () => {
@@ -362,6 +377,25 @@ describe('the tools of the live trading, the proposals and the tasks, as their s
     expect(stepTitle('task_done', {})).toBe('Said the task is done')
     expect(writingTitle('propose_new_script')).toBe('Proposing a new script')
   })
+
+  it('titles the reads of trading, the charts, the verdicts, the actions, the new rules and the questions', () => {
+    expect(stepTitle('ops_trading_now', {})).toBe('Read trading as the dashboard shows it')
+    expect(stepTitle('ops_changes', {})).toBe('Read what changed lately')
+    expect(stepTitle('ops_changes', { hours: 2 })).toBe('Read what changed in the last 2 h')
+    expect(stepTitle('ops_changes', { hours: 2, until: '2026-10-29 14:30' }))
+      .toBe('Read what changed in the 2 h before 2026-10-29 14:30')
+    expect(stepTitle('show_chart', { title: 'Its days' })).toBe('Drew a chart: Its days')
+    expect(stepTitle('set_verdict', { about: 'run:20261030-204011-442342' }))
+      .toBe('Said its verdict on run 20261030-204011-442342')
+    expect(stepTitle('set_verdict', { about: 'day:2026-10-29' })).toBe('Said its verdict on the day of 2026-10-29')
+    expect(stepTitle('propose_action', { title: 'Pause new entries' })).toBe('Proposed an action: Pause new entries')
+    expect(stepTitle('propose_new_rule', { name: 'Cross 5' })).toBe('Proposed a new rule: Cross 5')
+    expect(stepTitle('ask_operator', { question: 'Which days?' })).toBe('Asked you: Which days?')
+    for (const tool of ['ops_trading_now', 'ops_changes', 'ops_engine', 'ops_release', 'show_chart', 'set_verdict',
+      'propose_action', 'propose_new_rule', 'ask_operator']) {
+      expect(writingTitle(tool)).not.toMatch(/\?|Writing a call/)
+    }
+  })
 })
 
 describe('what it is doing', () => {
@@ -422,3 +456,63 @@ describe('what it is doing', () => {
   })
 })
 
+
+describe('what it shows on the pages', () => {
+  it('says what Telegram is told, or why it cannot be', () => {
+    expect(tellSaid({ ...STATE, telegram: false }, true)).toMatch(/^No Telegram bot is set/)
+    expect(tellSaid({ ...STATE, telegram: true }, false)).toBe('Say on Telegram the first lines of the answer, once it is written.')
+    expect(tellSaid(STATE, true, true)).toBe('Telegram says its conclusion, once the task ends.')
+  })
+
+  it('leads from a verdict to what it is on, and says one older than the thing\'s last change', () => {
+    expect(verdictLink('run:20261027-101010-abcdef')).toBe('/backtests/20261027-101010-abcdef')
+    expect(verdictLink('day:2026-10-28')).toBe('/report?day=2026-10-28')
+    expect(verdictLink('position:5001')).toBe('/positions?find=5001')
+    expect(verdictLink('rule:a1b2c3d4e5f6')).toBe('/ta/signals')
+    expect(verdictSubject('day:2026-10-28')).toBe('the day of 2026-10-28')
+    expect(verdictTone('negative')).toBe('danger')
+    expect(verdictBefore({ at: '2026-10-28T10:00:00Z' }, '2026-10-29T08:00:00Z')).toBe(true)
+    expect(verdictBefore({ at: '2026-10-28T10:00:00Z' }, null)).toBe(false)
+  })
+
+  it("gives a line chart each series' numbers, a gap as null, and its values with their unit", () => {
+    const points = chartPoints({
+      kind: 'line', title: 't', unit: '%', references: [], source: 's',
+      series: [{ key: 'run', label: 'Run' }, { key: 'random', label: 'Random' }],
+      points: [{ t: '2026-10-13', run: 1.5 }, { t: '2026-10-14', run: -0.25, random: 0.1 }],
+    })
+
+    expect(points).toEqual([{ t: '2026-10-13', run: 1.5, random: null }, { t: '2026-10-14', run: -0.25, random: 0.1 }])
+    expect(chartValue(1.5, '%')).toBe('1.50 %')
+    expect(chartValue(123.4, '€')).toBe('123 €')
+    expect(chartValue(12.34, null)).toBe('12.3')
+  })
+})
+
+describe('an action proposed', () => {
+  it('says what it does and where it is done by hand', () => {
+    expect(actionSaid({ kind: 'close_position', position_id: '5001', instrument_name: 'Turbo long' })).toBe('Close position 5001 (Turbo long)')
+    expect(actionSaid({ kind: 'restart', services: [{ id: 'trader', name: 'Trader' }, { id: 'web_server', name: 'Web server' },
+      { id: 'admin', name: 'Admin' }] })).toBe('Restart the trader, web server and admin')
+    expect(actionSaid({ kind: 'rule_out_of_live', rule: { id: 'r', name: 'Cross', mode: 'live', indice: 'us100' } }))
+      .toBe('Take Cross out of live')
+    expect(actionPage({ kind: 'resume_entries' })).toEqual({ to: '/', label: 'the dashboard' })
+    expect(actionPage({ kind: 'close_position', position_id: '5001' }).to).toBe('/positions?find=5001')
+  })
+
+  it('is applied from its card while fresh only', () => {
+    const now = Date.parse('2026-10-28T14:20:00Z')
+    expect(actionFresh({ fresh_until: '2026-10-28T14:30:00Z' }, now)).toBe(true)
+    expect(actionFresh({ fresh_until: '2026-10-28T14:10:00Z' }, now)).toBe(false)
+    expect(actionFresh({}, now)).toBe(false)
+  })
+})
+
+describe('a signal rule asked about', () => {
+  it('is read from the address and offered its dossier first', () => {
+    expect(subjectOf('rule:a1b2c3d4e5f6')).toEqual({ kind: 'rule', id: 'a1b2c3d4e5f6', label: 'a1b2c3d4e5f6' })
+    expect(presetsFor('rule')[0].label).toBe('Is it ready to go live?')
+    expect(subjectLink({ kind: 'rule', id: 'x', label: 'Cross' })).toBe('/ta/signals')
+    expect(subjectSaid({ kind: 'draft', id: 'x', label: 'a draft of Cross' })).toBe('To review: a draft of Cross')
+  })
+})

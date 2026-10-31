@@ -20,7 +20,7 @@ from src.admin.agent.loop import digest_of, prompt_for, request_params
 from src.admin.agent.prompts import MEMORY, SYSTEM_PROMPT
 from src.admin.agent.proposals import Proposals
 from src.admin.agent.store import ConversationStore
-from src.admin.agent.tools import AGENT_TOOLS, MEMORY_WRITES, OWN_TOOLS, AgentTools
+from src.admin.agent.tools import AGENT_TOOLS, GIVEN_OWN_TOOLS, MEMORY_WRITES, AgentTools
 from src.admin.agent_memory import Author, MemoryStore, UnknownEntry
 from src.admin.errors import InvalidRequest, NotPossible
 from src.logging_helper.redaction import forget_secrets, register_secret
@@ -235,7 +235,7 @@ def test_with_its_memory_the_agent_reads_it_as_claude_code_does_and_changes_it_w
         ("memory_forget", {"name": "range-ticks", "revision": 2, "why": "Said in the instructions already"}),
     )
 
-    assert names == [*AGENT_TOOLS, *OWN_TOOLS, *MEMORY_WRITES]
+    assert names == [*AGENT_TOOLS, *GIVEN_OWN_TOOLS, "show_chart", *MEMORY_WRITES]
     for definition in tools.definitions():
         for words in ("Claude Code", "the Mac", "job_wait", "CSV"):
             assert words not in definition["description"], (definition["name"], words)

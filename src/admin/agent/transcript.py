@@ -3,7 +3,8 @@ A conversation as the Claude API is sent it, and as the pages read it, from its
 files (src/admin/agent/store.py). Pure.
 
 - ``api_messages``: each line of the transcript as a message, an answer echoed
-  as the API asks after a fallback inside it (``echoed``);
+  as the API asks after a fallback inside it (``echoed``), a file the operator
+  attached made the API's block from its bytes (``file_block``);
 - ``runnable``: the tool calls of an answer to run, those of the model that
   answered last;
 - ``project``: a conversation for the pages, request by request, from its
@@ -12,6 +13,7 @@ files (src/admin/agent/store.py). Pure.
   window, part by part.
 """
 
+import base64
 import json
 
 FALLBACK = "fallback"
@@ -26,6 +28,11 @@ UNDER_WAY = ("queued", "running", "waiting")
 # shared (with the limits the admin adds), the tool calls, their results, the answers.
 KINDS = ("asked", "calls", "results", "answers")
 THINKING = ("thinking", "redacted_thinking")
+# A file the operator attached, as the transcript keeps it: the API's block is made from the file's bytes at each
+# request (``api_messages``), the same each time, so that the transcript holds no copy of it and the pages never
+# read one. What it becomes: an image, a PDF, or a text, each as the API takes it.
+FILE_BLOCK = "wata_file"
+SENT_AS = ("image", "document")
 
 
 def _last_fallback(content: list[dict]) -> int | None:
@@ -80,12 +87,34 @@ def notes_of(content: list[dict]) -> list[str]:
             if block.get("type") == "thinking" and (block.get("thinking") or "").strip()]
 
 
-def api_messages(lines: list[dict]) -> list[dict]:
+def file_block(entry: dict) -> dict:
+    """A file attached (src/admin/agent/uploads.py), as the transcript keeps it."""
+    return {"type": FILE_BLOCK, "file": entry["id"], "file_type": entry["type"], "media_type": entry["media_type"],
+            "name": entry["name"]}
+
+
+def _sent_file(block: dict, files) -> dict:
+    """A file attached as the API is sent it, from its bytes (``files``: its id -> its bytes, None once gone)."""
+    data = files(block.get("file")) if files is not None else None
+    if data is None:
+        return {"type": "text", "text": f"(The file {block.get('name')} is no longer kept.)"}
+    if block.get("file_type") == "text":
+        return {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": data.decode("utf-8")},
+                "title": block.get("name")}
+    encoded = base64.standard_b64encode(data).decode("ascii")
+    if block.get("file_type") == "pdf":
+        return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": encoded},
+                "title": block.get("name")}
+    return {"type": "image", "source": {"type": "base64", "media_type": block.get("media_type"), "data": encoded}}
+
+
+def api_messages(lines: list[dict], files=None) -> list[dict]:
     """
-    The transcript's lines as the API takes them: the answers echoed. A note of
-    the agent's side (a request's limits) is sent last or before an answer: one
-    that a request stopped before the API spoke left unanswered is not, and as
-    nothing the API answered came after it, nothing it answered changes.
+    The transcript's lines as the API takes them: the answers echoed, the files
+    attached made from their bytes (``files``: a file's id -> its bytes). A note
+    of the agent's side (a request's limits) is sent last or before an answer:
+    one that a request stopped before the API spoke left unanswered is not, and
+    as nothing the API answered came after it, nothing it answered changes.
     """
     messages = []
     for position, line in enumerate(lines):
@@ -96,8 +125,16 @@ def api_messages(lines: list[dict]) -> list[dict]:
                 continue
         if role == "assistant":
             content = echoed(content)
+        elif role == "user" and isinstance(content, list) and any(block.get("type") == FILE_BLOCK for block in content):
+            content = [_sent_file(block, files) if block.get("type") == FILE_BLOCK else block for block in content]
         messages.append({"role": role, "content": content})
     return messages
+
+
+def files_in(lines: list[dict]) -> int:
+    """How many files the operator attached the transcript holds."""
+    return sum(1 for line in lines if line.get("role") == "user" and isinstance(line.get("content"), list)
+               for block in line["content"] if block.get("type") == FILE_BLOCK)
 
 
 def shown(value, limit: int = SHOWN_INPUT_CHARS):
@@ -117,6 +154,7 @@ def _request(requests: dict, index) -> dict:
             "index": index, "prompt": "", "shared": None, "asked_at": None, "started_at": None, "ended_at": None,
             "status": "queued", "detail": None, "steps": [], "answer": None, "proposals": [], "runs": [],
             "cost_usd": 0.0, "feedback": None, "model": None, "effort": None, "by": None, "memory": [],
+            "charts": [], "verdicts": [], "attached": [],
         }
     return requests[index]
 
@@ -133,7 +171,9 @@ def project(meta: dict, activity: list[dict], proposals: dict, pending: dict | N
         at = event.get("at")
         if kind == "request":
             # by: the operator's address, or "task" for a research task's next request.
+            # attached: what was shared with it, a request of before having its subject alone (shared).
             request.update(prompt=event.get("prompt", ""), shared=event.get("shared"), asked_at=at,
+                           attached=event.get("attached") or ([event["shared"]] if event.get("shared") else []),
                            model=event.get("model"), effort=event.get("effort"), by=event.get("by"))
         elif kind == "started":
             request.update(status="running", started_at=request["started_at"] or at)
@@ -166,6 +206,11 @@ def project(meta: dict, activity: list[dict], proposals: dict, pending: dict | N
             request["proposals"].append(event.get("id"))
         elif kind == "memory":
             request["memory"].append({"name": event.get("name"), "action": event.get("action")})
+        elif kind == "chart":
+            # Drawn under the answer, in the order asked (show_chart).
+            request["charts"].append({**(event.get("chart") or {}), "id": event.get("id")})
+        elif kind == "verdict":
+            request["verdicts"].append({key: event.get(key) for key in ("about", "tone", "line")})
         elif kind == "answer":
             request["answer"] = {"text": event.get("text", ""), "model": event.get("model"),
                                  "stop_reason": event.get("stop_reason")}
@@ -226,6 +271,17 @@ def ending_with_operator(messages: list[dict], block: dict) -> list[dict]:
         last = messages[-1]
         return [*messages[:-1], {**last, "content": [*_blocks(last["content"]), block]}]
     return [*messages, {"role": "user", "content": [block]}]
+
+
+def without_files(messages: list[dict]) -> list[dict]:
+    """The conversation without the files attached: what tells how many tokens they hold."""
+    stripped = []
+    for message in messages:
+        if message["role"] == "user" and isinstance(message["content"], list):
+            kept = [block for block in message["content"] if block.get("type") not in SENT_AS]
+            message = {**message, "content": kept or [{"type": "text", "text": "."}]}
+        stripped.append(message)
+    return stripped
 
 
 def without_thinking(messages: list[dict]) -> list[dict]:
@@ -298,29 +354,34 @@ def _shares(tokens: int, sizes: dict) -> dict:
 
 def context_view(*, model: str, label: str, window: int, answer_room: int, tools: int, counted: dict | None,
                  base: dict | None, composition: dict, last: dict | None, thinking_written: int, unread: list[str],
-                 clearing: dict) -> dict:
+                 clearing: dict, files: int = 0) -> dict:
     """
     The next request in the model's context window, part by part. The system
     prompt, the tools and the conversation's thinking are counted by the API
     (``base``, ``counted``); the rest of the conversation is split by its
-    length (``estimated``). Without the API's counts, the last answer's prompt
-    and output stand for the conversation, and its thinking for what the
-    answers wrote.
+    length (``estimated``), the ``files`` attached apart, counted by the API too.
+    Without the API's counts, the last answer's prompt and output stand for the
+    conversation, and its thinking for what the answers wrote.
     """
     parts: list[dict] = []
     if base is not None:
         parts += [{"id": "system", "tokens": base["system"]}, {"id": "tools", "tokens": base["tools"], "count": tools}]
     how = conversation = thinking = cleared = None
+    in_files = 0
     if counted is not None and base is not None:
         how = "counted"
         conversation, thinking, cleared = counted["conversation"], counted["thinking"], counted["cleared"] or None
+        in_files = counted.get("files") or 0
     elif last is not None:
         how = "estimated"
         conversation = last["prompt"] + last["output"] - (base["system"] + base["tools"] if base else 0)
         thinking, cleared = thinking_written, last["cleared_tokens"]
     if conversation is not None and base is not None:
         thinking = max(0, min(thinking, conversation))
-        rest = _shares(max(conversation - thinking, 0), composition)
+        in_files = max(0, min(in_files, conversation - thinking))
+        rest = _shares(max(conversation - thinking - in_files, 0), composition)
+        if in_files:
+            parts.append({"id": "files", "tokens": in_files, "count": files})
         parts += [{"id": "asked", "tokens": rest["asked"], "estimated": True},
                   {"id": "thinking", "tokens": thinking, "estimated": how == "estimated"},
                   {"id": "calls", "tokens": rest["calls"], "estimated": True},

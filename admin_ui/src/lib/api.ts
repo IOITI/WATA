@@ -1,5 +1,7 @@
 import type {
   AgentArtefact,
+  AgentAttach,
+  AgentFile,
   AgentMemoryChange,
   AgentMemoryDraft,
   AgentMemoryEntry,
@@ -10,7 +12,10 @@ import type {
   AgentConversation,
   AgentConversationListed,
   AgentProposal,
+  AgentRoutine,
+  AgentRoutineDraft,
   AgentState,
+  AgentVerdict,
   AssetDetails,
   BacktestBaseline,
   BacktestBreakdowns,
@@ -149,6 +154,8 @@ export function errorMessage(body: unknown, fallback: string): string {
 
 interface RequestOptions {
   body?: unknown
+  /** A file sent as a form (multipart): the browser writes its type and boundary. */
+  form?: FormData
   /** The login call answers 401 for a wrong password, which is not an expired session. */
   expectUnauthorized?: boolean
 }
@@ -161,7 +168,7 @@ async function request<T>(method: string, path: string, options: RequestOptions 
       method,
       credentials: 'same-origin',
       headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
-      body: hasBody ? JSON.stringify(options.body) : undefined,
+      body: options.form ?? (hasBody ? JSON.stringify(options.body) : undefined),
     })
   } catch {
     throw new ApiError(0, 'The admin server cannot be reached')
@@ -207,6 +214,11 @@ export function assetLiveUrl(ref: string): string {
   return `/api/data/assets/${assetPath(ref)}/live`
 }
 
+/** Where a file attached to a conversation is read back: an image shown, any other downloaded. */
+export function agentFileUrl(conversationId: string, fileId: string): string {
+  return `/api/agent/conversations/${encodeURIComponent(conversationId)}/files/${encodeURIComponent(fileId)}`
+}
+
 /** Where a script's current source is downloaded as a .pine file: a link, not fetch. */
 export function taScriptSourceUrl(id: string): string {
   return `/api/ta/scripts/${encodeURIComponent(id)}/source.pine`
@@ -246,7 +258,8 @@ export const api = {
   performance: (params: DateRangeParams = {}) =>
     request<Performance>('GET', `/api/performance${query({ ...params })}`),
   exits: (params: DateRangeParams = {}) => request<Exits>('GET', `/api/exits${query({ ...params })}`),
-  report: () => request<Report>('GET', '/api/report'),
+  /** The daily report's figures: of today, or as of ``day`` (YYYY-MM-DD). */
+  report: (day?: string) => request<Report>('GET', `/api/report${query({ day })}`),
   journal: (params: DateRangeParams = {}) =>
     request<{ items: JournalEntry[] }>('GET', `/api/journal${query({ ...params, limit: 500 })}`),
   watchlist: () => request<Watchlist>('GET', '/api/watchlist'),
@@ -332,8 +345,9 @@ export const api = {
   testTelegram: () => request<{ ok: boolean; detail: string }>('POST', '/api/credentials/telegram.bot/test'),
   /** The Claude API asked for its model with the key as stored: a read, no token spent. */
   testAnthropicKey: () => request<{ ok: boolean; detail: string }>('POST', '/api/credentials/anthropic.api/test'),
-  restartServices: (services: string[], force = false) =>
-    request<{ plan: RestartPlan }>('POST', '/api/system/services/restart', { body: { services, force } }),
+  /** ``proposal``: the AI agent's proposal this restart applies (<conversation>/<proposal>), from its card. */
+  restartServices: (services: string[], force = false, proposal?: string) =>
+    request<{ plan: RestartPlan }>('POST', '/api/system/services/restart', { body: proposal ? { services, force, proposal } : { services, force } }),
   release: () => request<ReleaseState>('GET', '/api/system/release'),
   /** Asks the server to apply the newest release to these containers; watadeploy reads their guards again. */
   applyRelease: (containers: string[], force = false) =>
@@ -346,11 +360,13 @@ export const api = {
   sendSignal: (body: { action: string; indice?: string; confidence?: number }) =>
     request<SignalSent>('POST', '/api/actions/signal', { body }),
   requestDailyStats: () => request<{ status: string }>('POST', '/api/actions/daily-stats'),
-  pauseEntries: () => request<{ entries_paused_since: string | null }>('POST', '/api/actions/pause-entries'),
-  resumeEntries: () => request<{ entries_paused_since: string | null }>('POST', '/api/actions/resume-entries'),
-  closePosition: (positionId: string) =>
+  pauseEntries: (proposal?: string) =>
+    request<{ entries_paused_since: string | null }>('POST', '/api/actions/pause-entries', proposal ? { body: { proposal } } : {}),
+  resumeEntries: (proposal?: string) =>
+    request<{ entries_paused_since: string | null }>('POST', '/api/actions/resume-entries', proposal ? { body: { proposal } } : {}),
+  closePosition: (positionId: string, proposal?: string) =>
     request<{ status: string; position_id: string }>('POST', '/api/actions/close-position', {
-      body: { position_id: positionId },
+      body: proposal ? { position_id: positionId, proposal } : { position_id: positionId },
     }),
   submitSaxoAuthCode: (code: string, state: string | null = null) =>
     request<void>('POST', '/api/system/saxo/auth-code', { body: { code, state } }),
@@ -451,9 +467,9 @@ export const api = {
    * Live is an operator action: refused (403) while actions are disabled, and (409) while the rule is not ready
    * unless `force` goes live anyway, which the audit trail records with what was missing.
    */
-  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string, force = false) =>
+  setTaRuleMode: (id: string, mode: TaRuleMode, revision: string, force = false, proposal?: string) =>
     request<TaRuleSaved>('POST', `/api/ta/rules/${encodeURIComponent(id)}/mode`, {
-      body: force ? { mode, revision, force } : { mode, revision },
+      body: { mode, revision, ...(force ? { force } : {}), ...(proposal ? { proposal } : {}) },
     }),
   deleteTaRule: (id: string, revision: string) =>
     request<void>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}${query({ revision })}`),
@@ -492,15 +508,31 @@ export const api = {
     request<{ items: AgentConversationListed[] }>('GET', `/api/agent/conversations${query({ subject })}`),
   agentConversation: (id: string) =>
     request<AgentConversation>('GET', `/api/agent/conversations/${encodeURIComponent(id)}`),
-  /** A new conversation, about a run or a script when given: its first request queued. */
+  /**
+   * A new conversation, about a run or a script when given, with what is attached to it: its first request queued;
+   * told on Telegram when ``tell``.
+   */
   startAgentConversation: (
     prompt: string,
     subject?: { kind: AgentSubject['kind']; id: string; version?: number; day?: string; at?: string },
     choice?: AgentChoice,
+    tell = false,
+    attach?: AgentAttach[],
   ) =>
-    request<AgentConversationListed>('POST', '/api/agent/conversations', { body: { prompt, subject, ...choice } }),
-  askAgent: (id: string, prompt: string, choice?: AgentChoice) =>
-    request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/requests`, { body: { prompt, ...choice } }),
+    request<AgentConversationListed>('POST', '/api/agent/conversations', {
+      body: { prompt, subject, ...choice, tell, attach: attach?.length ? attach : undefined },
+    }),
+  askAgent: (id: string, prompt: string, choice?: AgentChoice, tell = false, attach?: AgentAttach[]) =>
+    request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/requests`, {
+      body: { prompt, ...choice, tell, attach: attach?.length ? attach : undefined },
+    }),
+  /** A file of the operator's computer, staged until the request that sends it (an hour at most). */
+  uploadAgentFile: (file: Blob, name: string) => {
+    const form = new FormData()
+    form.append('file', file, name)
+    return request<AgentFile>('POST', '/api/agent/files', { form })
+  },
+  removeAgentFile: (id: string) => request<void>('DELETE', `/api/agent/files/${encodeURIComponent(id)}`),
   /** What the next request would put in the model's context window: of a conversation, or of a new one. */
   agentContext: (id: string | null, model: string) =>
     request<AgentContext>('GET', id
@@ -517,10 +549,29 @@ export const api = {
   removeAgentConversation: (id: string) =>
     request<void>('DELETE', `/api/agent/conversations/${encodeURIComponent(id)}`),
   /** The proposal applied through the stores' checks: a new version of the script, or the rule (not live) changed. */
-  settleAgentProposal: (id: string, proposal: string, apply: boolean) =>
-    request<AgentProposal>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/${apply ? 'apply' : 'dismiss'}`),
-  startAgentTask: (body: { goal: string; budget: { usd: number; backtests: number; hours: number }; model?: string; effort?: string }) =>
+  settleAgentProposal: (id: string, proposal: string, apply: boolean, intoEditor = false) =>
+    request<AgentProposal>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/${apply ? 'apply' : 'dismiss'}`,
+      intoEditor ? { body: { into_editor: true } } : {}),
+  /** The agent asked to review a change before it is saved: config.json's, a rule's, a script's draft. Nothing is saved. */
+  reviewConfigWithAgent: (config: JsonObject) =>
+    request<AgentConversationListed>('POST', '/api/agent/reviews/config', { body: { config } }),
+  reviewRuleWithAgent: (ruleId: string | null, fields: TaRuleFields & { revision: string }) =>
+    request<AgentConversationListed>('POST', '/api/agent/reviews/rule', { body: { rule_id: ruleId, fields } }),
+  reviewScriptWithAgent: (scriptId: string, baseVersion: number, source: string) =>
+    request<AgentConversationListed>('POST', '/api/agent/reviews/script', { body: { script_id: scriptId, base_version: baseVersion, source } }),
+  startAgentTask: (body: { goal: string; budget: { usd: number; backtests: number; hours: number }; model?: string; effort?: string; tell?: boolean; attach?: AgentAttach[] }) =>
     request<AgentConversationListed>('POST', '/api/agent/tasks', { body }),
+  /** The operator's answer to the question a research task asked: it goes on with it. */
+  answerAgentTask: (id: string, answer: string) =>
+    request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/task/answer`, { body: { answer } }),
+  agentRoutines: () => request<{ revision: string; max: number; routines: AgentRoutine[] }>('GET', '/api/agent/routines'),
+  saveAgentRoutine: (routine: AgentRoutineDraft, revision: string, id?: string) =>
+    request<{ revision: string; routine: AgentRoutine }>(id ? 'PUT' : 'POST',
+      id ? `/api/agent/routines/${encodeURIComponent(id)}` : '/api/agent/routines', { body: { ...routine, revision } }),
+  removeAgentRoutine: (id: string, revision: string) =>
+    request<{ revision: string }>('DELETE', `/api/agent/routines/${encodeURIComponent(id)}${query({ revision })}`),
+  runAgentRoutine: (id: string) =>
+    request<{ conversation: string }>('POST', `/api/agent/routines/${encodeURIComponent(id)}/run`),
   stopAgentTask: (id: string) =>
     request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/task/stop`),
   /** A change of settings as a save of the Configuration page is previewed, with the file's revision it was read at. */
@@ -530,6 +581,9 @@ export const api = {
     request<AgentProposal & { impact: ConfigImpact; restart_required: boolean }>(
       'POST', `/api/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposal)}/apply`, { body: { revision } }),
   agentArtefacts: () => request<{ items: AgentArtefact[] }>('GET', '/api/agent/artefacts'),
+  /** What the agent last concluded on each of these (run:<id>, rule:<id>, day:<date>, position:<id>). */
+  agentVerdicts: (about: string[]) =>
+    request<{ items: Record<string, AgentVerdict> }>('GET', `/api/agent/verdicts?${about.map((entry) => `about=${encodeURIComponent(entry)}`).join('&')}`),
   // Its memory: kept whether the agent is on or not, every change journaled and undoable.
   agentMemory: () => request<AgentMemoryState>('GET', '/api/agent/memory'),
   agentMemoryHistory: (name?: string) =>

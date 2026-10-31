@@ -22,6 +22,12 @@ _CHOICES = {
     # The daily debrief's: a day's account needs less than an analysis.
     "debrief_model": ("claude-sonnet-5-5", MODELS),
     "debrief_effort": ("medium", EFFORTS),
+    # The morning briefing's: an account of facts the tools give, on the cheapest model.
+    "briefing_model": ("claude-haiku-5-5", MODELS),
+    "briefing_effort": ("low", EFFORTS),
+    # An alert's triage: a diagnosis, worth a model that reasons.
+    "triage_model": ("claude-sonnet-5-5", MODELS),
+    "triage_effort": ("medium", EFFORTS),
 }
 # name: (default, lowest, highest)
 _WHOLE = {
@@ -34,6 +40,12 @@ _WHOLE = {
     "keep_days": (365, 30, 3650),
     # Backtests one research task may start in all, over its requests.
     "max_task_backtests": (40, 0, 200),
+    # How long before the trading start the morning briefing is written, in minutes.
+    "briefing_minutes_before": (30, 5, 240),
+    # Alerts triaged in a day at most, all together.
+    "triage_max_per_day": (6, 1, 30),
+    # Routines kept at most: research tasks that come back by themselves.
+    "max_routines": (10, 1, 50),
 }
 # name: default, a switch.
 _SWITCHES = {
@@ -44,6 +56,18 @@ _SWITCHES = {
     "debrief_telegram": True,
     # Its memory between conversations (src/admin/agent_memory.py): its index shared at each one's start, its tools.
     "memory": True,
+    # A briefing before each trading day's start, said on Telegram when briefing_telegram.
+    "briefing_enabled": False,
+    "briefing_telegram": True,
+    # An alert (a sale refused, a service down in trading hours, live drift...) triaged by the agent itself, its
+    # diagnosis said on Telegram when triage_telegram. Read at the admin's start: it listens to the admin's events.
+    "triage_enabled": False,
+    "triage_telegram": True,
+    # Whether it may propose actions on live trading (a pause, a close, a restart, a rule live or out), each applied
+    # only by the operator's click through the page's own confirmation.
+    "action_proposals": True,
+    # A go-live dossier written by itself once an operator's rule in shadow meets its readiness.
+    "dossier_when_ready": False,
 }
 # name: (default, lowest, highest), in US dollars as the Claude API bills them.
 _AMOUNTS = {
@@ -54,6 +78,9 @@ _AMOUNTS = {
     "max_task_hours": (12.0, 0.5, 72.0),
     # What one daily debrief may cost.
     "debrief_max_usd": (0.5, 0.1, 5.0),
+    # What one morning briefing, and one triage, may cost.
+    "briefing_max_usd": (0.3, 0.05, 2.0),
+    "triage_max_usd": (0.5, 0.1, 5.0),
 }
 
 
@@ -80,6 +107,21 @@ class AgentSettings:
     debrief_max_usd: float = 0.5
     debrief_telegram: bool = True
     memory: bool = True
+    briefing_enabled: bool = False
+    briefing_model: str = "claude-haiku-5-5"
+    briefing_effort: str = "low"
+    briefing_max_usd: float = 0.3
+    briefing_minutes_before: int = 30
+    briefing_telegram: bool = True
+    triage_enabled: bool = False
+    triage_model: str = "claude-sonnet-5-5"
+    triage_effort: str = "medium"
+    triage_max_usd: float = 0.5
+    triage_max_per_day: int = 6
+    triage_telegram: bool = True
+    action_proposals: bool = True
+    dossier_when_ready: bool = False
+    max_routines: int = 10
 
     @classmethod
     def from_config(cls, section) -> "AgentSettings":

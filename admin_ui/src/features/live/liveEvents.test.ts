@@ -87,6 +87,12 @@ describe('describeEvent', () => {
     expect(staleQueries({ type: 'agent_finished' })).toContain('agent-conversation')
   })
 
+  it('says a research task asks the operator, and leads to it', () => {
+    expect(describeEvent({ type: 'agent_question', title: 'Find a line', question: 'Fast or slow first?' })).toEqual({
+      title: 'The research task asks you', body: 'Find a line · Fast or slow first?', variant: 'info' })
+    expect(eventLink({ type: 'agent_question', conversation_id: '20261028-080000-a1b2c3' })).toBe('/agent/20261028-080000-a1b2c3')
+  })
+
   it('says how a download of prices ended, and that days are usually still missing', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done' })).toEqual({
       title: 'Prices downloaded', body: undefined, variant: 'success',

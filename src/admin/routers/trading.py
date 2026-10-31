@@ -150,7 +150,11 @@ def _cooldown(last_loss_at: datetime | None, cooldown_minutes: int) -> dict:
 
 @router.get("/overview")
 async def overview(request: Request):
-    ctx = request.app.state.ctx
+    return await overview_of(request.app.state.ctx)
+
+
+async def overview_of(ctx) -> dict:
+    """The dashboard's overview: the route's answer, and trading now as the AI agent reads it (src/admin/agent_ops.py)."""
     today = datetime.now(pytz.timezone(ctx.settings.timezone)).date()
     limits = _limits(ctx.config_manager)
     market_day = _market_day(ctx.config_manager, ctx.settings.timezone, datetime.now(pytz.utc))
@@ -267,11 +271,18 @@ async def exits(
 
 
 @router.get("/report")
-async def report(request: Request):
-    """The figures of the daily Telegram report, with the recorded account balances."""
+async def report(request: Request, day: date | None = Query(None)):
+    """
+    The figures of the daily Telegram report, with the recorded account balances: of today, or as of ``day``
+    (the AI agent's links to a day lead there).
+    """
     ctx = request.app.state.ctx
+    today = datetime.now(pytz.timezone(ctx.settings.timezone)).date()
+    if day is not None and day > today:
+        raise HTTPException(status_code=422, detail="A report is of a day that has begun")
     return await ctx.queries.report(
         milestones_eur=ctx.config_manager.get_config_value("reporting.milestones_eur", None),
+        **({"today": day} if day is not None else {}),
     )
 
 

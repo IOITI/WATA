@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
@@ -103,7 +104,8 @@ export function PositionsPage() {
               initialExpandedRowIds={find ? [find] : undefined}
               renderSubComponent={(row) => (
                 <div className="space-y-4">
-                  <div className="flex justify-end">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <AgentVerdict about={`position:${row.position_id}`} />
                     <AskAgentLink subject={{ kind: 'position', id: row.position_id }} />
                   </div>
                   {row.position_status === 'Open' ? <LivePositionChart position={row} /> : <PositionChart position={row} />}

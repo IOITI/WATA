@@ -63,6 +63,10 @@ if "asyncpg" not in sys.modules:
 import uvicorn
 
 from src.admin.agent_memory import memory_of
+from src.admin.agent_telegram import AgentTeller
+from src.admin.agent_dossier import dossiers_of
+from src.admin.agent_routines import routines_of
+from src.admin.agent_triage import triage_of
 from src.admin.analysis import summarise_exits
 from src.admin.live_breakdowns import live_breakdowns
 from src.admin.app import SHUTDOWN_GRACE_SECONDS, create_app
@@ -851,9 +855,11 @@ class FakeQueries:
             "breakdowns": live_breakdowns(trades),
         }
 
-    async def report(self, milestones_eur=None):
+    async def report(self, milestones_eur=None, today=None):
+        """As AdminQueries.report: of today, or as of ``today`` (a day the AI agent's links name)."""
+        until = today or self.today
         closed = sorted(
-            (p for p in self.positions if p["position_status"] == "Closed"),
+            (p for p in self.positions if p["position_status"] == "Closed" and p["execution_time_close"].date() <= until),
             key=lambda p: p["execution_time_close"],
         )
         trades = [
@@ -867,13 +873,13 @@ class FakeQueries:
             }
             for p in closed
         ]
-        daily = summarise_trades(self._closed_trades())["daily"]
+        daily = summarise_trades(self._closed_trades(end=until))["daily"]
         balances, balance = [], 9000.0
         for day in daily:
             balance += day["profit_loss"]
             balances.append({"date_day": day["day_date"], "total_value": round(balance, 2), "recorded_at": None})
         payload = build_daily_trading_report_payload(
-            report_date=self.today,
+            report_date=until,
             closed_trades=trades,
             daily_profit_history=[
                 {"day_date": day["day_date"], "sum_profit": day["profit_loss"], "trade_count": day["trade_count"]}
@@ -1520,6 +1526,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
     if ai:
         config["admin"]["ai_agent"]["enabled"] = True
         config["admin"]["ai_agent"]["debrief_enabled"] = True
+        config["admin"]["ai_agent"]["briefing_enabled"] = True
+        config["admin"]["ai_agent"]["triage_enabled"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))
@@ -1638,9 +1646,18 @@ def build_dev_context(work_dir: str) -> AdminContext:
         fake_ai.seed_memory(ctx.agent_memory)
         ctx.agent = fake_ai.agent_of(ctx)
         ctx.closers.insert(0, ctx.agent.close)
-        # The last finished weekday debriefed at the start (its Telegram printed here).
+        # What the agent says on Telegram, printed here; the last finished weekday debriefed at the start.
+        ctx.teller = AgentTeller(agent=ctx.agent, path=os.path.join(settings.agent_path, "tell.json"), notify=notifier)
         ctx.debrief = fake_ai.FakeDailyDebrief(agent=ctx.agent, queries=queries, config_path=config_path,
-                                               path=os.path.join(settings.agent_path, "debriefs.json"), notify=notifier)
+                                               path=os.path.join(settings.agent_path, "debriefs.json"), teller=ctx.teller)
+        # Today's briefing at the start, whatever the hour; the always-refused sale triaged once an hour.
+        ctx.briefing = fake_ai.FakeMorningBriefing(agent=ctx.agent, config_path=config_path,
+                                                   path=os.path.join(settings.agent_path, "briefings.json"),
+                                                   teller=ctx.teller)
+        ctx.triage = triage_of(ctx, ctx.teller)
+        ctx.dossiers = dossiers_of(ctx, ctx.teller)
+        ctx.routines = routines_of(ctx, ctx.teller)
+        fake_ai.seed_routines(ctx.routines.store, ctx.agent.settings)
         print("The AI agent is on, with answers made up (fake_ai.py)")
     return ctx
 

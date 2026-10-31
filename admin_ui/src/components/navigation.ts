@@ -38,6 +38,7 @@ export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'agent', path: '/agent', label: 'Activity', section: 'AI agent' },
   { id: 'agent-memory', path: '/agent/memory', label: 'Memory', section: 'AI agent' },
   { id: 'agent-artefacts', path: '/agent/artefacts', label: 'Artefacts', section: 'AI agent' },
+  { id: 'agent-routines', path: '/agent/routines', label: 'Routines', section: 'AI agent' },
   { id: 'system', path: '/system', label: 'System', section: 'Operations' },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations' },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations' },

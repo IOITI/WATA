@@ -1,7 +1,7 @@
 // A conversation with the AI agent, request by request: what was asked (and shared), what the agent did
 // (ioiti-ui's AIAgentActivity, its notes between its steps, folded once a newer request is asked), what it is
-// doing while nothing of its answer is written, its answer as it streams (AIResponse), what it proposed, how it
-// ended.
+// doing while nothing of its answer is written, its answer as it streams (AIResponse), the charts it drew and the
+// verdicts it set, what it proposed, how it ended.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -26,6 +26,9 @@ import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { AgentConversation, AgentProposal, AgentRequest } from '@/lib/types'
 
+import { AgentChart } from './AgentChart'
+import { SharedChips } from './AttachedChips'
+
 import {
   activityItems,
   activitySummary,
@@ -38,6 +41,9 @@ import {
   subjectLink,
   subjectSaid,
   toolsOf,
+  VERDICT_SAID,
+  verdictLink,
+  verdictSubject,
   workingOf,
 } from './model'
 import { MEMORY_DONE, memoryLink } from './memoryModel'
@@ -51,7 +57,7 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
   /** Whether what it did is shown, or folded to its line. */
   open: boolean
   onOpenChange: (open: boolean) => void
-  blockedFor?: (proposal: AgentProposal) => string | null
+  blockedFor?: (proposal: AgentProposal, conversation: AgentConversation) => string | null
   onApplied?: (proposal: AgentProposal) => void
 }) {
   const { timezone } = useSession()
@@ -89,7 +95,10 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
         </p>
       ) : (
         <div className="ml-auto max-w-[min(42rem,100%)] space-y-1.5 rounded-2xl bg-surface-raised px-4 py-3">
-          {request.shared && (
+          {request.attached && request.attached.length > 0 ? (
+            <SharedChips conversationId={conversation.id} attached={request.attached} />
+          ) : request.shared && (
+            // From an admin of before, which said the conversation's subject alone.
             <p className="text-xs text-muted-foreground">
               Shared: <Link className="underline" to={subjectLink(request.shared)}>{subjectSaid(request.shared)}</Link>
             </p>
@@ -129,6 +138,18 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
         <AIResponseSources />
         <AIResponseActions />
       </AIResponse>
+      {(request.charts ?? []).map((chart, index) => <AgentChart key={chart.id ?? index} chart={chart} />)}
+      {(request.verdicts?.length ?? 0) > 0 && (
+        <ul className="space-y-1 text-xs text-muted-foreground">
+          {request.verdicts!.map((verdict) => (
+            <li key={verdict.about}>
+              Its verdict on{' '}
+              <Link className="underline underline-offset-2" to={verdictLink(verdict.about)}>{verdictSubject(verdict.about)}</Link>
+              : {VERDICT_SAID[verdict.tone].toLowerCase()}, “{verdict.line}”
+            </li>
+          ))}
+        </ul>
+      )}
       {!running && (
         <p className="text-xs text-muted-foreground">
           {outcomeSaid(request.status, request.detail)}
@@ -159,7 +180,8 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
       )}
       {proposals.map((proposal) => (
         <ProposalCard key={proposal.id} conversationId={conversation.id} proposal={proposal} proposals={conversation.proposals}
-          blockedReason={blockedFor?.(proposal) ?? null} onApplied={onApplied} />
+          blockedReason={blockedFor?.(proposal, conversation) ?? null} onApplied={onApplied}
+          intoEditor={conversation.subject?.kind === 'draft'} />
       ))}
     </article>
   )
@@ -168,7 +190,7 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
 export function ConversationView({ conversation, blockedFor, onApplied }: {
   conversation: AgentConversation
   /** Why a proposal cannot be applied from this page now, if it cannot. */
-  blockedFor?: (proposal: AgentProposal) => string | null
+  blockedFor?: (proposal: AgentProposal, conversation: AgentConversation) => string | null
   onApplied?: (proposal: AgentProposal) => void
 }) {
   // What the operator opened or folded, by conversation and request: otherwise what the newest request did is

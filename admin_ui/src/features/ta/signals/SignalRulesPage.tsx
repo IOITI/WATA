@@ -12,8 +12,6 @@ import {
   Badge,
   Button,
   ButtonLink,
-  Checkbox,
-  CheckList,
   formatDateTime,
   Hint,
   PageHeader,
@@ -29,22 +27,27 @@ import { Eye, Pencil, Plus, PowerOff, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
-import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
 import { ClaudeBadge } from '@/components/status'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AgentVerdict, VerdictLine } from '@/features/agent/AgentVerdict'
+import { AskAgentLink } from '@/features/agent/AskAgentLink'
+import { ABOUT_PARAM, subjectOf } from '@/features/agent/model'
+import { useVerdicts } from '@/features/agent/useConversation'
 import { useSession } from '@/features/auth/auth-context'
 import { paperReportHref, paperTradingHref } from '@/features/backtests/paperModel'
 import { madeByClaude } from '@/features/system/claude'
 import { monitorHref } from '@/features/ta/monitor/monitorModel'
-import { api, ApiError } from '@/lib/api'
+import { api } from '@/lib/api'
 import type { TaEngine, TaRule, TaRuleMode, TaRules } from '@/lib/types'
 
 import { ComparisonPanel } from './ComparisonPanel'
 import { RuleDialog } from './RuleDialog'
 import type { RuleDialogStart } from './RuleDialog'
-import { barsLabel, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, updatesOf } from './ruleModel'
+import { barsLabel, conflictText, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, updatesOf } from './ruleModel'
 import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
-import { holdingBack, liveReadiness } from './readiness'
+import { liveReadiness } from './readiness'
+import { RuleModeDialog } from './RuleModeDialog'
 import { SignalJournal } from './SignalJournal'
 
 const STATE_LABEL: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
@@ -112,10 +115,6 @@ interface ModeChange {
   force?: boolean
 }
 
-/** The server's refusal of a rule not ready, which the page may not have seen coming (its view is 10 s old at most). */
-const notReadyRefusal = (error: Error | null) =>
-  error instanceof ApiError && error.status === 409 && error.message.startsWith('Not ready to go live')
-
 /** What the selection basket does to the rules selected: never live, which is one rule at a time. */
 type BulkAction = 'off' | 'shadow' | 'delete'
 
@@ -153,6 +152,9 @@ export function SignalRulesPage() {
   const paperQuery = useQuery({ queryKey: ['backtest-paper'], queryFn: api.backtestPaper, enabled: backtestsEnabled, staleTime: 60_000 })
   const paper = paperQuery.data
   const rules: TaRules | undefined = rulesQuery.data
+  // What the AI agent last concluded on each rule (its go-live dossier, say).
+  const verdictsQuery = useVerdicts((rules?.rules ?? []).map((rule) => `rule:${rule.id}`))
+  const verdicts = verdictsQuery.data?.items
   const scripts = useMemo(() => scriptsQuery.data?.items ?? [], [scriptsQuery.data])
   const states = engineQuery.data?.rules ?? {}
 
@@ -183,25 +185,20 @@ export function SignalRulesPage() {
     return null
   }, [rules, scripts, askedScript, askedRun, fromRunQuery.data, assetsQuery.data])
   const shownDialog = dialog ?? (askedDraft ? { rule: null, start: 'edit' as const, draft: askedDraft } : null)
+  // A rule asked about from its row: named by its name before the agent names it.
+  const about = subjectOf(params.get(ABOUT_PARAM))
+  const aboutRule = about?.kind === 'rule' ? rules?.rules.find((rule) => rule.id === about.id) : undefined
   const closeDialog = () => {
     setDialog(null)
     if (askedScript || askedRun) setParams({}, { replace: true })
   }
   const [changing, setChanging] = useState<ModeChange | null>(null)
-  // "Go live anyway", ticked in the confirmation of a rule not ready.
-  const [anyway, setAnyway] = useState(false)
   const [deleting, setDeleting] = useState<TaRule | null>(null)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   // The rules the deletion of several is about, while it is asked.
   const [deletingMany, setDeletingMany] = useState<TaRule[] | null>(null)
 
   const refresh = () => Promise.all([['ta-rules'], ['ta-engine']].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
-  const conflictText = (error: Error | null) =>
-    error instanceof ApiError && error.status === 409 && error.message.includes('changed meanwhile')
-      ? 'The rules changed since this page read them: they are read again, try once more.'
-      : error instanceof ApiError && error.status === 403
-        ? 'Operator actions are disabled in the configuration (admin.actions_enabled): no rule goes live.'
-        : error?.message ?? null
 
   const modeMutation = useMutation({
     mutationFn: ({ rule, mode, force }: ModeChange) => api.setTaRuleMode(rule.id, mode, rules!.revision, force),
@@ -283,7 +280,6 @@ export function SignalRulesPage() {
     if (mode !== 'live' && rule.mode !== 'live') modeMutation.mutate({ rule, mode })
     else {
       modeMutation.reset()
-      setAnyway(false)
       setChanging({ rule, mode })
     }
   }
@@ -317,6 +313,9 @@ export function SignalRulesPage() {
                 <button type="button" className="text-xs underline underline-offset-2" onClick={() => setDialog({ rule: row, start: 'update-libraries' })}>
                   Run {updates.libraries.map((entry) => `${entry.name} v${entry.to}`).join(', ')}
                 </button>
+              )}
+              {verdicts?.[`rule:${row.id}`] && (
+                <VerdictLine verdict={verdicts[`rule:${row.id}`]} changedAt={row.run_changed_at} className="mt-1 text-xs" />
               )}
             </div>
           )
@@ -454,6 +453,7 @@ export function SignalRulesPage() {
         align: 'right',
         cell: ({ row }) => (
           <div className="flex justify-end gap-1">
+            <AskAgentLink subject={{ kind: 'rule', id: row.id }} label={`Ask the AI agent about ${row.name}`} compact />
             <Hint content="Edit">
               <Button variant="ghost" size="icon" aria-label={`Edit ${row.name}`} onClick={() => setDialog({ rule: row, start: 'edit' })}>
                 <Pencil className="size-4" />
@@ -480,15 +480,13 @@ export function SignalRulesPage() {
     ],
     // askMode reads the latest rules through the mutation; the columns change with what they show.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [states, timezone, actionsEnabled, rules?.revision, paper],
+    [states, timezone, actionsEnabled, rules?.revision, paper, verdicts],
   )
 
   const runnable = scripts.filter((script) => script.kind !== 'library')
   const change = changing
-  const goingLive = change?.mode === 'live'
   const readiness =
-    change && goingLive ? liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone) : []
-  const notReady = goingLive && (holdingBack(readiness).length > 0 || notReadyRefusal(modeMutation.error))
+    change?.mode === 'live' ? liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone) : []
 
   return (
     <div className="flex flex-col gap-6">
@@ -585,59 +583,9 @@ export function SignalRulesPage() {
         />
       )}
 
-      <ConfirmLiveAction
-        open={change !== null}
-        title={goingLive ? `Switch ${change?.rule.name} to live` : `Take ${change?.rule.name} off live`}
-        gesture={goingLive ? 'slide' : 'button'}
-        confirmLabel={goingLive ? 'Slide to go live' : `Switch to ${change ? MODE_LABEL[change.mode].toLowerCase() : ''}`}
-        doneLabel={goingLive ? 'Live' : 'Done'}
-        pending={modeMutation.isPending}
-        blocked={notReady && !anyway}
-        error={conflictText(modeMutation.error)}
-        warning={
-          goingLive
-            ? `The web server keeps one signal per indice, whoever sends it: switch TradingView's alerts for ${change?.rule.indice} off first, or both will trade it.`
-            : undefined
-        }
-        description={
-          change &&
-          (goingLive ? (
-            <div className="space-y-2">
-              <p>
-                From its next bar, the alerts of <strong>{change.rule.name}</strong> ({change.rule.asset.key},{' '}
-                {barsLabel(change.rule.bars)}) become signals the trader acts on, for <strong>{change.rule.indice}</strong>:
-              </p>
-              <ul className="list-disc pl-5">
-                {mappedAlerts(change.rule).map((entry) => (
-                  <li key={entry}>{entry}</li>
-                ))}
-              </ul>
-              <p>The trader applies its usual rules to each of them. The switch is recorded in the audit trail.</p>
-              <div className="space-y-2 pt-2">
-                <p className="font-medium">Is it ready?</p>
-                <CheckList checks={readiness} label="Is it ready?" />
-                {notReady ? (
-                  <>
-                    <p className="text-xs text-muted-foreground">
-                      Not ready: the server checks the same, all but the script’s version, and refuses the switch unless you
-                      go live anyway. The audit trail then records what was missing.
-                    </p>
-                    <Checkbox label="Go live anyway" checked={anyway} onChange={(event) => setAnyway(event.target.checked)} />
-                  </>
-                ) : (
-                  <p className="text-xs text-muted-foreground">What this page knows of it; the server checks the same before the switch.</p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <p>
-              Its signals stop going to the trader from now on{change.mode === 'shadow' ? ': they are journaled only' : ''}.
-            </p>
-          ))
-        }
-        onConfirm={() => change && modeMutation.mutate({ ...change, force: notReady && anyway })}
-        onClose={() => setChanging(null)}
-      />
+      <RuleModeDialog change={change} revision={rules?.revision} readiness={readiness} onClose={() => setChanging(null)}
+        verdict={change ? <AgentVerdict about={`rule:${change.rule.id}`} changedAt={change.rule.run_changed_at} /> : null} />
+      <AgentSheet subject={about && aboutRule ? { ...about, label: aboutRule.name } : undefined} />
 
       <SettleModal
         open={deletingMany !== null}

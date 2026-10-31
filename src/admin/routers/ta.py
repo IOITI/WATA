@@ -18,7 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from src.admin.auth import require_session
+from src.admin import proposed_actions
+from src.admin.agent.proposals import RULE_LIVE, RULE_OUT
+from src.admin.auth import client_ip, require_session
 from src.admin.health import DOWN, ta_engine_health
 from src.admin.routers.actions import _allowed_indices, require_actions_enabled
 from src.admin.ta_compare import compare, default_tolerance
@@ -163,6 +165,8 @@ class RuleMode(BaseModel):
     mode: Literal["off", "shadow", "live"]
     # Go live though the rule is not ready (src/admin/ta_readiness.py): recorded with what was missing.
     force: bool = False
+    # The AI agent's proposal this switch applies, from its card (src/admin/proposed_actions.py).
+    proposal: str | None = Field(None, max_length=proposed_actions.MAX_REF)
 
 
 # What the audit trail says changed in a live rule.
@@ -400,6 +404,10 @@ async def set_rule_mode(
     live is always allowed (it stops signals), and recorded as one.
     """
     current = await run_in_threadpool(rule_store.rule, rule_id)
+    ctx = request.app.state.ctx
+    found = await proposed_actions.pending(ctx, body.proposal, RULE_LIVE if body.mode == LIVE else RULE_OUT)
+    if found and found["proposal"]["action"].get("rule", {}).get("id") != rule_id:
+        raise HTTPException(status_code=422, detail="The proposal switches another rule")
     unmet = []
     if body.mode == LIVE and current["mode"] != LIVE:
         await _check_can_go_live(request, current)
@@ -415,7 +423,10 @@ async def set_rule_mode(
         action = "signal rule live" if rule["mode"] == LIVE else f"signal rule no longer live ({rule['mode']})"
         if rule["mode"] == LIVE and unmet:
             action += f" WITHOUT its readiness ({'; '.join(unmet)})"
-        request.app.state.ctx.audit(request, action, _rule_line(rule, answer["rule"]["script_name"]))
+        ctx.audit(request, action, proposed_actions.joined(_rule_line(rule, answer["rule"]["script_name"]),
+                                                           proposed_actions.said(found)))
+    await proposed_actions.settled(ctx, found, client_ip(request, ctx.trusted_proxies),
+                                   {"rule_id": rule["id"], "mode": rule["mode"]})
     return answer
 
 
@@ -565,7 +576,11 @@ async def monitor_now(request: Request):
     The TA engine's last minutes: its last tick, what its runs and the live signals were, and the
     checks of what can cost a live signal, the first failed one of which health says.
     """
-    ctx = request.app.state.ctx
+    return await engine_now(request.app.state.ctx)
+
+
+async def engine_now(ctx) -> dict:
+    """The Engine monitor's Now panel: the route's answer, and what the AI agent reads of the engine (src/admin/agent_ops.py)."""
     settings = _engine_settings(ctx.config_manager)
     now = datetime.now(timezone.utc)
     state = await ctx.queries.ta_engine_state()

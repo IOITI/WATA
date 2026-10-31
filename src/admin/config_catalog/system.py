@@ -316,6 +316,118 @@ ADMIN_PARAMS = (
         readers=(ADMIN,), risk=NONE,
     ),
     Param(
+        path=f"{AGENT}.briefing_enabled", group="agent", label="Morning briefing", kind="bool", optional=True,
+        default=False,
+        help="Before each trading day's start, the agent writes a short briefing of the day ahead: the US market's "
+             "day and its releases, the rules that run, what needs you (the health, Saxo's login, a pause, what "
+             "changed since the close) and the day before in a line, kept on AI agent › Activity.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("A day the US market is closed gets one Telegram line, without a call to the API.",
+                 "Written from its minutes before the start to an hour after it; later, the day goes without one."),
+        also_needs=(f"{AGENT}.enabled",),
+    ),
+    Param(
+        path=f"{AGENT}.briefing_model", group="agent", label="Briefing's model", kind="enum", choices=MODELS,
+        optional=True, default="claude-haiku-5-5",
+        help="The model that writes the morning briefing: an account of facts its tools give needs the least.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.briefing_effort", group="agent", label="Briefing's effort", kind="enum", choices=EFFORTS,
+        optional=True, default="low", help="How much the briefing's model thinks before it writes.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.briefing_max_usd", group="agent", label="Cost of a briefing at most", kind="number", unit="$",
+        minimum=0.05, maximum=2, optional=True, default=0.3,
+        help="What one morning briefing may cost: it is asked to conclude near it, and stopped there.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.briefing_minutes_before", group="agent", label="Briefing before the start", kind="int",
+        unit="min", minimum=5, maximum=240, optional=True, default=30,
+        help="How long before the trading start (market_hours, in its timezone) the briefing is written.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.briefing_telegram", group="agent", label="Briefing said on Telegram", kind="bool",
+        optional=True, default=True,
+        help="Once a briefing is written, Telegram gets its first lines, with the way to the whole of it.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.triage_enabled", group="agent", label="Alert triage", kind="bool", optional=True, default=False,
+        help="When an alert fires (a sale Saxo keeps refusing, a service of the trading path down in trading hours, "
+             "live drift, the account guard's pause, Saxo's login to authorise), the agent opens the incident itself, "
+             "reads the health, the logs, the positions and what changed, and its diagnosis is said on Telegram.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("It reads only, and starts no backtest; it may propose one action, which waits for your click.",
+                 "A service is triaged in trading hours only, never during a deploy or a restart, nor in the two "
+                 "minutes after one.",
+                 "Read at the admin's start: while it is on, the admin watches its state whether a page is open or "
+                 "not, as it does while one is."),
+        also_needs=(f"{AGENT}.enabled",),
+    ),
+    Param(
+        path=f"{AGENT}.triage_model", group="agent", label="Triage's model", kind="enum", choices=MODELS,
+        optional=True, default="claude-sonnet-5-5",
+        help="The model that triages an alert: a diagnosis is worth a model that reasons.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.triage_effort", group="agent", label="Triage's effort", kind="enum", choices=EFFORTS,
+        optional=True, default="medium", help="How much the triage's model thinks before it answers.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.triage_max_usd", group="agent", label="Cost of a triage at most", kind="number", unit="$",
+        minimum=0.1, maximum=5, optional=True, default=0.5,
+        help="What one triage may cost: it is asked to conclude near it, and stopped there.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.triage_max_per_day", group="agent", label="Triages a day at most", kind="int",
+        minimum=1, maximum=30, optional=True, default=6,
+        help="Alerts triaged in a day, all together; one alert is triaged once an hour at most, the same one firing "
+             "again meanwhile counted and said in its next triage.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.triage_telegram", group="agent", label="Triage said on Telegram", kind="bool",
+        optional=True, default=True,
+        help="Once a triage is written, Telegram gets its first lines and the action it proposes, if any.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.action_proposals", group="agent", label="Action proposals", kind="bool", optional=True,
+        default=True,
+        help="Whether the agent may propose actions on live trading: pausing or resuming new entries, closing a "
+             "position, restarting services, taking a signal rule live or out of live. Each is a card under its "
+             "answer, applied only by your click, through the page's own confirmation, checks and audit.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("A proposal older than 30 minutes is no longer applied from its card: the situation may have changed.",),
+    ),
+    Param(
+        path=f"{AGENT}.dossier_when_ready", group="agent", label="Go-live dossier when ready", kind="bool",
+        optional=True, default=False,
+        help="Once one of your signal rules in shadow meets its readiness to go live, the agent writes its go-live "
+             "dossier by itself, the market closed: its paper days against its reference, its report, its reference "
+             "run under worse fills, its signals beside TradingView's, the engine running it; its verdict shown on "
+             "the rule's row, its first lines on Telegram.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("Once for what a rule runs: a change of its script, inputs or bars starts its readiness, and its "
+                 "dossier, again.",
+                 "Within the agent's own limits of a request (its backtests too); going live stays yours."),
+        also_needs=(f"{AGENT}.enabled",),
+    ),
+    Param(
+        path=f"{AGENT}.max_routines", group="agent", label="Routines at most", kind="int", minimum=1, maximum=50,
+        optional=True, default=10,
+        help="Research tasks that come back by themselves (AI agent › Routines), each trading day or each week, kept "
+             "at most: each within a task's bounds above, all within the month's budget.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
         path="admin.actions_enabled", group="admin", label="Operator actions", kind="bool", access=SERVER,
         optional=True, default=True, reason=KILL_SWITCH, how=ON_THE_SERVER,
         help="Closing a position, sending a signal, pausing entries, authorising Saxo from the page.",

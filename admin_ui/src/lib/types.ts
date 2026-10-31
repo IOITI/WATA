@@ -3252,6 +3252,8 @@ export interface AgentState {
   debrief?: AgentDebriefState
   /** Whether it uses its memory (admin.ai_agent.memory). */
   memory?: boolean
+  /** Whether a Telegram bot is set, which "Tell me on Telegram" needs; null when it cannot be told. */
+  telegram?: boolean | null
 }
 
 export interface AgentDebriefState {
@@ -3263,6 +3265,15 @@ export interface AgentDebriefState {
 }
 
 /** A research task: a goal the agent works on alone, request after request, within its budget. */
+/** A question a research task asked the operator. */
+export interface AgentQuestion {
+  question: string
+  why: string
+  choices: string[]
+  asked_at: string
+  request: number
+}
+
 export interface AgentTask {
   goal?: string
   budget: { usd: number; backtests: number; hours: number }
@@ -3278,6 +3289,10 @@ export interface AgentTask {
   ended_because?: string | null
   stopped_by?: string | null
   conclusion?: { conclusion: string; runs_kept: string[]; next_steps: string | null } | null
+  /** A question it asked the operator, which it waits for an answer to (ask_operator). */
+  question?: AgentQuestion | null
+  /** The questions it asked before, with the operator's answers. */
+  answers?: (AgentQuestion & { answer: string; answered_at: string; by: string | null })[]
 }
 
 export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -3295,6 +3310,9 @@ export interface AgentModel {
   available: boolean | null
   /** The models whose notes it reads. */
   reads: string[]
+  /** Whether it reads the images and the PDFs attached; null until the Models API says. */
+  images?: boolean | null
+  pdfs?: boolean | null
 }
 
 /** A model and an effort, as a request is asked with them. */
@@ -3322,7 +3340,7 @@ export interface AgentContext {
   unread: string[]
 }
 
-export type AgentContextPart = 'system' | 'tools' | 'asked' | 'thinking' | 'calls' | 'results' | 'answers' | 'conversation'
+export type AgentContextPart = 'system' | 'tools' | 'files' | 'asked' | 'thinking' | 'calls' | 'results' | 'answers' | 'conversation'
 
 export interface AgentLastCall {
   at: string | null
@@ -3340,7 +3358,7 @@ export interface AgentLastCall {
 }
 
 export interface AgentSubject {
-  kind: 'run' | 'script' | 'position' | 'signal' | 'day' | 'incident'
+  kind: 'run' | 'script' | 'position' | 'signal' | 'day' | 'incident' | 'briefing' | 'rule' | 'change' | 'draft'
   id: string
   label: string
   version?: number | null
@@ -3372,7 +3390,29 @@ export interface AgentConversationListed {
   /** Who asked it: an operator's address, or "debrief" for a daily debrief. */
   by?: string | null
   task?: AgentTask | null
+  /** How many things it holds attached, its subject among them (0 when only its subject). */
+  attached?: number
 }
+
+/** A file of the operator's computer, staged for a request or kept with its conversation (src/admin/agent/uploads.py). */
+export interface AgentFile {
+  kind: 'file'
+  id: string
+  name: string
+  type: 'image' | 'pdf' | 'text'
+  media_type: string
+  size: number
+  /** Values that looked like secrets, masked in a text before it was kept. */
+  masked: number
+}
+
+/** What a request shared: WATA's things, as a conversation's subject is said, and files. */
+export type AgentAttachment = AgentSubject | AgentFile
+
+/** What a request is asked to attach: a subject, or a staged file by its id. */
+export type AgentAttach =
+  | { kind: AgentSubject['kind']; id: string; version?: number; day?: string; at?: string }
+  | { kind: 'file'; id: string }
 
 export interface AgentStep {
   kind: 'note' | 'tool'
@@ -3395,6 +3435,8 @@ export interface AgentRequest {
   index: number
   prompt: string
   shared: AgentSubject | null
+  /** What it shared: its things and files (the conversation's subject alone for one asked before). */
+  attached?: AgentAttachment[]
   asked_at: string | null
   started_at: string | null
   ended_at: string | null
@@ -3413,6 +3455,61 @@ export interface AgentRequest {
   by?: string | null
   /** The entries of its memory it saved or forgot. */
   memory?: { name: string; action: AgentMemoryAction }[]
+  /** The charts it drew under its answer (show_chart). */
+  charts?: AgentChart[]
+  /** Its verdicts on runs, rules, days and positions (set_verdict). */
+  verdicts?: Pick<AgentVerdict, 'about' | 'tone' | 'line'>[]
+}
+
+/** A chart the agent drew under its answer, from figures its tools gave (src/admin/agent/charts.py). */
+export interface AgentChart {
+  id?: string
+  kind: 'line' | 'bar'
+  title: string
+  unit: string | null
+  series: { key: string; label: string }[]
+  /** A line's points: a moment and each series' value then, null for a gap. */
+  points?: ({ t: string } & Record<string, number | string | null>)[]
+  /** Bars' categories: a label and each series' value. */
+  categories?: ({ label: string } & Record<string, number | string | null>)[]
+  references: { value: number; label?: string | null }[]
+  tone?: 'series' | 'sign'
+  zero?: boolean
+  /** The tool calls and runs its figures come from. */
+  source: string
+}
+
+/** A research task that comes back by itself (src/admin/agent_routines.py). */
+export interface AgentRoutine {
+  id: string
+  name: string
+  goal: string
+  schedule: { every: 'trading_day' } | { every: 'week'; weekday: number; time: string }
+  budget: { usd: number; backtests: number; hours: number }
+  model: string | null
+  effort: AgentEffort | null
+  telegram: boolean
+  enabled: boolean
+  created_at: string
+  created_by: string | null
+  runs: { at: string; conversation: string; turn: string }[]
+  /** When it next comes back; the market's close may still hold it back. */
+  next: string | null
+}
+
+export type AgentRoutineDraft = Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'model' | 'effort' | 'telegram' | 'enabled'>
+
+export type AgentVerdictTone = 'positive' | 'mixed' | 'negative' | 'neutral'
+
+/** What the agent last concluded on a run, a rule, a day or a position, in one line (set_verdict). */
+export interface AgentVerdict {
+  /** run:<id>, rule:<id>, day:<YYYY-MM-DD>, position:<id>. */
+  about: string
+  tone: AgentVerdictTone
+  line: string
+  at: string
+  conversation: string
+  request: number
 }
 
 export interface AgentInputChange {
@@ -3445,9 +3542,20 @@ export interface AgentProposalRun {
   headline?: BacktestHeadline | null
 }
 
+/** An action on live trading the agent proposed: what it does, and what was seen when it was proposed. */
+export interface AgentAction {
+  kind: 'pause_entries' | 'resume_entries' | 'close_position' | 'restart' | 'rule_live' | 'rule_out_of_live'
+  position_id?: string
+  action?: string | null
+  instrument_name?: string | null
+  execution_time_open?: string | null
+  services?: { id: string; name: string }[]
+  rule?: { id: string; name: string; mode: string; indice: string }
+}
+
 export interface AgentProposal {
   id: string
-  kind: 'script' | 'rule' | 'settings' | 'new_script'
+  kind: 'script' | 'rule' | 'settings' | 'new_script' | 'new_rule' | 'action'
   request: number
   created_at: string
   status: 'proposed' | 'applied' | 'dismissed'
@@ -3465,6 +3573,15 @@ export interface AgentProposal {
   same?: string[]
   /** A rule's: the rule as it was, and what changes. */
   rule?: { id: string; name: string; mode: string; script_id: string; script_version: number }
+  /** A new rule's: the rule as the store makes it, the script it runs (or the new script proposed before it). */
+  new_rule?: {
+    fields: Pick<TaRule, 'name' | 'asset' | 'side' | 'bars' | 'inputs' | 'alerts' | 'alert_calls' | 'indice'> & { history_days?: number | null }
+    script: { id?: string; name: string; version: number; after_proposal?: string }
+    mode: 'shadow' | 'off'
+  }
+  /** An action's: what it does; applied from its card until fresh_until, through the page's own confirmation. */
+  action?: AgentAction
+  fresh_until?: string
   changes?: {
     script_version?: number
     after_proposal?: string
@@ -3483,6 +3600,13 @@ export interface AgentProposal {
     revision?: string
     backup?: string
     services?: string[]
+    /** A change of a script put in the editor, unsaved. */
+    into_editor?: boolean
+    /** An action done: what its route answered. */
+    entries_paused_since?: string | null
+    status?: string
+    position_id?: string
+    mode?: string
   } | null
   settled_at?: string
   settled_by?: string | null

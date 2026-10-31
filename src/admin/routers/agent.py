@@ -18,19 +18,32 @@ hand is not.
 
 import asyncio
 import json
+import secrets
 import time
 from typing import Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.agent_memory import KINDS, MAX_BODY, MAX_DESCRIPTION, MAX_ENTRIES, Author
+from src.admin.agent.prompts import CONFIG_REVIEW_PROMPT, DRAFT_REVIEW_PROMPT, RULE_REVIEW_PROMPT
+from src.admin.agent.proposals import testable_settings
+from src.admin.agent.service import MAX_ATTACHED
+from src.admin.agent.uploads import LARGEST, UnknownFile
+from src.admin.agent.verdicts import MAX_ASKED
+from src.admin.agent_jobs import read_config
+from src.admin.agent_routines import RoutineConflict, checked_fields, next_turn
+from src.admin.agent_telegram import ANSWER, TASK
 from src.admin.auth import client_ip, require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
 from src.admin.routers.config import changes_said, require_config_edit_enabled
+from src.admin.routers.ta import RuleFields
 from src.admin.ta_monitor import rules_by_id
+from src.admin.ta_rules import RuleStore
+from src.admin.ta_scripts import MAX_SOURCE_BYTES
 
 router = APIRouter(prefix="/api/agent", dependencies=[Depends(require_session)])
 
@@ -54,6 +67,10 @@ class Ask(BaseModel):
     # The request's model and effort; the conversation's last, or the settings', when not given.
     model: str | None = Field(None, max_length=40)
     effort: str | None = Field(None, max_length=10)
+    # Said on Telegram once answered (src/admin/agent_telegram.py).
+    tell: bool = False
+    # What the operator attaches to it: subjects, and files staged (kind "file", their id).
+    attach: list[Subject] | None = Field(None, max_length=MAX_ATTACHED)
 
 
 class NewConversation(Ask):
@@ -69,9 +86,53 @@ class TaskBudget(BaseModel):
 class NewTask(BaseModel):
     goal: str = Field(max_length=8000)
     subject: Subject | None = None
+    attach: list[Subject] | None = Field(None, max_length=MAX_ATTACHED)
     budget: TaskBudget
     model: str | None = Field(None, max_length=40)
     effort: str | None = Field(None, max_length=10)
+    # Its end said on Telegram.
+    tell: bool = False
+
+
+class Review(BaseModel):
+    # The operator's question; the review's own when not given.
+    prompt: str | None = Field(None, max_length=8000)
+    model: str | None = Field(None, max_length=40)
+    effort: str | None = Field(None, max_length=10)
+    tell: bool = False
+
+
+class ConfigReview(Review):
+    config: dict
+
+
+class RuleReview(Review):
+    # The rule changed; none for a new one.
+    rule_id: str | None = Field(None, max_length=64)
+    fields: RuleFields
+
+
+class ScriptReview(Review):
+    script_id: str = Field(max_length=64)
+    base_version: int = Field(ge=1)
+    source: str = Field(max_length=MAX_SOURCE_BYTES)
+
+
+class Answer(BaseModel):
+    answer: str = Field(max_length=4000)
+
+
+class RoutineFields(BaseModel):
+    # The routines' revision the page read: a change made meanwhile is never overwritten.
+    revision: str = Field(max_length=64)
+    name: str = Field(max_length=200)
+    goal: str = Field(max_length=8000)
+    schedule: dict
+    budget: TaskBudget
+    model: str | None = Field(None, max_length=40)
+    effort: str | None = Field(None, max_length=10)
+    telegram: bool = True
+    enabled: bool = True
 
 
 class Title(BaseModel):
@@ -86,6 +147,8 @@ class Feedback(BaseModel):
 class Apply(BaseModel):
     # A change of settings: the revision of config.json its preview was read at.
     revision: str | None = Field(None, max_length=128)
+    # A script's change from a draft reviewed: put in the operator's editor, unsaved, rather than saved.
+    into_editor: bool = False
 
 
 class MemoryEntry(BaseModel):
@@ -123,6 +186,27 @@ def _by(request: Request) -> str:
     return client_ip(request, request.app.state.ctx.trusted_proxies)
 
 
+# Whether a Telegram bot is set, read from the credentials at most this often (the pages read the state often).
+TELEGRAM_SEEN_SECONDS = 60.0
+_telegram_seen: dict = {}
+
+
+async def _telegram(ctx) -> bool | None:
+    """Whether the Telegram bot is set, as the Credentials page lists it; None when it cannot be told."""
+    if ctx.vault is None:
+        return None
+    if _telegram_seen.get("vault") is ctx.vault and time.monotonic() - _telegram_seen["at"] < TELEGRAM_SEEN_SECONDS:
+        return _telegram_seen["set"]
+    try:
+        listed = await ctx.vault.listed()
+    except Exception:
+        return None
+    entry = next((item for item in listed.get("items") or [] if item.get("name") == "telegram.bot"), {})
+    found = entry.get("where") in ("database", "old place")
+    _telegram_seen.update(vault=ctx.vault, at=time.monotonic(), set=found)
+    return found
+
+
 @router.get("")
 async def state(request: Request):
     """Whether the agent is on, the key set, the month's spending, its limits and what it is working on."""
@@ -131,6 +215,8 @@ async def state(request: Request):
         return {"enabled": False, "model": ctx.settings.ai_agent.model}
     said = await run_in_threadpool(ctx.agent.state)
     said["key"] = await ctx.agent.has_key()
+    # Whether "Tell me on Telegram" can be said: a Telegram bot is set.
+    said["telegram"] = await _telegram(ctx)
     return said
 
 
@@ -151,18 +237,233 @@ async def conversations(request: Request, subject: str | None = Query(None, max_
     return {"items": await run_in_threadpool(_agent(request).conversations, subject)}
 
 
+async def _tell(request: Request, meta: dict, kind: str) -> dict:
+    """What becomes of the request just asked (or of the task) said on Telegram once it ends."""
+    teller = request.app.state.ctx.teller
+    if teller is not None:
+        await run_in_threadpool(teller.add, meta["id"], kind, request=meta["request"] if kind == ANSWER else None)
+    return meta
+
+
+def _attach(body) -> list[dict] | None:
+    return [entry.model_dump() for entry in body.attach] if body.attach else None
+
+
 @router.post("/conversations", status_code=201)
 async def create(body: NewConversation, request: Request):
     subject = body.subject.model_dump() if body.subject is not None else None
-    return await _agent(request).create(subject, body.prompt, _by(request), body.model, body.effort)
+    meta = await _agent(request).create(subject, body.prompt, _by(request), body.model, body.effort,
+                                        attach=_attach(body))
+    return await _tell(request, meta, ANSWER) if body.tell else meta
 
 
 @router.post("/tasks", status_code=201)
 async def create_task(body: NewTask, request: Request):
     """A research task: a conversation the agent works on alone, request after request, within its budget."""
     subject = body.subject.model_dump() if body.subject is not None else None
-    return await _agent(request).create_task(body.goal, subject, _by(request), body.budget.model_dump(), body.model,
-                                             body.effort)
+    meta = await _agent(request).create_task(body.goal, subject, _by(request), body.budget.model_dump(), body.model,
+                                             body.effort, attach=_attach(body))
+    return await _tell(request, meta, TASK) if body.tell else meta
+
+
+# ── files of the operator's computer, attached to a request (src/admin/agent/uploads.py) ──
+
+@router.post("/files", status_code=201)
+async def stage_file(request: Request, file: UploadFile = File(...)):
+    """A file chosen, checked and kept until the request that sends it (an hour at most): what it is."""
+    agent = _agent(request)
+    too_large = HTTPException(status_code=413, detail=f"A file is {LARGEST // (1024 * 1024)} MB at most")
+    declared = request.headers.get("content-length") or ""
+    if declared.isdigit() and int(declared) > LARGEST + 64 * 1024:
+        raise too_large
+    data = await file.read(LARGEST + 1)
+    if len(data) > LARGEST:
+        raise too_large
+    return await run_in_threadpool(agent.uploads.stage, file.filename or "file", data)
+
+
+@router.delete("/files/{file_id}", status_code=204)
+async def unstage_file(file_id: str, request: Request):
+    """A file chosen and not sent, removed (its chip's ×)."""
+    try:
+        await run_in_threadpool(_agent(request).uploads.remove, file_id)
+    except UnknownFile:
+        raise HTTPException(status_code=404, detail="No such file waiting to be sent") from None
+    return Response(status_code=204)
+
+
+@router.get("/conversations/{conversation_id}/files/{file_id}")
+async def attached_file(conversation_id: str, file_id: str, request: Request):
+    """A file attached to a conversation, as it was sent: an image shown, any other downloaded."""
+    try:
+        entry, data = await run_in_threadpool(_agent(request).attachment, conversation_id, file_id)
+    except UnknownFile:
+        raise HTTPException(status_code=404, detail="No such file in this conversation") from None
+    image = entry.get("type") == "image"
+    return Response(content=data, media_type="text/plain; charset=utf-8" if entry.get("type") == "text"
+                    else entry["media_type"], headers={
+                        "Content-Disposition": f"{'inline' if image else 'attachment'}; "
+                                               f"filename*=UTF-8''{quote(entry['name'])}",
+                        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"})
+
+
+# ── a change reviewed before it is saved: nothing is saved here ──
+
+# A rule's parts a review says the change of.
+_RULE_PARTS = ("name", "asset", "side", "bars", "script", "inputs", "alerts", "alert_calls", "indice", "history_days")
+MAX_REVIEWED = 100
+
+
+def _part(rule: dict | None, part: str):
+    """A rule's part as a save compares it: its script by id and version, an input by id and value, nothing empty."""
+    value = (rule or {}).get(part)
+    if part == "script" and isinstance(value, dict):
+        return {"id": value.get("id"), "version": value.get("version")}
+    if part == "inputs":
+        return [{"id": entry.get("id"), "value": entry.get("value")} for entry in value or []]
+    if part == "alerts":
+        return [{"title": entry.get("title"), "action": entry.get("action")} for entry in value or []]
+    if isinstance(value, dict):
+        return {key: item for key, item in value.items() if item is not None}
+    return value
+
+
+async def _reviewed(request: Request, body: Review, subject: dict, prompt: str, files: dict | None = None) -> dict:
+    meta = await _agent(request).create(subject, body.prompt or prompt, _by(request), body.model, body.effort,
+                                        files=files)
+    return await _tell(request, meta, ANSWER) if body.tell else meta
+
+
+@router.post("/reviews/config", status_code=201)
+async def review_config(body: ConfigReview, request: Request):
+    """
+    The agent asked to review a change of config.json before the operator
+    saves it: the change as the Configuration page previews it (values
+    masked), which of its settings a backtest can test, the services it
+    restarts and its warnings. Nothing is saved.
+    """
+    ctx = request.app.state.ctx
+    _agent(request)
+    rules = await run_in_threadpool(rules_by_id, ctx.ta_scripts)
+    live_indices = sorted({rule["indice"] for rule in rules.values() if rule.get("mode") == "live"})
+    try:
+        preview = await run_in_threadpool(ctx.config_editor.preview, body.config, live_indices)
+    except ConfigInvalid as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    changes = preview["changes"]
+    if not changes:
+        raise HTTPException(status_code=422, detail="Nothing changed: there is nothing to review")
+    subject = {"kind": "change", "id": secrets.token_hex(4),
+               "label": f"a change of config.json, {len(changes)} key{'s' if len(changes) != 1 else ''}",
+               "change": {"of": "config", "changes": changes[:MAX_REVIEWED], "services": preview["impact"]["services"],
+                          "warnings": preview["warnings"], "testable": testable_settings(changes)}}
+    return await _reviewed(request, body, subject, CONFIG_REVIEW_PROMPT)
+
+
+@router.post("/reviews/rule", status_code=201)
+async def review_rule(body: RuleReview, request: Request):
+    """
+    The agent asked to review a change of a signal rule (or a new one) before
+    the operator saves it: what it changes, the rule as it would be. Its
+    script and libraries are pinned as a save pins them. Nothing is saved.
+    """
+    ctx = request.app.state.ctx
+    _agent(request)
+    store = RuleStore(ctx.ta_scripts)
+    loaded = await run_in_threadpool(store.load)
+    before = RuleStore.find(loaded["rules"], body.rule_id) if body.rule_id else None
+    after = body.fields.fields()
+    await run_in_threadpool(store.pin, after["script"]["id"], after["script"]["version"])
+    changes = [{"part": part, "before": _part(before, part), "after": _part(after, part)} for part in _RULE_PARTS
+               if before is None or json.dumps(_part(before, part), sort_keys=True, default=str)
+               != json.dumps(_part(after, part), sort_keys=True, default=str)]
+    if before is not None and not changes:
+        raise HTTPException(status_code=422, detail="Nothing changed: there is nothing to review")
+    rule = {key: before[key] for key in ("id", "name", "mode")} if before else None
+    subject = {"kind": "change", "id": secrets.token_hex(4),
+               "label": f"a change of the rule {before['name']}" if before else f"a new rule, {after['name']}",
+               "change": {"of": "rule", "rule": rule, "changes": changes, "after": after}}
+    return await _reviewed(request, body, subject, RULE_REVIEW_PROMPT)
+
+
+@router.post("/reviews/script", status_code=201)
+async def review_script(body: ScriptReview, request: Request):
+    """
+    The agent asked to review an unsaved draft of a script, made on one of
+    its versions: kept with the conversation, its difference and its check
+    shared. Nothing is saved; a fix the agent proposes is put in the editor.
+    """
+    ctx = request.app.state.ctx
+    _agent(request)
+    script = await run_in_threadpool(ctx.ta_scripts.script, body.script_id)
+    subject = {"kind": "draft", "id": secrets.token_hex(4), "label": f"a draft of {script['name']}",
+               "script_id": script["id"], "base_version": body.base_version}
+    return await _reviewed(request, body, subject, DRAFT_REVIEW_PROMPT, files={"draft.pine": body.source})
+
+
+# ── routines: research tasks that come back by themselves ──
+
+
+def _routines(request: Request):
+    _agent(request)
+    routines = request.app.state.ctx.routines
+    if routines is None:
+        raise HTTPException(status_code=503, detail="The routines are not available")
+    return routines
+
+
+async def _routine_saved(request: Request, body: RoutineFields, routine_id: str | None = None) -> dict:
+    ctx = request.app.state.ctx
+    routines = _routines(request)
+    fields = checked_fields(body.model_dump(exclude={"revision"}), ctx.agent.settings)
+    try:
+        return await run_in_threadpool(routines.store.save, fields, body.revision, _by(request), routine_id,
+                                       ctx.agent.settings.max_routines)
+    except RoutineConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@router.get("/routines")
+async def routines_list(request: Request):
+    """Each routine, its last runs and when it next comes back (the market's close may still hold it back)."""
+    ctx = request.app.state.ctx
+    routines = _routines(request)
+    loaded = await run_in_threadpool(routines.store.load)
+    config = await run_in_threadpool(read_config, ctx.settings.config_path)
+    now = time.time()
+    return {**loaded, "max": ctx.agent.settings.max_routines,
+            "routines": [{**routine, "next": next_turn(routine["schedule"], config, now)}
+                         for routine in loaded["routines"]]}
+
+
+@router.post("/routines", status_code=201)
+async def routine_create(body: RoutineFields, request: Request):
+    return await _routine_saved(request, body)
+
+
+@router.put("/routines/{routine_id}")
+async def routine_change(routine_id: str, body: RoutineFields, request: Request):
+    return await _routine_saved(request, body, routine_id)
+
+
+@router.delete("/routines/{routine_id}")
+async def routine_remove(routine_id: str, request: Request, revision: str = Query(..., max_length=64)):
+    try:
+        return await run_in_threadpool(_routines(request).store.remove, routine_id, revision)
+    except RoutineConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@router.post("/routines/{routine_id}/run", status_code=201)
+async def routine_run(routine_id: str, request: Request):
+    """A routine's task started now, whatever the hour: its conversation."""
+    return {"conversation": await _routines(request).run_now(routine_id)}
+
+
+@router.post("/conversations/{conversation_id}/task/answer")
+async def answer_task(conversation_id: str, body: Answer, request: Request):
+    """The operator's answer to the question a research task asked: it goes on, its next request starting with it."""
+    return await run_in_threadpool(_agent(request).answer_question, conversation_id, body.answer, _by(request))
 
 
 @router.post("/conversations/{conversation_id}/task/stop")
@@ -201,7 +502,9 @@ async def remove(conversation_id: str, request: Request):
 
 @router.post("/conversations/{conversation_id}/requests")
 async def ask(conversation_id: str, body: Ask, request: Request):
-    return await _agent(request).ask(conversation_id, body.prompt, _by(request), body.model, body.effort)
+    meta = await _agent(request).ask(conversation_id, body.prompt, _by(request), body.model, body.effort,
+                                     attach=_attach(body))
+    return await _tell(request, meta, ANSWER) if body.tell else meta
 
 
 @router.post("/conversations/{conversation_id}/stop")
@@ -229,6 +532,8 @@ async def apply(conversation_id: str, proposal_id: str, request: Request, body: 
     Configuration page saves them (``revision``: the one its preview was read at).
     """
     agent = _agent(request)
+    if body is not None and body.into_editor:
+        return await run_in_threadpool(agent.into_editor, conversation_id, proposal_id, _by(request))
     if body is None or body.revision is None:
         return await run_in_threadpool(agent.settle, conversation_id, proposal_id, True, _by(request))
     return await _save_settings(request, agent, conversation_id, proposal_id, body.revision)
@@ -313,6 +618,15 @@ async def stream(conversation_id: str, request: Request):
             agent.unsubscribe(conversation_id, queue)
 
     return StreamingResponse(frames(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+
+@router.get("/verdicts")
+async def verdicts(request: Request, about: list[str] = Query(default=[], max_length=MAX_ASKED)):
+    """What the agent last concluded on each of these things (run:<id>, rule:<id>, day:<date>, position:<id>)."""
+    agent = _agent(request)
+    if agent.verdicts is None:
+        return {"items": {}}
+    return {"items": await run_in_threadpool(agent.verdicts.of, [entry for entry in about if len(entry) <= 80])}
 
 
 @router.get("/artefacts")

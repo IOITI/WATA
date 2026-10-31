@@ -207,14 +207,21 @@ class ClaudeProvider:
         return message.model_dump(mode="json", by_alias=True, exclude_none=True)
 
     async def model_info(self, model_id: str) -> dict:
-        """What the Models API says of a model for this key: its window, its longest answer, the efforts it takes."""
+        """
+        What the Models API says of a model for this key: its window, its longest
+        answer, the efforts it takes, whether it reads images and PDFs (None when
+        it does not say).
+        """
         client = await self._current()
         found = (await client.with_options(max_retries=1, timeout=15).models.retrieve(model_id)).model_dump(mode="json")
-        effort = (found.get("capabilities") or {}).get("effort") or {}
+        capabilities = found.get("capabilities") or {}
+        effort = capabilities.get("effort") or {}
         return {
             "label": found.get("display_name"), "window": found.get("max_input_tokens"),
             "max_output": found.get("max_tokens"),
             "efforts": [level for level in EFFORTS if (effort.get(level) or {}).get("supported")] or None,
+            "images": (capabilities.get("image_input") or {}).get("supported"),
+            "pdfs": (capabilities.get("pdf_input") or {}).get("supported"),
         }
 
     async def count_tokens(self, params: dict) -> dict:

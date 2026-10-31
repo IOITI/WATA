@@ -74,19 +74,23 @@ def test_what_it_cannot_be_about_is_refused_before_anything_is_kept(agent, subje
 
 
 class Session:
-    """The tools of a request, answering each call with what it was asked."""
+    """The tools of a request, answering each call with what it was asked; the admin's reads it is given."""
 
-    def __init__(self, answers=None):
+    def __init__(self, answers=None, offered=("ops_health", "ops_logs", "ops_changes")):
         self.asked = []
         self.answers = answers or {}
+        self.offered = offered
+
+    def offers(self, name):
+        return name in self.offered
 
     async def call(self, name, arguments, request, **_):
         self.asked.append((name, arguments))
         return ToolAnswer(self.answers.get(name, json.dumps({"tool": name})))
 
 
-def shared(subject, answers=None):
-    session = Session(answers)
+def shared(subject, answers=None, **given):
+    session = Session(answers, **given)
     return asyncio.run(_shared_trading(session, subject, 0)), session.asked
 
 
@@ -104,10 +108,16 @@ def test_each_subject_is_shared_as_the_tools_read_it():
     assert asked[1] == ("data_position", {"position_id": "5001"}) and '"signal_uuid": "c0ffee"' in text
 
     text, asked = shared({"kind": "incident", "id": "trader", "at": "2026-10-28 15:31", "label": "trader at 15:31"})
+    before = ("ops_changes", {"until": "2026-10-28 15:31", "hours": 2})
     assert asked == [("ops_health", {}), ("ops_logs", {"service": LOG_OF["trader"], "around": "2026-10-28 15:31",
-                                                       "minutes": 15})]
-    # An entry of the health no log is kept for: its health alone.
+                                                       "minutes": 15}), before]
+    assert "What changed in the 2 hours before it:" in text
+    # An entry of the health no log is kept for: its health and what changed before it.
     _, asked = shared({"kind": "incident", "id": "postgres", "at": "2026-10-28 15:31", "label": "postgres"})
+    assert asked == [("ops_health", {}), before]
+    # Without leave to read the logs, nor the changes: its health alone.
+    _, asked = shared({"kind": "incident", "id": "trader", "at": "2026-10-28 15:31", "label": "trader"},
+                      offered=("ops_health",))
     assert asked == [("ops_health", {})]
 
 

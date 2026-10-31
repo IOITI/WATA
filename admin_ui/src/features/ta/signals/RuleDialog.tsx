@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertDescription, AlertTitle, Button, DragToConfirm, Input, Select, SettleModal, StepPanels, Stepper, useToast } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
+import { useAgentState } from '@/features/agent/useConversation'
 import { api, ApiError } from '@/lib/api'
 import type { TaRule, TaRules, TaScriptSummary } from '@/lib/types'
 
@@ -155,6 +156,11 @@ function RuleForm({
       onClose()
     },
   })
+  // The change reviewed by the AI agent before it is saved, in a tab of its own: this dialog keeps the draft.
+  const agentOn = !!useAgentState().data?.enabled
+  const askAgent = useMutation({
+    mutationFn: () => api.reviewRuleWithAgent(rule?.id ?? null, { ...fields, revision: rules.revision }),
+  })
   const saveError =
     save.error instanceof ApiError && save.error.status === 409 && save.error.message.includes('changed meanwhile')
       ? 'The rules changed since this dialog read them. Close it and open it again: the change will have to be made again.'
@@ -297,6 +303,25 @@ function RuleForm({
           )}
         </div>
       </StepPanels>
+
+      {step === REVIEW && agentOn && ready && (
+        <p className="text-xs text-muted-foreground">
+          {askAgent.data ? (
+            <>The AI agent reviews it:{' '}
+              <a className="underline" href={`/agent/${encodeURIComponent(askAgent.data.id)}`} target="_blank" rel="noreferrer">
+                its conversation, in a new tab
+              </a>; this dialog keeps your change.</>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" isLoading={askAgent.isPending} onClick={() => askAgent.mutate()}>
+                Ask the AI agent first
+              </Button>{' '}
+              It tests the change against the rule as it runs. Nothing is saved.
+            </>
+          )}
+          {askAgent.error && <span className="block text-danger" role="alert">{askAgent.error.message}</span>}
+        </p>
+      )}
 
       <div className="flex justify-end gap-2">
         {step === 0 ? (

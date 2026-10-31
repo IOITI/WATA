@@ -2,7 +2,8 @@
 The AI agent's daily debrief (src/admin/agent_debrief.py): once the market is
 closed by the live rules, the day's conversation is asked once, a quiet day is
 noted without a call to the API, what holds the agent back is tried again at
-the next tick, and the debrief written is said on Telegram once.
+the next tick, and the debrief written is said on Telegram once, by the agent's
+teller (src/admin/agent_telegram.py).
 """
 
 import asyncio
@@ -15,7 +16,8 @@ import pytz
 from src.admin.agent.prompts import DEBRIEF_PROMPT
 from src.admin.agent.settings import AgentSettings
 from src.admin.agent.store import ConversationStore
-from src.admin.agent_debrief import DailyDebrief, debriefed_day, said_of
+from src.admin.agent_debrief import DailyDebrief, debriefed_day
+from src.admin.agent_telegram import AgentTeller, said_of
 from src.admin.errors import NotPossible
 from tests.test_agent_loop import FakeProvider, answer, settled, text
 from tests.test_agent_tasks import agent_of, asked_text
@@ -80,8 +82,10 @@ class FakeAgent:
         return {"id": "20261028-210000-abcdef"}
 
     def conversation(self, conversation_id):
-        return {"id": conversation_id, "status": self.status, "error": None,
-                "requests": [{"answer": {"text": self.answer} if self.answer else None}]}
+        ended = "done" if self.status == "idle" else self.status
+        return {"id": conversation_id, "title": "Debrief of Wed 28 Oct 2026", "status": self.status, "error": None,
+                "proposals": [], "requests": [{"index": 0, "status": ended, "proposals": [],
+                                               "answer": {"text": self.answer} if self.answer else None}]}
 
 
 @pytest.fixture
@@ -92,38 +96,56 @@ def config_path(tmp_path):
 
 
 def debrief_of(agent, config_path, tmp_path, queries=None, said=None):
+    """The debrief, and the teller that says it (none when ``said`` is not kept)."""
+
     async def notify(message):
         said.append(message)
 
-    return DailyDebrief(agent=agent, queries=queries or Queries(signals=[{"signal_uuid": "a"}]), config_path=config_path,
-                        path=str(tmp_path / "debriefs.json"), notify=notify if said is not None else None)
+    teller = AgentTeller(agent=agent, path=str(tmp_path / "tell.json"), notify=notify) if said is not None else None
+    debrief = DailyDebrief(agent=agent, queries=queries or Queries(signals=[{"signal_uuid": "a"}]),
+                           config_path=config_path, path=str(tmp_path / "debriefs.json"), teller=teller)
+    return debrief, teller
 
 
 def test_once_the_market_is_closed_the_day_is_debriefed_once_and_said_once(config_path, tmp_path):
     agent, said = FakeAgent(), []
-    debrief = debrief_of(agent, config_path, tmp_path, said=said)
+    debrief, teller = debrief_of(agent, config_path, tmp_path, said=said)
 
     assert asyncio.run(debrief.catch_up(at("2026-10-28 15:00"))) is None, "the market is open"
     first = asyncio.run(debrief.catch_up(at("2026-10-28 22:30")))
-    again = asyncio.run(debrief.catch_up(at("2026-10-28 22:45")))
+    asyncio.run(teller.tell_due())
+    assert said == [], "said only once written"
+    asyncio.run(debrief.catch_up(at("2026-10-28 22:45")))
     agent.status = "idle"
-    written = asyncio.run(debrief.catch_up(at("2026-10-28 23:00")))
-    asyncio.run(debrief.catch_up(at("2026-10-28 23:15")))
+    asyncio.run(teller.tell_due())
+    asyncio.run(teller.tell_due())
 
     assert agent.created == [{"subject": {"kind": "day", "id": "2026-10-28"}, "prompt": DEBRIEF_PROMPT, "by": "debrief",
                               "model": "claude-sonnet-5-5", "effort": "medium",
                               "debrief": {"day": "2026-10-28", "max_usd": 0.5}}]
-    assert first["conversation"] == "20261028-210000-abcdef" and not first["said"]
-    assert again["said"] is False, "said only once written"
-    assert written["said"] is True
+    # Handed to the teller as soon as asked: said once written, and once only.
+    assert first["conversation"] == "20261028-210000-abcdef" and first["said"] is True
     assert said == ["📝 WATA's debrief of Wed 28 Oct:\n\nA quiet day: one long, sold at its target.\n\n"
                     "The whole of it: AI agent › Activity."]
-    assert list(debrief.days()) == ["2026-10-28"]
+    assert list(debrief.days()) == ["2026-10-28"] and teller.notes() == []
+
+
+def test_a_debrief_written_before_the_teller_said_it_is_handed_to_it(config_path, tmp_path):
+    agent, said = FakeAgent(), []
+    agent.status = "idle"
+    debrief, teller = debrief_of(agent, config_path, tmp_path, said=said)
+    (tmp_path / "debriefs.json").write_text(json.dumps({"days": {"2026-10-28": {
+        "at": "2026-10-28T20:31:00Z", "conversation": "20261028-210000-abcdef", "said": False}}}))
+
+    entry = asyncio.run(debrief.catch_up(at("2026-10-28 23:00")))
+    asyncio.run(teller.tell_due())
+
+    assert entry["said"] is True and agent.created == [] and len(said) == 1
 
 
 def test_a_quiet_day_is_noted_without_a_call_to_the_api(config_path, tmp_path):
     agent = FakeAgent()
-    debrief = debrief_of(agent, config_path, tmp_path, queries=Queries(), said=[])
+    debrief, _ = debrief_of(agent, config_path, tmp_path, queries=Queries(), said=[])
 
     entry = asyncio.run(debrief.catch_up(at("2026-10-28 22:30")))
 
@@ -133,7 +155,7 @@ def test_a_quiet_day_is_noted_without_a_call_to_the_api(config_path, tmp_path):
 def test_what_holds_the_agent_back_is_tried_again_at_the_next_tick(config_path, tmp_path):
     agent = FakeAgent()
     agent.refusal = "The AI agent is paused"
-    debrief = debrief_of(agent, config_path, tmp_path, said=[])
+    debrief, _ = debrief_of(agent, config_path, tmp_path, said=[])
 
     assert asyncio.run(debrief.catch_up(at("2026-10-28 22:30"))) is None and debrief.days() == {}
     agent.refusal = None
@@ -142,19 +164,23 @@ def test_what_holds_the_agent_back_is_tried_again_at_the_next_tick(config_path, 
 
 def test_off_or_without_telegram_nothing_is_asked_or_said(config_path, tmp_path):
     off = FakeAgent(debrief_enabled=False)
-    assert asyncio.run(debrief_of(off, config_path, tmp_path, said=[]).catch_up(at("2026-10-28 22:30"))) is None
+    assert asyncio.run(debrief_of(off, config_path, tmp_path, said=[])[0].catch_up(at("2026-10-28 22:30"))) is None
     assert off.created == []
 
     quiet, said = FakeAgent(debrief_telegram=False), []
     quiet.status = "idle"
-    entry = asyncio.run(debrief_of(quiet, config_path, tmp_path, said=said).catch_up(at("2026-10-28 22:30")))
-    assert entry["said"] is True and said == []
+    debrief, teller = debrief_of(quiet, config_path, tmp_path, said=said)
+    entry = asyncio.run(debrief.catch_up(at("2026-10-28 22:30")))
+    asyncio.run(teller.tell_due())
+    assert entry["said"] is True and said == [] and teller.notes() == []
 
 
 def test_a_debrief_that_could_not_be_written_is_said_so(config_path, tmp_path):
     agent, said = FakeAgent(), []
     agent.status, agent.answer = "failed", None
-    asyncio.run(debrief_of(agent, config_path, tmp_path, said=said).catch_up(at("2026-10-28 22:30")))
+    debrief, teller = debrief_of(agent, config_path, tmp_path, said=said)
+    asyncio.run(debrief.catch_up(at("2026-10-28 22:30")))
+    asyncio.run(teller.tell_due())
     assert said == ["📝 WATA's debrief of Wed 28 Oct could not be written: it ended without an answer. AI agent › Activity."]
 
 
@@ -187,7 +213,7 @@ def test_a_debrief_s_request_costs_its_own_and_starts_no_backtest(tmp_path):
 def test_it_waits_for_the_agent_s_tools_before_its_first_look(config_path, tmp_path, monkeypatch):
     agent = FakeAgent()
     agent.ready = False
-    debrief = debrief_of(agent, config_path, tmp_path, said=[])
+    debrief, _ = debrief_of(agent, config_path, tmp_path, said=[])
     looked = []
 
     async def catch_up(now=None):

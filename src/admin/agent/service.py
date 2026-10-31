@@ -22,6 +22,7 @@ other conversations changed in it since (``memory_seq`` of its meta).
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -29,7 +30,7 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timezone
 
 from starlette.concurrency import run_in_threadpool
 
@@ -47,7 +48,9 @@ from src.admin.agent.settings import EFFORTS
 from src.admin.agent.settings import MODELS as CHOICES
 from src.admin.agent.store import ConversationStore, UnknownConversation, month_of, stamp
 from src.admin.agent.tools import AgentTools
+from src.admin.agent.uploads import IMAGE, PDF, UnknownFile, Uploads
 from src.admin.errors import InvalidRequest, NotPossible
+from src.admin.ta_rules import RuleNotFound, RuleStore
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +64,35 @@ PRUNE_EVERY_SECONDS = 6 * 3600
 COUNTS_KEPT = 64
 # What a token count is given to end on: a request is counted as the operator's next one would be sent.
 _NEXT = {"type": "text", "text": "."}
-SUBJECT_KINDS = ("run", "script", "position", "signal", "day", "incident")
-RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT = SUBJECT_KINDS
+SUBJECT_KINDS = ("run", "script", "position", "signal", "day", "incident", "briefing", "rule", "change", "draft")
+RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT, BRIEFING, RULE, CHANGE, DRAFT = SUBJECT_KINDS
+# What the operator attaches to a request: a file of their computer (src/admin/agent/uploads.py), or one of these
+# (the day ahead, a change and a draft are the admin's own subjects); five at most in a conversation, the subject of
+# the page it was asked from counted.
+FILE = "file"
+ATTACHABLE = (RUN, SCRIPT, POSITION, SIGNAL, DAY, INCIDENT, RULE)
+MAX_ATTACHED = 5
+# What a change reviewed before it is saved may hold, as shared; a draft's diff from its version, as shared.
+MAX_CHANGE_CHARS = 64_000
+MAX_DIFF_CHARS = 30_000
+_REVIEW_ID = re.compile(r"^[0-9a-f]{8}$")
 # The log an incident of each entry of the health is read in (src/admin/logs.py LOG_SERVICES).
 LOG_OF = {
     "trader": "wata-trader-async", "saxo": "wata-trader-async", "position_monitor": "wata-position-monitor",
     "web_server": "wata-api", "scheduler": "wata-scheduler", "telegram": "wata-telegram",
     "watchlist_manager": "wata-watchlist-manager", "capital_feed": "wata-capital-feed", "ta_engine": "wata-ta-engine",
-    "admin": "wata-admin", "live_drift": "wata-admin", "backups": "wata-admin",
+    "admin": "wata-admin", "live_drift": "wata-admin", "backups": "wata-admin", "account_guard": "wata-trader-async",
 }
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MOMENT = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 _HEALTH_ID = re.compile(r"^[a-z_]{2,32}$")
 # What a conversation about a day or a signal reads of the day's signals and trades at most.
 SHARED_ROWS = 200
+# What an incident is shared of the changes before its moment.
+INCIDENT_CHANGES_HOURS = 2
+# What a morning briefing is shared of what changed since the day before, and of the day before's debrief.
+BRIEFING_CHANGES_HOURS = 18
+BRIEFING_DEBRIEF_CHARS = 3000
 FEEDBACK = ("like", "dislike", None)
 # A research task: working, done by the agent's word (task_done), or ended for another reason (said with it).
 TASK_WORKING, TASK_DONE, TASK_ENDED = "working", "done", "ended"
@@ -82,6 +100,11 @@ TASK_WORKING, TASK_DONE, TASK_ENDED = "working", "done", "ended"
 MAX_TASK_REQUESTS = 30
 # Less than this left of a task's dollars: no request is started, it could do nothing worth its cost.
 TASK_LEAST_USD = 0.10
+# A question a task asks the operator (ask_operator): its wait does not count in the task's hours, two days at most,
+# looked at this often.
+QUESTION_WAIT_HOURS = 48
+QUESTION_LOOK_SECONDS = 300
+MAX_ANSWER = 2000
 
 
 class AgentUnavailable(Exception):
@@ -90,9 +113,13 @@ class AgentUnavailable(Exception):
 
 class AgentService:
     def __init__(self, *, settings, store, provider, tools, proposals, backtests, scripts, key, publish,
-                 clock=time.time, queries=None, memory=None):
+                 clock=time.time, queries=None, memory=None, verdicts=None, uploads=None):
         self.settings = settings
         self.store = store
+        # The files chosen and not yet sent, staged beside the conversations.
+        self.uploads = uploads if uploads is not None else Uploads(os.path.join(store.root, "uploads"), clock=clock)
+        # Its verdicts shown on the pages (src/admin/agent/verdicts.py): they go with their conversations.
+        self.verdicts = verdicts
         # Its memory (src/admin/agent_memory.py): None without it (admin.ai_agent.memory).
         self.memory = memory
         # The research tools' named queries (src/admin/mcp_server/facade.py ReadQueries): a position, a day's journal.
@@ -121,6 +148,8 @@ class AgentService:
         self._base_counts: dict[tuple, dict] = {}
         self._counts: dict[tuple, dict] = {}
         self._refreshing: asyncio.Task | None = None
+        # The research tasks that wait for the operator's answer to their question.
+        self._questions: set[str] = set()
 
     @property
     def ready(self) -> bool:
@@ -143,6 +172,7 @@ class AgentService:
         # Ready (a conversation may be created: the daily debrief waits for it) once what a stop left is queued again.
         self._started = True
         workers = [asyncio.create_task(self._worker()) for _ in range(self.settings.max_running)]
+        workers.append(asyncio.create_task(self._questions_kept()))
         try:
             while True:
                 await run_in_threadpool(self._prune)
@@ -159,6 +189,10 @@ class AgentService:
         its next one asked.
         """
         for meta in reversed(self.store.metas()):
+            if (meta.get("task") or {}).get("question") and meta["task"].get("state") == TASK_WORKING:
+                # Waiting for the operator's answer: nothing to take up.
+                self._questions.add(meta["id"])
+                continue
             if meta.get("status") in transcript.UNDER_WAY and meta["id"] not in self._queued:
                 self.store.update_meta(meta["id"], status="queued")
                 self._enqueue(meta["id"], True)
@@ -189,6 +223,10 @@ class AgentService:
             raise
 
     def _prune(self) -> None:
+        try:
+            self.uploads.prune()
+        except OSError as e:
+            logger.warning(f"The AI agent's files waiting to be sent could not be pruned: {e}")
         if self.memory is not None:
             try:
                 self.memory.prune(self.settings.keep_days)
@@ -196,6 +234,8 @@ class AgentService:
                 logger.warning(f"The AI agent's memory history could not be pruned: {e}")
         try:
             removed = self.store.prune(self._clock(), self.settings.keep_days)
+            if self.verdicts is not None:
+                self.verdicts.forget(set(removed))
         except OSError as e:
             logger.warning(f"The AI agent's old conversations could not be removed: {e}")
             return
@@ -235,10 +275,12 @@ class AgentService:
         task = meta.get("task") or {}
         in_task = task.get("state") == TASK_WORKING
         settings = self._task_settings(task) if in_task else self.settings
-        if meta.get("debrief") and request == 0:
-            # A daily debrief: its own cost, and no backtest. A question asked after it has the agent's limits.
-            settings = replace(settings, max_request_usd=min(settings.max_request_usd, meta["debrief"]["max_usd"]),
-                               max_backtests=0)
+        capped = meta.get("debrief") or meta.get("job")
+        if capped and request == 0:
+            # A daily debrief, a briefing, a triage: its own cost, and its backtests (none unless said). A question
+            # asked after it has the agent's limits.
+            settings = replace(settings, max_request_usd=min(settings.max_request_usd, capped["max_usd"]),
+                               max_backtests=min(settings.max_backtests, capped.get("backtests", 0)))
         self._working.add(conversation_id)
         self.store.update_meta(conversation_id, status="running", model=model, effort=effort)
         pending = self._pending.setdefault(conversation_id, {})
@@ -287,7 +329,8 @@ class AgentService:
         """
         meta = self.store.meta(conversation_id)
         task = dict(meta.get("task") or {})
-        if task.get("state") != TASK_WORKING:
+        if task.get("state") != TASK_WORKING or task.get("question"):
+            # Ended, or waiting for the operator's answer to its question (a restart's recovery included).
             return task or None
         activity = self.store.read(conversation_id, "activity")
         task["spent_usd"] = round(meta.get("cost_usd") or 0.0, 6)
@@ -305,6 +348,17 @@ class AgentService:
         if why is not None:
             task.update(state=TASK_ENDED, ended_at=stamp(now), ended_because=why)
             return self.store.update_meta(conversation_id, task=task)["task"]
+        asked = next((event for event in reversed(activity)
+                      if event.get("event") == "question" and event.get("request") == request), None)
+        if asked is not None:
+            # It waits for the operator's answer: said on the pages (and on Telegram by the teller), no request asked.
+            task["question"] = {key: asked.get(key) for key in ("question", "choices", "why")}
+            task["question"].update(asked_at=stamp(now), request=request)
+            meta = self.store.update_meta(conversation_id, task=task)
+            self._questions.add(conversation_id)
+            self._publish("agent_question", conversation_id=conversation_id, title=meta.get("title"),
+                          question=task["question"]["question"])
+            return meta["task"]
         task["requests"] = (task.get("requests") or 1) + 1
         budget = task["budget"]
         prompt = task_going_on(task["spent_usd"], budget["usd"], task["backtests"], budget["backtests"], task["deadline"])
@@ -314,6 +368,80 @@ class AgentService:
                                           outcome=None, error=None, retry=False)
         self._asked_now(conversation_id, request + 1, prompt, None, "task", model, effort)
         return meta["task"]
+
+    def waiting_questions(self) -> list[dict]:
+        """The research tasks that wait for the operator's answer: their conversation, title and question."""
+        found = []
+        for conversation_id in list(self._questions):
+            try:
+                meta = self.store.meta(conversation_id)
+            except UnknownConversation:
+                self._questions.discard(conversation_id)
+                continue
+            question = (meta.get("task") or {}).get("question")
+            if question:
+                found.append({"conversation": conversation_id, "title": meta.get("title"), **question})
+        return found
+
+    def answer_question(self, conversation_id: str, answer, by: str | None) -> dict:
+        """
+        The operator's answer to a task's question: the task goes on, its next
+        request starting with it, its deadline moved by the time it waited.
+        """
+        self._check_room()
+        if not isinstance(answer, str) or not answer.strip() or len(answer) > MAX_ANSWER:
+            raise InvalidRequest(f"An answer is a few words, {MAX_ANSWER:,} characters at most")
+        meta = self.store.meta(conversation_id)
+        task = dict(meta.get("task") or {})
+        question = task.get("question")
+        if task.get("state") != TASK_WORKING or not question:
+            raise NotPossible("No question of this task waits for an answer")
+        now = self._clock()
+        waited = max(0.0, now - _seconds(question["asked_at"]))
+        task["deadline"] = stamp(_seconds(task["deadline"]) + waited)
+        task["question"] = None
+        task["answers"] = [*(task.get("answers") or []),
+                           {**question, "answer": answer.strip(), "answered_at": stamp(now), "by": by}]
+        task["requests"] = (task.get("requests") or 1) + 1
+        budget = task["budget"]
+        prompt = (task_going_on(task.get("spent_usd") or 0.0, budget["usd"], task.get("backtests") or 0,
+                                budget["backtests"], task["deadline"])
+                  + f"\n\nThe operator answered your question ({question['question']}): {answer.strip()}")
+        model, effort = self._kept_choice(meta)
+        request = meta["request"] + 1
+        with self._queuing(conversation_id):
+            meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request,
+                                          requests=(meta.get("requests") or request) + 1, updated_at=stamp(now),
+                                          outcome=None, error=None, retry=False)
+        self._questions.discard(conversation_id)
+        self._asked_now(conversation_id, request, prompt, None, "task", model, effort)
+        return meta
+
+    async def _questions_kept(self) -> None:
+        """Until cancelled: a question unanswered for QUESTION_WAIT_HOURS ends its task."""
+        while True:
+            await asyncio.sleep(QUESTION_LOOK_SECONDS)
+            try:
+                await run_in_threadpool(self.expire_questions)
+            except Exception:
+                logger.exception("The AI agent could not look at the questions its tasks ask")
+
+    def expire_questions(self) -> list[str]:
+        """The tasks whose question waited too long, ended; their conversations."""
+        ended = []
+        limit = stamp(self._clock() - QUESTION_WAIT_HOURS * 3600)
+        for waiting in self.waiting_questions():
+            if waiting["asked_at"] > limit:
+                continue
+            meta = self.store.meta(waiting["conversation"])
+            why = f"your answer to its question did not come in {QUESTION_WAIT_HOURS} hours"
+            task = {**meta["task"], "state": TASK_ENDED, "ended_at": stamp(self._clock()), "ended_because": why}
+            self.store.update_meta(waiting["conversation"], task=task)
+            self._questions.discard(waiting["conversation"])
+            self._publish("agent_finished", conversation_id=waiting["conversation"], title=meta.get("title"),
+                          outcome="done", detail=None, cost_usd=0.0, task=TASK_ENDED, task_detail=why)
+            ended.append(waiting["conversation"])
+        return ended
 
     def _task_ends(self, task: dict, status: str, now: float) -> str | None:
         """Why a working task makes no next request, or None."""
@@ -341,9 +469,13 @@ class AgentService:
     def _opening(self, meta: dict, request: int, settings) -> dict:
         prompt = next((event.get("prompt", "") for event in reversed(self.store.read(meta["id"], "activity"))
                        if event.get("event") == "request" and event.get("request") == request), "")
+        attached = [entry for entry in meta.get("attached") or [] if entry.get("request") == request]
+        if "attached" not in meta and request == 0 and meta.get("subject"):
+            # A conversation begun before things could be attached: its subject alone.
+            attached = [meta["subject"]]
         return {
             "prompt": prompt,
-            "subject": meta.get("subject") if request == 0 else None,
+            "attached": [{key: value for key, value in entry.items() if key != "request"} for entry in attached],
             "limits": limits_note(settings.max_tool_calls, settings.max_backtests, settings.max_request_usd),
             "shared": self._shared,
             "memory": (lambda: self._memory_said(meta["id"], request)) if self.memory is not None else None,
@@ -364,6 +496,21 @@ class AgentService:
     async def _shared(self, session, subject: dict, request: int) -> str:
         """What the operator shares at a conversation's start, as the tools read it."""
         kind = subject["kind"]
+        if kind == BRIEFING:
+            return await self._shared_briefing(session, subject, request)
+        if kind == CHANGE:
+            return subject_text("a change, to review before it is saved:", subject["label"],
+                                json.dumps(subject["change"], ensure_ascii=False, default=str))
+        if kind == DRAFT:
+            return await self._shared_draft(session, subject, request)
+        if kind == RULE:
+            listed = await session.call("rule_list", {}, request)
+            try:
+                line = next(rule for rule in json.loads(listed.text).get("rules") or [] if rule.get("id") == subject["id"])
+                shared = json.dumps(line, ensure_ascii=False, default=str)
+            except (TypeError, ValueError, StopIteration, AttributeError):
+                shared = f"(not read: {listed.text[:500]}; read it with rule_list)"
+            return subject_text("the signal rule", f"{subject.get('label') or subject['id']} ({subject['id']})", shared)
         if kind in (POSITION, SIGNAL, DAY, INCIDENT):
             paper = await self._paper_day(subject["id"]) if kind == DAY else None
             return await _shared_trading(session, subject, request, paper)
@@ -378,6 +525,59 @@ class AgentService:
             arguments["version"] = subject["version"]
         answer = await session.call("pine_get", arguments, request)
         return subject_text("the Pine script", f"{subject.get('label') or subject['id']} ({subject['id']})", answer.text)
+
+    async def _shared_draft(self, session, subject: dict, request: int) -> str:
+        """An unsaved draft of the operator's script: what changed from its version, and whether it compiles."""
+        def read() -> tuple[str, str]:
+            draft = self.store.read_file(session.conversation_id, "draft.pine") or ""
+            return draft, self._scripts.source(subject["script_id"], subject["base_version"])
+
+        draft, base = await run_in_threadpool(read)
+        diff = "\n".join(difflib.unified_diff(base.splitlines(), draft.splitlines(), f"version {subject['base_version']}",
+                                              "the draft", lineterm=""))
+        if len(diff) > MAX_DIFF_CHARS:
+            diff = diff[:MAX_DIFF_CHARS] + "\n… (cut: read the whole draft below)"
+        checked = await session.call("pine_check", {"source": draft}, request) if draft else None
+        parts = [f"What changed from version {subject['base_version']} of script {subject['script_id']}:\n"
+                 f"{diff or '(nothing: the draft is that version)'}",
+                 f"Its check:\n{checked.text if checked is not None else '(the draft is empty)'}",
+                 f"The whole draft:\n{draft}"]
+        return subject_text("an unsaved draft of the script,", subject["label"], "\n\n".join(parts))
+
+    async def _shared_briefing(self, session, subject: dict, request: int) -> str:
+        """
+        The day ahead, before its trading starts: trading now as the dashboard
+        reads it, the health, the rules, what changed since the day before's
+        close, and the day before as its debrief told it.
+        """
+        async def read(tool: str, arguments: dict) -> str | None:
+            if not session.offers(tool):
+                return None
+            answer = await session.call(tool, arguments, request)
+            return answer.text if not answer.is_error else f"(not read: {answer.text})"
+
+        parts = [
+            ("Trading now", await read("ops_trading_now", {})),
+            ("The admin's health", await read("ops_health", {})),
+            ("The signal rules", await read("rule_list", {})),
+            (f"What changed in the last {BRIEFING_CHANGES_HOURS} hours",
+             await read("ops_changes", {"hours": BRIEFING_CHANGES_HOURS})),
+            ("The day before, as its debrief told it", await run_in_threadpool(self._debrief_before, subject["id"])),
+        ]
+        return subject_text("the day ahead", subject["id"],
+                            "\n\n".join(f"{name}:\n{text}" for name, text in parts if text is not None))
+
+    def _debrief_before(self, day: str) -> str:
+        """The answer of the newest daily debrief of a day before ``day``, or why there is none."""
+        found = [meta for meta in self.store.metas()
+                 if (meta.get("debrief") or {}).get("day", "") < day and meta.get("status") not in transcript.UNDER_WAY]
+        if not found:
+            return "No debrief of a day before it."
+        newest = max(found, key=lambda meta: meta["debrief"]["day"])
+        said = transcript.project(newest, self.store.read(newest["id"], "activity"), {})
+        answer = next((entry.get("answer") for entry in said["requests"] if entry.get("answer")), None)
+        text = (answer or {}).get("text") or "It was not written."
+        return f"The debrief of {newest['debrief']['day']}:\n{text[:BRIEFING_DEBRIEF_CHARS]}"
 
     async def _paper_day(self, day: str) -> str:
         """The signals received that day traded on paper under the live settings, as the Performance page shows it."""
@@ -488,6 +688,8 @@ class AgentService:
             "available": said.get("available"),
             # Whose notes it reads: the pages say which a switch to it leaves out.
             "reads": list(model.reads),
+            # Whether it reads the images and the PDFs attached: None until the Models API says.
+            "images": said.get("images"), "pdfs": said.get("pdfs"),
         }
 
     async def refresh_models(self) -> None:
@@ -506,7 +708,8 @@ class AgentService:
                 else:
                     logger.info(f"The AI agent could not read {model_id} from the Models API: {e!r}")
                 continue
-            self._models[model_id] = {**{key: value for key, value in said.items() if value}, "available": True}
+            self._models[model_id] = {**{key: value for key, value in said.items() if value is not None},
+                                      "available": True}
 
     def _refresh_soon(self) -> None:
         """The Models API asked in the background once a key is there: it may have been set since the start."""
@@ -541,18 +744,22 @@ class AgentService:
             return None
         kind, subject_id = subject.get("kind"), subject.get("id")
         if kind not in SUBJECT_KINDS or not isinstance(subject_id, str) or not subject_id:
-            raise InvalidRequest("A conversation is about a run, a script, a position, a signal, a day or an incident")
-        if kind in (RUN, SCRIPT):
+            raise InvalidRequest("A conversation is about a run, a script, a position, a signal, a day, an incident, "
+                                 "the day ahead, a signal rule or a change reviewed before it is saved")
+        if kind in (RUN, SCRIPT, RULE):
             return await run_in_threadpool(self._stored_subject, kind, subject_id, subject.get("version"))
+        if kind in (CHANGE, DRAFT):
+            return await run_in_threadpool(self._reviewed, subject)
         if kind == INCIDENT:
             at = subject.get("at")
             if not _HEALTH_ID.match(subject_id) or not isinstance(at, str) or not _MOMENT.match(at):
                 raise InvalidRequest("An incident is an entry of the health and a moment: YYYY-MM-DD HH:MM (UTC)")
             return {"kind": INCIDENT, "id": subject_id, "at": at, "label": f"{subject_id.replace('_', ' ')} at {at} UTC"}
-        if kind == DAY:
+        if kind in (DAY, BRIEFING):
             if not _DAY.match(subject_id):
                 raise InvalidRequest("A day is YYYY-MM-DD")
-            return {"kind": DAY, "id": subject_id, "label": f"the day of {subject_id}"}
+            label = f"the day of {subject_id}" if kind == DAY else f"the day ahead, {subject_id}"
+            return {"kind": kind, "id": subject_id, "label": label}
         if self._queries is None:
             raise NotPossible("WATA's positions and signals cannot be read here")
         if kind == POSITION:
@@ -571,7 +778,97 @@ class AgentService:
             raise InvalidRequest(f"No signal {subject_id} on {day}")
         return {"kind": SIGNAL, "id": subject_id, "day": day, "label": f"{row.get('action') or 'the'} signal of {day}"}
 
+    async def _attached(self, attach, held: list[dict]) -> list[dict]:
+        """
+        What a request attaches, checked before anything is kept: each subject
+        named as one a conversation is about, each file as it was staged; five
+        at most in a conversation with what it holds (``held``), none twice.
+        """
+        if not attach:
+            return []
+        if not isinstance(attach, list):
+            raise InvalidRequest("What is attached is a list")
+        if len(held) + len(attach) > MAX_ATTACHED:
+            raise InvalidRequest(f"A conversation has {MAX_ATTACHED} things attached at most")
+        seen = {_identity(entry) for entry in held}
+        checked = []
+        for entry in attach:
+            kind = entry.get("kind") if isinstance(entry, dict) else None
+            if kind == FILE:
+                try:
+                    found = {"kind": FILE, **await run_in_threadpool(self.uploads.describe, entry.get("id"))}
+                except UnknownFile:
+                    raise InvalidRequest("A file attached is no longer waiting to be sent: attach it again") from None
+            elif kind in ATTACHABLE:
+                found = await self._subject(entry)
+            else:
+                raise InvalidRequest("Attach a run, a script, a signal rule, a position, a signal, a day, an incident "
+                                     "or a file")
+            if _identity(found) in seen:
+                raise InvalidRequest(f"{found.get('label') or found.get('name')} is attached already")
+            seen.add(_identity(found))
+            checked.append(found)
+        return checked
+
+    async def _taken(self, attached: list[dict]) -> dict[str, bytes]:
+        """The bytes of the files attached, no longer staged: kept with the conversation they are sent in."""
+        taken = {}
+        for entry in attached:
+            if entry["kind"] == FILE:
+                try:
+                    _, taken[entry["id"]] = await run_in_threadpool(self.uploads.take, entry["id"])
+                except UnknownFile:
+                    raise InvalidRequest(f"{entry['name']} is no longer waiting to be sent: attach it again") from None
+        return taken
+
+    def _check_readable(self, model: str, attached: list[dict]) -> None:
+        """No image is sent to a model the Models API says reads none, nor a PDF to one that reads no PDF."""
+        entry = self._model_entry(model)
+        for kind, key, said in ((IMAGE, "images", "images"), (PDF, "pdfs", "PDFs")):
+            if entry.get(key) is False and any(found.get("kind") == FILE and found.get("type") == kind
+                                               for found in attached):
+                raise InvalidRequest(f"{entry['label']} does not read {said}: choose another model")
+
+    def attachment(self, conversation_id: str, file_id: str) -> tuple[dict, bytes]:
+        """A file attached to a conversation, as the operator gave it (a text cleaned), and what is said of it."""
+        meta = self.store.meta(conversation_id)
+        entry = next((found for found in meta.get("attached") or []
+                      if found.get("kind") == FILE and found.get("id") == file_id), None)
+        data = self.store.read_attachment(conversation_id, file_id) if entry is not None else None
+        if data is None:
+            raise UnknownFile(f"No file {file_id!r} in {conversation_id}")
+        return entry, data
+
+    def _reviewed(self, subject: dict) -> dict:
+        """
+        A change reviewed before it is saved, as the review's route made it
+        (src/admin/routers/agent.py): config.json's or a rule's changes, or a
+        script's draft, its source given as the conversation's file.
+        """
+        if not isinstance(subject.get("id"), str) or not _REVIEW_ID.match(subject["id"]):
+            raise InvalidRequest("A review is asked from the page that edits what it reviews")
+        label = str(subject.get("label") or "")[:MAX_TITLE]
+        if subject["kind"] == CHANGE:
+            change = subject.get("change")
+            if not isinstance(change, dict) or change.get("of") not in ("config", "rule"):
+                raise InvalidRequest("A review is asked from the page that edits what it reviews")
+            if len(json.dumps(change, default=str)) > MAX_CHANGE_CHARS:
+                raise InvalidRequest("This change is too large to review at once: review it in parts")
+            return {"kind": CHANGE, "id": subject["id"], "label": label, "change": change}
+        script = self._scripts.script(subject.get("script_id") or "")
+        base = subject.get("base_version")
+        if not isinstance(base, int) or not 1 <= base <= script["version"]:
+            raise InvalidRequest(f"{script['name']!r} has no version {base}")
+        return {"kind": DRAFT, "id": subject["id"], "label": label or f"a draft of {script['name']}",
+                "script_id": script["id"], "base_version": base}
+
     def _stored_subject(self, kind: str, subject_id: str, version) -> dict:
+        if kind == RULE:
+            try:
+                rule = RuleStore(self._scripts).rule(subject_id)
+            except RuleNotFound:
+                raise InvalidRequest(f"WATA has no signal rule {subject_id}") from None
+            return {"kind": RULE, "id": subject_id, "label": rule["name"]}
         if kind == RUN:
             if self._backtests is None:
                 raise NotPossible("Backtests are switched off in the configuration (admin.backtests_enabled)")
@@ -583,17 +880,34 @@ class AgentService:
         return {"kind": SCRIPT, "id": subject_id, "label": script["name"], "version": version or script["version"]}
 
     async def create(self, subject: dict | None, prompt: str, by: str | None, model: str | None = None,
-                     effort: str | None = None, *, task: dict | None = None, debrief: dict | None = None) -> dict:
+                     effort: str | None = None, *, task: dict | None = None, debrief: dict | None = None,
+                     job: dict | None = None, files: dict[str, str] | None = None, attach: list | None = None) -> dict:
+        """
+        A conversation, its first request queued. ``job``: one the admin asks
+        by itself (a briefing, a triage, a dossier): its kind, title, what its
+        first request may cost (``max_usd``) and its backtests (none unless
+        said). ``files``: kept with it before its first request starts (the
+        draft a review is about). ``attach``: what the operator attached to it
+        besides the page's subject (``_attached``); it is about the first.
+        """
         self._check_room()
         await self._check_key()
         prompt = _prompt(prompt)
         self._refresh_soon()
         model, effort = self._choice(model, effort)
         subject = await self._subject(subject)
+        given = [subject] if subject is not None else []
+        attached = await self._attached(attach, given)
+        everything = given + attached
+        self._check_readable(model, everything)
+        subject = subject or next((entry for entry in attached if entry["kind"] != FILE), None)
+        taken = await self._taken(attached)
         now = self._clock()
         conversation_id = self.store.new_id(now)
         if debrief is not None:
             title = f"Debrief of {date.fromisoformat(debrief['day']):%a %d %b %Y}"
+        elif job is not None and job.get("title"):
+            title = job["title"][:MAX_TITLE]
         else:
             title = _title(task["goal"] if task else prompt)
         meta = {
@@ -607,13 +921,23 @@ class AgentService:
         if debrief is not None:
             # A daily debrief (src/admin/agent_debrief.py): its day, and what its request may cost.
             meta["debrief"] = debrief
+        if job is not None:
+            meta["job"] = job
+        if attached:
+            # What it holds, each with the request it came with: it is listed beside each (conversations). Without
+            # anything attached, its subject alone, as before.
+            meta["attached"] = [{**entry, "request": 0} for entry in everything]
         with self._queuing(conversation_id):
             await run_in_threadpool(self.store.create, meta)
-        self._asked_now(conversation_id, 0, prompt, subject, by, model, effort)
+            for name, text in (files or {}).items():
+                await run_in_threadpool(self.store.write_file, conversation_id, name, text)
+            for file_id, data in taken.items():
+                await run_in_threadpool(self.store.write_attachment, conversation_id, file_id, data)
+        self._asked_now(conversation_id, 0, prompt, subject, by, model, effort, everything if attached else [])
         return meta
 
     async def create_task(self, goal: str, subject: dict | None, by: str | None, budget: dict,
-                          model: str | None = None, effort: str | None = None) -> dict:
+                          model: str | None = None, effort: str | None = None, attach: list | None = None) -> dict:
         """
         A research task: a conversation the agent works on alone, request after
         request, within its budget (dollars, backtests, hours: each at most the
@@ -628,7 +952,7 @@ class AgentService:
             "requests": 1, "by": by, "ended_at": None, "ended_because": None, "conclusion": None,
         }
         return await self.create(subject, task_opening(goal, usd, backtests, task["deadline"]), by, model, effort,
-                                 task=task)
+                                 task=task, attach=attach)
 
     def _task_budget(self, budget) -> tuple[float, int, float]:
         settings = self.settings
@@ -652,15 +976,16 @@ class AgentService:
         if task.get("state") != TASK_WORKING:
             raise NotPossible("This task has ended already")
         task = {**task, "state": TASK_ENDED, "ended_at": stamp(self._clock()), "ended_because": "stopped by the operator",
-                "stopped_by": by}
+                "stopped_by": by, "question": None}
         meta = self.store.update_meta(conversation_id, task=task)
+        self._questions.discard(conversation_id)
         if meta.get("status") in transcript.UNDER_WAY:
             self.stop(conversation_id)
         self._changed(conversation_id)
         return meta
 
     async def ask(self, conversation_id: str, prompt: str, by: str | None, model: str | None = None,
-                  effort: str | None = None) -> dict:
+                  effort: str | None = None, attach: list | None = None) -> dict:
         self._check_room()
         await self._check_key()
         prompt = _prompt(prompt)
@@ -668,20 +993,30 @@ class AgentService:
         if meta.get("status") in transcript.UNDER_WAY:
             raise NotPossible("The agent is still working on this conversation: wait for its answer, or stop it")
         model, effort = self._choice(model, effort, meta)
+        # What it holds already: a conversation begun before things could be attached, its subject alone.
+        held = meta.get("attached") or ([{**meta["subject"], "request": 0}] if meta.get("subject") else [])
+        attached = await self._attached(attach, held)
+        self._check_readable(model, held + attached)
+        taken = await self._taken(attached)
         request = meta["request"] + 1
+        more = {"attached": [*held, *({**entry, "request": request} for entry in attached)]} if attached else {}
         with self._queuing(conversation_id):
+            for file_id, data in taken.items():
+                await run_in_threadpool(self.store.write_attachment, conversation_id, file_id, data)
             meta = self.store.update_meta(conversation_id, status="queued", request=request,
                                           requests=(meta.get("requests") or request) + 1,
                                           updated_at=stamp(self._clock()), outcome=None, error=None, retry=False,
-                                          model=model, effort=effort)
-        self._asked_now(conversation_id, request, prompt, None, by, model, effort)
+                                          model=model, effort=effort, **more)
+        self._asked_now(conversation_id, request, prompt, None, by, model, effort, attached)
         return meta
 
     def _asked_now(self, conversation_id: str, request: int, prompt: str, subject: dict | None, by: str | None,
-                   model: str, effort: str) -> None:
+                   model: str, effort: str, attached: list[dict] | None = None) -> None:
+        # shared: the conversation's subject, as the pages of before read it; attached: all the request shares.
         self.store.append(conversation_id, "activity", {"at": stamp(self._clock()), "event": "request",
                                                          "request": request, "prompt": prompt, "shared": subject,
-                                                         "by": by, "model": model, "effort": effort})
+                                                         "attached": attached or [], "by": by, "model": model,
+                                                         "effort": effort})
         self._enqueue(conversation_id, False)
         self._changed(conversation_id)
 
@@ -735,7 +1070,8 @@ class AgentService:
         lines = await run_in_threadpool(self.store.read, conversation_id, "messages") if conversation_id else []
         tools = self._tools.definitions()
         drop_block = meta.get("digest") not in (None, digest_of(tools))
-        messages = transcript.api_messages(lines)
+        messages = await run_in_threadpool(
+            transcript.api_messages, lines, lambda file_id: self.store.read_attachment(conversation_id, file_id))
         self._refresh_soon()
         try:
             counted = await self._counted(model, effort, tools, messages, drop_block, (conversation_id, len(lines)))
@@ -753,6 +1089,7 @@ class AgentService:
             thinking_written=transcript.thinking_written(lines, model.reads),
             unread=[claude.label_of(writer) for writer in claude.unread_by(model.id, transcript.thinking_writers(lines))],
             clearing={"from_tokens": CLEAR_FROM_TOKENS, "keep_tool_uses": KEEP_TOOL_USES},
+            files=transcript.files_in(lines),
         )
 
     async def _counted(self, model, effort: str, tools: list[dict], messages: list[dict], drop_block: bool,
@@ -777,11 +1114,19 @@ class AgentService:
             counted = await self._count(counted_params(request_params(model, effort, tools, ending, drop_block)))
             unthought = await self._count(counted_params(request_params(
                 model, effort, tools, transcript.without_thinking(ending), False)))
+            # The files attached, counted without the thinking as well: a thinking block holds only with what was
+            # sent before it.
+            in_files = 0
+            if transcript.without_files(ending) != ending:
+                unfiled = await self._count(counted_params(request_params(
+                    model, effort, tools, transcript.without_thinking(transcript.without_files(ending)), False)))
+                in_files = max(0, unthought["input_tokens"] - unfiled["input_tokens"])
             original = (counted.get("context_management") or {}).get("original_input_tokens")
             self._counts[count_key] = {
                 "conversation": counted["input_tokens"] - base["with_tools"],
                 "thinking": max(0, counted["input_tokens"] - unthought["input_tokens"]),
                 "cleared": max(0, (original or counted["input_tokens"]) - counted["input_tokens"]),
+                "files": in_files,
             }
             while len(self._counts) > COUNTS_KEPT:
                 self._counts.pop(next(iter(self._counts)))
@@ -794,12 +1139,13 @@ class AgentService:
         metas = self.store.metas()
         if subject:
             kind, _, subject_id = subject.partition(":")
-            metas = [meta for meta in metas if (meta.get("subject") or {}).get("kind") == kind
-                     and (meta.get("subject") or {}).get("id") == subject_id]
+            metas = [meta for meta in metas
+                     if any(held.get("kind") == kind and held.get("id") == subject_id
+                            for held in [meta.get("subject") or {}, *(meta.get("attached") or [])])]
         return [{**{key: meta.get(key) for key in (
             "id", "title", "subject", "status", "model", "created_at", "updated_at", "requests", "cost_usd",
             "outcome", "error", "by",
-        )}, "task": _task_line(meta.get("task"))} for meta in metas]
+        )}, "attached": len(meta.get("attached") or []), "task": _task_line(meta.get("task"))} for meta in metas]
 
     def rename(self, conversation_id: str, title: str) -> dict:
         if not isinstance(title, str) or not title.strip():
@@ -811,6 +1157,8 @@ class AgentService:
         if meta.get("status") in transcript.UNDER_WAY:
             raise NotPossible("The agent is working on this conversation: stop it first")
         self.store.remove(conversation_id)
+        if self.verdicts is not None:
+            self.verdicts.forget({conversation_id})
 
     def feedback(self, conversation_id: str, request: int, value: str | None) -> None:
         meta = self.store.meta(conversation_id)
@@ -823,6 +1171,20 @@ class AgentService:
     def settle(self, conversation_id: str, proposal_id: str, apply: bool, by: str | None) -> dict:
         settle = self.proposals.apply if apply else self.proposals.dismiss
         proposal = settle(conversation_id, proposal_id, by)
+        self._changed(conversation_id)
+        return proposal
+
+    def into_editor(self, conversation_id: str, proposal_id: str, by: str | None) -> dict:
+        """A script's change, proposed on a draft reviewed, put in the operator's editor: applied, nothing saved."""
+        if (self.store.meta(conversation_id).get("subject") or {}).get("kind") != DRAFT:
+            raise InvalidRequest("Only a change proposed on a draft reviewed is put in the editor")
+        proposal = self.proposals.into_editor(conversation_id, proposal_id, by)
+        self._changed(conversation_id)
+        return proposal
+
+    def settle_action(self, conversation_id: str, proposal_id: str, by: str | None, result: dict) -> dict:
+        """An action proposed, done by the page's route (src/admin/proposed_actions.py): applied."""
+        proposal = self.proposals.action_applied(conversation_id, proposal_id, by, result)
         self._changed(conversation_id)
         return proposal
 
@@ -886,17 +1248,31 @@ async def _shared_trading(session, subject: dict, request: int, paper: str | Non
         return subject_text("the signal", f"{label} ({subject['id']})", shared)
     shared = f"The admin's health now:\n{await read('ops_health', {})}"
     service = LOG_OF.get(subject["id"])
-    if service:
+    if service and session.offers("ops_logs"):
         shared += (f"\n\nThe lines of {service} around {subject['at']} (UTC):\n"
                    f"{await read('ops_logs', {'service': service, 'around': subject['at'], 'minutes': 15})}")
+    if session.offers("ops_changes"):
+        shared += (f"\n\nWhat changed in the {INCIDENT_CHANGES_HOURS} hours before it:\n"
+                   f"{await read('ops_changes', {'until': subject['at'], 'hours': INCIDENT_CHANGES_HOURS})}")
     return subject_text("the incident", label, shared)
+
+
+def _seconds(moment: str) -> float:
+    """A moment as the store writes it (YYYY-MM-DDTHH:MM:SSZ), in seconds."""
+    return datetime.strptime(moment, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
 
 
 def _task_line(task: dict | None) -> dict | None:
     """What a list of conversations says of a task: its state and budget, not its conclusion."""
     if not task:
         return None
-    return {key: task.get(key) for key in ("state", "budget", "spent_usd", "backtests", "deadline", "ended_because")}
+    return {key: task.get(key) for key in ("state", "budget", "spent_usd", "backtests", "deadline", "ended_because",
+                                           "question")}
+
+
+def _identity(entry: dict) -> tuple:
+    """What tells two things attached apart: a script's versions, an incident's moments are each their own."""
+    return entry.get("kind"), entry.get("id"), entry.get("version") or entry.get("at")
 
 
 def _prompt(prompt) -> str:
@@ -918,11 +1294,13 @@ def build_agent(ctx, ops=None) -> AgentService:
     endpoint has it), the key opened on demand, and what the admin lets it read
     of itself (``ops``: its health, its logs; src/admin/context.py agent_of).
     """
+    from src.admin.agent.verdicts import VerdictStore
     from src.admin.mcp_server.calls import CallLog
     from src.admin.mcp_server.facade import ResearchServices
 
     settings = ctx.settings
     store = ConversationStore(settings.agent_path)
+    verdicts = VerdictStore(settings.agent_path)
     backtests = ctx.backtests if settings.backtests_enabled else None
     memory = getattr(ctx, "agent_memory", None) if settings.ai_agent.memory else None
     proposals = Proposals(store, ctx.ta_scripts, backtests=backtests)
@@ -936,7 +1314,8 @@ def build_agent(ctx, ops=None) -> AgentService:
 
     return AgentService(
         settings=settings.ai_agent, store=store, provider=claude.ClaudeProvider(key),
-        tools=AgentTools(research, proposals, ops=ops, memory=memory), proposals=proposals,
+        tools=AgentTools(research, proposals, ops=ops, memory=memory, verdicts=verdicts,
+                         actions=settings.ai_agent.action_proposals), proposals=proposals,
         backtests=backtests, scripts=ctx.ta_scripts, key=key,
-        publish=ctx.events.publish, queries=research.queries, memory=memory,
+        publish=ctx.events.publish, queries=research.queries, memory=memory, verdicts=verdicts,
     )

@@ -35,6 +35,11 @@ def _release(request: Request):
     return release
 
 
+async def held_now(ctx, status: dict) -> dict[str, str]:
+    """What holds each waiting container back now: what the AI agent reads of a deploy (src/admin/agent_ops.py)."""
+    return (await _held(ctx, status))[0]
+
+
 async def _held(ctx, status: dict) -> tuple[dict[str, str], dict]:
     """What holds each waiting container back now, as the admin sees it (watadeploy reads it again)."""
     situation = await situation_of(ctx)

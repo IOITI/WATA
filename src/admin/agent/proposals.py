@@ -10,7 +10,12 @@ A proposal writes nothing but itself (``proposals.json`` of its conversation):
 - a change to settings of config.json that a backtest reads (the FIELDS of
   src/backtest/settings.py read from it), resting on finished runs;
 - a new script of the operator's, an indicator or a strategy, from one of
-  Claude's own.
+  Claude's own;
+- a new signal rule of the operator's, in shadow or off (never live), running
+  one of their scripts (or the new script proposed before it), resting on runs;
+- an action on live trading (admin.ai_agent.action_proposals): a pause or a
+  resume of new entries, a position closed, services restarted, a rule taken
+  live or out of live.
 
 Applying is the operator's click, through the stores' own checks: the script's
 version the change was made on (ScriptConflict, a 409, when it moved on), the
@@ -22,6 +27,11 @@ Neither is an audited action, as the same saves made by hand are not.
 Settings are applied by the agent's route (src/admin/routers/agent.py) with the
 Configuration editor's preview and save, audited as the Configuration page's
 saves are: this package never reaches the editor, it only says what to write.
+
+An action is applied by the page's own route, as the operator's click there
+would (src/admin/proposed_actions.py): the route checks the proposal is still
+waiting and fresh (ACTION_FRESH_MINUTES) before it acts, says it in its audit
+entry, and marks it applied once done. Nothing here acts.
 """
 
 import difflib
@@ -33,17 +43,29 @@ from src.admin.agent.store import PROPOSAL_ID, stamp
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
 from src.admin.mcp_server.facade import CLAUDE
 from src.admin.rule_history import RecordedRuleStore
-from src.admin.ta_rules import LIVE, RuleNotFound, RuleStore
+from src.admin.ta_rules import (LIVE, OFF, SHADOW, InvalidRule, RuleConflict, RuleNotFound, RuleStore, checked_alerts,
+                                 checked_asset, checked_bars, checked_history_days, checked_inputs)
 from src.admin.ta_scripts import (LIBRARY, MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, InvalidScript, ScriptConflict,
                                     ScriptNotFound)
 from src.backtest.settings import FIELDS, FIELDS_BY_NAME, InvalidSettings, with_changes
 
 PROPOSED, APPLIED, DISMISSED = "proposed", "applied", "dismissed"
-SCRIPT, RULE, SETTINGS, NEW_SCRIPT = "script", "rule", "settings", "new_script"
+SCRIPT, RULE, SETTINGS, NEW_SCRIPT, NEW_RULE, ACTION = "script", "rule", "settings", "new_script", "new_rule", "action"
+# The actions on live trading it may propose, each applied by the page's own route.
+PAUSE, RESUME, CLOSE, RESTART, RULE_LIVE, RULE_OUT = (
+    "pause_entries", "resume_entries", "close_position", "restart", "rule_live", "rule_out_of_live")
+ACTIONS = (PAUSE, RESUME, CLOSE, RESTART, RULE_LIVE, RULE_OUT)
+# An action proposed longer ago than this is no longer applied from its card: the situation may have changed.
+ACTION_FRESH_MINUTES = 30
+# What System restarts, by id: the services an action may restart.
+RESTARTABLE = {service.id: service.name for service in config_catalog.SERVICES}
 MAX_TITLE = 160
 MAX_RATIONALE = 4000
 # The runs a change of settings rests on, at most.
 MAX_RUNS = 6
+# A new rule rests on runs of its script too: its week in shadow comes after them, not instead.
+NEW_RULE_RUNS = ("Name the finished runs it rests on: backtests of its script on its asset and bars "
+                 "(backtest_start with source.kind pine)")
 # Read by a backtest from config.json, but said in words rather than proposed: whether the window around US
 # releases is on and its events (a rule added or removed, a list), the timezone of the hours (its absence means
 # the trading one), and the TA engine's days (every rule's engine day moves).
@@ -53,6 +75,12 @@ _SAID_IN_WORDS = frozenset({
 })
 PROPOSED_SETTINGS = tuple(entry.name for entry in FIELDS if entry.source and entry.name not in _SAID_IN_WORDS)
 _RULES = "trade.rules."
+
+
+def testable_settings(changes: list[dict]) -> dict[str, str]:
+    """Of config.json's changes, those a backtest reads, by path: the setting's name in backtest_options."""
+    testable = {catalog_path(entry.source): entry.name for entry in FIELDS if entry.source}
+    return {change["path"]: testable[change["path"]] for change in changes if change.get("path") in testable}
 
 
 class ProposalRefused(Exception):
@@ -80,6 +108,22 @@ def fields_of(rule: dict) -> dict:
         "indice": rule["indice"],
         "history_days": rule.get("history_days"),
     }
+
+
+def _asset_of(asset) -> dict:
+    """capital/<EPIC>, as data_assets names it: the asset a rule runs on."""
+    provider, _, key = str(asset or "").partition("/")
+    if provider != "capital" or not key:
+        raise ProposalRefused("A rule runs on the bars the Capital.com feed records: asset is capital/<EPIC>")
+    return {"provider": provider, "key": key}
+
+
+def _bars_of(text) -> dict:
+    """1, 5, 45S... (bars of time) or R60 (range bars), as rule_list says them."""
+    text = str(text or "1").strip()
+    if text[:1] in ("R", "r"):
+        return {"type": "range", "ticks": int(text[1:]) if text[1:].isdigit() else 0}
+    return {"type": "time", "timeframe": text}
 
 
 def catalog_path(source: str) -> str:
@@ -259,9 +303,11 @@ class Proposals:
         proposal.update(settings=settings, runs=runs, same=[name for name in names if name not in kept])
         return self._record(conversation_id, proposal)
 
-    def _finished_runs(self, run_ids: list) -> list[dict]:
+    def _finished_runs(self, run_ids: list,
+                       missing: str = "Name the finished runs the change rests on (backtest_start with the changes)",
+                       ) -> list[dict]:
         if not run_ids:
-            raise ProposalRefused("Name the finished runs the change rests on (backtest_start with the changes)")
+            raise ProposalRefused(missing)
         runs = []
         for run_id in dict.fromkeys(run_ids):
             try:
@@ -294,6 +340,105 @@ class Proposals:
             new_script={"name": name, "description": (arguments.get("description") or "").strip()[:MAX_DESCRIPTION_LENGTH]},
             lines={"added": len(source.splitlines()), "removed": 0},
         )
+        return self._record(conversation_id, proposal)
+
+    def propose_action(self, conversation_id: str, request: int, arguments: dict, position: dict | None = None) -> dict:
+        """
+        An action on live trading, as it was seen when proposed: the position
+        open (``position``, read by the caller), the services System restarts,
+        the rule and its mode. Applied by the page's own route, never here.
+        """
+        action = arguments.get("action")
+        seen: dict = {}
+        if action == CLOSE:
+            if position is None:
+                raise ProposalRefused(f"WATA has no position {arguments.get('position_id')}")
+            if position.get("position_status") != "Open":
+                raise ProposalRefused(f"Position {position.get('position_id')} is not open: nothing to close")
+            seen = {key: position.get(key) for key in ("position_id", "action", "instrument_name", "execution_time_open")}
+        elif action == RESTART:
+            services = list(dict.fromkeys(arguments.get("services") or []))
+            unknown = [service for service in services if service not in RESTARTABLE]
+            if not services or unknown:
+                raise ProposalRefused(f"Restart services among {', '.join(RESTARTABLE)}: the admin restarts last")
+            seen = {"services": [{"id": service, "name": RESTARTABLE[service]} for service in services]}
+        elif action in (RULE_LIVE, RULE_OUT):
+            try:
+                rule = RuleStore.find(self._rules.load()["rules"], arguments.get("rule_id"))
+            except RuleNotFound as e:
+                raise ProposalRefused(str(e)) from None
+            if action == RULE_LIVE and rule.get("made_by") == CLAUDE:
+                raise ProposalRefused(f"{rule['name']!r} is one of your own rules: those never go live")
+            if action == RULE_LIVE and rule["mode"] != "shadow":
+                raise ProposalRefused(f"{rule['name']!r} is {rule['mode']}: only a rule in shadow goes live, its "
+                                      "signals journaled first")
+            if action == RULE_OUT and rule["mode"] != LIVE:
+                raise ProposalRefused(f"{rule['name']!r} is not live")
+            seen = {"rule": {"id": rule["id"], "name": rule["name"], "mode": rule["mode"], "indice": rule["indice"]}}
+        elif action not in (PAUSE, RESUME):
+            raise ProposalRefused(f"An action is one of {', '.join(ACTIONS)}")
+        proposal = self._new(ACTION, request, arguments)
+        proposal.update(action={"kind": action, **seen},
+                        fresh_until=stamp(self._clock() + ACTION_FRESH_MINUTES * 60))
+        return self._record(conversation_id, proposal)
+
+    def propose_new_rule(self, conversation_id: str, request: int, arguments: dict) -> dict:
+        """
+        A new signal rule of the operator's, checked as the rules' store checks
+        one, running one of their scripts (or the new script proposed before
+        it), in shadow or off, resting on runs made from it. Never live.
+        """
+        rules = self._rules.load()["rules"]
+        name = " ".join(_text(arguments.get("name"), "A name", MAX_TITLE).split())
+        if any(rule["name"].casefold() == name.casefold() for rule in rules):
+            raise ProposalRefused(f"A rule is named {name!r} already: choose another name")
+        mode = arguments.get("mode", SHADOW)
+        if mode not in (SHADOW, OFF):
+            raise ProposalRefused("A new rule is in shadow or off: going live is the operator's, once it is ready")
+        if arguments.get("after_proposal"):
+            first = self._store.proposals(conversation_id).get(arguments["after_proposal"])
+            if first is None or first["kind"] != NEW_SCRIPT:
+                raise ProposalRefused("after_proposal is one of your proposals of a new script")
+            script = {"after_proposal": first["id"], "name": first["new_script"]["name"], "version": 1}
+        else:
+            try:
+                target = self._scripts.script(arguments.get("script_id") or "")
+            except ScriptNotFound as e:
+                raise ProposalRefused(str(e)) from None
+            if target.get("made_by") == CLAUDE:
+                raise ProposalRefused(f"{target['name']!r} is one of your own scripts: propose it as the operator's "
+                                      "first (propose_new_script), then this rule after it (after_proposal)")
+            if target["kind"] == LIBRARY:
+                raise ProposalRefused(f"{target['name']!r} is a library: a rule runs an indicator or a strategy")
+            version = arguments.get("script_version") or target["version"]
+            try:
+                self._rules.pin(target["id"], version)
+            except Exception as e:
+                raise ProposalRefused(str(e)) from None
+            script = {"id": target["id"], "name": target["name"], "version": version}
+        try:
+            fields = {
+                "name": name, "asset": checked_asset(_asset_of(arguments.get("asset"))),
+                "side": arguments.get("side", "bid"), "bars": checked_bars(_bars_of(arguments.get("bars"))),
+                "inputs": checked_inputs([{"id": key, "value": value}
+                                          for key, value in (arguments.get("inputs") or {}).items()]),
+                "alerts": checked_alerts([{"title": title, "action": action}
+                                          for title, action in (arguments.get("alerts") or {}).items()]),
+                "alert_calls": arguments.get("alert_calls", "ignore"), "confidence_plot": None,
+                "indice": arguments.get("indice"),
+            }
+            history_days = checked_history_days(arguments.get("history_days"))
+        except InvalidRule as e:
+            raise ProposalRefused(str(e)) from None
+        if history_days is not None:
+            fields["history_days"] = history_days
+        if fields["side"] not in ("bid", "ask"):
+            raise ProposalRefused("The side is bid or ask")
+        if fields["alert_calls"] != "message" and all(entry["action"] == "ignore" for entry in fields["alerts"]):
+            raise ProposalRefused("None of its alerts makes a signal: map a title to long, short or close-position")
+        runs = self._finished_runs(arguments.get("runs") or [], NEW_RULE_RUNS) if self._backtests is not None else []
+        proposal = self._new(NEW_RULE, request, arguments)
+        proposal.update(new_rule={"fields": fields, "script": script, "mode": mode}, runs=runs)
         return self._record(conversation_id, proposal)
 
     def _name_taken(self, name: str) -> bool:
@@ -329,10 +474,14 @@ class Proposals:
         proposals, proposal = self._proposal(conversation_id, proposal_id)
         if proposal["kind"] == SETTINGS:
             raise NotPossible("A change of settings is saved from its preview, as the Configuration page saves it")
+        if proposal["kind"] == ACTION:
+            raise NotPossible("An action is applied from its card, through the page's own confirmation")
         if proposal["kind"] == SCRIPT:
             result = self._apply_script(proposal)
         elif proposal["kind"] == NEW_SCRIPT:
             result = self._apply_new_script(proposal)
+        elif proposal["kind"] == NEW_RULE:
+            result = self._apply_new_rule(proposals, proposal)
         else:
             result = self._apply_rule(proposals, proposal)
         return self._settled(conversation_id, proposals, proposal, APPLIED, by, result)
@@ -368,6 +517,32 @@ class Proposals:
             config_catalog.place(config, path, change["after"])
         return config
 
+    def into_editor(self, conversation_id: str, proposal_id: str, by: str | None) -> dict:
+        """
+        A script's change put in the operator's editor rather than saved: its
+        draft's source is read by the page, which holds it unsaved.
+        """
+        proposals, proposal = self._proposal(conversation_id, proposal_id)
+        if proposal["kind"] != SCRIPT:
+            raise InvalidRequest("Only a new version of a script is put in the editor")
+        return self._settled(conversation_id, proposals, proposal, APPLIED, by,
+                             {"into_editor": True, "script_id": proposal["script"]["id"]})
+
+    def pending_action(self, conversation_id: str, proposal_id: str, kind: str) -> dict:
+        """An action proposed, still waiting and fresh, of the kind the route applying it does; refused otherwise."""
+        _, proposal = self._proposal(conversation_id, proposal_id)
+        if proposal["kind"] != ACTION or proposal["action"]["kind"] != kind:
+            raise InvalidRequest(f"Proposal {proposal_id} is not an action of this kind")
+        if stamp(self._clock()) > proposal.get("fresh_until", ""):
+            raise NotPossible(f"Proposed over {ACTION_FRESH_MINUTES} minutes ago: the situation may have changed. "
+                              "Act from the page itself, if you still want it")
+        return proposal
+
+    def action_applied(self, conversation_id: str, proposal_id: str, by: str | None, result: dict) -> dict:
+        """The action done by the page's route: the proposal applied, with what the route answered."""
+        proposals, proposal = self._proposal(conversation_id, proposal_id)
+        return self._settled(conversation_id, proposals, proposal, APPLIED, by, result)
+
     def dismiss(self, conversation_id: str, proposal_id: str, by: str | None) -> dict:
         proposals, proposal = self._proposal(conversation_id, proposal_id)
         return self._settled(conversation_id, proposals, proposal, DISMISSED, by)
@@ -392,6 +567,24 @@ class Proposals:
         except InvalidScript as e:
             raise NotPossible(str(e)) from None
         return {"script_id": made["id"], "version": made["version"], "name": made["name"]}
+
+    def _apply_new_rule(self, proposals: dict, proposal: dict) -> dict:
+        """The operator's new rule, made by the rules' store as the Signal rules page makes one: in shadow or off."""
+        script = proposal["new_rule"]["script"]
+        if script.get("after_proposal"):
+            first = proposals.get(script["after_proposal"]) or {}
+            if first.get("status") != APPLIED:
+                raise NotPossible(f"Create the new script first ({first.get('title') or 'its proposal'})")
+            pin = {"id": first["result"]["script_id"], "version": first["result"]["version"]}
+        else:
+            pin = {"id": script["id"], "version": script["version"]}
+        loaded = self._rules.load()
+        try:
+            made = self._rules.create({**proposal["new_rule"]["fields"], "script": pin}, loaded["revision"],
+                                      proposal["new_rule"]["mode"])["rule"]
+        except (RuleConflict, InvalidRule, ScriptNotFound) as e:
+            raise NotPossible(str(e)) from None
+        return {"rule_id": made["id"], "name": made["name"], "mode": made["mode"]}
 
     def _apply_rule(self, proposals: dict, proposal: dict) -> dict:
         changes = proposal["changes"]

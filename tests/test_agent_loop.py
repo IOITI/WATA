@@ -65,8 +65,12 @@ class FakeProvider:
 
 
 class FakeSession:
-    def __init__(self, tools):
+    def __init__(self, tools, conversation_id=None):
         self.tools = tools
+        self.conversation_id = conversation_id
+
+    def offers(self, name):
+        return any(tool["name"] == name for tool in TOOLS)
 
     async def call(self, name, arguments, request, progress=lambda detail: None, stopping=lambda: False):
         tools = self.tools
@@ -85,6 +89,10 @@ class FakeSession:
                 return ToolAnswer('{"noted":true}', task_done={"conclusion": arguments.get("conclusion"),
                                                                "runs_kept": arguments.get("runs_kept") or [],
                                                                "next_steps": arguments.get("next_steps")})
+            if name == "ask_operator":
+                return ToolAnswer('{"asked":true}', question={"question": arguments.get("question"),
+                                                              "why": arguments.get("why"),
+                                                              "choices": arguments.get("choices") or []})
             return ToolAnswer(f'{{"tool":"{name}"}}')
         finally:
             tools.running -= 1
@@ -110,7 +118,7 @@ class FakeTools:
     @asynccontextmanager
     async def session(self, conversation_id, task=False):
         self.sessions += 1
-        yield FakeSession(self)
+        yield FakeSession(self, conversation_id)
 
 
 @pytest.fixture

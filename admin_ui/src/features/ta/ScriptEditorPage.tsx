@@ -11,6 +11,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { NotFoundState } from '@/components/NotFoundState'
 import { AgentSheet } from '@/features/agent/AgentSheet'
 import { NEW, withAgent } from '@/features/agent/model'
+import { useAgentState } from '@/features/agent/useConversation'
 import { useSession } from '@/features/auth/auth-context'
 import { isSignIn } from '@/features/auth/returnPath'
 import { api, ApiError, isNotFound } from '@/lib/api'
@@ -64,6 +65,8 @@ function ScriptEditor({ id }: { id: string | undefined }) {
     id ? null : { source: TEMPLATES[newKind], name: '', description: '', base: 0 },
   )
   const [conflict, setConflict] = useState<string | null>(null)
+  // The draft last sent to the AI agent for review: a change it proposes on it goes into the editor while it holds it.
+  const [reviewed, setReviewed] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   // The last test that ran, drawn under the editor.
   const [tested, setTested] = useState<TestDone | null>(null)
@@ -96,6 +99,16 @@ function ScriptEditor({ id }: { id: string | undefined }) {
   }, [draft, script, newKind])
 
   const update = useCallback((changes: Partial<Draft>) => setDraft((before) => (before ? { ...before, ...changes } : before)), [])
+
+  // The unsaved draft sent to the AI agent for review: its conversation opens beside the editor.
+  const agentOn = !!useAgentState().data?.enabled
+  const review = useMutation({
+    mutationFn: (sent: Draft) => api.reviewScriptWithAgent(script!.id, sent.base, sent.source),
+    onSuccess: (made, sent) => {
+      setReviewed(sent.source)
+      navigate(withAgent(searchParams, made.id))
+    },
+  })
 
   const saveMutation = useMutation({
     mutationFn: async (): Promise<TaScript> => {
@@ -207,6 +220,14 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                 <ButtonLink to={withAgent(searchParams, NEW)} variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />}>
                   Ask the AI agent
                 </ButtonLink>
+                {dirty && agentOn && (
+                  <Hint content="The agent reads your changes, unsaved, checks them and proposes a fix you put in here, or not">
+                    <Button variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />} isLoading={review.isPending}
+                      onClick={() => draft && review.mutate(draft)}>
+                      Ask about this draft
+                    </Button>
+                  </Hint>
+                )}
               </>
             )}
             <Hint content={errors > 0 ? 'It can be saved with its errors, and fixed later' : null} wrap={!dirty}>
@@ -219,12 +240,23 @@ function ScriptEditor({ id }: { id: string | undefined }) {
       {script && (
         <AgentSheet
           subject={{ kind: 'script', id: script.id, label: script.name, version: script.version }}
-          // A new version of this script, while the editor holds changes not saved: they would be left behind.
-          blockedFor={(proposal) => (dirty && proposal.kind === 'script' && proposal.script?.id === script.id
-            ? 'Save or drop your changes in the editor first: applying it saves a new version.' : null)}
-          // A new version saved from its proposal: the editor starts again from it.
+          // A new version of this script, while the editor holds changes not saved: they would be left behind. One made
+          // on a draft reviewed goes into the editor instead, while the editor holds that draft.
+          blockedFor={(proposal, conversation) => {
+            if (proposal.kind !== 'script' || proposal.script?.id !== script.id || !dirty) return null
+            if (conversation.subject?.kind === 'draft') {
+              return draft?.source === reviewed ? null : 'The editor changed since you asked: ask again, or make the change by hand.'
+            }
+            return 'Save or drop your changes in the editor first: applying it saves a new version.'
+          }}
+          // A new version saved from its proposal: the editor starts again from it; one put in the editor: unsaved there.
           onApplied={(proposal) => {
             if (proposal.kind !== 'script' || proposal.script?.id !== script.id) return
+            if (proposal.result?.into_editor && proposal.draft) {
+              void api.taScriptVersion(proposal.draft.id, proposal.draft.version)
+                .then((version) => setDraft((current) => (current ? { ...current, source: version.source } : current)))
+              return
+            }
             void queryClient.fetchQuery({ queryKey: ['ta-script', script.id], queryFn: () => api.taScript(script.id) })
               .then((fresh) => setDraft(fromScript(fresh)))
           }}

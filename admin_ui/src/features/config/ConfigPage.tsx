@@ -2,9 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertDescription, AlertTitle, Button, Loader, PageHeader, QueryState, SaveBar, useToast } from 'ioiti-ui'
 import { RouterLeaveGuard } from 'ioiti-ui/react-router'
 import { useCallback, useMemo, useState } from 'react'
-import { Outlet } from 'react-router'
+import { Outlet, useNavigate, useSearchParams } from 'react-router'
 
 import { ConfirmLiveAction } from '@/components/ConfirmLiveAction'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { withAgent } from '@/features/agent/model'
+import { useAgentState } from '@/features/agent/useConversation'
 import { isSignIn } from '@/features/auth/returnPath'
 import { api, ApiError } from '@/lib/api'
 import type { ConfigCatalog, ConfigDocument, ConfigHistoryEntry, ConfigSaved, JsonObject, JsonValue } from '@/lib/types'
@@ -51,6 +54,17 @@ function ConfigEditor({ catalog, doc, history, lastSaved, onSaved, dismissSaved 
   }, [])
 
   const preview = useMutation({ mutationFn: (config: JsonObject) => api.validateConfig(config) })
+  // The change reviewed by the AI agent before it is saved: its conversation opens beside the page, the draft kept.
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const agentOn = !!useAgentState().data?.enabled
+  const askAgent = useMutation({
+    mutationFn: () => api.reviewConfigWithAgent(draft),
+    onSuccess: (made) => {
+      setReviewing(false)
+      navigate(withAgent(searchParams, made.id))
+    },
+  })
   const save = useMutation({
     mutationFn: () => api.saveConfig(draft, doc.revision),
     onSuccess: async (saved) => {
@@ -196,12 +210,25 @@ function ConfigEditor({ catalog, doc, history, lastSaved, onSaved, dismissSaved 
                 validators.
               </p>
               <ReviewChanges catalog={catalog} preview={preview.data} />
+              {agentOn && (
+                <div className="space-y-1">
+                  <Button variant="outline" size="sm" isLoading={askAgent.isPending} onClick={() => askAgent.mutate()}>
+                    Ask the AI agent first
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    It tests what a backtest can test against the live values and says whether the data supports the
+                    change. Nothing is saved; your changes stay here.
+                  </p>
+                  {askAgent.error && <p className="text-xs text-danger" role="alert">{askAgent.error.message}</p>}
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">This configuration cannot be saved as it is.</p>
           )
         }
       />
+      <AgentSheet />
     </ConfigEditorContext.Provider>
   )
 }

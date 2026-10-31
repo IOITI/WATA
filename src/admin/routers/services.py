@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from src.admin import proposed_actions
+from src.admin.agent.proposals import RESTART
 from src.admin.auth import client_ip, require_session
 from src.admin.errors import ServiceUnavailable
 from src.admin.routers.actions import require_actions_enabled
@@ -44,10 +46,13 @@ NO_CONTROL = "No control service runs beside this admin: restart the services on
 class RestartRequest(BaseModel):
     services: list[str] = Field(min_length=1, max_length=len(ORDER))
     force: bool = False
+    # The AI agent's proposal this restart applies, from its card (src/admin/proposed_actions.py).
+    proposal: str | None = Field(None, max_length=proposed_actions.MAX_REF)
 
 
 class OneRestart(BaseModel):
     force: bool = False
+    proposal: str | None = Field(None, max_length=proposed_actions.MAX_REF)
 
 
 def plans(ctx) -> RestartPlans | None:
@@ -111,12 +116,15 @@ async def services(request: Request):
     }
 
 
-async def _start(request: Request, services: list[str], force: bool) -> dict:
+async def _start(request: Request, services: list[str], force: bool, proposal: str | None = None) -> dict:
     ctx = request.app.state.ctx
     try:
         wanted = ordered(services)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from None
+    found = await proposed_actions.pending(ctx, proposal, RESTART)
+    if found and {entry["id"] for entry in found["proposal"]["action"].get("services") or []} != set(wanted):
+        raise HTTPException(status_code=422, detail="The proposal restarts other services")
     restarts = plans(ctx)
     if restarts is None:
         raise HTTPException(status_code=503, detail=NO_CONTROL)
@@ -135,18 +143,21 @@ async def _start(request: Request, services: list[str], force: bool) -> dict:
     action = f"restart {', '.join(SERVICE_NAMES[service] for service in plan.services)}"
     if held:
         action += f" ANYWAY ({said})"
-    ctx.audit(request, action, "The admin restarts last: its sessions end" if "admin" in plan.services else "")
-    return {"plan": plan.as_dict()}
+    ctx.audit(request, action, proposed_actions.joined(
+        "The admin restarts last: its sessions end" if "admin" in plan.services else "", proposed_actions.said(found)))
+    answer = {"plan": plan.as_dict()}
+    await proposed_actions.settled(ctx, found, plan.by, {"services": list(plan.services)})
+    return answer
 
 
 @router.post("/restart", status_code=202, dependencies=[Depends(require_actions_enabled)])
 async def restart_services(body: RestartRequest, request: Request):
     """Restart ``services`` one after the other, each once the one before works again; the admin last."""
-    return await _start(request, body.services, body.force)
+    return await _start(request, body.services, body.force, body.proposal)
 
 
 @router.post("/{service}/restart", status_code=202, dependencies=[Depends(require_actions_enabled)])
 async def restart_service(service: str, body: OneRestart, request: Request):
     if service not in SERVICE_NAMES:
         raise HTTPException(status_code=404, detail=f"{service} is not one of WATA's services")
-    return await _start(request, [service], body.force)
+    return await _start(request, [service], body.force, body.proposal)

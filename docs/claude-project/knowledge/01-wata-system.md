@@ -31,6 +31,8 @@ WATA is the operator's self-hosted automated trading assistant: async Python ser
   - no paper day outside its reference's range;
   - the engine running it without fault.
 
+  From admin v0.67.0, `rule_list` gives each rule's `readiness`: what of these is missing, empty once ready.
+
 ## State on 30 Oct 2026
 
 - **No signal source is live**: TradingView is off and no rule is live. WATA takes no trade; its last real position was on 20 Oct 2026.

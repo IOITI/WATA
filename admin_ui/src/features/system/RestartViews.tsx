@@ -32,6 +32,8 @@ export function RestartDialog({
   ids,
   onClose,
   onStarted,
+  proposal,
+  onRefused,
 }: {
   state: ServicesState
   /** The services to restart; none: the dialog is closed. */
@@ -39,6 +41,10 @@ export function RestartDialog({
   onClose: () => void
   /** The plan the server started. */
   onStarted?: (plan: RestartPlan) => void
+  /** The AI agent's proposal this applies (<conversation>/<proposal>): its services alone, never fewer. */
+  proposal?: string
+  /** What the server answered when it refused it. */
+  onRefused?: (message: string) => void
 }) {
   const queryClient = useQueryClient()
   const [anyway, setAnyway] = useState(false)
@@ -51,12 +57,13 @@ export function RestartDialog({
   const others = asked.length - heldNow.length
   const tradingPath = services.some((service) => service.trading_path)
   const mutation = useMutation({
-    mutationFn: () => api.restartServices(services.map((service) => service.id), held.length > 0 && anyway),
+    mutationFn: () => api.restartServices(services.map((service) => service.id), held.length > 0 && anyway, proposal),
     onSuccess: async ({ plan }) => {
       onStarted?.(plan)
       await Promise.all([['services'], ['session']].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
       close()
     },
+    onError: (error) => onRefused?.(error.message),
   })
   const close = () => {
     setAnyway(false)
@@ -108,7 +115,8 @@ export function RestartDialog({
               </p>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                 <Checkbox label="Restart anyway" checked={anyway} onChange={(event) => setAnyway(event.target.checked)} />
-                {others > 0 && (
+                {/* A proposal restarts what it names, or nothing: the server refuses fewer. */}
+                {others > 0 && !proposal && (
                   <Button
                     variant="outline"
                     size="sm"

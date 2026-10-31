@@ -1,5 +1,177 @@
 # Changelog
 
+## v0.69.0 - Things attached to a conversation with the AI agent: WATA's own, and files of your computer
+
+**Release date:** not yet released
+
+A conversation was about one thing, chosen on that thing's own page, and the AI agent's page started with nothing: it said to go to the item first. A conversation, any of its later requests and a research task can now be given what to work on, from where they are asked.
+
+- **The paperclip** beside the field searches WATA's things: backtest runs, scripts (at their version), signal rules, positions (a number typed finds one), the last week's signals, the last month's trading days (a date typed finds one), and the health's entries that are not OK. Each is shared with the agent as its own page shares it.
+- **Files of your computer**, chosen there, dropped on the field or pasted into it (a screenshot):
+  - an image (PNG, JPEG, GIF, WebP), scaled in the browser to the largest the Claude API reads (2576 px on its long edge, 3.75 megapixels);
+  - a PDF, 5 MB at most;
+  - a text file (CSV, TSV, .pine, .txt, .json, .md), 200 kB at most, cleaned of what looks like a secret before it is kept; its chip says how many values were masked.
+
+  Each is uploaded as it is chosen, kept with its conversation, and sent with each of its requests. An image or a PDF goes to Anthropic as it is.
+- **Five things at most in a conversation**, the page's own subject counted, none twice; a script's versions and an incident's moments are each their own.
+- Each request shows what it shared, a thing leading to its page and a file to itself. Activity says how many more a conversation holds, and the panel beside a run lists a conversation that attached it later.
+- A model the Models API says reads no image, or no PDF, is not sent one: the field says so before anything is sent.
+- The context window's view counts the files attached apart.
+- With ioiti-ui 0.7.0: `PromptComposer`'s `attachments` and `onFiles`, and the new `AttachmentChip`.
+
+**On the live path:** nothing. The admin alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Files known by their first bytes or as UTF-8 text by their name, each limit, a text cleaned and its masked count, an hour staged, taken into the conversation and removed with it, served back; what is attached checked as a subject is, five at most, none twice, the admin's own subjects refused; shared in order at the request's start, each file sent from its bytes the same at each answer; the context view's files; a model that reads no image refused; a conversation listed beside each thing it holds. 3,641 Python tests pass.
+- The interface: the picker's entries (each subject as its page builds it, a typed number or date, what is attached left out), the image's scaled size, what holds a request (a file uploading or refused, a model that cannot read it), the composer (a script and a file attached and sent, a file dropped and taken away, a refused one, the page's subject kept), what a request shared, a research task given a script. 1,283 interface tests pass, with lint, typecheck and build.
+- Seen in a browser on the fake admin (`FAKE_AI=1`), at 1,024 and 375 px, light and dark:
+  - from the Ask panel: a script, a rule in shadow and a run attached from the picker; a 3000 × 1800 screenshot pasted, kept at 2500 × 1500 (the 3.75 megapixels bind before the edge); a CSV dropped, its token masked.
+  - the paperclip disabled at five, with its hint; the request sent, the agent's answer naming all five; the request's chips leading to each page, the image shown inline and the CSV downloaded, both with `nosniff`.
+  - beside a run: its own chip kept; a day attached by typing its date; on the next message, a position by its number. The sheet listed the conversation that had attached the run, and Activity said "and 2 more attached".
+  - the picker over the sheet on a phone, holding the focus; Escape closed it alone.
+  - Found there and fixed: a date typed offered nothing (the picker keeps only the entries holding what is typed); a conversation holding several things named only its subject, and its field said "Ask about this script…".
+- ioiti-ui v0.7.0 pushed (its "Verify a release" passed on GitHub) and pinned by `admin_ui`; the installed build is the one tested, byte for byte, and the interface's checks pass on it.
+- Against the real Claude API (a temporary key, $0.20), on the fake admin's data:
+  - the Models API says each of the four models reads images and PDFs;
+  - on Haiku 5.5 with no tool ($0.0050), a two-colour PNG, a one-page PDF and a CSV were read right: red on the left and blue on the right, the PDF's number, the CSV's best day. The CSV's token was masked before it was kept;
+  - the context window counted the three files at 1,835 tokens, apart from the rest, and the transcript holds only their references, no base64;
+  - a later request on Opus 5.5 ($0.20, most of the cost) read them again from the conversation's history and named the masked token.
+
+## v0.68.0 - The AI agent's research comes back: routines, and questions it asks you mid-task
+
+**Release date:** not yet released
+
+A research task was asked by hand, once, and went on alone without a way to ask anything: it guessed, or stopped. The agent now has routines that come back by themselves, and a task may stop on a question to you.
+
+- **Routines** (AI agent › Routines). A research task that comes back each trading day once its hours are over, or each week at a day and time. Each has a goal and a budget (each part at most what a task may be given), its model and effort, and whether its end is said on Telegram.
+  - It starts only while the market is closed, once a turn, and never over its last task still working.
+  - It is held back, as a task asked by hand is, by the agent's pause, a missing key or the month's budget.
+  - Run now starts one at any hour. Switch one off, change it, or remove it with an Undo.
+  - The page says what they would spend in a month at most, each turn its whole budget.
+  - Ten at most by default (`admin.ai_agent.max_routines`).
+- **Questions mid-task**. A research task may stop on a question to you, with choices, when your answer would change what it does next. It is said on the bell and on Telegram, and shown on its page with its choices and a field.
+  - Your answer starts its next request.
+  - Its hours do not count while it waits.
+  - Unanswered for two days, it ends.
+
+  Outside a task, the agent asks in its answer as before.
+- Activity marks what the admin asked by itself (a debrief, a briefing, a triage, a dossier, a routine) and a task that waits for your answer.
+
+**On the live path:** nothing. The admin alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Routines: a turn at each trading day's close or at a week's day and time across the clocks' change, the next turn on the trading timezone's clock (an hour off after the clocks went back, found in the browser and fixed with its test), once a turn and never over its last task, the market closed only, bounded as a task, kept with a revision, told at its end; the routes. Questions: the wait outside its hours, the answer that resumes it, two days unanswered that end it, the recovery that leaves it, its Telegram line. 3,604 Python tests and 1,265 of the interface pass, with lint, typecheck and build.
+- Seen in a browser on the fake admin (`FAKE_AI=1`): the Routines page with its month's commitment and next turn; Run now started its task, which asked "Fast lines or slow ones first?" with its choices; answered on its page, the task went on, its deadline moved by the wait, and ended with its conclusion; the question and the end said on the fake's Telegram. At 1,024 and 375 px, light and dark.
+- Against the real Claude API (a temporary key; the four releases' checks cost about $0.15 in all), on the fake admin's data: a research task on Haiku 5.5 asked its question with its choices and why, waited, went on once answered and ended with `task_done` ($0.0014); the question and the end were said in the teller's words (captured, not sent).
+- Not verified: a routine started by its schedule outside the tests.
+
+## v0.67.0 - The AI agent on signal rules: a go-live dossier, new rules proposed, and changes reviewed before they are saved
+
+**Release date:** not yet released
+
+The AI agent could not be asked about a signal rule from its row, said nothing of whether a rule in shadow was ready to go live, and saw a change of the configuration, a rule or a script only once it was saved. It now argues a rule's case for going live, proposes rules of your own, and reviews a change before you save it.
+
+- **Ask about a signal rule** from its row on Signal rules. "Is it ready to go live?" writes its **go-live dossier**:
+  - its paper days against its reference run's range;
+  - its report since it began, against the bar a result must clear;
+  - its reference run under worse fills;
+  - its signals beside TradingView's;
+  - how the engine runs it, and its readiness.
+
+  The verdict shows on its row and in its go-live dialog. When it is ready, the agent may propose taking it live, through that same dialog.
+- **A dossier written by itself** (`admin.ai_agent.dossier_when_ready`, off until switched on): once one of your rules in shadow meets its readiness, its dossier is written that evening, the market closed. It is written once for what the rule runs, and its first lines go to Telegram.
+- **The rules' readiness for Claude Code**: `rule_list` of the MCP endpoint says what keeps each rule from going live, as the Signal rules page checks it (and `docs/claude-project/` says so).
+- **New rules proposed**: a signal rule of yours, in shadow or off, running one of your scripts or the new script proposed just before it, checked as the rules' store checks one and resting on the runs that showed it. Its card says what it runs and on what; you create it, or not. It is never live.
+- **Review before save**: nothing is saved by a review.
+  - On the Configuration page's review, "Ask the AI agent first": it tests the settings a backtest can test against the live values, and says whether the data supports the change. Your changes stay on the page.
+  - On a rule's review step, the same, in a tab of its own: the dialog keeps your change.
+  - In the script editor, "Ask about this draft": your unsaved changes, checked and reviewed. A fix it proposes is put in your editor, unsaved, while the editor still holds what you sent.
+
+**On the live path:** nothing. The admin alone. Each rule shows what the agent concluded on it, and its review buttons appear only while the agent is on.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- The rules' readiness in `rule_list`; a rule as a subject; a dossier once per change of what a rule runs; a new rule checked as the store checks one (refused without finished runs, in words of its own), created in shadow and never live; the reviews masked, saving nothing, with the settings a backtest can test; a draft's fix put in the editor only while it holds what was sent.
+- Seen in a browser on the fake admin: a rule asked about from its row, its sheet named by the rule (it said the rule's id), its dossier's verdict on its row and in its go-live dialog; Configuration's "Ask the AI agent first" with the change kept unsaved; a rule's review in its own tab; a draft reviewed in the script editor and its fix put there unsaved (the sheet now names the draft, not the script); a new script and a new rule created from their cards, the rule in shadow and the operator's. The fake's dossier and new rule were fixed to reach their flows.
+- Against the real Claude API: a signal rule as a subject on Haiku 5.5. From its shared line alone, it read the fake's live rule's readiness (never in shadow) and said to take it out of live ($0.0005).
+- Not verified: the dossier written by itself once a rule is ready (`dossier_when_ready`) outside its tests; a dossier on the real API (it runs backtests).
+
+## v0.66.0 - The AI agent watches live trading: a morning briefing, alerts triaged, and actions it may propose
+
+**Release date:** not yet released
+
+The AI agent worked when asked, and once a day after the close. It now writes a briefing before the open, looks into an alert as it fires, and may propose an action on live trading, which only the operator's click applies, through the page's own confirmation.
+
+- **The morning briefing** (`admin.ai_agent.briefing_*`, off until switched on in Configuration › AI agent). Before each trading day's start (30 minutes by default, in the market's own hours), a short account of the day ahead, kept on AI agent › Activity and said on Telegram:
+  - whether the US market is open, an early close, and the releases around which WATA takes no entry;
+  - the rules that run, and the shadow rules near their readiness;
+  - what needs you: the health, Saxo's login, a pause, what changed since the close;
+  - the day before in a line, from its debrief.
+
+  A day the US market is closed gets a Telegram line instead, without a call to the API. It runs on Haiku by default, 30 cents at most.
+- **Alert triage** (`admin.ai_agent.triage_*`, off until switched on). When an alert fires, the agent opens the incident itself and its diagnosis is said on Telegram, with the action it proposes, if any:
+  - a sale Saxo keeps refusing;
+  - a service of the trading path down in trading hours (the TA engine and the Capital.com feed too while a rule is live);
+  - the live trading leaving its paper reference's range;
+  - Saxo's login to authorise again;
+  - the account guard's pause.
+
+  It reads only and starts no backtest. Each alert is triaged once an hour at most, six a day by default, one at a time. A service's state is never triaged during a deploy or a restart, nor in the two minutes after one. While the triage is on, the admin watches its state whether a page is open or not, as it does while one is.
+- **Actions it may propose** (`admin.ai_agent.action_proposals`, on). A pause or a resume of new entries, a position closed, services restarted, a rule taken live or out of live:
+  - Each is a card under its answer, with what was seen when proposed. Its button opens the very confirmation of the page that does it by hand (the dashboard's pause, the Positions page's close, System's restart with what holds it back, Signal rules' switch with the rule's readiness and "Go live anyway").
+  - The route keeps all its checks. Its audit entry says the action was proposed by the agent. A refusal leaves the proposal open, the server's answer said on its card.
+  - A proposal older than 30 minutes is no longer applied from its card, which then leads to the page.
+
+**On the live path:** nothing changes unless switched on. The pause, close, restart and rule-mode routes take an optional proposal they apply. The dashboard's pause, a position's close and a rule's switch to live are the same dialogs, now shared with the agent's cards.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- The briefing (New York hours, a closed day, once a day, a missed day passed over, held when paused); the triage (each alert, gated by trading hours, deploys and restarts, once an hour, a day's limit, one at a time, folded); action proposals (each kind checked, the routes' audit and settling, a refused route leaving it open, stale after 30 minutes); the boundary.
+- Seen in a browser on the fake admin: the briefing and a refused sale's triage said on the fake's Telegram; the triage's pause applied through the dashboard's own dialog, its audit entry and Telegram line saying the agent proposed it; a dossier's go-live proposal opening Signal rules' own dialog with the rule's readiness and the agent's verdict, refused by the server (us100 takes TradingView's signals), that answer kept on the card. At 1,024 and 375 px, light and dark.
+- Against the real Claude API, on the fake admin's data:
+  - the next weekday's briefing on Haiku 5.5 at low effort ($0.0067), told as plain lines;
+  - the fake's refused sale triaged on Sonnet 5.5 at medium effort ($0.13): "watch it, nothing to do now", no action proposed, told with its verdict first;
+  - an action proposed on Haiku 5.5 (`pause_entries`, fresh for 30 minutes, applied by no one).
+  - Unasked, Haiku 5.5 saved an entry of its memory from the briefing, and the triage read it: the memory works as built (journaled, lockable, pausable), and an unattended briefing writes to it too.
+- Not verified: alerts and their triage on the server; a close or a restart applied from a card in a browser (tests only).
+
+## v0.65.0 - The AI agent reads more of the admin, says its answers on Telegram, and shows its verdicts and charts
+
+**Release date:** not yet released
+
+The AI agent read the health and the logs of the admin, and nothing else of how WATA traded at that moment; what it concluded stayed in its conversations, and only the daily debrief reached Telegram. It now reads trading as the dashboard does and what changed before an incident, says what it was asked to on Telegram once written, and leaves its verdict where the thing it judged is shown.
+
+- **Four more reads of the admin** (`src/admin/agent_ops.py`, given to the agent as its health and logs are; never a service):
+  - `ops_trading_now`: the dashboard's overview. The US market's day and its weekday, the window around a US release, the pause and whose it is, Saxo's login, the day's figures against their limits, the breakers, the open positions with their live value and the sales Saxo refused. Its description lists what refuses an entry in the trader's order, so that the agent reads the figures as the trader would. The weekday is there because the overview's closed day counts only the closed dates and US holidays: on the real API, Haiku took a Saturday for an open day.
+  - `ops_changes`: what changed in a window of up to a week. config.json's saves key by key (secrets masked as its journal writes them), the operator's actions from the audit, and the last deploy. Who did it is never said, and a credential is named without its last characters. An incident shared with the agent now comes with the changes of the two hours before it.
+  - `ops_engine`: the Engine monitor's last minutes and its checks.
+  - `ops_release`: what waits to be deployed, and what holds each container back.
+- **"Tell me on Telegram"** (the teller, `src/admin/agent_telegram.py`). A switch beside the model and effort of a request, and in the research task's form: once the request is answered (the task ended), Telegram says its first lines (its headings and tables as plain lines), the proposals that wait, and where to read the rest. It is disabled while no Telegram bot is set. The daily debrief is said the same way.
+- **Its verdicts on the pages** (`set_verdict`). Once it concluded on a run, a signal rule, a trading day or a position, the agent says it in one line, and the run's page, the rule's row on Signal rules, the Report's day and the position's opened row show it with a link to the conversation. A rule's verdict is said to be from before when the rule runs something else since. The daily debrief sets its day's. The Report page now opens on the day the agent's links name (`/report?day=…`), where it opened on the latest report whatever the link said.
+- **Charts in its answers** (`show_chart`): a line over time or bars by category, four series at most in the admin's own charts, from figures its tools gave in the conversation, where they come from said under the chart.
+- Under an answer, a change of settings or a new script it proposed is no longer called "a change to a rule".
+- A conversation's page followed its newest step even when the operator scrolled up in the first moments after the page loaded (its wait after a jump counted from the page's start). Two tests failed for it whenever their file ran alone.
+
+**On the live path:** nothing. The admin alone: the overview, the Engine monitor's and the release's routes now share a function with the agent's reads, and the Report's route takes a day.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Each read of the admin (its shape, no address, credentials by name, values masked, its bounds); the teller (told once, tried again, dropped when old, cleaned of secrets, headings and tables as plain lines and no stop doubled, the last two found in the browser); verdicts (subjects checked, replaced, pruned); `show_chart`'s checks; the Report's day; the new tools' steps said in words (they showed as tool names).
+- Seen in a browser on the fake admin: a run's analysis with its chart and where its figures come from, its verdict on the run's page, a day's verdict on the Report, an answer said on the fake's Telegram with "Tell me on Telegram". At 1,024 and 375 px, light and dark: nothing wider than the page on the eight pages these releases change.
+- Against the real Claude API:
+  - the token count took the system prompt and the 54 tools as they are sent (2,165 and 19,915 tokens) on Haiku 5.5, Sonnet 5.5 and Opus 5.5;
+  - on Haiku 5.5, a run's daily results drawn with `show_chart` (as bars by day), its verdict set and kept for its page ($0.0073);
+  - `ops_engine` and `ops_release` read and said ($0.0010);
+  - asked on a Saturday, Haiku 5.5 read `ops_trading_now`'s closed day as an open market. Its weekday was added, and read again, it said the market was closed.
+- Not verified: a real Telegram bot, a verdict on a position's opened row (the fake sets none).
+
 ## v0.64.0 - Quick ranges of days for a backtest, and its period fitted to the days recorded
 
 **Release date:** 2026-10-30

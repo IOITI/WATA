@@ -371,7 +371,22 @@
       "debrief_effort": "medium",
       "debrief_max_usd": 0.5,
       "debrief_telegram": true,
-      "memory": true
+      "memory": true,
+      "briefing_enabled": false,
+      "briefing_model": "claude-haiku-5-5",
+      "briefing_effort": "low",
+      "briefing_max_usd": 0.3,
+      "briefing_minutes_before": 30,
+      "briefing_telegram": true,
+      "triage_enabled": false,
+      "triage_model": "claude-sonnet-5-5",
+      "triage_effort": "medium",
+      "triage_max_usd": 0.5,
+      "triage_max_per_day": 6,
+      "triage_telegram": true,
+      "action_proposals": true,
+      "dossier_when_ready": false,
+      "max_routines": 10
     },
     "persistant": {
       "credentials_path": "/app/var/lib/admin/credentials.json",

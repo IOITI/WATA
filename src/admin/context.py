@@ -170,6 +170,16 @@ class AdminContext:
     agent: Any = None
     # Its daily debrief (src/admin/agent_debrief.py): with the agent, acting only while debrief_enabled.
     debrief: Any = None
+    # What it says on Telegram once written (src/admin/agent_telegram.py): with the agent.
+    teller: Any = None
+    # Its morning briefing (src/admin/agent_briefing.py): with the agent, acting only while briefing_enabled.
+    briefing: Any = None
+    # Its triage of the alerts as they fire (src/admin/agent_triage.py): with admin.ai_agent.triage_enabled only.
+    triage: Any = None
+    # Its go-live dossiers of the rules ready (src/admin/agent_dossier.py): with the agent, acting while dossier_when_ready.
+    dossiers: Any = None
+    # Its routines, research tasks that come back by themselves (src/admin/agent_routines.py): with the agent.
+    routines: Any = None
     # Its memory (src/admin/agent_memory.py), beside its conversations: there whether the agent is on or not, read by
     # the Memory page and by Claude Code's endpoint too.
     agent_memory: Any = None
@@ -213,23 +223,15 @@ class AdminContext:
 def agent_of(ctx):
     """
     The AI agent over the admin's services, given what it may read of the admin
-    itself: its health, and its services' logs when admin.ai_agent.read_logs
-    allows (never a service: src/admin/agent/ reaches none, tests/test_agent_boundary.py).
+    itself (src/admin/agent_ops.py): its health, its services' logs when
+    admin.ai_agent.read_logs allows, trading now, what changed, the TA engine's
+    last minutes, what waits to be deployed (never a service: src/admin/agent/
+    reaches none, tests/test_agent_boundary.py).
     """
-    from functools import partial
-
     from src.admin.agent.service import build_agent
-    from src.admin.agent.tools import OpsReads
-    from src.admin.health import collect_health
-    from src.admin.logs import read_log
+    from src.admin.agent_ops import ops_reads
 
-    settings = ctx.settings
-
-    async def health() -> dict:
-        return await collect_health(ctx)
-
-    logs = partial(read_log, settings.log_path) if settings.ai_agent.read_logs else None
-    return build_agent(ctx, ops=OpsReads(health=health, logs=logs))
+    return build_agent(ctx, ops=ops_reads(ctx))
 
 
 def build_context(config_manager) -> AdminContext:
@@ -379,10 +381,20 @@ def build_context(config_manager) -> AdminContext:
                  service_control.close, *([studies.close] if studies is not None else [])],
     )
     if settings.ai_agent.enabled:
-        from src.admin.agent_debrief import FILE, DailyDebrief
+        from src.admin import agent_briefing, agent_debrief, agent_dossier, agent_routines, agent_telegram, agent_triage
 
         ctx.agent = agent_of(ctx)
         ctx.closers.insert(0, ctx.agent.close)
-        ctx.debrief = DailyDebrief(agent=ctx.agent, queries=queries, config_path=settings.config_path,
-                                   path=os.path.join(settings.agent_path, FILE), notify=telegram_sender.send)
+        ctx.teller = agent_telegram.AgentTeller(agent=ctx.agent, path=os.path.join(settings.agent_path, agent_telegram.FILE),
+                                                notify=telegram_sender.send)
+        ctx.debrief = agent_debrief.DailyDebrief(agent=ctx.agent, queries=queries, config_path=settings.config_path,
+                                                 path=os.path.join(settings.agent_path, agent_debrief.FILE),
+                                                 teller=ctx.teller)
+        ctx.briefing = agent_briefing.MorningBriefing(agent=ctx.agent, config_path=settings.config_path,
+                                                      path=os.path.join(settings.agent_path, agent_briefing.FILE),
+                                                      teller=ctx.teller)
+        if settings.ai_agent.triage_enabled:
+            ctx.triage = agent_triage.triage_of(ctx, ctx.teller)
+        ctx.dossiers = agent_dossier.dossiers_of(ctx, ctx.teller)
+        ctx.routines = agent_routines.routines_of(ctx, ctx.teller)
     return ctx

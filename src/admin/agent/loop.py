@@ -23,7 +23,7 @@ from typing import Callable
 
 from src.admin.agent import provider as claude
 from src.admin.agent import transcript
-from src.admin.agent.prompts import system_prompt, wrap_up_note
+from src.admin.agent.prompts import files_note, system_prompt, wrap_up_note
 from src.admin.agent.store import stamp
 from src.admin.agent.tools import MEMORY_SAVE, STARTS
 
@@ -98,6 +98,8 @@ class RequestRun:
     effort: str | None = None
     # A request of a research task: it may say the task is done (task_done).
     task: bool = False
+    # The files attached to the conversation, read once a request: each answer of the API is sent them again.
+    files: dict = field(default_factory=dict)
 
     # ── what is kept ──
 
@@ -198,23 +200,38 @@ class RequestRun:
     async def _open(self, session) -> None:
         """
         The request as the API is sent it: the memory's list (a conversation's
-        first) or what changed in it since, what was shared (a conversation's
-        first), the prompt, its limits.
+        first) or what changed in it since, what was attached to it (each thing
+        as one subject is shared, then the files, named first, as the
+        transcript keeps them), the prompt, its limits.
         """
         opening, content, seen = self.opening, [], None
         if opening.get("memory") is not None:
             said, seen = opening["memory"]()
             if said:
                 content.append({"type": "text", "text": said})
-        if opening.get("subject"):
-            shared = await opening["shared"](session, opening["subject"], self.request)
-            content.append({"type": "text", "text": shared})
+        attached = opening.get("attached")
+        if attached is None:
+            attached = [opening["subject"]] if opening.get("subject") else []
+        for entry in attached:
+            if entry.get("kind") != "file":
+                shared = await opening["shared"](session, entry, self.request)
+                content.append({"type": "text", "text": shared})
+        files = [entry for entry in attached if entry.get("kind") == "file"]
+        if files:
+            content.append({"type": "text", "text": files_note(files)})
+            content += [transcript.file_block(entry) for entry in files]
         content.append({"type": "text", "text": opening["prompt"]})
         self._message("user", content)
         self._message("system", opening["limits"])
         if seen is not None:
             # The next request is told what changed after this one.
             self.store.update_meta(self.conversation_id, memory_seq=seen)
+
+    def _file(self, file_id: str) -> bytes | None:
+        """A file attached to the conversation, read once a request."""
+        if file_id not in self.files:
+            self.files[file_id] = self.store.read_attachment(self.conversation_id, file_id)
+        return self.files[file_id]
 
     def _past_limits(self) -> bool:
         return self.used.tool_calls >= self.settings.max_tool_calls
@@ -237,7 +254,8 @@ class RequestRun:
     async def _answer(self, model, effort: str, tools: list[dict], drop_block: bool) -> dict:
         """One answer of the API, streamed and kept; a tool call it could not read whole asked again."""
         lines = self.store.read(self.conversation_id, "messages")
-        params = request_params(model, effort, tools, transcript.api_messages(lines), drop_block)
+        messages = await asyncio.to_thread(transcript.api_messages, lines, self._file)
+        params = request_params(model, effort, tools, messages, drop_block)
         for attempt in range(MAX_UNREADABLE + 1):
             self.pending.clear()
             self.pending.update(request=self.request, text={}, note={}, writing=None)
@@ -374,10 +392,17 @@ class RequestRun:
             if answer.task_done is not None:
                 # Kept with the request: a restart before its answer still ends the task.
                 self._activity("task_done", **answer.task_done)
+            if answer.question is not None:
+                # Kept with the request: once it ends, the task waits for the operator's answer.
+                self._activity("question", **answer.question)
             if answer.memory is not None:
                 self._activity("memory", **answer.memory)
                 self.store.add_artefact({"at": stamp(self.clock()), "kind": "memory", "conversation": self.conversation_id,
                                          "id": answer.memory["name"], **answer.memory})
+            if answer.chart is not None:
+                self._activity("chart", id=call["id"], chart=answer.chart)
+            if answer.verdict is not None:
+                self._activity("verdict", **answer.verdict)
         self._activity("tool_done", id=call["id"], is_error=is_error, seconds=round(time.monotonic() - started, 1),
                        output=transcript.shown(text, transcript.SHOWN_OUTPUT_CHARS))
         result = {"type": "tool_result", "tool_use_id": call["id"], "content": text}

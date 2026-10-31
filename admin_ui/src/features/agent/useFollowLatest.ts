@@ -49,7 +49,8 @@ export function useFollowLatest(
     if (!element || !id) return
     const onScroll = () => {
       const foot = isAtFoot(element)
-      if (!foot && performance.now() - jumped.current < JUMP_MS) return
+      // A smooth jump on its way passes by heights short of the foot: not the operator scrolling away. None yet: none.
+      if (!foot && jumped.current !== 0 && performance.now() - jumped.current < JUMP_MS) return
       jumped.current = 0
       atFoot.current = foot
       setAway(!foot)

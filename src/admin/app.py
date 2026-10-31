@@ -222,6 +222,21 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.debrief is not None:
             # The agent's daily debrief, once the market is closed (while admin.ai_agent.debrief_enabled).
             background.append(asyncio.create_task(ctx.debrief.keep()))
+        if ctx.teller is not None:
+            # What the agent was asked to say on Telegram, once written (src/admin/agent_telegram.py).
+            background.append(asyncio.create_task(ctx.teller.keep()))
+        if ctx.briefing is not None:
+            # The agent's morning briefing, before the trading start (while admin.ai_agent.briefing_enabled).
+            background.append(asyncio.create_task(ctx.briefing.keep()))
+        if ctx.triage is not None:
+            # The agent's triage of the alerts as they fire: while it listens, the watcher looks without a page open.
+            background.append(asyncio.create_task(ctx.triage.keep()))
+        if ctx.dossiers is not None:
+            # The agent's go-live dossier of a rule once ready, the market closed (while dossier_when_ready).
+            background.append(asyncio.create_task(ctx.dossiers.keep()))
+        if ctx.routines is not None:
+            # The agent's routines, each at its turn, the market closed.
+            background.append(asyncio.create_task(ctx.routines.keep()))
         if ctx.vault is not None:
             # Its own credentials laid over its configuration: the Telegram bot of its direct fallback.
             background.append(asyncio.create_task(_load_own_credentials(ctx)))

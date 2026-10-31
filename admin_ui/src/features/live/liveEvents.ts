@@ -21,6 +21,7 @@ export const LIVE_EVENT_TYPES = [
   'restart_plan',
   'release',
   'agent_finished',
+  'agent_question',
 ] as const
 
 export interface EventNotice {
@@ -154,6 +155,13 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         variant: outcome === 'done' ? 'success' : outcome === 'failed' || outcome === 'declined' ? 'error' : 'warning',
       }
     }
+    case 'agent_question':
+      // A research task waits for the operator's answer.
+      return {
+        title: 'The research task asks you',
+        body: [text(event.title), text(event.question)].filter(Boolean).join(' · '),
+        variant: 'info',
+      }
     case 'prices_fetch_finished': {
       const state = text(event.state) ?? ''
       // Stopped by the operator, or one of the downloads the service makes by itself: no news.
@@ -220,7 +228,8 @@ export function eventLink(event: LiveEvent): string | null {
       return '/system'
     case 'release':
       return '/system#release'
-    case 'agent_finished': {
+    case 'agent_finished':
+    case 'agent_question': {
       const conversation = text(event.conversation_id)
       return conversation ? `/agent/${encodeURIComponent(conversation)}` : '/agent'
     }
@@ -256,6 +265,8 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'agent_finished':
       // Its runs, scripts and proposals are read again with it.
       return ['agent', 'agent-conversations', 'agent-conversation', 'agent-artefacts', 'backtests', 'ta-script']
+    case 'agent_question':
+      return ['agent-conversations', 'agent-conversation']
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
       return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']

@@ -12,7 +12,9 @@ import { WithTrail } from '@/test/WithTrail'
 
 import { AgentActivityPage } from './AgentActivityPage'
 import { AgentSheet } from './AgentSheet'
+import { AgentVerdict } from './AgentVerdict'
 import { ConversationPage } from './ConversationPage'
+import { RoutinesPage } from './RoutinesPage'
 
 const SESSION: Session = {
   authenticated: true, version: '0.54.0', timezone: 'Europe/Paris', actions_enabled: true, config_edit_enabled: true,
@@ -71,6 +73,74 @@ const CONVERSATION: AgentConversation = {
   }],
 }
 
+// A conversation whose answer drew a chart and set a verdict on its run.
+const CHARTED_ID = '20261028-130000-2b3c4d'
+const CHARTED: AgentConversation = {
+  ...CONVERSATION, id: CHARTED_ID, proposals: [],
+  requests: [{
+    ...CONVERSATION.requests[0], proposals: [],
+    charts: [{ id: 't9', kind: 'bar', title: 'Each day of the run', unit: '%', tone: 'sign', references: [],
+      series: [{ key: 'day', label: 'Day' }], categories: [{ label: '13 Oct', day: -0.5 }, { label: '14 Oct', day: 1.5 }],
+      source: 'backtest_days of run 20261027-101010-abcdef' }],
+    verdicts: [{ about: `run:${RUN}`, tone: 'positive', line: 'It holds on 21 days.' }],
+  }],
+}
+
+// A conversation whose triage proposed a pause of new entries, fresh, and a restart proposed too long ago.
+const ACTING_ID = '20261028-140000-3c4d5e'
+const PAUSE: AgentProposal = {
+  id: 'p9a8b7c6d', kind: 'action', request: 0, created_at: '2026-10-28T14:00:00Z', status: 'proposed',
+  title: 'Pause new entries', rationale: 'Saxo refuses every sale since 13:52.', action: { kind: 'pause_entries' },
+  fresh_until: '2099-01-01T00:00:00Z',
+}
+const STALE_RESTART: AgentProposal = {
+  id: 'p1b2c3d4e', kind: 'action', request: 0, created_at: '2026-10-28T14:00:00Z', status: 'proposed',
+  title: 'Restart the position monitor', rationale: 'It stopped beating.', fresh_until: '2026-10-28T14:30:00Z',
+  action: { kind: 'restart', services: [{ id: 'position_monitor', name: 'Position monitor' }] },
+}
+const ACTING: AgentConversation = {
+  ...CONVERSATION, id: ACTING_ID, proposals: [PAUSE, STALE_RESTART],
+  requests: [{ ...CONVERSATION.requests[0], proposals: [PAUSE.id, STALE_RESTART.id] }],
+}
+
+// A review of a script's unsaved draft, whose fix goes into the editor; and a new rule proposed.
+const DRAFT_ID = '20261028-150000-4d5e6f'
+const NEW_RULE: AgentProposal = {
+  id: 'p2c3d4e5f', kind: 'new_rule', request: 0, created_at: '2026-10-28T15:04:00Z', status: 'proposed',
+  title: 'A slower cross, in shadow', rationale: 'Beat the cross on 22 days.',
+  new_rule: {
+    fields: { name: 'Cross, slow', asset: { provider: 'capital', key: 'US100' }, side: 'bid', bars: { type: 'time', timeframe: '5' },
+      inputs: [{ id: 'in_0', var: null, title: null, value: 14 }], alerts: [{ title: 'Enter Long', action: 'long' }],
+      alert_calls: 'ignore', indice: 'us100' },
+    script: { id: '8c2df05570d5', name: 'EMA cross', version: 1 }, mode: 'shadow',
+  },
+}
+const DRAFTED: AgentConversation = {
+  ...CONVERSATION, id: DRAFT_ID, subject: { kind: 'draft', id: '0a1b2c3d', label: 'a draft of EMA cross' },
+  proposals: [CONVERSATION.proposals[0], NEW_RULE],
+  requests: [{ ...CONVERSATION.requests[0], proposals: [CONVERSATION.proposals[0].id, NEW_RULE.id] }],
+}
+
+// A research task waiting for the operator's answer to its question; and a routine.
+const ASKING_ID = '20261028-160000-5e6f7a'
+const ASKING: AgentConversation = {
+  ...CONVERSATION, id: ASKING_ID, title: 'Find a line that holds', subject: null, proposals: [],
+  task: {
+    goal: 'Find a line that holds', budget: { usd: 5, backtests: 20, hours: 4 }, state: 'working',
+    started_at: '2026-10-28T16:00:00Z', deadline: '2026-10-28T20:00:00Z', spent_usd: 0.4, backtests: 0, requests: 1,
+    ended_at: null, ended_because: null, conclusion: null,
+    question: { question: 'Fast lines or slow ones first?', why: 'Each takes half the budget.', choices: ['Fast', 'Slow'],
+      asked_at: '2026-10-28T16:05:00Z', request: 0 },
+  },
+  requests: [{ ...CONVERSATION.requests[0], proposals: [] }],
+}
+const ROUTINE = {
+  id: 'r0a1b2c3d', name: 'Weekly edge check', goal: 'Run the references again with the week.',
+  schedule: { every: 'week' as const, weekday: 5, time: '10:00' }, budget: { usd: 3, backtests: 6, hours: 2 },
+  model: null, effort: null, telegram: true, enabled: true, created_at: '2026-10-28T10:00:00Z', created_by: '10.8.0.2',
+  runs: [], next: '2026-10-31T09:00:00Z',
+}
+
 // A conversation that proposed a change of settings and a new script.
 const PROPOSING_ID = '20261028-110000-0c0d0e'
 const SETTINGS: AgentProposal = {
@@ -120,17 +190,33 @@ const CONTEXT: AgentContext = {
     cache_write: 6_100, output: 1_912, thinking: 1_400, cleared_tokens: null, cleared_tool_uses: null, dropped_notes: null },
 }
 
+// What the attach picker lists of the scripts, and a file the server staged.
+const SCRIPT_LISTED = { id: '0d4fd1117e2f', name: 'Kernel VWAP', kind: 'indicator', version: 10 }
+const STAGED = { kind: 'file' as const, id: 'f0123456789', name: 'chart.png', type: 'image' as const, media_type: 'image/png',
+  size: 2048, masked: 0 }
+// A conversation whose request shared a run and a screenshot.
+const ATTACHED_ID = '20261030-090000-f1f2f3'
+const ATTACHED: AgentConversation = {
+  ...CONVERSATION, id: ATTACHED_ID, proposals: [],
+  requests: [{ ...CONVERSATION.requests[0], proposals: [], attached: [LISTED.subject!, STAGED] }],
+}
+
 let sent: { method: string; path: string; body: unknown }[] = []
 let state: AgentState = STATE
+// Whether the dashboard's pause is refused, as the server refuses an action whose situation changed.
+let refusePause = false
 
 function serve() {
   sent = []
+  refusePause = false
   const json = (body: unknown, status = 200) =>
     new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
   vi.stubGlobal('fetch', vi.fn(async (path: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET'
     const url = new URL(path, 'http://admin.test')
-    const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+    // A file staged is sent as a form: what is kept of it here is its name.
+    const body = typeof init.body === 'string' ? JSON.parse(init.body)
+      : init.body instanceof FormData ? { file: (init.body.get('file') as File | null)?.name } : undefined
     sent.push({ method, path: `${url.pathname}${url.search}`, body })
     const route = url.pathname
     if (route === '/api/agent') return json(state)
@@ -151,6 +237,26 @@ function serve() {
       return json({ ...CONVERSATION.proposals[0], status: 'applied', result: { script_id: '8c2df05570d5', version: 2 } })
     }
     if (route === `/api/agent/conversations/${PROPOSING_ID}`) return json(PROPOSING)
+    if (route === `/api/agent/conversations/${CHARTED_ID}`) return json(CHARTED)
+    if (route === `/api/agent/conversations/${ACTING_ID}`) return json(ACTING)
+    if (route === `/api/agent/conversations/${DRAFT_ID}`) return json(DRAFTED)
+    if (route === `/api/agent/conversations/${ASKING_ID}`) return json(ASKING)
+    if (route === `/api/agent/conversations/${ASKING_ID}/task/answer`) return json({ ...LISTED, id: ASKING_ID, status: 'queued' })
+    if (route === '/api/agent/routines') return json({ revision: 'rv1', max: 10, routines: [ROUTINE] })
+    if (route === `/api/agent/routines/${ROUTINE.id}/run`) return json({ conversation: ASKING_ID }, 201)
+    if (route === `/api/agent/conversations/${DRAFT_ID}/proposals/${CONVERSATION.proposals[0].id}/apply`) {
+      return json({ ...CONVERSATION.proposals[0], status: 'applied', result: { into_editor: true, script_id: '8c2df05570d5' } })
+    }
+    if (route === `/api/agent/conversations/${DRAFT_ID}/proposals/${NEW_RULE.id}/apply`) {
+      return json({ ...NEW_RULE, status: 'applied', result: { rule_id: 'a1b2c3d4e5f6', name: 'Cross, slow', mode: 'shadow' } })
+    }
+    if (route === '/api/actions/pause-entries') {
+      return refusePause ? json({ detail: 'New entries are paused already' }, 409) : json({ entries_paused_since: '2026-10-28T14:05:00Z' })
+    }
+    if (route === '/api/agent/verdicts') {
+      return json({ items: { [`run:${RUN}`]: { about: `run:${RUN}`, tone: 'positive', line: 'It holds on 21 days.',
+        at: '2026-10-28T08:05:00Z', conversation: CHARTED_ID, request: 0 } } })
+    }
     if (route.endsWith(`/proposals/${SETTINGS.id}/preview`)) {
       return json({ revision: 'r1', changes: [{ path: STOPLOSS, before: -7, after: -5, added: false, removed: false }],
         impact: { services: ['position_monitor'], consumers: [], risk: 'trading', unknown: [] }, warnings: [] })
@@ -164,6 +270,10 @@ function serve() {
       return json({ ...NEW_SCRIPT, status: 'applied', result: { script_id: 'ffff00001111', version: 1, name: 'Cross, slow' } })
     }
     if (route === '/api/config/catalog') return json(CATALOG)
+    if (route === '/api/ta/scripts') return json({ items: [SCRIPT_LISTED] })
+    if (route === '/api/agent/files' && method === 'POST') return json(STAGED, 201)
+    if (route === `/api/agent/files/${STAGED.id}` && method === 'DELETE') return json(null, 204)
+    if (route === `/api/agent/conversations/${ATTACHED_ID}`) return json(ATTACHED)
     if (route === '/api/agent/tasks') return json({ ...LISTED, id: TASK_ID, status: 'queued', task: TASK_CONVERSATION.task }, 201)
     if (route === `/api/agent/conversations/${TASK_ID}`) return json(TASK_CONVERSATION)
     if (route === `/api/agent/conversations/${TASK_ID}/task/stop`) return json({ ...LISTED, id: TASK_ID })
@@ -191,10 +301,14 @@ function renderAt(address: string) {
   const router = createMemoryRouter(
     [
       { path: '/agent', element: page(<AgentActivityPage />) },
+      { path: '/agent/routines', element: page(<RoutinesPage />) },
       { path: '/agent/:conversationId', element: page(<ConversationPage />) },
       { path: '/backtests/:runId', element: page(<AgentSheet subject={{ kind: 'run', id: RUN, label: 'Cross R60' }} />) },
       // A list's page: its rows ask about themselves through the address.
       { path: '/positions', element: page(<AgentSheet />) },
+      // A page that shows what the agent concluded on its run, the run having changed since or not.
+      { path: '/verdict', element: page(<AgentVerdict about={`run:${RUN}`} />) },
+      { path: '/verdict-before', element: page(<AgentVerdict about={`run:${RUN}`} changedAt="2026-10-29T08:00:00Z" />) },
     ],
     { initialEntries: [address] },
   )
@@ -346,7 +460,7 @@ describe('the AI agent', () => {
 
     await waitFor(() => expect(sent.find((request) => request.method === 'POST'
       && request.path === `/api/agent/conversations/${ID}/requests`)?.body)
-      .toEqual({ prompt: 'Go on', model: 'claude-sonnet-5-5', effort: 'low' }))
+      .toEqual({ prompt: 'Go on', model: 'claude-sonnet-5-5', effort: 'low', tell: false }))
   })
 
   it('shows the context window the conversation fills, counted by the API part by part', async () => {
@@ -420,7 +534,7 @@ describe('the AI agent', () => {
     await waitFor(() => expect(address()).toBe(`/agent/${TASK_ID}`))
     expect(sent.find((request) => request.path === '/api/agent/tasks')?.body).toEqual({
       goal: 'Find whether a slower line holds', budget: { usd: 5, backtests: 20, hours: 4 },
-      model: 'claude-opus-5-5', effort: 'high',
+      model: 'claude-opus-5-5', effort: 'high', tell: false,
     })
     expect(await screen.findByText('$1.25 of $5.00')).toBeInTheDocument()
     expect(screen.getByRole('meter', { name: 'Backtests: 6 of 20' })).toBeInTheDocument()
@@ -443,5 +557,233 @@ describe('the AI agent', () => {
     renderAt('/agent/20261028-000000-ffffff')
 
     expect(await screen.findByRole('heading', { name: 'No such conversation' })).toBeInTheDocument()
+  })
+
+  it('says a request on Telegram once answered when asked, and cannot without a Telegram bot', async () => {
+    const user = userEvent.setup()
+    state = { ...STATE, telegram: true }
+    renderAt(`/agent/${ID}`)
+
+    const toggle = await screen.findByRole('button', { name: 'Tell me on Telegram' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    await user.type(screen.getByRole('textbox', { name: 'Ask the agent again' }), 'Go on')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST'
+      && request.path === `/api/agent/conversations/${ID}/requests`)?.body).toMatchObject({ prompt: 'Go on', tell: true }))
+  })
+
+  it('cannot be asked to tell on Telegram while no bot is set', async () => {
+    state = { ...STATE, telegram: false }
+    renderAt(`/agent/${ID}`)
+
+    expect(await screen.findByRole('button', { name: 'Tell me on Telegram' })).toBeDisabled()
+  })
+
+  it('draws the charts its answer made, says where their figures come from, and its verdicts', async () => {
+    renderAt(`/agent/${CHARTED_ID}`)
+
+    expect((await screen.findAllByText('Each day of the run')).some((element) => element.tagName === 'FIGCAPTION')).toBe(true)
+    expect(screen.getByText('From: backtest_days of run 20261027-101010-abcdef')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: `run ${RUN}` })).toHaveAttribute('href', `/backtests/${RUN}`)
+    expect(screen.getByText(/It holds on 21 days/)).toBeInTheDocument()
+  })
+
+  it("shows its verdict on what a page is about, said to be from before the thing's last change", async () => {
+    renderAt('/verdict')
+    expect(await screen.findByText('It holds on 21 days.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /28\/10\/2026|28 Oct/ })).toHaveAttribute('href', `/agent/${CHARTED_ID}`)
+    expect(sent.some((request) => request.path === `/api/agent/verdicts?about=${encodeURIComponent(`run:${RUN}`)}`)).toBe(true)
+  })
+
+  it('says a verdict older than what it is on changed', async () => {
+    renderAt('/verdict-before')
+    expect(await screen.findByRole('link', { name: /^before its last change/ })).toBeInTheDocument()
+  })
+
+  it('applies an action it proposed through the page\'s own confirmation, with the proposal it applies', async () => {
+    const user = userEvent.setup()
+    renderAt(`/agent/${ACTING_ID}`)
+
+    await user.click(await screen.findByRole('button', { name: 'Pause new entries…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Pause new entries' })
+    expect(within(dialog).getByText(/Nothing is closed and nothing is stopped/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Pause new entries' }))
+
+    await waitFor(() => expect(sent.find((request) => request.path === '/api/actions/pause-entries')?.body)
+      .toEqual({ proposal: `${ACTING_ID}/${PAUSE.id}` }))
+  })
+
+  it('keeps an action open when the page refuses it, saying what the server answered', async () => {
+    refusePause = true
+    const user = userEvent.setup()
+    renderAt(`/agent/${ACTING_ID}`)
+
+    await user.click(await screen.findByRole('button', { name: 'Pause new entries…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Pause new entries' })
+    await user.click(within(dialog).getByRole('button', { name: 'Pause new entries' }))
+    expect(await within(dialog).findByText(/New entries are paused already/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    const card = screen.getByRole('region', { name: 'Proposal: Pause new entries' })
+    expect(within(card).getByText('Refused when you tried it: New entries are paused already')).toBeInTheDocument()
+    expect(within(card).getByRole('button', { name: 'Pause new entries…' })).toBeInTheDocument()
+  })
+
+  it('leads to the page where an action is done once its proposal is too old', async () => {
+    renderAt(`/agent/${ACTING_ID}`)
+
+    const restart = await screen.findByRole('region', { name: 'Proposal: Restart the position monitor' })
+    expect(within(restart).getByText(/Proposed over 30 minutes ago/)).toBeInTheDocument()
+    expect(within(restart).getByRole('link', { name: 'Go to System' })).toHaveAttribute('href', '/system')
+    expect(within(restart).queryByRole('button', { name: /Restart the position monitor/ })).toBeNull()
+  })
+
+  it("puts a draft's fix in the editor, unsaved, and creates a new rule proposed in shadow", async () => {
+    const user = userEvent.setup()
+    renderAt(`/agent/${DRAFT_ID}`)
+
+    await user.click(await screen.findByRole('button', { name: 'Put in the editor, unsaved' }))
+    await waitFor(() => expect(sent.find((request) => request.path.endsWith(`/proposals/${CONVERSATION.proposals[0].id}/apply`))?.body)
+      .toEqual({ into_editor: true }))
+    const rule = screen.getByRole('region', { name: 'Proposal: A slower cross, in shadow' })
+    expect(rule.textContent).toMatch(/on US100, 5 min bars of its bid, for us100/)
+    await user.click(within(rule).getByRole('button', { name: 'Create the rule (in shadow)' }))
+    await waitFor(() => expect(sent.some((request) => request.path.endsWith(`/proposals/${NEW_RULE.id}/apply`))).toBe(true))
+  })
+
+  it("answers the question a research task waits on, with one of its choices", async () => {
+    const user = userEvent.setup()
+    renderAt(`/agent/${ASKING_ID}`)
+
+    const question = await screen.findByRole('region', { name: 'Its question' })
+    expect(within(question).getByText('Fast lines or slow ones first?')).toBeInTheDocument()
+    await user.click(within(question).getByRole('button', { name: 'Slow' }))
+
+    await waitFor(() => expect(sent.find((request) => request.path === `/api/agent/conversations/${ASKING_ID}/task/answer`)?.body)
+      .toEqual({ answer: 'Slow' }))
+  })
+
+  it('lists the routines with when each comes back, and runs one now', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent/routines')
+
+    expect(await screen.findByText('Weekly edge check')).toBeInTheDocument()
+    expect(screen.getByText('Each Saturday at 10:00')).toBeInTheDocument()
+    expect(screen.getByText(/would spend \$13\.05 a month at most/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Run Weekly edge check now' }))
+
+    await waitFor(() => expect(address()).toBe(`/agent/${ASKING_ID}`))
+  })
+})
+
+describe('what is attached to a request', () => {
+  beforeEach(() => {
+    state = STATE
+    serve()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('attaches a script from the paperclip and a file of the computer to a new conversation', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent')
+
+    const [attach] = await screen.findAllByRole('button', { name: 'Attach' })
+    await user.click(attach)
+    const picker = await screen.findByRole('dialog', { name: 'Attach to the conversation' })
+    await user.type(within(picker).getByRole('combobox', { name: 'Search' }), 'Kernel')
+    await user.click(await within(picker).findByRole('option', { name: /Kernel VWAP/ }))
+    const chooser = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    fireEvent.change(chooser, { target: { files: [new File(['png'], 'chart.png', { type: 'image/png' })] } })
+
+    const attached = screen.getAllByRole('group', { name: 'Attached' })[0]
+    expect(within(attached).getByText('Script Kernel VWAP v10')).toBeInTheDocument()
+    expect(await within(attached).findByText('2 kB')).toBeInTheDocument()
+    expect(sent.find((request) => request.path === '/api/agent/files')?.body).toEqual({ file: 'chart.png' })
+    await user.type(screen.getByRole('textbox', { name: 'Ask the AI agent' }), 'What do they show?')
+    await user.click(screen.getAllByRole('button', { name: 'Send' })[0])
+
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/agent/conversations')?.body)
+      .toMatchObject({ prompt: 'What do they show?', attach: [{ kind: 'script', id: '0d4fd1117e2f', version: 10 }, { kind: 'file', id: STAGED.id }] }))
+  })
+
+  it('takes a file dropped on the field, and removes it from the server when it is taken away', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent')
+
+    const field = await screen.findByRole('textbox', { name: 'Ask the AI agent' })
+    const dropped = [new File(['png'], 'chart.png', { type: 'image/png' })]
+    fireEvent.drop(field.parentElement!, { dataTransfer: { types: ['Files'], files: dropped } })
+    const attached = screen.getAllByRole('group', { name: 'Attached' })[0]
+    expect(await within(attached).findByText('2 kB')).toBeInTheDocument()
+    await user.click(within(attached).getByRole('button', { name: 'Remove chart.png' }))
+
+    expect(screen.queryByRole('button', { name: 'Remove chart.png' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Attached' })).toBeNull()
+    await waitFor(() => expect(sent.some((request) => request.method === 'DELETE' && request.path === `/api/agent/files/${STAGED.id}`)).toBe(true))
+  })
+
+  it('refuses a file it cannot take before uploading it, and holds the request until it is removed', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent')
+
+    const field = await screen.findByRole('textbox', { name: 'Ask the AI agent' })
+    fireEvent.drop(field.parentElement!, { dataTransfer: { types: ['Files'], files: [new File(['x'], 'tool.exe')] } })
+    await user.type(field, 'And this?')
+
+    expect(screen.getAllByText(/^Attach an image, a PDF/)[0]).toBeInTheDocument()
+    expect(screen.getByText('tool.exe could not be taken: remove it to send')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Send' })[0]).toBeDisabled()
+    expect(sent.some((request) => request.path === '/api/agent/files')).toBe(false)
+  })
+
+  it('keeps the page\'s subject first, which cannot be taken away', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN}?agent=new`)
+
+    const attached = await screen.findByRole('group', { name: 'Attached' })
+    expect(within(attached).getByText('Run Cross R60')).toBeInTheDocument()
+    // Its controls once the agent's state is read: a request can be sent then.
+    await screen.findByRole('button', { name: 'Attach' })
+    expect(within(attached).queryByRole('button', { name: /^Remove/ })).toBeNull()
+    await user.type(screen.getByRole('textbox', { name: 'Ask the AI agent' }), 'Can it be believed?')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(sent.map((request) => `${request.method} ${request.path}`)).toContain('POST /api/agent/conversations'))
+    expect(sent.find((request) => request.method === 'POST' && request.path === '/api/agent/conversations')?.body)
+      .toEqual(expect.objectContaining({ subject: { kind: 'run', id: RUN } }))
+    expect(sent.find((request) => request.path === '/api/agent/conversations' && request.method === 'POST')?.body)
+      .not.toHaveProperty('attach')
+  })
+
+  it('shows what a request shared, a thing leading to its page and a file to itself', async () => {
+    renderAt(`/agent/${ATTACHED_ID}`)
+
+    const shared = await screen.findByRole('group', { name: 'Shared with the request' })
+    expect(within(shared).getByRole('link', { name: 'Run Cross R60' })).toHaveAttribute('href', `/backtests/${RUN}`)
+    const file = within(shared).getByRole('link', { name: 'chart.png' })
+    expect(file).toHaveAttribute('href', `/api/agent/conversations/${ATTACHED_ID}/files/${STAGED.id}`)
+    expect(file).toHaveAttribute('target', '_blank')
+    expect(shared.querySelector('img')).toHaveAttribute('src', `/api/agent/conversations/${ATTACHED_ID}/files/${STAGED.id}`)
+  })
+
+  it('gives a research task what is attached to it', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent')
+
+    const attach = (await screen.findAllByRole('button', { name: 'Attach' }))[1]
+    await user.click(attach)
+    const picker = await screen.findByRole('dialog', { name: 'Attach to the conversation' })
+    await user.click(await within(picker).findByRole('option', { name: /Kernel VWAP/ }))
+    expect(within(screen.getByRole('group', { name: 'Given to the task' })).getByText('Script Kernel VWAP v10')).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'Its goal' }), 'Find a slower line that holds.')
+    await user.click(screen.getByRole('button', { name: 'Start the task' }))
+
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/agent/tasks')?.body)
+      .toMatchObject({ goal: 'Find a slower line that holds.', attach: [{ kind: 'script', id: '0d4fd1117e2f', version: 10 }] }))
   })
 })

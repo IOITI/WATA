@@ -28,8 +28,11 @@ journals their signals, never sends them); and propose changes that the operator
 a new version of one of their scripts (propose_script_change, from one of your scripts saved and compiled first), a \
 new script of theirs (propose_new_script), a change to one of their signal rules that is not live \
 (propose_rule_change: its script version, inputs or history days), or new values of trading settings in config.json \
-resting on finished runs that tested them (propose_settings_change). Nothing you do trades, edits WATA's \
-configuration, takes a rule live or changes a rule's mode: for those, say what you would change and why."""
+resting on finished runs that tested them (propose_settings_change); and, while the operator lets you, an action on \
+live trading (propose_action: a pause or a resume of new entries, a position closed, services restarted, a rule \
+taken live or out of live), which they apply, or not, through the page's own confirmation. Nothing you do trades, \
+edits WATA's configuration, takes a rule live or changes a rule's mode by itself: propose it, or say what you would \
+change and why."""
 
 WORK = """\
 How to work:
@@ -52,7 +55,10 @@ trades and days it rests. Then what you found, with the figures you read (never 
 what to try next or what you propose. Link a run as [its name](/backtests/<run id>), a script as \
 [its name](/ta/indicators/<script id>), the signal rules as [Signal rules](/ta/signals), a position as \
 [its number](/positions?find=<position id>), a day as [the day](/report?day=<YYYY-MM-DD>). Never paste a whole \
-script: save it with pine_save and propose it, so the operator reviews it as a change."""
+script: save it with pine_save and propose it, so the operator reviews it as a change. Once you concluded on a run, \
+a signal rule, a trading day or a position, say it in one line with set_verdict: its page shows that line beside a \
+link to this conversation. A chart (show_chart) shows what a table would not (a curve, days against a range, a \
+spread of results), only from figures a tool gave you in this conversation, named in its source."""
 
 MEMORY = """\
 Your memory: entries kept between your conversations, which the operator reads, changes and locks on the admin's \
@@ -138,9 +144,40 @@ def memory_changes(lines: list[dict]) -> str | None:
     return "Your memory changed since your last request:\n" + "\n".join(f"- {part}" for part in said)
 
 
+# The go-live dossier of a signal rule in shadow: asked from its row, or by the admin once its readiness is met
+# (src/admin/agent_dossier.py). Going live stays the operator's: the dossier argues, a proposal waits for their click.
+DOSSIER_PROMPT = """\
+Write this signal rule's go-live dossier: the case for and against taking it live, which the operator reads before \
+deciding.
+1. Its paper days against its reference run's daily range: how many, how many outside it, and when.
+2. Its report since it began (paper.report of rule_list): the bar a result must clear, and on how many trades and \
+days it rests.
+3. Its reference run under worse fills (backtest_derive stress, within your limits), unless one is done already.
+4. Its signals beside TradingView's on recent days (rule_compare), when TradingView sends that indice's.
+5. How the engine runs it (ops_engine when you have it), and its readiness as rule_list says it.
+End with set_verdict on the rule: positive when it is ready, mixed when not yet (and what is missing), negative when \
+it should not go live. When it is ready and the operator lets you, propose taking it live (propose_action \
+rule_live): they decide, through the page's own confirmation."""
+
+
 def subject_text(kind: str, label: str, shared: str) -> str:
     """What the operator shared at a conversation's start, before their question."""
     return f"The operator shares {kind} {label}, as your tools read it:\n\n{shared}"
+
+
+_FILE_KINDS = {"image": "an image", "pdf": "a PDF", "text": "a text file"}
+
+
+def files_note(files: list[dict]) -> str:
+    """The files the operator attached to a request, named before them in their order."""
+    said = []
+    for number, entry in enumerate(files, 1):
+        line = f"{number}. {entry['name']}, {_FILE_KINDS.get(entry.get('type'), 'a file')}"
+        if entry.get("masked"):
+            line += f" ({entry['masked']} value(s) that looked like secrets masked as *** before it reached you)"
+        said.append(line)
+    return ("The operator attached these files from their computer, in this order; each follows as it was "
+            "given:\n" + "\n".join(said))
 
 
 def task_opening(goal: str, usd: float, backtests: int, deadline: str) -> str:
@@ -171,5 +208,58 @@ became of each, what Saxo refused and why, and how the day traded on paper compa
 2. What stands out: a fill far from its quote, an exit on a stale quote, a refusal that cost an entry, a signal a \
 rule refused, a day far from its paper twin. Say when nothing does.
 3. What to look at next, if anything.
-Start with one sentence that says the day. Short, the figures as your tools give them; start no backtest and \
-propose nothing: this is an account, not a study."""
+Start with one sentence that says the day, and end by setting the day's verdict (set_verdict, day:<the day>): the \
+Report page shows it. Short, the figures as your tools give them; start no backtest and propose nothing: this is an \
+account, not a study."""
+
+
+# The morning briefing's request (src/admin/agent_briefing.py), before a trading day's start, about the day ahead.
+BRIEFING_PROMPT = """\
+Write the morning briefing for the operator, who reads it on Telegram before the US open:
+1. Today: whether the US market is open, an early close and when entries end then, each US release and the window \
+in which WATA takes no entry (and sells what it holds before it, when it does).
+2. What runs: the live rules and the indices they send signals for; the shadow rules near their readiness to go \
+live, and what each still lacks.
+3. What needs the operator: an entry of the health that is not ok, Saxo's login to renew or refused, a pause of \
+new entries in force, an account guard or a breaker near its limit, what changed since the day before's close.
+4. The day before in one line, from its debrief when there is one.
+Start with one sentence that says the day ahead. Twelve short lines at most, the figures as your tools give them; \
+start no backtest and propose nothing: this is a briefing, not a study."""
+
+
+def triage_prompt(what: str, facts: dict, seen_again: int) -> str:
+    """The request of an alert's triage (src/admin/agent_triage.py): what fired, as the admin saw it."""
+    again = (f" It fired {seen_again} more time{'s' if seen_again != 1 else ''} since its last triage."
+             if seen_again else "")
+    lines = "\n".join(f"- {key}: {value}" for key, value in facts.items() if value not in (None, "", []))
+    return (
+        f"An alert fired: {what}.{again} What the admin saw:\n{lines}\n\n"
+        "Triage it for the operator, who reads you on a phone: what happened and whether it still goes on (read "
+        "the health, the logs around it, the positions and Saxo's answers, what changed before it); what WATA "
+        "already does about it by itself (the position monitor tries a refused sale again, the trader refuses entries "
+        "while Saxo's login is not renewed...); and what the operator should do, if anything. Propose at most one "
+        "action, only when one would help (propose_action). Start no backtest. Eight short lines at most, the verdict "
+        "first: nothing to do, watch it, or act now.")
+
+
+# A change reviewed before the operator saves it (src/admin/routers/agent.py's reviews): nothing is saved by a review.
+CONFIG_REVIEW_PROMPT = """\
+Review this change of config.json before the operator saves it. For each setting a backtest can test (the change \
+shared says which), run the change against the live values on the recorded days (backtest_start with the changes, \
+beside a run without them), within your limits; say what the others do from what they are, and what the warnings \
+mean. Your verdict first: the data supports the change, it does not, or it cannot be told, on how many trades and \
+days. Propose nothing: the operator saves it, or not, from the Configuration page."""
+
+RULE_REVIEW_PROMPT = """\
+Review this change of a signal rule before the operator saves it: what it changes in what the rule raises \
+(pine_signals on recent days with the changed definition, beside the rule as it runs) and, within your limits, a \
+backtest of the changed rule beside its current one. Your verdict first: the data supports the change, it does not, \
+or it cannot be told, on how many signals, trades and days. Propose nothing: the operator saves it, or not, from the \
+rule's dialog."""
+
+DRAFT_REVIEW_PROMPT = """\
+Review this unsaved draft of the operator's script: whether it compiles (its check is shared), what changed from \
+the version it was made on, what that changes in what it plots and alerts (pine_run on recent days, the draft saved \
+first as a script of your own with pine_save), and what is wrong or risky in it. If you fix something, save your fix \
+with pine_save and propose it (propose_script_change, on the version the draft was made on): the operator puts it in \
+their editor, or not."""

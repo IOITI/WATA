@@ -80,6 +80,9 @@ const AgentMemoryPage = lazy(() =>
 const AgentArtefactsPage = lazy(() =>
   import('@/features/agent/ArtefactsPage').then((module) => ({ default: module.ArtefactsPage })),
 )
+const AgentRoutinesPage = lazy(() =>
+  import('@/features/agent/RoutinesPage').then((module) => ({ default: module.RoutinesPage })),
+)
 
 /** An address of the former Prices page: to the Assets View, or to the asset it showed. */
 function PricesRedirect() {
@@ -244,6 +247,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <AgentArtefactsPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="agent/routines"
+          element={
+            <ChartPage>
+              <AgentRoutinesPage />
             </ChartPage>
           }
         />

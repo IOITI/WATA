@@ -19,7 +19,7 @@ import {
   QueryState,
   useToast,
 } from 'ioiti-ui'
-import { Check, Eye, FileCode2, FilePlus2, ListChecks, SlidersHorizontal, X } from 'lucide-react'
+import { Check, Eye, FileCode2, FilePlus2, ListChecks, ListPlus, SlidersHorizontal, X, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
@@ -29,13 +29,15 @@ import { RunPeekLink } from '@/features/backtests/RunPeek'
 import { serviceNames } from '@/features/config/editor-context'
 import { ReviewChanges } from '@/features/config/ReviewChanges'
 import { ScriptDiff } from '@/features/ta/editor/ScriptDiff'
+import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { api, ApiError } from '@/lib/api'
 import type { AgentInputChange, AgentProposal } from '@/lib/types'
 
-import { headlineSaid, settingSaid } from './model'
+import { ActionProposal } from './ActionProposal'
+import { actionSaid, headlineSaid, settingSaid } from './model'
 import { conversationKey } from './useConversation'
 
-const KIND_ICON = { script: FileCode2, rule: ListChecks, settings: SlidersHorizontal, new_script: FilePlus2 }
+const KIND_ICON = { script: FileCode2, rule: ListChecks, settings: SlidersHorizontal, new_script: FilePlus2, new_rule: ListPlus, action: Zap }
 
 function value(input: AgentInputChange['before']): string {
   return input === null || input === undefined ? 'its default' : String(input)
@@ -93,26 +95,62 @@ function SettingsChange({ proposal }: { proposal: AgentProposal }) {
     before: settingSaid(setting.before, setting.unit),
     after: settingSaid(setting.after, setting.unit),
   }))
-  const runs = proposal.runs ?? []
   return (
     <div className="space-y-2.5 text-sm">
       <ChangeList label="In config.json" changes={changes} />
-      {runs.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">It rests on {runs.length === 1 ? 'this run' : 'these runs'}:</p>
-          <ul className="space-y-1">
-            {runs.map((run) => (
-              <li key={run.id} className="flex flex-wrap items-baseline gap-x-2">
-                <RunPeekLink id={run.id} className="underline">{run.name ?? run.id}</RunPeekLink>
-                {run.headline && <span className="text-xs tabular-nums text-text-secondary">{headlineSaid(run.headline)}</span>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <RestsOn proposal={proposal} />
       {(proposal.same ?? []).length > 0 && (
         <p className="text-xs text-muted-foreground">Left out, already at the value proposed: {proposal.same!.join(', ')}.</p>
       )}
+    </div>
+  )
+}
+
+/** The finished runs a proposal rests on, each with its headline. */
+function RestsOn({ proposal }: { proposal: AgentProposal }) {
+  const runs = proposal.runs ?? []
+  if (runs.length === 0) return null
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">It rests on {runs.length === 1 ? 'this run' : 'these runs'}:</p>
+      <ul className="space-y-1">
+        {runs.map((run) => (
+          <li key={run.id} className="flex flex-wrap items-baseline gap-x-2">
+            <RunPeekLink id={run.id} className="underline">{run.name ?? run.id}</RunPeekLink>
+            {run.headline && <span className="text-xs tabular-nums text-text-secondary">{headlineSaid(run.headline)}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** A new signal rule: what it runs, on what, what its alerts become, in shadow or off. */
+function NewRule({ proposal, proposals }: { proposal: AgentProposal; proposals: AgentProposal[] }) {
+  const rule = proposal.new_rule!
+  const { fields, script } = rule
+  const first = script.after_proposal ? proposals.find((entry) => entry.id === script.after_proposal) : undefined
+  return (
+    <div className="space-y-2.5 text-sm">
+      <ul className="space-y-1 text-text-secondary">
+        <li>
+          Runs {script.after_proposal ? <>the new script proposed above, <strong>{script.name}</strong>{first?.status !== 'applied' && ' (once created)'},</>
+            : <><Link className="underline" to={`/ta/indicators/${encodeURIComponent(script.id ?? '')}`}>{script.name}</Link> v{script.version}</>}
+          {' '}on {fields.asset.key}, {barsLabel(fields.bars)} bars of its {fields.side}, for {fields.indice}.
+        </li>
+        {fields.inputs.length > 0 && (
+          <li>Its inputs: {fields.inputs.map((entry) => `${entry.id} ${String(entry.value)}`).join(', ')}.</li>
+        )}
+        <li>
+          Its alerts: {fields.alerts.map((entry) => `${entry.title} → ${entry.action}`).join('; ') || 'none mapped'}
+          {fields.alert_calls === 'message' && ', and its alert() calls as messages'}.
+        </li>
+        <li>
+          {rule.mode === 'shadow' ? 'In shadow: its signals journaled, never sent; its week in shadow starts once created.' : 'Off: the engine runs it once you switch it to shadow.'}
+          {fields.history_days != null && ` Its own ${fields.history_days} days of history.`}
+        </li>
+      </ul>
+      <RestsOn proposal={proposal} />
     </div>
   )
 }
@@ -164,7 +202,7 @@ function RuleChange({ proposal, proposals }: { proposal: AgentProposal; proposal
   )
 }
 
-export function ProposalCard({ conversationId, proposal, proposals, blockedReason, onApplied }: {
+export function ProposalCard({ conversationId, proposal, proposals, blockedReason, onApplied, intoEditor = false }: {
   conversationId: string
   proposal: AgentProposal
   proposals: AgentProposal[]
@@ -172,6 +210,8 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
   blockedReason?: string | null
   /** Once applied: the page that shows what it changed reads it again (the editor its script). */
   onApplied?: (proposal: AgentProposal) => void
+  /** Proposed on a draft reviewed: a script's change is put in the editor, unsaved, rather than saved. */
+  intoEditor?: boolean
 }) {
   const { timezone, config_edit_enabled: configEditable } = useSession()
   const queryClient = useQueryClient()
@@ -187,7 +227,8 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
     void queryClient.invalidateQueries({ queryKey: ['ta-rules'] })
   }
   const settle = useMutation({
-    mutationFn: (apply: boolean) => api.settleAgentProposal(conversationId, proposal.id, apply),
+    mutationFn: (apply: boolean) =>
+      api.settleAgentProposal(conversationId, proposal.id, apply, apply && intoEditor && proposal.kind === 'script'),
     onSuccess: settled,
   })
   // A change of settings: checked as a save would be, then saved at the revision it was checked at.
@@ -215,8 +256,9 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
   const isScript = kind === 'script'
   const open = proposal.status === 'proposed'
   const applyLabel = isScript
-    ? `Save as version ${proposal.script!.base_version + 1}`
-    : kind === 'new_script' ? 'Create the script' : 'Change the rule'
+    ? (intoEditor ? 'Put in the editor, unsaved' : `Save as version ${proposal.script!.base_version + 1}`)
+    : kind === 'new_script' ? 'Create the script'
+      : kind === 'new_rule' ? `Create the rule (${proposal.new_rule!.mode === 'shadow' ? 'in shadow' : 'off'})` : 'Change the rule'
   const conflict = settle.error instanceof ApiError && settle.error.status === 409
   const savedConflict = save.error instanceof ApiError && save.error.status === 409
   const Icon = KIND_ICON[kind]
@@ -235,6 +277,8 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
               <>A change to the rule <Link className="underline" to="/ta/signals">{proposal.rule!.name}</Link> ({proposal.rule!.mode})</>
             )}
             {kind === 'settings' && <>A change of settings in config.json</>}
+            {kind === 'action' && <>An action on live trading: {actionSaid(proposal.action!)}</>}
+            {kind === 'new_rule' && <>A new signal rule of yours, {proposal.new_rule!.fields.name}</>}
             {kind === 'new_script' && (
               <>A new script, from <Link className="underline" to={`/ta/indicators/${encodeURIComponent(proposal.draft!.id)}`}>{proposal.draft!.name}</Link> v{proposal.draft!.version}</>
             )}
@@ -264,22 +308,30 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
       )}
       {kind === 'rule' && <RuleChange proposal={proposal} proposals={proposals} />}
       {kind === 'settings' && <SettingsChange proposal={proposal} />}
+      {kind === 'action' && <ActionProposal conversationId={conversationId} proposal={proposal} />}
+      {kind === 'new_rule' && <NewRule proposal={proposal} proposals={proposals} />}
       {proposal.status === 'applied' && proposal.result && (
         <p className="text-sm text-text-secondary">
-          {kind === 'script' && (
+          {kind === 'script' && (proposal.result.into_editor ? (
+            <>Put in the editor, unsaved: save it there as a new version, or not.</>
+          ) : (
             <>Saved as <Link className="underline" to={`/ta/indicators/${encodeURIComponent(proposal.result.script_id ?? '')}`}>version {proposal.result.version}</Link>, written by Claude.</>
-          )}
+          ))}
           {kind === 'rule' && <>The rule runs version {proposal.result.script_version} now.</>}
           {kind === 'new_script' && (
             <>Created as <Link className="underline" to={`/ta/indicators/${encodeURIComponent(proposal.result.script_id ?? '')}`}>{proposal.result.name}</Link>, yours, its first version written by Claude.</>
           )}
           {kind === 'settings' && <SettingsSaved proposal={proposal} />}
+          {kind === 'action' && <>Done, through the page&apos;s own route, as its audit entry says.</>}
+          {kind === 'new_rule' && (
+            <>Created as <Link className="underline" to="/ta/signals">{proposal.result.name}</Link>, {proposal.result.mode === 'shadow' ? 'in shadow' : 'off'}.</>
+          )}
           {proposal.settled_at && <span className="text-muted-foreground"> {formatDateTime(proposal.settled_at, timezone, false)}.</span>}
         </p>
       )}
       {open && (
         <div className="flex flex-wrap items-center gap-2">
-          {kind === 'settings' ? (
+          {kind === 'action' ? null : kind === 'settings' ? (
             <Hint content={configEditable ? undefined : 'Configuration editing is switched off (admin.config_edit_enabled): set it on the server to save from here.'}
               wrap={!configEditable}>
               <Button size="sm" leftIcon={<Eye className="size-3.5" />} disabled={!configEditable} onClick={review}>

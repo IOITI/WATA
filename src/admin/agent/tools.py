@@ -31,15 +31,19 @@ import json
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 import jsonschema
 from starlette.concurrency import run_in_threadpool
 
+from src.admin.agent import charts as agent_charts
+from src.admin.agent import verdicts as agent_verdicts
 from src.admin.agent.proposals import ProposalRefused
+from src.admin.agent.store import stamp
 from src.admin.agent_memory import FORGOTTEN, KINDS, MAX_BODY, MAX_DESCRIPTION, NAME, Author, UnknownEntry
-from src.admin.errors import InvalidRequest, NotPossible
+from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
+from src.admin.ta_rules import RuleNotFound
 from src.admin.logs import LEVELS, LOG_SERVICES, MAX_LINES
 from src.admin.mcp_server.gate import CALLER
 from src.admin.mcp_server.tokens import Caller
@@ -63,10 +67,21 @@ PROPOSE_SCRIPT = "propose_script_change"
 PROPOSE_RULE = "propose_rule_change"
 PROPOSE_SETTINGS = "propose_settings_change"
 PROPOSE_NEW_SCRIPT = "propose_new_script"
+PROPOSE_NEW_RULE = "propose_new_rule"
+# An action on live trading, offered while admin.ai_agent.action_proposals: applied only by the operator's click.
+PROPOSE_ACTION = "propose_action"
 # The end of a research task, said by the agent (src/admin/agent/service.py chains a task's requests until it).
 TASK_DONE = "task_done"
-PROPOSALS = (PROPOSE_SCRIPT, PROPOSE_RULE, PROPOSE_SETTINGS, PROPOSE_NEW_SCRIPT)
-OWN_TOOLS = (*PROPOSALS, TASK_DONE)
+# A question a research task asks the operator: it waits for their answer before its next request.
+ASK_OPERATOR = "ask_operator"
+MAX_CHOICES = 5
+PROPOSALS = (PROPOSE_SCRIPT, PROPOSE_RULE, PROPOSE_SETTINGS, PROPOSE_NEW_SCRIPT, PROPOSE_NEW_RULE, PROPOSE_ACTION)
+OWN_TOOLS = (*PROPOSALS, TASK_DONE, ASK_OPERATOR)
+# The own tools every agent is given: an action only while the operator lets it propose them.
+GIVEN_OWN_TOOLS = tuple(name for name in OWN_TOOLS if name != PROPOSE_ACTION)
+# What it shows on the pages: a chart under its answer, its verdict on the thing it concluded about.
+SHOW_CHART = "show_chart"
+SET_VERDICT = "set_verdict"
 # Its memory's changes, its own: the MCP endpoint only reads the memory.
 MEMORY_SAVE = "memory_save"
 MEMORY_FORGET = "memory_forget"
@@ -212,6 +227,42 @@ OWN_DEFINITIONS = (
         },
     },
     {
+        "name": PROPOSE_NEW_RULE,
+        "description": (
+            "Propose a new signal rule of the operator's, in shadow (its signals journaled, never sent) or off: one of "
+            "their scripts (script_id, script_version: its current one by default), or the new script you proposed "
+            "before it in this conversation (after_proposal), on the bars the Capital.com feed records, resting on "
+            "the finished runs made from it. The operator creates it, or not; its week in shadow starts then. Never "
+            "live: going live is theirs, once it is ready. Your own shadow rules are rule_shadow_save's."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "maxLength": 80, "description": "Its name: one no rule has."},
+                "script_id": {"type": "string", "description": "The operator's script it runs."},
+                "script_version": {"type": "integer", "description": "Its version; the current one by default."},
+                "after_proposal": {"type": "string", "description": (
+                    "Or: your proposal of a new script in this conversation, which it runs once created.")},
+                "asset": {"type": "string", "description": "capital/<EPIC>, as data_assets names it."},
+                "indice": {"type": "string", "description": "The indice its signals are for (us100...)."},
+                "bars": {"type": "string", "description": "10S to a day (10S, 45S, 1, 5, 60) or R<ticks>."},
+                "side": {"type": "string", "enum": ["bid", "ask"]},
+                "inputs": {"type": "object", "description": "By id: {\"in_0\": 9}."},
+                "alerts": {"type": "object", "description": (
+                    "By title: {\"Long\": \"long\", \"Short\": \"short\", \"Exit\": \"close-position\"}, or ignore, "
+                    "message.")},
+                "alert_calls": {"type": "string", "enum": ["ignore", "message"]},
+                "history_days": {"type": ["integer", "null"], "minimum": 0, "maximum": 30},
+                "mode": {"type": "string", "enum": ["shadow", "off"]},
+                "runs": {"type": "array", "maxItems": 6, "items": {"type": "string"}, "description": (
+                    "The finished runs made from it that it rests on.")},
+                "title": {"type": "string", "description": "The proposal in a few words."},
+                "rationale": {"type": "string", "description": "Why, and what it rests on: the runs that showed it."},
+            },
+            "required": ["name", "asset", "indice", "alerts", "title", "rationale"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": TASK_DONE,
         "description": (
             "End the research task you were left to work on alone, once its goal is reached or cannot be with what "
@@ -230,7 +281,122 @@ OWN_DEFINITIONS = (
             "additionalProperties": False,
         },
     },
+    {
+        "name": ASK_OPERATOR,
+        "description": (
+            "Ask the operator a question in a research task you work on alone, when their answer would change what "
+            "you do next (which of two directions is worth your budget, whether a result is what they meant): they are "
+            "told on Telegram and on the admin's pages, and the task waits for their answer, its hours not counting "
+            "meanwhile, two days at most. End your answer after it: the next request starts with what they said. One "
+            "question a request, and only in a research task: in a conversation, ask in your answer."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "maxLength": 1000, "description": "The question, in a sentence or two."},
+                "choices": {"type": "array", "maxItems": MAX_CHOICES, "items": {"type": "string", "maxLength": 120},
+                            "description": "Short answers to choose from, if any: the operator may also write their own."},
+                "why": {"type": "string", "maxLength": 1000, "description": "Why it matters: what each answer leads to."},
+            },
+            "required": ["question", "why"],
+            "additionalProperties": False,
+        },
+    },
 )
+
+
+ACTION_DEFINITION = {
+    "name": PROPOSE_ACTION,
+    "description": (
+        "Propose an action on live trading, which the operator applies, or not, from a card under your answer, "
+        "through the page's own confirmation, checks and audit: pause_entries or resume_entries (new entries, as the "
+        "dashboard pauses them), close_position (position_id: one open now), restart (services, among those System "
+        "restarts: the admin last, each once the one before works again, held back as System holds it), rule_live "
+        "(rule_id: one of the operator's rules in shadow; its readiness is checked again) or rule_out_of_live (a live "
+        "rule). Only when it would help, one at a time, with why in its rationale: what you read that calls for it, "
+        "and what it costs. Not applied after 30 minutes: the situation may have changed."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["pause_entries", "resume_entries", "close_position", "restart",
+                                                  "rule_live", "rule_out_of_live"]},
+            "position_id": {"type": "string", "maxLength": 64, "description": "close_position's."},
+            "services": {"type": "array", "maxItems": 10, "items": {"type": "string"}, "description": (
+                "restart's: trader, position_monitor, web_server, scheduler, telegram, watchlist_manager, "
+                "price_recorder, capital_feed, ta_engine, admin.")},
+            "rule_id": {"type": "string", "maxLength": 64, "description": "rule_live's and rule_out_of_live's."},
+            "title": {"type": "string", "description": "The action in a few words."},
+            "rationale": {"type": "string", "description": "Why now: what you read that calls for it."},
+        },
+        "required": ["action", "title", "rationale"],
+        "additionalProperties": False,
+    },
+}
+CHART_DEFINITION = {
+    "name": SHOW_CHART,
+    "description": (
+        "Draw a chart under your answer from figures your tools gave you in this conversation, never figures of your "
+        "own: a line over time (points: {t: YYYY-MM-DD or an ISO moment, <series key>: value or null}, 2 to "
+        f"{agent_charts.MAX_POINTS:,}) or bars by category (categories: {{label, <series key>: value}}, up to "
+        f"{agent_charts.MAX_CATEGORIES}), {agent_charts.MAX_SERIES} series at most; a line's references are drawn "
+        "across it (a limit, a range's ends). Bars of one series may be coloured by their sign (tone sign: daily "
+        "results). source "
+        "names the tool calls and runs the figures come from: it is shown under the chart. "
+        f"{agent_charts.MAX_CHARTS} charts a request at most. Say in your answer what the chart shows, without "
+        "listing its figures again."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": 120},
+            "kind": {"type": "string", "enum": [agent_charts.LINE, agent_charts.BAR]},
+            "unit": {"type": "string", "maxLength": 20, "description": "The values' unit: %, €, points, s..."},
+            "series": {
+                "type": "array", "minItems": 1, "maxItems": agent_charts.MAX_SERIES,
+                "items": {
+                    "type": "object",
+                    "properties": {"key": {"type": "string", "pattern": agent_charts.KEY.pattern},
+                                   "label": {"type": "string", "minLength": 1, "maxLength": 60}},
+                    "required": ["key", "label"],
+                    "additionalProperties": False,
+                },
+            },
+            "points": {"type": "array", "maxItems": agent_charts.MAX_POINTS, "items": {"type": "object"},
+                       "description": "A line's points: {t, <series key>: value}, a value null for a gap."},
+            "categories": {"type": "array", "maxItems": agent_charts.MAX_CATEGORIES, "items": {"type": "object"},
+                           "description": "Bars' categories: {label, <series key>: value}."},
+            "references": {
+                "type": "array", "maxItems": agent_charts.MAX_REFERENCES,
+                "items": {"type": "object", "properties": {"value": {"type": "number"},
+                                                           "label": {"type": "string", "maxLength": 40}},
+                          "required": ["value"], "additionalProperties": False},
+            },
+            "tone": {"type": "string", "enum": ["series", "sign"], "description": "Bars only."},
+            "zero": {"type": "boolean", "description": "A line only: zero kept on the axis (a result, a balance)."},
+            "source": {"type": "string", "minLength": 1, "maxLength": 300},
+        },
+        "required": ["title", "kind", "series", "source"],
+        "additionalProperties": False,
+    },
+}
+VERDICT_DEFINITION = {
+    "name": SET_VERDICT,
+    "description": (
+        "Say your conclusion on a backtest run, a signal rule, a trading day or a position in one line: the admin "
+        "shows it on that thing's page beside a link to this conversation, until a later verdict replaces it. tone: "
+        "positive (it holds, ready to go live, a day as it should be), mixed (in part, not yet), negative (it does not "
+        "hold, not ready, something went wrong), neutral (nothing to judge). Set it once you concluded, on what you "
+        "concluded about, and say it in your answer too."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "about": {"type": "string", "pattern": agent_verdicts.ABOUT.pattern, "description": (
+                "run:<run id>, rule:<rule id>, day:<YYYY-MM-DD>, or position:<position id>.")},
+            "tone": {"type": "string", "enum": list(agent_verdicts.TONES)},
+            "line": {"type": "string", "minLength": 1, "maxLength": agent_verdicts.MAX_LINE},
+        },
+        "required": ["about", "tone", "line"],
+        "additionalProperties": False,
+    },
+}
 
 
 _NAME_SCHEMA = {"type": "string", "pattern": NAME.pattern, "description": (
@@ -283,14 +449,22 @@ MEMORY_DEFINITIONS = (
 )
 
 
-# The admin's own state, read for the agent: its health, and a service's log lines around a moment.
+# The admin's own state, read for the agent (src/admin/agent_ops.py): its health, a service's log lines around a
+# moment, trading now as the dashboard reads it, what changed, the TA engine's last minutes, what waits to deploy.
 OPS_HEALTH = "ops_health"
 OPS_LOGS = "ops_logs"
-OPS_TOOLS = (OPS_HEALTH, OPS_LOGS)
+OPS_TRADING = "ops_trading_now"
+OPS_CHANGES = "ops_changes"
+OPS_ENGINE = "ops_engine"
+OPS_RELEASE = "ops_release"
+OPS_TOOLS = (OPS_HEALTH, OPS_LOGS, OPS_TRADING, OPS_CHANGES, OPS_ENGINE, OPS_RELEASE)
 # A look at a log: the lines of its window, the newest kept, at most.
 LOG_LINES = 300
 LOG_MINUTES = 60
 _LOG_MOMENT = "%Y-%m-%d %H:%M"
+# A look at what changed: the hours before its end, by default and at most.
+CHANGES_HOURS = 24
+CHANGES_MAX_HOURS = 168
 
 OPS_DEFINITIONS = {
     OPS_HEALTH: {
@@ -323,16 +497,84 @@ OPS_DEFINITIONS = {
             "additionalProperties": False,
         },
     },
+    OPS_TRADING: {
+        "name": OPS_TRADING,
+        "description": (
+            "Trading now, as the dashboard reads it: the US market's day (closed, an early close with when entries "
+            "end and what is held is sold; closed_today counts the closed dates and US holidays alone, and on a "
+            "Saturday or a Sunday of the market's weekday the US market is closed all the same: no signal comes and "
+            "Saxo quotes no turbo), the trading hours and their timezone, the window around a US release in "
+            "force or next, the pause of new entries (the operator's, or the account guard's), Saxo refusing to renew "
+            "WATA's login, today's figures (trades, result) against their limits, the cooldown after a loss, the day's "
+            "breakers' figures, and each open position with its live value and the sales Saxo refused. A long or short "
+            "signal is refused, in the trader's order: entries paused; Saxo's login not renewed; a closed day, outside "
+            "the trading hours, from the risky minutes or an early close's end; inside a release's window; the day's "
+            "result at or above stop_entries_above_percent or at or below max_day_loss_percent; max_trades_per_day "
+            "reached; the cooldown running; max_consecutive_losses losses in a row, or the day "
+            "max_drawdown_from_day_best_percent points under its best (a limit of 0 or null is off). The signal's own "
+            "age, confidence and indice are judged when it comes. Reads only."),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    OPS_CHANGES: {
+        "name": OPS_CHANGES,
+        "description": (
+            "What changed, newest first: config.json's saves key by key (secrets masked; how each was saved: by hand, "
+            "from one of your proposals, a backup restored), the operator's actions recorded by the admin (pauses, "
+            "closes, restarts, rules taken live or out of it, credentials set by name, deploys asked), and the last "
+            f"deploy and how each container came out of it. ``hours`` before ``until`` (now by default), "
+            f"{CHANGES_MAX_HOURS} at most. Who did it is never said. Reads only."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "until": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$",
+                          "description": "YYYY-MM-DD HH:MM (UTC): the end of the look, now when not given."},
+                "hours": {"type": "number", "minimum": 0.25, "maximum": CHANGES_MAX_HOURS, "default": CHANGES_HOURS},
+            },
+            "additionalProperties": False,
+        },
+    },
+    OPS_ENGINE: {
+        "name": OPS_ENGINE,
+        "description": (
+            "The TA engine's last minutes, as the Engine monitor's Now panel reads them: its last tick, how long its "
+            "ticks and its rules' runs took against their limits, the feed's lag, its memory, the live signals and "
+            "those not sent, each check of what can cost a live signal (failed or not), and the notes the page says "
+            "beside them. Reads only."),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    OPS_RELEASE: {
+        "name": OPS_RELEASE,
+        "description": (
+            "What waits to be deployed: the newest release installed on the server, each container that waits for "
+            "it (what changes in it) and what holds it back now (positions open, the market open, a scheduler job "
+            "near...), whether a deploy is under way, and how the last one ended, container by container. status "
+            "already says which release each container runs. Reads only."),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
 }
 
 
 @dataclass(frozen=True)
 class OpsReads:
-    """What the admin lets the agent read of itself (build_agent): its health, and its services' logs when allowed."""
+    """What the admin lets the agent read of itself (src/admin/agent_ops.py): each read offered when given."""
 
     health: Callable[[], Awaitable[dict]]
     # read_log of src/admin/logs.py over the admin's log folder: (service, lines, level, query) -> its answer.
     logs: Callable[..., dict] | None = None
+    # The dashboard's overview, shaped for the agent.
+    trading: Callable[[], Awaitable[dict]] | None = None
+    # (since, until) -> what changed between them.
+    changes: Callable[[datetime, datetime], Awaitable[dict]] | None = None
+    # The Engine monitor's Now panel.
+    engine: Callable[[], Awaitable[dict]] | None = None
+    # What waits to be deployed.
+    release: Callable[[], Awaitable[dict]] | None = None
+
+    def offered(self) -> list[str]:
+        """The reads given, in the order the agent is shown them."""
+        given = {OPS_HEALTH: self.health, OPS_LOGS: self.logs, OPS_TRADING: self.trading, OPS_CHANGES: self.changes,
+                 OPS_ENGINE: self.engine, OPS_RELEASE: self.release}
+        return [name for name in OPS_TOOLS if given[name] is not None]
 
 
 @dataclass
@@ -349,8 +591,14 @@ class ToolAnswer:
     rule: dict | None = None
     # A research task said to be done (task_done): its conclusion.
     task_done: dict | None = None
+    # A question a research task asks the operator (ask_operator).
+    question: dict | None = None
     # An entry of its memory saved or forgotten: its name and what was done.
     memory: dict | None = None
+    # A chart drawn under the answer (show_chart), as the pages draw it.
+    chart: dict | None = None
+    # A verdict set on a run, a rule, a day or a position (set_verdict).
+    verdict: dict | None = None
 
 
 def _definition(tool) -> dict:
@@ -374,13 +622,18 @@ def _parsed(text: str):
 class AgentTools:
     """The tools, built once over the admin's research services; a session for each request."""
 
-    def __init__(self, research, proposals, *, clock=time.time, ops: OpsReads | None = None, memory=None):
+    def __init__(self, research, proposals, *, clock=time.time, ops: OpsReads | None = None, memory=None,
+                 verdicts=None, actions: bool = False):
         self._research = research
         self._proposals = proposals
         self._clock = clock
         self._ops = ops
         # Its memory (src/admin/agent_memory.py), None when it has none (admin.ai_agent.memory).
         self._memory = memory
+        # Its verdicts shown on the pages (src/admin/agent/verdicts.py): none, none offered.
+        self._verdicts = verdicts
+        # Whether it may propose actions on live trading (admin.ai_agent.action_proposals).
+        self._actions = actions
         self._server = None
         self._definitions: list[dict] | None = None
         self._read_only: dict[str, bool] = {}
@@ -399,12 +652,12 @@ class AgentTools:
         missing = [name for name in reads if name not in listed]
         if missing:
             raise RuntimeError(f"The research tools lack {', '.join(missing)}")
-        offered = [OPS_HEALTH] if self._ops is not None else []
-        if self._ops is not None and self._ops.logs is not None:
-            offered.append(OPS_LOGS)
+        offered = self._ops.offered() if self._ops is not None else []
         memory = [dict(own) for own in MEMORY_DEFINITIONS] if self._memory is not None else []
+        shown = [dict(CHART_DEFINITION)] + ([dict(VERDICT_DEFINITION)] if self._verdicts is not None else [])
+        actions = [dict(ACTION_DEFINITION)] if self._actions else []
         self._definitions = ([_definition(listed[name]) for name in reads] + [dict(own) for own in OWN_DEFINITIONS]
-                             + memory + [dict(OPS_DEFINITIONS[name]) for name in offered])
+                             + actions + shown + memory + [dict(OPS_DEFINITIONS[name]) for name in offered])
         self._read_only = {name: bool(listed[name].annotations and listed[name].annotations.read_only_hint)
                            for name in reads}
 
@@ -442,6 +695,16 @@ class ToolSession:
         self._conversation_id = conversation_id
         self._caller = caller
         self._task = task
+        # The charts this request drew.
+        self._charts = 0
+
+    @property
+    def conversation_id(self) -> str:
+        return self._conversation_id
+
+    def offers(self, name: str) -> bool:
+        """Whether the agent is given this tool (a read the admin gives, its memory's)."""
+        return any(entry["name"] == name for entry in self._tools.definitions())
 
     async def call(self, name: str, arguments, request: int, progress=lambda detail: None,
                    stopping=lambda: False) -> ToolAnswer:
@@ -456,6 +719,12 @@ class ToolSession:
             return ToolAnswer(f"INVALID_JSON: {e.message}"[:2000], is_error=True)
         if name == TASK_DONE:
             return self._task_done(arguments)
+        if name == ASK_OPERATOR:
+            return self._ask_operator(arguments)
+        if name == SHOW_CHART:
+            return self._chart(arguments)
+        if name == SET_VERDICT:
+            return await self._verdict(arguments, request)
         if name in MEMORY_WRITES:
             return await self._remember(name, arguments, request)
         if name in OWN_TOOLS:
@@ -495,6 +764,20 @@ class ToolSession:
                     "services": [{key: entry.get(key) for key in ("id", "name", "status", "detail")}
                                  for entry in health.get("services") or []],
                     "queues": health.get("queues")}
+            return self._fitted_answer(name, json.dumps(said, ensure_ascii=False, default=str))
+        if name == OPS_CHANGES:
+            until = (datetime.strptime(arguments["until"], _LOG_MOMENT).replace(tzinfo=timezone.utc)
+                     if arguments.get("until") else datetime.fromtimestamp(self._tools._clock(), timezone.utc))
+            hours = min(float(arguments.get("hours", CHANGES_HOURS)), CHANGES_MAX_HOURS)
+            said = await ops.changes(until - timedelta(hours=hours), until)
+            return self._fitted_answer(name, json.dumps(said, ensure_ascii=False, default=str))
+        if name in (OPS_TRADING, OPS_ENGINE, OPS_RELEASE):
+            read = {OPS_TRADING: ops.trading, OPS_ENGINE: ops.engine, OPS_RELEASE: ops.release}[name]
+            try:
+                said = await read()
+            except Exception as e:
+                # The database or a file out of reach: said as a refusal the agent can work around.
+                return ToolAnswer(f"{name} could not be read now: {e}"[:500], is_error=True)
             return self._fitted_answer(name, json.dumps(said, ensure_ascii=False, default=str))
         around = datetime.strptime(arguments["around"], _LOG_MOMENT)
         span = timedelta(minutes=arguments.get("minutes", 10))
@@ -576,7 +859,16 @@ class ToolSession:
     async def _propose(self, name: str, arguments: dict, request: int) -> ToolAnswer:
         proposals = self._tools._proposals
         make = {PROPOSE_SCRIPT: proposals.propose_script, PROPOSE_RULE: proposals.propose_rule,
-                PROPOSE_SETTINGS: proposals.propose_settings, PROPOSE_NEW_SCRIPT: proposals.propose_new_script}[name]
+                PROPOSE_SETTINGS: proposals.propose_settings, PROPOSE_NEW_SCRIPT: proposals.propose_new_script,
+                PROPOSE_NEW_RULE: proposals.propose_new_rule}.get(name)
+        if name == PROPOSE_ACTION:
+            # A close is proposed on a position as WATA has it now (read here: the proposals read no database).
+            position = None
+            if arguments.get("action") == "close_position" and arguments.get("position_id"):
+                found = await self._tools._research.queries.position_record(str(arguments["position_id"]))
+                position = (found or {}).get("position")
+            make = lambda conversation, asked, given: proposals.propose_action(  # noqa: E731
+                conversation, asked, given, position=position)
         try:
             proposal = await run_in_threadpool(make, self._conversation_id, request, arguments)
         except ProposalRefused as e:
@@ -609,6 +901,57 @@ class ToolSession:
         if action != FORGOTTEN:
             said["revision"] = entry["revision"]
         return ToolAnswer(json.dumps(said, ensure_ascii=False), memory={"name": entry["name"], "action": action})
+
+    def _chart(self, arguments: dict) -> ToolAnswer:
+        if self._charts >= agent_charts.MAX_CHARTS:
+            return ToolAnswer(f"This request drew {agent_charts.MAX_CHARTS} charts already: say the rest in words",
+                              is_error=True)
+        try:
+            chart = agent_charts.checked_chart(arguments)
+        except agent_charts.ChartRefused as e:
+            return ToolAnswer(str(e), is_error=True)
+        self._charts += 1
+        said = {"shown": chart["title"], "next": "It is drawn under your answer: say what it shows."}
+        return ToolAnswer(json.dumps(said, ensure_ascii=False), chart=chart)
+
+    async def _verdict(self, arguments: dict, request: int) -> ToolAnswer:
+        """A verdict on a thing that exists: a run, a rule, a day, a position WATA knows."""
+        about = arguments["about"]
+        kind, _, thing = about.partition(":")
+        research = self._tools._research
+        try:
+            if kind == "run":
+                if research.backtests is None:
+                    raise LookupError("Backtests are switched off: there is no run to judge")
+                await run_in_threadpool(research.backtests.get, thing)
+            elif kind == "rule":
+                if research.rules is None:
+                    raise LookupError("There is no signal rule here")
+                await run_in_threadpool(research.rules.rule, thing)
+            elif kind == "day":
+                datetime.strptime(thing, "%Y-%m-%d")
+            elif await research.queries.position_record(thing) is None:
+                raise LookupError(f"WATA has no position {thing}")
+        except (UnknownRun, RuleNotFound) as e:
+            return ToolAnswer(f"Nothing to judge: {e}", is_error=True)
+        except ValueError:
+            return ToolAnswer("A day is day:YYYY-MM-DD", is_error=True)
+        except LookupError as e:
+            return ToolAnswer(str(e), is_error=True)
+        verdict = await run_in_threadpool(lambda: self._tools._verdicts.save(
+            about, arguments["tone"], arguments["line"], conversation=self._conversation_id, request=request,
+            at=stamp(self._tools._clock())))
+        said = {"set": about, "next": "Its page shows it now: say it in your answer too."}
+        return ToolAnswer(json.dumps(said), verdict={key: verdict[key] for key in ("about", "tone", "line")})
+
+    def _ask_operator(self, arguments: dict) -> ToolAnswer:
+        if not self._task:
+            return ToolAnswer("This conversation is not a research task: ask the operator in your answer", is_error=True)
+        question = {"question": arguments["question"].strip(), "why": arguments["why"].strip(),
+                    "choices": [choice.strip() for choice in arguments.get("choices") or [] if choice.strip()]}
+        said = {"asked": True, "next": "End your answer now: the task waits for the operator's answer, and your next "
+                                        "request starts with it."}
+        return ToolAnswer(json.dumps(said), question=question)
 
     def _task_done(self, arguments: dict) -> ToolAnswer:
         if not self._task:

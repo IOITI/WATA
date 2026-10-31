@@ -21,7 +21,7 @@ import { useRef } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { api } from '@/lib/api'
-import type { AgentProposal, AgentSubject } from '@/lib/types'
+import type { AgentConversation, AgentProposal, AgentSubject } from '@/lib/types'
 
 import { AgentComposer } from './AgentComposer'
 import { ConversationView } from './ConversationView'
@@ -39,14 +39,15 @@ export function AgentSheet({ subject: given, blockedFor, onApplied }: {
   /** What the page is about; a list's page leaves it to the address (?about=) or to the conversation open. */
   subject?: AgentSubject
   /** Why a proposal cannot be applied from this page now, if it cannot. */
-  blockedFor?: (proposal: AgentProposal) => string | null
+  blockedFor?: (proposal: AgentProposal, conversation: AgentConversation) => string | null
   onApplied?: (proposal: AgentProposal) => void
 }) {
   const [params, setParams] = useSearchParams()
   const open = params.get(AGENT_PARAM)
   const chosen = open && open !== NEW ? open : null
   const conversation = useConversation(chosen)
-  const subject = given ?? conversation.data?.subject ?? subjectOf(params.get(ABOUT_PARAM))
+  // The conversation open says what it is about (a draft reviewed from a script's page), else the page or the address.
+  const subject = (chosen ? conversation.data?.subject : undefined) ?? given ?? subjectOf(params.get(ABOUT_PARAM))
   const listed = useQuery({
     queryKey: ['agent-conversations', subject ? `${subject.kind}:${subject.id}` : 'none'],
     queryFn: () => api.agentConversations(`${subject!.kind}:${subject!.id}`),

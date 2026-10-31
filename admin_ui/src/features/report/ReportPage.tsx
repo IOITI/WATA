@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { formatDay, formatMoney, formatNumber, formatPercent, KpiTile, PageHeader, Panel, QueryState, SignedValue, StatCard } from 'ioiti-ui'
+import { ButtonLink, formatDay, formatMoney, formatNumber, formatPercent, KpiTile, PageHeader, Panel, QueryState, SignedValue, StatCard } from 'ioiti-ui'
+import { useSearchParams } from 'react-router'
 
 import { BalanceChart } from '@/components/charts/PerformanceCharts'
 import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { api } from '@/lib/api'
 import type { MilestoneProjection, Report, TradeSummary } from '@/lib/types'
@@ -124,7 +126,7 @@ function Milestones({ report }: { report: Report }) {
   )
 }
 
-function ReportContent({ report }: { report: Report }) {
+function ReportContent({ report, past = false }: { report: Report; past?: boolean }) {
   const cumulative: PeriodRow[] = Object.values(report.cumulative)
     .sort((a, b) => a.days - b.days)
     .map((period) => ({ label: `Last ${period.days} days`, summary: period }))
@@ -200,7 +202,7 @@ function ReportContent({ report }: { report: Report }) {
         )}
       </Panel>
 
-      <Panel title="Today" bodyClassName="pt-2">
+      <Panel title={past ? `The day of ${formatDay(report.report_date)}` : 'Today'} bodyClassName="pt-2">
         <PeriodTable rows={today} periodHeader="Trades of the day" />
       </Panel>
       <Panel title="Recent periods" bodyClassName="pt-2">
@@ -227,9 +229,18 @@ function ReportContent({ report }: { report: Report }) {
   )
 }
 
+/** The day the address names (the AI agent links to a day so), or null for today's report. */
+function reportDay(params: URLSearchParams): string | null {
+  const day = params.get('day')
+  return day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null
+}
+
 export function ReportPage() {
-  const reportQuery = useQuery({ queryKey: ['report'], queryFn: api.report, refetchInterval: 120_000 })
+  const [params] = useSearchParams()
+  const day = reportDay(params)
+  const reportQuery = useQuery({ queryKey: ['report', day], queryFn: () => api.report(day ?? undefined), refetchInterval: day ? false : 120_000 })
   const report = reportQuery.data
+  const shown = report?.report_date.slice(0, 10)
 
   return (
     <>
@@ -240,10 +251,16 @@ export function ReportPage() {
             ? `The figures of the daily Telegram report, as of ${formatDay(report.report_date)}.`
             : 'The figures of the daily Telegram report.'
         }
-        actions={report ? <AskAgentLink subject={{ kind: 'day', id: report.report_date.slice(0, 10) }} label="Ask about the day" /> : undefined}
+        actions={report ? (
+          <>
+            {day && <ButtonLink to="/report" size="sm" variant="ghost">Today&apos;s report</ButtonLink>}
+            <AskAgentLink subject={{ kind: 'day', id: report.report_date.slice(0, 10) }} label="Ask about the day" />
+          </>
+        ) : undefined}
       />
+      {shown && <AgentVerdict about={`day:${shown}`} className="mb-4" />}
       <QueryState isPending={reportQuery.isPending} error={reportQuery.error} hasData={!!report}>
-        {report && <ReportContent report={report} />}
+        {report && <ReportContent report={report} past={!!day} />}
       </QueryState>
       <AgentSheet />
     </>

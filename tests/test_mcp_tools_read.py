@@ -455,6 +455,8 @@ def test_rules_are_listed_with_their_mode_and_who_made_them(research, scripts):
     [rule] = found["rules"]
     assert (rule["mode"], rule["made_by"], rule["bars"], rule["asset"]) == ("shadow", "claude", "1", "capital/US100")
     assert found["shadow_rules_switch"] is False
+    # Just made: a week in shadow to go, nothing journaled yet (src/admin/ta_readiness.py, the page's checks).
+    assert rule["readiness"][0].endswith("weekday(s) in shadow of 5") and "no signal journaled yet" in rule["readiness"]
 
 
 def test_a_rules_signals_are_set_beside_tradingviews(research, scripts):

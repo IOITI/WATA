@@ -12,6 +12,8 @@ import pytz
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from src.admin import proposed_actions
+from src.admin.agent.proposals import CLOSE, PAUSE, RESUME
 from src.admin.auth import client_ip, require_session
 from src.admin.errors import DatabaseUnavailable
 from src.admin.services import OPS_QUEUE
@@ -49,7 +51,12 @@ class SaxoAuthorizeRequest(BaseModel):
     environment: str | None = Field(None, max_length=16)
 
 
-class ClosePositionRequest(BaseModel):
+class ProposedBy(BaseModel):
+    # The AI agent's proposal this action applies, from its card (src/admin/proposed_actions.py).
+    proposal: str | None = Field(None, max_length=proposed_actions.MAX_REF)
+
+
+class ClosePositionRequest(ProposedBy):
     position_id: str = Field(min_length=1, max_length=64)
 
 
@@ -99,32 +106,38 @@ def _risk_state(ctx):
 
 
 @router.post("/actions/pause-entries")
-async def pause_entries(request: Request):
+async def pause_entries(request: Request, body: ProposedBy | None = None):
     """
     Make the trader refuse every signal that would open a position. Closing
     signals, the end-of-day close and the position monitor's exits still work.
     """
     ctx = request.app.state.ctx
+    found = await proposed_actions.pending(ctx, body.proposal if body else None, PAUSE)
     try:
         await _risk_state(ctx).pause_entries(datetime.now(pytz.utc))
         paused_since = await _risk_state(ctx).get_entries_paused_since()
     except DatabaseUnavailable:
         raise HTTPException(status_code=503, detail="The database is unavailable: the pause was NOT set")
-    ctx.audit(request, "new entries paused")
+    ctx.audit(request, "new entries paused", proposed_actions.said(found))
     ctx.events.publish("entries_paused")
-    return {"entries_paused_since": paused_since}
+    answer = {"entries_paused_since": paused_since}
+    await proposed_actions.settled(ctx, found, client_ip(request, ctx.trusted_proxies), answer)
+    return answer
 
 
 @router.post("/actions/resume-entries")
-async def resume_entries(request: Request):
+async def resume_entries(request: Request, body: ProposedBy | None = None):
     ctx = request.app.state.ctx
+    found = await proposed_actions.pending(ctx, body.proposal if body else None, RESUME)
     try:
         await _risk_state(ctx).resume_entries()
     except DatabaseUnavailable:
         raise HTTPException(status_code=503, detail="The database is unavailable: entries are still paused")
-    ctx.audit(request, "new entries resumed")
+    ctx.audit(request, "new entries resumed", proposed_actions.said(found))
     ctx.events.publish("entries_resumed")
-    return {"entries_paused_since": None}
+    answer = {"entries_paused_since": None}
+    await proposed_actions.settled(ctx, found, client_ip(request, ctx.trusted_proxies), answer)
+    return answer
 
 
 @router.post("/actions/close-position", status_code=202)
@@ -134,6 +147,9 @@ async def close_position(body: ClosePositionRequest, request: Request):
     which owns the exits and knows which closes are already in flight.
     """
     ctx = request.app.state.ctx
+    found = await proposed_actions.pending(ctx, body.proposal, CLOSE)
+    if found and found["proposal"]["action"].get("position_id") != body.position_id:
+        raise HTTPException(status_code=422, detail="The proposal closes another position")
     detail = await ctx.queries.get_position(body.position_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="Position not found")
@@ -151,8 +167,11 @@ async def close_position(body: ClosePositionRequest, request: Request):
         "requested_at": _utc_timestamp(),
     })
     instrument = detail["position"].get("instrument_name") or "unknown instrument"
-    ctx.audit(request, "close of one position requested", f"position_id={body.position_id} ({instrument})")
-    return {"status": "queued", "position_id": body.position_id}
+    ctx.audit(request, "close of one position requested",
+              proposed_actions.joined(f"position_id={body.position_id} ({instrument})", proposed_actions.said(found)))
+    answer = {"status": "queued", "position_id": body.position_id}
+    await proposed_actions.settled(ctx, found, client_ip(request, ctx.trusted_proxies), answer)
+    return answer
 
 
 @router.post("/actions/daily-stats", status_code=202)

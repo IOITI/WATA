@@ -6,7 +6,7 @@ shadow.py, once the operator switched them on. Going live is the operator's
 alone.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from starlette.concurrency import run_in_threadpool
 
@@ -14,10 +14,12 @@ from src.admin.mcp_server.budget import research_tool
 from src.admin.mcp_server.shadow import ShadowRules
 from src.admin.mcp_server.shape import compacted
 from src.admin.ta_compare import compare, default_tolerance
+from src.admin.ta_readiness import unmet_readiness
 from src.admin.ta_rules import bars_label
 
 
-def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict | None) -> dict:
+def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict | None,
+              readiness: list[str] | None = None) -> dict:
     script = scripts_by_id.get(rule["script"]["id"]) or {}
     return {
         "id": rule["id"], "name": rule["name"], "mode": rule["mode"], "made_by": rule.get("made_by"),
@@ -33,6 +35,8 @@ def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict |
         "engine": {key: state.get(key) for key in ("state", "detail", "last_bar_time", "last_alert_at", "updated_at")}
         if state else None,
         "paper": paper,
+        # What keeps it from going live, as the Signal rules page's checks say (the operator's alone to switch).
+        "readiness": readiness,
     }
 
 
@@ -46,7 +50,9 @@ def register(server, research) -> None:
         inputs, what each alert becomes, how the engine runs it now, and for a shadow rule its days traded on paper
         beside the daily range (5 % to 95 %) of its reference run, and its report: one run of its signals since it
         was made (paper.report.run_id, read with backtest_result and backtest_trades), made again after each
-        finished day; paper.next_report is the one being made, or why it was not."""
+        finished day; paper.next_report is the one being made, or why it was not. readiness: what keeps a rule
+        from going live (a week of weekdays in shadow, a signal journaled, no paper day outside its reference's
+        range, the engine running it without fault), empty once ready; going live stays the operator's."""
         def read():
             paper = research.backtests.paper() if research.backtests is not None else {}
             return research.rules.load()["rules"], {meta["id"]: meta for meta in research.scripts.scripts()}, paper
@@ -54,8 +60,12 @@ def register(server, research) -> None:
         rules, scripts_by_id, paper = await run_in_threadpool(read)
         states = await research.queries.ta_rule_states()
         papers = paper.get("rules") or {}
+        now = datetime.fromtimestamp(research.clock(), timezone.utc)
         return compacted({
-            "rules": [rule_line(rule, scripts_by_id, states.get(rule["id"]), papers.get(rule["id"])) for rule in rules],
+            "rules": [rule_line(rule, scripts_by_id, states.get(rule["id"]), papers.get(rule["id"]),
+                                unmet_readiness(rule, states.get(rule["id"]), papers.get(rule["id"]), now,
+                                                research.timezone))
+                      for rule in rules],
             "shadow_rules_switch": research.limits.shadow_rules,
         })
 

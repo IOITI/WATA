@@ -6,10 +6,13 @@
 import type { AgentActivityItemData, AIResponseSource, AIResponseStatus, ActivityType } from 'ioiti-ui'
 
 import type {
+  AgentAction,
+  AgentChart,
   AgentChoice,
   AgentContext,
   AgentContextPart,
   AgentConversation,
+  AgentConversationListed,
   AgentEffort,
   AgentModel,
   AgentPending,
@@ -21,6 +24,8 @@ import type {
   AgentStep,
   AgentSubject,
   AgentTask,
+  AgentVerdict,
+  AgentVerdictTone,
   BacktestHeadline,
 } from '@/lib/types'
 
@@ -85,9 +90,22 @@ export function subjectLink(subject: AgentSubject): string {
       return `/signals?find=${encodeURIComponent(subject.id)}`
     case 'day':
       return `/report?day=${encodeURIComponent(subject.id)}`
+    case 'briefing':
+      return '/'
+    case 'rule':
+      return '/ta/signals'
+    case 'change':
+      return '/config'
+    case 'draft':
+      return '/ta/indicators'
     default:
       return '/system'
   }
+}
+
+/** How many things a listed conversation holds attached besides its subject. */
+export function moreAttached(row: Pick<AgentConversationListed, 'attached' | 'subject'>): number {
+  return Math.max(0, (row.attached ?? 0) - (row.subject ? 1 : 0))
 }
 
 export function subjectSaid(subject: AgentSubject): string {
@@ -102,9 +120,27 @@ export function subjectSaid(subject: AgentSubject): string {
       return `Signal: ${subject.label}`
     case 'day':
       return `The trading day ${subject.id}`
+    case 'briefing':
+      return `The day ahead, ${subject.id}`
+    case 'rule':
+      return `Signal rule ${subject.label}`
+    case 'change':
+    case 'draft':
+      return `To review: ${subject.label}`
     default:
       return `Incident: ${subject.label}`
   }
+}
+
+/** What the admin asked by itself, said on Activity beside its conversation. */
+export const ASKED_BY: Record<string, string> = {
+  debrief: 'Daily debrief', briefing: 'Morning briefing', triage: 'Triage', dossier: 'Go-live dossier',
+}
+
+/** Who asked a conversation, said on Activity: the admin by itself (a debrief, a routine...), or nothing. */
+export function askedBy(by: string | null | undefined): string | null {
+  if (!by) return null
+  return by.startsWith('routine:') ? 'Routine' : ASKED_BY[by] ?? null
 }
 
 // ── a subject in the address: a list's row asked about (?agent=new&about=position:5001) ──
@@ -117,16 +153,16 @@ export function aboutParam(subject: Pick<AgentSubject, 'kind' | 'id' | 'day' | '
   return `${subject.kind}:${subject.id}${extra ? `@${extra}` : ''}`
 }
 
-const ABOUT_KINDS = ['position', 'signal', 'day', 'incident'] as const
+const ABOUT_KINDS = ['position', 'signal', 'day', 'incident', 'rule'] as const
 
 /** The subject the address names, or null; its label until the admin names it. */
 export function subjectOf(about: string | null): AgentSubject | null {
-  const match = about ? /^(position|signal|day|incident):([^@]{1,64})(?:@(.{1,16}))?$/.exec(about) : null
+  const match = about ? /^(position|signal|day|incident|rule):([^@]{1,64})(?:@(.{1,16}))?$/.exec(about) : null
   if (!match || !(ABOUT_KINDS as readonly string[]).includes(match[1])) return null
   const [, kind, id, extra] = match
   if (kind === 'signal') return extra ? { kind, id, day: extra, label: `the signal of ${extra}` } : null
   if (kind === 'incident') return extra ? { kind, id, at: extra, label: `${id.replace(/_/g, ' ')} at ${extra} UTC` } : null
-  return { kind: kind as 'position' | 'day', id, label: kind === 'day' ? id : id }
+  return { kind: kind as 'position' | 'day' | 'rule', id, label: id }
 }
 
 /** The address that opens the agent on a new conversation about ``subject``, from the page it is on. */
@@ -157,6 +193,12 @@ function runs(ids: unknown): string {
 function entries(names: unknown): string {
   if (!Array.isArray(names) || names.length === 0) return 'entries'
   return names.length <= 2 ? names.map(short).join(' and ') : `${names.length} entries`
+}
+
+function changes(input: Input): string {
+  const hours = typeof input.hours === 'number' ? `${input.hours} h` : null
+  if (typeof input.until === 'string') return `Read what changed in the ${hours ?? 'hours'} before ${input.until}`
+  return hours ? `Read what changed in the last ${hours}` : 'Read what changed lately'
 }
 
 const DERIVED: Record<string, string> = {
@@ -209,6 +251,15 @@ const TITLES: Record<string, (input: Input) => string> = {
   data_orders: (input) => `Read the orders sent to Saxo, ${period(input)}`,
   ops_health: () => "Read the admin's health",
   ops_logs: (input) => `Read the logs of ${short(input.service)} around ${short(input.around)}`,
+  ops_trading_now: () => 'Read trading as the dashboard shows it',
+  ops_changes: changes,
+  ops_engine: () => "Read the TA engine's last minutes",
+  ops_release: () => 'Read what waits to be deployed',
+  show_chart: (input) => `Drew a chart: ${short(input.title)}`,
+  set_verdict: (input) => `Said its verdict on ${typeof input.about === 'string' ? verdictSubject(input.about) : '?'}`,
+  propose_action: (input) => `Proposed an action: ${short(input.title)}`,
+  propose_new_rule: (input) => `Proposed a new rule: ${short(input.name)}`,
+  ask_operator: (input) => `Asked you: ${short(input.question)}`,
   rule_shadow_save: (input) => (typeof input.rule_id === 'string' && input.rule_id
     ? `Changed its shadow rule ${input.rule_id}` : `Saved the shadow rule "${short(input.name)}"`),
   rule_shadow_remove: (input) => `Removed its shadow rule ${short(input.rule_id)}`,
@@ -235,6 +286,11 @@ const TYPES: Record<string, ActivityType> = {
   propose_rule_change: 'writing',
   propose_settings_change: 'writing',
   propose_new_script: 'writing',
+  propose_new_rule: 'writing',
+  propose_action: 'writing',
+  show_chart: 'writing',
+  set_verdict: 'writing',
+  ask_operator: 'writing',
   rule_shadow_save: 'writing',
   rule_shadow_remove: 'writing',
   rule_set_reference: 'writing',
@@ -288,6 +344,15 @@ const WRITING: Record<string, string> = {
   data_orders: 'Reading the orders sent to Saxo',
   ops_health: "Reading the admin's health",
   ops_logs: 'Reading the logs',
+  ops_trading_now: 'Reading trading now',
+  ops_changes: 'Reading what changed',
+  ops_engine: "Reading the TA engine's last minutes",
+  ops_release: 'Reading what waits to be deployed',
+  show_chart: 'Drawing a chart',
+  set_verdict: 'Saying its verdict',
+  propose_action: 'Proposing an action',
+  propose_new_rule: 'Proposing a new rule',
+  ask_operator: 'Asking you a question',
   rule_shadow_save: 'Saving a shadow rule',
   rule_shadow_remove: 'Removing a shadow rule',
   rule_set_reference: "Setting a rule's reference",
@@ -460,7 +525,8 @@ export function workingOf(request: AgentRequest, pending: AgentPending | null): 
   return {
     label,
     lines: lines.length > 0 ? lines
-      : [request.shared ? 'Reading the request and what was shared' : 'Reading the request', 'Planning its first steps'],
+      : [request.shared || request.attached?.length ? 'Reading the request and what was shared' : 'Reading the request',
+          'Planning its first steps'],
     since: request.started_at ?? request.asked_at ?? undefined,
   }
 }
@@ -487,12 +553,16 @@ export function answerOf(request: AgentRequest, pending: AgentPending | null): {
   }
 }
 
-/** What an answer rests on, as its sources: what was shared, the runs it started, what it proposed. */
+/**
+ * What an answer rests on, as its sources: what was shared, the runs it started, what it proposed. A file attached
+ * is named without a link: the sources lead through the router, and a file is not a page (its chip leads to it).
+ */
 export function sourcesOf(request: AgentRequest, proposals: AgentProposal[]): AIResponseSource[] {
   const sources: AIResponseSource[] = []
-  if (request.shared) {
-    sources.push({ id: `shared-${request.shared.id}`, title: subjectSaid(request.shared), url: subjectLink(request.shared),
-      snippet: 'Shared with the request' })
+  for (const entry of request.attached ?? (request.shared ? [request.shared] : [])) {
+    sources.push(entry.kind === 'file'
+      ? { id: `file-${entry.id}`, title: entry.name, snippet: 'Attached to the request' }
+      : { id: `shared-${entry.kind}-${entry.id}`, title: subjectSaid(entry), url: subjectLink(entry), snippet: 'Shared with the request' })
   }
   for (const run of request.runs) {
     sources.push({ id: `run-${run}`, title: `Run ${run}`, url: `/backtests/${encodeURIComponent(run)}`,
@@ -500,9 +570,48 @@ export function sourcesOf(request: AgentRequest, proposals: AgentProposal[]): AI
   }
   for (const proposal of proposals.filter((entry) => request.proposals.includes(entry.id))) {
     sources.push({ id: proposal.id, title: proposal.title, url: `#proposal-${proposal.id}`,
-      snippet: proposal.kind === 'script' ? 'A new version of a script, proposed' : 'A change to a rule, proposed' })
+      snippet: PROPOSAL_SAID[proposal.kind] ?? 'A proposal' })
   }
   return sources
+}
+
+/** What each kind of proposal is, under the answer that made it. */
+export const PROPOSAL_SAID: Record<AgentProposal['kind'], string> = {
+  script: 'A new version of a script, proposed',
+  rule: 'A change to a rule, proposed',
+  settings: 'A change of settings, proposed',
+  new_script: 'A new script, proposed',
+  new_rule: 'A new signal rule, proposed',
+  action: 'An action on live trading, proposed',
+}
+
+// ── an action on live trading ──
+
+/** An action in words, as its card names it. */
+export function actionSaid(action: AgentAction): string {
+  if (action.kind === 'pause_entries') return 'Pause new entries'
+  if (action.kind === 'resume_entries') return 'Resume new entries'
+  if (action.kind === 'close_position') {
+    return `Close position ${action.position_id}${action.instrument_name ? ` (${action.instrument_name})` : ''}`
+  }
+  if (action.kind === 'restart') {
+    const names = (action.services ?? []).map((service) => service.name.toLowerCase())
+    return `Restart the ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] ?? 'services'}`
+  }
+  return action.kind === 'rule_live' ? `Take ${action.rule?.name} live` : `Take ${action.rule?.name} out of live`
+}
+
+/** Where the action is done by hand: the page that holds its own confirmation. */
+export function actionPage(action: AgentAction): { to: string; label: string } {
+  if (action.kind === 'pause_entries' || action.kind === 'resume_entries') return { to: '/', label: 'the dashboard' }
+  if (action.kind === 'close_position') return { to: `/positions?find=${encodeURIComponent(action.position_id ?? '')}`, label: 'the position' }
+  if (action.kind === 'restart') return { to: '/system', label: 'System' }
+  return { to: '/ta/signals', label: 'Signal rules' }
+}
+
+/** Whether an action proposed may still be applied from its card: the situation may have changed since. */
+export function actionFresh(proposal: Pick<AgentProposal, 'fresh_until'>, now: number): boolean {
+  return !!proposal.fresh_until && now <= Date.parse(proposal.fresh_until)
 }
 
 /** The tools a request used, for the response's summary. */
@@ -565,6 +674,13 @@ export function presetsFor(kind: AgentSubject['kind'] | null): Preset[] {
       { label: 'Is it still going on?', prompt: "Is this still going on? Compare the health now with the log lines around the moment, and say whether trading is affected." },
     ]
   }
+  if (kind === 'rule') {
+    return [
+      { label: 'Is it ready to go live?', prompt: "Write this rule's go-live dossier: its paper days against its reference, its report against the bar, its reference run under worse fills, its signals beside TradingView's, the engine running it and its readiness. Set your verdict on the rule." },
+      { label: 'Why did a paper day leave its range?', prompt: "Why did this rule's latest paper day outside its reference's range go so? Read its trades and signals that day, and say whether it is the rule, the market or the fills." },
+      { label: 'Improve it', prompt: "Look for a change of this rule's script or inputs that could do better: test it on the recorded days against the rule as it runs, and propose it if it holds." },
+    ]
+  }
   return [
     { label: 'What to try next', prompt: "Look at WATA's recent backtests and signal rules and say what is most worth trying next, and why." },
   ]
@@ -581,6 +697,13 @@ export function askRefusal(state: AgentState | undefined): string | null {
     return `This month's budget of ${costText(state.month.budget_usd)} is spent: raise it in Configuration › AI agent.`
   }
   return null
+}
+
+/** What "Tell me on Telegram" does, or why it cannot be asked. */
+export function tellSaid(state: AgentState | undefined, tell: boolean, task = false): string {
+  if (state?.telegram === false) return 'No Telegram bot is set: set it in Configuration › Credentials to be told there.'
+  const what = task ? 'its conclusion, once the task ends' : 'the first lines of the answer, once it is written'
+  return tell ? `Telegram says ${what}.` : `Say on Telegram ${what}.`
 }
 
 /** What a request may use, said under the field. */
@@ -652,6 +775,7 @@ export const PART_LABEL: Record<AgentContextPart, string> = {
   system: 'System prompt',
   tools: 'Tool definitions',
   asked: 'Your requests, what was shared, the limits',
+  files: 'The files you attached',
   thinking: "Claude's thinking",
   calls: 'Its tool calls',
   results: 'Tool results',
@@ -663,7 +787,10 @@ export const PART_LABEL: Record<AgentContextPart, string> = {
 export function contextItems(view: AgentContext): { label: string; value: number }[] {
   return view.parts
     .filter((part) => part.tokens > 0)
-    .map((part) => ({ label: part.id === 'tools' && part.count ? `${PART_LABEL.tools} (${part.count})` : PART_LABEL[part.id], value: part.tokens }))
+    .map((part) => ({
+      label: (part.id === 'tools' || part.id === 'files') && part.count ? `${PART_LABEL[part.id]} (${part.count})` : PART_LABEL[part.id],
+      value: part.tokens,
+    }))
     .sort((a, b) => b.value - a.value)
 }
 
@@ -768,4 +895,58 @@ export function taskShares(task: AgentTask, now: number): { usd: number; backtes
     backtests: share(task.backtests, task.budget.backtests),
     time: share(until - started, Date.parse(task.deadline) - started),
   }
+}
+
+// ── what it shows on the pages ──
+
+/** How each verdict reads, beside its line. */
+export const VERDICT_SAID: Record<AgentVerdictTone, string> = {
+  positive: 'It holds',
+  mixed: 'In part',
+  negative: 'It does not hold',
+  neutral: 'Nothing to judge',
+}
+
+/** A verdict's tone as a badge's. */
+export function verdictTone(tone: AgentVerdictTone): 'success' | 'warning' | 'danger' | 'neutral' {
+  return tone === 'positive' ? 'success' : tone === 'mixed' ? 'warning' : tone === 'negative' ? 'danger' : 'neutral'
+}
+
+/** Where the thing a verdict is on is shown: a run's page, the signal rules, a day of the Report, a position. */
+export function verdictLink(about: string): string {
+  const [kind, id] = [about.slice(0, about.indexOf(':')), about.slice(about.indexOf(':') + 1)]
+  if (kind === 'run') return `/backtests/${encodeURIComponent(id)}`
+  if (kind === 'rule') return '/ta/signals'
+  if (kind === 'day') return `/report?day=${encodeURIComponent(id)}`
+  return `/positions?find=${encodeURIComponent(id)}`
+}
+
+/** What a verdict is on, in words. */
+export function verdictSubject(about: string): string {
+  const [kind, id] = [about.slice(0, about.indexOf(':')), about.slice(about.indexOf(':') + 1)]
+  return { run: `run ${id}`, rule: 'its signal rule', day: `the day of ${id}`, position: `position ${id}` }[kind] ?? about
+}
+
+/** A verdict on a thing changed since (a rule that runs something else): said to be from before. */
+export function verdictBefore(verdict: Pick<AgentVerdict, 'at'>, changedAt: string | null | undefined): boolean {
+  return !!changedAt && Date.parse(changedAt) > Date.parse(verdict.at)
+}
+
+/** The rows of a line chart as ioiti-ui's LineChart takes them: each moment and its series' numbers. */
+export function chartPoints(chart: AgentChart): ({ t: string } & Record<string, number | string | null>)[] {
+  return (chart.points ?? []).map((point) => {
+    const row: { t: string } & Record<string, number | string | null> = { t: point.t }
+    for (const series of chart.series) {
+      const value = point[series.key]
+      row[series.key] = typeof value === 'number' ? value : null
+    }
+    return row
+  })
+}
+
+/** A chart's value with its unit: 1.5 %, 12 €, 3 points. */
+export function chartValue(value: number, unit: string | null): string {
+  const shown = Math.abs(value) >= 100 ? value.toFixed(0) : Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2)
+  if (!unit) return shown
+  return unit === '%' ? `${shown} %` : `${shown} ${unit}`
 }

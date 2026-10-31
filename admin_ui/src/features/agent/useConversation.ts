@@ -73,3 +73,14 @@ export function useAgentState() {
   return useQuery({ queryKey: ['agent'], queryFn: api.agent, staleTime: 10_000 })
 }
 
+/** What the agent last concluded on these things (run:<id>, rule:<id>, day:<date>, position:<id>), while it is on. */
+export function useVerdicts(about: string[]) {
+  const state = useAgentState()
+  return useQuery({
+    queryKey: ['agent-verdicts', about],
+    queryFn: () => api.agentVerdicts(about),
+    enabled: !!state.data?.enabled && about.length > 0,
+    staleTime: 30_000,
+  })
+}
+

@@ -4,11 +4,24 @@
 import type { IPineInput } from 'pinets'
 
 import type { ChartMarker } from '@/features/prices/chartData'
+import { ApiError } from '@/lib/api'
 import type { BacktestRun, TaAlertAction, TaComparisonRow, TaRule, TaRuleBars, TaRuleFields, TaRuleMode, TaScriptSummary } from '@/lib/types'
 
 import { timeframeOf } from '../engine/timeframes'
 
 export const MODE_LABEL: Record<TaRuleMode, string> = { off: 'Off', shadow: 'Shadow', live: 'Live' }
+
+/** The server's refusal of a rule not ready, which the page may not have seen coming (its view is 10 s old at most). */
+export const notReadyRefusal = (error: Error | null) =>
+  error instanceof ApiError && error.status === 409 && error.message.startsWith('Not ready to go live')
+
+/** What a refusal of a rule's change says to the operator. */
+export const conflictText = (error: Error | null) =>
+  error instanceof ApiError && error.status === 409 && error.message.includes('changed meanwhile')
+    ? 'The rules changed since this page read them: they are read again, try once more.'
+    : error instanceof ApiError && error.status === 403
+      ? 'Operator actions are disabled in the configuration (admin.actions_enabled): no rule goes live.'
+      : error?.message ?? null
 
 export const MODE_TONE: Record<TaRuleMode, 'neutral' | 'warning' | 'danger'> = {
   off: 'neutral',

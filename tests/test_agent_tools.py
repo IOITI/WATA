@@ -18,7 +18,7 @@ import pytest
 from src.admin.agent import tools as agent_tools
 from src.admin.agent.proposals import Proposals
 from src.admin.agent.store import ConversationStore
-from src.admin.agent.tools import AGENT_TOOLS, MEMORY_READS, OWN_TOOLS, AgentTools, OpsReads
+from src.admin.agent.tools import AGENT_TOOLS, GIVEN_OWN_TOOLS, MEMORY_READS, AgentTools, OpsReads
 from src.admin.logs import read_log
 from src.admin.mcp_server.facade import ReadQueries
 from src.admin.mcp_server.limits import McpLimits
@@ -56,9 +56,10 @@ def test_the_agent_is_offered_its_allowlist_and_its_own_tools_in_the_api_s_shape
     tools = started(research, store)
     definitions = tools.definitions()
 
-    # Without its memory, neither the memory's reads nor its own changes of it (tests/test_agent_memory.py has them).
+    # Without its memory, neither the memory's reads nor its own changes of it (tests/test_agent_memory.py has them);
+    # without a store of verdicts, no verdict (tests/test_agent_show.py has them).
     assert [definition["name"] for definition in definitions] == [
-        *(name for name in AGENT_TOOLS if name not in MEMORY_READS), *OWN_TOOLS]
+        *(name for name in AGENT_TOOLS if name not in MEMORY_READS), *GIVEN_OWN_TOOLS, "show_chart"]
     for definition in definitions:
         schema = definition["input_schema"]
         assert schema["type"] == "object" and not {"anyOf", "oneOf", "allOf"} & set(schema), definition["name"]

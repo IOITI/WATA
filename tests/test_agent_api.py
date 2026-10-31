@@ -285,3 +285,40 @@ def test_a_research_task_is_started_bounded_and_stopped_from_the_pages(config_pa
     assert said["task"]["ended_because"] == "stopped by the operator"
     assert too_dear.status_code == 422 and "max_task_usd" in too_dear.json()["detail"]
     assert [item["task"]["state"] for item in listed] == ["ended"]
+
+
+# ── files of the operator's computer, attached to a request ──
+
+
+def test_a_file_is_staged_sent_with_its_request_and_read_back_as_it_was_sent(config_path, tmp_path):
+    ctx = with_agent(make_ctx(config_path, tmp_path), tmp_path, FakeProvider(answer(text("A chart."))))
+    client = signed_in(ctx, tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + bytes(range(32))
+    try:
+        staged = client.post("/api/agent/files", headers=SAME_ORIGIN,
+                             files={"file": ("../shots/chart.png", png, "image/png")})
+        removed = client.post("/api/agent/files", headers=SAME_ORIGIN,
+                              files={"file": ("calls.txt", b"Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345",
+                                              "text/plain")})
+        refused = client.post("/api/agent/files", headers=SAME_ORIGIN, files={"file": ("tool.exe", b"MZ\x90\x00",
+                                                                                     "application/octet-stream")})
+        unstaged = client.delete(f"/api/agent/files/{removed.json()['id']}", headers=SAME_ORIGIN)
+        unknown = client.delete("/api/agent/files/f0123456789", headers=SAME_ORIGIN)
+        made = client.post("/api/agent/conversations", headers=SAME_ORIGIN, json={
+            "prompt": "What is it?", "attach": [{"kind": "file", "id": staged.json()["id"]}]})
+        said = until_settled(client, made.json()["id"])
+        image = client.get(f"/api/agent/conversations/{made.json()['id']}/files/{staged.json()['id']}")
+        missing = client.get(f"/api/agent/conversations/{made.json()['id']}/files/f0123456789")
+        too_many = client.post("/api/agent/conversations", headers=SAME_ORIGIN, json={
+            "prompt": "And?", "attach": [{"kind": "day", "id": f"2026-10-{day}"} for day in range(20, 26)]})
+    finally:
+        client.__exit__(None, None, None)
+
+    assert staged.status_code == 201 and staged.json()["name"] == "chart.png" and staged.json()["type"] == "image"
+    assert removed.json()["masked"] == 1 and unstaged.status_code == 204 and unknown.status_code == 404
+    assert refused.status_code == 422 and "Attach an image" in refused.json()["detail"]
+    assert said["requests"][0]["attached"][0]["name"] == "chart.png"
+    assert image.status_code == 200 and image.content == png and image.headers["content-type"] == "image/png"
+    assert image.headers["x-content-type-options"] == "nosniff"
+    assert image.headers["content-disposition"] == "inline; filename*=UTF-8''chart.png"
+    assert missing.status_code == 404 and too_many.status_code == 422

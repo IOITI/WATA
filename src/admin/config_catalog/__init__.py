@@ -150,12 +150,25 @@ BLOCKS = (
         "A request stops where it reaches one of them, after saying what it found."),
     Block("agent", "spending", "Spending and work", (f"{_AGENT}.monthly_budget_usd", f"{_AGENT}.max_running")),
     Block("agent", "tasks", "Research tasks", (
-        f"{_AGENT}.max_task_usd", f"{_AGENT}.max_task_backtests", f"{_AGENT}.max_task_hours"),
-        "What a task the agent works on alone may be given at most: its budget is chosen when it is started."),
+        f"{_AGENT}.max_task_usd", f"{_AGENT}.max_task_backtests", f"{_AGENT}.max_task_hours", f"{_AGENT}.max_routines"),
+        "What a task the agent works on alone may be given at most: its budget is chosen when it is started; and the "
+        "routines that come back by themselves."),
     Block("agent", "debrief", "Daily debrief", (
         f"{_AGENT}.debrief_enabled", f"{_AGENT}.debrief_model", f"{_AGENT}.debrief_effort", f"{_AGENT}.debrief_max_usd",
         f"{_AGENT}.debrief_telegram"),
         "An account of each trading day, written once the market is closed."),
+    Block("agent", "briefing", "Morning briefing", (
+        f"{_AGENT}.briefing_enabled", f"{_AGENT}.briefing_model", f"{_AGENT}.briefing_effort",
+        f"{_AGENT}.briefing_max_usd", f"{_AGENT}.briefing_minutes_before", f"{_AGENT}.briefing_telegram"),
+        "The day ahead, written before the trading start."),
+    Block("agent", "triage", "Alert triage", (
+        f"{_AGENT}.triage_enabled", f"{_AGENT}.triage_model", f"{_AGENT}.triage_effort", f"{_AGENT}.triage_max_usd",
+        f"{_AGENT}.triage_max_per_day", f"{_AGENT}.triage_telegram"),
+        "An alert's diagnosis, written by the agent as it fires."),
+    Block("agent", "actions", "Action proposals", (f"{_AGENT}.action_proposals",),
+          "What it may propose on live trading, applied only by your click."),
+    Block("agent", "dossier", "Go-live dossier", (f"{_AGENT}.dossier_when_ready",),
+          "The case for and against taking a signal rule live, once it is ready."),
     Block("agent", "reads", "What it reads", (f"{_AGENT}.read_logs",),
           "WATA's research data, its positions, orders and signals, and the admin's health, always; the logs if allowed."),
     Block("agent", "memory", "Memory", (f"{_AGENT}.memory",),

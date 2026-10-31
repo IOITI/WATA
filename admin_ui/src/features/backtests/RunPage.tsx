@@ -31,6 +31,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'reac
 
 import { NotFoundState } from '@/components/NotFoundState'
 import { AgentSheet } from '@/features/agent/AgentSheet'
+import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
@@ -417,6 +418,7 @@ export function RunPage() {
                   </Badge>
                 ))}
               </div>
+              <AgentVerdict about={`run:${run.id}`} />
 
               {paperLine && (
                 <p className="text-sm text-muted-foreground">

@@ -30,11 +30,13 @@ import type { AgentConversationListed } from '@/lib/types'
 
 import { AgentComposer } from './AgentComposer'
 import {
+  askedBy,
   costText,
   isUnderWay,
   OUTCOME_LABEL,
   STATUS_LABEL,
   statusTone,
+  moreAttached,
   subjectLink,
   subjectSaid,
   TASK_LABEL,
@@ -55,14 +57,20 @@ function columns(timezone: string, remove: (row: AgentConversationListed) => voi
       cell: ({ row }) => (
         <div className="min-w-0 max-w-[28rem] whitespace-normal">
           <Link className="font-medium underline-offset-2 hover:underline" to={`/agent/${encodeURIComponent(row.id)}`}>{row.title}</Link>
-          {(row.task || row.by === 'debrief') && (
+          {(row.task || askedBy(row.by)) && (
             <span className="ml-2 inline-flex gap-1 align-middle">
               {row.task && <Badge variant="outline" tone={taskTone(row.task)}>{TASK_LABEL[row.task.state]}</Badge>}
-              {row.by === 'debrief' && <Badge variant="outline">Daily debrief</Badge>}
+              {row.task?.question && <Badge variant="outline" tone="warning">Asks you</Badge>}
+              {askedBy(row.by) && <Badge variant="outline">{askedBy(row.by)}</Badge>}
             </span>
           )}
           {row.subject && (
             <Link className="block text-xs text-muted-foreground hover:underline" to={subjectLink(row.subject)}>{subjectSaid(row.subject)}</Link>
+          )}
+          {moreAttached(row) > 0 && (
+            <span className="block text-xs text-muted-foreground">
+              {row.subject ? `and ${moreAttached(row)} more attached` : `${moreAttached(row)} attached`}
+            </span>
           )}
         </div>
       ),
@@ -189,7 +197,7 @@ export function AgentActivityPage() {
                 hint={data.model_label ?? data.model} />
             </KpiGrid>
             <div className="grid gap-6 xl:grid-cols-2">
-              <Panel title="Ask" description="A conversation about anything WATA records. To ask about a run, a script, a position or a day, open it and choose “Ask the AI agent”.">
+              <Panel title="Ask" description="A conversation about anything WATA records. Attach runs, scripts, rules, positions, signals, days or files with the paperclip, or drop a file on the field.">
                 <AgentComposer onStarted={(id) => navigate(`/agent/${encodeURIComponent(id)}`)} />
               </Panel>
               <Panel title="New research task" description="A goal it works on alone, request after request, within a budget: it goes on with the page closed.">

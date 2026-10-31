@@ -12,6 +12,7 @@ import { NotFoundState } from '@/components/NotFoundState'
 import { api, isNotFound } from '@/lib/api'
 
 import { AgentComposer } from './AgentComposer'
+import { heldBy } from './attachments'
 import { ConversationView } from './ConversationView'
 import { LatestButton } from './LatestButton'
 import { TaskPanel } from './TaskPanel'
@@ -55,7 +56,12 @@ export function ConversationPage() {
               <Badge variant="soft" tone={statusTone(data.status, last?.status)}>
                 {data.status === 'idle' && last ? OUTCOME_LABEL[last.status] : STATUS_LABEL[data.status]}
               </Badge>
-              {data.subject && <span>About {subjectSaid(data.subject)}</span>}
+              {data.subject && (
+                <span>
+                  About {subjectSaid(data.subject)}
+                  {heldBy(data).length > 1 && ` and ${heldBy(data).length - 1} more`}
+                </span>
+              )}
               <span>{costText(data.cost_usd)} so far</span>
             </span>
           )

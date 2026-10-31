@@ -20,11 +20,14 @@ answer.
 """
 
 import asyncio
+import base64
 import json
 import re
 import secrets
+from datetime import datetime, timezone
 
 from src.admin.agent import provider as claude
+from src.admin.agent_briefing import MorningBriefing
 from src.admin.agent_debrief import DailyDebrief
 from src.admin.agent_memory import Author
 from src.admin.agent.settings import EFFORTS
@@ -39,9 +42,16 @@ FIRST_PIECE_SECONDS = 1.5
 THOUGHT_TOKENS = 450
 _SHARED = re.compile(r"The operator shares the (backtest run|Pine script) .*?\(([0-9a-f-]{12,22})\)")
 _SHARED_TRADING = re.compile(r"The operator shares the (position|signal|trading day|incident) ([^\n]*?), as your tools")
+_SHARED_RULE = re.compile(r"The operator shares the signal rule .*?\(([0-9a-f]{12})\), as your tools")
+_SHARED_REVIEW = re.compile(r"The operator shares (a change, to review before it is saved:|an unsaved draft of the script,) ")
+_DRAFT_OF = re.compile(r"What changed from version (\d+) of script ([0-9a-f]{12})")
 _TASK = "A research task the operator left you"
 _TASK_GOES_ON = "The research task goes on"
 _DEBRIEF = "Write the debrief of this trading day"
+_BRIEFING = "Write the morning briefing"
+_TRIAGE = "An alert fired"
+# A PNG says its width and height in its first 24 bytes (its IHDR chunk).
+_PNG = b"\x89PNG\r\n\x1a\n"
 # An entry of the memory's list, as a conversation's first words give it (src/admin/agent/prompts.py memory_index).
 _LISTED = re.compile(r"^- \[[a-z]+\] ([a-z0-9-]+): ", re.M)
 # What the development admin's memory holds at its start.
@@ -93,21 +103,37 @@ class FakeClaude:
             for block in _blocks_of(message):
                 said = block.get("text", "") if block.get("type") == "text" else ""
                 found, trading = _SHARED.search(said), _SHARED_TRADING.search(said)
+                rule, review, draft = _SHARED_RULE.search(said), _SHARED_REVIEW.search(said), _DRAFT_OF.search(said)
                 if found and subject is None:
                     subject = ("run" if found.group(1) == "backtest run" else "script", found.group(2))
+                elif rule and subject is None:
+                    # Before the trading ones: "the signal rule" starts as "the signal" does.
+                    subject = ("rule", rule.group(1), '"readiness": []' in said)
                 elif trading and subject is None:
                     subject = (trading.group(1), trading.group(2).strip())
+                elif draft and subject is None:
+                    subject = ("draft", draft.group(2), int(draft.group(1)))
+                elif review and subject is None:
+                    subject = ("change", "")
         done = self._done(messages)
         asked = self._asked(messages)
+        shared, files = self._given(messages)
         # The conversation's first words: its memory's list, when it has one.
         self._opening = next((block.get("text", "") for block in _blocks_of(messages[0])
                               if block.get("type") == "text"), "") if messages else ""
         if asked.startswith(_DEBRIEF):
-            blocks = await self._debrief(on_event)
+            blocks = await self._debrief(subject, done, on_event)
+        elif asked.startswith(_BRIEFING):
+            blocks = await self._briefing(on_event)
+        elif asked.startswith(_TRIAGE):
+            blocks = await self._triage(done, on_event)
         elif asked.startswith(_TASK_GOES_ON):
             blocks = await self._task_going_on(done, on_event)
         elif asked.startswith(_TASK):
             blocks = await self._task(done, on_event)
+        elif (files or len(shared) > 1) and not done:
+            # Several things attached, or files: it says what it was given.
+            blocks = await self._attached(shared, files, on_event)
         else:
             blocks = await self._next(subject, done, on_event)
         stop = "tool_use" if any(block["type"] == "tool_use" for block in blocks) else "end_turn"
@@ -128,6 +154,39 @@ class FakeClaude:
             if texts:
                 return texts[-1]
         return ""
+
+    @staticmethod
+    def _given(messages) -> tuple[list[str], list[dict]]:
+        """What the request under way was given: the things shared (each as it is named) and the files attached."""
+        for message in reversed(messages):
+            blocks = _blocks_of(message) if message["role"] == "user" else []
+            if not any(block.get("type") == "text" for block in blocks):
+                continue
+            shared = [block["text"].removeprefix("The operator shares ").split(", as your tools", 1)[0]
+                      for block in blocks if block.get("type") == "text" and block["text"].startswith("The operator shares ")]
+            return shared, [block for block in blocks if block.get("type") in ("image", "document")]
+        return [], []
+
+    async def _attached(self, shared: list[str], files: list[dict], on_event) -> list:
+        lines = [f"- {thing}" for thing in shared]
+        for block in files:
+            source = block.get("source") or {}
+            data = source.get("data") or ""
+            if source.get("type") == "text":
+                rows = data.count("\n") + (0 if data.endswith("\n") else 1)
+                lines.append(f"- {block.get('title')}, a text of {rows} line{'' if rows == 1 else 's'}")
+                continue
+            weight = f"{max(1, len(data) * 3 // 4 // 1024)} kB"
+            if block["type"] == "document":
+                lines.append(f"- {block.get('title')}, a PDF of {weight}")
+                continue
+            head = base64.b64decode(data[:32] + "=" * (-len(data[:32]) % 4))
+            drawn = (f", {int.from_bytes(head[16:20], 'big')} × {int.from_bytes(head[20:24], 'big')} px"
+                     if head.startswith(_PNG) and len(head) >= 24 else "")
+            lines.append(f"- an image of {weight}{drawn}")
+        return await self._turn(on_event, "I read what was attached before anything else.", text=(
+            "**What I was given** (made up by the development admin):\n\n" + "\n".join(lines)
+            + "\n\nAsk about any of them: they stay in this conversation, and each later request reads them again."))
 
     @staticmethod
     def _done(messages) -> dict:
@@ -174,6 +233,15 @@ class FakeClaude:
             return await self._script(subject[1], done, on_event)
         if subject and subject[0] == "incident":
             return await self._incident(subject[1], done, on_event)
+        if subject and subject[0] == "rule":
+            return await self._dossier(subject[1], subject[2], done, on_event)
+        if subject and subject[0] == "draft":
+            return await self._draft(subject[1], subject[2], done, on_event)
+        if subject and subject[0] == "change":
+            return await self._turn(on_event, "The change is shared whole: I weigh what a backtest can test.", text=(
+                "**It cannot be told yet** (made up by the development admin): the setting it changes rests on 12 "
+                "trades over 9 days at the new value, too few to tell it from the live one. Nothing is saved; save it "
+                "from the page, or wait for more days."))
         if subject:
             return await self._trading(subject, on_event)
         if "backtest_list" not in done:
@@ -218,6 +286,17 @@ class FakeClaude:
                                  "description": f"Run {run_id} rests on too few days to be believed",
                                  "body": f"Under 30 trades and 20 days (made up by the development admin), "
                                          f"[the run](/backtests/{run_id})."})])
+        if "show_chart" not in done:
+            return await self._turn(on_event, "Its days say more drawn than in a table.", [("show_chart", {
+                "title": "Its days, against random entries (made up)", "kind": "line", "unit": "%",
+                "series": [{"key": "run", "label": "The run"}, {"key": "random", "label": "Random entries, median"}],
+                "points": [{"t": f"2026-10-{day:02d}", "run": round(0.6 * (day - 12) - (day % 3), 2),
+                            "random": round(0.1 * (day - 12), 2)} for day in range(13, 29) if day % 7 not in (3, 4)],
+                "references": [{"value": 0, "label": "Even"}], "zero": True,
+                "source": f"backtest_days of run {run_id} (made up by the development admin)"})])
+        if "set_verdict" not in done:
+            return await self._turn(on_event, "I say my verdict where the run is shown.", [("set_verdict", {
+                "about": f"run:{run_id}", "tone": "mixed", "line": "Rests on too few days to be believed (made up)."})])
         link = f"[the stress test](/backtests/{stress_id})" if stress_id else "the stress test (refused)"
         return await self._turn(on_event, "I have its edge and its stress test.", text=(
             f"I kept it in my memory as [{name}](/agent/memory?find={name}).\n\n"
@@ -249,6 +328,20 @@ class FakeClaude:
                         "description": "The same, its first input two steps slower (made up).",
                         "title": "A slower copy, as a script of its own",
                         "rationale": "Made up by the development admin: to run beside the original."})])
+        if "propose_new_rule" not in done and done.get("propose_new_script", "").startswith("{"):
+            made = json.loads(done["propose_new_script"]).get("proposal")
+            # A new rule rests on finished runs: the development admin's newest stands for runs of its script.
+            listed = self._backtests.list_runs(limit=20) if self._backtests is not None else []
+            finished = [run["id"] for run in listed if (run.get("status") or {}).get("state") == "done"][:1]
+            # Its first two alerts' titles, as the script declares them: the first long, the second short.
+            titles = re.findall(r'alertcondition\([^,]+,\s*"([^"]+)"', script["source"])[:2] or ["Long", "Short"]
+            if made and finished:
+                return await self._turn(on_event, "And a rule of yours that runs it, in shadow.", [
+                    ("propose_new_rule", {"name": f"{script['name']}, slower {secrets.token_hex(2)}", "after_proposal": made,
+                                          "asset": "capital/US100", "indice": "us100", "bars": "5",
+                                          "alerts": dict(zip(titles, ("long", "short"))), "runs": finished,
+                                          "title": "Run it in shadow",
+                                          "rationale": "Made up by the development admin: a week in shadow first."})])
         # The operator's rules first: Claude Code's shadow rules are its own.
         rules = sorted(self._rules.load()["rules"], key=lambda rule: rule.get("made_by") == "claude")
         rule = next((rule for rule in rules if rule["script"]["id"] == script_id and rule["mode"] != LIVE), None)
@@ -271,6 +364,40 @@ class FakeClaude:
                 return found
         return None
 
+    async def _dossier(self, rule_id: str, ready: bool, done: dict, on_event) -> list:
+        if "set_verdict" not in done:
+            verdict = ({"tone": "positive", "line": "Ready: its week in shadow done, its paper days in range (made up)."}
+                       if ready else
+                       {"tone": "mixed", "line": "Not yet: 3 of its 5 weekdays in shadow, its report on 9 trades (made up)."})
+            return await self._turn(on_event, "Its paper days and its report say enough for a verdict.", [("set_verdict", {
+                "about": f"rule:{rule_id}", **verdict})])
+        if ready and "propose_action" not in done:
+            return await self._turn(on_event, "It is ready, and going live is the operator's: I propose it.", [
+                ("propose_action", {"action": "rule_live", "rule_id": rule_id, "title": "Take it live",
+                                    "rationale": "Made up by the development admin: its week in shadow is done and "
+                                                 "its paper days stayed inside its reference's range."})])
+        if ready:
+            return await self._turn(on_event, "I have its case.", text=(
+                "## Ready\n\nIts week in shadow is done, its paper days stayed inside its reference's range and the "
+                "engine runs it without fault (made up by the development admin). I proposed taking it live: **it "
+                "waits for you**, through the page's own confirmation."))
+        return await self._turn(on_event, "I have its case.", text=(
+            "## Not ready yet\n\nIts paper days stay inside its reference's range, but they are **three**, and its "
+            "report rests on 9 trades (made up by the development admin). Two more weekdays in shadow, then ask again."))
+
+    async def _draft(self, script_id: str, base: int, done: dict, on_event) -> list:
+        if "propose_script_change" not in done:
+            script = self._scripts.script(script_id)
+            source = script["source"].rstrip("\n") + "\n// Fixed by the AI agent (made up)\n"
+            fix = self._scripts.create(f"{script['name']} fixed by Claude {secrets.token_hex(2)}", source, made_by="claude")
+            return await self._turn(on_event, "The draft compiles; I fix one thing and propose it for your editor.", [
+                ("propose_script_change", {"script_id": script_id, "base_version": script["version"],
+                                           "from_script_id": fix["id"], "from_version": 1, "title": "One line fixed",
+                                           "rationale": "Made up by the development admin: put it in, then save."})])
+        return await self._turn(on_event, "I reviewed the draft.", text=(
+            "## The draft\n\nIt **compiles**, and its alerts are unchanged (made up). I propose one line fixed: put "
+            "it in your editor below, then save it there, or not."))
+
     async def _trading(self, subject, on_event) -> list:
         kind, label = subject
         return await self._turn(on_event, f"The {kind} is shared whole: I read what it says.", text=(
@@ -289,8 +416,12 @@ class FakeClaude:
         if "backtest_list" not in done:
             return await self._turn(on_event, "A research task: I start by looking at the runs there are.", [
                 ("backtest_list", {"limit": 10})])
-        return await self._turn(on_event, "A first look is done: the next request goes on from here.", text=(
-            "I looked at the runs there are. Next: read the strongest one's edge, then decide."))
+        if "ask_operator" not in done:
+            return await self._turn(on_event, "Two directions, one budget: I ask which first.", [
+                ("ask_operator", {"question": "Fast lines or slow ones first?", "choices": ["Fast", "Slow"],
+                                  "why": "Each takes half the budget (made up by the development admin)."})])
+        return await self._turn(on_event, "A first look is done: the task waits for the operator's answer.", text=(
+            "I looked at the runs there are, and asked which direction first: the task goes on with your answer."))
 
     async def _task_going_on(self, done: dict, on_event) -> list:
         if "task_done" not in done:
@@ -301,8 +432,31 @@ class FakeClaude:
             "## Conclusion\n\nNo run here rests on enough days to be believed. **Record more days**, then run the "
             "strongest script again over all of them."))
 
-    async def _debrief(self, on_event) -> list:
-        return await self._turn(on_event, "The day is shared whole: I write its account.", text=(
+    async def _briefing(self, on_event) -> list:
+        return await self._turn(on_event, "The day ahead is shared whole: I write its briefing.", text=(
+            "An ordinary day ahead: the US market opens as usual, no release keeps entries out (made up by the "
+            "development admin).\n\n1. **Today**: open from 15:30 Paris; no early close.\n2. **What runs**: no rule "
+            "is live; one rule in shadow, two days short of its week.\n3. **What needs you**: Saxo's login lapses in "
+            "three days.\n4. **Yesterday**: two trades, one won (its debrief)."))
+
+    async def _triage(self, done: dict, on_event) -> list:
+        if "ops_trading_now" not in done:
+            return await self._turn(on_event, "Trading as the dashboard reads it, first.", [("ops_trading_now", {})])
+        if "propose_action" not in done:
+            return await self._turn(on_event, "The sale keeps being refused: I propose a pause while it is looked at.", [
+                ("propose_action", {"action": "pause_entries", "title": "Pause new entries while the sale is refused",
+                                    "rationale": "Made up by the development admin: Saxo refuses the sale again and "
+                                                 "again; a new entry would add a second position to watch."})])
+        return await self._turn(on_event, "I have what I need.", text=(
+            "**Watch it.** Saxo keeps refusing the sale of one position (made up); the position monitor tries it again "
+            "by itself. Nothing else is wrong. I proposed a pause of new entries while it lasts: it waits for you."))
+
+    async def _debrief(self, subject, done: dict, on_event) -> list:
+        day = subject[1] if subject and subject[0] == "trading day" else None
+        if day and "set_verdict" not in done:
+            return await self._turn(on_event, "The day is shared whole: its verdict first, where the Report shows it.", [
+                ("set_verdict", {"about": f"day:{day}", "tone": "positive", "line": "A calm day, sold by its rules (made up)."})])
+        return await self._turn(on_event, "I write its account.", text=(
             "A calm day: two trades, one won, one lost, both sold by their rules (made up by the development admin).\n\n"
             "1. **What happened**: a long sold at its target, a short at its stop; one refusal of Saxo, tried again.\n"
             "2. **What stands out**: nothing beyond the refusal.\n3. **Next**: nothing to look at."))
@@ -330,6 +484,26 @@ def seed_memory(memory) -> None:
     for author, name, kind, description, body, locked in SEEDED:
         who = Author.operator("127.0.0.1") if author == "operator" else Author.agent("20261021-090000-0a0b0c", 0)
         memory.save(who, name, kind=kind, description=description, body=body, locked=locked)
+
+
+def seed_routines(store, settings) -> None:
+    """A weekly routine, so that the Routines page shows one at the start (made up)."""
+    from src.admin.agent_routines import checked_fields
+
+    if store.load()["routines"]:
+        return
+    store.save(checked_fields({"name": "Weekly edge check", "goal": "Run the reference runs again with the week's days, "
+                               "and say which rule lost its edge.", "schedule": {"every": "week", "weekday": 5,
+                                                                                 "time": "10:00"},
+                               "budget": {"usd": 3, "backtests": 6, "hours": 2}}, settings),
+               store.load()["revision"], "dev")
+
+
+class FakeMorningBriefing(MorningBriefing):
+    """The morning briefing at any hour: the day of today, its window now."""
+
+    def _window(self, config: dict, now: float, minutes_before: int):
+        return datetime.fromtimestamp(now, timezone.utc).date().isoformat(), now - 60, now + 3600
 
 
 class FakeDailyDebrief(DailyDebrief):

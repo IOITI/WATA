@@ -5,6 +5,7 @@ The AI agent's files, under ``admin.persistant.agent_path``:
     conversations/<id>/messages.jsonl   the Claude API transcript, only ever appended to
     conversations/<id>/activity.jsonl   each step with its moments and outcome, only ever appended to
     conversations/<id>/proposals.json   what it proposed and what became of it, written whole
+    conversations/<id>/files/<file id>  a file the operator attached, sent with each of its requests
     artefacts.jsonl                     what conversations made: runs, scripts, experiments, proposals
     spend.jsonl                         what each answer of the API cost: the month's total
     pause.json                          the operator's pause of new requests
@@ -24,12 +25,18 @@ import shutil
 import threading
 from datetime import datetime, timezone
 
+from src.admin.agent.uploads import FILE_ID
+
 logger = logging.getLogger(__name__)
 
 CONVERSATION_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+# What a conversation keeps besides its journals: the unsaved draft of a script it reviews.
+FILES = ("draft.pine",)
 PROPOSAL_ID = re.compile(r"^p[0-9a-f]{8}$")
 CONVERSATIONS = "conversations"
 JOURNALS = ("messages", "activity")
+# Where the files the operator attached are kept, each under its own id (src/admin/agent/uploads.py).
+ATTACHMENTS = "files"
 
 
 class UnknownConversation(Exception):
@@ -159,6 +166,43 @@ class ConversationStore:
     def write_proposals(self, conversation_id: str, proposals: dict) -> None:
         with self._lock:
             _write_json(os.path.join(self._existing(conversation_id), "proposals.json"), proposals)
+
+    def write_file(self, conversation_id: str, name: str, text: str) -> None:
+        if name not in FILES:
+            raise ValueError(f"No file {name!r}")
+        with self._lock:
+            with open(os.path.join(self._existing(conversation_id), name), "w", encoding="utf-8") as out_file:
+                out_file.write(text)
+
+    def read_file(self, conversation_id: str, name: str) -> str | None:
+        if name not in FILES:
+            raise ValueError(f"No file {name!r}")
+        try:
+            with open(os.path.join(self._existing(conversation_id), name), encoding="utf-8") as in_file:
+                return in_file.read()
+        except FileNotFoundError:
+            return None
+
+    def write_attachment(self, conversation_id: str, file_id: str, data: bytes) -> None:
+        """A file attached to the conversation, kept with it: sent with each of its requests, removed with it."""
+        if not isinstance(file_id, str) or not FILE_ID.match(file_id):
+            raise ValueError(f"No file {file_id!r}")
+        folder = os.path.join(self._existing(conversation_id), ATTACHMENTS)
+        with self._lock:
+            os.makedirs(folder, exist_ok=True)
+            partial = os.path.join(folder, f"{file_id}.part")
+            with open(partial, "wb") as out_file:
+                out_file.write(data)
+            os.replace(partial, os.path.join(folder, file_id))
+
+    def read_attachment(self, conversation_id: str, file_id: str) -> bytes | None:
+        if not isinstance(file_id, str) or not FILE_ID.match(file_id):
+            return None
+        try:
+            with open(os.path.join(self._existing(conversation_id), ATTACHMENTS, file_id), "rb") as in_file:
+                return in_file.read()
+        except FileNotFoundError:
+            return None
 
     def remove(self, conversation_id: str) -> None:
         folder = self._existing(conversation_id)
