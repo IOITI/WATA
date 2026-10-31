@@ -398,6 +398,12 @@ export const api = {
     request<BacktestCoverage>('GET', `/api/backtests/coverage${query(params)}`),
   backtests: () =>
     request<{ items: BacktestRunListed[]; storage: BacktestStorage; remaking?: BacktestRemaking | null }>('GET', '/api/backtests'),
+  /** The runs of one Pine script, any version: its page's Backtests tab. */
+  scriptBacktests: (scriptId: string) =>
+    request<{ items: BacktestRunListed[]; storage: BacktestStorage; remaking?: BacktestRemaking | null }>(
+      'GET',
+      `/api/backtests?script=${encodeURIComponent(scriptId)}`,
+    ),
   remakePreview: () => request<BacktestRemakePreview>('GET', '/api/backtests/remake'),
   remakeBacktests: (body: { runs: string[] } | { stale: true }) =>
     request<{ remaking: BacktestRemaking | null }>('POST', '/api/backtests/remake', { body }),

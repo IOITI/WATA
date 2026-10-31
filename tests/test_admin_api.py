@@ -3351,8 +3351,8 @@ class FakeBacktests:
         assert all(value is None for value in research.values()), research
         return self._answer("create", body, journal, capital, positions, answer={"id": RUN, "status": {"state": "queued"}})
 
-    def list_runs(self):
-        return self._answer("list_runs", answer=[{"id": RUN}])
+    def list_runs(self, script=None):
+        return self._answer("list_runs", *([script] if script else []), answer=[{"id": RUN}])
 
     def storage(self):
         return {"runs": {"count": 1, "bytes": 2048}, "former": {"count": 0, "bytes": 0}}
@@ -3636,6 +3636,10 @@ def test_runs_are_listed_read_renamed_stopped_and_removed(client, backtests):
     assert [entry[0] for entry in backtests.asked] == [
         "list_runs", "get", "update", "cancel", "delete", "delete_many", "delete_former",
     ]
+    # A script's page asks for the runs of that script alone; what is not a script's id is refused.
+    assert client.get("/api/backtests?script=0123456789ab").json()["items"] == [{"id": RUN}]
+    assert backtests.asked[-1] == ("list_runs", "0123456789ab")
+    assert client.get("/api/backtests?script=../x").status_code == 422
 
 
 def test_runs_made_with_older_code_are_made_again_when_asked_and_no_more_when_stopped(client, backtests):

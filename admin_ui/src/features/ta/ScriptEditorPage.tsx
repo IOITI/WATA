@@ -1,9 +1,10 @@
 // Technical Analysis › Indicators › a script: the Pine editor, its checks as the
-// script is written, its versions, and a test on WATA's prices.
+// script is written and a test on WATA's prices; and, each a tab with its address
+// (`?tab=`), its backtests, the signal rules that run it and its versions.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertTitle, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
-import { RouterLeaveGuard } from 'ioiti-ui/react-router'
+import { Alert, AlertTitle, AnimatedTabs, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
+import { RouterLeaveGuard, RouterLink } from 'ioiti-ui/react-router'
 import { ChartSpline, FlaskConical, History, Radar, Save, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
@@ -27,6 +28,11 @@ import { TestPanel } from './editor/TestPanel'
 import type { TestDone } from './editor/TestPanel'
 import { TestResult } from './editor/TestResult'
 import { usePineReference, usePineWorker, useScriptCheck } from './editor/useScriptCheck'
+import { ScriptBacktestsTab } from './script/ScriptBacktestsTab'
+import { ScriptHistoryTab } from './script/ScriptHistoryTab'
+import { scriptTabHref, scriptTabOf, TAB_LABEL, tabsOf } from './script/scriptPageModel'
+import type { ScriptTab } from './script/scriptPageModel'
+import { ScriptRulesTab } from './script/ScriptRulesTab'
 import { declaredKind, declaredTitle, isKind, KIND_LABEL, TEMPLATES } from './templates'
 
 interface Draft {
@@ -48,7 +54,7 @@ export function ScriptEditorPage() {
 }
 
 function ScriptEditor({ id }: { id: string | undefined }) {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { timezone, backtests_enabled: backtestsEnabled } = useSession()
@@ -62,6 +68,27 @@ function ScriptEditor({ id }: { id: string | undefined }) {
     refetchOnWindowFocus: false,
   })
   const script = id ? scriptQuery.data : undefined
+  // The script's views, each a tab with its address; a new script is its editor alone.
+  const tabs = script ? tabsOf(script.kind, backtestsEnabled) : []
+  const tab = scriptTabOf(searchParams.get('tab'), tabs)
+  const setTab = (next: string) =>
+    setSearchParams(
+      (current) => {
+        const params = new URLSearchParams(current)
+        if (next === 'editor') params.delete('tab')
+        else params.set('tab', next)
+        if (next !== 'backtests') params.delete('version')
+        return params
+      },
+      { replace: true },
+    )
+  // What the History tab says each version was used by: the script's runs and the rules.
+  const historyRuns = useQuery({
+    queryKey: ['backtests', 'script', id],
+    queryFn: () => api.scriptBacktests(id as string),
+    enabled: tab === 'history' && tabs.includes('backtests'),
+  })
+  const historyRules = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules, enabled: tab === 'history' })
 
   const [draft, setDraft] = useState<Draft | null>(() =>
     id ? null : { source: TEMPLATES[newKind], name: '', description: '', base: 0 },
@@ -283,6 +310,16 @@ function ScriptEditor({ id }: { id: string | undefined }) {
       <QueryState isPending={!!id && scriptQuery.isPending} error={id ? scriptQuery.error : null} hasData={!!draft}>
         {draft && (
           <>
+            {script && (
+              <AnimatedTabs
+                label="Views of the script"
+                tabs={tabs.map((entry: ScriptTab) => ({ id: entry, label: TAB_LABEL[entry], href: scriptTabHref(entry) }))}
+                activeTab={tab}
+                onChange={setTab}
+                linkComponent={RouterLink}
+                renderContent={false}
+              />
+            )}
             {conflict && (
               <Alert tone="warning">
                 <AlertTitle>Changed elsewhere</AlertTitle>
@@ -303,61 +340,78 @@ function ScriptEditor({ id }: { id: string | undefined }) {
               </p>
             )}
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
-              <div className="flex min-w-0 flex-col gap-3">
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-                  <Input
-                    aria-label="Name"
-                    placeholder={declaredTitle(source) ?? 'Name'}
-                    value={draft.name}
-                    onChange={(event) => update({ name: event.target.value })}
+            {/* Kept while another tab is shown: its draft, its undo and the test's choices stay. */}
+            <div hidden={tab !== 'editor'} className="flex flex-col gap-4">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+                    <Input
+                      aria-label="Name"
+                      placeholder={declaredTitle(source) ?? 'Name'}
+                      value={draft.name}
+                      onChange={(event) => update({ name: event.target.value })}
+                    />
+                    <Input
+                      aria-label="Description"
+                      placeholder="What it shows, in a sentence"
+                      value={draft.description}
+                      onChange={(event) => update({ description: event.target.value })}
+                    />
+                  </div>
+                  <PineEditor
+                    value={draft.source}
+                    onChange={(next) => update({ source: next })}
+                    diagnostics={check.diagnostics}
+                    label={`Pine source of ${title}`}
+                    onSave={save}
+                    functions={reference?.functions}
+                    className="h-[60vh] min-h-[420px]"
                   />
-                  <Input
-                    aria-label="Description"
-                    placeholder="What it shows, in a sentence"
-                    value={draft.description}
-                    onChange={(event) => update({ description: event.target.value })}
-                  />
+                  <DiagnosticsList diagnostics={check.diagnostics} checking={check.checking} />
+                  {check.result?.prepared && check.result.prepared.libraries.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Libraries inlined:{' '}
+                      {check.result.prepared.libraries.map((library) => `${library.name} (version ${library.version})`).join(', ')}.
+                    </p>
+                  )}
                 </div>
-                <PineEditor
-                  value={draft.source}
-                  onChange={(next) => update({ source: next })}
-                  diagnostics={check.diagnostics}
-                  label={`Pine source of ${title}`}
-                  onSave={save}
-                  functions={reference?.functions}
-                  className="h-[60vh] min-h-[420px]"
-                />
-                <DiagnosticsList diagnostics={check.diagnostics} checking={check.checking} />
-                {check.result?.prepared && check.result.prepared.libraries.length > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Libraries inlined:{' '}
-                    {check.result.prepared.libraries.map((library) => `${library.name} (version ${library.version})`).join(', ')}.
-                  </p>
-                )}
+                <div className="flex min-w-0 flex-col gap-4">
+                  {kind === 'library' ? (
+                    <section className="rounded-2xl border border-border/70 p-5 text-sm text-text-secondary glass-card">
+                      A library runs inside the scripts that import it:{' '}
+                      <code className="font-mono text-xs">
+                        import you/{libraryName}/1 as {libraryName ? libraryName.charAt(0).toLowerCase() + libraryName.slice(1) : 'lib'}
+                      </code>
+                      . It is checked here inside an empty indicator.
+                    </section>
+                  ) : (
+                    <TestPanel
+                      prepared={check.result?.compiled ? check.result.prepared : null}
+                      inputs={check.result?.compiled?.inputs ?? []}
+                      worker={worker}
+                      scriptId={script?.id ?? null}
+                      scriptName={title}
+                      onResult={setTested}
+                    />
+                  )}
+                </div>
               </div>
-              <div className="flex min-w-0 flex-col gap-4">
-                {kind === 'library' ? (
-                  <section className="rounded-2xl border border-border/70 p-5 text-sm text-text-secondary glass-card">
-                    A library runs inside the scripts that import it:{' '}
-                    <code className="font-mono text-xs">
-                      import you/{libraryName}/1 as {libraryName ? libraryName.charAt(0).toLowerCase() + libraryName.slice(1) : 'lib'}
-                    </code>
-                    . It is checked here inside an empty indicator.
-                  </section>
-                ) : (
-                  <TestPanel
-                    prepared={check.result?.compiled ? check.result.prepared : null}
-                    inputs={check.result?.compiled?.inputs ?? []}
-                    worker={worker}
-                    scriptId={script?.id ?? null}
-                    scriptName={title}
-                    onResult={setTested}
-                  />
-                )}
-              </div>
+              {tested && kind !== 'library' && <TestResult run={tested} scriptName={title} timeZone={timezone} />}
             </div>
-            {tested && kind !== 'library' && <TestResult run={tested} scriptName={title} timeZone={timezone} />}
+            {script && tab === 'backtests' && <ScriptBacktestsTab script={script} />}
+            {script && tab === 'rules' && <ScriptRulesTab script={script} />}
+            {script && tab === 'history' && (
+              <ScriptHistoryTab
+                script={script}
+                runs={historyRuns.data?.items ?? []}
+                rules={historyRules.data?.rules ?? []}
+                backtests={tabs.includes('backtests')}
+                onRestore={(restored) => {
+                  update({ source: restored })
+                  setTab('editor')
+                }}
+              />
+            )}
           </>
         )}
       </QueryState>

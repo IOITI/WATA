@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.75.0 - A page per script, in tabs
+
+**Release date:** not yet released
+
+A script's page was its editor: its runs, the rules that run it and its versions were each on another page, or in a dialog. Its page now has four tabs, each with its address.
+- **Editor**: as before. A draft, its undo and the test's choices stay while another tab is shown.
+- **Backtests**: the runs of the script, every version's or one version's, in the Backtests list's own table, with their verdicts, the runs made again folded and the basket to compare or remove.
+- **Rules**: the signal rules that run it, each with its mode, the version it pins against the newest ("Runs v3; v5 is the newest"), what it runs on and its days on paper, each leading to its page. A library's are the rules whose scripts import it, beside those scripts.
+- **History**: each version, when it was saved, its size and who wrote it, the runs made on it and the rules that pin it; what changed from the version before, side by side; and any version put back in the editor, unsaved.
+- A library has no Backtests tab. Making a rule and backtesting the newest version stay in the page's header, whichever tab shows.
+- The list of Indicators says of each script, in one column, the rules that run it by mode and its runs with how many pass every check, each a link to its tab.
+
+**On the live path:** nothing. The admin alone: the list of runs filtered by script (`GET /api/backtests?script=<id>`).
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Tests: the runs of one script, whatever its version, through the service and the route; the tabs and their addresses, a draft kept across them, the rules at their pinned versions, a script's runs and their verdicts narrowed to a version, its versions with their runs and rules, the changes between two, a version put back in the editor unsaved, a library's tabs and rules, the list's column. The 3,775 Python tests and the interface's 1,373 pass, with lint and typecheck.
+- Seen in the browser pane on the development admin: a script of two versions with a run of each and three rules, each tab and its address, a draft kept from the Editor to the Rules and back, a version narrowed, the changes from v1 to v2 side by side, v1 put back in the editor unsaved, a library without Backtests, and at 375 px in the dark theme nothing wider than the screen.
+- Found there and fixed before release: the two new columns of the Indicators list pushed its actions out of sight (now one column, the table in its frame); the diff did not say which side was which version; the tabs repeated the header's "New signal rule" and "Backtest v2".
+
 ## v0.74.0 - A runs list you can trust, and runs made again on today's code
 
 **Release date:** 2026-10-31

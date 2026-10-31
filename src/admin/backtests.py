@@ -1422,25 +1422,30 @@ class BacktestService:
         request = read_json(self._file(run_id, "request.json")) or {}
         return ((request.get("source") or {}).get("from_rule") or {}).get("id")
 
-    def run_ids(self, *, made_by: str | None = None, experiment: str | None = None) -> list[str]:
-        """The runs, newest first, without the paper runs; only those of ``made_by`` or ``experiment`` when given."""
+    def run_ids(self, *, made_by: str | None = None, experiment: str | None = None, script: str | None = None) -> list[str]:
+        """
+        The runs, newest first, without the paper runs; only those of ``made_by`` or ``experiment`` when given,
+        and those that ran the Pine script ``script`` (any version: a script's page).
+        """
         paper = self._paper_ids()
         chosen = []
         for run_id in self._run_ids():
             if run_id in paper:
                 continue
-            if made_by is not None or experiment is not None:
+            if made_by is not None or experiment is not None or script is not None:
                 request = read_json(os.path.join(self._runs_root, run_id, "request.json")) or {}
+                ran = (((request.get("source") or {}).get("rule") or {}).get("script") or {}).get("id")
                 if (made_by is not None and request.get("made_by") != made_by) or \
-                        (experiment is not None and request.get("experiment") != experiment):
+                        (experiment is not None and request.get("experiment") != experiment) or \
+                        (script is not None and ran != script):
                     continue
             chosen.append(run_id)
         return chosen
 
-    def list_runs(self, *, made_by: str | None = None, experiment: str | None = None, offset: int = 0,
-                  limit: int = MAX_LISTED) -> list[dict]:
+    def list_runs(self, *, made_by: str | None = None, experiment: str | None = None, script: str | None = None,
+                  offset: int = 0, limit: int = MAX_LISTED) -> list[dict]:
         """The runs, newest first; the paper runs of the signal rules have their own place."""
-        chosen = self.run_ids(made_by=made_by, experiment=experiment)[offset:offset + limit]
+        chosen = self.run_ids(made_by=made_by, experiment=experiment, script=script)[offset:offset + limit]
         return [self._described(run_id, whole=False) for run_id in chosen]
 
     # ── made again on today's code ──

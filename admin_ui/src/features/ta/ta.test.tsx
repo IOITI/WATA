@@ -1,12 +1,23 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ThemeProvider } from 'ioiti-ui'
+import { ThemeProvider, ToastProvider } from 'ioiti-ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { AgentConversation, AgentConversationListed, AgentState, Session, TaScript, TaScriptSummary } from '@/lib/types'
+import { PendingRemovalsProvider } from '@/features/backtests/PendingRemovalsProvider'
+import type {
+  AgentConversation,
+  AgentConversationListed,
+  AgentState,
+  BacktestRunListed,
+  Session,
+  TaRule,
+  TaScript,
+  TaScriptSummary,
+} from '@/lib/types'
+import { listedRun } from '@/test/backtests'
 import { WithTrail } from '@/test/WithTrail'
 
 import { IndicatorsPage } from './IndicatorsPage'
@@ -110,6 +121,44 @@ const PROPOSING: AgentConversation = {
   ],
 }
 
+// The rules that run EMA: a live one on its first version, one in shadow on its newest.
+function rule(changes: Partial<TaRule>): TaRule {
+  return {
+    id: 'r00000000001', name: 'EMA live', asset: { provider: 'capital', key: 'US100' }, side: 'bid',
+    bars: { type: 'time', timeframe: '1' }, script: { id: EMA.id, version: 1, sha256: 'a' }, libraries: [],
+    inputs: [], alerts: [{ title: 'Up', action: 'long' }], alert_calls: 'ignore', confidence_plot: null, indice: 'us100',
+    mode: 'live', created_at: '2026-10-18T10:00:00+00:00', updated_at: '2026-10-18T10:00:00+00:00',
+    mode_changed_at: '2026-10-18T10:00:00+00:00', script_name: 'EMA', latest: { script: 2, libraries: {} }, ...changes,
+  }
+}
+const RULES: TaRule[] = [
+  rule({}),
+  rule({ id: 'r00000000002', name: 'EMA in shadow', mode: 'shadow', script: { id: EMA.id, version: 2, sha256: 'b' } }),
+  // A rule of Doubled, whose library is Helpers at its first version.
+  rule({ id: 'r00000000003', name: 'Doubled off', mode: 'off', script: { id: DOUBLED.id, version: 1, sha256: 'c' },
+    libraries: [{ id: HELPERS.id, version: 1, sha256: 'd', name: 'Helpers' }] }),
+]
+
+/** EMA's runs: one of each version, the newest passing every check it is held to. */
+const PASSING = { days: 25, repetitions: 100, beaten: 97, trades: 40, sample: 'few' as const, edge: {
+  horizons: [{ minutes: 15, signals: 60, mean_bp: 6, hit_rate: 60, t: 3.1, independent: 30, random_mean_bp: 0.2, beaten: 98 }], unpriced: 0 } }
+const RUNS: BacktestRunListed[] = [
+  listedRun({ id: '20261020-090000-aaaaaa', name: 'EMA v2 in October', source: { kind: 'pine', script: { id: EMA.id, version: 2, name: 'EMA' }, from_rule: null, signals: null },
+    headline: { ...listedRun().headline!, ...PASSING } }),
+  // 3 trades over 3 days, 85 % of 20 random runs beaten: it fails.
+  listedRun({ id: '20261019-090000-bbbbbb', name: 'EMA v1 in October', source: { kind: 'pine', script: { id: EMA.id, version: 1, name: 'EMA' }, from_rule: null, signals: null },
+    headline: { ...listedRun().headline!, days: 3, repetitions: 20 } }),
+]
+/** A stress of the newest that holds: each order a step later and dearer still above zero. */
+const STRESSED: BacktestRunListed = listedRun({
+  id: '20261020-100000-cccccc', name: 'Stress: EMA v2 in October', kind: 'sweep', stress_of: RUNS[0].id,
+  source: { kind: 'pine', script: { id: EMA.id, version: 2, name: 'EMA' }, from_rule: null, signals: null },
+  headline: { ...listedRun().headline!, grid: {
+    axes: [{ kind: 'setting', name: 'order_seconds', values: [1, 3] }, { kind: 'setting', name: 'slippage', values: [0, 0.01] }],
+    cells: [[1, 0, 4], [1, 0.01, 3], [3, 0, 2], [3, 0.01, 1.2]].map(([order, slip, total]) => ({
+      values: [order, slip], tuning: null, held_out: null, whole: { total_percent: total, days: 25 } })) } },
+})
+
 let sent: { method: string; path: string; body: unknown }[] = []
 /** The assets the fake server lists (the editor's test offers them). */
 let assets: unknown[] = []
@@ -130,6 +179,9 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
         return json({ ...EMA, id: 'cccccccccccc', name: (body as { name: string }).name, version: 1 }, 201)
       }
       if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'GET') return json(EMA)
+      if (url.pathname === `/api/ta/scripts/${HELPERS.id}` && method === 'GET') {
+        return json({ ...HELPERS, source: '//@version=6\nlibrary("Helpers")\nexport double(float x) => x * 2\n' })
+      }
       const version = /^\/api\/ta\/scripts\/[0-9a-f]+\/versions\/(\d+)$/.exec(url.pathname)
       if (version && method === 'GET') {
         const number = Number(version[1])
@@ -149,6 +201,15 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
       if (url.pathname.endsWith('/duplicate')) return json({ ...EMA, id: 'dddddddddddd', name: (body as { name: string }).name }, 201)
       if (url.pathname.startsWith('/api/ta/libraries/')) return json({ detail: 'No library' }, 404)
       if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', seen: 'all', items: assets, truncated: false, max: 5000, saxo_error: null })
+      if (url.pathname === '/api/ta/rules') {
+        return json({ revision: 'r1', rules: RULES, indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1, engine_restart_time: '21:15' })
+      }
+      if (url.pathname === '/api/backtests' && method === 'GET') {
+        const script = url.searchParams.get('script')
+        const runs = [STRESSED, ...RUNS].filter((run) => !script || run.source.script?.id === script)
+        return json({ items: runs, storage: { runs: { count: runs.length, bytes: 1000 }, former: { count: 0, bytes: 0 } }, remaking: null })
+      }
+      if (url.pathname === '/api/backtests/paper') return json({ rules: {} })
       if (url.pathname === '/api/agent') return json(AGENT)
       if (url.pathname === '/api/agent/conversations' && method === 'GET') return json({ items: [LISTED] })
       if (url.pathname === `/api/agent/conversations/${CONVERSATION_ID}`) return json(PROPOSING)
@@ -159,7 +220,12 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
 
 function Address() {
   const location = useLocation()
-  return <output data-testid="address">{location.pathname}</output>
+  return (
+    <>
+      <output data-testid="address">{location.pathname}</output>
+      <output data-testid="query">{location.search}</output>
+    </>
+  )
 }
 
 function renderAt(address: string) {
@@ -182,9 +248,13 @@ function renderAt(address: string) {
   render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
-          <RouterProvider router={router} />
-        </AuthContext.Provider>
+        <ToastProvider>
+          <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
+            <PendingRemovalsProvider>
+              <RouterProvider router={router} />
+            </PendingRemovalsProvider>
+          </AuthContext.Provider>
+        </ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>,
   )
@@ -207,6 +277,19 @@ afterEach(() => {
 })
 
 describe('the Indicators page', () => {
+  it('says of each script the rules that run it and its backtests, each leading to its tab', async () => {
+    renderAt('/ta/indicators')
+
+    const ema = await screen.findByRole('link', { name: '1 live · 1 in shadow' })
+    expect(ema).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=rules`)
+    // Its runs, and how many pass every check their page holds them to.
+    expect(within(rowOf('EMA')).getByRole('link', { name: '2 runs, 1 passing' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=backtests`)
+    // A library is run by the rules that import it, and never backtested alone.
+    expect(within(rowOf('Helpers')).getByRole('link', { name: '1 off' })).toBeInTheDocument()
+    expect(within(rowOf('Helpers')).queryByText(/run/)).toBeNull()
+    expect(within(rowOf('Doubled')).getByText('No run')).toBeInTheDocument()
+  })
+
   it('lists the scripts, their kind, and which scripts use a library', async () => {
     renderAt('/ta/indicators')
 
@@ -436,5 +519,97 @@ describe("the editor's test", () => {
     await user.keyboard('{Enter}')
 
     expect(field).toHaveTextContent('TURBO LONG NASDAQ-100 KO 24,150 SG · Saxo')
+  })
+})
+
+describe("a script's page", () => {
+  // The tabs are links, each to its view's address.
+  const tabs = () => screen
+  const query = () => screen.getByTestId('query').textContent
+
+  it('opens on its editor, its backtests, rules and history each a tab of its own', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}`)
+
+    expect(await screen.findByRole('textbox', { name: 'Pine source of EMA' })).toBeInTheDocument()
+    expect(tabs().getByRole('link', { name: 'Editor' })).toHaveAttribute('aria-current', 'page')
+    expect(tabs().getByRole('link', { name: 'Rules' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=rules`)
+    expect(tabs().getByRole('link', { name: 'History' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=history`)
+
+    // A draft lives in the page: another tab leaves it as it was, unsaved.
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), ' fast')
+    await user.click(tabs().getByRole('link', { name: 'Rules' }))
+    expect(query()).toBe('?tab=rules')
+    // Hidden while another tab is shown, not gone: its draft and its undo stay.
+    expect(screen.queryByRole('textbox', { name: 'Pine source of EMA' })).toBeNull()
+    await user.click(tabs().getByRole('link', { name: 'Editor' }))
+    expect(query()).toBe('')
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('EMA fast')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('lists the rules that run it, at the version each pins, leading to their pages', async () => {
+    renderAt(`/ta/indicators/${EMA.id}?tab=rules`)
+
+    const list = within(await screen.findByRole('list', { name: 'Rules running it' }))
+    expect(list.getByRole('link', { name: 'EMA live' })).toHaveAttribute('href', '/ta/signals/r00000000001')
+    expect(list.getByText(/Runs v1; v2 is the newest/)).toBeInTheDocument()
+    expect(list.getByText(/Runs v2, the newest/)).toBeInTheDocument()
+    expect(screen.getByText('1 live · 1 in shadow')).toBeInTheDocument()
+    // Another rule of it is made from the page's header, whichever tab is shown.
+    expect(screen.getByRole('link', { name: 'New signal rule' })).toHaveAttribute('href', `/ta/signals?new=${EMA.id}`)
+  })
+
+  it('lists its backtests with their verdicts, every version or one, and backtests the newest', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}?tab=backtests`)
+
+    // Each row named by its run; the stress's verdict names the run it stresses.
+    await screen.findAllByRole('link', { name: 'EMA v2 in October' })
+    expect(rowOf('EMA v1 in October')).toBeInTheDocument()
+    expect(within(rowOf('Stress: EMA v2 in October')).getByRole('link', { name: 'EMA v2 in October' })).toBeInTheDocument()
+    // The newest passes every check, its stress listed with it; the other fails on its own.
+    expect(within(rowOf('EMA v2 in October')).getByRole('link', { name: /Passes/ })).toBeInTheDocument()
+    expect(within(rowOf('EMA v1 in October')).getByRole('link', { name: /Fails/ })).toBeInTheDocument()
+    // A run of the newest version is asked from the page's header, whichever tab is shown.
+    expect(screen.getByRole('link', { name: 'Backtest v2' })).toHaveAttribute('href', `/backtests/new?script=${EMA.id}&version=2`)
+    expect(sent.some((request) => request.path === '/api/backtests')).toBe(true)
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Version' }), '1')
+    expect(query()).toBe('?tab=backtests&version=1')
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'EMA v2 in October' })).toBeNull())
+    expect(screen.getByRole('link', { name: 'EMA v1 in October' })).toBeInTheDocument()
+  })
+
+  it('lists its versions with their runs and rules, what changed, and puts one back in the editor unsaved', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}?tab=history`)
+
+    const versions = within(await screen.findByRole('list', { name: 'Versions' }))
+    expect(versions.getAllByRole('listitem').map((item) => item.querySelector('.font-mono')?.textContent)).toEqual(['v2', 'v1'])
+    expect(await versions.findAllByRole('link', { name: '2 runs' })).toHaveLength(1)
+    expect(versions.getByRole('link', { name: 'EMA live' })).toHaveAttribute('href', '/ta/signals/r00000000001')
+    expect(versions.getAllByRole('link', { name: /run/ })[0]).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=backtests&version=2`)
+
+    await user.click(versions.getByRole('button', { name: 'Changes from v1' }))
+    expect(await screen.findByTestId('version-diff')).toBeInTheDocument()
+
+    // The first version back in the editor: unsaved there, the editor's tab shown.
+    await user.click(versions.getAllByRole('button', { name: 'Into the editor' })[1])
+    await waitFor(() => expect(query()).toBe(''))
+    expect(screen.getByRole('textbox', { name: 'Pine source of EMA' })).toHaveValue(EMA_SOURCE.replace('20', '10'))
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('has no backtests of a library, whose rules are those of the scripts importing it', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${HELPERS.id}`)
+
+    await screen.findByRole('link', { name: 'Rules' })
+    expect(tabs().queryByRole('link', { name: 'Backtests' })).toBeNull()
+    await user.click(tabs().getByRole('link', { name: 'Rules' }))
+    expect(within(await screen.findByRole('list', { name: 'Rules running it' })).getByRole('link', { name: 'Doubled off' })).toBeInTheDocument()
+    expect(screen.getByText(/Runs v1, the newest/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Doubled' })).toHaveAttribute('href', `/ta/indicators/${DOUBLED.id}`)
   })
 })

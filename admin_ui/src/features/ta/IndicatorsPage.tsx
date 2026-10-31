@@ -23,13 +23,15 @@ import { Link, useNavigate } from 'react-router'
 
 import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
+import { judgedRuns } from '@/features/backtests/verdict'
 import { madeByClaude } from '@/features/system/claude'
 import { api, ApiError, taScriptSourceUrl } from '@/lib/api'
-import type { TaScriptKind, TaScriptSummary } from '@/lib/types'
+import type { TaRuleMode, TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
 import { LuxAlgoBadge } from './luxalgo/LuxAlgoBadge'
 import { importScript, librariesFirst, MAX_SCRIPT_BYTES } from './importScripts'
+import { modeCounts, modesSaid, rulesRunning, runsOfScript, runsSaid, scriptTabHref } from './script/scriptPageModel'
 import { importersOf, KIND_LABEL, librariesOf } from './templates'
 
 const KIND_TONE: Record<TaScriptKind, 'neutral' | 'success' | 'warning'> = {
@@ -37,6 +39,9 @@ const KIND_TONE: Record<TaScriptKind, 'neutral' | 'success' | 'warning'> = {
   strategy: 'warning',
   library: 'neutral',
 }
+
+// The runs the list of backtests gives, the newest first (MAX_LISTED of src/admin/backtests.py).
+const MAX_LISTED_RUNS = 200
 
 // A column of short values as narrow as they are: the room left goes to the scripts and their libraries.
 // Left to itself, the browser gives it all to the scripts, whose descriptions are the longest text.
@@ -65,11 +70,18 @@ function ScriptNames({ entries }: { entries: { name: string; script?: TaScriptSu
 // An icon of a row's actions that leads to a page.
 const ICON_LINK = 'inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground'
 
+/** What the list says of each script beside it: the rules that run it, its runs and how many pass every check. */
+interface ScriptUses {
+  rules: Map<string, Record<TaRuleMode, number>>
+  runs: Map<string, { runs: number; passing: number }>
+}
+
 function scriptColumns(
   timezone: string,
   importers: Map<string, TaScriptSummary[]>,
   libraries: Map<string, TaScriptSummary>,
   backtests: boolean,
+  uses: ScriptUses,
   act: (action: 'duplicate' | 'delete', script: TaScriptSummary) => void,
 ): ColumnDef<TaScriptSummary>[] {
   return [
@@ -123,6 +135,44 @@ function scriptColumns(
       ),
     },
     {
+      id: 'uses',
+      // The rules that run it, then its runs and how many pass every check: one column, the table's room being short.
+      header: 'In use',
+      width: FIT,
+      accessorFn: (row) => {
+        const counts = uses.rules.get(row.id)
+        const rules = counts ? counts.live * 100 + counts.shadow * 10 + counts.off : 0
+        return rules * 10_000 + (uses.runs.get(row.id)?.runs ?? 0)
+      },
+      sortable: true,
+      cell: ({ row }) => {
+        const counts = uses.rules.get(row.id)
+        const rules = counts ? modesSaid(counts) : 'None'
+        const runs = uses.runs.get(row.id)
+        return (
+          // Each line whole in the table (its floor there only: a card on a phone is narrower).
+          <div className="flex max-w-44 flex-col gap-0.5 whitespace-normal text-xs [td_&]:min-w-36">
+            {rules === 'None' ? (
+              <span className="text-muted-foreground">No rule</span>
+            ) : (
+              <Link to={`/ta/indicators/${row.id}${scriptTabHref('rules')}`} className="underline-offset-4 hover:underline">
+                {rules}
+              </Link>
+            )}
+            {backtests &&
+              row.kind !== 'library' &&
+              (!runs || runs.runs === 0 ? (
+                <span className="text-muted-foreground">No run</span>
+              ) : (
+                <Link to={`/ta/indicators/${row.id}${scriptTabHref('backtests')}`} className="underline-offset-4 hover:underline">
+                  {runs.runs} run{runs.runs === 1 ? '' : 's'}, {runs.passing === 0 ? 'none passing' : `${runs.passing} passing`}
+                </Link>
+              ))}
+          </div>
+        )
+      },
+    },
+    {
       id: 'libraries',
       header: 'Libraries',
       width: LIBRARIES_SHARE,
@@ -132,7 +182,7 @@ function scriptColumns(
       cell: ({ row }) => {
         const users = row.kind === 'library' ? (importers.get(row.library_name ?? '') ?? []) : []
         return (
-          <div className="flex max-w-72 flex-col gap-1 whitespace-normal text-xs [td_&]:min-w-48">
+          <div className="flex max-w-72 flex-col gap-1 whitespace-normal text-xs [td_&]:min-w-40">
             {row.kind === 'library' ? (
               <>
                 {/* Broken after its parenthesis when it must, and inside the name only in a card too narrow for it. */}
@@ -216,6 +266,18 @@ export function IndicatorsPage() {
   const scripts = scriptsQuery.data?.items
   const importers = useMemo(() => importersOf(scripts ?? []), [scripts])
   const libraries = useMemo(() => librariesOf(scripts ?? []), [scripts])
+  // The rules that run each script, and its runs among the newest the list of backtests gives, with their verdicts.
+  const rulesQuery = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules })
+  const runsQuery = useQuery({ queryKey: ['backtests'], queryFn: api.backtests, enabled: backtests })
+  const uses = useMemo((): ScriptUses => {
+    const rules = rulesQuery.data?.rules ?? []
+    const runs = runsQuery.data?.items ?? []
+    const judged = judgedRuns(runs)
+    return {
+      rules: new Map((scripts ?? []).map((script) => [script.id, modeCounts(rulesRunning(script.id, rules))])),
+      runs: new Map((scripts ?? []).map((script) => [script.id, runsSaid(runsOfScript(runs, script.id), judged)])),
+    }
+  }, [scripts, rulesQuery.data, runsQuery.data])
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['ta-scripts'] })
@@ -257,7 +319,7 @@ export function IndicatorsPage() {
 
   const columns = useMemo(
     () =>
-      scriptColumns(timezone, importers, libraries, backtests, (action, script) => {
+      scriptColumns(timezone, importers, libraries, backtests, uses, (action, script) => {
         if (action === 'delete') {
           deleteMutation.reset()
           setDeleting(script)
@@ -269,7 +331,7 @@ export function IndicatorsPage() {
       }),
     // The mutations' reset is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone, importers, libraries, backtests],
+    [timezone, importers, libraries, backtests, uses],
   )
 
   const onFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -350,7 +412,8 @@ export function IndicatorsPage() {
               selectable={false}
             />
             <p className="text-xs text-muted-foreground">
-              Every save keeps the version before it. A script imports a library of WATA with{' '}
+              Every save keeps the version before it. A script's backtests are counted among the newest {MAX_LISTED_RUNS} runs.
+              A script imports a library of WATA with{' '}
               <code className="font-mono">import user/Name/1 as alias</code>, Name being what the library declares in{' '}
               <code className="font-mono">library("Name")</code>.
             </p>

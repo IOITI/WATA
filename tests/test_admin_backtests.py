@@ -507,6 +507,24 @@ def test_an_id_that_is_not_one_of_a_run_reaches_no_folder(tmp_path, scripts, con
             read(run_id)
 
 
+def test_the_runs_of_one_script_are_listed_whatever_its_version(tmp_path, scripts, config):
+    backtests = service(tmp_path, scripts, config, clock=Ticking())
+    other = next(meta["id"] for meta in scripts.scripts() if meta["name"] == "Maths")
+
+    async def ask():
+        made = [backtests.create(pine(scripts)), backtests.create(pine(scripts, name="Later"))]
+        made.append(backtests.create({**pine(scripts), "source": {"kind": "journal"}, "chart": {
+            "asset": {"provider": "dukascopy", "key": "us100"}, "side": "bid", "bars": {"type": "time", "timeframe": "1"}}},
+            journal=JOURNAL))
+        return made
+
+    first, later, replay = asyncio.run(ask())
+    listed = [run["id"] for run in backtests.list_runs(script=cross_id(scripts))]
+
+    assert listed == [later["id"], first["id"]]
+    assert backtests.list_runs(script=other) == [] and replay["id"] in [run["id"] for run in backtests.list_runs()]
+
+
 def test_runs_are_named_tagged_removed_and_what_the_former_backtester_left_too(tmp_path, scripts, config):
     backtests = service(tmp_path, scripts, config)
     former = tmp_path / "backtests" / "20261012-213045-a1b2c3"

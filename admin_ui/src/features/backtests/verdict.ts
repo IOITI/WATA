@@ -296,6 +296,22 @@ export interface RunVerdict {
   sentence: string
 }
 
+/** A run's checks and what they say together, as its page says them. */
+export interface Judged {
+  checks: RunCheck[]
+  verdict: RunVerdict
+}
+
+/** Each listed run's checks, read from the list itself (``listedChecks``); a run not judged has none. */
+export function judgedRuns(runs: readonly BacktestRunListed[]): Map<string, Judged> {
+  const found = new Map<string, Judged>()
+  for (const run of runs) {
+    const checks = listedChecks(run, runs)
+    if (checks.length > 0) found.set(run.id, { checks, verdict: verdictOf(checks) })
+  }
+  return found
+}
+
 /** What the checks say together: a fail outweighs everything, a check left open is said. */
 export function verdictOf(checks: readonly RunCheck[]): RunVerdict {
   const named = (list: readonly RunCheck[]) => list.map((check) => check.label.toLowerCase()).join(', ')

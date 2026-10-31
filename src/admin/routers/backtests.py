@@ -128,8 +128,9 @@ async def execution(
 
 
 @router.get("")
-async def runs(service=Depends(backtests)):
-    items = await run_in_threadpool(service.list_runs)
+async def runs(script: str | None = Query(None, pattern=r"^[0-9a-f]{12}$"), service=Depends(backtests)):
+    """The runs, newest first; with ``script``, those that ran that Pine script, any version (a script's page)."""
+    items = await run_in_threadpool(lambda: service.list_runs(script=script))
     return {"items": items, "storage": await run_in_threadpool(service.storage),
             "remaking": await run_in_threadpool(service.remaking)}
 
