@@ -90,6 +90,38 @@ def test_a_question_unanswered_for_two_days_ends_its_task_and_one_answered_twice
         assert "No question" in str(e)
 
 
+def test_a_question_answered_as_it_expires_keeps_its_answer(store):
+    """
+    The expiry lists the questions, then ends each task from the task as it reads it again: an answer that came in
+    between was ended over, and the request it had asked was left to run outside its task.
+    """
+    clock = Clock()
+    agent, _, _ = asking_agent(store, clock)
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        meta = await agent.create_task("Find a line that holds", None, None, BUDGET)
+        await settled(agent, meta["id"])
+        worker.cancel()
+        return meta
+
+    meta = asyncio.run(scenario())
+    clock.now += 49 * 3600
+    listed = agent.waiting_questions
+
+    def listed_then_answered():
+        waiting = listed()
+        agent.answer_question(meta["id"], "Slow", "10.8.0.2")
+        return waiting
+
+    agent.waiting_questions = listed_then_answered
+
+    assert agent.expire_questions() == []
+    kept = agent.store.meta(meta["id"])
+    assert kept["task"]["state"] == "working" and kept["task"]["answers"][0]["answer"] == "Slow"
+    assert kept["status"] == "queued" and kept["request"] == 1
+
+
 def test_a_question_is_told_once_on_telegram(store, tmp_path):
     clock = Clock()
     agent, _, _ = asking_agent(store, clock)

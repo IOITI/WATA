@@ -7,6 +7,7 @@ hours are spent, the operator stops it, or nothing new may start.
 
 import asyncio
 import json
+import threading
 
 import pytest
 
@@ -239,6 +240,76 @@ def test_the_operator_stops_a_task_and_no_request_follows(store):
     assert len(provider.asked) == 1
     with pytest.raises(NotPossible, match="ended already"):
         agent.stop_task(ended["id"], None)
+
+
+def test_a_stop_that_comes_as_a_request_ends_is_kept(store):
+    """
+    The operator's stop runs in a thread of the routes, while the worker, on the event loop, reads the task whose
+    request ended and writes it back with its next request asked. A stop between the two was written over: the task
+    went on, its stop answered (seen on CI on 2026-10-31). Here the stop comes while the worker reads the activity.
+    """
+    provider = FakeProvider(answer(text("Never asked.")))
+    agent, _ = agent_of(store, provider)
+    conversation_id = store.new_id(NOW)
+    task = {"goal": "Tune", "budget": BUDGET, "state": "working", "started_at": stamp(NOW),
+            "deadline": stamp(NOW + 4 * 3600), "spent_usd": 0.1, "backtests": 0, "requests": 1, "by": None,
+            "ended_at": None, "ended_because": None, "conclusion": None}
+    store.create({"id": conversation_id, "title": "Tune", "status": "idle", "request": 0, "requests": 1,
+                  "cost_usd": 0.1, "updated_at": stamp(NOW), "task": task})
+    read, stops = store.read, []
+
+    def read_as_the_operator_stops(conversation, journal):
+        if journal == "activity" and not stops:
+            stops.append(threading.Thread(target=agent.stop_task, args=(conversation, "10.8.0.2")))
+            stops[0].start()
+            stops[0].join(0.5)
+        return read(conversation, journal)
+
+    store.read = read_as_the_operator_stops
+    agent._task_went_on(conversation_id, 0, "done", agent.settings.model, agent.settings.effort)
+    stops[0].join(5)
+
+    stopped = store.meta(conversation_id)
+    assert stopped["task"]["state"] == "ended" and stopped["task"]["ended_because"] == "stopped by the operator"
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        ended = await until_the_task_ends(agent, conversation_id)
+        worker.cancel()
+        return ended
+
+    ended = asyncio.run(scenario())
+
+    # The request it had asked waited its turn, stopped: it ended there, nothing asked of the model.
+    assert ended["request"] == 1 and ended["outcome"] == "stopped" and provider.asked == []
+
+
+def test_a_stop_that_comes_once_the_next_request_is_queued_is_that_request_s(store):
+    """
+    A stop that comes once the worker has queued the task's next request, before it lets the conversation go, is that
+    request's: the worker's own end dropped it, and the request was asked all the same, after the operator's stop.
+    """
+    provider = FakeProvider(answer(text("A first look.")), answer(text("Asked after the stop.")))
+    agent, published = agent_of(store, provider)
+
+    def stopped_as_it_goes_on(event_type, **data):
+        published(event_type, **data)
+        if event_type == "agent_finished" and data.get("task") == "working":
+            agent.stop_task(data["conversation_id"], "10.8.0.2")
+
+    agent._publish = stopped_as_it_goes_on
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        meta = await agent.create_task("Tune the stop", None, None, BUDGET)
+        ended = await until_the_task_ends(agent, meta["id"])
+        worker.cancel()
+        return ended
+
+    ended = asyncio.run(scenario())
+
+    assert ended["task"]["state"] == "ended" and ended["task"]["ended_because"] == "stopped by the operator"
+    assert ended["request"] == 1 and ended["outcome"] == "stopped" and len(provider.asked) == 1
 
 
 def test_a_pause_ends_a_task_between_two_requests(store):

@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.72.1 - A research task's Stop is kept
+
+**Release date:** not yet released
+
+v0.72.0's tests found it on CI (2026-10-31): the operator's **Stop the task** could be lost. The Stop runs in a thread of the admin's routes, while the agent's worker, once one of the task's requests ends, reads the task, decides its next request and writes the task back with it. A Stop that came between the two was written over: the task went on, its requests still asked and paid for within its budget, while the page had been told it stopped. It was so since v0.57.0, which brought research tasks. Each of the four that change a task (the worker going on, the Stop, the answer to its question, a question's expiry) now reads it, decides and writes it with no other in between. Two more of the same kind go with it:
+- A Stop that came once the task's next request was queued, before the worker let the conversation go, was dropped at the worker's end, and that request was asked all the same. It is now that request's, which ends before asking anything.
+- A question answered as it expired was ended over, and the request its answer had asked ran outside its task (since v0.68.0). The expiry now reads each task again and leaves one answered meanwhile.
+
+**On the live path:** nothing. The admin alone (its AI agent).
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- Three tests make each race happen where it did: each fails on v0.72.0 and passes. They, the test CI caught and the Stop's own test passed 25 runs in a row; the agent's 291 tests pass.
+
 ## v0.72.0 - LuxAlgo's indicators seen: their pictures in the Library, a chart on each page, the source in colour
 
 **Release date:** 2026-10-31

@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import replace
@@ -155,6 +156,10 @@ class AgentService:
         self._refreshing: asyncio.Task | None = None
         # The research tasks that wait for the operator's answer to their question.
         self._questions: set[str] = set()
+        # A research task is read, decided on and written by one at a time: the worker going on to its next request
+        # (on the event loop), the operator's stop and answer (in the routes' threads), a question's expiry. Each
+        # wrote back the task it had read, and a stop that came as a request ended was written over.
+        self._task_lock = threading.RLock()
 
     @property
     def ready(self) -> bool:
@@ -269,7 +274,9 @@ class AgentService:
                     pass
             finally:
                 self._working.discard(conversation_id)
-                self._stopping.discard(conversation_id)
+                if conversation_id not in self._queued:
+                    # A stop that came once its task's next request was queued is that request's.
+                    self._stopping.discard(conversation_id)
                 self._pending.pop(conversation_id, None)
                 self._changed(conversation_id)
 
@@ -332,47 +339,50 @@ class AgentService:
         next request asked, or the task ended with why. A request that failed
         waits for the operator's retry, after which the task goes on.
         """
-        meta = self.store.meta(conversation_id)
-        task = dict(meta.get("task") or {})
-        if task.get("state") != TASK_WORKING or task.get("question"):
-            # Ended, or waiting for the operator's answer to its question (a restart's recovery included).
-            return task or None
-        activity = self.store.read(conversation_id, "activity")
-        task["spent_usd"] = round(meta.get("cost_usd") or 0.0, 6)
-        task["backtests"] = sum(1 for event in activity if event.get("event") == "run")
-        if status == FAILED:
-            return self.store.update_meta(conversation_id, task=task)["task"]
-        now = self._clock()
-        done = next((event for event in reversed(activity)
-                     if event.get("event") == "task_done" and event.get("request") == request), None)
-        if done is not None:
-            task.update(state=TASK_DONE, ended_at=stamp(now), conclusion={
-                key: done.get(key) for key in ("conclusion", "runs_kept", "next_steps")})
-            return self.store.update_meta(conversation_id, task=task)["task"]
-        why = self._task_ends(task, status, now)
-        if why is not None:
-            task.update(state=TASK_ENDED, ended_at=stamp(now), ended_because=why)
-            return self.store.update_meta(conversation_id, task=task)["task"]
-        asked = next((event for event in reversed(activity)
-                      if event.get("event") == "question" and event.get("request") == request), None)
-        if asked is not None:
-            # It waits for the operator's answer: said on the pages (and on Telegram by the teller), no request asked.
-            task["question"] = {key: asked.get(key) for key in ("question", "choices", "why")}
-            task["question"].update(asked_at=stamp(now), request=request)
-            meta = self.store.update_meta(conversation_id, task=task)
-            self._questions.add(conversation_id)
-            self._publish("agent_question", conversation_id=conversation_id, title=meta.get("title"),
-                          question=task["question"]["question"])
+        with self._task_lock:
+            meta = self.store.meta(conversation_id)
+            task = dict(meta.get("task") or {})
+            if task.get("state") != TASK_WORKING or task.get("question"):
+                # Ended, or waiting for the operator's answer to its question (a restart's recovery included).
+                return task or None
+            activity = self.store.read(conversation_id, "activity")
+            task["spent_usd"] = round(meta.get("cost_usd") or 0.0, 6)
+            task["backtests"] = sum(1 for event in activity if event.get("event") == "run")
+            if status == FAILED:
+                return self.store.update_meta(conversation_id, task=task)["task"]
+            now = self._clock()
+            done = next((event for event in reversed(activity)
+                         if event.get("event") == "task_done" and event.get("request") == request), None)
+            if done is not None:
+                task.update(state=TASK_DONE, ended_at=stamp(now), conclusion={
+                    key: done.get(key) for key in ("conclusion", "runs_kept", "next_steps")})
+                return self.store.update_meta(conversation_id, task=task)["task"]
+            why = self._task_ends(task, status, now)
+            if why is not None:
+                task.update(state=TASK_ENDED, ended_at=stamp(now), ended_because=why)
+                return self.store.update_meta(conversation_id, task=task)["task"]
+            asked = next((event for event in reversed(activity)
+                          if event.get("event") == "question" and event.get("request") == request), None)
+            if asked is not None:
+                # It waits for the operator's answer: said on the pages (and on Telegram by the teller), no request
+                # asked.
+                task["question"] = {key: asked.get(key) for key in ("question", "choices", "why")}
+                task["question"].update(asked_at=stamp(now), request=request)
+                meta = self.store.update_meta(conversation_id, task=task)
+                self._questions.add(conversation_id)
+                self._publish("agent_question", conversation_id=conversation_id, title=meta.get("title"),
+                              question=task["question"]["question"])
+                return meta["task"]
+            task["requests"] = (task.get("requests") or 1) + 1
+            budget = task["budget"]
+            prompt = task_going_on(task["spent_usd"], budget["usd"], task["backtests"], budget["backtests"],
+                                   task["deadline"])
+            with self._queuing(conversation_id):
+                meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request + 1,
+                                              requests=(meta.get("requests") or request + 1) + 1,
+                                              updated_at=stamp(now), outcome=None, error=None, retry=False)
+            self._asked_now(conversation_id, request + 1, prompt, None, "task", model, effort)
             return meta["task"]
-        task["requests"] = (task.get("requests") or 1) + 1
-        budget = task["budget"]
-        prompt = task_going_on(task["spent_usd"], budget["usd"], task["backtests"], budget["backtests"], task["deadline"])
-        with self._queuing(conversation_id):
-            meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request + 1,
-                                          requests=(meta.get("requests") or request + 1) + 1, updated_at=stamp(now),
-                                          outcome=None, error=None, retry=False)
-        self._asked_now(conversation_id, request + 1, prompt, None, "task", model, effort)
-        return meta["task"]
 
     def waiting_questions(self) -> list[dict]:
         """The research tasks that wait for the operator's answer: their conversation, title and question."""
@@ -396,30 +406,31 @@ class AgentService:
         self._check_room()
         if not isinstance(answer, str) or not answer.strip() or len(answer) > MAX_ANSWER:
             raise InvalidRequest(f"An answer is a few words, {MAX_ANSWER:,} characters at most")
-        meta = self.store.meta(conversation_id)
-        task = dict(meta.get("task") or {})
-        question = task.get("question")
-        if task.get("state") != TASK_WORKING or not question:
-            raise NotPossible("No question of this task waits for an answer")
-        now = self._clock()
-        waited = max(0.0, now - _seconds(question["asked_at"]))
-        task["deadline"] = stamp(_seconds(task["deadline"]) + waited)
-        task["question"] = None
-        task["answers"] = [*(task.get("answers") or []),
-                           {**question, "answer": answer.strip(), "answered_at": stamp(now), "by": by}]
-        task["requests"] = (task.get("requests") or 1) + 1
-        budget = task["budget"]
-        prompt = (task_going_on(task.get("spent_usd") or 0.0, budget["usd"], task.get("backtests") or 0,
-                                budget["backtests"], task["deadline"])
-                  + f"\n\nThe operator answered your question ({question['question']}): {answer.strip()}")
-        model, effort = self._kept_choice(meta)
-        request = meta["request"] + 1
-        with self._queuing(conversation_id):
-            meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request,
-                                          requests=(meta.get("requests") or request) + 1, updated_at=stamp(now),
-                                          outcome=None, error=None, retry=False)
-        self._questions.discard(conversation_id)
-        self._asked_now(conversation_id, request, prompt, None, "task", model, effort)
+        with self._task_lock:
+            meta = self.store.meta(conversation_id)
+            task = dict(meta.get("task") or {})
+            question = task.get("question")
+            if task.get("state") != TASK_WORKING or not question:
+                raise NotPossible("No question of this task waits for an answer")
+            now = self._clock()
+            waited = max(0.0, now - _seconds(question["asked_at"]))
+            task["deadline"] = stamp(_seconds(task["deadline"]) + waited)
+            task["question"] = None
+            task["answers"] = [*(task.get("answers") or []),
+                               {**question, "answer": answer.strip(), "answered_at": stamp(now), "by": by}]
+            task["requests"] = (task.get("requests") or 1) + 1
+            budget = task["budget"]
+            prompt = (task_going_on(task.get("spent_usd") or 0.0, budget["usd"], task.get("backtests") or 0,
+                                    budget["backtests"], task["deadline"])
+                      + f"\n\nThe operator answered your question ({question['question']}): {answer.strip()}")
+            model, effort = self._kept_choice(meta)
+            request = meta["request"] + 1
+            with self._queuing(conversation_id):
+                meta = self.store.update_meta(conversation_id, task=task, status="queued", request=request,
+                                              requests=(meta.get("requests") or request) + 1, updated_at=stamp(now),
+                                              outcome=None, error=None, retry=False)
+            self._questions.discard(conversation_id)
+            self._asked_now(conversation_id, request, prompt, None, "task", model, effort)
         return meta
 
     async def _questions_kept(self) -> None:
@@ -438,11 +449,17 @@ class AgentService:
         for waiting in self.waiting_questions():
             if waiting["asked_at"] > limit:
                 continue
-            meta = self.store.meta(waiting["conversation"])
-            why = f"your answer to its question did not come in {QUESTION_WAIT_HOURS} hours"
-            task = {**meta["task"], "state": TASK_ENDED, "ended_at": stamp(self._clock()), "ended_because": why}
-            self.store.update_meta(waiting["conversation"], task=task)
-            self._questions.discard(waiting["conversation"])
+            with self._task_lock:
+                meta = self.store.meta(waiting["conversation"])
+                task = meta.get("task") or {}
+                question = task.get("question") or {}
+                if task.get("state") != TASK_WORKING or question.get("asked_at") != waiting["asked_at"]:
+                    # Answered, or stopped, since it was listed.
+                    continue
+                why = f"your answer to its question did not come in {QUESTION_WAIT_HOURS} hours"
+                task = {**task, "state": TASK_ENDED, "ended_at": stamp(self._clock()), "ended_because": why}
+                self.store.update_meta(waiting["conversation"], task=task)
+                self._questions.discard(waiting["conversation"])
             self._publish("agent_finished", conversation_id=waiting["conversation"], title=meta.get("title"),
                           outcome="done", detail=None, cost_usd=0.0, task=TASK_ENDED, task_detail=why)
             ended.append(waiting["conversation"])
@@ -996,18 +1013,19 @@ class AgentService:
 
     def stop_task(self, conversation_id: str, by: str | None) -> dict:
         """A task ended by the operator: no request follows; the one under way stops between two tool calls."""
-        meta = self.store.meta(conversation_id)
-        task = meta.get("task")
-        if not task:
-            raise InvalidRequest("This conversation is not a research task")
-        if task.get("state") != TASK_WORKING:
-            raise NotPossible("This task has ended already")
-        task = {**task, "state": TASK_ENDED, "ended_at": stamp(self._clock()), "ended_because": "stopped by the operator",
-                "stopped_by": by, "question": None}
-        meta = self.store.update_meta(conversation_id, task=task)
-        self._questions.discard(conversation_id)
-        if meta.get("status") in transcript.UNDER_WAY:
-            self.stop(conversation_id)
+        with self._task_lock:
+            meta = self.store.meta(conversation_id)
+            task = meta.get("task")
+            if not task:
+                raise InvalidRequest("This conversation is not a research task")
+            if task.get("state") != TASK_WORKING:
+                raise NotPossible("This task has ended already")
+            task = {**task, "state": TASK_ENDED, "ended_at": stamp(self._clock()),
+                    "ended_because": "stopped by the operator", "stopped_by": by, "question": None}
+            meta = self.store.update_meta(conversation_id, task=task)
+            self._questions.discard(conversation_id)
+            if meta.get("status") in transcript.UNDER_WAY:
+                self.stop(conversation_id)
         self._changed(conversation_id)
         return meta
 
