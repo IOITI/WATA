@@ -140,6 +140,9 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/backtests/20261012-213045-a1b2c3/stress"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/model-check"),
     ("GET", "/api/backtests/turbo-model"),
+    ("GET", "/api/backtests/remake"),
+    ("POST", "/api/backtests/remake"),
+    ("DELETE", "/api/backtests/remake"),
     ("GET", "/api/backtests/execution"),
     ("GET", "/api/backtests/paper"),
     ("GET", "/api/backtests/paper/live"),
@@ -3414,6 +3417,24 @@ class FakeBacktests:
     def stress(self, run_id):
         return self._answer("stress", run_id, answer={"id": RUN, "stress_of": run_id})
 
+    def remaking(self):
+        return None
+
+    def remake_preview(self):
+        return self._answer("remake_preview", answer={"runs": 2, "claude": 1, "seconds": 900})
+
+    def remake_candidates(self, run_ids=None, *, stale=False):
+        return self._answer("remake_candidates", run_ids, stale, answer=[RUN])
+
+    def add_remakes(self, chosen):
+        return self._answer("add_remakes", chosen, answer={"total": len(chosen), "waiting": len(chosen)})
+
+    def wake(self):
+        self.asked.append(("wake",))
+
+    def stop_remaking(self):
+        return self._answer("stop_remaking", answer=None)
+
     async def run(self):
         await asyncio.Event().wait()
 
@@ -3603,7 +3624,7 @@ def test_what_the_service_refuses_is_answered_with_its_reason(client, backtests)
 def test_runs_are_listed_read_renamed_stopped_and_removed(client, backtests):
     assert client.get("/api/backtests").json() == {"items": [{"id": RUN}], "storage": {
         "runs": {"count": 1, "bytes": 2048}, "former": {"count": 0, "bytes": 0},
-    }}
+    }, "remaking": None}
     assert client.get(f"/api/backtests/{RUN}").json() == {"id": RUN}
     assert client.patch(f"/api/backtests/{RUN}", json={"name": "Kernel", "tags": ["a"]}, headers=SAME_ORIGIN).json()["name"] == "Kernel"
     assert client.post(f"/api/backtests/{RUN}/cancel", headers=SAME_ORIGIN).json() == {"id": RUN}
@@ -3615,6 +3636,26 @@ def test_runs_are_listed_read_renamed_stopped_and_removed(client, backtests):
     assert [entry[0] for entry in backtests.asked] == [
         "list_runs", "get", "update", "cancel", "delete", "delete_many", "delete_former",
     ]
+
+
+def test_runs_made_with_older_code_are_made_again_when_asked_and_no_more_when_stopped(client, backtests):
+    from src.admin.errors import NotPossible
+
+    assert client.get("/api/backtests/remake").json() == {"runs": 2, "claude": 1, "seconds": 900}
+    answer = client.post("/api/backtests/remake", json={"stale": True}, headers=SAME_ORIGIN)
+    assert (answer.status_code, answer.json()) == (202, {"remaking": {"total": 1, "waiting": 1}})
+    assert client.post("/api/backtests/remake", json={"runs": [RUN]}, headers=SAME_ORIGIN).status_code == 202
+    # Neither named nor every stale one: nothing is asked.
+    assert client.post("/api/backtests/remake", json={}, headers=SAME_ORIGIN).status_code == 422
+    assert client.delete("/api/backtests/remake", headers=SAME_ORIGIN).json() == {"remaking": None}
+
+    assert backtests.asked == [
+        ("remake_preview",), ("remake_candidates", None, True), ("add_remakes", [RUN]), ("wake",),
+        ("remake_candidates", [RUN], False), ("add_remakes", [RUN]), ("wake",), ("stop_remaking",),
+    ]
+    backtests.failure = NotPossible("No backtest made with older code is left to make again")
+    refused = client.post("/api/backtests/remake", json={"stale": True}, headers=SAME_ORIGIN)
+    assert (refused.status_code, refused.json()["detail"]) == (409, "No backtest made with older code is left to make again")
 
 
 def test_what_a_run_found_is_read_by_day_and_fate(client, backtests):

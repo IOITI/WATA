@@ -60,6 +60,8 @@ class FakeLauncher:
         self.ends_with = ends_with
         self.commands: list[list[str]] = []
         self.processes: list[FakeProcess] = []
+        # The code its summaries say they were made with: not the admin's, unless a test says so.
+        self.code = "x"
 
     async def __call__(self, arguments, log_path):
         self.commands.append(arguments)
@@ -75,7 +77,7 @@ class FakeLauncher:
         folder = self.commands[number][self.commands[number].index("--run") + 1]
         if code == 0:
             with open(os.path.join(folder, "summary.json"), "w", encoding="utf-8") as out_file:
-                json.dump({"made_with": {"code": "x"}, "figures": {"total_percent": 1.5, "trades": 3, "win_rate": 66.7,
+                json.dump({"made_with": {"code": self.code}, "figures": {"total_percent": 1.5, "trades": 3, "win_rate": 66.7,
                                                                    "worst_drawdown": -0.4, "sample": "too_few"},
                            "against_random": {"beaten": 71.0}, "days": {"tested": 2}, "money": {"profit_loss": 150.0}}, out_file)
         self.processes[number].end(code)
@@ -678,6 +680,215 @@ def test_a_finished_run_is_stressed_with_later_and_worse_fills_its_own_first(tmp
     backtests._waiting.clear()
     with pytest.raises(NotPossible):
         asyncio.run(asyncio.to_thread(backtests.stress, stressed["id"]))
+
+
+# ── the list's verdict, and runs made again on today's code ──
+
+
+EDGE = {"horizons": [{"minutes": 5, "signals": 40, "mean_bp": 3.0, "hit_rate": 0.6, "t": 2.9, "independent": 30,
+                      "random_mean_bp": 0.1, "beaten": 97.0}], "unpriced": 0}
+GRID_AXES = [{"kind": "setting", "name": "order_seconds", "values": [1, 3]},
+             {"kind": "setting", "name": "slippage", "values": [0, 0.01]}]
+
+
+def test_the_list_carries_what_its_verdict_reads_without_reading_a_whole_run(tmp_path, scripts, config):
+    backtests = service(tmp_path, scripts, config, clock=Ticking())
+    run_id = finished(tmp_path, backtests, scripts, {"summary.json": {
+        "made_with": {"code": "x"}, "figures": {"total_percent": 4.0, "trades": 41, "days": 22, "sample": "fair"},
+        "against_random": {"beaten": 96.0, "repetitions": 100, "seed": 1}, "days": {"tested": 22}, "edge": EDGE,
+        "model_check": {"paired": 30, "correlation": 0.8, "recorded_trades": 31},
+    }})
+
+    async def ask():
+        return backtests.create(pine(scripts, sweep={"axes": GRID_AXES, "held_out": 0.3}))
+
+    sweep_id = asyncio.run(ask())["id"]
+    folder = folder_of(tmp_path, sweep_id)
+    cells = [{"values": [order, slip], "whole": {"total_percent": order - slip * 100, "days": 4, "trades": 9},
+              "tuning": None, "held_out": None, "money": {"capital": 1000}, "curve": [["2026-10-13", 1.0, 2]]}
+             for order in (1, 3) for slip in (0, 0.01)]
+    (folder / "sweep.json").write_text(json.dumps({"axes": GRID_AXES, "held_out": 0.3, "held_out_from": None, "cells": cells}))
+    (folder / "summary.json").write_text(json.dumps({"made_with": {"code": "x"}, "days": {"tested": 4}, "cells": 4,
+                                                     "pbo": {"probability": 0.2, "splits": 8, "combinations": 70}}))
+    (folder / "status.json").write_text(json.dumps({"state": DONE}))
+    backtests._waiting.clear()
+
+    listed = {run["id"]: run["headline"] for run in backtests.list_runs()}
+    single, grid = listed[run_id], listed[sweep_id]["grid"]
+    assert (single["days"], single["repetitions"], single["edge"], single["model_check"]) == (22, 100, EDGE, {"paired": 30, "correlation": 0.8})
+    assert single["pbo"] is None and single["deflated_sharpe"] is None and single["grid"] is None
+    assert listed[sweep_id]["pbo"] == {"probability": 0.2}
+    # Each combination's totals alone: neither its money, nor its days one by one.
+    assert grid["axes"] == GRID_AXES and grid["cells"][1] == {
+        "values": [1, 0.01], "tuning": None, "held_out": None, "whole": {"total_percent": 0.0, "days": 4},
+    }
+    # Read again once its file changed, not before.
+    (folder / "sweep.json").write_text(json.dumps({"axes": GRID_AXES, "cells": cells[:1]}))
+    os.utime(folder / "sweep.json", (NOW + 60, NOW + 60))
+    assert len(backtests.get(sweep_id)["headline"]["grid"]["cells"]) == 1
+
+
+def done_at(tmp_path, run_id: str, started: str, ended: str) -> None:
+    (folder_of(tmp_path, run_id) / "status.json").write_text(json.dumps({"state": DONE, "started_at": started, "finished_at": ended}))
+
+
+def run_folder(command: list[str]) -> str:
+    return os.path.basename(command[command.index("--run") + 1])
+
+
+def test_a_stale_run_is_made_again_with_what_it_had_once_nothing_else_waits(tmp_path, scripts, config):
+    launcher = FakeLauncher(ends_with=None)
+    backtests = service(tmp_path, scripts, config, launcher, clock=Ticking())
+    old = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}},
+                                                     "journal.json": [{"signal_uuid": "a"}]})
+    backtests.update(old, name="September", tags=["keep"])
+    done_at(tmp_path, old, "2026-10-19T20:00:00Z", "2026-10-19T20:10:00Z")
+    backtests._write_paper("references.json", {"abcdef123456": old, "live": "20261001-000000-aaaaaa"})
+    launcher.code = backtests.code
+
+    @worked
+    async def scenario(backtests):
+        preview = backtests.remake_preview()
+        # One run waits, and another is asked while the first runs: both come before the run made again.
+        first = backtests.create(pine(scripts, name="First"))
+        await until(lambda: len(launcher.commands) == 1)
+        asked = backtests.remake([old])
+        second = backtests.create(pine(scripts, name="Second"))
+        launcher.finish(0)
+        await until(lambda: len(launcher.commands) == 2)
+        launcher.finish(1)
+        await until(lambda: len(launcher.commands) == 3)
+        launcher.finish(2)
+        await until(lambda: backtests.remaking()["made"] == 1)
+        return preview, asked, first["id"], second["id"]
+
+    preview, asked, first, second = scenario(backtests)
+    new = run_folder(launcher.commands[2])
+
+    assert preview == {"runs": 1, "claude": 0, "seconds": 600}
+    assert asked["total"] == 1 and asked["waiting"] == 1
+    assert [run_folder(command) for command in launcher.commands] == [first, second, new]
+    old_request = json.loads((folder_of(tmp_path, old) / "request.json").read_text())
+    new_request = json.loads((folder_of(tmp_path, new) / "request.json").read_text())
+    # The same request, settings, script and signals: only when it was asked, and the run it makes again.
+    assert {key: value for key, value in new_request.items() if key not in ("asked_at", "remade_from")} == \
+        {key: value for key, value in old_request.items() if key != "asked_at"}
+    assert new_request["remade_from"] == old and (new_request["name"], new_request["tags"]) == ("September", ["keep"])
+    for name in ("settings.json", "journal.json"):
+        assert json.loads((folder_of(tmp_path, new) / name).read_text()) == json.loads((folder_of(tmp_path, old) / name).read_text())
+    assert sorted(os.listdir(folder_of(tmp_path, new) / "sources")) == sorted(os.listdir(folder_of(tmp_path, old) / "sources"))
+    # Done: the old run says so and stays, a reference that named it names the new one.
+    listed = {run["id"]: run for run in backtests.list_runs()}
+    assert (listed[old]["remade_by"], listed[new]["remade_from"], listed[new]["stale"]) == (new, old, False)
+    assert backtests.references() == {"abcdef123456": new, "live": "20261001-000000-aaaaaa"}
+    assert backtests.remaking() == {"asked_at": asked["asked_at"], "total": 1, "waiting": 0, "under_way": [], "made": 1,
+                                    "failed": [], "stopped": 0}
+    with pytest.raises(NotPossible, match=f"Made again already, as {new}"):
+        backtests.remake([old])
+
+
+def test_a_run_made_again_that_fails_leaves_the_old_one_and_one_a_restart_cut_is_asked_again(tmp_path, scripts, config):
+    launcher = FakeLauncher(ends_with=None)
+    backtests = service(tmp_path, scripts, config, launcher, clock=Ticking())
+    old = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}}})
+
+    @worked
+    async def scenario(backtests):
+        backtests.remake([old])
+        await until(lambda: len(launcher.commands) == 1)
+        launcher.finish(0, 1)
+        await until(lambda: bool(backtests.remaking()["failed"]))
+
+    scenario(backtests)
+    assert backtests.remaking()["failed"] == [{"run": old, "error": "started"}]
+    assert backtests.get(old)["remade_by"] is None and backtests.get(old)["status"]["state"] == DONE
+
+    # Asked again, then the admin stopped while it waited: the next admin asks it again, its unfinished run gone.
+    backtests.remake([old])
+    assert backtests._feed_remake() is True
+    cut = backtests.remaking()["under_way"][0]
+    again = service(tmp_path, scripts, config, clock=Ticking())
+    again.recover()
+    assert again.remaking()["waiting"] == 1 and again.remaking()["under_way"] == []
+    assert not folder_of(tmp_path, cut).exists()
+
+
+def test_a_stress_of_a_run_made_again_waits_for_it_and_then_stresses_the_new_one(tmp_path, scripts, config):
+    launcher = FakeLauncher(ends_with=None)
+    backtests = service(tmp_path, scripts, config, launcher, clock=Ticking())
+    base = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}}})
+
+    async def stress():
+        return backtests.stress(base)
+
+    stressed = asyncio.run(stress())["id"]
+    (folder_of(tmp_path, stressed) / "summary.json").write_text(json.dumps({"made_with": {"code": "x"}}))
+    (folder_of(tmp_path, stressed) / "status.json").write_text(json.dumps({"state": DONE}))
+    backtests._waiting.clear()
+    launcher.code = backtests.code
+
+    @worked
+    async def scenario(backtests):
+        backtests.remake(stale=True)
+        await until(lambda: len(launcher.commands) == 1)
+        launcher.finish(0)
+        await until(lambda: len(launcher.commands) == 2)
+        launcher.finish(1)
+        await until(lambda: backtests.remaking()["made"] == 2)
+
+    scenario(backtests)
+    new_base, new_stress = (run_folder(command) for command in launcher.commands)
+    base_request = json.loads((folder_of(tmp_path, new_base) / "request.json").read_text())
+    stress_request = json.loads((folder_of(tmp_path, new_stress) / "request.json").read_text())
+    # The stress, newer, waited for its run, then judged the run made again.
+    assert base_request["remade_from"] == base
+    assert (stress_request["remade_from"], stress_request["stress_of"]) == (stressed, new_base)
+
+
+def test_only_a_finished_run_made_with_older_code_and_not_on_paper_is_made_again(tmp_path, scripts, config):
+    backtests = service(tmp_path, scripts, config, clock=Ticking())
+    current = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": backtests.code}}})
+    on_paper = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}}})
+    backtests._index_paper("abcdef123456", "2026-10-13", on_paper)
+
+    async def ask():
+        return backtests.create(pine(scripts))
+
+    waiting = asyncio.run(ask())["id"]
+
+    with pytest.raises(NotPossible, match="today's code already"):
+        backtests.remake([current])
+    with pytest.raises(NotPossible, match="Only a finished backtest"):
+        backtests.remake([waiting])
+    with pytest.raises(NotPossible, match="paper trading"):
+        backtests.remake([on_paper])
+    with pytest.raises(UnknownRun):
+        backtests.remake(["20261019-200000-abcdef"])
+    with pytest.raises(NotPossible, match="No backtest made with older code"):
+        backtests.remake(stale=True)
+    assert backtests.remaking() is None and backtests.remake_preview() == {"runs": 0, "claude": 0, "seconds": 0}
+
+
+def test_stopping_drops_what_waits_and_forgets_them_once_none_is_under_way(tmp_path, scripts, config):
+    launcher = FakeLauncher(ends_with=None)
+    backtests = service(tmp_path, scripts, config, launcher, clock=Ticking())
+    for _ in range(3):
+        finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}}})
+
+    @worked
+    async def scenario(backtests):
+        backtests.remake(stale=True)
+        await until(lambda: len(launcher.commands) == 1)
+        stopped = backtests.stop_remaking()
+        launcher.finish(0)
+        await until(lambda: not backtests.remaking()["under_way"])
+        return stopped
+
+    stopped = scenario(backtests)
+    assert (stopped["stopped"], len(stopped["under_way"])) == (2, 1)
+    assert (backtests.remaking()["made"], backtests.remaking()["stopped"]) == (1, 2) and len(launcher.commands) == 1
+    # Nothing under way any more: stopping again forgets them.
+    assert backtests.stop_remaking() is None and backtests.remaking() is None
 
 
 def test_turbos_are_measured_by_a_command_and_a_run_on_made_up_turbos_keeps_the_measure(tmp_path, scripts, config):

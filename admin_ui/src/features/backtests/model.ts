@@ -1,5 +1,5 @@
 import { formatBytes, formatDay, formatPercent } from 'ioiti-ui'
-import type { BadgeTone, FunnelStage } from 'ioiti-ui'
+import type { BadgeTone, CheckState, FunnelStage } from 'ioiti-ui'
 
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
 import { madeByClaude } from '@/features/system/claude'
@@ -449,9 +449,13 @@ export interface RunFilter {
   experiment: string | null
   turbos: BacktestTurbos | null
   code: 'current' | 'older' | null
+  /** One of its tags. */
+  tag: string | null
+  /** What its checks say together (verdict.ts). */
+  verdict: CheckState | null
 }
 
-export const RUN_FILTER_NAMES = ['state', 'by', 'experiment', 'turbos', 'code'] as const
+export const RUN_FILTER_NAMES = ['state', 'by', 'experiment', 'turbos', 'code', 'tag', 'verdict'] as const
 
 const STATE_GROUP: Record<BacktestState, NonNullable<RunFilter['state']>> = {
   queued: 'active',
@@ -474,18 +478,43 @@ export function runFilterOf(params: URLSearchParams): RunFilter {
     experiment: params.get('experiment') || null,
     turbos: one('turbos', ['recorded', 'modelled']),
     code: one('code', ['current', 'older']),
+    tag: params.get('tag') || null,
+    verdict: one('verdict', ['pass', 'open', 'fail']),
   }
 }
 
-export function filterRuns(runs: readonly BacktestRunListed[], filter: RunFilter): BacktestRunListed[] {
+/** The list narrowed by ``filter``; ``verdicts`` says each run's verdict, for a list narrowed by it. */
+export function filterRuns(
+  runs: readonly BacktestRunListed[],
+  filter: RunFilter,
+  verdicts: ReadonlyMap<string, CheckState> = new Map(),
+): BacktestRunListed[] {
   return runs.filter(
     (run) =>
       (!filter.state || STATE_GROUP[run.status.state] === filter.state) &&
       (!filter.by || (filter.by === 'claude') === madeByClaude(run)) &&
       (!filter.experiment || run.experiment === filter.experiment) &&
       (!filter.turbos || (run.turbos ?? 'recorded') === filter.turbos) &&
-      (!filter.code || (filter.code === 'older') === Boolean(run.stale)),
+      (!filter.code || (filter.code === 'older') === Boolean(run.stale)) &&
+      (!filter.tag || run.tags.includes(filter.tag)) &&
+      (!filter.verdict || verdicts.get(run.id) === filter.verdict),
   )
+}
+
+/** The tags the runs carry, each once, in the order of their names. */
+export function tagsInUse(runs: readonly Pick<BacktestRunListed, 'tags'>[]): string[] {
+  return [...new Set(runs.flatMap((run) => run.tags))].sort((first, second) => first.localeCompare(second))
+}
+
+/** A tag as typed, made one: no comma (the form keeps its tags as a list of them), within its length. */
+export function tagOf(text: string, length: number): string | undefined {
+  const tag = text.replace(/,/g, ' ').replace(/\s+/g, ' ').trim().slice(0, length)
+  return tag || undefined
+}
+
+/** Whether a run is to be made again on today's code: finished, made with other code, not made again yet. */
+export function remakable(run: BacktestRunListed): boolean {
+  return run.status.state === 'done' && Boolean(run.stale) && !run.remade_by && !run.paper
 }
 
 /** What makes two runs the same request, asked again after one failed: everything but when. */
@@ -496,26 +525,48 @@ function requestKey(run: BacktestRunListed): string {
   ])
 }
 
+const ended = (run: BacktestRunListed) => run.status.state === 'failed' || run.status.state === 'interrupted'
+
 /**
  * The failed runs a later run of the same request stands for, listed under it
  * rather than as rows of their own: a run asked again and again until it
  * finished (13 of 32 on the server on 22 Oct 2026). The runs come newest first.
+ *
+ * And the runs made again on today's code: each old run under the run that made
+ * it again (``before``), while that one is listed; a remake that failed under the
+ * run it was to make again, as an attempt of it.
  */
-export function collapseAttempts(runs: readonly BacktestRunListed[]): { shown: BacktestRunListed[]; earlier: Map<string, BacktestRunListed[]> } {
+export function collapseAttempts(runs: readonly BacktestRunListed[]): {
+  shown: BacktestRunListed[]
+  earlier: Map<string, BacktestRunListed[]>
+  before: Map<string, BacktestRunListed[]>
+} {
+  const listed = new Set(runs.map((run) => run.id))
+  const before = new Map<string, BacktestRunListed[]>()
+  const failedRemakes = new Map<string, BacktestRunListed[]>()
   const keeper = new Map<string, string>()
   const earlier = new Map<string, BacktestRunListed[]>()
   const shown: BacktestRunListed[] = []
   for (const run of runs) {
+    if (run.remade_by && listed.has(run.remade_by)) {
+      before.set(run.remade_by, [...(before.get(run.remade_by) ?? []), run])
+      continue
+    }
+    if (run.remade_from && listed.has(run.remade_from) && (ended(run) || run.status.state === 'cancelled')) {
+      failedRemakes.set(run.remade_from, [...(failedRemakes.get(run.remade_from) ?? []), run])
+      continue
+    }
     const key = requestKey(run)
     const kept = keeper.get(key)
-    if (kept && (run.status.state === 'failed' || run.status.state === 'interrupted')) {
+    if (kept && ended(run)) {
       earlier.set(kept, [...(earlier.get(kept) ?? []), run])
       continue
     }
     shown.push(run)
     if (!kept) keeper.set(key, run.id)
   }
-  return { shown, earlier }
+  for (const [old, failed] of failedRemakes) earlier.set(old, [...failed, ...(earlier.get(old) ?? [])])
+  return { shown, earlier, before }
 }
 
 /** What a failed run said last: the sentence its error ends with. */

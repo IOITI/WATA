@@ -1,6 +1,6 @@
 import { formatPercent } from 'ioiti-ui'
 
-import type { BacktestFigures, BacktestSweep, BacktestSweepAxis, BacktestSweepCell, BacktestValue } from '@/lib/types'
+import type { BacktestFigures, BacktestSweep, BacktestSweepAxis, BacktestSweepCell, BacktestSweepGrid, BacktestValue } from '@/lib/types'
 
 /** A sweep's combinations as a grid, its tints, and what it says about choosing a value. Pure. */
 
@@ -73,7 +73,7 @@ export function axisName(axis: BacktestSweepAxis, labels: Record<string, string>
 }
 
 /** What a cell was traded with: "stop-loss -5, input in_0 12". */
-export function cellName(axes: readonly BacktestSweepAxis[], cell: BacktestSweepCell, labels: Record<string, string> = {}): string {
+export function cellName(axes: readonly BacktestSweepAxis[], cell: Pick<BacktestSweepCell, 'values'>, labels: Record<string, string> = {}): string {
   return axes.map((axis, number) => `${axisName(axis, labels).toLowerCase()} ${String(cell.values[number])}`).join(', ')
 }
 
@@ -87,7 +87,7 @@ export interface SweepVerdict {
  * What a sweep says about choosing a value: the combination that did best on
  * the days a choice may be made on, and where it then stood on the days held out.
  */
-export function sweepVerdict(sweep: BacktestSweep, labels: Record<string, string> = {}): SweepVerdict | null {
+export function sweepVerdict(sweep: BacktestSweepGrid, labels: Record<string, string> = {}): SweepVerdict | null {
   const order = (part: Part) =>
     sweep.cells
       .map((cell, index) => ({ index, total: cell[part]?.total_percent ?? null, days: cell[part]?.days ?? 0 }))

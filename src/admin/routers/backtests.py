@@ -48,6 +48,12 @@ class Removal(BaseModel):
     ids: list[str] = Field(max_length=200)
 
 
+class Remaking(BaseModel):
+    # The runs to make again on today's code, or every one made with older code.
+    runs: list[str] | None = Field(default=None, max_length=200)
+    stale: bool = False
+
+
 class ResearchSwitch(BaseModel):
     enabled: bool | None = None
     keep_days: int | None = None
@@ -124,7 +130,8 @@ async def execution(
 @router.get("")
 async def runs(service=Depends(backtests)):
     items = await run_in_threadpool(service.list_runs)
-    return {"items": items, "storage": await run_in_threadpool(service.storage)}
+    return {"items": items, "storage": await run_in_threadpool(service.storage),
+            "remaking": await run_in_threadpool(service.remaking)}
 
 
 @router.post("", status_code=202)
@@ -215,6 +222,33 @@ async def turbo_model(service=Depends(backtests)):
 async def measure_turbos(body: TurboMeasure, service=Depends(backtests)):
     """Measure the recorded turbos of a period against the index, for the runs on made-up turbos."""
     return service.measure_turbos(body.first, body.last)
+
+
+@router.get("/remake")
+async def remake_preview(service=Depends(backtests)):
+    """What making every run made with older code again would ask: how many, Claude's among them, how long they took."""
+    return await run_in_threadpool(service.remake_preview)
+
+
+@router.post("/remake", status_code=202)
+async def remake(body: Remaking, service=Depends(backtests)):
+    """
+    Runs made again on today's code, those named or every stale one: one at a time, once nothing else waits. Each
+    old run stays, folded under the run that made it again. The runs are chosen in a thread, and added on the
+    event loop, where the line changes the same file.
+    """
+    if not body.stale and not body.runs:
+        raise InvalidRequest("Name the backtests to make again, or ask for every one made with older code")
+    chosen = await run_in_threadpool(lambda: service.remake_candidates(body.runs, stale=body.stale))
+    found = service.add_remakes(chosen)
+    service.wake()
+    return {"remaking": found}
+
+
+@router.delete("/remake")
+async def stop_remaking(service=Depends(backtests)):
+    """No more runs made again: those not asked yet are dropped, one waiting in the line is stopped."""
+    return {"remaking": service.stop_remaking()}
 
 
 @router.get("/{run_id}")

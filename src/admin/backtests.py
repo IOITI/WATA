@@ -103,6 +103,11 @@ logger = logging.getLogger(__name__)
 RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
 # What an admin feature keeps beside a run's results: its check against funded challenges (src/admin/propfirm_check.py).
 KEPT_FILES = ("propfirms.json",)
+# The runs to be made again on today's code (``remake``), beside the runs; in an old run's folder, the run that did.
+REMAKES_FILE = "remakes.json"
+REMADE_FILE = "remade.json"
+# Where each of them stands: to be asked, asked (waiting or running), made, failed, stopped by the operator.
+REMAKE_WAITING, REMAKE_ASKED, REMAKE_MADE, REMAKE_FAILED, REMAKE_STOPPED = "waiting", "asked", "made", "failed", "stopped"
 RUNS_FOLDER = "runs"
 # What the former backtester left at the root of the folder: its runs, its measures of the turbo.
 FORMER_FOLDERS = ("_calibration", "_fetch")
@@ -327,6 +332,36 @@ def _derived(request: dict) -> dict:
     return {key: value for key, value in request.items() if key not in RESEARCH_KEYS and key != "paper"}
 
 
+def compact_grid(sweep: dict | None) -> dict | None:
+    """
+    A sweep's grid with what the list's verdict reads of it (stressVerdict and sweepVerdict of the interface): its
+    axes, and each combination's values and totals over its days, its days held out and all its days.
+    """
+    if not isinstance(sweep, dict) or not isinstance(sweep.get("cells"), list):
+        return None
+
+    def part(figures):
+        return {"total_percent": figures.get("total_percent"), "days": figures.get("days")} if isinstance(figures, dict) else None
+
+    return {
+        "axes": sweep.get("axes") or [],
+        "held_out": sweep.get("held_out"),
+        "held_out_from": sweep.get("held_out_from"),
+        "cells": [
+            {"values": cell.get("values") or [], "tuning": part(cell.get("tuning")), "held_out": part(cell.get("held_out")),
+             "whole": part(cell.get("whole"))}
+            for cell in sweep["cells"] if isinstance(cell, dict)
+        ],
+    }
+
+
+def _seconds_between(started: str | None, finished: str | None) -> float | None:
+    try:
+        return max(0.0, (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
 def _checked_count(value, what: str) -> int:
     if value is None:
         return 0
@@ -383,6 +418,8 @@ class BacktestService:
         self._measure_task: asyncio.Task | None = None
         # What a run made now is made with: read once, the code does not change under a running admin.
         self._code = code_digest()
+        # Each sweep's grid as the list's verdict reads it, with the time its file was written.
+        self._grids: dict[str, tuple[float, dict | None]] = {}
 
     # ── the live settings ──
 
@@ -984,6 +1021,34 @@ class BacktestService:
         for run_id in self._run_ids():
             if self._status(run_id).get("state") in (QUEUED, RUNNING) and run_id not in self._waiting:
                 self._set_status(run_id, state=INTERRUPTED, error="The admin stopped before this run was finished")
+        self._recover_remakes()
+
+    def _recover_remakes(self) -> None:
+        """
+        The runs being made again when the admin stopped: one its stop cut is asked again (its unfinished run goes),
+        one that ended meanwhile is settled as ``_execute`` would have.
+        """
+        batch = self._remakes()
+        changed = False
+        for entry in batch["entries"]:
+            if entry["state"] != REMAKE_ASKED:
+                continue
+            try:
+                status = self._status(entry["new"])
+            except UnknownRun:
+                status = None
+            if status is None or status.get("state") in (QUEUED, RUNNING, INTERRUPTED):
+                if status is not None and entry["new"] not in self._waiting:
+                    shutil.rmtree(os.path.join(self._runs_root, entry["new"]), ignore_errors=True)
+                entry.update(state=REMAKE_WAITING, new=None)
+                changed = True
+        if changed:
+            self._write_remakes(batch)
+        for entry in batch["entries"]:
+            if entry["state"] == REMAKE_ASKED:
+                status = self._status(entry["new"])
+                if status.get("state") in (DONE, FAILED, CANCELLED):
+                    self._settle_remake(entry["new"], entry["run"], status.get("state"), status.get("error"))
 
     def _in_turn(self) -> list[str]:
         """The waiting runs in the order they will start: those an agent asked for give way to the others."""
@@ -991,8 +1056,10 @@ class BacktestService:
             [run_id for run_id in self._waiting if run_id in self._owners]
 
     async def _next(self) -> str:
-        """The run to start now, taken out of the line."""
+        """The run to start now, taken out of the line: once nothing else waits, a run to be made again."""
         while not self._waiting:
+            if self._feed_remake():
+                break
             self._wakeup.clear()
             await self._wakeup.wait()
         run_id = self._in_turn()[0]
@@ -1093,6 +1160,8 @@ class BacktestService:
                     error = lines or failure_sentence(failure)
         self._set_status(run_id, state=state, error=error, finished_at=utc(self._clock()),
                          **({"failure": failure} if failure is not None else {}))
+        if request.get("remade_from"):
+            self._settle_remake(run_id, request["remade_from"], state, error)
         self._announce("backtest_finished", run_id=run_id, state=state, name=request.get("name") or "")
         if self._signal_cache_bytes is not None and self._clock() - self._cache_pruned_at >= CACHE_PRUNE_SECONDS:
             self._cache_pruned_at = self._clock()
@@ -1229,11 +1298,15 @@ class BacktestService:
 
     # ── reading them ──
 
-    def _headline(self, summary: dict | None) -> dict | None:
+    def _headline(self, summary: dict | None, grid: dict | None = None) -> dict | None:
         if not summary:
             return None
         figures = summary.get("figures") or {}
         against = summary.get("against_random") or {}
+
+        def kept(found, *names):
+            return {name: found.get(name) for name in names} if isinstance(found, dict) else None
+
         return {
             "total_percent": figures.get("total_percent"),
             "trades": figures.get("trades"),
@@ -1244,7 +1317,29 @@ class BacktestService:
             "days_tested": (summary.get("days") or {}).get("tested"),
             "profit_loss": (summary.get("money") or {}).get("profit_loss"),
             "cells": summary.get("cells"),
+            # What the list's verdict reads (verdict.ts), as a run's page reads it from the whole summary.
+            "days": figures.get("days"),
+            "repetitions": against.get("repetitions"),
+            "edge": summary.get("edge"),
+            "pbo": kept(summary.get("pbo"), "probability"),
+            "deflated_sharpe": kept(summary.get("deflated_sharpe"), "probability", "trials"),
+            "model_check": kept(summary.get("model_check"), "paired", "correlation"),
+            "grid": grid,
         }
+
+    def _grid_of(self, run_id: str) -> dict | None:
+        """A sweep's grid as the list's verdict reads it (``compact_grid``), kept while its file stays as it was."""
+        path = self._file(run_id, "sweep.json")
+        try:
+            written = os.stat(path).st_mtime
+        except OSError:
+            return None
+        known = self._grids.get(run_id)
+        if known is not None and known[0] == written:
+            return known[1]
+        grid = compact_grid(read_json(path))
+        self._grids[run_id] = (written, grid)
+        return grid
 
     def _described(self, run_id: str, *, whole: bool) -> dict:
         request = read_json(self._file(run_id, "request.json")) or {}
@@ -1252,6 +1347,7 @@ class BacktestService:
         if status.get("state") == RUNNING and run_id not in self._running:
             status = {**status, "state": INTERRUPTED}
         summary = read_json(self._file(run_id, "summary.json")) if status.get("state") == DONE else None
+        grid = self._grid_of(run_id) if summary is not None and request.get("kind") == "sweep" else None
         source = request.get("source") or {}
         rule = source.get("rule") or {}
         described = {
@@ -1283,8 +1379,11 @@ class BacktestService:
             "made_by": request.get("made_by"),
             "made_via": request.get("made_via"),
             "experiment": request.get("experiment"),
+            # The run it makes again on today's code, and the run that made it again once that one was done.
+            "remade_from": request.get("remade_from"),
+            "remade_by": (read_json(self._file(run_id, REMADE_FILE)) or {}).get("by"),
             "status": status,
-            "headline": self._headline(summary),
+            "headline": self._headline(summary, grid),
             "position": self._in_turn().index(run_id) + 1 if run_id in self._waiting else None,
         }
         if summary is not None:
@@ -1343,6 +1442,242 @@ class BacktestService:
         """The runs, newest first; the paper runs of the signal rules have their own place."""
         chosen = self.run_ids(made_by=made_by, experiment=experiment)[offset:offset + limit]
         return [self._described(run_id, whole=False) for run_id in chosen]
+
+    # ── made again on today's code ──
+
+    def _remakes(self) -> dict:
+        found = read_json(os.path.join(self._root, REMAKES_FILE))
+        if not isinstance(found, dict) or not isinstance(found.get("entries"), list):
+            return {"asked_at": None, "entries": []}
+        return found
+
+    def _write_remakes(self, batch: dict) -> None:
+        os.makedirs(self._root, exist_ok=True)
+        write_json(os.path.join(self._root, REMAKES_FILE), batch)
+
+    def _why_not_remade(self, run_id: str, paper: set[str] | None = None) -> str | None:
+        """Why a run is not to be made again on today's code; None when it is. UnknownRun for no run."""
+        self._directory(run_id)
+        if run_id in (self._paper_ids() if paper is None else paper):
+            return "A day on paper, or a report, is made again by paper trading"
+        if self._status(run_id).get("state") != DONE:
+            return "Only a finished backtest is made again"
+        made_by = (read_json(self._file(run_id, REMADE_FILE)) or {}).get("by")
+        if made_by:
+            return f"Made again already, as {made_by}"
+        if self._made_with(run_id).get("code") == self._code:
+            return "Made with today's code already"
+        return None
+
+    def _remakable(self) -> list[str]:
+        """The finished runs made with other code than today's and not made again yet, newest first; no paper run."""
+        paper = self._paper_ids()
+        found = []
+        for run_id in self.run_ids():
+            try:
+                if self._why_not_remade(run_id, paper) is None:
+                    found.append(run_id)
+            except UnknownRun:
+                continue
+        return found
+
+    def remake_preview(self) -> dict:
+        """What making every stale run again would ask: how many, how many of them Claude's, how long they took to make."""
+        chosen = self._remakable()
+        seconds = 0.0
+        claude = 0
+        for run_id in chosen:
+            status = self._status(run_id)
+            seconds += _seconds_between(status.get("started_at"), status.get("finished_at")) or 0.0
+            claude += 1 if self.made_by(run_id) else 0
+        return {"runs": len(chosen), "claude": claude, "seconds": round(seconds)}
+
+    def remake(self, run_ids: list[str] | None = None, *, stale: bool = False) -> dict:
+        """
+        Runs to be made again on today's code: those named, or every stale one (``stale``). Each is the same request
+        with the same settings, sources and signals; only the code differs. They are kept in REMAKES_FILE and given
+        to the line one at a time, while nothing else waits (``_next``): never in the way of a run asked for.
+        """
+        found = self.add_remakes(self.remake_candidates(run_ids, stale=stale))
+        self.wake()
+        return found
+
+    def remake_candidates(self, run_ids: list[str] | None = None, *, stale: bool = False) -> list[str]:
+        """The runs ``remake`` would add, read without changing anything (from a thread); NotPossible says why not one."""
+        if stale:
+            return self._remakable()
+        chosen = []
+        for run_id in run_ids or []:
+            reason = self._why_not_remade(run_id)
+            if reason is not None:
+                raise NotPossible(reason)
+            if run_id not in chosen:
+                chosen.append(run_id)
+        return chosen
+
+    def add_remakes(self, chosen: list[str]) -> dict:
+        """
+        ``chosen`` added to the runs to be made again, on the event loop (the line changes the same file). Those
+        already to be made again are not added twice. Call ``wake`` then.
+        """
+        batch = self._remakes()
+        active = {entry["run"] for entry in batch["entries"] if entry["state"] in (REMAKE_WAITING, REMAKE_ASKED)}
+        chosen = [run_id for run_id in chosen if run_id not in active]
+        if not chosen:
+            if active:
+                return self.remaking()
+            raise NotPossible("No backtest made with older code is left to make again")
+        if not active:
+            # The batch before is over: this is a new one.
+            batch = {"asked_at": utc(self._clock()), "entries": []}
+        batch["entries"] += [{"run": run_id, "state": REMAKE_WAITING, "new": None, "error": None} for run_id in chosen]
+        self._write_remakes(batch)
+        return self.remaking()
+
+    def wake(self) -> None:
+        """Let the line look again for something to start (on the event loop)."""
+        self._wakeup.set()
+
+    def remaking(self) -> dict | None:
+        """Where the runs being made again stand; None when none was asked for, or the last were dismissed."""
+        batch = self._remakes()
+        entries = batch["entries"]
+        if not entries:
+            return None
+
+        def count(state):
+            return sum(1 for entry in entries if entry["state"] == state)
+
+        return {
+            "asked_at": batch.get("asked_at"),
+            "total": len(entries),
+            "waiting": count(REMAKE_WAITING),
+            "under_way": [entry["new"] for entry in entries if entry["state"] == REMAKE_ASKED],
+            "made": count(REMAKE_MADE),
+            "failed": [{"run": entry["run"], "error": entry.get("error")} for entry in entries if entry["state"] == REMAKE_FAILED],
+            "stopped": count(REMAKE_STOPPED),
+        }
+
+    def stop_remaking(self) -> dict | None:
+        """
+        No more runs made again: those still to be asked are dropped, one waiting in the line is stopped; one that
+        runs goes on (it can be stopped from its page). Once nothing is under way, the batch is forgotten.
+        """
+        batch = self._remakes()
+        for entry in batch["entries"]:
+            if entry["state"] == REMAKE_WAITING:
+                entry["state"] = REMAKE_STOPPED
+            elif entry["state"] == REMAKE_ASKED and entry["new"] in self._waiting:
+                self.cancel(entry["new"])
+                entry["state"] = REMAKE_STOPPED
+        if any(entry["state"] == REMAKE_ASKED for entry in batch["entries"]):
+            self._write_remakes(batch)
+        else:
+            try:
+                os.remove(os.path.join(self._root, REMAKES_FILE))
+            except FileNotFoundError:
+                pass
+        return self.remaking()
+
+    def _newest_of(self, run_id: str) -> str:
+        """The run that made ``run_id`` again, and the one that made that one again, and so on."""
+        seen = {run_id}
+        while True:
+            later = (read_json(os.path.join(self._runs_root, run_id, REMADE_FILE)) or {}).get("by")
+            if not later or later in seen or not RUN_ID.fullmatch(later):
+                return run_id
+            seen.add(later)
+            run_id = later
+
+    def _feed_remake(self) -> bool:
+        """
+        Nothing else waits: the next run to be made again joins the line. One that cannot be (removed meanwhile, its
+        own run not made again) is said to have failed. Whether one joined the line.
+        """
+        try:
+            batch = self._remakes()
+            changed = False
+            for entry in batch["entries"]:
+                if entry["state"] != REMAKE_WAITING:
+                    continue
+                try:
+                    made = self._remade(entry["run"], batch)
+                except (UnknownRun, NotPossible, InvalidRequest, OSError, KeyError, TypeError) as e:
+                    entry.update(state=REMAKE_FAILED, error=str(e) if not isinstance(e, UnknownRun) else "No such backtest")
+                    changed = True
+                    continue
+                if made is None:
+                    continue
+                entry.update(state=REMAKE_ASKED, new=made["id"])
+                self._write_remakes(batch)
+                return True
+            if changed:
+                self._write_remakes(batch)
+        except Exception as e:
+            logger.error(f"Could not give a backtest to be made again to the line: {e}", exc_info=True)
+        return False
+
+    def _remade(self, old: str, batch: dict) -> dict | None:
+        """
+        ``old`` asked again on today's code: its request, settings, sources and signals, as a stress copies them.
+        A stress or a model check of a run made again in the same batch waits for that one, then judges it.
+        None while it waits.
+        """
+        reason = self._why_not_remade(old)
+        if reason is not None:
+            raise NotPossible(reason)
+        folder = self._directory(old)
+        request = read_json(os.path.join(folder, "request.json"))
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        if request is None or settings_doc is None:
+            raise NotPossible("What was asked of this backtest cannot be read")
+        new_request = {**request, "asked_at": utc(self._clock()), "remade_from": old}
+        recorded_trades = None
+        for key in ("stress_of", "model_check_of"):
+            base = request.get(key)
+            if not base:
+                continue
+            entry = next((entry for entry in batch["entries"] if entry["run"] == base), None)
+            if entry is not None and entry["state"] in (REMAKE_WAITING, REMAKE_ASKED):
+                return None
+            if entry is not None and entry["state"] in (REMAKE_FAILED, REMAKE_STOPPED):
+                raise NotPossible("The run it was made from was not made again")
+            new_request[key] = self._newest_of(base)
+            if key == "model_check_of":
+                # The trades it pairs its own with: those of the run it checks, made again or not.
+                recorded_trades = read_json(os.path.join(self._runs_root, new_request[key], "trades.json"))
+        if request.get("model_check_of") and recorded_trades is None:
+            recorded_trades = read_json(os.path.join(folder, RECORDED_TRADES_FILE))
+        journal = read_json(os.path.join(folder, "journal.json"))
+        return self._queue_run(new_request, settings_doc, [], journal, copy_from=folder, recorded_trades=recorded_trades)
+
+    def _settle_remake(self, run_id: str, old: str, state: str, error: str | None) -> None:
+        """
+        A run made again has ended. Done: the old one says so (REMADE_FILE), and a reference that named it names
+        the new one. Otherwise the old one stays as it was, and the failure is said.
+        """
+        if state == DONE:
+            try:
+                write_json(self._file(old, REMADE_FILE), {"by": run_id, "at": utc(self._clock())})
+            except UnknownRun:
+                pass
+            references = self.references()
+            moved = {owner: run_id for owner, kept in references.items() if kept == old}
+            if moved:
+                self._write_paper("references.json", {**references, **moved})
+        batch = self._remakes()
+        entry = next((entry for entry in batch["entries"] if entry.get("new") == run_id), None)
+        if entry is None:
+            return
+        if state == DONE:
+            entry.update(state=REMAKE_MADE, error=None)
+        elif state == CANCELLED:
+            entry.update(state=REMAKE_STOPPED, error=None)
+        else:
+            entry.update(state=REMAKE_FAILED, error=(error or "It did not finish").splitlines()[0])
+        self._write_remakes(batch)
+        # A stress of it may wait for it, while another worker waits for something to start.
+        self._wakeup.set()
 
     # ── paper trading of the signal rules ──
 

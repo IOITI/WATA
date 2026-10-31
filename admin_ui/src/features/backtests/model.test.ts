@@ -19,6 +19,7 @@ import {
   progressSentence,
   randomSentence,
   randomVerdict,
+  remakable,
   researchSentence,
   roomSentences,
   runFilterOf,
@@ -28,6 +29,8 @@ import {
   settingChanges,
   showValue,
   sourceLabel,
+  tagOf,
+  tagsInUse,
   tally,
 } from './model'
 
@@ -280,6 +283,54 @@ describe('the list of runs', () => {
     expect(ids('state=failed')).toEqual(['broken'])
     expect(ids('experiment=f59bc8&turbos=modelled&code=older')).toEqual(['claudes'])
     expect(ids('state=nonsense&by=someone')).toEqual(['mine', 'claudes', 'broken'])
+  })
+
+  it('narrows the list to a tag, and to what the runs’ checks say together', () => {
+    const runs = [
+      listedRun({ id: 'kept', tags: ['ema', 'october'] }),
+      listedRun({ id: 'other', tags: ['vwap'] }),
+      listedRun({ id: 'untagged' }),
+    ]
+    const verdicts = new Map([['kept', 'pass' as const], ['other', 'fail' as const]])
+    const ids = (query: string) => filterRuns(runs, runFilterOf(new URLSearchParams(query)), verdicts).map((run) => run.id)
+
+    expect(ids('tag=october')).toEqual(['kept'])
+    expect(ids('verdict=fail')).toEqual(['other'])
+    expect(ids('verdict=pass&tag=vwap')).toEqual([])
+    // A verdict it does not know narrows nothing; a run not judged has none.
+    expect(ids('verdict=maybe')).toEqual(['kept', 'other', 'untagged'])
+    expect(ids('verdict=open')).toEqual([])
+    expect(tagsInUse(runs)).toEqual(['ema', 'october', 'vwap'])
+  })
+
+  it('makes one tag of what is typed, without commas, within its length', () => {
+    expect(tagOf('  late,  entries ', 24)).toBe('late entries')
+    expect(tagOf(' , ', 24)).toBeUndefined()
+    expect(tagOf('a very long tag indeed for a run', 10)).toBe('a very lon')
+  })
+
+  it('makes again only a finished run of older code, not yet made again, never a day on paper', () => {
+    expect(remakable(listedRun({ stale: true }))).toBe(true)
+    expect(remakable(listedRun({ stale: false }))).toBe(false)
+    expect(remakable(listedRun({ stale: true, status: { state: 'failed' } }))).toBe(false)
+    expect(remakable(listedRun({ stale: true, remade_by: '20261031-120000-aaaaaa' }))).toBe(false)
+    expect(remakable(listedRun({ stale: true, paper: { rule: 'a00000000001', day: '2026-10-20' } }))).toBe(false)
+  })
+
+  it('folds a run made again under the run that did, and a remake that failed under the run it was to make again', () => {
+    const runs = [
+      listedRun({ id: 'new', remade_from: 'old' }),
+      listedRun({ id: 'failed-remake', remade_from: 'kept', status: { state: 'failed', error: 'No bar recorded' } }),
+      listedRun({ id: 'old', remade_by: 'new', stale: true }),
+      listedRun({ id: 'kept', name: 'Another', stale: true }),
+      // Made again by a run removed since: in the list again.
+      listedRun({ id: 'orphan', name: 'Orphan', remade_by: '20261031-000000-gone00', stale: true }),
+    ]
+    const { shown, earlier, before } = collapseAttempts(runs)
+
+    expect(shown.map((run) => run.id)).toEqual(['new', 'kept', 'orphan'])
+    expect(before.get('new')?.map((run) => run.id)).toEqual(['old'])
+    expect(earlier.get('kept')?.map((run) => run.id)).toEqual(['failed-remake'])
   })
 })
 

@@ -1,7 +1,7 @@
 import { formatNumber, formatPercent } from 'ioiti-ui'
 import type { Check, CheckState } from 'ioiti-ui'
 
-import type { BacktestModelCheck, BacktestRun, BacktestRunListed, BacktestSample, BacktestSweep } from '@/lib/types'
+import type { BacktestModelCheck, BacktestRun, BacktestRunListed, BacktestSample, BacktestSummary, BacktestSweepGrid, BacktestTurbos } from '@/lib/types'
 
 import { EDGE_BEATEN, EDGE_T, headlineEdge, horizonLabel, LEAST_SIGNALS } from './edge'
 import { isActive, sampleWarning } from './model'
@@ -32,11 +32,69 @@ export interface RunCheck extends Check {
 /** The runs made from this one, or for it, that a check reads. */
 export interface Derived {
   /** The newest stress sweep of the run; its grid once it is done. */
-  stress: { run: BacktestRunListed; sweep: BacktestSweep | null } | null
+  stress: { run: BacktestRunListed; sweep: BacktestSweepGrid | null } | null
   /** For a run on made-up turbos: the newest model check done of a run on recorded ones, with what it found. */
-  modelCheck: { run: BacktestRunListed; found: BacktestModelCheck | null } | null
+  modelCheck: { run: BacktestRunListed; found: Pick<BacktestModelCheck, 'paired' | 'correlation'> | null } | null
   /** A sweep's own grid. */
-  sweep: BacktestSweep | null
+  sweep: BacktestSweepGrid | null
+}
+
+/**
+ * What the checks read of a finished run: its whole summary on its page (``runChecks``), its headline in the
+ * list (``listedChecks``), which the server fills with the same figures, so that the two say the same.
+ */
+interface Evidence {
+  kind: 'run' | 'sweep'
+  turbos: BacktestTurbos | undefined
+  stale: boolean
+  /** Made again on today's code since: its new run says what holds. */
+  remade: boolean
+  /** A run's figures; none for a run that has not any, which is not judged. */
+  figures: { trades: number; days: number; sample?: BacktestSample } | null
+  /** The days a sweep was tested on. */
+  daysTested: number
+  random: { beaten: number; repetitions: number | null } | null
+  edge: NonNullable<BacktestSummary['edge']> | null
+  pbo: { probability: number } | null
+  deflated: { probability: number; trials: number } | null
+}
+
+function evidenceOfRun(run: BacktestRun): Evidence | null {
+  const summary = run.summary
+  if (!summary) return null
+  const figures = summary.figures
+  return {
+    kind: run.kind,
+    turbos: run.turbos,
+    stale: Boolean(run.stale),
+    remade: Boolean(run.remade_by),
+    figures: figures ? { trades: figures.trades, days: figures.days, sample: figures.sample } : null,
+    daysTested: summary.days.tested,
+    random: summary.against_random ? { beaten: summary.against_random.beaten, repetitions: summary.against_random.repetitions } : null,
+    edge: summary.edge ?? null,
+    pbo: summary.pbo ?? null,
+    deflated: summary.deflated_sharpe ?? null,
+  }
+}
+
+function evidenceOfListed(run: BacktestRunListed): Evidence | null {
+  const headline = run.headline
+  if (!headline) return null
+  return {
+    kind: run.kind,
+    turbos: run.turbos,
+    stale: Boolean(run.stale),
+    remade: Boolean(run.remade_by),
+    figures:
+      headline.days !== null && headline.days !== undefined
+        ? { trades: headline.trades ?? 0, days: headline.days, sample: headline.sample ?? undefined }
+        : null,
+    daysTested: headline.days_tested ?? 0,
+    random: headline.beaten !== null ? { beaten: headline.beaten, repetitions: headline.repetitions ?? null } : null,
+    edge: headline.edge ?? null,
+    pbo: headline.pbo ?? null,
+    deflated: headline.deflated_sharpe ?? null,
+  }
 }
 
 export const NO_DERIVED: Derived = { stress: null, modelCheck: null, sweep: null }
@@ -67,37 +125,40 @@ function sampleCheck(trades: number | null, days: number, sample?: BacktestSampl
   }
 }
 
-function codeCheck(run: BacktestRun): RunCheck {
+function codeCheck(evidence: Evidence): RunCheck {
   return {
     id: 'code',
     label: 'Made with today’s code',
     // Not a fault of the strategy: what it found may come out otherwise now.
-    state: run.stale ? 'open' : 'pass',
-    detail: run.stale ? 'Made with other code than the admin runs now: run it again to see whether it still holds.' : 'Made with the code the admin runs now.',
+    state: evidence.stale ? 'open' : 'pass',
+    detail: !evidence.stale
+      ? 'Made with the code the admin runs now.'
+      : evidence.remade
+        ? 'Made with other code than the admin runs now, and made again on it since: the run that did says what holds.'
+        : 'Made with other code than the admin runs now: make it again to see whether it still holds.',
     section: 'setup',
   }
 }
 
 /** The checks of a run that traded on its own (not a sweep, a stress or a model check). */
-function singleChecks(run: BacktestRun, derived: Derived): RunCheck[] {
-  const summary = run.summary
-  const figures = summary?.figures
-  if (!summary || !figures) return []
+function singleChecks(evidence: Evidence, derived: Derived): RunCheck[] {
+  const figures = evidence.figures
+  if (!figures) return []
   const checks: RunCheck[] = [sampleCheck(figures.trades, figures.days, figures.sample)]
 
-  const random = summary.against_random
+  const random = evidence.random
   checks.push({
     id: 'random',
     label: 'Beats random entries',
     state: !random ? 'open' : random.beaten >= MIN_BEATEN ? 'pass' : 'fail',
     detail: !random
       ? 'No random entries were set against it: nothing tells its entries from the exit rules.'
-      : `Better than ${formatPercent(random.beaten, false, 0)} of ${random.repetitions} runs at random entries` +
+      : `Better than ${formatPercent(random.beaten, false, 0)} of ${random.repetitions ?? 'its'} runs at random entries` +
         (random.beaten >= MIN_BEATEN ? '.' : `: ${MIN_BEATEN} % is the bar.`),
     section: 'trust',
   })
 
-  const edge = summary.edge ? headlineEdge(summary.edge) : null
+  const edge = evidence.edge ? headlineEdge(evidence.edge) : null
   checks.push({
     id: 'edge',
     label: 'An edge in its entries',
@@ -131,7 +192,7 @@ function singleChecks(run: BacktestRun, derived: Derived): RunCheck[] {
     section: 'stress',
   })
 
-  if (run.turbos === 'modelled') {
+  if (evidence.turbos === 'modelled') {
     const check = derived.modelCheck
     const found = check?.found
     checks.push({
@@ -147,15 +208,13 @@ function singleChecks(run: BacktestRun, derived: Derived): RunCheck[] {
       section: 'model-check',
     })
   }
-  checks.push(codeCheck(run))
+  checks.push(codeCheck(evidence))
   return checks
 }
 
 /** The checks of a sweep: whether choosing among its combinations can be believed. */
-function sweepChecks(run: BacktestRun, derived: Derived): RunCheck[] {
-  const summary = run.summary
-  if (!summary) return []
-  const checks: RunCheck[] = [sampleCheck(null, summary.days.tested)]
+function sweepChecks(evidence: Evidence, derived: Derived): RunCheck[] {
+  const checks: RunCheck[] = [sampleCheck(null, evidence.daysTested)]
 
   const held = derived.sweep ? sweepVerdict(derived.sweep)?.held ?? null : null
   checks.push({
@@ -171,7 +230,7 @@ function sweepChecks(run: BacktestRun, derived: Derived): RunCheck[] {
     section: 'choice',
   })
 
-  const pbo = summary.pbo
+  const pbo = evidence.pbo
   checks.push({
     id: 'overfitting',
     label: 'Little chance of overfitting',
@@ -183,7 +242,7 @@ function sweepChecks(run: BacktestRun, derived: Derived): RunCheck[] {
     section: 'choice',
   })
 
-  const deflated = summary.deflated_sharpe
+  const deflated = evidence.deflated
   checks.push({
     id: 'deflated',
     label: 'Its Sharpe ratio, deflated',
@@ -194,8 +253,18 @@ function sweepChecks(run: BacktestRun, derived: Derived): RunCheck[] {
         (deflated.probability >= MIN_DEFLATED_SHARPE ? '.' : ` (${formatPercent(MIN_DEFLATED_SHARPE * 100, false, 0)} is the bar).`),
     section: 'choice',
   })
-  checks.push(codeCheck(run))
+  checks.push(codeCheck(evidence))
   return checks
+}
+
+function checksOf(evidence: Evidence | null, derived: Derived): RunCheck[] {
+  if (!evidence) return []
+  return evidence.kind === 'sweep' ? sweepChecks(evidence, derived) : singleChecks(evidence, derived)
+}
+
+/** Whether a run is judged at all: a stress sweep or a model check judges another run; a run not done, nothing yet. */
+export function isJudged(run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'model_check_of'>): boolean {
+  return run.status.state === 'done' && !run.stress_of && !run.model_check_of
 }
 
 /**
@@ -203,8 +272,23 @@ function sweepChecks(run: BacktestRun, derived: Derived): RunCheck[] {
  * sweep or a model check (they judge another run), a run not done.
  */
 export function runChecks(run: BacktestRun, derived: Derived = NO_DERIVED): RunCheck[] {
-  if (run.status.state !== 'done' || run.stress_of || run.model_check_of) return []
-  return run.kind === 'sweep' ? sweepChecks(run, derived) : singleChecks(run, derived)
+  return isJudged(run) ? checksOf(evidenceOfRun(run), derived) : []
+}
+
+/** The runs a listed run's checks read, from the list itself: its newest stress, the newest model check, its own grid. */
+export function listedDerived(run: BacktestRunListed, runs: readonly BacktestRunListed[]): Derived {
+  const stress = newestStress(runs, run.id)
+  const check = run.turbos === 'modelled' ? newestModelCheck(runs) : null
+  return {
+    stress: stress ? { run: stress, sweep: stress.headline?.grid ?? null } : null,
+    modelCheck: check ? { run: check, found: check.headline?.model_check ?? null } : null,
+    sweep: run.headline?.grid ?? null,
+  }
+}
+
+/** A listed run's checks, from its headline and the runs listed with it: those of its page (``runChecks``). */
+export function listedChecks(run: BacktestRunListed, runs: readonly BacktestRunListed[]): RunCheck[] {
+  return isJudged(run) ? checksOf(evidenceOfListed(run), listedDerived(run, runs)) : []
 }
 
 export interface RunVerdict {

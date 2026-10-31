@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import type { BacktestModelCheck, BacktestSummary, BacktestSweep, BacktestSweepCell } from '@/lib/types'
+import type { BacktestModelCheck, BacktestRun, BacktestRunListed, BacktestSummary, BacktestSweep, BacktestSweepCell } from '@/lib/types'
 import { listedRun, run, SUMMARY } from '@/test/backtests'
 
-import { newestModelCheck, newestStress, NO_DERIVED, runChecks, verdictOf } from './verdict'
+import { listedChecks, newestModelCheck, newestStress, NO_DERIVED, runChecks, verdictOf } from './verdict'
 import type { Derived } from './verdict'
 
 function cell(values: BacktestSweepCell['values'], whole: number, tuning: number | null = null, heldOut: number | null = null): BacktestSweepCell {
@@ -113,6 +113,17 @@ describe('the verdict of a run', () => {
     expect(states(runChecks(run({ summary: STRONG })))).not.toHaveProperty('model')
   })
 
+  it('says of a run of older code made again since that the new run says what holds', () => {
+    const code = (shown: BacktestRun) => runChecks(shown).find((check) => check.id === 'code')
+    expect(code(run({ summary: STRONG, stale: true }))?.detail).toBe(
+      'Made with other code than the admin runs now: make it again to see whether it still holds.',
+    )
+    expect(code(run({ summary: STRONG, stale: true, remade_by: '20261031-200000-aaaaaa' }))).toMatchObject({
+      state: 'open',
+      detail: 'Made with other code than the admin runs now, and made again on it since: the run that did says what holds.',
+    })
+  })
+
   it('judges nothing that is not a run of its own, or not done', () => {
     expect(runChecks(run({ status: { state: 'running' } }))).toEqual([])
     expect(runChecks(run({ stress_of: 'other' }))).toEqual([])
@@ -154,5 +165,92 @@ describe('the runs a check reads', () => {
     expect(newestStress(runs, 'r1')?.id).toBe('b')
     expect(newestStress(runs, 'r2')).toBeNull()
     expect(newestModelCheck(runs)?.id).toBe('m')
+  })
+})
+
+/** A run as the list gives it: its headline made of its summary as the server makes it (_headline, compact_grid). */
+function listedOf(of: BacktestRun, grid: BacktestSweep | null = null): BacktestRunListed {
+  const summary = of.summary!
+  const part = (figures: BacktestSweepCell['whole']) => (figures ? { total_percent: figures.total_percent, days: figures.days } : null)
+  return listedRun({
+    id: of.id,
+    kind: of.kind,
+    status: of.status,
+    stale: of.stale,
+    turbos: of.turbos,
+    stress_of: of.stress_of,
+    model_check_of: of.model_check_of,
+    headline: {
+      total_percent: summary.figures?.total_percent ?? null,
+      trades: summary.figures?.trades ?? null,
+      win_rate: summary.figures?.win_rate ?? null,
+      worst_drawdown: summary.figures?.worst_drawdown ?? null,
+      sample: summary.figures?.sample ?? null,
+      beaten: summary.against_random?.beaten ?? null,
+      days_tested: summary.days.tested,
+      profit_loss: summary.money?.profit_loss ?? null,
+      cells: summary.cells ?? null,
+      days: summary.figures?.days ?? null,
+      repetitions: summary.against_random?.repetitions ?? null,
+      edge: summary.edge ?? null,
+      pbo: summary.pbo ? { probability: summary.pbo.probability } : null,
+      deflated_sharpe: summary.deflated_sharpe ? { probability: summary.deflated_sharpe.probability, trials: summary.deflated_sharpe.trials } : null,
+      model_check: summary.model_check ? { paired: summary.model_check.paired, correlation: summary.model_check.correlation } : null,
+      grid: grid
+        ? { axes: grid.axes, cells: grid.cells.map((cell) => ({ values: cell.values, tuning: part(cell.tuning), held_out: part(cell.held_out), whole: part(cell.whole) })) }
+        : null,
+    },
+  })
+}
+
+describe('the verdict in the list', () => {
+  const sweepSummary: BacktestSummary = { ...SUMMARY, days: { asked: 3, tested: 3, by_status: { tested: 3 } } }
+
+  it('says what the run page says, from the headline the server lists each run with', () => {
+    const strong = run({ summary: STRONG })
+    const stressRun = run({ id: 'stress-1', kind: 'sweep', stress_of: strong.id, summary: sweepSummary })
+    const modelled = run({ summary: STRONG, turbos: 'modelled' })
+    const checkRun = run({
+      id: 'check-1', model_check_of: 'other',
+      summary: { ...SUMMARY, model_check: { recorded_trades: 30, modelled_trades: 29, paired: 28, mean_difference_percent: 0.1,
+        median_absolute_difference_percent: 0.3, correlation: 0.86, same_exit_percent: 80,
+        median_entry_price: { recorded: 5, modelled: 5.1 }, recorded_total_percent: 3, modelled_total_percent: 3.4 } },
+    })
+    const sweep: BacktestSweep = {
+      axes: [{ kind: 'setting', name: 'stoploss_percent', values: [-10, -15] }],
+      held_out: 0.3,
+      held_out_from: '2026-10-22',
+      cells: [cell([-10], 5, 3, 2), cell([-15], 4, 2, -1)],
+    }
+    const sweepRun = run({
+      id: 'sweep-1', kind: 'sweep',
+      summary: { ...sweepSummary, pbo: { probability: 0.62, splits: 8, combinations: 70, sentence: '' },
+        deflated_sharpe: { probability: 0.97, sharpe_daily: 0.2, expected_max_sharpe_daily: 0.1, trials: 12, days: 21, sentence: '' } },
+    })
+
+    // Each run, the derived runs its page reads, and the list it is listed with (newest first).
+    const cases: [BacktestRun, Parameters<typeof runChecks>[1], BacktestRunListed[]][] = [
+      [run(), NO_DERIVED, [listedOf(run())]],
+      [strong, { ...NO_DERIVED, stress: { run: listedOf(stressRun, stress(1.2)), sweep: stress(1.2) } },
+        [listedOf(stressRun, stress(1.2)), listedOf(strong)]],
+      [strong, { ...NO_DERIVED, stress: { run: listedOf(stressRun, stress(-0.4)), sweep: stress(-0.4) } },
+        [listedOf(stressRun, stress(-0.4)), listedOf(strong)]],
+      [run({ summary: STRONG, stale: true }), NO_DERIVED, [listedOf(run({ summary: STRONG, stale: true }))]],
+      [modelled, { ...NO_DERIVED, modelCheck: { run: listedOf(checkRun), found: checkRun.summary!.model_check! } },
+        [listedOf(checkRun), listedOf(modelled)]],
+      [sweepRun, { ...NO_DERIVED, sweep }, [listedOf(sweepRun, sweep)]],
+    ]
+    for (const [shown, derived, rows] of cases) {
+      const row = rows.find((entry) => entry.id === shown.id)!
+      expect(listedChecks(row, rows)).toEqual(runChecks(shown, derived))
+    }
+    // A stress judges another run: it has no verdict of its own, in the list as on its page.
+    expect(listedChecks(listedOf(stressRun, stress(1.2)), [])).toEqual([])
+  })
+
+  it('leaves the stress open while the run stressing it is not done', () => {
+    const strong = run({ summary: STRONG })
+    const rows = [listedRun({ id: 'stress-1', kind: 'sweep', stress_of: strong.id, status: { state: 'running' }, headline: null }), listedOf(strong)]
+    expect(listedChecks(rows[1], rows).find((check) => check.id === 'stress')).toMatchObject({ state: 'open', detail: 'Being stressed.' })
   })
 })

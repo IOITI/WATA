@@ -38,16 +38,18 @@ import { useLuxAlgoStatus } from '@/features/ta/luxalgo/useLuxAlgo'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { RulePeekName } from '@/features/ta/signals/RulePeek'
 import { api, isNotFound } from '@/lib/api'
-import type { BacktestRun } from '@/lib/types'
+import type { BacktestRun, BacktestRunListed } from '@/lib/types'
 
 import {
   assetLabel,
   daysSentence,
   isActive,
   progressSentence,
+  remakable,
   RUN_NOT_FOUND,
   settingChanges,
   sourceLabel,
+  STATE_LABEL,
 } from './model'
 import { EdgePanel } from './EdgePanel'
 import { BacktestsDisabled, Measure, SettingChanges, StateBadge } from './parts'
@@ -61,6 +63,7 @@ import { choiceTrust } from './robustness'
 import { PropFirmPanel } from './PropFirmPanel'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
+import { TagsField } from './TagsField'
 import { underlyingLabel } from './turboModel'
 import { VerdictPanel } from './VerdictPanel'
 import type { PageSection } from './VerdictPanel'
@@ -248,7 +251,7 @@ export function RunPage() {
   const removeRuns = useRemoveRuns()
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
-  const [tags, setTags] = useState('')
+  const [tags, setTags] = useState<string[]>([])
 
   const runQuery = useQuery({
     queryKey: ['backtest', runId],
@@ -272,12 +275,20 @@ export function RunPage() {
     onSuccess: (paper) => queryClient.setQueryData(['backtest-paper'], paper),
   })
   const rename = useMutation({
-    mutationFn: () => api.renameBacktest(runId, { name, tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) }),
+    mutationFn: () => api.renameBacktest(runId, { name, tags }),
     onSuccess: () => {
       void refresh()
       setRenaming(false)
     },
   })
+  // Made again on today's code, one at a time once no other run waits: followed through the list of runs.
+  const remake = useMutation({
+    mutationFn: () => api.remakeBacktests({ runs: [runId] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['backtests'] }),
+  })
+  const listQuery = useQuery({ queryKey: ['backtests'], queryFn: api.backtests, enabled })
+  // The run making this one again, while it waits or runs.
+  const remaking = listQuery.data?.items.find((other) => other.remade_from === runId && isActive(other.status.state)) ?? null
 
   const summary = run?.summary
   const figures = summary?.figures
@@ -336,7 +347,7 @@ export function RunPage() {
       icon: <Pencil />,
       onSelect: () => {
         setName(shown.name)
-        setTags(shown.tags.join(', '))
+        setTags(shown.tags)
         setRenaming(true)
       },
     })
@@ -418,12 +429,13 @@ export function RunPage() {
                   </Link>
                 )}
                 {run.tags.map((tag) => (
-                  <Badge key={tag} tone="neutral">
-                    {tag}
-                  </Badge>
+                  <Link key={tag} to={`/backtests?tag=${encodeURIComponent(tag)}`} aria-label={`The runs tagged ${tag}`} className="rounded-full">
+                    <Badge tone="neutral">{tag}</Badge>
+                  </Link>
                 ))}
               </div>
               <AgentVerdict about={`run:${run.id}`} />
+              <RemadeLine run={run} remaking={remaking} asking={remake} />
 
               {paperLine && (
                 <p className="text-sm text-muted-foreground">
@@ -611,10 +623,10 @@ export function RunPage() {
             <span className="text-xs text-text-secondary">Name</span>
             <Input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-text-secondary">Tags, separated by commas</span>
-            <Input value={tags} onChange={(event) => setTags(event.target.value)} />
-          </label>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">Tags</span>
+            <TagsField value={tags} onChange={setTags} limits={optionsQuery.data?.limits} />
+          </div>
           {rename.error && (
             <p role="alert" className="text-sm text-negative">
               {rename.error.message}
@@ -622,6 +634,63 @@ export function RunPage() {
           )}
         </div>
       </SettleModal>
+    </>
+  )
+}
+
+/**
+ * Where a run stands against today's code: made again (the run that did, or the
+ * one it makes again), being made again, or made with older code and offered to
+ * be made again, which the list of runs then follows.
+ */
+function RemadeLine({
+  run,
+  remaking,
+  asking,
+}: {
+  run: BacktestRun
+  remaking: BacktestRunListed | null
+  asking: { mutate: () => void; isPending: boolean; error: Error | null }
+}) {
+  const link = (id: string, label: string) => (
+    <RunPeekLink id={id} className="font-medium text-foreground underline-offset-4 hover:underline">
+      {label}
+    </RunPeekLink>
+  )
+  if (run.remade_by) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Made again on today’s code: {link(run.remade_by, 'the run that made it again')}. What this page shows is what it found on
+        its older code.
+      </p>
+    )
+  }
+  return (
+    <>
+      {run.remade_from && (
+        <p className="text-sm text-muted-foreground">
+          Made again on today’s code from {link(run.remade_from, 'the run before')}, with its settings, script and signals.
+        </p>
+      )}
+      {remaking ? (
+        <p className="text-sm text-muted-foreground">
+          Being made again on today’s code: {link(remaking.id, `its new run ${STATE_LABEL[remaking.status.state].toLowerCase()}`)}.
+        </p>
+      ) : (
+        remakable(run) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+            <span>Made with older code than today’s: what it found may come out otherwise now.</span>
+            <Button variant="outline" size="sm" leftIcon={<RotateCcw className="size-3.5" />} isLoading={asking.isPending} onClick={() => asking.mutate()}>
+              Make it again
+            </Button>
+            {asking.error && (
+              <span role="alert" className="text-negative">
+                {asking.error.message}
+              </span>
+            )}
+          </div>
+        )
+      )}
     </>
   )
 }

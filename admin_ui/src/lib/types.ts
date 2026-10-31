@@ -2075,6 +2075,49 @@ export interface BacktestHeadline {
   days_tested: number | null
   profit_loss: number | null
   cells: number | null
+  // What the list's verdict reads (verdict.ts), as a run's page reads it from the whole summary; absent from answers of before.
+  /** The days of its figures. */
+  days?: number | null
+  /** How many runs at random entries it was set against. */
+  repetitions?: number | null
+  edge?: BacktestSummary['edge'] | null
+  pbo?: Pick<BacktestPbo, 'probability'> | null
+  deflated_sharpe?: Pick<BacktestDeflatedSharpe, 'probability' | 'trials'> | null
+  /** A model check's: how many trades it paired with the recorded run's, and how alike their results were. */
+  model_check?: Pick<BacktestModelCheck, 'paired' | 'correlation'> | null
+  /** A sweep's grid with its totals alone. */
+  grid?: BacktestSweepGrid | null
+}
+
+/** A combination's totals, as a sweep's verdict reads them. */
+export type BacktestGridFigures = Pick<BacktestFigures, 'total_percent' | 'days'>
+
+/** A sweep's grid as its verdict reads it: the list's (a run's headline), or the whole sweep (BacktestSweep). */
+export interface BacktestSweepGrid {
+  axes: BacktestSweepAxis[]
+  cells: { values: BacktestValue[]; tuning: BacktestGridFigures | null; held_out: BacktestGridFigures | null; whole: BacktestGridFigures | null }[]
+}
+
+/** The runs being made again on today's code (src/admin/backtests.py, remaking). */
+export interface BacktestRemaking {
+  asked_at: string | null
+  total: number
+  /** Not asked yet: each waits until nothing else does. */
+  waiting: number
+  /** The runs that make them again, waiting or running. */
+  under_way: string[]
+  made: number
+  failed: { run: string; error: string | null }[]
+  stopped: number
+}
+
+/** What making every stale run again would ask. */
+export interface BacktestRemakePreview {
+  runs: number
+  /** Of them, Claude's. */
+  claude: number
+  /** How long they took to make, together. */
+  seconds: number
 }
 
 export type BacktestSample = 'too_few' | 'few' | 'fair'
@@ -2113,6 +2156,10 @@ export interface BacktestRunListed {
   /** Through what: an MCP token's name, or "agent:<conversation>" for the AI agent of these pages. */
   made_via?: string | null
   experiment?: string | null
+  /** The run it makes again on today's code. */
+  remade_from?: string | null
+  /** The run that made it again on today's code, once that one was done. */
+  remade_by?: string | null
 }
 
 export interface BacktestTotalRange {

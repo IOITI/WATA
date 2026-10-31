@@ -1,7 +1,7 @@
 import { formatDay, formatNumber, formatPercent } from 'ioiti-ui'
 
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
-import type { BacktestRisk, BacktestStress, BacktestSummary, BacktestSweep, BacktestSweepAxis, BacktestWalkForward } from '@/lib/types'
+import type { BacktestRisk, BacktestStress, BacktestSummary, BacktestSweep, BacktestSweepAxis, BacktestSweepGrid, BacktestWalkForward } from '@/lib/types'
 
 import { axisName } from './sweep'
 
@@ -93,7 +93,7 @@ function dearer(axis: BacktestSweepAxis, index: number): string {
 }
 
 /** A stress sweep (order time × worse price) in a sentence: the run as it was, one step worse, and the worst. */
-export function stressVerdict(sweep: BacktestSweep): StressVerdict | null {
+export function stressVerdict(sweep: BacktestSweepGrid): StressVerdict | null {
   const [rows, columns] = sweep.axes
   if (!rows || !columns) return null
   const width = columns.values.length

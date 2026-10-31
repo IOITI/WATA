@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.74.0 - A runs list you can trust, and runs made again on today's code
+
+**Release date:** not yet released
+
+The list of backtests said what each run made, not whether it could be believed: that was on each run's page alone. A change of backtest code marked runs "made with other code", and nothing made them again but asking each anew.
+- **A Verdict column**: "Passes", "N open" or "Fails", from the very checks of the run's page (enough trades and days, random entries beaten, an edge, a stress step, a sweep's held-out days and overfitting, today's code), and how many passed; on hover, those that failed or are open; a click opens the run's verdict. A stress test or a model check names the run it judges. The list is narrowed to a verdict from its filters.
+- **Tags**: a tag in a row narrows the list to it, and tags are among the filters; a run's tags are chips, the tags in use offered and a new one typed, on its page and in the form.
+- **Runs made again on today's code**: "Make them again" above the list asks for every run made with older code, after a confirmation that says how many and how long their last makes took; "Make it again" on a run's page asks for that one. Each is the same run, its settings, script and signals, only the code differing, and adds no trial to an experiment. They run one at a time, each once no other run waits: a run you ask for goes first, and "Stop" leaves the rest. The old run stays, folded under the run that made it again with what it found, and a rule's reference and the live reference move to the new one. A stress test or a model check is made again after its run and then judges the new one. One that fails leaves the old run as it was, its failure said under it; one cut by a restart of the admin is asked again.
+
+**On the live path:** nothing. The admin alone: three routes, `GET|POST|DELETE /api/backtests/remake`, and the list's figures.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5): no run turns stale. The list's verdict reads what each run's summary already holds.
+
+**Verification status:**
+- Tests: the list's headline (the figures its checks read, a sweep's grid read again once its file changed); a run made again (after the runs asked before it and meanwhile, with what it had and only that, the old run marked, references moved), one that fails, one a restart cut, a stress waiting for its run then judging the new one, what is refused, stopping; the routes. The listed verdict equals the run page's on the same runs (a run, a stressed one, one of older code, on made-up turbos, a sweep); the filters, tags and folding; the list's column, filter, tag link, remaking and folded run; a run's "Make it again" and its tags. The 3,774 Python tests and the interface's 1,362 pass, with lint and typecheck.
+- Seen in the browser pane on the development admin: a run and its stress made with older code, made again in one action (the run first, its stress waiting for it, then judging the new run), each old run folded under its new one, the run pages' links between them, the tags as chips with those in use offered, and at 375 px in the dark theme nothing wider than the screen.
+- Found there and fixed before release: the new column left the backtest's name too narrow to read (it now keeps two lines' width and the table scrolls in its frame); a stress of a paper day said its run was removed; a run made again still offered, in its verdict, to be made again.
+
 ## v0.73.0 - A page for each signal rule
 
 **Release date:** 2026-10-31

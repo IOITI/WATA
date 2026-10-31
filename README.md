@@ -996,8 +996,12 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 
 **Compare** sets up to four finished runs side by side: their figures, the settings and inputs they did not share, and their curves on one chart.
 
+**The list of runs** says of each whether it can be believed (since v0.74.0): its **Verdict**, "Passes", "N open" or "Fails", from the same checks as the run's own page, how many of them passed, and on hover which failed or are open. A stress test or a model check names the run it judges instead. The list can be narrowed to a verdict, and to a tag (a tag in a row narrows it to that tag), with the state, the maker, the experiment, the turbos and the code, all kept in the address.
+
+**Runs made with older code** are made again on today's code when you ask: "Make them again" above the list, or "Make it again" on a run's page. Each is the same run, with its own settings, script and signals, and only the code differs. They run one at a time, each once no other run waits, so a run you ask for always goes first, and "Stop" leaves the rest. The old run stays, folded under the run that made it again with what it found, and can be removed from there. A rule's reference, and the live reference, move to the new run. A stress test is made again after its run, and then judges the new one. Paper days are made again by paper trading, as before.
+
 **Housekeeping**:
-- a run can be renamed and tagged, and several can be removed at once;
+- a run can be renamed and tagged: tags are chips, the tags in use offered, a new one typed; several runs can be removed at once;
 - the list says how much disk the runs take;
 - a run made by other code than the admin's is marked so;
 - the runs of the backtester this one replaced (on a model of the turbo) are of no use any more: "Remove them" deletes them. Dukascopy's prices stay.

@@ -29,6 +29,8 @@ import type {
   BacktestOptions,
   BacktestPaper,
   BacktestReconciliation,
+  BacktestRemakePreview,
+  BacktestRemaking,
   BacktestRequestBody,
   BacktestRun,
   BacktestRunListed,
@@ -394,7 +396,12 @@ export const api = {
   backtestOptions: () => request<BacktestOptions>('GET', '/api/backtests/options'),
   backtestCoverage: (params: { from: string; to: string; indice: string; asset?: string; source?: 'pine' | 'journal' | 'ta_signals'; rule?: string }) =>
     request<BacktestCoverage>('GET', `/api/backtests/coverage${query(params)}`),
-  backtests: () => request<{ items: BacktestRunListed[]; storage: BacktestStorage }>('GET', '/api/backtests'),
+  backtests: () =>
+    request<{ items: BacktestRunListed[]; storage: BacktestStorage; remaking?: BacktestRemaking | null }>('GET', '/api/backtests'),
+  remakePreview: () => request<BacktestRemakePreview>('GET', '/api/backtests/remake'),
+  remakeBacktests: (body: { runs: string[] } | { stale: true }) =>
+    request<{ remaking: BacktestRemaking | null }>('POST', '/api/backtests/remake', { body }),
+  stopRemaking: () => request<{ remaking: BacktestRemaking | null }>('DELETE', '/api/backtests/remake'),
   backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
   createBacktest: (body: BacktestRequestBody) => request<BacktestRun>('POST', '/api/backtests', { body }),
   renameBacktest: (runId: string, body: { name?: string; tags?: string[] }) =>

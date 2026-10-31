@@ -7,6 +7,8 @@ import {
   formatBytes,
   formatDateTime,
   formatDay,
+  formatDuration,
+  formatNumber,
   formatPercent,
   Hint,
   PageHeader,
@@ -15,7 +17,7 @@ import {
   SettleModal,
   SignedValue,
 } from 'ioiti-ui'
-import type { ColumnDef } from 'ioiti-ui'
+import type { BadgeTone, CheckState, ColumnDef } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { Columns3, FlaskConical, Newspaper, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
@@ -26,35 +28,67 @@ import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
-import type { BacktestRunListed, Experiment } from '@/lib/types'
+import type { BacktestRemaking, BacktestRunListed, Experiment } from '@/lib/types'
 
-import { collapseAttempts, comparable, failureLine, filterRuns, isActive, RUN_FILTER_NAMES, runFilterOf, sourceLabel, STATE_LABEL } from './model'
+import {
+  collapseAttempts,
+  comparable,
+  failureLine,
+  filterRuns,
+  isActive,
+  remakable,
+  RUN_FILTER_NAMES,
+  runFilterOf,
+  sourceLabel,
+  STATE_LABEL,
+  tagsInUse,
+} from './model'
 import type { RunFilter } from './model'
+import { listedChecks, verdictOf } from './verdict'
+import type { RunCheck, RunVerdict } from './verdict'
 import { BacktestsDisabled, StateBadge } from './parts'
 import { useHiddenRuns, useRemoveRuns } from './pending-removals-context'
 import { ResearchFiles } from './ResearchFiles'
 import { TurboModelPanel } from './TurboModelPanel'
 
 /** What each filter of the list offers: the first, empty, leaves the list whole. */
-const FILTERS: Record<Exclude<keyof RunFilter, 'experiment'>, { label: string; options: [string, string][] }> = {
+const FILTERS: Record<Exclude<keyof RunFilter, 'experiment' | 'tag'>, { label: string; options: [string, string][] }> = {
   state: { label: 'State', options: [['', 'Any'], ['active', 'Waiting or running'], ['done', 'Done'], ['failed', 'Failed'], ['stopped', 'Stopped']] },
+  verdict: { label: 'Verdict', options: [['', 'Any'], ['pass', 'Passes'], ['open', 'Checks open'], ['fail', 'Fails']] },
   by: { label: 'Made by', options: [['', 'Anyone'], ['me', 'You'], ['claude', 'Claude']] },
   turbos: { label: 'Turbos', options: [['', 'Any'], ['recorded', 'Recorded'], ['modelled', 'Made up']] },
   code: { label: 'Code', options: [['', 'Any'], ['current', 'Today’s'], ['older', 'Older']] },
 }
 
+/** A run's checks and what they say together, as its page says them (verdict.ts). */
+interface Judged {
+  checks: RunCheck[]
+  verdict: RunVerdict
+}
+
+const VERDICT_BADGE: Record<CheckState, { tone: BadgeTone; label: (open: number) => string }> = {
+  pass: { tone: 'success', label: () => 'Passes' },
+  open: { tone: 'neutral', label: (open) => `${open} open` },
+  fail: { tone: 'danger', label: () => 'Fails' },
+}
+
+/** The verdicts in an order to sort by: what passes first, what fails last. */
+const VERDICT_RANK: Record<CheckState, number> = { pass: 3, open: 2, fail: 1 }
+
 /**
- * The list narrowed by state, by who made the runs, by experiment, turbos and
- * code: in the address, so that a list narrowed can be opened elsewhere, kept or
- * sent. Search and sort stay the table's.
+ * The list narrowed by state, verdict, who made the runs, experiment, turbos,
+ * code and tag: in the address, so that a list narrowed can be opened elsewhere,
+ * kept or sent. Search and sort stay the table's.
  */
 function RunFilters({
   filter,
   experiments,
+  tags,
   onChange,
 }: {
   filter: RunFilter
   experiments: { id: string; title: string }[]
+  tags: string[]
   onChange: (name: keyof RunFilter, value: string) => void
 }) {
   const narrowed = RUN_FILTER_NAMES.some((name) => filter[name] !== null)
@@ -73,6 +107,8 @@ function RunFilters({
       {(Object.keys(FILTERS) as (keyof typeof FILTERS)[]).map((name) => field(name, FILTERS[name].label, FILTERS[name].options))}
       {experiments.length > 0 &&
         field('experiment', 'Experiment', [['', 'Any'], ...experiments.map((entry): [string, string] => [entry.id, entry.title])])}
+      {(tags.length > 0 || filter.tag) &&
+        field('tag', 'Tag', [['', 'Any'], ...[...new Set([...tags, ...(filter.tag ? [filter.tag] : [])])].map((tag): [string, string] => [tag, tag])])}
       {narrowed && (
         <ButtonLink to="/backtests" variant="ghost" size="sm">
           Every run
@@ -86,9 +122,45 @@ function RunFilters({
 const selectableRun = (run: BacktestRunListed) => !isActive(run.status.state)
 const runName = (run: BacktestRunListed) => run.name
 
+/** Whether a listed run can be believed, check by check: the badge says it, its hint and its page say why. */
+function VerdictCell({ run, judged, judges }: { run: BacktestRunListed; judged: Judged | null; judges: BacktestRunListed | null }) {
+  const judgedId = run.stress_of ?? run.model_check_of
+  if (judgedId) {
+    // The run it judges is named when it is listed; a paper day is not, and its page says if it is gone.
+    return (
+      <span className="text-xs whitespace-normal text-muted-foreground">
+        {run.stress_of ? 'Stresses' : 'Checks'}{' '}
+        <Link to={`/backtests/${judgedId}`} className="underline-offset-2 hover:underline">
+          {judges?.name ?? 'its run'}
+        </Link>
+      </span>
+    )
+  }
+  if (!judged) return <span className="text-muted-foreground">-</span>
+  const { checks, verdict } = judged
+  const open = checks.filter((check) => check.state === 'open').length
+  const passed = checks.filter((check) => check.state === 'pass').length
+  const badge = VERDICT_BADGE[verdict.tone]
+  return (
+    <Hint content={verdict.sentence}>
+      <Link to={`/backtests/${run.id}#trust`} className="inline-flex flex-col items-start gap-0.5 rounded-md">
+        <Badge tone={badge.tone}>{badge.label(open)}</Badge>
+        <span className="text-xs text-muted-foreground">
+          {passed} of {checks.length} checks
+        </span>
+      </Link>
+    </Hint>
+  )
+}
+
 function runColumns(
   timezone: string,
   earlier: ReadonlyMap<string, BacktestRunListed[]>,
+  before: ReadonlyMap<string, BacktestRunListed[]>,
+  judged: ReadonlyMap<string, Judged>,
+  byId: ReadonlyMap<string, BacktestRunListed>,
+  remaking: ReadonlyMap<string, BacktestRunListed>,
+  tagHref: (tag: string) => string,
   removeAttempts: (attempts: BacktestRunListed[]) => void,
 ): ColumnDef<BacktestRunListed>[] {
   return [
@@ -99,7 +171,8 @@ function runColumns(
       accessorFn: (row) => [row.name, sourceLabel(row), ...row.tags, ...(madeByClaude(row) ? ['Claude'] : [])].join(' '),
       sortable: true,
       cell: ({ row }) => (
-        <div className="min-w-0 max-w-96 whitespace-normal">
+        // Wide enough to read a name on two lines at most: past it, the table scrolls in its frame.
+        <div className="min-w-56 max-w-96 whitespace-normal">
           <Link to={`/backtests/${row.id}`} className="font-medium underline-offset-4 hover:underline">
             {row.name}
           </Link>
@@ -115,16 +188,26 @@ function runColumns(
               {formatDay(row.from)} to {formatDay(row.to)}
             </span>
             {row.tags.map((tag) => (
-              <Badge key={tag} tone="neutral">
-                {tag}
-              </Badge>
+              <Link key={tag} to={tagHref(tag)} aria-label={`Only the runs tagged ${tag}`} className="rounded-full">
+                <Badge tone="neutral">{tag}</Badge>
+              </Link>
             ))}
             {row.stale && (
               <Hint content="Made by other code than this admin's: it could come out otherwise today" wrap>
                 <span className="text-warning">made with other code</span>
               </Hint>
             )}
+            {row.remade_from && <span>made again on today’s code</span>}
           </p>
+          {remaking.has(row.id) && (
+            <p className="text-xs text-muted-foreground">
+              Being made again on today’s code:{' '}
+              <Link to={`/backtests/${remaking.get(row.id)!.id}`} className="underline-offset-2 hover:underline">
+                {STATE_LABEL[remaking.get(row.id)!.status.state].toLowerCase()}
+              </Link>
+            </p>
+          )}
+          <Before runs={before.get(row.id) ?? []} timezone={timezone} onRemove={removeAttempts} />
           <Attempts attempts={earlier.get(row.id) ?? []} timezone={timezone} onRemove={removeAttempts} />
         </div>
       ),
@@ -149,8 +232,21 @@ function runColumns(
       ),
     },
     {
+      id: 'verdict',
+      header: 'Verdict',
+      // What passes first; the runs not judged (not done, or judging another) after those that fail.
+      accessorFn: (row) => {
+        const found = judged.get(row.id)
+        return found ? VERDICT_RANK[found.verdict.tone] : null
+      },
+      sortable: true,
+      cell: ({ row }) => (
+        <VerdictCell run={row} judged={judged.get(row.id) ?? null} judges={byId.get(row.stress_of ?? row.model_check_of ?? '') ?? null} />
+      ),
+    },
+    {
       id: 'days',
-      header: 'Days traded',
+      header: 'Days',
       accessorFn: (row) => row.headline?.days_tested ?? null,
       sortable: true,
       align: 'right',
@@ -209,6 +305,43 @@ function runColumns(
   ]
 }
 
+/** The runs a run made again on today's code, folded under it with what they found on their older code. */
+function Before({
+  runs,
+  timezone,
+  onRemove,
+}: {
+  runs: BacktestRunListed[]
+  timezone: string
+  onRemove: (runs: BacktestRunListed[]) => void
+}) {
+  if (runs.length === 0) return null
+  return (
+    <details className="mt-1 text-xs">
+      <summary className="cursor-pointer text-muted-foreground">
+        The run{runs.length === 1 ? '' : 's'} before, made with older code
+      </summary>
+      <ul className="mt-1 flex flex-col gap-1">
+        {runs.map((run) => (
+          <li key={run.id} className="flex flex-wrap items-baseline gap-x-2">
+            <Link to={`/backtests/${run.id}`} className="underline-offset-2 hover:underline">
+              {formatDateTime(run.status.created_at, timezone, false)}
+            </Link>
+            <span className="text-muted-foreground">
+              {run.headline?.total_percent !== null && run.headline?.total_percent !== undefined
+                ? `${formatPercent(run.headline.total_percent, true)} in ${formatNumber(run.headline.trades ?? 0)} trades`
+                : 'no figures'}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <Button variant="ghost" size="sm" className="mt-1" onClick={() => onRemove(runs)}>
+        Remove {runs.length === 1 ? 'it' : 'them'}
+      </Button>
+    </details>
+  )
+}
+
 /** The failed runs of the same request, folded under the run that came after them. */
 function Attempts({
   attempts,
@@ -241,6 +374,130 @@ function Attempts({
         Remove them
       </Button>
     </details>
+  )
+}
+
+/**
+ * The runs made with older code than today's, and their making again: offered
+ * while some are, followed while they are made, said once they all were.
+ */
+function RemakeLine({
+  stale,
+  remaking,
+  byId,
+}: {
+  stale: number
+  remaking: BacktestRemaking | null
+  byId: ReadonlyMap<string, BacktestRunListed>
+}) {
+  const queryClient = useQueryClient()
+  const [asking, setAsking] = useState(false)
+  const preview = useQuery({ queryKey: ['backtests-remake'], queryFn: api.remakePreview, enabled: asking })
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['backtests'] })
+  const ask = useMutation({
+    mutationFn: () => api.remakeBacktests({ stale: true }),
+    onSuccess: () => {
+      setAsking(false)
+      void refresh()
+    },
+  })
+  const stop = useMutation({ mutationFn: api.stopRemaking, onSuccess: () => void refresh() })
+  const active = remaking !== null && (remaking.waiting > 0 || remaking.under_way.length > 0)
+
+  let line = null
+  if (remaking !== null && active) {
+    const running = remaking.under_way.map((id) => byId.get(id)).filter((run): run is BacktestRunListed => Boolean(run))
+    line = (
+      <>
+        <span>
+          Making {remaking.total} run{remaking.total === 1 ? '' : 's'} again on today’s code: {remaking.made} made,{' '}
+          {remaking.under_way.length} under way, {remaking.waiting} to go
+          {remaking.failed.length > 0 && `, ${remaking.failed.length} could not be`}. Each waits until no other run does.
+        </span>
+        {running.map((run) => (
+          <Link key={run.id} to={`/backtests/${run.id}`} className="underline-offset-2 hover:underline">
+            {run.name}
+          </Link>
+        ))}
+        <Button variant="ghost" size="sm" isLoading={stop.isPending} onClick={() => stop.mutate()}>
+          Stop
+        </Button>
+      </>
+    )
+  } else if (remaking !== null) {
+    line = (
+      <>
+        <span>
+          {remaking.made} run{remaking.made === 1 ? ' was' : 's were'} made again on today’s code
+          {remaking.failed.length > 0 &&
+            `; ${remaking.failed.length} could not be, each said under the run it was to make again`}
+          {remaking.stopped > 0 && `; ${remaking.stopped} stopped`}.
+        </span>
+        <Button variant="ghost" size="sm" isLoading={stop.isPending} onClick={() => stop.mutate()}>
+          Dismiss
+        </Button>
+      </>
+    )
+  } else if (stale > 0) {
+    line = (
+      <>
+        <span>
+          {stale} run{stale === 1 ? ' was' : 's were'} made with older code than today’s: what {stale === 1 ? 'it' : 'they'} found may come
+          out otherwise now.
+        </span>
+        <Button variant="outline" size="sm" onClick={() => setAsking(true)}>
+          Make {stale === 1 ? 'it' : 'them'} again
+        </Button>
+      </>
+    )
+  }
+  const found = preview.data
+  return (
+    <>
+      {line && (
+        <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-text-secondary">
+          {line}
+        </div>
+      )}
+      <SettleModal
+        open={asking}
+        onClose={() => setAsking(false)}
+        title="Make the runs made with older code again?"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setAsking(false)}>
+              Not now
+            </Button>
+            <Button size="sm" isLoading={ask.isPending} disabled={!found || found.runs === 0} onClick={() => ask.mutate()}>
+              Make {found?.runs === 1 ? 'it' : 'them'} again
+            </Button>
+          </>
+        }
+      >
+        <QueryState isPending={preview.isPending} error={preview.error} hasData={Boolean(found)}>
+          {found && (
+            <div className="flex flex-col gap-2 text-sm leading-relaxed text-text-secondary">
+              <p>
+                {found.runs} run{found.runs === 1 ? '' : 's'}
+                {found.claude > 0 && ` (${found.claude} of them Claude’s)`} {found.runs === 1 ? 'was' : 'were'} made with older code.
+                Each is made again with its own settings, script and signals: only the code differs.
+                {found.seconds > 0 && ` Their last makes took ${formatDuration(found.seconds * 1000)} together.`}
+              </p>
+              <p>
+                They run one at a time, each once no other run waits: a run you ask for goes first. Nothing trades. The old runs
+                stay, each folded under the run that made it again, and a rule’s reference moves to the new run.
+              </p>
+            </div>
+          )}
+        </QueryState>
+        {ask.error && (
+          <p role="alert" className="mt-2 text-sm text-negative">
+            {ask.error.message}
+          </p>
+        )}
+      </SettleModal>
+    </>
   )
 }
 
@@ -283,7 +540,24 @@ export function BacktestsPage() {
     const ids = [...new Set((runs ?? []).flatMap((run) => (run.experiment ? [run.experiment] : [])))]
     return ids.map((id) => ({ id, title: titles.get(id) ?? id }))
   }, [runs, experimentsQuery.data])
-  const { shown, earlier } = useMemo(() => collapseAttempts(filterRuns(runs ?? [], filter)), [runs, shownKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Each run's checks, from the list itself, as its page makes them (verdict.ts).
+  const judged = useMemo(() => {
+    const found = new Map<string, Judged>()
+    for (const run of runs ?? []) {
+      const checks = listedChecks(run, runs ?? [])
+      if (checks.length > 0) found.set(run.id, { checks, verdict: verdictOf(checks) })
+    }
+    return found
+  }, [runs])
+  const verdicts = useMemo(() => new Map([...judged].map(([id, found]) => [id, found.verdict.tone])), [judged])
+  const byId = useMemo(() => new Map((runs ?? []).map((run) => [run.id, run])), [runs])
+  // The runs being made again on today's code, by the run each makes again.
+  const remaking = useMemo(
+    () => new Map((runs ?? []).flatMap((run) => (run.remade_from && isActive(run.status.state) ? [[run.remade_from, run] as const] : []))),
+    [runs],
+  )
+  const tags = useMemo(() => tagsInUse(runs ?? []), [runs])
+  const { shown, earlier, before } = useMemo(() => collapseAttempts(filterRuns(runs ?? [], filter, verdicts)), [runs, shownKey, verdicts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Selected runs, or a run's earlier failed attempts: gone from the list at once, with an Undo.
   const remove = useCallback(
@@ -294,7 +568,19 @@ export function BacktestsPage() {
     },
     [removeRuns, setSelected],
   )
-  const columns = useMemo(() => runColumns(timezone, earlier, remove), [timezone, earlier, remove])
+  // A tag of a row narrows the list to it, the rest of the address kept.
+  const tagHref = useCallback(
+    (tag: string) => {
+      const next = new URLSearchParams(params)
+      next.set('tag', tag)
+      return `/backtests?${next.toString()}`
+    },
+    [params],
+  )
+  const columns = useMemo(
+    () => runColumns(timezone, earlier, before, judged, byId, remaking, tagHref, remove),
+    [timezone, earlier, before, judged, byId, remaking, tagHref, remove],
+  )
   // A run removed meanwhile, or now waiting or running, is no longer selected.
   const chosen = useMemo(() => (runs ?? []).filter((run) => selected.has(run.id) && selectableRun(run)), [runs, selected])
   const chosenIds = useMemo(() => new Set(chosen.map((run) => run.id)), [chosen])
@@ -339,7 +625,8 @@ export function BacktestsPage() {
           <QueryState isPending={runsQuery.isPending} error={runsQuery.error} hasData={!!runs}>
             {runs && (
               <div className="flex flex-col gap-2">
-                {runs.length > 0 && <RunFilters filter={filter} experiments={experiments} onChange={setFilter} />}
+                {runs.length > 0 && <RunFilters filter={filter} experiments={experiments} tags={tags} onChange={setFilter} />}
+                <RemakeLine stale={runs.filter(remakable).length} remaking={runsQuery.data?.remaking ?? null} byId={byId} />
                 <AdvancedDataTable<BacktestRunListed>
                   key={shownKey}
                   title="Runs"

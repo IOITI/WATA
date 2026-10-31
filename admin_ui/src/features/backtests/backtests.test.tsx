@@ -12,6 +12,7 @@ import type {
   BacktestEdge,
   BacktestOptions,
   BacktestReconciliation,
+  BacktestRemaking,
   BacktestRun,
   BacktestSweep,
   BacktestTurboMeasure,
@@ -22,7 +23,7 @@ import type {
   TaRule,
   TaScriptSummary,
 } from '@/lib/types'
-import { day, OPTIONS, run, RUN_ID, SETTINGS, signal, trade } from '@/test/backtests'
+import { day, listedRun, OPTIONS, run, RUN_ID, SETTINGS, signal, trade } from '@/test/backtests'
 import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
 import { engines, resetVela, velas } from '@/test/fakeVela'
 import { stubSystemTheme } from '@/test/systemTheme'
@@ -195,6 +196,8 @@ let sweeps: Record<string, BacktestSweep> = {}
 let edges: Record<string, BacktestEdge> = {}
 let reconciliations: Record<string, BacktestReconciliation> = {}
 let options: BacktestOptions = OPTIONS
+/** Where the runs made again on today's code stand, as the list says it. */
+let remaking: BacktestRemaking | null = null
 const MEASURE: BacktestTurboMeasure = {
   made_at: '2026-10-20T01:00:00Z',
   underlying: { provider: 'dukascopy', key: 'us100', side: 'bid' },
@@ -232,7 +235,16 @@ function serve() {
       sent.push({ method, path: `${url.pathname}${url.search}`, body })
       const route = url.pathname
       if (route === '/api/backtests' && method === 'GET') {
-        return json({ items: Object.values(runs).map(({ request: _r, settings: _s, summary: _m, progress: _p, lines: _l, ...listed }) => listed), storage: { runs: { count: 2, bytes: 52_000 }, former: { count: 7, bytes: 3_400_000 } } })
+        return json({ items: Object.values(runs).map(({ request: _r, settings: _s, summary: _m, progress: _p, lines: _l, ...listed }) => listed), storage: { runs: { count: 2, bytes: 52_000 }, former: { count: 7, bytes: 3_400_000 } }, remaking })
+      }
+      if (route === '/api/backtests/remake') {
+        if (method === 'GET') return json({ runs: 1, claude: 0, seconds: 300 })
+        if (method === 'POST') {
+          remaking = { asked_at: '2026-10-31T10:00:00Z', total: 1, waiting: 1, under_way: [], made: 0, failed: [], stopped: 0 }
+          return json({ remaking }, 202)
+        }
+        remaking = null
+        return json({ remaking })
       }
       if (route === '/api/backtests' && method === 'POST') return json(run({ id: '20261019-230000-cccccc', status: { state: 'queued' } }), 202)
       if (route === '/api/backtests/options') return json(options)
@@ -387,6 +399,7 @@ beforeEach(() => {
   edges = {}
   reconciliations = {}
   options = OPTIONS
+  remaking = null
   turboModel = { ...turboModel, state: 'idle', asked: null, measure: null }
   research = { ...research, enabled: false, keep_days: 30, state: 'off' }
   runs = {
@@ -504,6 +517,76 @@ describe('the list of backtests', () => {
     await waitFor(() => expect(removals().map((request) => request.body)).toEqual([
       { ids: ['20261019-203000-cccc01', '20261019-202000-cccc02'] },
     ]))
+  })
+
+  it('says in a column whether each run can be believed, and narrows the list to a verdict', async () => {
+    const user = userEvent.setup()
+    // As the server lists it: the figures its checks read (3 trades over 3 days, 85 % of 20 random runs beaten).
+    runs = { ...runs, [RUN_ID]: run({ headline: { ...listedRun().headline!, days: 3, repetitions: 20, edge: null } }) }
+    renderAt('/backtests')
+
+    const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
+    expect(within(row).getByRole('link', { name: /Fails/ })).toHaveAttribute('href', `/backtests/${RUN_ID}#trust`)
+    expect(within(row).getByText('1 of 5 checks')).toBeInTheDocument()
+    // A run listed without the figures its checks read is not judged here.
+    const other = screen.getByRole('link', { name: 'Stop at 10' }).closest('tr') as HTMLElement
+    expect(within(other).queryByText(/of \d+ checks/)).toBeNull()
+
+    const narrow = screen.getByRole('group', { name: 'Narrow the list' })
+    await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Verdict' }), 'fail')
+    expect(address()).toBe('/backtests?verdict=fail')
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Stop at 10' })).toBeNull())
+    expect(screen.getByRole('link', { name: 'Smoke EMA cross' })).toBeInTheDocument()
+  })
+
+  it('narrows the list to a tag from a row, the tag kept among the filters', async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, [RUN_ID]: run({ tags: ['ema', 'october'] }) }
+    renderAt('/backtests')
+
+    await user.click(await screen.findByRole('link', { name: 'Only the runs tagged october' }))
+    expect(address()).toBe('/backtests?tag=october')
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Stop at 10' })).toBeNull())
+    expect(within(screen.getByRole('group', { name: 'Narrow the list' })).getByRole('combobox', { name: 'Tag' })).toHaveValue('october')
+  })
+
+  it('offers to make the runs of older code again, follows them, and stops them when asked', async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, [RUN_ID]: run({ stale: true }) }
+    renderAt('/backtests')
+
+    expect(await screen.findByText(/1 run was made with older code than today’s: what it found may come\s+out otherwise now\./)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Make it again' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Make the runs made with older code again?' })
+    expect(await within(dialog).findByText(/Each is made again with its own settings, script and signals: only the code differs\. Their last makes took 5 min together\./))
+      .toBeInTheDocument()
+    expect(within(dialog).getByText(/a run you ask for goes first\. Nothing trades\. The old runs\s+stay/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Make it again' }))
+
+    await waitFor(() => expect(sent.filter((request) => request.method === 'POST' && request.path === '/api/backtests/remake').map((request) => request.body))
+      .toEqual([{ stale: true }]))
+    expect(await screen.findByText(/Making 1 run again on today’s code: 0 made, 0 under way, 1 to go\./)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(sent.some((request) => request.method === 'DELETE' && request.path === '/api/backtests/remake')).toBe(true))
+  })
+
+  it('folds a run made again under the run that made it, with what it found, and removes it when asked', async () => {
+    const user = userEvent.setup()
+    const remadeId = '20261020-090000-aaaaaa'
+    runs = {
+      [remadeId]: run({ id: remadeId, remade_from: RUN_ID, status: { state: 'done', created_at: '2026-10-20T09:00:00Z' } }),
+      [RUN_ID]: run({ remade_by: remadeId, stale: true, headline: { ...listedRun().headline!, total_percent: -2.5, trades: 7 } }),
+    }
+    renderAt('/backtests')
+
+    const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
+    expect(within(row).getByText('made again on today’s code')).toBeInTheDocument()
+    // Nothing to make again: the old run is made again already.
+    expect(screen.queryByRole('button', { name: 'Make it again' })).toBeNull()
+    await user.click(within(row).getByText('The run before, made with older code'))
+    expect(within(row).getByText('−2.50% in 7 trades')).toBeInTheDocument()
+    await user.click(within(row).getByRole('button', { name: 'Remove it' }))
+    await waitFor(() => expect(removals().map((request) => request.body)).toEqual([{ ids: [RUN_ID] }]))
   })
 
   it("marks Claude's runs, and leads to its experiments", async () => {
@@ -1048,6 +1131,38 @@ describe('a run', () => {
     expect(rows.map((row) => row.textContent)).toEqual(
       expect.arrayContaining(['Entry signals113100%', 'Passed the rules32.7%', 'Won32.7%']),
     )
+  })
+
+  it('offers a run of older code to be made again, and says once it was, and by which run', async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, [RUN_ID]: run({ stale: true }) }
+    renderAt(`/backtests/${RUN_ID}`)
+
+    expect(await screen.findByText('Made with older code than today’s: what it found may come out otherwise now.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Make it again' }))
+    await waitFor(() => expect(sent.filter((request) => request.method === 'POST' && request.path === '/api/backtests/remake').map((request) => request.body))
+      .toEqual([{ runs: [RUN_ID] }]))
+
+    runs = { ...runs, [RUN_ID]: run({ stale: true, remade_by: '20261020-090000-aaaaaa' }) }
+    renderAt(`/backtests/${RUN_ID}`)
+    expect(await screen.findByRole('link', { name: 'the run that made it again' })).toHaveAttribute('href', '/backtests/20261020-090000-aaaaaa')
+  })
+
+  it('is tagged with the tags in use, or a new one typed', async () => {
+    const user = userEvent.setup()
+    runs = { ...runs, '20261019-210000-bbbbbb': run({ id: '20261019-210000-bbbbbb', name: 'Stop at 10', tags: ['october'] }) }
+    renderAt(`/backtests/${RUN_ID}`)
+
+    await user.click(await screen.findByRole('button', { name: 'More actions on this run' }))
+    await user.click(await screen.findByRole('menuitem', { name: /Rename/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Name and tags' })
+    await user.type(within(dialog).getByRole('combobox', { name: 'Tags' }), 'late entries{Enter}')
+    await user.click(within(dialog).getByRole('combobox', { name: 'Tags' }))
+    await user.click(await screen.findByRole('option', { name: 'october' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(sent.filter((request) => request.method === 'PATCH').map((request) => request.body))
+      .toEqual([{ name: 'Smoke EMA cross', tags: ['late entries', 'october'] }]))
   })
 
   it('follows a run while it waits its turn', async () => {

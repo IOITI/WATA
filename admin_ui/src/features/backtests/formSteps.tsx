@@ -45,11 +45,13 @@ import {
   rangeHint,
   strategyAssets,
   sweepCells,
+  tagsOf,
   walkForwardChoices,
 } from './form'
 import type { AxisDraft, BacktestDraft, DayState } from './form'
 import { assetLabel, settingChanges, showValue } from './model'
 import { SettingChanges } from './parts'
+import { TagsField } from './TagsField'
 import { measureSentence, underlyingLabel } from './turboModel'
 
 type Update = (changes: Partial<BacktestDraft>) => void
@@ -765,10 +767,10 @@ export function ReviewStep({
           <span className="text-xs text-text-secondary">Name (optional)</span>
           <Input value={draft.name} maxLength={options.limits.name_length} onChange={(event) => update({ name: event.target.value })} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-text-secondary">Tags, separated by commas</span>
-          <Input value={draft.tags} onChange={(event) => update({ tags: event.target.value })} />
-        </label>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-text-secondary">Tags (optional)</span>
+          <TagsField value={tagsOf(draft.tags)} onChange={(tags) => update({ tags: tags.join(', ') })} limits={options.limits} />
+        </div>
       </div>
       {problems.length > 0 && (
         <ul className="list-disc space-y-1 pl-5 text-xs text-negative">
