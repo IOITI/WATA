@@ -2,7 +2,7 @@
 
 ## v0.71.0 - The AI agent and LuxAlgo's Library, together: asked about an indicator, what WATA knows of it, whether it runs here, a weekly scout, and funded challenges
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 v0.70.0 brought LuxAlgo's Library into WATA. The agent could not be asked about one of its indicators from that indicator's page, nothing kept what WATA learned of one, whether one runs on WATA was found only by trying it, and LuxAlgo's prop-firm tools went unused.
 
@@ -36,7 +36,7 @@ v0.70.0 brought LuxAlgo's Library into WATA. The agent could not be asked about 
 
 ## v0.70.0 - LuxAlgo's Library in WATA: its indicators taken as your scripts, and the AI agent reading it
 
-**Release date:** not yet released
+**Release date:** 2026-10-31
 
 LuxAlgo, who make Vela, the chart WATA draws with, serve their Library of trading concepts and indicators with their Pine source, market trackers of US public records and prop-firm tools over MCP. WATA's admin now reads them for a page of its own and for the AI agent, and Claude Code in this repository reaches them too.
 
