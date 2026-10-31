@@ -47,7 +47,7 @@ from src.backtest.turbo_model import (
 from src.backtest.baseline import DEFAULT_SEED, Baseline, entry_hours
 from src.backtest.clock import TradingClock, days_between
 from src.backtest.rules import compounded
-from src.backtest.data import AssetSeries, DatabaseData, FileData
+from src.backtest.data import AssetSeries, DatabaseData, FileData, IndexSeries, index_series
 from src.backtest.execution import EXECUTION_FILE, MEASURED, fills_for
 from src.backtest.settings import BacktestSettings
 from src.backtest.signals import by_day, closing_signals, journal_signals, pine_signals, raised_signals
@@ -191,6 +191,18 @@ async def _asset_series(rows: AssetRows, chart: dict | None, start: int, end: in
             series.ts.append(int(row[0]))
             series.close.append(float(value))
     return series
+
+
+async def _index_series(rows: AssetRows, epic: str, start: int, end: int) -> IndexSeries | None:
+    """
+    The index the position monitor follows between the turbos' quotes over a day: the Capital.com feed's bars of
+    ``epic``, as the monitor reads its quotes; None when they cannot be read, which judges on Saxo's quotes alone.
+    """
+    try:
+        found, _ = await rows.rows("capital", epic, start, end)
+    except (ValueError, OSError):
+        return None
+    return index_series(found)
 
 
 def delayed(events: list, shift_seconds: float) -> list:
@@ -375,11 +387,17 @@ async def run(arguments) -> int:
             if previous_close is not None:
                 break
         features: dict[str, dict] = {}
+        # The index between the turbos' quotes, read only when a simulator of the run judges on it.
+        between_quotes = bool(settings.index_epic) and (
+            settings.index_between_quotes or any(cell["simulator"].settings.index_between_quotes for cell in cells)
+        )
         for place, day in enumerate(days):
             progress("days", place, len(days), day)
             day_start, day_end = clock.day_bounds(day)
             recorded = await data.day(indice, day, day_start, day_end)
             recorded.asset = await _asset_series(rows, request.get("chart"), day_start, day_end)
+            if between_quotes:
+                recorded.index = await _index_series(rows, settings.index_epic, day_start, day_end)
             key = day.isoformat()
             closing_today = closing_by_day.get(key, [])
             for number, cell in enumerate(cells):

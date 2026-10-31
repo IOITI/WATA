@@ -25,6 +25,12 @@ after the one standing at its fill, nearer to what WATA paid than the standing
 one. With ``wait_for_fresh_quote`` a position is judged only once its bid has
 changed after its purchase, as the position monitor judges it
 (src/trade/fresh_quote.py).
+
+With ``index_between_quotes``, the monitor also judges every price exit on the
+bid estimated from the index between Saxo's quotes (src/trade/index_estimate.py):
+on the index's ten-second bar, at its open before the turbo's new quote, and at
+its open, low, high and close in ten seconds without one. A turbo's quote is
+taken to come in the middle of its ten seconds, the index read there.
 """
 
 from dataclasses import dataclass, field
@@ -49,6 +55,7 @@ from src.backtest.rules import (
 from src.backtest.selection import NotSelected, select_turbo
 from src.backtest.settings import NEXT, BacktestSettings
 from src.trade.fresh_quote import FreshQuotes
+from src.trade.index_estimate import TURBO_DIRECTIONS, BetweenQuotes, between_quotes_reason
 from src.trade.macro_calendar import Calendar, flat_reason, flat_window_at, read_calendar
 from src.trade.market_calendar import MarketCalendar, read_market_calendar
 
@@ -148,6 +155,8 @@ class Simulator:
         self.positions: list[Position] = []
         # The positions whose bid is still the one standing at their purchase, by trade id.
         self.fresh_quotes = FreshQuotes(enabled=settings.wait_for_fresh_quote)
+        # Saxo's last quote of each position and its sensitivity to the index, when it is judged between quotes.
+        self.between_quotes = BetweenQuotes(enabled=settings.index_between_quotes and bool(settings.index_epic))
         self.last_loss_at: float | None = None
         self.trader_free_at = 0.0
         self.trades: list[dict] = []
@@ -173,6 +182,7 @@ class Simulator:
         self._day = day
         self.fills.start_day(day.day.isoformat())
         self.fresh_quotes.forget_except(position.trade_id for position in self.positions)
+        self.between_quotes.forget_except(position.trade_id for position in self.positions)
         self._day_percents = []
         self._entries_today = 0
         first_trade = len(self.trades)
@@ -458,6 +468,10 @@ class Simulator:
         if index > 0 and start - series.ts[index - 1] > BAR_SECONDS:
             self._note_gap(position, series.ts[index - 1] + BAR_SECONDS, start)
         position.cursor = index + 1
+        changed = series.changed(index)
+        # Between Saxo's quotes, on the bid estimated from the index: before the quote this bar brings, or through it.
+        if self._judged_between_quotes(position, start, whole=not changed):
+            return
         opened, high, low, close = series.bid_open[index], series.bid_high[index], series.bid_low[index], series.bid_close[index]
         middle = (low, high) if close >= opened else (high, low)
         points = ((start, opened, True), (start + BAR_SECONDS, middle[0], False),
@@ -496,6 +510,67 @@ class Simulator:
             delay = self.fills.exit_seconds()
             self._sell(position, moment + delay if delay else moment, price, f"Performance ({decision.reason})", kind=decision.kind)
             return
+        if changed or self.between_quotes.anchor(position.trade_id) is None:
+            self._note_quote(position, index, start)
+
+    def _note_quote(self, position: Position, index: int, start: int) -> None:
+        """
+        Saxo's new quote of a position it may be judged on (``_note_quote`` of the monitor): where its estimates
+        between quotes start from, the index read in the middle of the ten seconds the quote came in.
+        """
+        if not self.between_quotes.enabled or position.trade_id in self.fresh_quotes.waiting:
+            return
+        bars = self._day.index if self._day is not None else None
+        place = bars.bar_at(start) if bars is not None else None
+        self.between_quotes.quoted(
+            position.trade_id, position.series.bid_close[index], bars.middle(place) if place is not None else None,
+            start + BAR_SECONDS / 2, TURBO_DIRECTIONS[position.direction],
+        )
+
+    def _judged_between_quotes(self, position: Position, start: int, *, whole: bool) -> bool:
+        """
+        The monitor's look at a position between Saxo's quotes (``judge_between_quotes``), on the index's bar of
+        those ten seconds: at its open, then (``whole``: no new quote of the turbo in them) its low and high in the
+        order the index went, the nearer to its close last, and its close. Sold at the estimate that decided it,
+        as on a quote of the turbo. Whether it was sold.
+        """
+        bars = self._day.index if self._day is not None else None
+        if not self.between_quotes.enabled or bars is None or position.trade_id in self.fresh_quotes.waiting:
+            return False
+        place = bars.bar_at(start)
+        if place is None:
+            return False
+        opened, high, low, close = bars.open[place], bars.high[place], bars.low[place], bars.close[place]
+        middle = (low, high) if close >= opened else (high, low)
+        points = ((start, opened, True),)
+        if whole:
+            points += ((start + BAR_SECONDS, middle[0], False), (start + BAR_SECONDS, middle[1], False),
+                       (start + BAR_SECONDS, close, False))
+        series = position.series
+        for moment, level, at_open in points:
+            estimate, _ = self.between_quotes.estimate(
+                position.trade_id, index=level, index_at=moment, now=moment, barrier=series.ref.barrier,
+            )
+            if estimate is None:
+                continue
+            decision = exit_decision(
+                self.settings, open_price=position.open_price, perf=performance(position.open_price, estimate.bid),
+                best_before=position.best, day_percent=self.day_percent(),
+            )
+            if decision is None:
+                continue
+            bid = round(estimate.bid, series.decimals)
+            if at_open:
+                price = bid
+            elif decision.kind in (STOP_LOSS, TRAILING):
+                price = bid if self.settings.stop_fill == "worst" else max(series.tick_at_or_below(decision.level), bid)
+            else:
+                price = min(series.tick_at_or_above(decision.level), bid)
+            delay = self.fills.exit_seconds()
+            reason = between_quotes_reason(decision.reason, self.settings.index_epic, estimate, moment)
+            self._sell(position, moment + delay if delay else moment, price, f"Performance ({reason})", kind=decision.kind)
+            return True
+        return False
 
     def _flat_window(self, moment: float):
         """The release nothing is to be held into at ``moment``, when the macro_news rule sells before it."""

@@ -1095,3 +1095,39 @@ def test_a_quote_the_capital_com_feed_publishes_reaches_a_chart_through_the_admi
     assert (received["type"], received["ref"], received["bid"], received["t"]) == ("quote", ref, 25000.5, 1792051200123)
     assert publisher.sent == 1 and publisher.dropped == 0
 
+
+
+def test_a_quote_the_capital_com_feed_publishes_reaches_the_position_monitor(settings):
+    import aio_pika
+
+    from src.capital_feed.live import LivePublisher, RabbitExchange
+    from src.position_monitor import follow_index
+    from src.trade.index_feed import IndexQuotes
+
+    epic, other = (f"T{uuid.uuid4().hex[:8].upper()}" for _ in range(2))
+
+    async def scenario():
+        # As the position monitor follows its index (index_between_quotes), then the feed's own publisher.
+        connection = await aio_pika.connect_robust(settings.url)
+        quotes = IndexQuotes(epic, clock=lambda: 1792051201.0)
+        await follow_index(connection, quotes)
+        exchange = RabbitExchange(settings.url)
+        publisher = LivePublisher(exchange.open)
+        sending = asyncio.create_task(publisher.run())
+        publisher.quote(other, bid=1.5, ask=2.5, quoted_ms=1792051200100, received_at=1792051200.1, bar=None)
+        publisher.quote(epic, bid=25000.5, ask=25002.5, quoted_ms=1792051200123, received_at=1792051200.25, bar=None)
+        for _ in range(300):
+            if quotes.received:
+                break
+            await asyncio.sleep(0.05)
+        sending.cancel()
+        await asyncio.gather(sending, return_exceptions=True)
+        await exchange.close()
+        await connection.close()
+        return quotes, publisher
+
+    quotes, publisher = asyncio.run(asyncio.wait_for(scenario(), timeout=45))
+
+    assert quotes.latest() == (25001.5, 1792051200.25)
+    assert quotes.received == 1
+    assert publisher.sent == 2 and publisher.dropped == 0

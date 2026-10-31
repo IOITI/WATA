@@ -55,6 +55,14 @@ from .exceptions import (
 )
 from .close_intents import CloseIntent, CloseIntents
 from .fresh_quote import FreshQuotes, opened_at, wait_for_fresh_quote
+from .index_estimate import (
+    INDEX_FRESH_SECONDS,
+    TURBO_DIRECTIONS,
+    BetweenQuotes,
+    between_quotes_reason,
+    followed_epic,
+    index_between_quotes,
+)
 from .macro_calendar import Calendar, NewsRule, flat_reason, flat_window_at
 from .order_tracker import (
     CANCEL,
@@ -192,6 +200,15 @@ def parse_saxo_turbo_description(description: str) -> dict | None:
             "from": match.group(5),
         }
     return None
+
+
+def _indice_ids(rules) -> dict:
+    """The indices the trader takes (``allowed_indices``' ``indice_ids``), from the configuration's rules."""
+    for rule in rules if isinstance(rules, list) else []:
+        if isinstance(rule, dict) and rule.get("rule_type") == "allowed_indices":
+            indice_ids = (rule.get("rule_config") or {}).get("indice_ids")
+            return indice_ids if isinstance(indice_ids, dict) else {}
+    return {}
 
 
 def annotate_parsed_turbos(instruments: list[dict]) -> list[dict]:
@@ -1692,6 +1709,7 @@ class AsyncPerformanceMonitor:
         trigger_daily_stats_fn=None,  # optional async callable() -> None
         order_tracker=None,
         order_requests=None,  # what WATA asked of Saxo's order endpoint (AsyncDbOrderRequestManager), read
+        index_quotes=None,  # the newest quote of the index followed (src/trade/index_feed.py IndexQuotes)
     ):
         self.position_service = position_service
         self.order_service = order_service
@@ -1752,6 +1770,16 @@ class AsyncPerformanceMonitor:
         # Since when each managed position has been without a price, and those already said.
         self._missing_price_since: dict[str, float] = {}
         self._missing_price_said: set[str] = set()
+        # The positions judged on the index between Saxo's quotes, when position_management says so
+        # (src/trade/index_estimate.py): the index followed, its newest quote, and Saxo's last quote of each.
+        self.between_quotes = BetweenQuotes(enabled=index_between_quotes(self.perf_config))
+        self.index_epic = followed_epic(
+            self.config.get_config_value("trade.config.capital_feed", {}),
+            _indice_ids(self.config.get_config_value("trade.rules", [])),
+        )
+        self.index_quotes = index_quotes
+        self._last_quotes: dict[str, tuple] = {}
+        self._barriers: dict[str, float | None] = {}
 
     @staticmethod
     def _now() -> float:
@@ -1934,12 +1962,14 @@ class AsyncPerformanceMonitor:
         db_positions, today_pct = await self._load_managed_state()
         managed_ids = {db_pos["position_id"] for db_pos in db_positions}
         for known in (self._max_perf_by_position, self._max_perf_pending_save, self._min_perf_by_position,
-                      self._min_perf_pending_save, self._live_values, self._missing_price_since):
+                      self._min_perf_pending_save, self._live_values, self._missing_price_since,
+                      self._last_quotes, self._barriers):
             for pid in list(known):
                 if pid not in managed_ids:
                     del known[pid]
         self._missing_price_said &= managed_ids
         self.fresh_quotes.forget_except(managed_ids)
+        self.between_quotes.forget_except(managed_ids)
 
         if not db_positions:
             logger.info("No open positions to check.")
@@ -1989,6 +2019,7 @@ class AsyncPerformanceMonitor:
             if perf_pct < self._min_perf_by_position.get(pid, 0.0):
                 self._min_perf_by_position[pid] = perf_pct
                 self._min_perf_pending_save[pid] = perf_pct
+            self._note_quote(pid, db_pos.get("action"), api_pos, current_bid, now)
 
             if pid in self.close_intents:
                 # Already to be sold: its intent is tried below, with its own reason, soon once quoted again.
@@ -1996,32 +2027,12 @@ class AsyncPerformanceMonitor:
                 continue
 
             close_reason = None
-
-            # Stop-loss
-            if perf_pct <= self.thresholds["stoploss_percent"]:
-                close_reason = f"Stoploss ({self.thresholds['stoploss_percent']}%) hit at {perf_pct}%"
-                # Not awaited: the sell must not wait for this DB write.
-                self._run_in_background(self._record_loss())
-
-            # Take-profit
-            elif perf_pct >= self.thresholds["max_profit_percent"]:
-                close_reason = f"Takeprofit ({self.thresholds['max_profit_percent']}%) hit at {perf_pct}%"
-
-            # Trailing stop
-            if not close_reason and max_perf is not None and self.trailing_stop_config.get("enabled", False):
-                act_pct = self.trailing_stop_config.get("activation_percent", 5)
-                dd_pct = self.trailing_stop_config.get("drawdown_percent", 8)
-                if max_perf >= act_pct:
-                    drawdown = max_perf - perf_pct
-                    if drawdown >= dd_pct:
-                        close_reason = f"Trailing Stop: peak {max_perf:.1f}%, now {perf_pct:.1f}% (dd {drawdown:.1f}% >= {dd_pct}%)"
-
-            # Daily profit target
-            if not close_reason and today_pct is not None:
-                factor = (1 + today_pct / 100.0) * (1 + perf_pct / 100.0) - 1
-                potential = round(factor * 100, 2)
-                if potential >= self.percent_profit_wanted:
-                    close_reason = f"Daily profit target ({self.percent_profit_wanted}%) potentially met ({potential}%)"
+            price_exit = self._price_exit(perf_pct, max_perf, today_pct)
+            if price_exit is not None:
+                close_reason, stop_loss = price_exit
+                if stop_loss:
+                    # Not awaited: the sell must not wait for this DB write.
+                    self._run_in_background(self._record_loss())
 
             # Nothing held through a US release, when the macro_news rule says so
             if not close_reason:
@@ -2040,6 +2051,97 @@ class AsyncPerformanceMonitor:
 
         logger.debug("Perf check done. Closed=%d, MaxPerf updates=%d, Errors=%d", len(processed), len(db_updates), errors)
         return {"closed_positions_processed": processed, "db_updates": db_updates, "errors": errors}
+
+    def _price_exit(self, perf_pct: float, max_perf: float | None, today_pct: float | None) -> tuple[str, bool] | None:
+        """
+        Why a position at ``perf_pct`` is to be sold on its price, and whether that is its stop-loss: the stop-loss,
+        else the take-profit; then the trailing stop on its best (``max_perf``, None while unknown); then the day's
+        target with today's realised result (``today_pct``). Saxo's quotes and the estimates between them alike.
+        """
+        if perf_pct <= self.thresholds["stoploss_percent"]:
+            return f"Stoploss ({self.thresholds['stoploss_percent']}%) hit at {perf_pct}%", True
+        if perf_pct >= self.thresholds["max_profit_percent"]:
+            return f"Takeprofit ({self.thresholds['max_profit_percent']}%) hit at {perf_pct}%", False
+        if max_perf is not None and self.trailing_stop_config.get("enabled", False):
+            act_pct = self.trailing_stop_config.get("activation_percent", 5)
+            dd_pct = self.trailing_stop_config.get("drawdown_percent", 8)
+            if max_perf >= act_pct:
+                drawdown = max_perf - perf_pct
+                if drawdown >= dd_pct:
+                    return f"Trailing Stop: peak {max_perf:.1f}%, now {perf_pct:.1f}% (dd {drawdown:.1f}% >= {dd_pct}%)", False
+        if today_pct is not None:
+            factor = (1 + today_pct / 100.0) * (1 + perf_pct / 100.0) - 1
+            potential = round(factor * 100, 2)
+            if potential >= self.percent_profit_wanted:
+                return f"Daily profit target ({self.percent_profit_wanted}%) potentially met ({potential}%)", False
+        return None
+
+    def _note_quote(self, pid: str, action: str | None, api_pos: dict, bid: float, now: float) -> None:
+        """
+        A quote of a position it may be judged on: Saxo's new one (its bid or ask changed) is where its estimates
+        between quotes start from, with the index at that moment when its quote is fresh.
+        """
+        direction = TURBO_DIRECTIONS.get(action)
+        if not self.between_quotes.enabled or direction is None:
+            return
+        quote = (bid, (api_pos.get("PositionView") or {}).get("Ask"))
+        if self._last_quotes.get(pid) == quote:
+            return
+        self._last_quotes[pid] = quote
+        index, index_at = self.index_quotes.latest() if self.index_quotes is not None else (None, None)
+        fresh = index_at is not None and now - index_at <= INDEX_FRESH_SECONDS
+        self.between_quotes.quoted(pid, bid, index if fresh else None, now, direction)
+
+    def _barrier_of(self, pid: str, api_pos: dict) -> float | None:
+        """The level its turbo's description names (``parse_saxo_turbo_description``), read once."""
+        if pid not in self._barriers:
+            parsed = parse_saxo_turbo_description((api_pos.get("DisplayAndFormat") or {}).get("Description") or "")
+            try:
+                self._barriers[pid] = float(parsed["price"]) if parsed else None
+            except (TypeError, ValueError):
+                self._barriers[pid] = None
+        return self._barriers[pid]
+
+    def judge_between_quotes(self, positions: dict[str, dict], now: float) -> int:
+        """
+        Every price exit judged again on each managed position's bid estimated from the index, between Saxo's
+        quotes (``index_between_quotes``), on what the stream last listed and the managed state read last: nothing
+        is asked of the database. A position waiting for a quote newer than its purchase is not judged, and
+        without a fresh quote of the index the exits wait for Saxo's next one. The best and the worst stay
+        Saxo's. Returns how many positions are now to be sold.
+        """
+        if not self.between_quotes.enabled or self.index_quotes is None or not self.index_epic:
+            return 0
+        index, index_at = self.index_quotes.latest()
+        wanted = 0
+        for db_pos in self._last_managed_positions or []:
+            pid = db_pos["position_id"]
+            api_pos = positions.get(pid)
+            if (api_pos is None or pid in self._closing_position_ids or pid in self.close_intents
+                    or pid in self.fresh_quotes.waiting):
+                continue
+            open_price = (api_pos.get("PositionBase") or {}).get("OpenPrice")
+            if not open_price:
+                continue
+            estimate, _ = self.between_quotes.estimate(
+                pid, index=index, index_at=index_at, now=now, barrier=self._barrier_of(pid, api_pos),
+            )
+            if estimate is None:
+                continue
+            perf_pct = round(((estimate.bid * 100) / open_price) - 100, 2)
+            price_exit = self._price_exit(perf_pct, self._max_perf_by_position.get(pid), self._last_today_pct)
+            if price_exit is None:
+                continue
+            reason, stop_loss = price_exit
+            if stop_loss:
+                # Not awaited: the sell must not wait for this DB write.
+                self._run_in_background(self._record_loss())
+            said = between_quotes_reason(reason, self.index_epic, estimate, now)
+            logger.info("Pos %s: %s (index %.2f)", pid, said, estimate.index)
+            # Urgent, as on Saxo's quote: nothing is asked of Saxo before this sale (see _attempt_close).
+            self.close_intents.want(pid, f"Performance ({said})", now, action=db_pos.get("action"), urgent=True)
+            wanted += 1
+        return wanted
 
     def _flat_reason(self, now: float) -> str | None:
         """Why nothing is to be held at ``now``: a US release ahead, when the macro_news rule sells before it."""
@@ -2084,6 +2186,7 @@ class AsyncPerformanceMonitor:
         """
         now = self._now()
         self._end_intents_of_sold(streamed_positions)
+        self.judge_between_quotes(streamed_positions, now)
         reason = END_OF_DAY_REASON if self._after_the_close(now) else self._flat_reason(now)
         # Nothing listed at Saxo, nothing to read: the night's checks cost no query.
         if reason is not None and streamed_positions:

@@ -444,6 +444,13 @@ class ConfigurationManager:
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
+            # Exits judged on the index between Saxo's quotes (src/trade/index_estimate.py): off unless true
+            between_quotes = self.get_config_value("trade.config.position_management.index_between_quotes")
+            if between_quotes is not None and not isinstance(between_quotes, bool):
+                error_msg = "Config field 'trade.config.position_management.index_between_quotes' must be a boolean"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
             # No turbo with a wider spread than this share of its ask is bought: no limit unless set
             max_spread = self.get_config_value("trade.config.turbo_preference.max_spread_percent")
             if max_spread is not None and (

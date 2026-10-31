@@ -103,6 +103,8 @@ BLOCKS = (
     Block("exits", "saxo", "Stop placed at Saxo", (f"{_POSITIONS}.protective_stop",),
           "A stop order Saxo holds itself, should WATA not be there to sell."),
     Block("exits", "fresh", "A position just bought", (f"{_POSITIONS}.wait_for_fresh_quote",)),
+    Block("exits", "index", "Between Saxo's quotes", (f"{_POSITIONS}.index_between_quotes",),
+          "Each position's bid estimated from the index while Saxo's quote stands."),
     Block("watchlist", "kept", "What it keeps", (
         f"{_WATCHLIST}.enabled", f"{_WATCHLIST}.directions", f"{_WATCHLIST}.startup_refresh",
         f"{_WATCHLIST}.accept_stale")),

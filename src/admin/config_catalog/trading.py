@@ -385,6 +385,24 @@ EXITS = (
         caveats=("On 19 October 2026 a stop was 'hit at −8.47 %' on a bid 17 to 27 s older than the purchase; the "
                  "sale filled at +0.51 %.",),
     ),
+    Param(
+        path="trade.config.position_management.index_between_quotes", group="exits",
+        label="Judge positions on the index between Saxo's quotes", kind="bool", optional=True, default=False,
+        help="Saxo quotes a turbo about every 30 s. Between two quotes, each position's bid is estimated from "
+             "Capital.com's index and every price exit judged on it each second.",
+        readers=(MONITOR,), consumers=("backtests",), risk=TRADING,
+        effects=("The stop-loss, the take-profit, the trailing stop and the day's target may sell on the estimate, as "
+                 "urgently as on Saxo's quote; the reason says it was judged between quotes.",
+                 "The best and the worst of a position stay Saxo's quotes.",),
+        related=(STOPLOSS, MAX_PROFIT, f"{TRAILING}.enabled", DAY_TARGET,
+                 "trade.config.position_management.wait_for_fresh_quote", "trade.config.capital_feed.enabled"),
+        also_needs=("The Capital.com feed on, recording the index of the one indice the trader takes "
+                    "(trade.config.capital_feed.instruments).",),
+        caveats=("Measured on 26-30 October 2026: the estimate was 0.12 % from Saxo's next quote at the median and "
+                 "0.59 % at the 95th percentile, Saxo's last quote 0.25 % and 1.37 %.",
+                 "Without a quote of the index in the last 2 s, or Saxo's in the last 90 s, the exits wait for "
+                 "Saxo's next quote, as when it is off.",),
+    ),
 )
 
 SIZE = (

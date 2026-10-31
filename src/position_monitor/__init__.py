@@ -11,7 +11,9 @@ its sales are tried again every second, whether prices come or not, with the
 sales that come with time (after the day's close, before a US release).
 Reconciling the DB with Saxo is separate and rarer: it runs when a position
 leaves the stream and on a timer, and gives a row back to a position WATA
-bought but lost.
+bought but lost. With ``position_management.index_between_quotes``, the
+index's quotes come from the Capital.com feed's exchange, and every price exit
+is judged again each second on the bid estimated from them.
 
 Runs as a separate Docker container (WATA_APP_ROLE=position_monitor).
 """
@@ -56,6 +58,7 @@ from src.vault import loader as vault
 from src.vault import store as vault_store
 from src.saxo_authen import SaxoAuth
 from src.saxo_streaming.client import SaxoStreamClient
+from src.trade.index_feed import EXCHANGE as PRICES_EXCHANGE, QUEUE_LENGTH as INDEX_QUEUE_LENGTH, IndexQuotes, quote_key
 from src.trade.rules import TradingRule
 from src.trade.order_tracker import OrderTracker
 from src.message_helper import build_daily_trading_report_message, DEFAULT_MILESTONES_EUR
@@ -327,6 +330,26 @@ class StreamPositionHandler:
                  "attempts": intent.attempts, "last_error": intent.last_error}
                 for intent in self.performance_monitor.close_intents.all()
             ],
+            "index_between_quotes": self.index_figures(),
+        }
+
+    def index_figures(self) -> dict | None:
+        """
+        The index positions are judged on between Saxo's quotes, and when its newest quote came, for the admin's
+        health; None while the setting is off.
+        """
+        monitor = self.performance_monitor
+        if getattr(getattr(monitor, "between_quotes", None), "enabled", False) is not True:
+            return None
+        quotes = monitor.index_quotes
+        _, at = quotes.latest() if isinstance(quotes, IndexQuotes) else (None, None)
+        try:
+            in_hours = bool(monitor.trading_rule.in_trading_hours())
+        except Exception:
+            in_hours = None
+        return {
+            "epic": monitor.index_epic, "quote_at": moment(at), "in_trading_hours": in_hours,
+            "received": quotes.received if isinstance(quotes, IndexQuotes) else 0,
         }
 
     def stop(self):
@@ -373,6 +396,26 @@ async def stop_when_asked(stopping: asyncio.Event, performance_monitor, stream_c
     if not await performance_monitor.wait_for_sales_under_way(settle_seconds):
         logger.warning("Stopping with a sale still awaiting Saxo's answer after %ss", settle_seconds)
     await stream_client.stop()
+
+
+async def follow_index(connection, index_quotes: IndexQuotes) -> None:
+    """
+    The index's quotes from the Capital.com feed's exchange, through a queue of the monitor's own (exclusive, gone
+    with the connection, the oldest dropped first) on a channel of its own: whatever happens there never reaches
+    the ops queue's. Nothing is acknowledged or awaited: each quote only replaces the one before in memory.
+    """
+    channel = await connection.channel()
+    exchange = await channel.declare_exchange(PRICES_EXCHANGE, aio_pika.ExchangeType.TOPIC, durable=False)
+    queue = await channel.declare_queue(
+        exclusive=True, auto_delete=True,
+        arguments={"x-max-length": INDEX_QUEUE_LENGTH, "x-overflow": "drop-head"},
+    )
+    await queue.bind(exchange, routing_key=quote_key(index_quotes.epic))
+
+    async def on_quote(message) -> None:
+        index_quotes.take(message.body)
+
+    await queue.consume(on_quote, no_ack=True)
 
 
 def stream_heard_lately(stream_client, now: float | None = None) -> bool:
@@ -626,6 +669,9 @@ async def main():
             order_tracker=order_tracker,
             order_requests=AsyncDbOrderRequestManager(pg),
         )
+        # Positions judged on the index between Saxo's quotes, when position_management says so.
+        if performance_monitor.between_quotes.enabled and performance_monitor.index_epic:
+            performance_monitor.index_quotes = IndexQuotes(performance_monitor.index_epic)
 
         # ── Streaming configuration ──
         environment = config_manager.get_config_value("saxo_auth.env", "live")
@@ -670,6 +716,19 @@ async def main():
             )
 
         await ops_queue.consume(on_message)
+
+        if performance_monitor.index_quotes is not None:
+            try:
+                await follow_index(connection, performance_monitor.index_quotes)
+                logger.info("Exits judged on %s between Saxo's quotes.", performance_monitor.index_epic)
+            except Exception as e:
+                # The exits are judged on Saxo's quotes alone, as before; the health says no quote came.
+                logger.error("Could not follow %s's quotes: %s", performance_monitor.index_epic, e, exc_info=True)
+        elif performance_monitor.between_quotes.enabled:
+            logger.warning(
+                "index_between_quotes is on, but the Capital.com feed records no index for the one indice the trader "
+                "takes: exits are judged on Saxo's quotes alone."
+            )
 
         await telegram.send(
             f"WATA Position Monitor v{APP_VERSION} is running "

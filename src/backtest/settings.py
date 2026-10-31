@@ -20,6 +20,7 @@ from src.ta_engine.settings import TaEngineSettings
 from src.trade.account_guard import AccountGuard
 from src.trade.day_breakers import DayBreakers
 from src.trade.fresh_quote import wait_for_fresh_quote
+from src.trade.index_estimate import followed_epic, index_between_quotes
 from src.trade.macro_calendar import NewsRule
 
 _TIME_OF_DAY = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
@@ -138,6 +139,8 @@ FIELDS = (
     # Exits wait for the turbo's first quote after the purchase (src/trade/fresh_quote.py): off, the monitor of before.
     Field("wait_for_fresh_quote", "exits", "boolean", "Exits wait for the turbo's first quote after the purchase",
           source="trade.config.position_management.wait_for_fresh_quote"),
+    Field("index_between_quotes", "exits", "boolean", "Exits judged on the index between the turbo's quotes",
+          source="trade.config.position_management.index_between_quotes"),
     # ── the turbo bought ──
     Field("turbo_min_price", "turbo", "number", "Turbos priced from", 0.01, 10_000,
           source="trade.config.turbo_preference.price_range.min"),
@@ -243,6 +246,10 @@ class BacktestSettings:
     trailing_drawdown_percent: float = 8
     # Off for the runs made before it existed; a new run takes the live configuration's (on unless false).
     wait_for_fresh_quote: bool = False
+    # Every price exit judged on the bid estimated from the index between the turbo's quotes
+    # (src/trade/index_estimate.py), on the Capital.com instrument the position monitor follows (none: never).
+    index_between_quotes: bool = False
+    index_epic: str = ""
     # The turbo.
     turbo_min_price: float = 4
     turbo_max_price: float = 15
@@ -411,6 +418,11 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         trailing_activation_percent=trailing.get("activation_percent", defaults.trailing_activation_percent),
         trailing_drawdown_percent=trailing.get("drawdown_percent", defaults.trailing_drawdown_percent),
         wait_for_fresh_quote=wait_for_fresh_quote(position_management),
+        index_between_quotes=index_between_quotes(position_management),
+        index_epic=followed_epic(
+            _section(config, "trade", "config", "capital_feed"),
+            (_rule(config, "allowed_indices") or {}).get("indice_ids"),
+        ) or "",
         turbo_min_price=price_range.get("min", defaults.turbo_min_price),
         turbo_max_price=price_range.get("max", defaults.turbo_max_price),
         max_spread_percent=_section(config, "trade", "config", "turbo_preference").get("max_spread_percent") or 0.0,

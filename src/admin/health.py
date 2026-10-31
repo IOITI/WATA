@@ -44,6 +44,10 @@ DOWN = "down"
 UNKNOWN = "unknown"
 DISABLED = "disabled"
 
+# Exits judged on the index between Saxo's quotes (position_management.index_between_quotes), and no quote of it
+# for this long in trading hours: they wait for Saxo's quotes meanwhile.
+INDEX_QUOTE_STALE_SECONDS = 15
+
 # Services with no interface to probe: log file -> lines marking their lifecycle.
 LOG_OBSERVED_SERVICES = {
     "trader": {
@@ -508,8 +512,30 @@ def position_monitor_health(beat: dict, now: datetime, timezone_name: str) -> tu
     if figures.get("rest_fallback_since"):
         return WARNING, (f"The position stream is silent: positions checked through REST since "
                          f"{_clock(figures['rest_fallback_since'], timezone_name)}")
+    index = figures.get("index_between_quotes")
+    said = _index_warning(index, beat["beat_at"]) if isinstance(index, dict) else None
+    if said:
+        return WARNING, said
     listed = figures.get("positions_listed") or 0
     return OK, f"Streaming, {_count(listed, 'position')} at Saxo" if listed else "Streaming, no position at Saxo"
+
+
+def _index_warning(index: dict, beat_at: datetime) -> str | None:
+    """What keeps the positions from being judged on the index between Saxo's quotes, as the beat says it."""
+    epic = index.get("epic")
+    if not epic:
+        return ("Exits between Saxo's quotes are on, but no index is followed: the Capital.com feed records none for "
+                "the one indice the trader takes")
+    if not index.get("in_trading_hours"):
+        return None
+    try:
+        at = datetime.fromisoformat(index["quote_at"])
+    except (KeyError, TypeError, ValueError):
+        return f"No quote of {epic} received: exits wait for Saxo's quotes"
+    age = (beat_at - at).total_seconds()
+    if age > INDEX_QUOTE_STALE_SECONDS:
+        return f"No quote of {epic} for {int(age)} s: exits wait for Saxo's quotes"
+    return None
 
 
 async def _heartbeats(ctx) -> dict[str, dict]:

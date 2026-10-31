@@ -146,7 +146,7 @@ function held(groups: NamedGroupStats[]): NamedGroupStats[] {
   return groups.filter((group) => group.trade_count > 0)
 }
 
-/** The trades grouped as the trading style asks: confidence, source, turbo's price, signal's delay, worst reached. */
+/** The trades grouped as the trading style asks: confidence, source, turbo's price, signal's delay, worst reached, what decided the exit. */
 function Breakdowns({ breakdowns }: { breakdowns: LiveBreakdowns }) {
   const label = (group: NamedGroupStats) => group.group
   return (
@@ -186,6 +186,15 @@ function Breakdowns({ breakdowns }: { breakdowns: LiveBreakdowns }) {
       >
         <GroupTable groups={held(breakdowns.by_worst)} header="Worst" label={label} />
       </Panel>
+      {breakdowns.by_decided_on && (
+        <Panel
+          title="By what decided the exit"
+          description="A stop-loss, take-profit, trailing stop or day's target decided on Saxo's quote, or on the turbo's bid estimated from the index between Saxo's quotes."
+          bodyClassName="pt-2"
+        >
+          <GroupTable groups={held(breakdowns.by_decided_on)} header="Decided on" label={label} />
+        </Panel>
+      )}
     </>
   )
 }

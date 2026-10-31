@@ -166,7 +166,8 @@
           "percent": -30,
           "order_type": "StopIfTraded"
         },
-        "wait_for_fresh_quote": true
+        "wait_for_fresh_quote": true,
+        "index_between_quotes": false
       },
       "position_sizing": {
         "time_of_day_scaling": {

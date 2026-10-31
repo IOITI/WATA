@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { Exits, GroupStats, Session } from '@/lib/types'
+import type { Exits, GroupStats, LiveBreakdowns, Session } from '@/lib/types'
 import { WithTrail } from '@/test/WithTrail'
 
 import { ExitsPage } from './ExitsPage'
@@ -43,12 +43,23 @@ const EXITS: Exits = {
   by_holding_time: [{ bucket: 'Under 5 min', ...stats(3, 8) }],
 }
 
+const BREAKDOWNS: LiveBreakdowns = {
+  by_confidence: [],
+  by_source: [],
+  by_open_price: [],
+  by_signal_delay: [],
+  by_worst: [],
+}
+
+let answered: Exits = EXITS
+
 beforeEach(() => {
+  answered = EXITS
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string) => {
       if (path.startsWith('/api/exits')) {
-        return new Response(JSON.stringify(EXITS), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify(answered), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       throw new Error(`Unexpected request: ${path}`)
     }),
@@ -59,19 +70,23 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+function renderPage() {
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MemoryRouter initialEntries={['/exits']}>
+        <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
+          <WithTrail>
+            <ExitsPage />
+          </WithTrail>
+        </AuthContext.Provider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
 describe('the Exits page', () => {
   it('places the trades by the weekday and hour they were opened, in the trading time zone', async () => {
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter initialEntries={['/exits']}>
-          <AuthContext.Provider value={{ session: SESSION, error: null, login: async () => {}, logout: async () => {} }}>
-            <WithTrail>
-              <ExitsPage />
-            </WithTrail>
-          </AuthContext.Provider>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    )
+    renderPage()
 
     const panel = (await screen.findByRole('heading', { name: 'By weekday and hour of entry' })).closest('section') as HTMLElement
     expect(panel).toHaveTextContent('Profit and loss of the trades opened in each hour of each weekday (Europe/Paris)')
@@ -79,5 +94,34 @@ describe('the Exits page', () => {
     expect(within(panel).getByText('+€8.00 over 3 trades')).toBeInTheDocument()
     expect(within(panel).getByRole('rowheader', { name: 'Monday, 09:00' })).toBeInTheDocument()
     expect(within(panel).getByRole('rowheader', { name: 'Thursday, 15:00' })).toBeInTheDocument()
+  })
+
+  it("tells the price exits decided on Saxo's quote from those decided on the index between its quotes", async () => {
+    answered = {
+      ...EXITS,
+      breakdowns: {
+        ...BREAKDOWNS,
+        by_decided_on: [
+          { group: "Saxo's quote", ...stats(2, 6) },
+          { group: "The index, between Saxo's quotes", ...stats(1, -2) },
+          { group: 'Not a price exit', ...stats(0, 0) },
+        ],
+      },
+    }
+    renderPage()
+
+    const panel = (await screen.findByRole('heading', { name: 'By what decided the exit' })).closest('section') as HTMLElement
+    expect(within(panel).getByText("Saxo's quote")).toBeInTheDocument()
+    expect(within(panel).getByText("The index, between Saxo's quotes")).toBeInTheDocument()
+    // A group without a trade is left out, as in the other breakdowns.
+    expect(within(panel).queryByText('Not a price exit')).not.toBeInTheDocument()
+  })
+
+  it('shows no such breakdown for an admin of before it', async () => {
+    answered = { ...EXITS, breakdowns: BREAKDOWNS }
+    renderPage()
+
+    await screen.findByRole('heading', { name: 'By the worst it reached' })
+    expect(screen.queryByRole('heading', { name: 'By what decided the exit' })).not.toBeInTheDocument()
   })
 })

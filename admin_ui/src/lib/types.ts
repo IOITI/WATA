@@ -725,6 +725,8 @@ export interface LiveBreakdowns {
   by_open_price: NamedGroupStats[]
   by_signal_delay: NamedGroupStats[]
   by_worst: NamedGroupStats[]
+  /** Price exits decided on Saxo's quote or on the index between its quotes (index_between_quotes); absent before v0.76.0. */
+  by_decided_on?: NamedGroupStats[]
 }
 
 /** A period of the Telegram report (a day, a week, a month...), as message_helper computes it. */

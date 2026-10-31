@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.76.0 - Exits judged on the index between Saxo's quotes
+
+**Release date:** not yet released
+
+Saxo quotes a turbo about every 30 s and fills an order at its live price, while Capital.com's US100 moves several times a second: the position monitor judged every exit on a price up to 30 s old. With `trade.config.position_management.index_between_quotes` (off unless you switch it on, on the Configuration page's Exits, "Between Saxo's quotes"), it also judges each position between Saxo's quotes on its bid estimated from the index.
+- **The estimate**: Saxo's last bid, moved as the index moved since, at the turbo's own euros per index point. That figure is learned from its own quotes (the median of its last moves of 8 points or more, from the fifth on); until then, 0.0086 € a point (0.01 $), believed only for a turbo priced like those measured. It is never read from the knock-out level: a TurboXL's financing level is not its barrier.
+- **Measured** on 8 turbos (Turbo and TurboXL, long and short) of 26–30 October, 57,468 pairs of quotes: the estimate was 0.12 % from Saxo's next quote at the median and 0.59 % at the 95th percentile; Saxo's last bid left standing was 0.25 % and 1.37 %.
+- **Every price exit**: the stop-loss, the take-profit, the trailing stop and the day's target are judged on it each second, by the same function as on Saxo's quotes. The sale is as urgent as on a quote, and its reason keeps its words, then says it was judged between quotes (`; US100 between quotes: 8.452 from 10, 10 s`). The best and the worst of a position stay Saxo's quotes.
+- **Never on less than all it rests on**: no quote of the index in the last 2 s, the index unknown at Saxo's last quote, Saxo's last quote older than 90 s, the index at the barrier, an estimate more than 25 % from Saxo's bid, or a position just bought still waiting for a quote newer than its purchase: the exits wait for Saxo's next quote, as when it is off.
+- **The index** is the Capital.com feed's instrument of the one indice the trader takes: the position monitor reads its quotes from RabbitMQ, through a queue of its own that only keeps the newest in memory. The save warns when it is switched on without the feed. Health warns when it is on and no index is followed, or no quote of it came for 15 s in trading hours.
+- **The Exits page** tells the price exits decided on Saxo's quote from those decided on the index ("By what decided the exit").
+- **The backtests do the same** (the setting "Exits judged on the index between the turbo's quotes", from the live configuration, off for the runs made before) on the feed's ten-second bars. Parity is tested against the monitor.
+
+**On the live path:** the position monitor, while the setting is on; it is off. The release recreates every WATA container, not only the trading ones, because the setting's check is in the configuration validator they all load. So it is deployed with the market closed and no position held.
+
+**Backtests:** the code digest changed (9c7a409571b614e5 → 7446dd27f5df9a7e): every run made before is marked made with older code, and "Make them again" on the Backtests page makes them again on today's code (v0.74.0). Their results do not change while the setting is off.
+
+**Before switching it on**, WATA's real positions and random entries were replayed with the backtests' own simulator on recorded quotes:
+- **WATA's 17 positions of 16, 19 and 20 October** (the days the index was recorded whole), from their real opening, under the live settings (stop −7 %, trailing stop from +2 % at 2.5 points, day's target 0.5 %):
+  - −25.4 % summed with the setting on against −29.6 % off; 5 of them were sold between quotes;
+  - with the stress sweep's slippage, +4.3, +0.6 and +1.0 points at 0.01, 0.02 and 0.05 € per fill;
+  - each sale decided on the index priced at Saxo's next quote instead of the estimate: +4.3 points, then +4.3, +0.3 and +0.3 at the slippage steps.
+- **1,000 random entries on those 8 turbos of 26–30 October**, each held until an exit or 30 minutes, the same entries in every variant:
+  - +0.30 points per trade on average (−0.09 % against −0.39 %), the median exit 40 s sooner;
+  - of the exits it changed, 178 did better and 37 worse;
+  - +0.27 to +0.34 at each slippage step, and +0.31 with the sales priced at Saxo's next quote.
+- Eight days in all, positions overlapping in time: not enough to believe (30 trades and 20 days at least).
+
+**Verification status:**
+- Tests:
+  - the estimate, its learning, its guards and its reason (held to the 128 characters of a close reason);
+  - the index's newest quote, read as the feed publishes it (its exchange and keys held to the feed's);
+  - the monitor's queue of its own, without acknowledgements;
+  - the monitor selling on the estimate once, urgently, with the cooldown and without raising the best or the worst; nothing judged without all it rests on; a short turbo; the trailing stop on the best of Saxo's quotes;
+  - the heartbeat and the health, the setting's check and its warning, the backtest settings;
+  - the simulator selling on the estimate, and as before without it or the index;
+  - parity with the monitor on a stop, a take-profit, a trailing stop, the day's target, Saxo's quote first, and nothing to sell;
+  - the Exits page's breakdown.
+- The 3,817 Python tests and the interface's 1,375 pass, with lint and typecheck.
+- Seen in the browser pane on the development admin:
+  - Configuration › Exits: "Between Saxo's quotes", its switch off, what it changes, what it works with and what else it needs;
+  - the review of switching it on: the position monitor at its next start, new backtests reading it (not saved);
+  - the Exits page's new panel.
+- The monitor's queue on the feed's exchange has a test against a real RabbitMQ (`tests/test_infrastructure_live.py`), which CI runs; it was not run here, where there is no RabbitMQ. Not seen against Saxo.
+
 ## v0.75.0 - A page per script, in tabs
 
 **Release date:** 2026-10-31

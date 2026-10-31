@@ -6,6 +6,7 @@ save; the validators do that.
 
 from src.admin.config_catalog import flatten
 from src.admin.config_catalog.trading import CLOSE_TIME, END_HOUR, MAX_PROFIT, TRAILING
+from src.trade.index_estimate import followed_epic
 from src.trade.signal_sources import CONFIG_PATH as SIGNAL_SOURCES, sources_from, unattended, unheard
 
 ADMIN_IDLE = "admin.session_idle_minutes"
@@ -22,6 +23,12 @@ def _minutes(clock) -> int | None:
     except (TypeError, ValueError):
         return None
     return hour * 60 + minute
+
+
+def _indice_ids(config: dict) -> dict:
+    rules = (config.get("trade") or {}).get("rules") or []
+    return next(((rule.get("rule_config") or {}).get("indice_ids") or {}
+                 for rule in rules if isinstance(rule, dict) and rule.get("rule_type") == "allowed_indices"), {})
 
 
 def warnings(config: dict, live_indices=()) -> list[dict]:
@@ -69,6 +76,14 @@ def warnings(config: dict, live_indices=()) -> list[dict]:
         found.append({"path": "trade.config.ta_engine.enabled", "message": (
             "The TA engine runs the signal rules on the bars the Capital.com feed records, and the feed is off: no "
             "rule will have a bar."
+        )})
+
+    if values.get("trade.config.position_management.index_between_quotes") is True and followed_epic(
+        ((config.get("trade") or {}).get("config") or {}).get("capital_feed"), _indice_ids(config),
+    ) is None:
+        found.append({"path": "trade.config.position_management.index_between_quotes", "message": (
+            "No index to judge the positions on between Saxo's quotes: it needs the Capital.com feed on, recording "
+            "the index of the one indice the trader takes. Until then, the exits wait for Saxo's quotes."
         )})
 
     if values.get("trade.config.position_management.wait_for_fresh_quote") is False:

@@ -2,9 +2,10 @@
 The backtest's rules beside the live code, on the same inputs: the trader's
 checks on an entry (``handle_trading_signal`` with a real ``TradingRule``),
 its sizing (``AsyncTradingOrchestrator``) and the position monitor's exits
-(``AsyncPerformanceMonitor._evaluate_positions``), each run with the clock
-frozen at the moment the backtest decides. A change to the live rules that is
-not made in src/backtest/rules.py fails here.
+(``AsyncPerformanceMonitor._evaluate_positions``, and ``judge_between_quotes``
+on the index between Saxo's quotes), each run with the clock frozen at the
+moment the backtest decides. A change to the live rules that is not made in
+src/backtest/rules.py (or src/backtest/simulator.py) fails here.
 """
 
 import asyncio
@@ -33,7 +34,9 @@ from src.trade.async_services import AsyncPerformanceMonitor, AsyncTradingOrches
 from src.trade.exceptions import InsufficientFundsException  # noqa: E402
 from src.trade.rules import TradingRule  # noqa: E402
 from src.trade.macro_calendar import flat_reason, read_calendar  # noqa: E402
-from src.backtest.simulator import Simulator  # noqa: E402
+from src.backtest.data import DayData, IndexSeries, TurboRef, TurboSeries  # noqa: E402
+from src.backtest.simulator import Position, Simulator  # noqa: E402
+from src.trade.index_feed import IndexQuotes  # noqa: E402
 from src.trade.fresh_quote import FreshQuotes  # noqa: E402
 from src.trade.exceptions import NoTurbosAvailableException  # noqa: E402
 
@@ -548,6 +551,142 @@ def test_a_position_is_sold_before_a_us_release_at_the_same_moment_and_for_the_s
     mirrored = [] if window is None else [f"Performance ({flat_reason(window, simulator.settings.timezone)})"]
     assert sent == mirrored
     assert bool(sent) is sold
+
+
+# ── judged on the index between Saxo's quotes ──
+
+
+BETWEEN_START = paris("10:00").timestamp()
+
+
+def between_quotes_config(**thresholds) -> dict:
+    config = config_with(day_trading={"percent_profit_wanted_per_days": thresholds.pop("day_target", 100)})
+    management = config["trade"]["config"]["position_management"]
+    management["index_between_quotes"] = True
+    management["wait_for_fresh_quote"] = False
+    management["performance_thresholds"].update(thresholds)
+    config["trade"]["config"]["capital_feed"]["enabled"] = True
+    return config
+
+
+def live_between_quotes(config: dict, open_price: float, path, log_path: str, *, day_percent: float = 0.0,
+                        description: str = "NASDAQ 100 Turbo Long 28000 SG") -> str | None:
+    """
+    The live monitor along ``path``, ten seconds each: (the index's level, Saxo's new bid or None). Each second
+    the simulator judges is one of the monitor's: the start and the end of each ten seconds, Saxo's quote in their
+    middle. The reason of its first sale.
+    """
+    trading_rule = MagicMock()
+    trading_rule.get_rule_config.side_effect = lambda rule_type: next(
+        rule["rule_config"] for rule in config["trade"]["rules"] if rule["rule_type"] == rule_type
+    )
+    trading_rule.record_loss = AsyncMock()
+    monitor = AsyncPerformanceMonitor(
+        MagicMock(), MagicMock(), Config(config, log_path), OpenPosition(day_percent), trading_rule, AsyncMock(),
+    )
+    sent = []
+
+    async def send_close_order(api_pos, *, position_id, action, reason):
+        sent.append(reason)
+
+    monitor._send_close_order = send_close_order
+    monitor._record_closed_position_in_background = MagicMock()
+    monitor.position_service.get_open_orders = AsyncMock(return_value=[])
+    clock = {"now": BETWEEN_START}
+    monitor.index_quotes = IndexQuotes("US100", clock=lambda: clock["now"])
+
+    def at(moment: float, level: float) -> None:
+        clock["now"] = moment
+        monitor._now = lambda: moment
+        monitor.index_quotes.take(json.dumps(
+            {"type": "quote", "ref": "capital/US100", "rx": int(moment * 1000), "bid": level - 0.5, "ask": level + 0.5}
+        ).encode())
+
+    def listed(bid: float) -> dict:
+        return {"p1": {
+            "PositionBase": {"OpenPrice": open_price, "CanBeClosed": True, "Amount": 10, "Uic": 1},
+            "PositionView": {"Bid": bid, "Ask": round(bid + 0.05, 4)}, "DisplayAndFormat": {"Description": description},
+        }}
+
+    async def walk():
+        standing = None
+        for number, (level, quote) in enumerate(path):
+            start = BETWEEN_START + 10 * number
+            at(start, level)
+            if standing is not None:
+                await monitor.keep_flat(listed(standing))
+            if not sent and quote is not None:
+                standing = quote
+                at(start + 5, level)
+                await monitor._evaluate_positions(listed(standing))
+            if not sent and standing is not None:
+                at(start + 10, level)
+                await monitor.keep_flat(listed(standing))
+            if sent:
+                break
+        await asyncio.sleep(0)
+
+    asyncio.run(walk())
+    return sent[0] if sent else None
+
+
+def mirrored_between_quotes(config: dict, open_price: float, path, *, day_percent: float = 0.0,
+                            barrier: float = 28_000.0) -> dict | None:
+    """The simulator's monitor (``_look_at_bar``) along the same path: the exit of its first sale."""
+    settings = from_config(config)
+    simulator = Simulator(settings, CLOCK)
+    series = TurboSeries(TurboRef(
+        instrument_id=1, uic=1, asset_type="WarrantOpenEndKnockOut", symbol="T1",
+        description=f"NASDAQ 100 Turbo Long {barrier:g} SG", issuer="SG", barrier=barrier, direction="long",
+    ))
+    index = IndexSeries()
+    standing = None
+    for number, (level, quote) in enumerate(path):
+        start = int(BETWEEN_START) + 10 * number
+        opened = standing if standing is not None else quote
+        close = quote if quote is not None else standing
+        series.append(start, opened, max(opened, close), min(opened, close), close, opened + 0.05, close + 0.05)
+        index.append(start, level, level, level, level)
+        standing = close
+    day_start, day_end = CLOCK.day_bounds(datetime.fromtimestamp(BETWEEN_START, PARIS).date())
+    simulator._day = DayData(day=CLOCK.day_of(BETWEEN_START), start=day_start, end=day_end, indice="us100",
+                             turbos={"long": [series]}, index=index)
+    simulator._day_percents = [day_percent] if day_percent else []
+    simulator.positions.append(Position(
+        trade_id=1, direction="long", series=series, units=10, open_price=open_price, opened_at=BETWEEN_START - 600,
+        cost=open_price * 10, commission=0.0, signal_id=None, confidence=None, scale_percent=100.0,
+        day_percent_before=day_percent, entry={},
+    ))
+    simulator._monitor_until(BETWEEN_START + 10 * len(path))
+    return simulator.trades[0]["exit"] if simulator.trades else None
+
+
+@pytest.mark.parametrize("name, thresholds, open_price, path, day_percent, estimated", [
+    # The index 180 points lower, Saxo's quote still 10: 8.452 is −15.9 % of 10.05.
+    ("a stop on the estimate", {}, 10.05, [(29000, 10.0), (29000, None), (28820, None)], 0.0, 8.452),
+    ("a take-profit on the estimate", {"max_profit_percent": 20}, 10.05, [(29000, 10.0), (29280, None)], 0.0, 12.408),
+    ("a trailing stop on the estimate, from the best of Saxo's quotes",
+     {"trailing_stop": {"enabled": True, "activation_percent": 5, "drawdown_percent": 8}}, 10.05,
+     [(29000, 10.0), (29100, 10.86), (29100, None), (28960, None)], 0.0, 9.656),
+    ("the day's target on the estimate", {"day_target": 2}, 10.05, [(29000, 10.0), (29040, None)], 1.5, 10.344),
+    ("Saxo's quote first", {}, 10.05, [(29000, 10.0), (28990, 8.5)], 0.0, None),
+    ("nothing to sell", {}, 10.05, [(29000, 10.0), (29010, None), (28990, 10.05)], 0.0, None),
+])
+def test_between_quotes_the_monitor_sells_on_the_same_estimate_for_the_same_reason_as_live(
+    name, thresholds, open_price, path, day_percent, estimated, tmp_path,
+):
+    config = between_quotes_config(**json.loads(json.dumps(thresholds)))
+
+    live = live_between_quotes(config, open_price, path, str(tmp_path), day_percent=day_percent)
+    mirrored = mirrored_between_quotes(config, open_price, path, day_percent=day_percent)
+
+    assert (mirrored["reason"] if mirrored else None) == live
+    if estimated is not None:
+        # Decided at the start of ten seconds, the sale is at the estimate, to the turbo's cent.
+        assert f"US100 between quotes: {estimated:g} from " in live
+        assert mirrored["bid"] == round(estimated, 2)
+    elif live is not None:
+        assert "between quotes" not in live
 
 
 # ── an entry that failed, with a cash reserve ──

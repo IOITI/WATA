@@ -188,6 +188,57 @@ class AssetSeries:
 
 
 @dataclass
+class IndexSeries:
+    """
+    The ten-second bars of the index the position monitor follows between the turbos' quotes
+    (``index_between_quotes``, src/trade/index_estimate.py): the middle of its bid and ask, as the monitor reads
+    each quote, and only the bars in which it was quoted (an index quoted 10 s ago is not fresh).
+    """
+
+    ts: array = field(default_factory=lambda: array("q"))
+    open: array = field(default_factory=lambda: array("d"))
+    high: array = field(default_factory=lambda: array("d"))
+    low: array = field(default_factory=lambda: array("d"))
+    close: array = field(default_factory=lambda: array("d"))
+
+    def append(self, ts: int, opened: float, high: float, low: float, close: float) -> None:
+        self.ts.append(int(ts))
+        self.open.append(float(opened))
+        self.high.append(float(high))
+        self.low.append(float(low))
+        self.close.append(float(close))
+
+    def __len__(self) -> int:
+        return len(self.ts)
+
+    def bar_at(self, boundary: int) -> int | None:
+        """The bar that begins at ``boundary``, if the index was quoted in those ten seconds."""
+        place = bisect_left(self.ts, boundary)
+        return place if place < len(self.ts) and self.ts[place] == boundary else None
+
+    def middle(self, place: int) -> float:
+        """The index in the middle of the bar ``place``: when a turbo's quote of those ten seconds is taken to come."""
+        return (self.open[place] + self.close[place]) / 2
+
+
+def index_series(rows) -> IndexSeries:
+    """
+    The index's bars from rows in the columns of src/ta_engine/source.py (ts, bid open, high, low, close, ask open,
+    high, low, close, updates): the middle of bid and ask, the buckets without a quote left out.
+    """
+    series = IndexSeries()
+    for row in rows:
+        if not row[9]:
+            continue
+        bids, asks = row[1:5], row[5:9]
+        if any(value is None for value in bids):
+            continue
+        middles = [bid if ask is None else (bid + ask) / 2 for bid, ask in zip(bids, asks)]
+        series.append(row[0], *middles)
+    return series
+
+
+@dataclass
 class DayData:
     day: date
     start: int
@@ -199,6 +250,8 @@ class DayData:
     # The buckets the recorder was listening in (a quote within its last 30 s), or None when unknown.
     covered: set[int] | None = None
     asset: AssetSeries | None = None
+    # The index the monitor follows between the turbos' quotes, when a run judges on it (index_between_quotes).
+    index: IndexSeries | None = None
 
     def is_covered(self, boundary: int) -> bool:
         if self.covered is None:
