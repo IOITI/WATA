@@ -5,8 +5,6 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AIResponse,
-  AIResponseContent,
   Alert,
   AlertDescription,
   AnimatedTabs,
@@ -44,6 +42,7 @@ import type { LuxAlgoCompat, LuxAlgoFamily, LuxAlgoIndicator, LuxAlgoSource } fr
 
 import { InWataPanel } from './InWataPanel'
 import { LuxAlgoPicture } from './LuxAlgoPicture'
+import { LuxAlgoWriteUp } from './LuxAlgoWriteUp'
 import {
   canTake,
   COMPAT_LABEL,
@@ -51,7 +50,6 @@ import {
   conceptPath,
   licenceTerms,
   LUXALGO_PATH,
-  shownMarkdown,
   sourceLinesSaid,
   sourceSaid,
 } from './luxalgoModel'
@@ -383,7 +381,7 @@ export function LuxAlgoIndicatorPage() {
           </Alert>
         )}
         {found && (
-          <>
+          <div className="space-y-6">
             <OnAChart indicator={found} source={source} signedIn={signedIn} />
             <div className="grid gap-6 lg:grid-cols-3">
               <div className="min-w-0 space-y-4 lg:col-span-2">
@@ -401,9 +399,7 @@ export function LuxAlgoIndicatorPage() {
                 {tab === 'about' && (
                   found.body_markdown ? (
                     <Panel>
-                      <AIResponse content={shownMarkdown(found.body_markdown)} className="p-0 shadow-none ring-0 sm:p-0">
-                        <AIResponseContent />
-                      </AIResponse>
+                      <LuxAlgoWriteUp markdown={found.body_markdown} />
                     </Panel>
                   ) : (
                     <p className="text-sm text-muted-foreground">LuxAlgo says nothing more of it.</p>
@@ -421,7 +417,7 @@ export function LuxAlgoIndicatorPage() {
               <AtAGlance indicator={found} source={source.data} compat={compat} families={families.data?.families}
                 picture={takeable} />
             </div>
-          </>
+          </div>
         )}
       </QueryState>
       {taking && found && source.data && <TakeDialog indicator={found} source={source.data} onClose={() => setTaking(false)} />}

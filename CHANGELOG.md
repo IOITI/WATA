@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.72.2 - LuxAlgo's write-ups in one card, and room under an indicator's chart
+
+**Release date:** not yet released
+
+Two corrections you asked for on an indicator's page of LuxAlgo's Library:
+- **Room under the chart:** the chart's panel touched the tabs below it (How it works, Pine source, In WATA). They now stand apart as the page's other parts do, and so do a concept's link to LuxAlgo's site and its write-up.
+- **One card:** an indicator's write-up, and a concept's, were a card inside a card: the panel, and inside it the card of the component that draws their Markdown (ioiti-ui's `AIResponse`), seen most under the glass material. That inner card is gone: the text sits in its panel (`LuxAlgoWriteUp`).
+
+**On the live path:** nothing. The admin's interface alone.
+
+**Backtests:** no file of the code digest changed (9c7a409571b614e5).
+
+**Verification status:**
+- The write-up's test now holds that it is drawn without a card of its own inside its panel. Lint, typecheck and the interface's 1,334 tests pass.
+- Seen in the browser pane on the development admin over LuxAlgo's public tools, in the glass and the flat materials: 24 px between the chart's panel and the tabs, and between a concept's link and its write-up; the write-up's own article without background, sheen, shadow or border, the panel the one card.
+
 ## v0.72.1 - A research task's Stop is kept
 
 **Release date:** 2026-10-31

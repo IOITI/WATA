@@ -310,6 +310,9 @@ describe("an indicator's page", () => {
     const writeUp = screen.getByRole('article', { name: 'AI response' })
     expect(within(writeUp).getByRole('link', { name: 'tri-star' })).toHaveAttribute('href', '/ta/luxalgo/concepts/tri-star')
     expect(within(writeUp).queryByText(/a chart/)).toBeNull()
+    // One card, the Panel's: the write-up's own article is drawn without its surface, the glass material's included.
+    expect(writeUp).toHaveClass('bg-transparent!', 'bg-none!', 'shadow-none!', 'ring-0', 'p-0')
+    expect(writeUp.closest('section')).toHaveClass('glass-card')
     expect(await screen.findByRole('link', { name: /Open on Vela/ })).toHaveAttribute('href', PART.chart_url)
   })
 
