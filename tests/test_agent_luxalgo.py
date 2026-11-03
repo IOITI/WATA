@@ -59,9 +59,11 @@ def test_luxalgos_tools_are_offered_only_while_it_is_on_and_its_prompt_with_them
     assert LUXALGO_PROMPT not in prompt_for(off.definitions())
     on = started(research, store, lux)
     names = [definition["name"] for definition in on.definitions()]
-    assert names[-4:] == list(LUXALGO)
+    assert names[-5:] == list(LUXALGO)
     assert LUXALGO_PROMPT in prompt_for(on.definitions())
     assert on.is_read("luxalgo_tools") and on.is_read("luxalgo_call") and not on.is_read("luxalgo_save_script")
+    # Run on a day, it is a study: one at a time.
+    assert not on.is_read("luxalgo_view")
     assert luxalgo_reads(SimpleNamespace(luxalgo=None, script_origins=None)) is None
 
 
@@ -120,6 +122,38 @@ def test_an_indicator_is_brought_in_whole_as_one_of_the_agents_scripts_its_origi
     assert answer["origin"]["slug"] == "made-up" and answer["origin"]["by"] == f"agent:{CONVERSATION}"
     assert origins.get(answer["id"])["licence"] == "CC BY-NC-SA 4.0"
     assert saved.script == {"id": answer["id"], "name": "Made up (LuxAlgo)", "version": 1}
+
+
+def test_an_indicator_is_run_on_a_day_as_chart_view_runs_a_script_and_saved_nowhere(research, store, lux, fake):
+    from tests.test_agent_pictures import Views
+    from tests.test_mcp_tools_pine import PNG
+
+    tools = started(research, store, lux)
+    research.studies = Views()
+    before = len(research.scripts.scripts())
+
+    viewed, = calls(tools, ("luxalgo_view", {"slug": "made-up", "day": "2026-10-14", "asset": "capital/US100", "bars": "5",
+                                             "start": "15:00", "end": "17:00"}))
+
+    assert not viewed.is_error, viewed.text
+    mode, request = research.studies.asked[0]
+    assert mode == "view" and request["source"].startswith("// This work is licensed") and request["name"] == "Made up"
+    assert (request["asset"], request["bars"]) == ("capital/US100", "5")
+    assert json.loads(viewed.text)["indicator"] == {"slug": "made-up", "name": "Made up", "licence": "CC BY-NC-SA 4.0"}
+    assert viewed.picture == PNG and viewed.script is None
+    assert len(research.scripts.scripts()) == before
+
+
+def test_a_part_of_an_indicator_is_never_run_on_a_day(research, store, lux, fake):
+    from tests.test_agent_pictures import Views
+
+    fake.whole = False
+    tools = started(research, store, lux)
+    research.studies = Views()
+
+    cut, = calls(tools, ("luxalgo_view", {"slug": "made-up", "day": "2026-10-14", "asset": "capital/US100"}))
+
+    assert cut.is_error and "sign in to LuxAlgo" in cut.text and research.studies.asked == []
 
 
 def test_a_part_of_an_indicator_is_never_saved(research, store, lux, fake):

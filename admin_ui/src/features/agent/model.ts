@@ -16,6 +16,7 @@ import type {
   AgentEffort,
   AgentModel,
   AgentPending,
+  AgentPicture,
   AgentProposal,
   AgentRequest,
   AgentRequestStatus,
@@ -83,7 +84,9 @@ export function costText(usd: number | null | undefined): string {
 export function subjectLink(subject: AgentSubject): string {
   switch (subject.kind) {
     case 'run':
-      return `/backtests/${encodeURIComponent(subject.id)}`
+      return subject.day
+        ? `/backtests/${encodeURIComponent(subject.id)}/days/${encodeURIComponent(subject.day)}`
+        : `/backtests/${encodeURIComponent(subject.id)}`
     case 'script':
       return `/ta/indicators/${encodeURIComponent(subject.id)}`
     case 'position':
@@ -115,7 +118,8 @@ export function moreAttached(row: Pick<AgentConversationListed, 'attached' | 'su
 export function subjectSaid(subject: AgentSubject): string {
   switch (subject.kind) {
     case 'run':
-      return `Run ${subject.label}`
+      // A day's label names the run and the day: "Cross R60, Wed 28 Oct 2026".
+      return subject.day ? `A day of run ${subject.label}` : `Run ${subject.label}`
     case 'script':
       return `Script ${subject.label}${subject.version ? ` v${subject.version}` : ''}`
     case 'position':
@@ -193,6 +197,15 @@ function period(input: Input): string {
   return start && end && end !== start ? `${start} to ${end}` : start ?? 'the days asked'
 }
 
+// A day chart_view looked at, and the hours it zoomed on.
+function dayLooked(input: Input): string {
+  const day = typeof input.day === 'string' ? input.day : 'a day'
+  const start = typeof input.start === 'string' ? input.start : null
+  const end = typeof input.end === 'string' ? input.end : null
+  const hours = start && end ? `, ${start} to ${end}` : start ? ` from ${start}` : end ? ` until ${end}` : ''
+  return `${day}${hours}${typeof input.run_id === 'string' && input.run_id ? ` of run ${input.run_id}` : ''}`
+}
+
 function runs(ids: unknown): string {
   if (!Array.isArray(ids) || ids.length === 0) return 'its runs'
   return ids.length === 1 ? `run ${short(ids[0])}` : `${ids.length} runs`
@@ -230,6 +243,7 @@ const TITLES: Record<string, (input: Input) => string> = {
   pine_run: (input) => `Ran a script on ${period(input)}`,
   pine_signals: (input) => `Replayed a script's signals, ${period(input)}`,
   pine_compare: (input) => `Compared a script's signals with TradingView's, ${period(input)}`,
+  chart_view: (input) => `Looked at ${dayLooked(input)}`,
   pine_save: (input) => (typeof input.script_id === 'string' && input.script_id
     ? `Saved a new version of its script ${input.script_id}` : `Saved the script "${short(input.name)}"`),
   backtest_options: () => "Read the backtests' settings",
@@ -281,6 +295,7 @@ const TITLES: Record<string, (input: Input) => string> = {
     typeof input.tool === 'string' && input.tool ? `Read how LuxAlgo's ${input.tool} is called` : "Listed LuxAlgo's tools",
   luxalgo_call: (input) => `Asked LuxAlgo: ${luxalgoAsked(input)}`,
   luxalgo_save_script: (input) => `Took LuxAlgo's ${short(input.slug)} as its script`,
+  luxalgo_view: (input) => `Ran LuxAlgo's ${short(input.slug)} on ${dayLooked(input)}`,
   luxalgo_known: (input) => `Read what WATA knows of ${Array.isArray(input.slugs) && input.slugs.length === 1
     ? `LuxAlgo's ${short(input.slugs[0])}` : `${Array.isArray(input.slugs) ? input.slugs.length : 'some'} LuxAlgo indicators`}`,
 }
@@ -301,6 +316,8 @@ const TYPES: Record<string, ActivityType> = {
   pine_run: 'code_execution',
   pine_signals: 'code_execution',
   pine_compare: 'code_execution',
+  chart_view: 'code_execution',
+  luxalgo_view: 'code_execution',
   pine_save: 'writing',
   exp_new: 'writing',
   exp_conclude: 'writing',
@@ -342,6 +359,7 @@ const WRITING: Record<string, string> = {
   pine_run: 'Running a script',
   pine_signals: "Replaying a script's signals",
   pine_compare: "Comparing a script's signals with TradingView's",
+  chart_view: 'Looking at a day',
   pine_save: 'Saving a script',
   backtest_options: "Reading the backtests' settings",
   backtest_list: 'Listing the backtests',
@@ -387,7 +405,14 @@ const WRITING: Record<string, string> = {
   luxalgo_tools: "Reading LuxAlgo's tools",
   luxalgo_call: 'Asking LuxAlgo',
   luxalgo_save_script: "Taking one of LuxAlgo's indicators",
+  luxalgo_view: "Running one of LuxAlgo's indicators on a day",
   luxalgo_known: "Reading what WATA knows of LuxAlgo's indicators",
+}
+
+/** What a picture of a tool is said as under it: its title, else the tool that drew it. */
+export function pictureCaption(picture: Pick<AgentPicture, 'title' | 'tool' | 'step'>): string {
+  if (picture.title) return picture.title
+  return picture.step === null ? 'The day it was shared' : picture.tool === 'luxalgo_view' ? "LuxAlgo's indicator on a day" : 'A day'
 }
 
 export function stepTitle(tool: string, input: unknown): string {
@@ -674,10 +699,24 @@ const LUXALGO_PRESETS: Preset[] = [
   { label: 'Make it a signal rule', prompt: "Make this indicator a signal rule of mine: take it whole, test it with pine_rule_check, fix in a version of your own what keeps it from being one (alertcondition() lines where it only draws its events, what repaints), check that version with pine_rule_check and its signals on recorded days, then map its alerts to WATA's actions and propose a new rule in shadow. Never live." },
 ]
 
-/** Requests to start from, by what the conversation is about; ``luxalgo``: the agent has LuxAlgo's tools. */
-export function presetsFor(kind: AgentSubject['kind'] | null, options: { luxalgo?: boolean } = {}): Preset[] {
+// A day of a run: looked at first, explained against its price and indicator, what is tried on it held to every day.
+const RUN_DAY_PRESETS: Preset[] = [
+  { label: 'Why did this day lose?', prompt: "Why did this day go as it did? Look at it with chart_view first (the run's day, with its script and its trades), zoom on the hours it lost, and explain each losing trade against price and the indicator: where it entered against the swing, what the indicator did then, why it exited. Start no backtest." },
+  { label: 'A better configuration for this day', prompt: "Find a configuration that would have done better on this day without doing worse on the others: read the day with chart_view and explain its losses, try other inputs or bars on it with chart_view or pine_signals, then backtest the most promising on every day of the run against random entries. Keep only what holds on every day, and say what it rests on." },
+]
+const RUN_DAY_LUXALGO: Preset = {
+  label: 'A LuxAlgo indicator for this day',
+  prompt: "Find one of LuxAlgo's indicators that fits this day: read its kind with chart_view, search the Library by the concepts it calls for, run three to five on this day with luxalgo_view (its run_id, so the run's bars and trades are on them), then take the best whole and backtest it on every day of the run against random entries. Set your verdict on each indicator you judged.",
+}
+
+/**
+ * Requests to start from, by what the conversation is about; ``luxalgo``: the agent has LuxAlgo's tools;
+ * ``day``: a run's day, asked from its page.
+ */
+export function presetsFor(kind: AgentSubject['kind'] | null, options: { luxalgo?: boolean; day?: boolean } = {}): Preset[] {
   const luxalgo = !!options.luxalgo
   if (kind === 'luxalgo') return LUXALGO_PRESETS
+  if (kind === 'run' && options.day) return [...RUN_DAY_PRESETS, ...(luxalgo ? [RUN_DAY_LUXALGO] : [])]
   if (kind === 'run') {
     return [
       { label: 'Analyse it', prompt: 'Can this run be believed? Read its verdict checks, the edge of its entries, random entries, stress, regimes and trades. Say what it rests on and what to try next.' },

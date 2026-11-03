@@ -213,7 +213,14 @@ TRADES = [
      "performance_percent": -7.5, "max_performance_percent": 0.5, "min_performance_percent": -7.5, "holding_seconds": 1795},
 ]
 DAYS = [{"day": "2026-10-13", "status": "tested", "trades": 1, "day_percent": 2.0,
-         "recorded": {"long": 40, "short": 38, "minutes": 840}, "regime": {"gap": 0.4, "labels": {"volatility": "high"}}}]
+         "signals": {"executed": 1, "refused": 7, "failed": 0, "unpriced": 0, "closed": 0, "ignored": 1}, "entries": 1,
+         "profit_loss": 16.68, "equity": 1016.68,
+         "recorded": {"long": 40, "short": 38, "minutes": 840, "first": "2026-10-13T07:00:00Z", "last": "2026-10-13T21:00:00Z"},
+         # As day_features and label_days write it (src/backtest/regimes.py).
+         "regime": {"weekday": "Tuesday", "news": ["FOMC"], "bars": 5040, "gap_percent": 0.363, "range_percent": 2.079,
+                    "volatility_percent": 1.409, "efficiency": 0.3, "day_type": "Mixed", "us_open_move_percent": -0.183,
+                    "labels": {"volatility": "high", "gap": "Gap up", "day_type": "Mixed", "us_open": "Open flat",
+                               "news": "FOMC"}}}]
 
 
 # ── orientation ──
@@ -409,7 +416,14 @@ def test_trades_are_sorted_and_narrowed_and_days_carry_their_regime(tmp_path, re
 
     assert [trade["id"] for trade in worst["items"]] == [2, 1]
     assert [trade["id"] for trade in stops["items"]] == [2]
-    assert days["items"][0]["turbos"] == {"long": 40, "short": 38} and days["items"][0]["labels"] == {"volatility": "high"}
+    assert days["items"][0]["turbos"] == {"long": 40, "short": 38}
+    # The day's own figures, its gap, range, volatility and US open among them, and the labels they do not say.
+    assert days["items"][0]["regime"] == {"gap": 0.363, "range": 2.079, "volatility": 1.409, "efficiency": 0.3, "day_type": "Mixed",
+                                          "us_open": -0.183, "news": ["FOMC"]}
+    assert days["items"][0]["labels"] == {"volatility": "high", "gap": "Gap up", "us_open": "Open flat"}
+    assert days["items"][0]["signals"] == {"executed": 1, "refused": 7, "ignored": 1}
+    assert answer(research, "backtest_days", {"run_id": run_id, "day": "2026-10-13"})["total"] == 1
+    assert answer(research, "backtest_days", {"run_id": run_id, "day": "2026-10-14"})["total"] == 0
     assert "turbo.issuer" in table.splitlines()[0]
 
 

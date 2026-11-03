@@ -6,6 +6,7 @@ pine_check, pine_run and pine_signals (src/admin/studies.py):
     python -m src.research.study run     --request <file.json> --out <file.json>
     python -m src.research.study signals --request <file.json> --out <file.json>
     python -m src.research.study rule    --request <file.json> --out <file.json>
+    python -m src.research.study view    --request <file.json> --out <file.json>
 
 (``--data files:<folder>``: Capital.com's and Saxo's bars from recorded day
 files, as a backtest reads them, instead of the database.)
@@ -29,6 +30,11 @@ sent and nothing is written but the answer (``--out``, written whole).
 - rule: the rule check of a script (src/research/rule_check.py): what its
   source says, then its run test on the engine's days, each run as a backtest
   runs it and again ended at chosen bars, as live had them.
+- view: one engine day as a backtest ran it, the hours asked of it as Claude
+  reads them (chart_view, src/research/day_view.py): its bars gathered into
+  rows with the script's plots, alerts and a run's trades, the day's figures,
+  what price did after each alert, and its picture (src/research/chart_picture.py,
+  a PNG in base64). Without a script, the asset's prices alone.
 
 It gives way to the trading services (nice 10, ahead of the backtests at 19)
 and is the first the kernel stops when the container runs out of memory.
@@ -36,6 +42,7 @@ and is the first the kernel stops when the container runs out of memory.
 
 import argparse
 import asyncio
+import base64
 import dataclasses
 import hashlib
 import json
@@ -43,13 +50,15 @@ import math
 import os
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from src.admin.ta_rules import (
     ALERT_CALL_ACTIONS,
     IGNORE,
     InvalidRule,
     RuleStore,
+    bars_label,
     checked_alerts,
     checked_bars,
     checked_history_days,
@@ -57,19 +66,25 @@ from src.admin.ta_rules import (
     timeframe_seconds,
 )
 from src.admin.ta_scripts import LIBRARY, InvalidScript, ScriptNotFound, ScriptStore, pine_facts
+from src.backtest import regimes
 from src.backtest.clock import TradingClock
 from src.price_history.process import lower_priority
+from src.research import day_view
 from src.research import rule_check as checks
 from src.research.rule_check import CHECKER_PATH, Checker, CheckerMissing
 from src.ta_engine.replay import (
     DAY,
     REPLAY_RULE_ID,
     ReplaySession,
+    _builder,
+    _decimals,
     asset_rows_for,
+    built_bars,
     engine_rule_of,
     engine_windows,
     restart_minute_of,
     ta_settings,
+    too_large,
 )
 from src.ta_engine.rules import EngineRule
 from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command
@@ -77,7 +92,7 @@ from src.ta_engine.signals import iso_seconds
 from src.ta_engine.tickers import parse_ticker
 
 STUDY_NICE = 10
-MODES = ("check", "run", "signals", "rule")
+MODES = ("check", "run", "signals", "rule", "view")
 # A script not saved yet runs under this id: it pins nothing that is on disk.
 DRAFT_ID = "draft0000000"
 DEFAULT_MEMORY_MB = 768
@@ -694,6 +709,268 @@ async def _live_bars(session: ReplaySession, rule_: dict, engine_rule: EngineRul
     return found
 
 
+# ── view: a day as chart_view shows it ──
+
+# The rows a view gathers its hours into, by default and at most; the plots it tabulates and draws.
+VIEW_ROWS, MAX_VIEW_ROWS = 180, 400
+VIEW_PLOTS, MAX_VIEW_PLOTS = 4, 8
+# The plots it lists with their figures, whatever it tabulates.
+LISTED_PLOTS = 30
+# What a view says at most, its picture aside: an answer's 32,000 characters, less what the tool adds to it.
+VIEW_CHARS = 31_000
+
+
+class _KeptRows:
+    """An asset's rows, read once for a view: the replay and the view's own figures ask for the same span."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self._kept: dict = {}
+
+    async def rows(self, provider: str, key: str, start: int, end: int):
+        asked = (provider, key, start, end)
+        if asked not in self._kept:
+            self._kept[asked] = await self._rows.rows(provider, key, start, end)
+        return self._kept[asked]
+
+
+def _parts_rule(request: dict) -> tuple[dict, EngineRule]:
+    """A run's own script, libraries, inputs and bars as it kept them (``parts``), run as the run ran them."""
+    parts = request["parts"]
+    script, chart = parts["script"], parts["chart"]
+    libraries = tuple({**{key: entry[key] for key in ("id", "name", "version", "source")}, "sha256": _sha256(entry["source"])}
+                      for entry in parts.get("libraries") or [])
+    rule = {
+        "id": REPLAY_RULE_ID, "name": f"{script.get('name') or 'Its script'} v{script.get('version')}",
+        "asset": chart["asset"], "side": chart["side"], "bars": checked_bars(chart["bars"]),
+        "script": {"id": script["id"], "version": script["version"], "sha256": _sha256(script["source"])},
+        "libraries": [{key: entry[key] for key in ("id", "name", "version", "sha256")} for entry in libraries],
+        "inputs": checked_inputs(list(parts.get("inputs") or [])),
+        "alerts": checked_alerts([{"title": title, "action": action} for title, action in (request.get("alerts") or {}).items()]),
+        "alert_calls": request.get("alert_calls", IGNORE), "confidence_plot": None,
+        "indice": request.get("indice") or "us100", "mode": "shadow",
+    }
+    return rule, EngineRule(rule=rule, source=script["source"], libraries=libraries)
+
+
+def _span(value, what: str) -> tuple[int, int]:
+    if not isinstance(value, list) or len(value) != 2 or not all(isinstance(part, int) and not isinstance(part, bool)
+                                                                  for part in value) or value[0] >= value[1]:
+        raise StudyRefused(f"The {what} is [begin, end], epoch seconds")
+    return value[0], value[1]
+
+
+def _whole_between(value, low: int, high: int, what: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise StudyRefused(f"{what} is {low} to {high}")
+    return value
+
+
+async def _previous_close(rows: _KeptRows, asset: dict, side: str, day: date, clock: TradingClock, hours: tuple[int, int],
+                          series) -> float | None:
+    """The last price of the trading hours of the weekday before ``day`` (its gap's), read further back when needed."""
+    for back in range(1, 6):
+        before = day - timedelta(days=back)
+        if before.weekday() >= 5:
+            continue
+        bounds = regimes.session(before, clock, *hours)
+        found = regimes.session_close(series, bounds)
+        if found is None:
+            earlier, _ = await rows.rows(asset["provider"], asset["key"], int(bounds[0]), int(bounds[1]))
+            found = regimes.session_close(day_view.asset_series(earlier, side), bounds)
+        if found is not None:
+            return found
+    return None
+
+
+async def view(request: dict, scripts: ScriptStore, config, prices_root: str, node: str, memory_mb: int, timeout: int,
+               files_root: str | None = None) -> dict:
+    wanted_rows = _whole_between(request.get("rows", VIEW_ROWS), 20, MAX_VIEW_ROWS, "rows")
+    try:
+        day = date.fromisoformat(request.get("day"))
+    except (TypeError, ValueError):
+        raise StudyRefused("The day is YYYY-MM-DD") from None
+    zone = ZoneInfo(request.get("timezone") or "Europe/Paris")
+    hours = request.get("hours") or {}
+    clock = TradingClock(hours.get("zone") or request.get("timezone") or "Europe/Paris")
+    trading = (int(hours.get("start_hour", 8)), int(hours.get("end_hour", 22)))
+    _, _, engine_history, restart = ta_settings(config)
+    own = checked_history_days(request.get("history_days"))
+    history_days = engine_history if own is None else own
+    if request.get("engine") is not None:
+        engine_begin, engine_end = _span(request["engine"], "engine day")
+    else:
+        # The engine day a backtest trades the day in: the one holding its noon (src/admin/backtest_indicator.py).
+        noon = int(datetime(day.year, day.month, day.day, 12, tzinfo=zone).timestamp())
+        engine_begin, engine_end = engine_windows(noon, noon + 1, restart_minute_of(restart))[0]
+    asked_begin, asked_end = _span(request.get("view"), "window shown")
+    # The hours shown, within the engine day: what the script ran on.
+    view_begin, view_end = max(asked_begin, engine_begin), min(asked_end, engine_end)
+    if view_begin >= view_end:
+        raise StudyRefused(f"The hours asked are outside the engine day ({day_view.clock_text(engine_begin * 1000, zone)} "
+                           f"the day before to {day_view.clock_text(engine_end * 1000, zone)}): the script ran on nothing then")
+
+    if request.get("parts"):
+        rule, engine_rule = _parts_rule(request)
+    elif request.get("source") is not None or request.get("script"):
+        rule, engine_rule = study_rule(request, scripts)
+    else:
+        side = request.get("side", "bid")
+        if side not in ("bid", "ask"):
+            raise StudyRefused("The side is bid or ask")
+        rule, engine_rule = {"name": "Prices alone", "asset": _asset(request.get("asset")), "side": side,
+                             "bars": bars_of(request.get("bars", "1")), "alerts": []}, None
+    asset, side = rule["asset"], rule["side"]
+    anchor = engine_begin - history_days * DAY
+    found_rows, pg = await asset_rows_for(config, prices_root, asset["provider"], files_root)
+    rows = _KeptRows(found_rows)
+    window = None
+    try:
+        if engine_rule is not None:
+            session = ReplaySession(rule, engine_rule, rows, node=node, history_days=history_days, memory_mb=memory_mb,
+                                    timeout_seconds=timeout)
+            try:
+                await session.start()
+                window = await session.window(engine_begin, engine_end, detail=True)
+            finally:
+                await session.stop()
+        ten_seconds, decimals = await rows.rows(asset["provider"], asset["key"], anchor, engine_end)
+        decimals = _decimals(ten_seconds, decimals) if ten_seconds else decimals
+        if window is None:
+            refusal = too_large(f"{asset['provider']}/{asset['key']}", rule["bars"], decimals)
+            bars = built_bars(_builder(rule["bars"], side, ten_seconds, decimals), ten_seconds, engine_end, refusal)
+        else:
+            bars = window.strategy_bars
+        series = day_view.asset_series(ten_seconds, side)
+        previous = await _previous_close(rows, asset, side, day, clock, trading, series)
+    finally:
+        if pg is not None:
+            await pg.close()
+
+    inside = [bar for bar in bars if view_begin * 1000 <= bar[0] < view_end * 1000]
+    if not inside:
+        raise StudyRefused(f"No bar of {asset['provider']}/{asset['key']} in the hours asked: its feed recorded nothing then")
+    detail = (window.series if window is not None else None) or {"times": [], "plots": {}}
+    place = {moment: index for index, moment in enumerate(detail.get("times") or [])}
+    all_plots = {name: [values[place[bar[0]]] if bar[0] in place and place[bar[0]] < len(values) else None for bar in inside]
+                 for name, values in (detail.get("plots") or {}).items()}
+    low, high = min(bar[3] for bar in inside), max(bar[2] for bar in inside)
+    over, _ = day_view.panes(all_plots, low, high)
+    listed_plots = []
+    for name, values in list(all_plots.items())[:LISTED_PLOTS]:
+        summary = _summary(values)
+        listed_plots.append({"name": name, "pane": "price" if name in over else "own", "na_share": summary["na_share"],
+                             "min": summary["min"], "max": summary["max"], "last": summary["last"]})
+    asked = [name for name in request.get("plots") or [] if name in all_plots][:MAX_VIEW_PLOTS]
+    chosen = asked or [name for name, values in all_plots.items()
+                       if any(day_view.finite(value) is not None for value in values)][:VIEW_PLOTS]
+    table_plots = {name: all_plots[name] for name in chosen}
+
+    # The alerts of the hours shown, with what price did after each.
+    alerts = []
+    for replayed in (window.alerts if window is not None else []):
+        bar = replayed.bar
+        if not view_begin * 1000 <= bar[0] < view_end * 1000:
+            continue
+        action = replayed.candidate.action if replayed.candidate is not None else None
+        alerts.append({"title": replayed.alert.get("title") or replayed.alert.get("type"), "action": action,
+                       "at": bar[6], "price": round(bar[4], decimals) if decimals is not None else bar[4],
+                       "moves": day_view.moved(series, bar[6] / 1000, action)})
+    by_title = day_view.alert_moves(series, [{**alert, "at": alert["at"] / 1000} for alert in alerts])
+    # A run's signals of the day that became no trade: why each was refused, failed or found no turbo.
+    refused = [{"at": day_view.clock_text((day_view.epoch(signal.get("at")) or 0) * 1000, zone, seconds=True),
+                **{key: signal.get(key) for key in ("action", "fate", "rule", "reason") if signal.get(key) is not None}}
+               for signal in request.get("signals") or []]
+    listed_alerts = [{"at": day_view.clock_text(alert["at"], zone, seconds=True), "title": alert["title"],
+                      "action": alert["action"], "price": alert["price"],
+                      **({"after_bp": alert["moves"]["after"], "best": alert["moves"]["best"], "worst": alert["moves"]["worst"]}
+                         if alert["moves"] else {})}
+                     for alert in alerts]
+
+    session_bounds = regimes.session(day, clock, *trading)
+    regime = request.get("regime") or regimes.day_features(series, previous, day, session_bounds,
+                                                           regimes.read_calendar().on(day))
+    figures = {
+        **(day_view.day_prices(series, view_begin, view_end, zone, decimals) or {}),
+        "previous_close": round(previous, decimals) if previous is not None and decimals is not None else previous,
+        "levels": day_view.levels(series, engine_begin, view_begin, regimes.us_open(day), zone, decimals),
+        "regime": {key: value for key, value in regime.items() if key != "labels" and value not in (None, [])},
+    }
+    all_swings = day_view.swings(series, view_begin, view_end, zone, decimals)
+    trades = request.get("trades") or []
+    bar_seconds = _bar_seconds(rule["bars"])
+    step = day_view.step_for([bar[0] for bar in inside], wanted_rows, bar_seconds)
+    coarser_steps = [candidate for candidate in day_view.STEPS_SECONDS
+                     if candidate > (step or bar_seconds or 0) and (not bar_seconds or candidate > bar_seconds)]
+    name = rule.get("name") or "Its script"
+    # As the pages say them: a minute's bars are "1 min", others the engine's word (45S, R60, 60).
+    label = bars_label(rule["bars"])
+    bars_said = f"{label} min" if label.isdigit() else label
+
+    def build(listed: int | None, plots_kept: int | None, coarser: int, swings_kept: int | None) -> dict:
+        used_step = step if coarser == 0 else coarser_steps[min(coarser, len(coarser_steps)) - 1] if coarser_steps else step
+        kept_plots = dict(list(table_plots.items())[:plots_kept]) if plots_kept is not None else table_plots
+        gathered = day_view.gathered(inside, kept_plots, used_step)
+        row_of_bar = {}
+        for number, row in enumerate(gathered):
+            for index in range(row["first"], row["last"] + 1):
+                row_of_bar[index] = number
+        alerts_by_row: dict[int, list[str]] = {}
+        by_close = {bar[6]: index for index, bar in enumerate(inside)}
+        for alert in alerts:
+            if alert["at"] in by_close:
+                alerts_by_row.setdefault(row_of_bar[by_close[alert["at"]]], []).append(alert["title"])
+        trades_by_row, trade_lines = day_view.trade_marks(trades, gathered)
+        seconds = used_step < 60 if used_step is not None else bar_seconds is None or bar_seconds < 60
+        columns, text = day_view.table(gathered, list(kept_plots), alerts_by_row, trades_by_row, zone, decimals, seconds)
+        cut = [said for said, done in zip(day_view.FITTING, (listed is not None, plots_kept is not None, coarser > 0,
+                                                              swings_kept is not None)) if done]
+        return {
+            "ok": True,
+            "view": {
+                "script": name if engine_rule is not None else None, "asset": f"{asset['provider']}/{asset['key']}",
+                "side": side, "bars": bars_said, "day": day.isoformat(), "timezone": str(zone),
+                "from": day_view.clock_text(view_begin * 1000, zone), "to": day_view.clock_text(view_end * 1000, zone),
+                "engine_day": {"from": iso_seconds(engine_begin), "to": iso_seconds(engine_end), "history_days": history_days},
+                "bars_shown": len(inside), "a_row": day_view.step_said(used_step),
+                "rows": len(gathered), "alerts": {entry["title"]: entry["action"] for entry in rule.get("alerts") or []} or None,
+            },
+            "day": {**figures, "swings": all_swings if swings_kept is None else all_swings[:swings_kept]},
+            "plots": listed_plots, "plots_total": len(all_plots), "tabulated": list(kept_plots),
+            "alerts": {"by_title": by_title, "listed": listed_alerts if listed is None else listed_alerts[:listed],
+                       "listed_of": len(listed_alerts)},
+            "trades": trade_lines,
+            **({"signals": {"by_fate": request.get("signals_by_fate"),
+                            "not_traded": refused if listed is None else refused[:listed]}} if request.get("signals_by_fate") else {}),
+            "table": {"columns": columns, "csv": text},
+            "cut": cut or None,
+            "warnings": window.warnings if window is not None else [],
+            "runtime_warnings": window.runtime_warnings if window is not None else [],
+            "milliseconds": window.milliseconds if window is not None else None,
+        }
+
+    answer = day_view.fitted(build, VIEW_CHARS, lambda found: len(json.dumps(found, separators=(",", ":"), ensure_ascii=False)))
+    if request.get("picture", True):
+        from src.research import chart_picture
+
+        drawn = {name: table_plots[name] for name in list(table_plots)[:chart_picture.MOST_PLOTS]}
+        title = (f"{name if engine_rule is not None else 'Prices'} · {asset['provider']}/{asset['key']} {side} · {bars_said} · "
+                 f"{day:%a %d %b %Y}, {answer['view']['from']}-{answer['view']['to']}")
+        marked = [{"id": line["id"], "direction": line["direction"], "result_percent": line["result_percent"],
+                   "asset_in": line["asset_in"], "asset_out": line["asset_out"],
+                   "in_ms": _moment_ms(line["in"]), "out_ms": _moment_ms(line["out"])} for line in answer["trades"]]
+        png = chart_picture.picture(bars=inside, plots=drawn, begin_ms=view_begin * 1000, end_ms=view_end * 1000,
+                                    zone=str(zone), title=title, alerts=alerts, trades=marked, decimals=decimals)
+        answer["picture"] = {"png": base64.b64encode(png).decode("ascii"), "width": chart_picture.WIDTH,
+                             "height": chart_picture.HEIGHT, "plots": list(drawn), "title": title}
+    return answer
+
+
+def _moment_ms(value) -> float | None:
+    at = day_view.epoch(value)
+    return at * 1000 if at is not None else None
+
+
 def _plural_alerts(count: int) -> str:
     return f"{count:,} alert{'' if count == 1 else 's'}"
 
@@ -743,6 +1020,8 @@ async def study(args: argparse.Namespace) -> dict:
             return await run(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, files_root)
         if args.mode == "rule":
             return await rule(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, files_root)
+        if args.mode == "view":
+            return await view(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, files_root)
         return await signals(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, args.signal_cache,
                              files_root)
     except RunnerFailed as e:

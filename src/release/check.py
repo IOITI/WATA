@@ -25,6 +25,8 @@ IMPORTS = (
     "src.capital_feed", "src.admin", "src.admin.app", "src.admin.agent", "src.mq_telegram", "src.saxo_authen",
     "src.price_history.dukascopy", "src.backtest.run", "src.ta_engine", "src.ta_engine.engine",
     "src.ta_engine.replay", "src.vault.migrate", "src.admin.vault", "src.service_control.app", "src.release.host",
+    # The pictures of the admin's Pine studies: Pillow, which only the study's child loads.
+    "src.research.chart_picture",
     "schedule", "duckdb", "uvloop", "httptools", "anthropic",
 )
 _REQUIREMENT = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(\[[^\]]+\])?==([^\s;#]+)$")

@@ -12,8 +12,10 @@ import type { IndicatorHandle } from '@luxalgo/vela'
 import { PineWorkerEngine } from '@luxalgo/vela-pinets'
 import { Alert, AlertDescription, cn, formatDay, formatNumber, useTheme } from 'ioiti-ui'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import velaWorkerUrl from 'virtual:vela-pine-worker'
 
+import type { ChartSnapshot } from '@/features/prices/chartSnapshot'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import type { BacktestDayIndicator, BacktestSignal, BacktestTrade } from '@/lib/types'
 
@@ -39,6 +41,8 @@ export interface RunDayChartProps {
   className?: string
   /** What the second layer draws, in place of the run's signals and trades (a rule's page: its journal). */
   layer?: LayerOf
+  /** Given what the chart shows, drawings and marks included, while it is on screen: a question to the agent sends it. */
+  snapshotRef?: RefObject<ChartSnapshot | null>
 }
 
 /** The second layer: the one given, else the run's signals and trades. */
@@ -73,7 +77,7 @@ function librariesOf(answer: BacktestDayIndicator): LibraryResolver {
   return async (name) => answer.libraries.find((library) => library.name === name) ?? null
 }
 
-export function RunDayChart({ answer, day, signals, trades, selected, timeZone, label, className, layer }: RunDayChartProps) {
+export function RunDayChart({ answer, day, signals, trades, selected, timeZone, label, className, layer, snapshotRef }: RunDayChartProps) {
   const host = useRef<HTMLDivElement>(null)
   const chartRef = useRef<Vela | null>(null)
   const runRef = useRef<IndicatorHandle | null>(null)
@@ -159,6 +163,15 @@ export function RunDayChart({ answer, day, signals, trades, selected, timeZone, 
       runRef.current = null
     }
   }, [answer, dayStart, timeZone, overrides])
+
+  // Its picture as Vela composes it: its background filled, the script's legend and the marks in it.
+  useEffect(() => {
+    if (!snapshotRef) return
+    snapshotRef.current = () => chartRef.current?.renderer.screenshotCanvas() ?? null
+    return () => {
+      snapshotRef.current = null
+    }
+  }, [snapshotRef])
 
   // Another theme: the chart's colours, and the run's marks in the theme's tones; the script is not run again.
   useEffect(() => {

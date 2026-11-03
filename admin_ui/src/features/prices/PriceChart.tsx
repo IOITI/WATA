@@ -19,9 +19,12 @@ import type {
   UTCTimestamp,
 } from 'lightweight-charts'
 import { useCallback, useEffect, useRef } from 'react'
+import type { RefObject } from 'react'
 
 import { withAlpha } from './chartData'
 import type { Candle, ChartMarker, ChartOverlay, EmptyPoint, LinePoint, MarkerTone } from './chartData'
+import { groundOf, onGround } from './chartSnapshot'
+import type { ChartSnapshot } from './chartSnapshot'
 import type { LiveChart, LiveUpdate } from './liveTail'
 
 /**
@@ -149,6 +152,8 @@ export interface PriceChartProps {
   onHover: (time: number | null) => void
   label: string
   className?: string
+  /** Given what the chart shows while it is on screen, its markers included: a question to the agent sends it. */
+  snapshotRef?: RefObject<ChartSnapshot | null>
 }
 
 export function PriceChart({
@@ -167,6 +172,7 @@ export function PriceChart({
   onHover,
   label,
   className,
+  snapshotRef,
 }: PriceChartProps) {
   const container = useRef<HTMLDivElement>(null)
   const chart = useRef<IChartApi | null>(null)
@@ -183,6 +189,18 @@ export function PriceChart({
   useEffect(() => {
     hover.current = onHover
   }, [onHover])
+
+  // Its picture with the markers (the top layer), on the ground it stands on: its own background is transparent.
+  useEffect(() => {
+    if (!snapshotRef) return
+    snapshotRef.current = () => {
+      const taken = chart.current?.takeScreenshot(true)
+      return taken ? onGround(taken, groundOf(container.current)) : null
+    }
+    return () => {
+      snapshotRef.current = null
+    }
+  }, [snapshotRef])
 
   useEffect(() => {
     const element = container.current

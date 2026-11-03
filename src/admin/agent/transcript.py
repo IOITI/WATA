@@ -108,6 +108,27 @@ def _sent_file(block: dict, files) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": block.get("media_type"), "data": encoded}}
 
 
+def _holds_files(content) -> bool:
+    """Whether a user message holds a file: one attached, or a tool's picture inside its result."""
+    return isinstance(content, list) and any(
+        block.get("type") == FILE_BLOCK or (block.get("type") == "tool_result" and isinstance(block.get("content"), list)
+                                            and any(part.get("type") == FILE_BLOCK for part in block["content"]))
+        for block in content)
+
+
+def _with_files(content: list[dict], files) -> list[dict]:
+    """A user message's blocks with each file made from its bytes, those inside a tool's result too."""
+    sent = []
+    for block in content:
+        if block.get("type") == FILE_BLOCK:
+            block = _sent_file(block, files)
+        elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+            block = {**block, "content": [_sent_file(part, files) if part.get("type") == FILE_BLOCK else part
+                                          for part in block["content"]]}
+        sent.append(block)
+    return sent
+
+
 def api_messages(lines: list[dict], files=None) -> list[dict]:
     """
     The transcript's lines as the API takes them: the answers echoed, the files
@@ -125,16 +146,24 @@ def api_messages(lines: list[dict], files=None) -> list[dict]:
                 continue
         if role == "assistant":
             content = echoed(content)
-        elif role == "user" and isinstance(content, list) and any(block.get("type") == FILE_BLOCK for block in content):
-            content = [_sent_file(block, files) if block.get("type") == FILE_BLOCK else block for block in content]
+        elif role == "user" and _holds_files(content):
+            content = _with_files(content, files)
         messages.append({"role": role, "content": content})
     return messages
 
 
 def files_in(lines: list[dict]) -> int:
-    """How many files the operator attached the transcript holds."""
-    return sum(1 for line in lines if line.get("role") == "user" and isinstance(line.get("content"), list)
-               for block in line["content"] if block.get("type") == FILE_BLOCK)
+    """How many files the transcript holds: those the operator attached, and the pictures its tools gave."""
+    count = 0
+    for line in lines:
+        if line.get("role") != "user" or not isinstance(line.get("content"), list):
+            continue
+        for block in line["content"]:
+            if block.get("type") == FILE_BLOCK:
+                count += 1
+            elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                count += sum(part.get("type") == FILE_BLOCK for part in block["content"])
+    return count
 
 
 def shown(value, limit: int = SHOWN_INPUT_CHARS):
@@ -154,7 +183,7 @@ def _request(requests: dict, index) -> dict:
             "index": index, "prompt": "", "shared": None, "asked_at": None, "started_at": None, "ended_at": None,
             "status": "queued", "detail": None, "steps": [], "answer": None, "proposals": [], "runs": [],
             "cost_usd": 0.0, "feedback": None, "model": None, "effort": None, "by": None, "memory": [],
-            "charts": [], "verdicts": [], "attached": [],
+            "charts": [], "verdicts": [], "attached": [], "pictures": [],
         }
     return requests[index]
 
@@ -209,6 +238,10 @@ def project(meta: dict, activity: list[dict], proposals: dict, pending: dict | N
         elif kind == "chart":
             # Drawn under the answer, in the order asked (show_chart).
             request["charts"].append({**(event.get("chart") or {}), "id": event.get("id")})
+        elif kind == "picture":
+            # A picture a tool gave (chart_view's day), with the step it came with (none: shared at the start).
+            request["pictures"].append({key: event.get(key) for key in ("file", "title", "size", "tool")}
+                                       | {"step": event.get("id")})
         elif kind == "verdict":
             request["verdicts"].append({key: event.get(key) for key in ("about", "tone", "line")})
         elif kind == "answer":
@@ -244,10 +277,11 @@ def _blocks(content) -> list[dict]:
 
 
 def _result_length(content) -> int:
+    """A tool result's characters: its picture's are not (the files are counted apart, by the API)."""
     if isinstance(content, str):
         return len(content)
-    return sum(len(block.get("text") or "") if block.get("type") == "text" else len(json.dumps(block))
-               for block in content or [])
+    return sum(len(block.get("text") or "") if block.get("type") == "text"
+               else 0 if block.get("type") in SENT_AS else len(json.dumps(block)) for block in content or [])
 
 
 def composition(messages: list[dict]) -> dict:
@@ -274,11 +308,18 @@ def ending_with_operator(messages: list[dict], block: dict) -> list[dict]:
 
 
 def without_files(messages: list[dict]) -> list[dict]:
-    """The conversation without the files attached: what tells how many tokens they hold."""
+    """The conversation without its files, the tools' pictures too: what tells how many tokens they hold."""
     stripped = []
     for message in messages:
         if message["role"] == "user" and isinstance(message["content"], list):
-            kept = [block for block in message["content"] if block.get("type") not in SENT_AS]
+            kept = []
+            for block in message["content"]:
+                if block.get("type") in SENT_AS:
+                    continue
+                if block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                    block = {**block, "content": [part for part in block["content"] if part.get("type") not in SENT_AS]
+                             or [{"type": "text", "text": "."}]}
+                kept.append(block)
             message = {**message, "content": kept or [{"type": "text", "text": "."}]}
         stripped.append(message)
     return stripped

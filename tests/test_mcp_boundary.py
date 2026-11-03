@@ -42,6 +42,9 @@ ALLOWED_IMPORTS = (
     # Whether a script can become a signal rule: its reports read, Claude's run tests kept beside the operator's.
     "src.admin.rule_checks",
     "src.backtest.clock", "src.ta_engine.runner", "src.ta_engine.replay", "src.ta_engine.bars", "src.ta_engine.rules",
+    # Pure: what price did after a moment (the edge's moves) and what kind of day it was, which chart_view reads a
+    # day with; never a run's simulation.
+    "src.backtest.data", "src.backtest.edge", "src.backtest.regimes",
     "src.ta_engine.signals", "src.price_history.process",
     # Pure: the names of WATA's assets, which a check's made-up series is asked by.
     "src.ta_engine.tickers",
@@ -87,6 +90,7 @@ CALLS = {
     "pine_check": {"source": "//@version=6\nindicator('x')\nplot(close)\n"},
     "pine_rule_check": {"source": "//@version=6\nindicator('x')\nplot(close)\n"},
     "pine_run": {"asset": "capital/US100", "start_day": "2026-10-13", "script_id": "000000000000"},
+    "chart_view": {"day": "2026-10-13", "asset": "capital/US100", "script_id": "000000000000"},
     "pine_signals": {"asset": "capital/US100", "start_day": "2026-10-13", "alerts": {"Up": "long"}, "script_id": "000000000000"},
     "pine_compare": {"asset": "capital/US100", "start_day": "2026-10-13", "alerts": {"Up": "long"}, "script_id": "000000000000"},
     "pine_save": {"source": "//@version=6\nindicator('x')\nplot(close)\n", "name": "X"},

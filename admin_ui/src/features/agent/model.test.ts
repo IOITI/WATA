@@ -27,6 +27,7 @@ import {
   limitsSaid,
   modelSaid,
   outcomeSaid,
+  pictureCaption,
   presetsFor,
   settingSaid,
   shortModel,
@@ -74,6 +75,10 @@ describe('a step', () => {
     expect(stepTitle('backtest_start', { request: { name: 'fast 14' } })).toBe('Started a backtest: fast 14')
     expect(stepTitle('backtest_derive', { run_id: 'r1', kind: 'stress' })).toBe('Stress-tested run r1')
     expect(stepTitle('backtest_wait', { run_ids: ['a', 'b'] })).toBe('Waited for 2 runs')
+    expect(stepTitle('chart_view', { day: '2026-10-23', run_id: 'r1' })).toBe('Looked at 2026-10-23 of run r1')
+    expect(stepTitle('chart_view', { day: '2026-10-23', start: '15:00', end: '17:30' })).toBe('Looked at 2026-10-23, 15:00 to 17:30')
+    expect(stepTitle('luxalgo_view', { slug: 'smart-money-concepts', day: '2026-10-23' }))
+      .toBe("Ran LuxAlgo's smart-money-concepts on 2026-10-23")
     expect(stepTitle('data_trades', { start_day: '2026-10-13', end_day: '2026-10-16' }))
       .toBe("Read WATA's trades of 2026-10-13 to 2026-10-16")
     expect(stepTitle('propose_rule_change', { title: 'Run v2' })).toBe('Proposed a change to a rule: Run v2')
@@ -219,6 +224,12 @@ describe('what can be asked', () => {
     expect(presetsFor('script')[0]).toMatchObject({ label: 'Make it ready for a signal rule' })
     expect(presetsFor('script')[0].prompt).toContain('pine_rule_check')
     expect(presetsFor(null)).toHaveLength(1)
+    // A run's day: looked at first, and what is tried on it held to every day; LuxAlgo's only with its tools.
+    const day = presetsFor('run', { day: true })
+    expect(day.map((preset) => preset.label)).toEqual(['Why did this day lose?', 'A better configuration for this day'])
+    expect(day.every((preset) => preset.prompt.includes('chart_view'))).toBe(true)
+    expect(day[1].prompt).toContain('every day of the run against random entries')
+    expect(presetsFor('run', { day: true, luxalgo: true }).at(-1)?.prompt).toContain('luxalgo_view')
   })
 
   it('says why nothing can be asked, the first reason first', () => {
@@ -347,6 +358,11 @@ describe('what it may be asked about', () => {
     expect(subjectLink({ kind: 'day', id: '2026-10-28', label: 'x' })).toBe('/report?day=2026-10-28')
     expect(subjectLink({ kind: 'incident', id: 'trader', label: 'x' })).toBe('/system')
     expect(subjectSaid({ kind: 'day', id: '2026-10-28', label: 'the day of 2026-10-28' })).toBe('The trading day 2026-10-28')
+    const runDay = { kind: 'run' as const, id: '20261027-101010-abcdef', day: '2026-10-23', label: 'Cross R60, Thu 23 Oct 2026' }
+    expect(subjectLink(runDay)).toBe('/backtests/20261027-101010-abcdef/days/2026-10-23')
+    expect(subjectSaid(runDay)).toBe('A day of run Cross R60, Thu 23 Oct 2026')
+    expect(pictureCaption({ title: 'Cross v1 · 23 Oct', tool: 'chart_view', step: 's1' })).toBe('Cross v1 · 23 Oct')
+    expect(pictureCaption({ title: null, tool: 'chart_view', step: null })).toBe('The day it was shared')
     expect(subjectSaid({ kind: 'incident', id: 'trader', label: 'trader at 15:31 UTC' })).toBe('Incident: trader at 15:31 UTC')
   })
 

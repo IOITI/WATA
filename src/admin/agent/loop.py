@@ -11,12 +11,17 @@ the growth of a tool call's input are published as they come, for the page
 that follows the conversation. The request's limits (tool calls, backtests,
 dollars) are said to the model when it starts, again near one of them, and
 held here whatever it does.
+
+A tool's picture (chart_view's day) is kept as a file of the conversation, as
+a file the operator attaches is, and the tool's result holds it: the model is
+sent its bytes with each later answer, the page shows it under the step.
 """
 
 import asyncio
 import hashlib
 import json
 import logging
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -216,7 +221,10 @@ class RequestRun:
         for entry in attached:
             if entry.get("kind") != "file":
                 shared = await opening["shared"](session, entry, self.request)
-                content.append({"type": "text", "text": shared})
+                # A thing shared may come with pictures of its own (a run's day): kept as a tool's are.
+                text, pictures = shared if isinstance(shared, tuple) else (shared, [])
+                content.append({"type": "text", "text": text})
+                content += [self._keep_picture(png, title, tool, None) for png, title, tool in pictures]
         files = [entry for entry in attached if entry.get("kind") == "file"]
         if files:
             content.append({"type": "text", "text": files_note(files)})
@@ -227,6 +235,22 @@ class RequestRun:
         if seen is not None:
             # The next request is told what changed after this one.
             self.store.update_meta(self.conversation_id, memory_seq=seen)
+
+    def _keep_picture(self, png: bytes, title: str | None, tool: str, call_id: str | None) -> dict:
+        """
+        A tool's picture kept as a file of the conversation (``pictures`` of its meta, served as the files
+        attached are), its activity naming the call it came with (none: the request's opening). The block the
+        transcript keeps of it, which the model is sent its bytes by.
+        """
+        file_id = f"f{secrets.token_hex(5)}"
+        self.store.write_attachment(self.conversation_id, file_id, png)
+        entry = {"id": file_id, "name": f"{tool}-{file_id}.png", "type": "image", "media_type": "image/png",
+                 "size": len(png), "title": title, "tool": tool, "request": self.request}
+        meta = self.store.meta(self.conversation_id)
+        self.store.update_meta(self.conversation_id, pictures=[*(meta.get("pictures") or []), entry])
+        self.files[file_id] = png
+        self._activity("picture", id=call_id, file=file_id, title=title, size=len(png), tool=tool)
+        return transcript.file_block(entry)
 
     def _file(self, file_id: str) -> bytes | None:
         """A file attached to the conversation, read once a request."""
@@ -404,9 +428,13 @@ class RequestRun:
                 self._activity("chart", id=call["id"], chart=answer.chart)
             if answer.verdict is not None:
                 self._activity("verdict", **answer.verdict)
+        content = text
+        if answer is not None and answer.picture is not None and not is_error:
+            content = [{"type": "text", "text": text},
+                       self._keep_picture(answer.picture, answer.picture_title, call["name"], call["id"])]
         self._activity("tool_done", id=call["id"], is_error=is_error, seconds=round(time.monotonic() - started, 1),
                        output=transcript.shown(text, transcript.SHOWN_OUTPUT_CHARS))
-        result = {"type": "tool_result", "tool_use_id": call["id"], "content": text}
+        result = {"type": "tool_result", "tool_use_id": call["id"], "content": content}
         if is_error:
             result["is_error"] = True
         return result

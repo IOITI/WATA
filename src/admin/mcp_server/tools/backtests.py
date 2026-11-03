@@ -151,17 +151,30 @@ def _trade_line(trade: dict, candidates: bool = False) -> dict:
     }
 
 
+# A day's figures as the run writes them (day_features of src/backtest/regimes.py), by the names said: in percent
+# but its efficiency (0 to 1) and its kind.
+REGIME_SAID = (("gap", "gap_percent"), ("range", "range_percent"), ("volatility", "volatility_percent"),
+               ("efficiency", "efficiency"), ("day_type", "day_type"), ("us_open", "us_open_move_percent"), ("news", "news"))
+
+
 def _day_line(day: dict) -> dict:
+    """
+    A run's day in a line, held small enough for a run of 92 days in one answer: the fates its signals had, its
+    regime by short names, and only the labels its figures do not say already.
+    """
     regime = day.get("regime") or {}
     recorded = day.get("recorded") or {}
-    return {
+    figures = {said: regime.get(key) for said, key in REGIME_SAID if regime.get(key) not in (None, [], "")}
+    labels = {key: value for key, value in (regime.get("labels") or {}).items()
+              if value is not None and key not in ("day_type", "news")}
+    line = {
         "day": day.get("day"), "status": day.get("status"), "entries": day.get("entries"), "trades": day.get("trades"),
-        "day_percent": day.get("day_percent"), "profit_loss": day.get("profit_loss"), "signals": day.get("signals"),
+        "day_percent": day.get("day_percent"), "profit_loss": day.get("profit_loss"),
+        "signals": {fate: count for fate, count in (day.get("signals") or {}).items() if count} or None,
         "recorded_minutes": recorded.get("minutes"), "turbos": {"long": recorded.get("long"), "short": recorded.get("short")},
-        "regime": {key: regime.get(key) for key in ("gap", "range", "volatility", "efficiency", "day_type", "us_open", "news")
-                   if key in regime} or None,
-        "labels": regime.get("labels"),
+        "regime": figures or None, "labels": labels or None,
     }
+    return {key: value for key, value in line.items() if value is not None}
 
 
 def _flat(row: dict, prefix: str = "") -> dict:
@@ -304,12 +317,14 @@ def register(server, research) -> None:
         return compacted(page(rows, offset, limit))
 
     @research_tool(server, calls, name="backtest_days", title="A backtest's days", read_only=True, export=True)
-    async def backtest_days(run_id: str, offset: int = 0, limit: int = 100, format: str = "json") -> dict | str:
-        """A run's days: whether each was traded (or had no recorded turbo, no bars, a closed market), its signals by
-        fate, entries, trades and result, the turbos recorded, and what kind of day it was (gap, range, volatility,
-        trend or back and forth, the US open's first half hour, macro news)."""
+    async def backtest_days(run_id: str, day: str = "", offset: int = 0, limit: int = 60, format: str = "json") -> dict | str:
+        """A run's days, 60 a page: whether each was traded (or had no recorded turbo, no bars, a closed market), its
+        signals by fate, entries, trades and result, the turbos recorded, and what kind of day it was (regime, in
+        percent: gap, range, volatility; efficiency 0 to 1, trend near 1, back and forth near 0; day_type; the US
+        open's first half hour; macro news), with labels for what those figures do not say. day gives one alone."""
         _format(format)
-        rows = [_day_line(day) for day in await run_in_threadpool(research.service().days, run_id)]
+        rows = [_day_line(line) for line in await run_in_threadpool(research.service().days, run_id)
+                if not day or line.get("day") == day]
         if format == "csv":
             return _table(compacted(rows))
         return compacted(page(rows, offset, limit))

@@ -15,6 +15,8 @@ describe('what is attached to a request', () => {
     expect(attachmentKey({ kind: 'script', id: 'a1', version: 3 })).toBe('script:a1@v3')
     expect(attachmentKey({ kind: 'incident', id: 'trader', at: '2026-10-30 14:01' })).toBe('incident:trader@2026-10-30 14:01')
     expect(attachmentKey(RUN)).toBe(`run:${RUN.id}`)
+    // A day of a run is its own, as the server tells them apart.
+    expect(attachmentKey({ ...RUN, day: '2026-10-23' })).toBe(`run:${RUN.id}@2026-10-23`)
   })
 
   it('sends the things and the files the server staged, not those still uploading or refused', () => {

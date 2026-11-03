@@ -23,7 +23,7 @@ from src.admin.errors import NotPossible
 from src.admin.processes import launch, tail
 from src.price_history.process import cgroup_memory, exit_said, oom_kills
 
-MODES = ("check", "run", "signals", "rule")
+MODES = ("check", "run", "signals", "rule", "view")
 # How long a study waits for the one before it.
 WAIT_SECONDS = 15
 # Beyond the study's own time limit: Python's and Node's start, reading the bars.

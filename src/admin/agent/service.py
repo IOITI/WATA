@@ -31,7 +31,8 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from starlette.concurrency import run_in_threadpool
 
@@ -94,6 +95,8 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
 LUXALGO_WRITE_UP_CHARS = 6_000
 # What a conversation about a day or a signal reads of the day's signals and trades at most.
 SHARED_ROWS = 200
+# The rows a run's day is shared in (chart_view's table): the agent zooms on the hours that matter.
+RUN_DAY_ROWS = 120
 # What an incident is shared of the changes before its moment.
 INCIDENT_CHANGES_HOURS = 2
 # What a morning briefing is shared of what changed since the day before, and of the day before's debrief.
@@ -558,6 +561,8 @@ class AgentService:
             summary = await session.call("backtest_result", {"run_id": subject["id"], "part": "summary"}, request)
             shared = f"Its settings:\n{settings.text}\n\nIts summary:\n" + (
                 summary.text if not summary.is_error else f"(not shared: {summary.text}; read it with backtest_result)")
+            if subject.get("day"):
+                return await _shared_run_day(session, subject, request, shared)
             return subject_text("the backtest run", f"{subject.get('label') or subject['id']} ({subject['id']})", shared)
         arguments = {"script_id": subject["id"]}
         if subject.get("version"):
@@ -608,8 +613,10 @@ class AgentService:
 
     def _debrief_before(self, day: str) -> str:
         """The answer of the newest daily debrief of a day before ``day``, or why there is none."""
+        # Only the debriefs: every other conversation has no day, which would read as before any.
         found = [meta for meta in self.store.metas()
-                 if (meta.get("debrief") or {}).get("day", "") < day and meta.get("status") not in transcript.UNDER_WAY]
+                 if isinstance((meta.get("debrief") or {}).get("day"), str) and meta["debrief"]["day"] < day
+                 and meta.get("status") not in transcript.UNDER_WAY]
         if not found:
             return "No debrief of a day before it."
         newest = max(found, key=lambda meta: meta["debrief"]["day"])
@@ -791,7 +798,10 @@ class AgentService:
         if kind == LUXALGO:
             return await self._luxalgo_subject(subject_id)
         if kind in (RUN, SCRIPT, RULE):
-            return await run_in_threadpool(self._stored_subject, kind, subject_id, subject.get("version"))
+            stored = await run_in_threadpool(self._stored_subject, kind, subject_id, subject.get("version"))
+            if kind == RUN and subject.get("day") is not None:
+                return await run_in_threadpool(self._run_day, stored, subject["day"])
+            return stored
         if kind in (CHANGE, DRAFT):
             return await run_in_threadpool(self._reviewed, subject)
         if kind == INCIDENT:
@@ -874,10 +884,13 @@ class AgentService:
                 raise InvalidRequest(f"{entry['label']} does not read {said}: choose another model")
 
     def attachment(self, conversation_id: str, file_id: str) -> tuple[dict, bytes]:
-        """A file attached to a conversation, as the operator gave it (a text cleaned), and what is said of it."""
+        """
+        A file of a conversation and what is said of it: one the operator attached, as given (a text
+        cleaned), or a picture one of its tools gave (chart_view's day).
+        """
         meta = self.store.meta(conversation_id)
-        entry = next((found for found in meta.get("attached") or []
-                      if found.get("kind") == FILE and found.get("id") == file_id), None)
+        entry = next((found for found in [*(meta.get("attached") or []), *(meta.get("pictures") or [])]
+                      if found.get("kind", FILE) == FILE and found.get("id") == file_id), None)
         data = self.store.read_attachment(conversation_id, file_id) if entry is not None else None
         if data is None:
             raise UnknownFile(f"No file {file_id!r} in {conversation_id}")
@@ -905,6 +918,18 @@ class AgentService:
             raise InvalidRequest(f"{script['name']!r} has no version {base}")
         return {"kind": DRAFT, "id": subject["id"], "label": label or f"a draft of {script['name']}",
                 "script_id": script["id"], "base_version": base}
+
+    def _run_day(self, run: dict, day) -> dict:
+        """A day of a finished run, one of its own: asked from the run's day page."""
+        if not isinstance(day, str) or not _DAY.match(day):
+            raise InvalidRequest("A run's day is YYYY-MM-DD")
+        try:
+            days = self._backtests.days(run["id"])
+        except NotPossible:
+            raise InvalidRequest("This backtest has no results yet: its days can be asked about once it is done") from None
+        if not any(entry.get("day") == day for entry in days):
+            raise InvalidRequest(f"{day} is not one of the run's days")
+        return {**run, "day": day, "label": f"{run['label']}, {date.fromisoformat(day):%a %d %b %Y}"}
 
     def _stored_subject(self, kind: str, subject_id: str, version) -> dict:
         if kind == RULE:
@@ -1356,8 +1381,69 @@ def _task_line(task: dict | None) -> dict | None:
 
 
 def _identity(entry: dict) -> tuple:
-    """What tells two things attached apart: a script's versions, an incident's moments are each their own."""
-    return entry.get("kind"), entry.get("id"), entry.get("version") or entry.get("at")
+    """What tells two things attached apart: a script's versions, an incident's moments, a run's days each their own."""
+    return entry.get("kind"), entry.get("id"), entry.get("version") or entry.get("at") or entry.get("day")
+
+
+def _losing_said(viewed: str) -> str | None:
+    """
+    A run's losing trades of a day, from chart_view's answer, each with the hours to zoom on (a quarter of an hour
+    either side, in the trading timezone): what the agent explains before it changes anything.
+    """
+    try:
+        answer = json.loads(viewed)
+        zone = ZoneInfo((answer.get("view") or {}).get("timezone") or "Europe/Paris")
+        trades = answer.get("trades") or []
+    except (TypeError, ValueError, AttributeError, KeyError):
+        return None
+
+    def local(moment: str | None, shift: int = 0) -> str | None:
+        try:
+            at = datetime.fromisoformat(str(moment).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return (at.astimezone(zone) + timedelta(minutes=shift)).strftime("%H:%M")
+
+    lines = []
+    for trade in trades:
+        result = trade.get("result_percent")
+        if not isinstance(result, (int, float)) or result >= 0:
+            continue
+        opened, closed = local(trade.get("in")), local(trade.get("out"))
+        start, end = local(trade.get("in"), -15), local(trade.get("out") or trade.get("in"), 15)
+        lines.append(f"- #{trade.get('id')} {trade.get('direction')} {opened}-{closed or '?'}, {result:+.2f} %"
+                     f"{', ' + trade['exit_reason'] if trade.get('exit_reason') else ''}: zoom with start {start}, "
+                     f"end {end}")
+    if not lines:
+        return None
+    return ("Its losing trades, each to explain before changing anything (chart_view with the run_id, the day and the "
+            "hours given):\n" + "\n".join(lines))
+
+
+async def _shared_run_day(session, subject: dict, request: int, run: str):
+    """
+    A day of a run, as the agent's tools read it: the run's settings and summary, the day among its days, and
+    the day as the run ran it (chart_view: its script, its trades, its signals that made none), with its picture.
+    """
+    day = subject["day"]
+    line = await session.call("backtest_days", {"run_id": subject["id"], "day": day}, request)
+    parts = [run, f"The day among its days:\n{line.text}"]
+    pictures = []
+    if session.offers("chart_view"):
+        viewed = await session.call("chart_view", {"run_id": subject["id"], "day": day, "rows": RUN_DAY_ROWS}, request)
+        said = viewed.text if not viewed.is_error else f"(not read: {viewed.text}; read it with chart_view)"
+        parts.append("The day as the run ran it (chart_view, its trading hours; zoom with start and end, run other "
+                     f"inputs or scripts on it):\n{said}")
+        losing = _losing_said(viewed.text) if not viewed.is_error else None
+        if losing:
+            parts.append(losing)
+        if getattr(viewed, "picture", None) is not None:
+            pictures.append((viewed.picture, viewed.picture_title, "chart_view"))
+    parts.append(f"A verdict on this day goes on the run (run:{subject['id']}): the day is not one of WATA's own "
+                 "trading days.")
+    text = subject_text("a day of the backtest run", f"{subject.get('label') or subject['id']} ({subject['id']})",
+                        "\n\n".join(parts))
+    return (text, pictures) if pictures else text
 
 
 def _prompt(prompt) -> str:

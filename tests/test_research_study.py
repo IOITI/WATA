@@ -6,6 +6,8 @@ Node 22+ is on the PATH.
 """
 
 import asyncio
+import base64
+import io
 import json
 import math
 import os
@@ -173,6 +175,68 @@ def test_a_study_that_cannot_be_made_says_why(tmp_path, scripts, prices, request
     found = study(tmp_path, scripts, prices, "run", request_)
 
     assert not found["ok"] and refused in found["error"]["message"]
+
+
+# The engine day holding the 14th's noon, and its trading hours in Paris (8:00 to 22:00).
+ENGINE_DAY = [int(datetime(2026, 10, 13, 21, 15, tzinfo=timezone.utc).timestamp()),
+              int(datetime(2026, 10, 14, 21, 15, tzinfo=timezone.utc).timestamp())]
+TRADING_HOURS = [int(datetime(2026, 10, 14, 6, tzinfo=timezone.utc).timestamp()),
+                 int(datetime(2026, 10, 14, 20, tzinfo=timezone.utc).timestamp())]
+
+
+def view_request(scripts, **more) -> dict:
+    return {"script": {"id": cross(scripts)["id"]}, "asset": "dukascopy/us100", "bars": "1",
+            "alerts": {"Enter Long": "long", "Exit": "close-position"}, "engine": ENGINE_DAY, "view": TRADING_HOURS,
+            "day": "2026-10-14", "timezone": "Europe/Paris", "hours": {"zone": "Europe/Paris", "start_hour": 8, "end_hour": 22},
+            "history_days": 1, **more}
+
+
+def test_a_view_is_the_engine_day_as_a_backtest_ran_it_in_rows_with_its_alerts_and_their_moves(tmp_path, scripts, prices):
+    from PIL import Image
+
+    trade = {"id": 1, "direction": "long", "performance_percent": 2.4,
+             "entry": {"filled_at": "2026-10-14T07:16:00Z", "asset_price": 24961.5},
+             "exit": {"filled_at": "2026-10-14T08:02:00Z", "asset_price": 25038.5, "reason": "Take profit"}}
+
+    found = study(tmp_path, scripts, prices, "view", view_request(scripts, trades=[trade]))
+    raised = study(tmp_path, scripts, prices, "signals", {
+        "script": {"id": cross(scripts)["id"]}, "asset": "dukascopy/us100", "bars": "1", "from": "2026-10-14",
+        "alerts": {"Enter Long": "long", "Exit": "close-position"}, "timezone": "Europe/Paris"})
+
+    assert found["ok"], found
+    view = found["view"]
+    assert (view["script"], view["bars"], view["from"], view["to"]) == ("Cross v1", "1 min", "08:00", "22:00")
+    # 840 minutes of bars recorded from 08:00: in rows of five minutes, 168 of them.
+    assert (view["bars_shown"], view["a_row"], view["rows"]) == (840, "5 min", 168)
+    lines = found["table"]["csv"].splitlines()
+    assert lines[0] == "time,open,high,low,close,bars,Mid,alerts,trades" and len(lines) == 169
+    assert found["tabulated"] == ["Mid"] and found["plots"][0]["pane"] == "price"
+    # Its alerts are the signals a rule of it raises in those hours, as the backtests have them.
+    shown = [signal for signal in raised["signals"] if "2026-10-14T06:00:00Z" <= signal["bar_time"] < "2026-10-14T20:00:00Z"]
+    by_title = found["alerts"]["by_title"]
+    assert by_title["Enter Long"]["count"] == sum(signal["action"] == "long" for signal in shown) > 0
+    assert by_title["Exit"]["count"] == sum(signal["action"] == "close-position" for signal in shown)
+    # On a wave, the long entries come at its trough: price rose after each.
+    assert by_title["Enter Long"]["after_bp"]["15"]["its_way"] == 1.0
+    assert any("Enter Long" in line for line in lines[1:])
+    assert found["trades"][0]["result_percent"] == 2.4 and any(line.endswith("#1 long in") for line in lines)
+    assert found["day"]["regime"]["day_type"] == "Back and forth" and found["day"]["swings"]
+    picture = Image.open(io.BytesIO(base64.b64decode(found["picture"]["png"])))
+    assert (picture.format, picture.size) == ("PNG", (1280, 720)) and found["picture"]["plots"] == ["Mid"]
+
+
+def test_a_view_zooms_into_the_hours_asked_bar_by_bar_and_shows_prices_alone_without_a_script(tmp_path, scripts, prices):
+    hour = [TRADING_HOURS[0] + 3600, TRADING_HOURS[0] + 7200]
+
+    zoomed = study(tmp_path, scripts, prices, "view", view_request(scripts, view=hour, picture=False))
+    alone = study(tmp_path, scripts, prices, "view", {**view_request(scripts, bars="5"), "script": None, "alerts": {}})
+    outside = study(tmp_path, scripts, prices, "view", view_request(scripts, view=[ENGINE_DAY[0], ENGINE_DAY[0] + 3600]))
+
+    assert zoomed["ok"] and (zoomed["view"]["from"], zoomed["view"]["to"], zoomed["view"]["a_row"]) == ("09:00", "10:00", "a bar")
+    assert zoomed["view"]["rows"] == 60 and "picture" not in zoomed
+    assert alone["ok"] and alone["view"]["script"] is None and alone["view"]["bars"] == "5 min"
+    assert alone["view"]["rows"] == 168 and alone["alerts"]["listed_of"] == 0 and alone["plots"] == []
+    assert not outside["ok"] and "No bar of dukascopy/us100 in the hours asked" in outside["error"]["message"]
 
 
 def test_claude_saves_checks_runs_and_replays_a_script_through_its_tools(tmp_path, scripts, prices):

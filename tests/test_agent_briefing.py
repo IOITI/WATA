@@ -144,3 +144,24 @@ def test_the_day_ahead_is_shared_as_the_tools_read_it_with_the_day_before_s_debr
     bare = Session(offered=("rule_list",))
     asyncio.run(agent._shared_briefing(bare, {"kind": "briefing", "id": "2026-10-30"}, 0))
     assert [name for name, _ in bare.asked] == ["rule_list"]
+
+
+def test_the_day_before_is_found_among_conversations_that_are_no_debrief(tmp_path):
+    # The briefings of 2 and 3 Nov 2026 failed before calling the API: a question asked from a page has no debrief,
+    # and was taken for one of a day before any.
+    store = ConversationStore(str(tmp_path / "agent"))
+    agent, _ = agent_of(store, FakeProvider())
+    store.create({"id": "20261102-080000-aaaaaa", "title": "A question", "status": "idle", "request": 0,
+                  "subject": {"kind": "run", "id": "20261101-090000-abcdef"}})
+    store.create({"id": "20261102-073000-bbbbbb", "title": "Briefing", "status": "idle", "request": 0,
+                  "briefing": {"day": "2026-11-02"}})
+
+    assert agent._debrief_before("2026-11-03") == "No debrief of a day before it."
+
+    store.create({"id": "20261102-213000-cccccc", "title": "Debrief", "status": "idle", "request": 0,
+                  "debrief": {"day": "2026-11-02", "max_usd": 0.5}})
+    store.append("20261102-213000-cccccc", "activity", {"at": "x", "event": "answer", "request": 0, "text": "A quiet day."})
+    store.create({"id": "20261103-213000-dddddd", "title": "Debrief", "status": "idle", "request": 0,
+                  "debrief": {"day": "2026-11-03", "max_usd": 0.5}})
+
+    assert agent._debrief_before("2026-11-03") == "The debrief of 2026-11-02:\nA quiet day."

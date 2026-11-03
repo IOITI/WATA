@@ -47,7 +47,7 @@ Research only, on the live server's own data. Nothing behind the tools trades, e
 |---|---|
 | Looking | `status`, `data_assets`, `data_coverage`, `data_bars`, `data_signals`, `data_trades`, `data_position`, `data_orders`, `data_execution`, `turbo_model`, `rule_list`, `memory_list`, `memory_read` |
 | The experiment journal | `exp_new`, `exp_get`, `exp_trials`, `exp_conclude`, `lockbox_set` |
-| Pine scripts | `pine_list`, `pine_get`, `pine_check`, `pine_run`, `pine_signals`, `pine_save`, `pine_delete` |
+| Pine scripts | `pine_list`, `pine_get`, `pine_check`, `pine_rule_check`, `pine_run`, `pine_signals`, `pine_compare`, `chart_view`, `pine_save`, `pine_delete` |
 | Backtests | `backtest_options`, `backtest_start`, `backtest_wait`, `backtest_list`, `backtest_result`, `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare`, `backtest_derive`, `backtest_remove`, `turbo_model_measure` |
 | Claude's shadow rules | `rule_shadow_save`, `rule_shadow_remove`, `rule_set_reference` |
 | Long studies | `job_wait` |

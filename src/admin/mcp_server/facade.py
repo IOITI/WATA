@@ -84,6 +84,13 @@ class ConfigFacts:
             "trading_hours": f"{start_hour:02d}:00-{end_hour:02d}:00 on weekdays",
         }
 
+    def hours(self) -> tuple[str, int, int] | None:
+        """The live rules' trading hours and the timezone they are written in; None when they cannot be read."""
+        try:
+            return trading_hours(self._config())
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
     def allowed_indices(self) -> list[str]:
         try:
             rules = (self._config().get("trade") or {}).get("rules") or []

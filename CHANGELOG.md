@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.79.0 - The AI agent looks at a day
+
+**Release date:** not released
+
+Asked about a day ("this day lost: find a better indicator or configuration for it", "find a LuxAlgo indicator that fits this day"), the AI agent reads the day's chart with the script applied before it changes anything. Its conversations on the server showed it backtesting blind: it had no way to see a day's price and indicator together.
+- **`chart_view`, a new research tool** (the agent's and Claude Code's): one day as a backtest ran it, from the TA engine's restart with its days of history before, a script applied (a run's own, a saved one, a source not saved yet, or none for the prices alone).
+  - A table of the trading hours, or of the hours asked (`start`, `end`) to zoom: each row its prices, the script's plots, the alerts raised and a run's trades. The rows are as long as needed to fit: five minutes for a day of minute bars, a bar each for a zoom of an hour.
+  - The day's prices, levels (the night, the US open, its first hour), swings and kind (trend or back and forth, its range, its gap).
+  - For each alert, what price did 5 to 60 minutes after, signed by its direction (the edge's own measure).
+  - With a run (`run_id`): its script, inputs, bars and alerts as it ran them, its trades of the day and its signals that made no trade, with why.
+  - And **a picture of it**, drawn by the server (candles, plots, alerts, trades): the script's own labels and boxes are not in it.
+- **The agent sees the pictures**: each is kept with the conversation, sent to the model inside the tool's answer, eight a request at most, and shown under what it did ("What it looked at"), each opening whole. A study past 45 s gives its picture through its job too.
+- **`luxalgo_view`**: one of LuxAlgo's indicators run on a day the same way, saved nowhere. The agent screens several on a day and brings in only the one it keeps.
+- **A run's day page**: "Ask the AI agent about this day" sends the chart as it is on screen (the script's drawings included) as an attached picture, and the day itself, which the agent is first given as `chart_view` reads it, its picture with it, and its losing trades, each with the hours to zoom on. Its verdict goes on the run: the day is not one of WATA's own trading days. Requests offered there: "Why did this day lose?", "A better configuration for this day", and with LuxAlgo, "A LuxAlgo indicator for this day".
+- **The method, in its prompt and the MCP instructions**: look at the day, explain each losing trade against price and the indicator, try an idea on the day cheaply, then on every day of the run against random entries, and keep nothing that helps one day only: each step before any backtest. For LuxAlgo: read the day's kind, search the Library by the concepts it calls for, screen three to five with `luxalgo_view`, then backtest the best.
+- **Three faults fixed on the way:**
+  - The morning briefing failed every day before asking anything (since 2 Nov in production), taking each conversation that was no debrief for one.
+  - `backtest_days` never gave a day's range, volatility, gap or US-open move (it read keys the runs do not write). It now gives them, 60 days a page and one day alone with `day`.
+  - A LuxAlgo indicator with a slug over 64 characters could not be asked about.
+
+**On the live path:** nothing. Only the admin's container changes (the release manifest, compared with v0.78.0's), with one library added for the pictures (Pillow 13.0.0, loaded by the study's child alone). The Pine runner is byte for byte the same (`runner.mjs`), and the backtests' code digest is unchanged (`7446dd27f5df9a7e`): no run turns stale.
+
+**Verification status:**
+- Tests:
+  - the day view's pure parts: rows that fit, the table, the moves after an alert set against the edge's own figures, swings, levels, a run's trades in their rows, the answer cut in order;
+  - the picture: a PNG of its size, a zoom a bar a column with its lines unbroken;
+  - the study with the real Pine runner: a day's alerts are those `pine_signals` raises in its hours, its picture a PNG of 1280 × 720, a zoom bar by bar, the prices alone;
+  - the tool: the request it asks of the study, a run's day with what it ran, its trades and untraded signals, the lock box refused, its picture an image block, through a job too;
+  - the agent: the picture kept as a file, sent inside the tool's result, eight a request, `luxalgo_view` saving nothing and refusing a cut source, the run-day subject named, told apart and shared with its picture;
+  - the briefing with conversations that are no debrief, `backtest_days`' figures on a run's real day, a 121-character slug;
+  - the pages: the day page's button with its snapshot attached and its presets, the pictures under the activity, the day's link and name.
+- Whole suites: 3,913 Python tests passed (24 skipped: the live PostgreSQL and RabbitMQ tests, and the lab's, without a database here), 1,413 interface tests, lint and typecheck clean, the builds made.
+- Seen in the browser pane on the development admin (its scripted agent), on a backtest of its EMA cross over five recorded days:
+  - from the day that lost 39 %, "Ask the AI agent about this day" attached the chart on screen (195 kB) beside the day, with the day's three requests offered;
+  - the agent was given the day's picture drawn by the server (1280 × 720, both EMAs, the alerts, the five trades with their results) and the screenshot;
+  - asked again, it zoomed on 15:00 to 17:00 with `chart_view`, its picture shown under its step;
+  - at 375 px in the dark theme, the conversation page holds its pictures within the screen.
+- On the real Claude API (Sonnet 5.5 at medium effort, the development admin's day that lost 29.6 %, "A better configuration for this day", $0.68 for two requests):
+  - the first went straight from the day it was given to one backtest of 5-minute bars, put its verdict on WATA's own trading day of that date, and answered in one line (the development admin's made-up memory asks for five lines at most);
+  - so the day's losing trades are now shared with the hours to zoom on, the method says each step comes before any backtest, and a run's day has its verdict on the run;
+  - the second zoomed on the three losing trades and explained each against the EMAs (an entry on two flat lines, a short at the bottom of a move, a long once the move had run), counted the signals of two ideas over the week before any backtest, backtested the better one on every day and judged it short of the bar (4 trades, random entries beaten 93 %), its verdict on the run, nothing proposed.
+
 ## v0.78.0 - Favourite backtests
 
 **Release date:** 2026-11-03

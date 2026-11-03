@@ -222,6 +222,13 @@ const MODEL_CHECK = {
   recorded_total_percent: -67.42, modelled_total_percent: -66.43,
 }
 
+const AGENT_ON = {
+  enabled: true, model: 'claude-opus-5-5', model_label: 'Claude Opus 5.5', effort: 'high', key: true, pause: null, started: true,
+  month: { month: '2026-10', spent_usd: 1, budget_usd: 50 }, under_way: [], conversations: 0,
+  limits: { tool_calls: 60, backtests: 8, request_usd: 5, running: 2 }, efforts: ['low', 'medium', 'high'], luxalgo: true,
+  tasks: { usd: 20, backtests: 40, hours: 12 }, models: [],
+}
+
 function serve() {
   sent = []
   const json = (body: unknown, status = 200) =>
@@ -231,9 +238,17 @@ function serve() {
     vi.fn(async (path: string, init: RequestInit = {}) => {
       const method = init.method ?? 'GET'
       const url = new URL(path, 'http://admin.test')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+      const body = typeof init.body === 'string' ? JSON.parse(init.body)
+        : init.body instanceof FormData ? { file: (init.body.get('file') as File | null)?.name } : undefined
       sent.push({ method, path: `${url.pathname}${url.search}`, body })
       const route = url.pathname
+      // The AI agent, asked about a day from its page: on, with nothing asked yet.
+      if (route === '/api/agent') return json(AGENT_ON)
+      if (route === '/api/agent/conversations' && method === 'GET') return json({ items: [] })
+      if (route === '/api/agent/files' && method === 'POST') {
+        return json({ kind: 'file', id: 'f0123456789', name: (body as { file: string }).file, type: 'image', media_type: 'image/png',
+          size: 2048, masked: 0 }, 201)
+      }
       if (route === '/api/backtests' && method === 'GET') {
         return json({ items: Object.values(runs).map(({ request: _r, settings: _s, summary: _m, progress: _p, lines: _l, ...listed }) => listed), storage: { runs: { count: 2, bytes: 52_000 }, former: { count: 7, bytes: 3_400_000 } }, remaking })
       }
@@ -1344,6 +1359,26 @@ describe('a day of a run', () => {
     expect(screen.getByRole('button', { name: 'Day before' })).toBeDisabled()
     // The 16th had no turbo recorded: the day after the 14th that was traded is the 15th.
     await waitFor(() => expect(screen.getByRole('link', { name: 'Day after' })).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-15`))
+  })
+
+  it('asks the AI agent about the day with the chart as it is on screen attached, and the day\'s own requests offered', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}/days/2026-10-14`)
+    await waitFor(() => expect(velas[0]?.indicators).toHaveLength(2))
+
+    const ask = await screen.findByRole('link', { name: 'Ask the AI agent about this day' })
+    expect(ask).toHaveAttribute('href', `/backtests/${RUN_ID}/days/2026-10-14?agent=new`)
+    await user.click(ask)
+
+    // The day is what it is about, kept first; the chart on screen comes as a file of the operator's.
+    const attached = await screen.findByRole('group', { name: 'Attached' })
+    expect(within(attached).getByText('A day of run Smoke EMA cross, 14 Oct 2026')).toBeInTheDocument()
+    await waitFor(() => expect(sent.find((request) => request.path === '/api/agent/files')?.body).toEqual({ file: 'chart-2026-10-14.png' }))
+    expect(await within(attached).findByText('2 kB')).toBeInTheDocument()
+    for (const preset of ['Why did this day lose?', 'A better configuration for this day', 'A LuxAlgo indicator for this day']) {
+      expect(screen.getByRole('button', { name: preset })).toBeInTheDocument()
+    }
+    expect(screen.getByRole('textbox', { name: 'Ask the AI agent' })).toHaveAttribute('placeholder', 'Ask about this day…')
   })
 
   it('draws the day again in another theme without running its script again', async () => {

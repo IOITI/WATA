@@ -210,9 +210,15 @@ async def window_bars(rows, chart: dict, anchor: int, end: int) -> tuple[list, i
     return bars, (decimals if decimals is not None else (_decimals(found, None) if found else None))
 
 
-async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, rules: RuleStore | None = None,
-                        history: RuleHistory | None = None) -> dict:
-    """What to draw a run's day with; ``folder`` is the run's, its id already checked."""
+def day_parts(folder: str, day: date, *, scripts: ScriptStore, rules: RuleStore | None = None,
+              history: RuleHistory | None = None) -> dict:
+    """
+    What a run's day ran, without its bars: the engine day holding it, the script, its libraries
+    and inputs, the bars it ran on and how far before it, and what to say when that is not known
+    exactly; ``folder`` is the run's, its id already checked. A replay of the journal ran no
+    script of WATA: its ``script`` is None, its bars the run's chart. What draws a day
+    (``day_indicator``) and what Claude reads of one (chart_view) start from it.
+    """
     request = read_json(os.path.join(folder, "request.json")) or {}
     if (read_json(os.path.join(folder, "status.json")) or {}).get("state") != DONE:
         raise NotPossible("This backtest has no results yet")
@@ -227,6 +233,7 @@ async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, r
     source = request.get("source") or {}
     notes: list[str] = []
 
+    alerts = None
     if source.get("kind") == PINE:
         rule = source["rule"]
         script, libraries = _pine_parts(folder, rule)
@@ -234,6 +241,7 @@ async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, r
         inputs, inputs_version = rule.get("inputs") or [], rule["script"]["version"]
         history_days = settings.get("history_days", 1)
         exact = True
+        alerts = rule.get("alerts")
     elif source.get("kind") == TA_SIGNALS:
         raised = read_json(os.path.join(folder, RAISED_FILE)) or []
         parts = rule_day_parts(scripts, (source.get("rule") or {}).get("id"), raised, begin, end, rules=rules,
@@ -242,15 +250,31 @@ async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, r
         inputs, inputs_version, history_days, exact = (parts["inputs"], parts["inputs_version"], parts["history_days"],
                                                        parts["exact"])
         notes.extend(parts["notes"])
+        alerts = parts["alerts"]
     elif source.get("kind") == "journal":
-        raise NotPossible(NO_SCRIPT)
+        script, libraries, inputs, inputs_version, exact = None, [], [], None, True
+        # The chart its form named, which a journal's day is read on (None for a run of before).
+        chart, history_days = request.get("chart"), settings.get("history_days", 1)
     else:
         raise NotPossible("This run's signals came from nowhere WATA can draw")
+    return {"kind": source["kind"], "script": script, "libraries": libraries, "inputs": inputs,
+            "inputs_version": inputs_version, "alerts": alerts, "chart": chart, "begin": begin, "end": end,
+            "history_days": history_days, "restart_time": restart_time, "exact": exact, "notes": notes,
+            "settings": settings}
 
+
+async def day_indicator(folder: str, day: date, *, scripts: ScriptStore, rows, rules: RuleStore | None = None,
+                        history: RuleHistory | None = None) -> dict:
+    """What to draw a run's day with; ``folder`` is the run's, its id already checked."""
+    parts = day_parts(folder, day, scripts=scripts, rules=rules, history=history)
+    if parts["script"] is None:
+        raise NotPossible(NO_SCRIPT)
+    begin, end, history_days = parts["begin"], parts["end"], parts["history_days"]
     anchor = begin - int(history_days) * DAY
-    bars, decimals = await window_bars(rows, chart, anchor, end)
-    return _drawn(source["kind"], script, libraries, inputs, inputs_version, chart, decimals, begin, end, anchor,
-                  history_days, restart_time, bars, exact, notes)
+    bars, decimals = await window_bars(rows, parts["chart"], anchor, end)
+    return _drawn(parts["kind"], parts["script"], parts["libraries"], parts["inputs"], parts["inputs_version"],
+                  parts["chart"], decimals, begin, end, anchor, history_days, parts["restart_time"], bars, parts["exact"],
+                  parts["notes"])
 
 
 def _drawn(kind: str, script: dict, libraries: list[dict], inputs: list, inputs_version, chart: dict, decimals,
@@ -349,6 +373,8 @@ def rule_day_parts(scripts: ScriptStore, rule_id: str | None, raised: list[dict]
         "chart": drawn_on,
         "inputs": inputs,
         "inputs_version": inputs_version,
+        # What each of its alerts became then: a day read again maps them as the rule did.
+        "alerts": (definition or rule_now or {}).get("alerts"),
         "history_days": (definition or {}).get("history_days", history_days),
         "exact": known and pinned,
         "notes": notes,

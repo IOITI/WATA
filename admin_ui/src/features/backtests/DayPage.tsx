@@ -10,22 +10,28 @@ import {
   formatNumber,
   formatPercent,
   formatTime,
+  isPlainClick,
   PageHeader,
   Panel,
   QueryState,
   SignedValue,
   useTheme,
 } from 'ioiti-ui'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
+import { ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
 import { ActionBadge } from '@/components/status'
+import { AgentSheet } from '@/features/agent/AgentSheet'
+import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
 import { ChartAttribution } from '@/features/prices/ChartAttribution'
 import { rangeChart, timeChart } from '@/features/prices/chartModel'
 import type { ChartModel } from '@/features/prices/chartModel'
+import { canvasFile } from '@/features/prices/chartSnapshot'
+import type { ChartSnapshot } from '@/features/prices/chartSnapshot'
 import { PriceChart } from '@/features/prices/PriceChart'
 import { timeframeOf } from '@/features/ta/engine/timeframes'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
@@ -353,6 +359,16 @@ export function DayPage() {
     }
   }, [selected])
 
+  // Asked about from here, the agent is given the chart as it is on screen, the script's drawings included: taken at
+  // the click, before its sheet narrows the page, and attached to the new conversation as a file of the operator's.
+  const snapshot = useRef<ChartSnapshot | null>(null)
+  const [shot, setShot] = useState<File[] | null>(null)
+  const askAgent = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!isPlainClick(event)) return
+    const canvas = snapshot.current?.()
+    if (canvas) void canvasFile(canvas, `chart-${day}.png`).then((file) => file && setShot([file]))
+  }
+
   if (isNotFound(runQuery.error)) return <NotFoundState {...RUN_NOT_FOUND} />
   // A day the run's days do not list: outside its period, or no day at all.
   if (run && daysQuery.data && !record) {
@@ -383,6 +399,12 @@ export function DayPage() {
             <ButtonLink to={next && `/backtests/${runId}/days/${next}`} variant="outline" size="sm" leftIcon={<ChevronRight className="size-3.5" />}>
               Day after
             </ButtonLink>
+            {done && record && (
+              <ButtonLink to={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}
+                onClick={askAgent}>
+                Ask the AI agent about this day
+              </ButtonLink>
+            )}
           </>
         }
       />
@@ -431,6 +453,7 @@ export function DayPage() {
                             selected={selected}
                             timeZone={timezone}
                             label={`${assetLabel(run.request.chart.asset)} on ${formatDay(day)}, with the script and the run's signals and trades`}
+                            snapshotRef={snapshot}
                           />
                         </Suspense>
                       ) : (
@@ -454,6 +477,7 @@ export function DayPage() {
                             onHover={() => undefined}
                             label={`${assetLabel(run.request.chart.asset)} on ${formatDay(day)}`}
                             className="h-[28rem]"
+                            snapshotRef={snapshot}
                           />
                         ) : (
                           <p className="py-6 text-center text-sm text-muted-foreground">No bar of the asset that day.</p>
@@ -488,6 +512,9 @@ export function DayPage() {
             </div>
           )}
         </QueryState>
+      )}
+      {run && done && record && (
+        <AgentSheet subject={{ kind: 'run', id: run.id, day, label: `${run.name}, ${formatDay(day)}` }} initialFiles={shot} />
       )}
     </>
   )

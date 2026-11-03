@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from src.admin.agent.service import LOG_OF, AgentService, _shared_trading
+from src.admin.agent.service import LOG_OF, RUN_DAY_ROWS, AgentService, _identity, _shared_run_day, _shared_trading
 from src.admin.agent.settings import AgentSettings
 from src.admin.agent.store import ConversationStore
 from src.admin.agent.tools import ToolAnswer
@@ -71,6 +71,51 @@ def test_what_it_cannot_be_about_is_refused_before_anything_is_kept(agent, subje
     with pytest.raises(InvalidRequest, match=said):
         started(agent, subject)
     assert agent.store.metas() == []
+
+
+RUN = "20261027-101010-abcdef"
+
+
+def test_a_day_of_a_run_is_named_with_the_run_and_told_apart_from_it(agent):
+    assert started(agent, {"kind": "run", "id": RUN, "day": "2026-10-28"}) == {
+        "kind": "run", "id": RUN, "day": "2026-10-28", "label": "Cross R60, Wed 28 Oct 2026"}
+    assert started(agent, {"kind": "run", "id": RUN}) == {"kind": "run", "id": RUN, "label": "Cross R60"}
+    assert _identity({"kind": "run", "id": RUN}) != _identity({"kind": "run", "id": RUN, "day": "2026-10-28"})
+    for subject, said in (({"kind": "run", "id": RUN, "day": "2026-10-29"}, "not one of the run's days"),
+                          ({"kind": "run", "id": RUN, "day": "28/10/2026"}, "YYYY-MM-DD"),
+                          ({"kind": "run", "id": "20261027-101010-0000ff", "day": "2026-10-28"}, "no results yet")):
+        with pytest.raises(InvalidRequest, match=said):
+            started(agent, subject)
+
+
+def test_a_day_of_a_run_is_shared_with_the_day_as_the_run_ran_it_and_its_picture():
+    viewed = json.dumps({"ok": True, "view": {"rows": 120, "timezone": "Europe/Paris"}, "trades": [
+        {"id": 1, "direction": "long", "in": "2026-10-28T07:16:00Z", "out": "2026-10-28T08:02:00Z", "result_percent": 2.4},
+        {"id": 2, "direction": "short", "in": "2026-10-28T13:40:00Z", "out": "2026-10-28T14:05:00Z", "result_percent": -5.23,
+         "exit_reason": "Stop loss hit"}]}, separators=(",", ":"))
+    picture = ToolAnswer(viewed, picture=b"\x89PNG", picture_title="Cross v1 · 28 Oct")
+
+    class Viewing(Session):
+        async def call(self, name, arguments, request, **_):
+            self.asked.append((name, arguments))
+            return picture if name == "chart_view" else ToolAnswer(json.dumps({"tool": name}))
+
+    session = Viewing(offered=("chart_view",))
+    subject = {"kind": "run", "id": RUN, "day": "2026-10-28", "label": "Cross R60, Wed 28 Oct 2026"}
+
+    text, pictures = asyncio.run(_shared_run_day(session, subject, 0, "Its settings: …"))
+
+    assert session.asked == [("backtest_days", {"run_id": RUN, "day": "2026-10-28"}),
+                             ("chart_view", {"run_id": RUN, "day": "2026-10-28", "rows": RUN_DAY_ROWS})]
+    assert text.startswith("The operator shares a day of the backtest run Cross R60, Wed 28 Oct 2026")
+    assert "The day as the run ran it" in text and viewed in text
+    assert pictures == [(b"\x89PNG", "Cross v1 · 28 Oct", "chart_view")]
+    # Its losing trades alone, each with the hours to zoom on in the trading timezone; its verdict goes on the run.
+    assert "- #2 short 14:40-15:05, -5.23 %, Stop loss hit: zoom with start 14:25, end 15:20" in text
+    assert "#1 long" not in text and f"A verdict on this day goes on the run (run:{RUN})" in text
+    # Without chart_view (an agent of before), the day's line alone, and no picture.
+    alone = asyncio.run(_shared_run_day(Session(offered=()), subject, 0, "Its settings: …"))
+    assert isinstance(alone, str) and "The day among its days" in alone and "losing trades" not in alone
 
 
 class Session:

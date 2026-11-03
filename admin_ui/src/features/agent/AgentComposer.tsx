@@ -7,7 +7,7 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertDescription, PromptComposer } from 'ioiti-ui'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from '@/lib/api'
 import type { AgentChoice, AgentConversation, AgentSubject } from '@/lib/types'
@@ -24,11 +24,13 @@ import { conversationKey, useAgentState } from './useConversation'
 
 const MAX_PROMPT = 8000
 
-export function AgentComposer({ conversation, subject, onStarted, onSent, floating, className }: {
+export function AgentComposer({ conversation, subject, initialFiles, onStarted, onSent, floating, className }: {
   /** The conversation the request goes to; none: a new one. */
   conversation?: AgentConversation | null
   /** What a new conversation is about: the page's, shown first and kept. */
   subject?: AgentSubject | null
+  /** Files the page attaches to a new conversation (the chart on its screen), each given once, as any file chosen. */
+  initialFiles?: readonly File[] | null
   onStarted?: (id: string) => void
   /** A request was sent: the page goes to its foot, where it will be. */
   onSent?: () => void
@@ -46,6 +48,13 @@ export function AgentComposer({ conversation, subject, onStarted, onSent, floati
   const held = useMemo(() => heldBy(conversation), [conversation])
   const fixed = conversation ? null : subject ?? null
   const attachments = useAttachments({ fixed, held })
+  const { addFiles } = attachments
+  const given = useRef<readonly File[] | null>(null)
+  useEffect(() => {
+    if (conversation || !initialFiles || initialFiles === given.current) return
+    given.current = initialFiles
+    addFiles(initialFiles)
+  }, [conversation, initialFiles, addFiles])
   const key = conversation?.id ?? 'new'
   const choice = choices[key] ?? choiceOf(state.data, conversation)
   const models = state.data?.models ?? []
@@ -81,6 +90,8 @@ export function AgentComposer({ conversation, subject, onStarted, onSent, floati
   // Sent only once its files are uploaded, and to a model that reads them.
   const blocked = sendBlocked(attachments.pending, model, held)
   const kind = fixed?.kind ?? attachments.subjects[0]?.kind ?? conversation?.subject?.kind ?? null
+  // A day of a run, asked from its page.
+  const day = kind === 'run' ? (fixed ?? conversation?.subject)?.day ?? null : null
   const fresh = !conversation || conversation.requests.length === 0
   const compare = comparePreset(attachments.subjects)
   const writers = writersOf(conversation)
@@ -91,7 +102,7 @@ export function AgentComposer({ conversation, subject, onStarted, onSent, floati
   // About one thing, the field names it; about several, it names none of them.
   const placeholder = !fixed && attachments.pending.length > 0 ? 'Ask about what is attached…'
     : held.length > 1 ? 'Ask the agent…'
-      : kind === 'run' ? 'Ask about this run…' : kind === 'script' ? 'Ask about this script…'
+      : kind === 'run' ? (day ? 'Ask about this day…' : 'Ask about this run…') : kind === 'script' ? 'Ask about this script…'
         : kind === 'luxalgo' ? 'Ask about this indicator…' : 'Ask the agent…'
 
   const controls = choice && model ? (
@@ -121,7 +132,7 @@ export function AgentComposer({ conversation, subject, onStarted, onSent, floati
         disabled={!!refusal}
         disabledReason={refusal}
         placeholder={placeholder}
-        suggestions={fresh ? [...presetsFor(kind, { luxalgo: !!state.data?.luxalgo }), ...(compare ? [compare] : [])] : []}
+        suggestions={fresh ? [...presetsFor(kind, { luxalgo: !!state.data?.luxalgo, day: !!day }), ...(compare ? [compare] : [])] : []}
         controls={controls}
         attachments={chips}
         onFiles={attachments.addFiles}

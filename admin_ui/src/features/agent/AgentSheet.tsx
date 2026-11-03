@@ -35,9 +35,11 @@ const CHIP =
   'inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs aria-[current=page]:bg-surface-raised ' +
   'accent:aria-[current=page]:border-brand/30 accent:aria-[current=page]:bg-brand-soft accent:aria-[current=page]:text-brand-text'
 
-export function AgentSheet({ subject: given, blockedFor, onApplied }: {
+export function AgentSheet({ subject: given, initialFiles, blockedFor, onApplied }: {
   /** What the page is about; a list's page leaves it to the address (?about=) or to the conversation open. */
   subject?: AgentSubject
+  /** Files the page attaches to a new conversation (a run's day: its chart as it is on screen). */
+  initialFiles?: readonly File[] | null
   /** Why a proposal cannot be applied from this page now, if it cannot. */
   blockedFor?: (proposal: AgentProposal, conversation: AgentConversation) => string | null
   onApplied?: (proposal: AgentProposal) => void
@@ -109,8 +111,8 @@ export function AgentSheet({ subject: given, blockedFor, onApplied }: {
         </FlysheetBody>
         <FlysheetFooter className="relative block space-y-2">
           {follow.away && <LatestButton onClick={follow.jump} />}
-          <AgentComposer conversation={chosen ? conversation.data : null} subject={chosen ? null : subject} onStarted={choose}
-            onSent={follow.follow} />
+          <AgentComposer conversation={chosen ? conversation.data : null} subject={chosen ? null : subject}
+            initialFiles={chosen ? null : initialFiles} onStarted={choose} onSent={follow.follow} />
           {chosen && (
             <ButtonLink to={`/agent/${encodeURIComponent(chosen)}`} size="sm" variant="ghost" leftIcon={<ExternalLink className="size-3.5" />}>
               On its own page

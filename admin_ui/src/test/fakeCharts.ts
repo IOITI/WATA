@@ -5,6 +5,8 @@
  *   vi.mock('lightweight-charts', async () => (await import('@/test/fakeCharts')).fakeLightweightCharts)
  */
 
+import { fakeCanvas } from './fakeCanvas'
+
 export interface FakeSeries {
   type: 'Candlestick' | 'Line' | 'Histogram'
   /** The panel it was added to: 0 for the prices, 1 under them. */
@@ -131,6 +133,10 @@ function createChart(container: HTMLElement, options: Record<string, any>) {
     },
     remove() {
       chart.removed = true
+    },
+    takeScreenshot(addTopLayer = false) {
+      chart.calls.push(`screenshot ${addTopLayer ? 'with' : 'without'} markers`)
+      return fakeCanvas('lightweight-charts')
     },
   }
 }

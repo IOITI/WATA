@@ -71,9 +71,11 @@ Live, each new bar is the last bar of its run; a backtest runs each engine day o
 - **Check, then look**:
   1. `pine_check`: it compiles, and lists the inputs `in_N`, the plots and the alerts on made-up bars;
   2. `pine_run` on two or three days: does it plot what you think, and how many alerts?
-  3. `pine_signals`: what a rule would send, day by day, with confidence;
-  4. `pine_rule_check`: whether it can be a rule as it is (it repaints, it lacks alerts, what to change);
-  5. `pine_save`.
+  3. `chart_view` on a day, as a backtest runs it: its bars in rows with the plots and the alerts, what price did after each alert, and a picture of it. Zoom (`start`, `end`) on the hours that matter; a run's day (`run_id`) has its trades on it.
+  4. `pine_signals`: what a rule would send, day by day, with confidence;
+  5. `pine_rule_check`: whether it can be a rule as it is (it repaints, it lacks alerts, what to change);
+  6. `pine_save`.
+- **A bad day of a run is read before it is fixed**: `chart_view` with its `run_id` first, each losing trade explained against price and the indicator, an idea tried on that day with other inputs, then on every day of the run against random entries. A change that only helps one day is overfitting.
 
 ## A skeleton
 

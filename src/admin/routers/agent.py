@@ -55,7 +55,8 @@ STREAM_KEEP_ALIVE_SECONDS = 15.0
 
 class Subject(BaseModel):
     kind: str = Field(max_length=8)
-    id: str = Field(max_length=64)
+    # The longest is one of LuxAlgo's slugs (SLUG of src/admin/luxalgo.py).
+    id: str = Field(max_length=121)
     version: int | None = None
     # A signal's day (YYYY-MM-DD), an incident's moment (YYYY-MM-DD HH:MM, UTC).
     day: str | None = Field(None, max_length=10)

@@ -1,7 +1,7 @@
 // A conversation with the AI agent, request by request: what was asked (and shared), what the agent did
-// (ioiti-ui's AIAgentActivity, its notes between its steps, folded once a newer request is asked), what it is
-// doing while nothing of its answer is written, its answer as it streams (AIResponse), the charts it drew and the
-// verdicts it set, what it proposed, how it ended.
+// (ioiti-ui's AIAgentActivity, its notes between its steps, folded once a newer request is asked), the pictures its
+// tools gave (what it looked at), what it is doing while nothing of its answer is written, its answer as it streams
+// (AIResponse), the charts it drew and the verdicts it set, what it proposed, how it ended.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -27,6 +27,7 @@ import { api } from '@/lib/api'
 import type { AgentConversation, AgentProposal, AgentRequest } from '@/lib/types'
 
 import { AgentChart } from './AgentChart'
+import { AgentPictures } from './AgentPictures'
 import { SharedChips } from './AttachedChips'
 
 import {
@@ -122,6 +123,7 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
           onOpenChange={onOpenChange}
         />
       )}
+      <AgentPictures conversationId={conversation.id} pictures={request.pictures ?? []} />
       <AIResponse
         content={answer.content}
         status={answer.status}

@@ -3590,6 +3590,19 @@ export interface AgentRequest {
   charts?: AgentChart[]
   /** Its verdicts on runs, rules, days and positions (set_verdict). */
   verdicts?: Pick<AgentVerdict, 'about' | 'tone' | 'line'>[]
+  /** The pictures its tools gave (chart_view's day), in the order of its steps. */
+  pictures?: AgentPicture[]
+}
+
+/** A picture one of the agent's tools gave, kept with its conversation (src/admin/agent/loop.py). */
+export interface AgentPicture {
+  /** The conversation's file it is kept as. */
+  file: string
+  title: string | null
+  size: number | null
+  tool: string | null
+  /** The step it came with; none for the day shared at the conversation's start. */
+  step: string | null
 }
 
 /** A chart the agent drew under its answer, from figures its tools gave (src/admin/agent/charts.py). */

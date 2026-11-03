@@ -4,11 +4,13 @@ strategies, libraries), read and, through the study child and the store,
 checked, run and saved.
 """
 
-from datetime import date, datetime, timedelta
+import base64
+import re
+from datetime import date, datetime, time, timedelta
 
 from starlette.concurrency import run_in_threadpool
 
-from src.admin.mcp_server.budget import CONTEXT_CHARS, Refused, compact, research_tool
+from src.admin.mcp_server.budget import CONTEXT_CHARS, Pictured, Refused, compact, research_tool
 from src.admin.mcp_server.facade import CLAUDE
 from src.admin.errors import NotPossible
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, page, period, refuse_lockbox
@@ -194,10 +196,61 @@ def _study_request(research, *, script_id: str, version: int, source: str, name:
     return request
 
 
+def _bars_word(bars: dict) -> str:
+    """A rule's bars in the one word a study is asked them by: R60, or a timeframe."""
+    return f"R{bars['ticks']}" if bars["type"] == "range" else bars["timeframe"]
+
+
 def _studies(research):
     if research.studies is None:
         raise Refused("Pine studies are not available here (the admin's MCP endpoint is off)")
     return research.studies
+
+
+# ── a day as chart_view reads it ──
+
+CHART_VIEW = (
+    "One day of an asset as a backtest ran it, with a script applied: the TA engine's day holding it (from its "
+    "restart, with history_days of bars before), its bars gathered into ``rows`` rows at most (20 to 400) of the "
+    "trading hours, or of ``start`` to ``end`` (HH:MM, trading timezone) to zoom; each row its open, high, low and "
+    "close, the script's plots (``plots`` by title, 8 at most; its first four by default), the alerts it raised and "
+    "a run's trades. Then the day's prices, levels, swings and kind; for each alert's title, what price did 5 to 60 "
+    "minutes after (basis points, signed by its direction when it is an entry) and each alert listed; and a picture "
+    "of the hours shown (picture=false: none). The script's own drawings (labels, boxes) are not in it. run_id: a "
+    "finished run's own script, inputs, bars and alerts, and its trades and untraded signals of that day; any argument "
+    "given replaces the run's (inputs by id). Without run_id: asset, bars and side, and a script (script_id, or a "
+    "source not saved yet) or none for the prices alone. Look at a day before changing a strategy for it; zoom on "
+    "the hours it lost."
+)
+_CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+# The fates of a run's signals that made no trade, listed with why.
+NOT_TRADED = ("refused", "failed", "unpriced")
+
+
+def _hours_of(settings: dict, timezone: str) -> tuple[str, int, int]:
+    """A run's trading hours and the timezone they are read in, as its settings say them."""
+    zone = settings.get("market_timezone")
+    zone = settings.get("timezone") or timezone if zone in (None, "trading") else zone
+    return zone, int(settings.get("trading_start_hour", 8)), int(settings.get("trading_end_hour", 22))
+
+
+def _shown_window(day: date, hours: tuple[str, int, int], timezone: str, start: str, end: str) -> list[int]:
+    """The hours chart_view shows: ``start`` to ``end`` in the trading timezone, or the day's trading hours."""
+    for said in (start, end):
+        if said and not _CLOCK.match(said):
+            raise Refused("start and end are HH:MM, in the trading timezone")
+    zone, start_hour, end_hour = hours
+    market = TradingClock(zone)
+    begin = market.epoch(day, time(start_hour))
+    finish = market.day_bounds(day)[1] if end_hour >= 24 else market.epoch(day, time(end_hour))
+    local = TradingClock(timezone)
+    if start:
+        begin = local.epoch(day, time(int(start[:2]), int(start[3:])))
+    if end:
+        finish = local.epoch(day, time(int(end[:2]), int(end[3:])))
+    if finish <= begin:
+        raise Refused("end comes after start, on the day asked")
+    return [int(begin), int(finish)]
 
 
 def register_studies(server, research) -> None:
@@ -255,6 +308,91 @@ def register_studies(server, research) -> None:
         check = (answer.get("static") or {}).get("check") or {}
         return compacted(said_rule_check({**check, "whole_because": check.get("wholeBecause"), "findings": answer["findings"],
                                           "verdict": answer["verdict"], "tested": answer.get("tested")}))
+
+    @research_tool(server, calls, name="chart_view", title="A day's chart with a script applied", read_only=True,
+                   jobs=jobs, description=CHART_VIEW)
+    async def chart_view(day: date, run_id: str = "", asset: str = "", bars: str = "", side: str = "",
+                         script_id: str = "", version: int = 0, source: str = "", name: str = "",
+                         inputs: dict | None = None, alerts: dict | None = None, history_days: int | None = None,
+                         start: str = "", end: str = "", rows: int = 180, plots: list[str] | None = None,
+                         picture: bool = True) -> dict | Pictured:
+        if script_id and source:
+            raise Refused("Name a saved script (script_id, version) or give a source not saved yet, not both")
+        refuse_lockbox(research.journal, day, day)
+        if plots is not None and len(plots) > 8:
+            raise Refused("8 plots at most")
+        request = {"day": day.isoformat(), "timezone": research.timezone, "rows": rows, "picture": picture,
+                   "plots": plots or []}
+        notes, mapping, chart, given_inputs = [], alerts, None, dict(inputs or {})
+        hours = research.config.hours() or (research.timezone, 8, 22)
+        if run_id:
+            service = research.service()
+            parts = await run_in_threadpool(service.day_parts, run_id, day)
+            trades = await run_in_threadpool(service.trades, run_id, day)
+            signals = await run_in_threadpool(service.signals, run_id, day)
+            line = next((entry for entry in await run_in_threadpool(service.days, run_id)
+                         if entry.get("day") == day.isoformat()), {})
+            hours = _hours_of(parts["settings"], research.timezone)
+            chart = parts["chart"]
+            fates: dict[str, int] = {}
+            for signal in signals:
+                fates[signal.get("fate")] = fates.get(signal.get("fate"), 0) + 1
+            request.update(engine=[parts["begin"], parts["end"]], trades=trades, regime=line.get("regime"),
+                           signals_by_fate=fates or None,
+                           signals=[{"at": signal.get("decided_at") or signal.get("arrived_at"),
+                                     **{key: signal.get(key) for key in ("action", "fate", "rule")},
+                                     "reason": (signal.get("reason") or "")[:200] or None}
+                                    for signal in signals if signal.get("fate") in NOT_TRADED])
+            request["history_days"] = parts["history_days"] if history_days is None else history_days
+            if mapping is None and parts.get("alerts"):
+                mapping = {entry["title"]: entry["action"] for entry in parts["alerts"]
+                           if isinstance(entry, dict) and entry.get("title")}
+            notes += parts["notes"]
+            if not (script_id or source) and parts["script"] is not None:
+                own = parts["script"]
+                kept = [dict(entry) for entry in parts["inputs"] or []] if parts["inputs_version"] == own["version"] else []
+                if parts["inputs"] and not kept:
+                    notes.append(f"The run's inputs were set for version {parts['inputs_version']} of its script: "
+                                 f"version {own['version']} is shown with its own.")
+                for input_id, value in given_inputs.items():
+                    found = next((entry for entry in kept if entry.get("id") == input_id), None)
+                    if found is None:
+                        kept.append({"id": input_id, "value": value})
+                    else:
+                        found["value"] = value
+                request["parts"] = {"script": own, "libraries": parts["libraries"], "inputs": kept}
+            elif parts["script"] is None and not (script_id or source):
+                notes.append("TradingView's alerts made this run's signals: its trades and signals on the prices alone.")
+        elif history_days is not None:
+            request["history_days"] = history_days
+        if chart is None and not asset:
+            raise Refused("Name the asset (a ref of data_assets), or a run whose day it is (run_id)")
+        chart = {
+            "asset": ({"provider": asset.partition("/")[0], "key": asset.partition("/")[2]} if asset else chart["asset"]),
+            "side": side or (chart or {}).get("side") or "bid",
+            "bars": bars_of(bars) if bars else (chart or {}).get("bars") or bars_of("1"),
+        }
+        if "parts" in request:
+            request["parts"]["chart"] = chart
+        else:
+            request.update(asset=f"{chart['asset']['provider']}/{chart['asset']['key']}", side=chart["side"],
+                           bars=_bars_word(chart["bars"]), inputs=given_inputs)
+            if source:
+                request.update(source=source, name=name or "Draft")
+            elif script_id:
+                request["script"] = {"id": script_id, "version": version or None}
+        request.update(alerts=mapping or {}, view=_shown_window(day, hours, research.timezone, start, end),
+                       hours={"zone": hours[0], "start_hour": hours[1], "end_hour": hours[2]})
+        answer = await _studies(research).study("view", request)
+        if not answer.get("ok"):
+            return compacted(answer)
+        drawn = answer.pop("picture", None)
+        if notes:
+            answer["notes"] = notes
+        if drawn:
+            answer["picture"] = {key: drawn[key] for key in ("width", "height", "plots", "title")}
+            return Pictured(compacted(answer), base64.b64decode(drawn["png"]))
+        return compacted(answer)
 
     @research_tool(server, calls, name="pine_check", title="Check a Pine script", read_only=True, jobs=jobs)
     async def pine_check(source: str = "", script_id: str = "", version: int = 0, name: str = "") -> dict:

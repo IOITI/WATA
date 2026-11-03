@@ -16,6 +16,8 @@ jsonschema==4.26.0
 # The admin's MCP endpoint for Claude (src/admin/mcp_server/), loaded only when admin.mcp_enabled is true.
 mcp==2.3.0
 pika==1.4.4
+# The chart pictures of the admin's Pine studies (src/research/chart_picture.py), drawn in the study's child alone.
+pillow==13.0.0
 pydantic==2.12.5
 pytz==2024.1
 requests==2.33.1

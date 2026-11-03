@@ -1,8 +1,9 @@
 """Claude's Pine tools over a stand-in study service: what they ask, and what they refuse."""
 
 import asyncio
+import base64
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -233,6 +234,146 @@ def test_a_study_that_outlasts_its_call_is_handed_back_as_a_job_and_answered_lat
     assert not refused and json.loads(behind)["state"] == "running"
     assert done["ok"] is True and done == again
     assert unknown and f"No job {handed['job']}" in theirs
+
+
+# ── a day as chart_view reads it ──
+
+PNG = b"\x89PNG\r\n\x1a\nmade-up"
+VIEWED = {"ok": True, "view": {"script": "Cross v1", "rows": 168}, "table": {"columns": ["time"], "csv": "time\n"},
+          "picture": {"png": base64.b64encode(PNG).decode("ascii"), "width": 1280, "height": 720, "plots": ["Mid"],
+                      "title": "Cross v1 · capital/US100"}}
+
+
+def utc(*parts) -> int:
+    return int(datetime(*parts, tzinfo=timezone.utc).timestamp())
+
+
+def shown(research, arguments: dict):
+    """chart_view's blocks as Claude gets them: its text, and the picture's bytes when it has one."""
+    from mcp import Client
+
+    from src.admin.mcp_server.server import build_server
+
+    async def calling():
+        async with Client(build_server(research)) as client:
+            return await client.call_tool("chart_view", arguments)
+
+    result = asyncio.run(calling())
+    assert not result.is_error, result.content[0].text
+    pictures = [base64.b64decode(block.data) for block in result.content if block.type == "image"]
+    return json.loads(result.content[0].text), pictures
+
+
+def test_a_day_is_viewed_in_its_trading_hours_and_its_picture_comes_as_an_image(research):
+    research.studies = Studies({"view": json.loads(json.dumps(VIEWED))})
+
+    found, pictures = shown(research, {"day": "2026-10-14", "asset": "capital/US100", "source": SIMPLE, "bars": "R60",
+                                       "inputs": {"in_0": 9}, "alerts": {"Up": "long"}, "plots": ["Close"]})
+
+    mode, request = research.studies.asked[0]
+    assert mode == "view" and pictures == [PNG]
+    # Its picture is said in its text, never its bytes.
+    assert found["picture"] == {"width": 1280, "height": 720, "plots": ["Mid"], "title": "Cross v1 · capital/US100"}
+    assert (request["asset"], request["bars"], request["side"], request["source"], request["name"]) == (
+        "capital/US100", "R60", "bid", SIMPLE, "Draft")
+    assert (request["inputs"], request["alerts"], request["plots"], request["rows"]) == ({"in_0": 9}, {"Up": "long"}, ["Close"], 180)
+    # The live rules' hours: 8:00 to 22:00 in Paris on 14 Oct (UTC+2), the engine day worked out by the study.
+    assert request["view"] == [utc(2026, 10, 14, 6), utc(2026, 10, 14, 20)] and "engine" not in request
+    assert request["hours"] == {"zone": "Europe/Paris", "start_hour": 8, "end_hour": 22}
+
+
+def test_a_view_zooms_on_the_hours_asked_and_refuses_the_lock_box_and_a_day_without_its_asset(research, journal):
+    research.studies = Studies({"view": {"ok": True, "view": {}}})
+
+    found, pictures = shown(research, {"day": "2026-10-14", "asset": "capital/US100", "start": "15:30", "end": "16:15",
+                                       "picture": False})
+
+    request = research.studies.asked[0][1]
+    assert request["view"] == [utc(2026, 10, 14, 13, 30), utc(2026, 10, 14, 14, 15)]
+    assert request["picture"] is False and pictures == []
+    assert "script" not in request and "source" not in request
+    assert "HH:MM" in refusal(research, "chart_view", {"day": "2026-10-14", "asset": "capital/US100", "start": "9h"})
+    assert "end comes after start" in refusal(research, "chart_view", {"day": "2026-10-14", "asset": "capital/US100",
+                                                                        "start": "16:00", "end": "15:00"})
+    assert "Name the asset" in refusal(research, "chart_view", {"day": "2026-10-14"})
+    journal.set_lockbox(date(2026, 10, 14))
+    assert "lock box" in refusal(research, "chart_view", {"day": "2026-10-14", "asset": "capital/US100"})
+
+
+def test_a_run_s_day_is_viewed_with_what_the_run_ran_its_trades_and_its_untraded_signals(tmp_path, research, scripts):
+    from tests.test_mcp_tools_read import DAYS, SUMMARY, TRADES, finished_run
+
+    research.studies = Studies({"view": {"ok": True, "view": {}}})
+    signals = [{"day": "2026-10-14", "fate": "executed", "action": "short", "decided_at": "2026-10-14T13:00:02Z"},
+               {"day": "2026-10-14", "fate": "refused", "action": "long", "rule": "day_profit", "reason": "Daily target met",
+                "decided_at": "2026-10-14T14:00:02Z"},
+               {"day": "2026-10-13", "fate": "refused", "action": "long", "decided_at": "2026-10-13T08:00:00Z"}]
+    days = [{**DAYS[0], "day": "2026-10-14", "regime": {"day_type": "Mixed", "range_percent": 1.2}}]
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": SUMMARY, "trades.json": TRADES, "days.json": days,
+                                                        "signals.json": signals})
+
+    shown(research, {"day": "2026-10-14", "run_id": run_id, "inputs": {"in_0": 20}})
+    request = research.studies.asked[0][1]
+    shown(research, {"day": "2026-10-14", "run_id": run_id, "bars": "5", "source": SIMPLE})
+    another = research.studies.asked[1][1]
+
+    # The run's own script, libraries and inputs (one changed), on its bars, in its engine day.
+    parts = request["parts"]
+    assert parts["script"]["name"] == "Cross" and "Enter Long" in parts["script"]["source"]
+    assert [library["name"] for library in parts["libraries"]] == ["Maths", "Bands"]
+    assert parts["inputs"] == [{"id": "in_0", "var": "fast", "title": "Fast", "value": 20}]
+    assert parts["chart"] == {"asset": {"provider": "dukascopy", "key": "us100"}, "side": "bid",
+                              "bars": {"type": "range", "ticks": 60}}
+    # The engine day holding the 14th's noon: from the restart of the 13th at 21:15 UTC.
+    assert request["engine"] == [utc(2026, 10, 13, 21, 15), utc(2026, 10, 14, 21, 15)] and request["history_days"] == 1
+    assert request["alerts"] == {"Enter Long": "long", "Exit": "close-position"}
+    # Its trades and the signals of that day that made none, with why; the day's figures as the run wrote them.
+    assert [trade["id"] for trade in request["trades"]] == [2]
+    assert request["signals_by_fate"] == {"executed": 1, "refused": 1}
+    assert request["signals"] == [{"at": "2026-10-14T14:00:02Z", "action": "long", "fate": "refused", "rule": "day_profit",
+                                   "reason": "Daily target met"}]
+    assert request["regime"] == {"day_type": "Mixed", "range_percent": 1.2}
+    # Another script on other bars: the run's trades still drawn over it.
+    assert "parts" not in another and another["source"] == SIMPLE and another["bars"] == "5"
+    assert another["asset"] == "dukascopy/us100" and [trade["id"] for trade in another["trades"]] == [2]
+    assert "not one of its days" in refusal(research, "chart_view", {"day": "2026-10-20", "run_id": run_id})
+
+
+def test_a_view_that_outlasts_its_call_gives_its_picture_through_job_wait(research, monkeypatch):
+    from types import SimpleNamespace
+
+    from mcp import Client
+
+    from src.admin.mcp_server import budget, jobs
+    from src.admin.mcp_server.gate import CALLER
+    from src.admin.mcp_server.server import build_server
+
+    class SlowView(Studies):
+        def __init__(self):
+            super().__init__({"view": json.loads(json.dumps(VIEWED))})
+            self.release = asyncio.Event()
+
+        async def study(self, mode, request):
+            await self.release.wait()
+            return await super().study(mode, request)
+
+    monkeypatch.setattr(budget, "ANSWER_SECONDS", 0.2)
+    monkeypatch.setattr(jobs, "ANSWER_SECONDS", 0.2)
+    research.studies = SlowView()
+
+    async def session():
+        CALLER.set(SimpleNamespace(name="claude-mac"))
+        async with Client(build_server(research)) as client:
+            handed = await client.call_tool("chart_view", {"day": "2026-10-14", "asset": "capital/US100"})
+            research.studies.release.set()
+            done = await client.call_tool("job_wait", {"job_id": json.loads(handed.content[0].text)["job"], "seconds": 5})
+            return handed, done
+
+    handed, done = asyncio.run(session())
+
+    assert json.loads(handed.content[0].text)["state"] == "running" and len(handed.content) == 1
+    assert [block.type for block in done.content] == ["text", "image"]
+    assert base64.b64decode(done.content[1].data) == PNG and json.loads(done.content[0].text)["picture"]["width"] == 1280
 
 
 def test_a_study_refused_behind_a_running_job_names_it():

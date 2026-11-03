@@ -338,6 +338,11 @@ class FakeBacktests:
     def get(self, run_id):
         return {"id": run_id, "name": "Cross R60"}
 
+    def days(self, run_id):
+        if run_id == "20261027-101010-0000ff":
+            raise NotPossible("This backtest has no results yet")
+        return [{"day": "2026-10-27"}, {"day": "2026-10-28"}]
+
     def paper(self, *, with_reports=True):
         return {"rules": {}, "live": None}
 

@@ -26,7 +26,7 @@ are the server's own, apart from this lab's. Its tools, by step of the loop:
 |---|---|---|
 | Look | `lab status` | `status`, `data_assets`, `data_coverage` |
 | Experiment | `lab exp new`, `exp trials`, `exp conclude` | `exp_new`, `exp_get`, `exp_trials`, `exp_conclude`, `lockbox_set` |
-| Strategy | `lab script check` | `pine_check`, `pine_run`, `pine_signals`, `pine_compare`, `pine_save`; `job_wait` for a study handed back as a job |
+| Strategy | `lab script check` | `pine_check`, `pine_rule_check`, `pine_run`, `pine_signals`, `pine_compare`, `chart_view` (a day as a backtest ran it, a run's trades on it, with a picture), `pine_save`; `job_wait` for a study handed back as a job |
 | Run | `lab run`, `lab sweep` | `backtest_start`, `backtest_wait` |
 | Read | `lab show`, `edge`, `regimes`, `trades`, `days`, `compare` | `backtest_result` (parts), `backtest_trades`, `backtest_days`, `backtest_signals`, `backtest_compare` |
 | Test | `lab neighbours`, `lab stress`, `lab model validate` | `backtest_derive` (neighbours, stress, a sweep's cell, model_check) |

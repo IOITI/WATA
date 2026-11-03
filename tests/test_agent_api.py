@@ -63,6 +63,19 @@ def until_settled(client, conversation_id, seconds=5.0):
     raise AssertionError("the request did not end")
 
 
+def test_a_subject_s_id_may_be_as_long_as_luxalgo_s_longest_slug():
+    from pydantic import ValidationError
+
+    from src.admin.luxalgo import SLUG
+    from src.admin.routers.agent import Subject
+
+    longest = "a" + "-b" * 60
+    assert SLUG.match(longest) and len(longest) == 121
+    assert Subject(kind="luxalgo", id=longest).id == longest
+    with pytest.raises(ValidationError):
+        Subject(kind="luxalgo", id=longest + "c")
+
+
 def test_off_the_agent_says_so_and_refuses_the_rest(config_path, tmp_path):
     ctx = make_ctx(config_path, tmp_path)
     client = signed_in(ctx, tmp_path)

@@ -2049,6 +2049,13 @@ class BacktestService:
         return await backtest_indicator.day_indicator(self._directory(run_id), day, scripts=self._scripts,
                                                       rows=rows or self.asset_rows(db))
 
+    def day_parts(self, run_id: str, day: date) -> dict:
+        """
+        What a finished run ran on one of its days, without its bars (src/admin/backtest_indicator.py):
+        its script, libraries, inputs and bars as it ran them, the engine day, its settings.
+        """
+        return backtest_indicator.day_parts(self._directory(run_id), day, scripts=self._scripts)
+
     def asset_rows(self, db=None) -> AssetRows:
         """
         The assets' ten-second rows where the runs read them: through ``db``, the admin's read-only

@@ -200,6 +200,18 @@ const CONTEXT: AgentContext = {
 const SCRIPT_LISTED = { id: '0d4fd1117e2f', name: 'Kernel VWAP', kind: 'indicator', version: 10 }
 const STAGED = { kind: 'file' as const, id: 'f0123456789', name: 'chart.png', type: 'image' as const, media_type: 'image/png',
   size: 2048, masked: 0 }
+// A conversation about a run's day, whose tools gave pictures of it (chart_view).
+const LOOKED_ID = '20261103-090000-a7b8c9'
+const LOOKED: AgentConversation = {
+  ...CONVERSATION, id: LOOKED_ID, proposals: [], subject: { kind: 'run', id: RUN, day: '2026-10-23', label: 'Cross R60, Thu 23 Oct 2026' },
+  requests: [{
+    ...CONVERSATION.requests[0], proposals: [], pictures: [
+      { file: 'f00000000a1', title: 'Cross v1 · capital/US100 bid · 1 min · Thu 23 Oct 2026, 08:00-22:00', size: 21_000, tool: 'chart_view', step: null },
+      { file: 'f00000000b2', title: null, size: 19_000, tool: 'luxalgo_view', step: 's2' },
+    ],
+  }],
+}
+
 // A conversation whose request shared a run and a screenshot.
 const ATTACHED_ID = '20261030-090000-f1f2f3'
 const ATTACHED: AgentConversation = {
@@ -244,6 +256,7 @@ function serve() {
     }
     if (route === `/api/agent/conversations/${PROPOSING_ID}`) return json(PROPOSING)
     if (route === `/api/agent/conversations/${CHARTED_ID}`) return json(CHARTED)
+    if (route === `/api/agent/conversations/${LOOKED_ID}`) return json(LOOKED)
     if (route === `/api/agent/conversations/${ACTING_ID}`) return json(ACTING)
     if (route === `/api/agent/conversations/${DRAFT_ID}`) return json(DRAFTED)
     if (route === `/api/agent/conversations/${ASKING_ID}`) return json(ASKING)
@@ -595,6 +608,17 @@ describe('the AI agent', () => {
     expect(screen.getByText('From: backtest_days of run 20261027-101010-abcdef')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: `run ${RUN}` })).toHaveAttribute('href', `/backtests/${RUN}`)
     expect(screen.getByText(/It holds on 21 days/)).toBeInTheDocument()
+  })
+
+  it('shows the pictures its tools gave under what it did, each opening whole', async () => {
+    renderAt(`/agent/${LOOKED_ID}`)
+
+    const looked = await screen.findByRole('region', { name: 'What it looked at' })
+    const day = within(looked).getByRole('img', { name: 'Cross v1 · capital/US100 bid · 1 min · Thu 23 Oct 2026, 08:00-22:00' })
+    expect(day).toHaveAttribute('src', `/api/agent/conversations/${LOOKED_ID}/files/f00000000a1`)
+    const whole = within(looked).getByRole('link', { name: "LuxAlgo's indicator on a day, whole" })
+    expect(whole).toHaveAttribute('href', `/api/agent/conversations/${LOOKED_ID}/files/f00000000b2`)
+    expect(whole).toHaveAttribute('target', '_blank')
   })
 
   it("shows its verdict on what a page is about, said to be from before the thing's last change", async () => {

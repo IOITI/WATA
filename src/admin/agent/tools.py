@@ -12,7 +12,10 @@ What differs from Claude Code's use of them:
   answer over ANSWER_CHARS is refused as one asking for less; a script's
   source passes whole (``pine_get``), its list of versions cut;
 - the caller is ``agent:<conversation>`` (``made_via`` of its runs), with a
-  call log of its own: System › Claude keeps Claude Code's calls.
+  call log of its own: System › Claude keeps Claude Code's calls;
+- a tool's picture (chart_view's day) comes back with its answer as bytes,
+  which the request keeps as a file of its conversation and sends the model
+  with the tool's result (src/admin/agent/loop.py), MAX_PICTURES a request.
 
 The agent also reads, through what the admin gives it (``OpsReads``), the
 admin's health and its services' log lines, cleaned of secrets as the Logs page
@@ -24,14 +27,17 @@ saves and forgets them with two of its own, as ``agent:<conversation>``.
 
 With LuxAlgo's tools (``admin.luxalgo_enabled``), it reads them through what the
 admin gives it (``LuxAlgoReads``: src/admin/luxalgo.py's allowlist, its fixed
-context, its limits), and brings an indicator in whole as one of its scripts,
-through the endpoint's own ``pine_save``, its origin kept beside it.
+context, its limits), runs an indicator on a day through the endpoint's own
+``chart_view`` without saving it (``luxalgo_view``), and brings one in whole as
+one of its scripts, through the endpoint's own ``pine_save``, its origin kept
+beside it.
 
 The MCP SDK is imported in the functions that use it: with the agent off, the
 admin never loads it.
 """
 
 import asyncio
+import base64
 import json
 import time
 from contextlib import asynccontextmanager
@@ -62,6 +68,7 @@ MEMORY_READS = ("memory_list", "memory_read")
 AGENT_TOOLS = (
     "status", "data_assets", "data_coverage", "data_signals", "data_trades", "data_execution", "data_position",
     "data_orders",
+    "chart_view",
     "pine_list", "pine_get", "pine_check", "pine_rule_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "backtest_start", "backtest_derive", "backtest_wait",
@@ -94,7 +101,11 @@ MEMORY_WRITES = (MEMORY_SAVE, MEMORY_FORGET)
 # The Pine studies run one at a time on the server, whoever asks: never two of them at once. A shadow rule saved is
 # run on its history first.
 STUDIES = frozenset({"pine_check", "pine_rule_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
-                     "rule_shadow_save"})
+                     "chart_view", "rule_shadow_save"})
+# The tools that may answer with a picture, and how many pictures one request keeps: each is sent the model again
+# with every later call of the API until the API clears old tool results (about 1,200 tokens each).
+PICTURED = ("chart_view", "luxalgo_view")
+MAX_PICTURES = 8
 # Each starts runs: counted in the request's max_backtests.
 STARTS = frozenset({"backtest_start", "backtest_derive"})
 # LuxAlgo's tools, through the admin's client (src/admin/luxalgo.py): its catalog, a call, an indicator brought in.
@@ -102,7 +113,10 @@ LUXALGO_TOOLS = "luxalgo_tools"
 LUXALGO_CALL = "luxalgo_call"
 LUXALGO_SAVE = "luxalgo_save_script"
 LUXALGO_KNOWN = "luxalgo_known"
-LUXALGO = (LUXALGO_TOOLS, LUXALGO_CALL, LUXALGO_SAVE, LUXALGO_KNOWN)
+LUXALGO_VIEW = "luxalgo_view"
+LUXALGO = (LUXALGO_TOOLS, LUXALGO_CALL, LUXALGO_SAVE, LUXALGO_VIEW, LUXALGO_KNOWN)
+# What luxalgo_view passes on to chart_view as they are.
+VIEW_ARGUMENTS = ("day", "run_id", "asset", "bars", "side", "inputs", "alerts", "start", "end", "rows", "plots", "picture")
 # What one look at WATA's knowledge of LuxAlgo's indicators names at most.
 LUXALGO_KNOWN_MOST = 20
 LUXALGO_GROUPS = ("library", "trackers", "propfirms")
@@ -529,6 +543,36 @@ LUXALGO_DEFINITIONS = (
         },
     },
     {
+        "name": LUXALGO_VIEW,
+        "description": (
+            "One of LuxAlgo's indicators run on a day as chart_view runs a script, saved nowhere: the admin fetches its "
+            "whole source and gives the same table, the moves after its alerts and the picture. Screen several on a "
+            "day so, a run's day with run_id (its bars, its trades drawn over them), and bring the one you keep in with "
+            "luxalgo_save_script. Its plots and alerts are shown, never its labels, lines or boxes. Refused while "
+            "LuxAlgo gives an indicator's first lines alone."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "pattern": r"^[a-z0-9][a-z0-9-]{0,120}$"},
+                "day": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+                "run_id": {"type": "string", "pattern": r"^\d{8}-\d{6}-[0-9a-f]{6}$",
+                           "description": "A run whose day it is: its bars and trades."},
+                "asset": {"type": "string", "description": "A ref of data_assets, without a run."},
+                "bars": {"type": "string", "description": "1, 5, 45S, R60...; the run's, or 1."},
+                "side": {"type": "string", "enum": ["bid", "ask"]},
+                "inputs": {"type": "object", "description": 'By id: {"in_0": 14}.'},
+                "alerts": {"type": "object", "description": 'What each alert title becomes: {"Buy": "long"}.'},
+                "start": {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d$"},
+                "end": {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d$"},
+                "rows": {"type": "integer", "minimum": 20, "maximum": 400},
+                "plots": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
+                "picture": {"type": "boolean"},
+            },
+            "required": ["slug", "day"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": LUXALGO_KNOWN,
         "description": (
             "What WATA already knows of LuxAlgo's indicators, by slug: the scripts taken from each (the operator's or "
@@ -715,6 +759,9 @@ class ToolAnswer:
     chart: dict | None = None
     # A verdict set on a run, a rule, a day or a position (set_verdict).
     verdict: dict | None = None
+    # A picture the tool gave with its answer (a PNG: chart_view's day), and what it is of.
+    picture: bytes | None = None
+    picture_title: str | None = None
 
 
 def _definition(tool) -> dict:
@@ -821,8 +868,9 @@ class ToolSession:
         self._conversation_id = conversation_id
         self._caller = caller
         self._task = task
-        # The charts this request drew.
+        # The charts this request drew, and the pictures its tools gave.
         self._charts = 0
+        self._pictures = 0
 
     @property
     def conversation_id(self) -> str:
@@ -858,23 +906,40 @@ class ToolSession:
         if name in OPS_TOOLS:
             return await self._ops(name, arguments)
         if name in LUXALGO:
-            return await self._luxalgo(name, arguments)
+            return await self._pictures_held(name, arguments, lambda given: self._luxalgo(name, given))
         arguments = {key: value for key, value in arguments.items() if key not in DROPPED_ARGUMENTS.get(name, ())}
         if name == "backtest_wait":
             return await self._wait(arguments, progress, stopping)
+        return await self._pictures_held(name, arguments, lambda given: self._research_call(name, given))
+
+    async def _research_call(self, name: str, arguments: dict) -> ToolAnswer:
         if name in STUDIES:
             async with self._tools._study:
                 return await self._mcp(name, arguments)
         return await self._mcp(name, arguments)
 
+    async def _pictures_held(self, name: str, arguments: dict, run) -> ToolAnswer:
+        """A call whose tool may draw a picture, past the request's MAX_PICTURES asked for its table alone."""
+        held_back = name in PICTURED and arguments.get("picture", True) and self._pictures >= MAX_PICTURES
+        answer = await run({**arguments, "picture": False} if held_back else arguments)
+        if held_back:
+            answer.picture = None
+            if not answer.is_error:
+                answer.text += f"\n(No picture: this request had its {MAX_PICTURES}. Read the table, or ask in a new request.)"
+        elif answer.picture is not None:
+            self._pictures += 1
+        return answer
+
     async def _mcp(self, name: str, arguments: dict) -> ToolAnswer:
         result = await self._client.call_tool(name, arguments)
-        text = "\n".join(getattr(block, "text", "") for block in result.content) if result.content else ""
+        blocks = result.content or []
+        text = "\n".join(getattr(block, "text", "") for block in blocks if getattr(block, "type", "text") == "text")
         if result.is_error:
             return ToolAnswer(text or f"{name} failed", is_error=True)
+        picture = next((base64.b64decode(block.data) for block in blocks if getattr(block, "type", None) == "image"), None)
         answer = _parsed(text)
         if isinstance(answer, dict) and answer.get("state") == "running" and answer.get("job"):
-            text, is_error = await self._job(name, answer["job"])
+            text, is_error, picture = await self._job(name, answer["job"])
             if is_error:
                 return ToolAnswer(text, is_error=True)
             answer = _parsed(text)
@@ -882,7 +947,11 @@ class ToolSession:
             text = self._fitted(name, text, answer)
         except _TooLong as e:
             return ToolAnswer(str(e), is_error=True)
-        return self._made(name, text, answer)
+        made = self._made(name, text, answer)
+        if picture is not None:
+            made.picture = picture
+            made.picture_title = ((answer or {}).get("picture") or {}).get("title") if isinstance(answer, dict) else None
+        return made
 
     async def _ops(self, name: str, arguments: dict) -> ToolAnswer:
         ops = self._tools._ops
@@ -965,6 +1034,8 @@ class ToolSession:
         except Exception as e:
             # LuxAlgo out of reach or refusing, said in words the agent can work around.
             return ToolAnswer(str(e)[:1000] or f"{name} failed", is_error=True)
+        if name == LUXALGO_VIEW:
+            return await self._luxalgo_view(found, arguments)
         given = arguments.get("name") or f"{found['name'][:69]} (LuxAlgo)"
         page = f"https://www.luxalgo.com/library/indicator/{found['slug']}/"
         owner = f", © {found['owner']}" if found.get("owner") else ""
@@ -983,23 +1054,39 @@ class ToolSession:
         saved.text = json.dumps({**answer, "origin": origin}, ensure_ascii=False)
         return saved
 
+    async def _luxalgo_view(self, found: dict, arguments: dict) -> ToolAnswer:
+        """An indicator's whole source run on a day by the endpoint's chart_view, as an unsaved source."""
+        asked = {key: arguments[key] for key in VIEW_ARGUMENTS if key in arguments}
+        async with self._tools._study:
+            viewed = await self._mcp("chart_view", {**asked, "source": found["source"], "name": found["name"][:80]})
+        answer = _parsed(viewed.text) if not viewed.is_error else None
+        if isinstance(answer, dict):
+            answer["indicator"] = {"slug": found["slug"], "name": found["name"], "licence": found.get("licence")}
+            viewed.text = json.dumps(answer, ensure_ascii=False, separators=(",", ":"))
+        return viewed
+
     def _fitted_answer(self, name: str, text: str) -> ToolAnswer:
         try:
             return ToolAnswer(self._fitted(name, text, None))
         except _TooLong as e:
             return ToolAnswer(str(e), is_error=True)
 
-    async def _job(self, name: str, job_id: str) -> tuple[str, bool]:
-        """A study that outlasted its call: waited for to its end, a stop included (pine_save writes)."""
-        from src.admin.mcp_server.budget import said
+    async def _job(self, name: str, job_id: str) -> tuple[str, bool, bytes | None]:
+        """
+        A study that outlasted its call: waited for to its end, a stop included (pine_save writes). Its
+        answer's text, whether it is a refusal, and its picture when it gave one.
+        """
+        from src.admin.mcp_server.budget import Pictured, said
 
         while True:
             try:
                 answer = await self._tools._research.jobs.wait(job_id, self._caller, 45)
             except Exception as e:
-                return str(said(name, e)[2]), True
+                return str(said(name, e)[2]), True, None
+            if isinstance(answer, Pictured):
+                return answer.answer, False, answer.png
             if not (isinstance(answer, dict) and answer.get("state") == "running"):
-                return (answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)), False
+                return (answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)), False, None
 
     async def _wait(self, arguments: dict, progress, stopping) -> ToolAnswer:
         """backtest_wait, looked at every WAIT_STEP_SECONDS until the runs end, WAIT_SECONDS at most, or a stop."""

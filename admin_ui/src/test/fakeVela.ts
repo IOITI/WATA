@@ -2,6 +2,8 @@
 // plain chart (a day of a backtest) record how they were built and what was asked of them, as
 // fakeCharts.ts does for Lightweight Charts.
 
+import { fakeCanvas } from './fakeCanvas'
+
 type Handler = (payload: unknown) => void
 
 export interface FakeEntry {
@@ -126,6 +128,7 @@ export class FakeVela {
     set: (key: string, value: unknown) => {
       this.settings.push([key, value])
     },
+    screenshotCanvas: () => fakeCanvas('vela'),
   }
 
   addIndicator(source: string, options: Record<string, unknown> = {}) {

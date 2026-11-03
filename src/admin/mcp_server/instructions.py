@@ -25,7 +25,8 @@ what bears on the work with `memory_read`; only they change it). The loop:
 1. `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as trials of the family; \
 configurations tried elsewhere (a port on the Mac) too, once written down with `exp_trials`.
 2. The strategy: `pine_check`, `pine_run` (plots and alerts on recorded bars), `pine_signals` (what a rule would \
-raise), `pine_compare` (against TradingView's signals), then `pine_save`.
+raise), `pine_compare` (against TradingView's signals), then `pine_save`. A day is read on `chart_view` (as a \
+backtest ran it, a run's trades on it, with a picture) before a change is made for it.
 3. `backtest_start` (the Backtests form's body; `backtest_options` lists the settings; a run starts with \
 1,000 € unless changes.capital says another), `backtest_wait`, then `backtest_result`: the edge of the entries \
 first, then random entries, risk, regimes, trades.

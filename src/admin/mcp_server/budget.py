@@ -12,17 +12,23 @@ What every tool of the MCP endpoint goes through (``research_tool``):
 - WATA's own refusals passed on as the sentence they are (``ToolError``):
   any other exception reaches Claude as "Error executing tool" alone;
 - one line in the call log, whatever the outcome.
+
+A tool may answer with a picture beside its answer (``Pictured``: chart_view's
+day): the answer is held to the size as any other, the PNG sent apart as an
+image block, which Claude Code shows and the AI agent keeps.
 """
 
 import asyncio
+import base64
 import functools
 import inspect
 import json
 import logging
 import time
+from dataclasses import dataclass
 
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.types import ImageContent, TextContent, ToolAnnotations
 
 from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, UnknownRun
@@ -52,6 +58,22 @@ _SAID = (Refused, InvalidRequest, NotPossible, UnknownRun, AssetNotFound, Invali
 
 def compact(value) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+@dataclass(frozen=True)
+class Pictured:
+    """A tool's answer (JSON-able, or its text once held to its size) and a PNG beside it."""
+
+    answer: object
+    png: bytes
+
+
+def sent(result):
+    """What the SDK is given of a tool's answer: its text, and its picture as an image block when it has one."""
+    if isinstance(result, Pictured):
+        return [TextContent(type="text", text=result.answer),
+                ImageContent(type="image", data=base64.b64encode(result.png).decode("ascii"), mime_type="image/png")]
+    return result
 
 
 def said(name: str, error: BaseException, running=None) -> tuple[str, str, ToolError]:
@@ -90,15 +112,18 @@ def research_tool(server, calls, *, name: str, title: str, read_only: bool, dest
     def register(fn):
         limit = export_chars if export else CONTEXT_CHARS
 
-        async def answer(arguments: dict) -> str:
+        async def answer(arguments: dict) -> str | Pictured:
             result = await fn(**arguments)
+            png = None
+            if isinstance(result, Pictured):
+                result, png = result.answer, result.png
             text = result if isinstance(result, str) else compact(result)
             if len(text) > limit:
                 raise Refused(
                     f"The answer would be {len(text):,} characters, over the {limit:,} this tool gives: "
                     "ask for fewer rows (limit, offset), a shorter period or less detail"
                 )
-            return text
+            return text if png is None else Pictured(text, png)
 
         def ended(job, who, arguments: dict, task) -> None:
             """A job's end, logged as the call it answers."""
@@ -120,14 +145,14 @@ def research_tool(server, calls, *, name: str, title: str, read_only: bool, dest
             try:
                 if jobs is None:
                     try:
-                        return await asyncio.wait_for(answer(arguments), seconds)
+                        return sent(await asyncio.wait_for(answer(arguments), seconds))
                     except TimeoutError:
                         raise Refused(f"No answer within {seconds:.0f} s: ask for less (a shorter period, fewer rows)") from None
                 job = jobs.start(name, who, answer(arguments))
                 await asyncio.wait({job.task}, timeout=ANSWER_SECONDS)
                 if job.task.done():
                     jobs.forget(job)
-                    return job.task.result()
+                    return sent(job.task.result())
                 # Not done yet: it goes on, and job_wait gives its answer.
                 job.task.add_done_callback(lambda task: ended(job, who, arguments, task))
                 outcome, detail = "job", f"job {job.id}"

@@ -6,7 +6,9 @@ reaches Anthropic.
 
 A run shared: its edge read, an experiment opened, a stress test of it started
 and waited for, a tighter stop proposed for config.json, then an answer with a
-table and links. A script shared: a copy of it saved as Claude's with an input
+table and links. A day of a run shared (its chart_view and picture at the
+start): the hours after the US open looked at again, bar by bar, with their
+own picture (chart_view for real), then the day explained. A script shared: a copy of it saved as Claude's with an input
 changed, proposed as a new version and as a new script, and the change of a
 rule that runs it (one not live), proposed after it; asked to make it ready for
 a signal rule, its rule check read, the events it only draws written in as
@@ -47,6 +49,8 @@ _SHARED_TRADING = re.compile(r"The operator shares the (position|signal|trading 
 _SHARED_RULE = re.compile(r"The operator shares the signal rule .*?\(([0-9a-f]{12})\), as your tools")
 _SHARED_REVIEW = re.compile(r"The operator shares (a change, to review before it is saved:|an unsaved draft of the script,) ")
 _SHARED_LUXALGO = re.compile(r"The operator shares the indicator of LuxAlgo's Library .*?\(([a-z0-9][a-z0-9-]{0,120})\), as your tools")
+_SHARED_RUN_DAY = re.compile(r"The operator shares a day of the backtest run .*?\((\d{8}-\d{6}-[0-9a-f]{6})\), as your tools")
+_DAY_OF = re.compile(r'"day":"(\d{4}-\d{2}-\d{2})"')
 # The preset "Make it ready for a signal rule" (presetsFor in admin_ui/src/features/agent/model.ts).
 _READY = "Make this script ready to be a signal rule"
 _DRAFT_OF = re.compile(r"What changed from version (\d+) of script ([0-9a-f]{12})")
@@ -112,7 +116,10 @@ class FakeClaude:
                 found, trading = _SHARED.search(said), _SHARED_TRADING.search(said)
                 rule, review, draft = _SHARED_RULE.search(said), _SHARED_REVIEW.search(said), _DRAFT_OF.search(said)
                 luxalgo = _SHARED_LUXALGO.search(said)
-                if luxalgo and subject is None:
+                run_day, day = _SHARED_RUN_DAY.search(said), _DAY_OF.search(said)
+                if run_day and day and subject is None:
+                    subject = ("run_day", run_day.group(1), day.group(1))
+                elif luxalgo and subject is None:
                     subject = ("luxalgo", luxalgo.group(1))
                 elif found and subject is None:
                     subject = ("run" if found.group(1) == "backtest run" else "script", found.group(2))
@@ -238,6 +245,8 @@ class FakeClaude:
         return blocks
 
     async def _next(self, subject, done: dict, on_event) -> list:
+        if subject and subject[0] == "run_day":
+            return await self._run_day(subject[1], subject[2], done, on_event)
         if subject and subject[0] == "run":
             return await self._run(subject[1], done, on_event)
         if subject and subject[0] == "script" and _READY in self._prompt:
@@ -318,6 +327,23 @@ class FakeClaude:
             f"## Not believable yet\n\nIt rests on **too few days** to be believed, whatever its total; see {link}.\n\n"
             "| Check | Result |\n| --- | --- |\n| Trades | under 30 |\n| Days | under 20 |\n| Stress | read above |\n\n"
             "- Run it again over every recorded day\n- Then look at the edge of its entries before its total\n"))
+
+    async def _run_day(self, run_id: str, day: str, done: dict, on_event) -> list:
+        """A day of a run: shared with its chart already; the hours after the US open looked at again, then explained."""
+        if "chart_view" not in done:
+            return await self._turn(on_event, "The day was shared whole: I look at the US open bar by bar.", [
+                ("chart_view", {"run_id": run_id, "day": day, "start": "15:00", "end": "17:00"})])
+        viewed = done["chart_view"]
+        text = viewed if isinstance(viewed, str) else next(
+            (block.get("text", "") for block in viewed or [] if block.get("type") == "text"), "")
+        shown = json.loads(text) if text.startswith("{") else {}
+        rows = (shown.get("view") or {}).get("rows")
+        looked = f"{rows} rows of it, " if rows else ""
+        return await self._turn(on_event, "I have the day and its open: I explain it.", text=(
+            f"## The day, explained (made up by the development admin)\n\nI looked at the open again ({looked}"
+            f"[the day](/backtests/{run_id}/days/{day})): the entries came after the first swing had run, against "
+            "it.\n\n- What to try: wait for the swing to turn before entering, on this day first (chart_view with "
+            "other inputs)\n- Then on every day of the run, against random entries, before keeping it\n"))
 
     async def _script(self, script_id: str, done: dict, on_event) -> list:
         script = self._scripts.script(script_id)

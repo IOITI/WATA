@@ -42,9 +42,10 @@ export type Pending =
 
 export type PendingFile = Extract<Pending, { kind: 'file' }>
 
-/** What tells two things attached apart, as the server does: a script's versions, an incident's moments. */
-export function attachmentKey(entry: { kind: string; id: string; version?: number | null; at?: string | null }): string {
-  const extra = entry.version ? `@v${entry.version}` : entry.at ? `@${entry.at}` : ''
+/** What tells two things attached apart, as the server does: a script's versions, an incident's moments, a run's days. */
+export function attachmentKey(entry: { kind: string; id: string; version?: number | null; at?: string | null;
+  day?: string | null }): string {
+  const extra = entry.version ? `@v${entry.version}` : entry.at ? `@${entry.at}` : entry.day ? `@${entry.day}` : ''
   return `${entry.kind}:${entry.id}${extra}`
 }
 
