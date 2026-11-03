@@ -2,7 +2,7 @@
 
 ## v0.78.0 - Favourite backtests
 
-**Release date:** not released yet
+**Release date:** 2026-11-03
 
 Backtests can be kept among your favourites, and the list narrowed to them.
 - **One run**: its star in the list, or "Add to favourites" on its page ("Remove from favourites" once it is one).
