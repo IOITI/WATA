@@ -1,22 +1,26 @@
 // A script's page (/ta/indicators/<id>): its tabs, each with its address, and what they say of the
-// script: the rules that run it, its runs and their verdicts, each version's uses. Pure.
+// script: the rules that run it, its runs and their verdicts, each version's uses, who wrote its How it works. Pure.
 
 import type { Judged } from '@/features/backtests/verdict'
-import type { BacktestRunListed, TaRule, TaRuleMode, TaScriptKind, TaScriptSummary } from '@/lib/types'
+import { shownMarkdown } from '@/features/ta/luxalgo/luxalgoModel'
+import type { BacktestRunListed, TaRule, TaRuleMode, TaScriptHowMeta, TaScriptKind, TaScriptSummary } from '@/lib/types'
 
-export const SCRIPT_TABS = ['editor', 'rule', 'backtests', 'rules', 'history'] as const
+export const SCRIPT_TABS = ['editor', 'chart', 'how', 'rule', 'backtests', 'rules', 'history'] as const
 export type ScriptTab = (typeof SCRIPT_TABS)[number]
 
 export const TAB_LABEL: Record<ScriptTab, string> = {
-  editor: 'Editor', rule: 'As a rule', backtests: 'Backtests', rules: 'Rules', history: 'History',
+  editor: 'Editor', chart: 'Chart', how: 'How it works', rule: 'As a rule', backtests: 'Backtests', rules: 'Rules', history: 'History',
 }
 
 /**
- * The tabs a script has: a library runs inside the scripts that import it, is never backtested alone, and is no
- * rule's script (its rule check is theirs).
+ * The tabs a script has: a library runs inside the scripts that import it, draws nothing alone, is never backtested
+ * alone, and is no rule's script (its rule check is theirs).
  */
 export function tabsOf(kind: TaScriptKind, backtests: boolean): ScriptTab[] {
-  return SCRIPT_TABS.filter((tab) => (tab !== 'backtests' || (backtests && kind !== 'library')) && (tab !== 'rule' || kind !== 'library'))
+  const library = kind === 'library'
+  return SCRIPT_TABS.filter(
+    (tab) => (tab !== 'backtests' || (backtests && !library)) && !(library && (tab === 'rule' || tab === 'chart')),
+  )
 }
 
 /** The tab an address names; one the script has not is its editor. */
@@ -111,4 +115,23 @@ export function versionUses(
     if (use) use.rules.push(rule)
   }
   return uses
+}
+
+/** Who wrote a script's How it works, as its page says it, and where that leads: LuxAlgo's page, the agent's conversation. */
+export function howBy(meta: Pick<TaScriptHowMeta, 'by' | 'from'>): { said: string; href: string | null } {
+  if (meta.from?.provider === 'luxalgo') return { said: 'LuxAlgo’s write-up', href: meta.from.url ?? null }
+  const conversation = /^agent:([A-Za-z0-9_-]+)$/.exec(meta.by ?? '')?.[1]
+  if (conversation) return { said: 'the AI agent', href: `/agent/${conversation}` }
+  if (meta.from?.script) return { said: 'copied with the script', href: `/ta/indicators/${meta.from.script}?tab=how` }
+  return { said: meta.by === 'operator' ? 'you' : (meta.by ?? 'someone'), href: null }
+}
+
+const IMAGE = /!\[[^\]]*\]\([^)]*\)/g
+
+/**
+ * A How it works as the page draws it: LuxAlgo's as its Library's pages draw it (its links to the Library's pages
+ * WATA has), any other without its images, which the admin's policy would not load from elsewhere.
+ */
+export function howShown(text: string, from: TaScriptHowMeta['from']): string {
+  return from?.provider === 'luxalgo' ? shownMarkdown(text) : text.replace(IMAGE, '').trim()
 }

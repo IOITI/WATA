@@ -67,6 +67,9 @@ WORKER_CONTENT_SECURITY_POLICY = "; ".join([
     "script-src 'self' 'unsafe-eval'",
 ])
 WORKER_PATH = re.compile(r"^/assets/(?:vela-)?pine-worker-[A-Za-z0-9_-]+\.js$")
+# A script's picture (src/admin/script_details.py): asked by its version (?v=, its time), the one answer of the API a
+# browser may keep, privately, for it never changes; every other answer of the API is no-store.
+KEPT_PICTURE = re.compile(r"^/api/ta/scripts/[0-9a-f]{12}/picture$")
 
 # Answers this big or more go out compressed when the browser accepts it: a day of range bars is 0.8 MB of
 # JSON, a sixth of that compressed. The smaller ones (the sign-in, a credential) go out as they are.
@@ -102,7 +105,9 @@ class SecurityHeadersMiddleware:
                 headers["X-Frame-Options"] = "DENY"
                 headers["X-Content-Type-Options"] = "nosniff"
                 headers["Referrer-Policy"] = "no-referrer"
-                if path.startswith("/api/") or path in ("/mcp", "/mcp/"):
+                # A script's picture asked by its version keeps the caching its route gives it, nothing of another kind.
+                kept = KEPT_PICTURE.match(path) and "immutable" in headers.get("Cache-Control", "")
+                if (path.startswith("/api/") or path in ("/mcp", "/mcp/")) and not kept:
                     headers["Cache-Control"] = "no-store"
             await send(message)
 

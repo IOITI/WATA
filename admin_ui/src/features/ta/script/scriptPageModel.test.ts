@@ -16,6 +16,8 @@ import {
   runsSaid,
   scriptTabHref,
   scriptTabOf,
+  howBy,
+  howShown,
   tabsOf,
   versionOf,
   versionUses,
@@ -47,10 +49,10 @@ const RULES = [
 
 describe('the tabs of a script', () => {
   it('has a tab for each view, a library none of backtests, nor any when backtests are off', () => {
-    expect(tabsOf('indicator', true)).toEqual(['editor', 'rule', 'backtests', 'rules', 'history'])
-    // A library is no rule's script: its rule check is the scripts' that import it.
-    expect(tabsOf('library', true)).toEqual(['editor', 'rules', 'history'])
-    expect(tabsOf('strategy', false)).toEqual(['editor', 'rule', 'rules', 'history'])
+    expect(tabsOf('indicator', true)).toEqual(['editor', 'chart', 'how', 'rule', 'backtests', 'rules', 'history'])
+    // A library is no rule's script (its rule check is the scripts' that import it), and draws nothing alone.
+    expect(tabsOf('library', true)).toEqual(['editor', 'how', 'rules', 'history'])
+    expect(tabsOf('strategy', false)).toEqual(['editor', 'chart', 'how', 'rule', 'rules', 'history'])
   })
 
   it('opens the tab its address names, the editor otherwise', () => {
@@ -102,5 +104,27 @@ describe('what runs a script', () => {
     expect(uses.get(3)).toEqual({ runs: 2, rules: [RULES[0], RULES[2]] })
     expect(uses.get(2)).toEqual({ runs: 1, rules: [RULES[1]] })
     expect(uses.get(1)).toEqual({ runs: 0, rules: [] })
+  })
+})
+
+describe('a script’s How it works', () => {
+  it('says who wrote it, and leads to LuxAlgo’s page or the agent’s conversation', () => {
+    const luxalgo = { provider: 'luxalgo' as const, slug: 'vwap', url: 'https://www.luxalgo.com/library/indicator/vwap/' }
+
+    expect(howBy({ by: 'operator', from: null })).toEqual({ said: 'you', href: null })
+    expect(howBy({ by: 'agent:c0ffee12', from: null })).toEqual({ said: 'the AI agent', href: '/agent/c0ffee12' })
+    expect(howBy({ by: 'operator', from: luxalgo })).toEqual({ said: 'LuxAlgo’s write-up', href: luxalgo.url })
+    expect(howBy({ by: 'operator', from: { script: '0123456789ab' } })).toEqual({
+      said: 'copied with the script', href: '/ta/indicators/0123456789ab?tab=how',
+    })
+    // Nothing else becomes an address.
+    expect(howBy({ by: 'agent:../../x', from: null })).toEqual({ said: 'agent:../../x', href: null })
+  })
+
+  it('is drawn without images, LuxAlgo’s as its Library’s pages draw it', () => {
+    expect(howShown('# Mine\n\n![chart](https://example.com/a.png)\nIt crosses.', null)).toBe('# Mine\n\n\nIt crosses.')
+    expect(howShown('# VWAP\n\nSee [the bands](/library/indicator/vwap-bands/).', { provider: 'luxalgo' })).toBe(
+      'See [the bands](/ta/luxalgo/indicators/vwap-bands).',
+    )
   })
 })

@@ -33,6 +33,7 @@ from src.admin.luxalgo_knowledge import known as known_of
 from src.admin.routers.config import require_config_edit_enabled
 from src.admin.routers.ta import RuleTestAsked, _rule_checks
 from src.admin.rule_checks import DEFAULT_SETTINGS, settings_of
+from src.admin.script_details import OPERATOR, from_luxalgo
 from src.admin.script_origins import luxalgo_origin
 from src.admin.ta_scripts import MAX_NAME_LENGTH
 
@@ -203,8 +204,22 @@ async def import_indicator(slug: str, body: ImportRequest, request: Request):
     script = await run_in_threadpool(made)
     if getattr(ctx, "rule_checks", None) is not None and script["kind"] != "library":
         ctx.rule_checks.noticed_version(script["id"], script["version"])
+    filled = await _with_luxalgo_details(ctx, script["id"], slug, OPERATOR)
     return {"id": script["id"], "name": script["name"], "version": script["version"], "kind": script["kind"],
-            "origin": origin}
+            "origin": origin, "filled": filled}
+
+
+async def _with_luxalgo_details(ctx, script_id: str, slug: str, by: str) -> list[str]:
+    """A script taken from LuxAlgo given LuxAlgo's write-up as its How it works, its family and its picture; the
+    script is kept whatever LuxAlgo answers then (its page's "Take LuxAlgo's" asks again)."""
+    details = getattr(ctx, "script_details", None)
+    if details is None or getattr(ctx, "luxalgo", None) is None:
+        return []
+    try:
+        return await from_luxalgo(details, ctx.luxalgo, script_id, slug, by)
+    except Exception as e:
+        logger.warning("LuxAlgo's write-up of %s was not kept with its script: %s", slug, e)
+        return []
 
 
 # ── whether one can become a signal rule ──

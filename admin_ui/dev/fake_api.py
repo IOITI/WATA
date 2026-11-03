@@ -95,6 +95,7 @@ from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.paper import PaperTrading
 from src.admin.release import Release
 from src.admin.ta_rules import RuleStore
+from src.admin.script_details import ScriptDetails
 from src.admin.script_origins import ScriptOrigins
 from src.admin.service_control import RestartRefused
 from src.admin.vault import AdminVault
@@ -1639,6 +1640,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         closers=closers,
         agent_memory=memory_of(settings.agent_path),
         script_origins=ScriptOrigins(ta_scripts.root),
+        script_details=ScriptDetails(ta_scripts),
     )
     ctx.restarts = RestartPlans(ctx.service_control, FakeReadiness(), lambda: situation_of(ctx), events, poll_seconds=1)
     # The credentials, sealed with keys made for this run: the admin's own and every public one, as the

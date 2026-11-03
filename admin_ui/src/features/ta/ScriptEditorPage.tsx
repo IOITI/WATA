@@ -1,7 +1,9 @@
 // Technical Analysis › Indicators › a script: the Pine editor, its checks as the
 // script is written and a test on WATA's prices; and, each a tab with its address
-// (`?tab=`), whether it can become a signal rule as it is, its backtests, the signal
-// rules that run it and its versions.
+// (`?tab=`), the script drawn on a chart as it is written (its code beside it), what
+// it does (its How it works), whether it can become a signal rule as it is, its
+// backtests, the signal rules that run it and its versions. Its star and its family
+// in the header, as the Indicators list shows them.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertTitle, AnimatedTabs, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
@@ -10,6 +12,7 @@ import { ChartSpline, FlaskConical, History, Radar, Save, Sparkles } from 'lucid
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
+import { FavouriteStar } from '@/components/FavouriteStar'
 import { NotFoundState } from '@/components/NotFoundState'
 import { AgentSheet } from '@/features/agent/AgentSheet'
 import { NEW, withAgent } from '@/features/agent/model'
@@ -30,13 +33,18 @@ import type { TestDone } from './editor/TestPanel'
 import { TestResult } from './editor/TestResult'
 import { usePineReference, usePineWorker, useScriptCheck } from './editor/useScriptCheck'
 import { ScriptBacktestsTab } from './script/ScriptBacktestsTab'
+import { ScriptChartTab } from './script/ScriptChartTab'
+import { ScriptFamily } from './script/ScriptFamily'
 import { ScriptHistoryTab } from './script/ScriptHistoryTab'
+import { ScriptHowTab } from './script/ScriptHowTab'
+import type { HowDraft } from './script/ScriptHowTab'
 import { lineOf, scriptTabHref, scriptTabOf, TAB_LABEL, tabsOf, versionOf } from './script/scriptPageModel'
 import type { ScriptTab } from './script/scriptPageModel'
 import { ScriptRulesTab } from './script/ScriptRulesTab'
 import { ScriptRuleTab } from './script/ScriptRuleTab'
 import { withAlerts } from './engine/ruleCheck'
 import { declaredKind, declaredTitle, isKind, KIND_LABEL, TEMPLATES } from './templates'
+import { useFavouriteScripts } from './useScriptDetails'
 
 interface Draft {
   source: string
@@ -103,6 +111,10 @@ function ScriptEditor({ id }: { id: string | undefined }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   // The last test that ran, drawn under the editor.
   const [tested, setTested] = useState<TestDone | null>(null)
+  // Its How it works being written: the page's, so that another tab keeps it and leaving asks first.
+  const [howDraft, setHowDraft] = useState<HowDraft | null>(null)
+  const howDirty = howDraft !== null && howDraft.text !== howDraft.original
+  const favourite = useFavouriteScripts()
   // A script just created, or the changes saved as a copy: the page goes to it once that is drawn,
   // and what it leaves is saved, so the guard against losing changes lets it go.
   const [leavingTo, setLeavingTo] = useState<string | null>(null)
@@ -220,7 +232,12 @@ function ScriptEditor({ id }: { id: string | undefined }) {
         description={
           script ? (
             <>
-              {`${KIND_LABEL[script.kind]} · Pine v${script.pine_version} · version ${script.version}, saved ${formatDateTime(script.updated_at, timezone, false)}`}
+              <span className="flex flex-wrap items-center gap-x-2">
+                <FavouriteStar on={!!script.favourite} name={script.name} className="-ml-1"
+                  onToggle={() => favourite.mutate({ ids: [script.id], favourite: !script.favourite })} />
+                {`${KIND_LABEL[script.kind]} · Pine v${script.pine_version} · version ${script.version}, saved ${formatDateTime(script.updated_at, timezone, false)}`}
+                <ScriptFamily script={script} />
+              </span>
               {script.origin && (
                 <span className="mt-1 flex flex-wrap items-center gap-x-2">
                   <LuxAlgoBadge origin={script.origin} />
@@ -416,6 +433,21 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                 }}
               />
             )}
+            {script && tab === 'chart' && (
+              <ScriptChartTab
+                script={script}
+                value={draft.source}
+                onChange={(next) => update({ source: next })}
+                prepared={check.result?.compiled ? check.result.prepared : null}
+                diagnostics={check.diagnostics}
+                checking={check.checking}
+                dirty={dirty}
+                title={title}
+                onSave={save}
+                functions={reference?.functions}
+              />
+            )}
+            {script && tab === 'how' && <ScriptHowTab script={script} draft={howDraft} onDraft={setHowDraft} />}
             {script && tab === 'backtests' && <ScriptBacktestsTab script={script} />}
             {script && tab === 'rules' && <ScriptRulesTab script={script} />}
             {script && tab === 'history' && (
@@ -447,9 +479,15 @@ function ScriptEditor({ id }: { id: string | undefined }) {
         />
       )}
       <RouterLeaveGuard
-        when={dirty && leavingTo === null}
+        when={(dirty || howDirty) && leavingTo === null}
         allowed={isSignIn}
-        message="The script has changes. Nothing of it has been saved."
+        message={
+          dirty && howDirty
+            ? 'The script and its How it works have changes. Nothing of them has been saved.'
+            : dirty
+              ? 'The script has changes. Nothing of it has been saved.'
+              : 'Its How it works has changes. Nothing of them has been saved.'
+        }
         stayLabel="Stay on this page"
         leaveLabel="Leave and discard"
       />

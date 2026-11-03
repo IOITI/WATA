@@ -2,7 +2,9 @@
 The Technical Analysis scripts of the fake admin server: the real store
 (src/admin/ta_scripts.py) on the server's temporary folder, with a few examples
 covering what the pages handle: an overlay with inputs and alert conditions,
-an oscillator in its own pane, and a library with a script importing it. Two
+an oscillator in its own pane, and a library with a script importing it, the
+first a favourite with its How it works and a picture, each but the library in
+a family (src/admin/script_details.py). Two
 signal rules run the first, one live and one of Claude's in shadow on ten-second
 bars, and a made-up TA engine says what it did and what it measured of itself
 (``FAKE_TA_TROUBLE=slow`` makes a live run slow now, for the Engine monitor's
@@ -14,8 +16,11 @@ import json
 import math
 import os
 import random
+import struct
+import zlib
 from datetime import datetime, timedelta, timezone
 
+from src.admin.script_details import OPERATOR, ScriptDetails
 from src.admin.ta_rules import LIVE, OFF, RuleStore, bars_label
 from src.admin.ta_scripts import ScriptStore
 
@@ -92,7 +97,80 @@ def seeded_store(root: str) -> ScriptStore:
         for name, source, description in EXAMPLES:
             store.create(name, source, description)
         seed_rule(store)
+        seed_details(ScriptDetails(store), store)
     return store
+
+
+# ── what the Indicators pages say of the scripts beside their code ──
+
+EMA_CROSS_HOW = """Two exponential moving averages of the close, a **fast** one and a **slow** one, drawn on the price.
+
+## How it decides
+
+- **Cross up**: the fast average crosses above the slow one. A triangle under the bar, and the alert *Cross up*.
+- **Cross down**: it crosses below. A triangle above the bar, and the alert *Cross down*.
+
+## Its inputs
+
+| Input | Default | What it changes |
+| --- | --- | --- |
+| Fast length | 9 | The bars of the fast average: shorter follows the price closer, and crosses more often. |
+| Slow length | 21 | The bars of the slow average. |
+
+It does not repaint: a cross is decided on a bar once it closed.
+"""
+
+FAMILIES = {"EMA cross": "Trend", "RSI": "Momentum", "Envelope": "Volatility"}
+
+
+def _png(width: int, height: int, rows) -> bytes:
+    """A PNG of RGB rows, made with the standard library alone."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def chart_picture(width: int = 480, height: int = 270) -> bytes:
+    """A made-up chart of a price and its two averages: the picture the EMA cross is seeded with."""
+    rng = random.Random(7)
+    price, prices = 0.0, []
+    for x in range(width):
+        price += rng.gauss(0, 1.1) + math.sin(x / 40) * 0.6
+        prices.append(price)
+
+    def ema(values, length):
+        alpha, out, value = 2 / (length + 1), [], values[0]
+        for each in values:
+            value = alpha * each + (1 - alpha) * value
+            out.append(value)
+        return out
+
+    low, high = min(prices), max(prices)
+    scale = lambda value: int((high - value) / (high - low or 1) * (height - 40)) + 20  # noqa: E731
+    lines = [(prices, (161, 161, 170)), (ema(prices, 9), (45, 212, 191)), (ema(prices, 21), (251, 146, 60))]
+    rows = [[24, 24, 27] * width for _ in range(height)]
+    for values, colour in lines:
+        for x in range(1, width):
+            top, bottom = sorted((scale(values[x - 1]), scale(values[x])))
+            for y in range(max(0, top - 1), min(height, bottom + 2)):
+                rows[y][x * 3:x * 3 + 3] = colour
+    return _png(width, height, rows)
+
+
+def seed_details(details: ScriptDetails, store: ScriptStore) -> None:
+    """The EMA cross a favourite with its How it works and a picture; the scripts that draw, each in a family."""
+    ids = {meta["name"]: meta["id"] for meta in store.scripts()}
+    for name, family in FAMILIES.items():
+        if name in ids:
+            details.set_family(ids[name], family, OPERATOR)
+    cross = ids.get("EMA cross")
+    if cross:
+        details.set_favourites([cross], True)
+        details.save_how(cross, EMA_CROSS_HOW, 0, OPERATOR)
+        details.set_picture(cross, chart_picture(), OPERATOR)
 
 
 # ── a signal rule, and what a made-up TA engine did with the rules ──

@@ -85,6 +85,8 @@ describe('describeEvent', () => {
       title: 'The research task ended', body: 'Tune · its budget of $5.00 is spent', variant: 'warning' })
     expect(eventLink({ type: 'agent_finished', conversation_id: '20261028-080000-a1b2c3' })).toBe('/agent/20261028-080000-a1b2c3')
     expect(staleQueries({ type: 'agent_finished' })).toContain('agent-conversation')
+    // What it wrote of a script, on its page and in the list.
+    expect(staleQueries({ type: 'agent_finished' })).toEqual(expect.arrayContaining(['ta-scripts', 'ta-script-how', 'ta-script-how-history']))
   })
 
   it('says a research task asks the operator, and leads to it', () => {

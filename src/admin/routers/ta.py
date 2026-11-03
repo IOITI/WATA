@@ -14,7 +14,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -58,9 +58,12 @@ from src.admin.ta_rules import (
 )
 from src.admin.ta_readiness import unmet_readiness
 from src.admin.rule_checks import DEFAULT_SETTINGS, readiness_check, settings_of
+from src.admin.script_details import (
+    LUXALGO, MAX_HOW, MAX_PICTURE_BYTES, OPERATOR, from_luxalgo, with_details,
+)
 from src.admin.script_origins import UNREAD_LICENCE, needs_licence_check, with_origin
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
-from src.admin.errors import ServiceUnavailable
+from src.admin.errors import NotPossible, ServiceUnavailable
 from src.capital_feed.settings import CapitalSettings
 from src.ta_engine.replay import AssetRows
 from src.ta_engine.settings import TaEngineSettings
@@ -98,6 +101,26 @@ class ScriptCopy(BaseModel):
     name: str = Field(max_length=MAX_NAME_LENGTH * 2)
 
 
+class FavouritesChange(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+    favourite: bool
+
+
+class FamilyChange(BaseModel):
+    family: str | None = Field(default=None, max_length=200)
+
+
+class HowChange(BaseModel):
+    text: str = Field(max_length=MAX_HOW * 2)
+    # The revision the text was written from (0 while it had none): another saved meantime is a 409.
+    revision: int = Field(ge=0)
+
+
+class FromLuxAlgo(BaseModel):
+    # Its How it works and family replaced by LuxAlgo's, else only filled where it has none.
+    replace: bool = False
+
+
 class Workspace(BaseModel):
     value: str
 
@@ -120,11 +143,25 @@ def _rule_checks(request: Request):
 
 
 def _saved(request: Request, meta: dict) -> dict:
-    """A version saved: what its source says of it as a rule made in the background."""
-    found = getattr(request.app.state.ctx, "rule_checks", None)
+    """A version saved: what its source says of it as a rule made in the background; the script as the pages read it."""
+    ctx = request.app.state.ctx
+    found = getattr(ctx, "rule_checks", None)
     if found is not None and meta.get("kind") != "library":
         found.noticed_version(meta["id"], meta["version"])
-    return meta
+    return _shown(ctx, ctx.ta_scripts, meta)
+
+
+def _shown(ctx, store, meta: dict) -> dict:
+    """A script as the pages read it: where it came from, its star, family, picture and How it works."""
+    return with_details(getattr(ctx, "script_details", None), with_origin(getattr(ctx, "script_origins", None), store, meta))
+
+
+def _details(request: Request):
+    """What the pages say of the scripts beside their code (src/admin/script_details.py)."""
+    found = getattr(request.app.state.ctx, "script_details", None)
+    if found is None:
+        raise HTTPException(status_code=503, detail="Technical Analysis is not available")
+    return found
 
 
 def rules(store=Depends(scripts)) -> RuleStore:
@@ -210,10 +247,10 @@ _RULE_FIELDS = (
 
 @router.get("/scripts")
 async def list_scripts(request: Request, store=Depends(scripts)):
-    origins = request.app.state.ctx.script_origins
+    ctx = request.app.state.ctx
 
     def listed() -> list[dict]:
-        return [with_origin(origins, store, meta) for meta in store.scripts()]
+        return [_shown(ctx, store, meta) for meta in store.scripts()]
 
     return {"items": await run_in_threadpool(listed)}
 
@@ -225,8 +262,8 @@ async def create_script(body: ScriptCreate, request: Request, store=Depends(scri
 
 @router.get("/scripts/{script_id}")
 async def get_script(script_id: str, request: Request, store=Depends(scripts)):
-    origins = request.app.state.ctx.script_origins
-    return await run_in_threadpool(lambda: with_origin(origins, store, store.script(script_id)))
+    ctx = request.app.state.ctx
+    return await run_in_threadpool(lambda: _shown(ctx, store, store.script(script_id)))
 
 
 @router.put("/scripts/{script_id}")
@@ -247,7 +284,114 @@ async def delete_script(script_id: str, store=Depends(scripts), rule_store: Rule
 
 @router.post("/scripts/{script_id}/duplicate", status_code=201)
 async def duplicate_script(script_id: str, body: ScriptCopy, request: Request, store=Depends(scripts)):
-    return _saved(request, await run_in_threadpool(store.duplicate, script_id, body.name))
+    copy = await run_in_threadpool(store.duplicate, script_id, body.name)
+    details = getattr(request.app.state.ctx, "script_details", None)
+    if details is not None:
+        # Its family, How it works and pictures go with it; its star does not.
+        await run_in_threadpool(details.carry, script_id, copy["id"], OPERATOR)
+    return _saved(request, copy)
+
+
+# ── what the pages say of a script beside its code: its star, family, How it works and picture ──
+
+
+@router.post("/scripts/favourites")
+async def favourite_scripts(body: FavouritesChange, request: Request):
+    """Scripts put among the favourites, or taken out of them: those not there named with why."""
+    return await run_in_threadpool(_details(request).set_favourites, body.ids, body.favourite)
+
+
+@router.put("/scripts/{script_id}/family")
+async def set_family(script_id: str, body: FamilyChange, request: Request, store=Depends(scripts)):
+    await run_in_threadpool(_details(request).set_family, script_id, body.family, OPERATOR)
+    return await run_in_threadpool(lambda: _shown(request.app.state.ctx, store, store.script(script_id)))
+
+
+@router.get("/scripts/{script_id}/how-it-works")
+async def how_it_works(script_id: str, request: Request):
+    """Its How it works (Markdown), with the revision a change starts from; empty while it has none."""
+    details = _details(request)
+
+    def read() -> dict:
+        found = details.how(script_id)
+        if found is not None:
+            return found
+        how = details.of(script_id)["how"] or {}
+        return {"text": "", "revision": how.get("revision", 0), "by": how.get("by"), "at": how.get("at"), "from": None}
+
+    return await run_in_threadpool(read)
+
+
+@router.put("/scripts/{script_id}/how-it-works")
+async def save_how_it_works(script_id: str, body: HowChange, request: Request):
+    return await run_in_threadpool(_details(request).save_how, script_id, body.text, body.revision, OPERATOR)
+
+
+@router.get("/scripts/{script_id}/how-it-works/history")
+async def how_it_works_history(script_id: str, request: Request):
+    return {"items": await run_in_threadpool(_details(request).how_history, script_id)}
+
+
+@router.get("/scripts/{script_id}/picture")
+async def script_picture(script_id: str, request: Request):
+    """Its own picture, as it was kept (its type known from its first bytes when it was)."""
+    found = await run_in_threadpool(_details(request).picture, script_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="It has no picture of its own")
+    path, media_type = found
+
+    def read() -> bytes:
+        with open(path, "rb") as in_file:
+            return in_file.read()
+
+    # Asked by its version (its time, which the pages put in its address): kept by the browser, for it never changes.
+    cache = "private, max-age=31536000, immutable" if request.query_params.get("v") else "no-store"
+    return Response(content=await run_in_threadpool(read), media_type=media_type, headers={
+        "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": cache,
+    })
+
+
+@router.put("/scripts/{script_id}/picture")
+async def set_picture(script_id: str, request: Request, file: UploadFile = File(...), store=Depends(scripts)):
+    """Its picture: a PNG, JPEG or WebP image, 2 MB at most, uploaded or taken from its chart."""
+    too_large = HTTPException(status_code=413, detail=f"A picture is {MAX_PICTURE_BYTES // (1024 * 1024)} MB at most")
+    declared = request.headers.get("content-length") or ""
+    if declared.isdigit() and int(declared) > MAX_PICTURE_BYTES + 64 * 1024:
+        raise too_large
+    data = await file.read(MAX_PICTURE_BYTES + 1)
+    if len(data) > MAX_PICTURE_BYTES:
+        raise too_large
+    await run_in_threadpool(_details(request).set_picture, script_id, data, OPERATOR)
+    return await run_in_threadpool(lambda: _shown(request.app.state.ctx, store, store.script(script_id)))
+
+
+@router.delete("/scripts/{script_id}/picture", status_code=204)
+async def drop_picture(script_id: str, request: Request):
+    await run_in_threadpool(_details(request).drop_picture, script_id)
+    return Response(status_code=204)
+
+
+@router.post("/scripts/{script_id}/from-luxalgo")
+async def take_from_luxalgo(script_id: str, body: FromLuxAlgo, request: Request, store=Depends(scripts)):
+    """LuxAlgo's write-up, family and picture of the indicator a script was taken from (before they came with it)."""
+    from src.admin.luxalgo import LuxAlgoRefused, LuxAlgoUnknown
+
+    ctx = request.app.state.ctx
+    details = _details(request)
+    luxalgo = getattr(ctx, "luxalgo", None)
+    if luxalgo is None:
+        raise NotPossible("LuxAlgo's tools are switched off (admin.luxalgo_enabled)")
+    origins = getattr(ctx, "script_origins", None)
+    origin = await run_in_threadpool(origins.get, script_id) if origins is not None else None
+    if not origin or origin.get("provider") != LUXALGO or not origin.get("slug"):
+        raise NotPossible("It was not taken from LuxAlgo's Library")
+    try:
+        filled = await from_luxalgo(details, luxalgo, script_id, origin["slug"], OPERATOR, replace=body.replace)
+    except LuxAlgoUnknown as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except LuxAlgoRefused as e:
+        raise NotPossible(str(e)) from None
+    return {"filled": filled, "script": await run_in_threadpool(lambda: _shown(ctx, store, store.script(script_id)))}
 
 
 @router.get("/scripts/{script_id}/versions/{number}")

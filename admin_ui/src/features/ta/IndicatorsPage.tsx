@@ -1,10 +1,13 @@
 // Technical Analysis › Indicators: the Pine scripts written in WATA (indicators,
-// strategies and the libraries they import), kept by the admin as .pine files.
+// strategies and the libraries they import), kept by the admin as .pine files; each
+// with its star, its family and its picture (src/admin/script_details.py), the list
+// narrowed to the favourites or a family by its address, as a table or as cards.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AdvancedDataTable,
   AnimatedFileUpload,
+  AnimatedTabs,
   Badge,
   Button,
   ButtonLink,
@@ -13,6 +16,7 @@ import {
   Input,
   PageHeader,
   QueryState,
+  Select,
   SettleModal,
 } from 'ioiti-ui'
 import type { ColumnDef, UploadFileItem, UploadResult } from 'ioiti-ui'
@@ -20,8 +24,9 @@ import { RouterLink } from 'ioiti-ui/react-router'
 import { ChartSpline, Copy, Download, FileUp, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 
+import { FavouriteStar } from '@/components/FavouriteStar'
 import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { judgedRuns } from '@/features/backtests/verdict'
@@ -30,12 +35,16 @@ import { api, ApiError, taScriptSourceUrl } from '@/lib/api'
 import type { RuleCheckSummary, RuleVerdict, TaRuleMode, TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
+import { familiesInUse, indicatorsHref, narrowed, readIndicatorsAddress, scriptsShown } from './indicatorsModel'
+import type { IndicatorsAddress, IndicatorsView } from './indicatorsModel'
 import { LuxAlgoBadge } from './luxalgo/LuxAlgoBadge'
 import { badgeOf, summarySaid } from './ruleCheck/ruleCheckModel'
 import { useRuleChecks } from './ruleCheck/useRuleCheck'
 import { importScript, librariesFirst, MAX_SCRIPT_BYTES } from './importScripts'
 import { modeCounts, modesSaid, rulesRunning, runsOfScript, runsSaid, scriptTabHref } from './script/scriptPageModel'
+import { PictureButton, PictureChooser, ScriptPicture } from './ScriptPicture'
 import { importersOf, KIND_LABEL, librariesOf } from './templates'
+import { useFavouriteScripts } from './useScriptDetails'
 
 const KIND_TONE: Record<TaScriptKind, 'neutral' | 'success' | 'warning'> = {
   indicator: 'success',
@@ -83,6 +92,21 @@ interface ScriptUses {
   checks: Record<string, RuleCheckSummary | null> | null
 }
 
+/** Its star, its name leading to its page, who made it, where it came from and its family. */
+function ScriptTitle({ script, onFavourite }: { script: TaScriptSummary; onFavourite: (script: TaScriptSummary) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <FavouriteStar on={Boolean(script.favourite)} name={script.name} onToggle={() => onFavourite(script)} className="-ml-1" />
+      <Link to={`/ta/indicators/${script.id}`} className="font-medium underline-offset-4 hover:underline">
+        {script.name}
+      </Link>
+      {madeByClaude(script) && <ClaudeBadge />}
+      {script.origin && <LuxAlgoBadge origin={script.origin} />}
+      {script.family && <Badge variant="outline">{script.family}</Badge>}
+    </div>
+  )
+}
+
 function scriptColumns(
   timezone: string,
   importers: Map<string, TaScriptSummary[]>,
@@ -90,23 +114,24 @@ function scriptColumns(
   backtests: boolean,
   uses: ScriptUses,
   act: (action: 'duplicate' | 'delete', script: TaScriptSummary) => void,
+  onFavourite: (script: TaScriptSummary) => void,
 ): ColumnDef<TaScriptSummary>[] {
   return [
     {
       id: 'name',
       header: 'Script',
+      // Searched by its name, description, library, family, "Claude", "LuxAlgo" and "favourite".
       accessorFn: (row) =>
-        `${row.name} ${row.description} ${row.library_name ?? ''}${madeByClaude(row) ? ' Claude' : ''}${row.origin ? ' LuxAlgo' : ''}`,
+        `${row.name} ${row.description} ${row.library_name ?? ''} ${row.family ?? ''}${madeByClaude(row) ? ' Claude' : ''}${row.origin ? ' LuxAlgo' : ''}${row.favourite ? ' favourite' : ''}`,
       sortable: true,
       cell: ({ row }) => (
         // Its floor in the table only: a card on a phone is narrower.
-        <div className="max-w-96 whitespace-normal [td_&]:min-w-48">
-          <Link to={`/ta/indicators/${row.id}`} className="font-medium underline-offset-4 hover:underline">
-            {row.name}
-          </Link>
-          {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
-          {row.origin && <LuxAlgoBadge origin={row.origin} className="ml-2" />}
-          {row.description && <p className="text-xs text-muted-foreground">{row.description}</p>}
+        <div className="flex max-w-[30rem] items-start gap-3 whitespace-normal [td_&]:min-w-64">
+          <PictureButton script={row} className="w-24 shrink-0" />
+          <div className="min-w-0">
+            <ScriptTitle script={row} onFavourite={onFavourite} />
+            {row.description && <p className="mt-0.5 text-xs text-muted-foreground">{row.description}</p>}
+          </div>
         </div>
       ),
     },
@@ -285,9 +310,114 @@ function scriptColumns(
   ]
 }
 
+/** The list narrowed to the favourites and a family: in the address, so that a list narrowed can be opened elsewhere, kept or sent. */
+function ScriptFilters({ address, families }: { address: IndicatorsAddress; families: string[] }) {
+  const navigate = useNavigate()
+  const go = (changes: Partial<IndicatorsAddress>) => navigate(indicatorsHref({ ...address, ...changes }), { replace: true })
+  // The family the address names, as the list spells it (the list is narrowed whatever its case).
+  const named = address.family?.toLocaleLowerCase()
+  const family = address.family ? (families.find((entry) => entry.toLocaleLowerCase() === named) ?? address.family) : null
+  const offered = family && !families.includes(family) ? [...families, family] : families
+  return (
+    <div role="group" aria-label="Narrow the list" className="flex flex-wrap items-end gap-3">
+      <label className="flex flex-col gap-1 text-xs">
+        <span className="text-text-secondary">Favourites</span>
+        <Select
+          value={address.favourite ?? ''}
+          onChange={(event) => go({ favourite: event.target.value === 'yes' ? 'yes' : null })}
+          options={[{ value: '', label: 'Every script' }, { value: 'yes', label: 'Favourites only' }]}
+        />
+      </label>
+      {offered.length > 0 && (
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="text-text-secondary">Family</span>
+          <Select
+            value={family ?? ''}
+            onChange={(event) => go({ family: event.target.value || null })}
+            options={[{ value: '', label: 'Any' }, ...offered.map((family) => ({ value: family, label: family }))]}
+          />
+        </label>
+      )}
+      {narrowed(address) && (
+        <ButtonLink to={indicatorsHref({ ...address, favourite: null, family: null })} variant="ghost" size="sm">
+          Every script
+        </ButtonLink>
+      )}
+    </div>
+  )
+}
+
+const VIEW_LABEL: Record<IndicatorsView, string> = { table: 'Table', cards: 'Cards' }
+
+/** The scripts as cards, as LuxAlgo's Library shows its indicators: its picture leading to it, a button to change it. */
+function ScriptCards({ scripts, uses, backtests, onFavourite }: {
+  scripts: TaScriptSummary[]
+  uses: ScriptUses
+  backtests: boolean
+  onFavourite: (script: TaScriptSummary) => void
+}) {
+  const [search, setSearch] = useState('')
+  const shown = useMemo(() => {
+    const words = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    return scripts.filter((script) => {
+      const text = `${script.name} ${script.description} ${script.family ?? ''} ${KIND_LABEL[script.kind]}`.toLocaleLowerCase()
+      return words.every((word) => text.includes(word))
+    })
+  }, [scripts, search])
+  return (
+    <div className="flex flex-col gap-3">
+      <Input
+        type="search"
+        aria-label="Search the scripts"
+        placeholder="Search…"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        className="max-w-xs"
+      />
+      {shown.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">No script here: change what narrows the list.</p>
+      ) : (
+        <ul aria-label="Scripts" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {shown.map((script) => {
+            const counts = uses.rules.get(script.id)
+            const runs = uses.runs.get(script.id)
+            return (
+              <li key={script.id} className="glass-card flex flex-col overflow-hidden rounded-xl border border-border bg-surface">
+                <div className="relative border-b border-border">
+                  {/* The name below is the card's link for the keyboard and screen readers: the picture's is for the pointer. */}
+                  <Link to={`/ta/indicators/${script.id}`} tabIndex={-1} aria-hidden className="block">
+                    <ScriptPicture script={script} />
+                  </Link>
+                  <PictureChooser script={script} className="absolute right-2 top-2" />
+                </div>
+                <div className="flex flex-col gap-1.5 p-4">
+                  <ScriptTitle script={script} onFavourite={onFavourite} />
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge tone={KIND_TONE[script.kind]}>{KIND_LABEL[script.kind]}</Badge>
+                    <span className="font-mono">v{script.version}</span>
+                    {counts && modesSaid(counts) !== 'None' && <span>{modesSaid(counts)}</span>}
+                    {backtests && script.kind !== 'library' && runs && runs.runs > 0 && (
+                      <span>
+                        {runs.runs} run{runs.runs === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </div>
+                  {script.description && <p className="line-clamp-3 text-sm text-text-secondary">{script.description}</p>}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function IndicatorsPage() {
   const { timezone, backtests_enabled: backtests } = useSession()
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const address = useMemo(() => readIndicatorsAddress(params), [params])
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
   const [deleting, setDeleting] = useState<TaScriptSummary | null>(null)
@@ -297,6 +427,10 @@ export function IndicatorsPage() {
 
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts })
   const scripts = scriptsQuery.data?.items
+  const shown = useMemo(() => scriptsShown(scripts ?? [], address), [scripts, address])
+  const families = useMemo(() => familiesInUse(scripts ?? []), [scripts])
+  const { mutate: favour } = useFavouriteScripts()
+  const toggleFavourite = useMemo(() => (script: TaScriptSummary) => favour({ ids: [script.id], favourite: !script.favourite }), [favour])
   const importers = useMemo(() => importersOf(scripts ?? []), [scripts])
   const libraries = useMemo(() => librariesOf(scripts ?? []), [scripts])
   // The rules that run each script, and its runs among the newest the list of backtests gives, with their verdicts.
@@ -363,10 +497,10 @@ export function IndicatorsPage() {
           setCopyName(`${script.name} copy`)
           setCopying(script)
         }
-      }),
+      }, toggleFavourite),
     // The mutations' reset is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone, importers, libraries, backtests, uses],
+    [timezone, importers, libraries, backtests, uses, toggleFavourite],
   )
 
   const onFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -434,18 +568,37 @@ export function IndicatorsPage() {
       <QueryState isPending={scriptsQuery.isPending} error={scriptsQuery.error} hasData={!!scripts}>
         {scripts && (
           // A row as tall as its longest cell: the others start at its top, not halfway down.
-          <div className="flex flex-col gap-2 [&_td]:align-top">
-            <AdvancedDataTable<TaScriptSummary>
-              title="Scripts"
-              searchPlaceholder="Search…"
-              emptyTitle="No script yet"
-              emptyDescription="Write one with “New indicator”, or import a .pine file from TradingView."
-              data={scripts}
-              columns={columns}
-              getRowId={(row) => row.id}
-              defaultPageSize={20}
-              selectable={false}
-            />
+          <div className="flex flex-col gap-3 [&_td]:align-top">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <ScriptFilters address={address} families={families} />
+              <AnimatedTabs
+                label="How the list is shown"
+                tabs={(['table', 'cards'] as const).map((view) => ({ id: view, label: VIEW_LABEL[view], href: indicatorsHref({ ...address, view }) }))}
+                activeTab={address.view}
+                onChange={(view) => navigate(indicatorsHref({ ...address, view: view as IndicatorsView }), { replace: true })}
+                linkComponent={RouterLink}
+                renderContent={false}
+              />
+            </div>
+            {address.view === 'cards' ? (
+              <ScriptCards scripts={shown} uses={uses} backtests={backtests} onFavourite={toggleFavourite} />
+            ) : (
+              <AdvancedDataTable<TaScriptSummary>
+                title="Scripts"
+                searchPlaceholder="Search…"
+                emptyTitle={narrowed(address) ? 'No script here' : 'No script yet'}
+                emptyDescription={
+                  narrowed(address)
+                    ? 'Change what narrows the list, or show every script.'
+                    : 'Write one with “New indicator”, or import a .pine file from TradingView.'
+                }
+                data={shown}
+                columns={columns}
+                getRowId={(row) => row.id}
+                defaultPageSize={20}
+                selectable={false}
+              />
+            )}
             <p className="text-xs text-muted-foreground">
               Every save keeps the version before it. A script's backtests are counted among the newest {MAX_LISTED_RUNS} runs.
               A script imports a library of WATA with{' '}

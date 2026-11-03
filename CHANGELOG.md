@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.81.0 - Indicators: favourites, families, How it works, a live chart, pictures
+
+**Release date:** not released
+
+Technical Analysis › Indicators now works like LuxAlgo's Library for WATA's own scripts.
+- **Favourites**: a star on each script (in the list, its cards and its page) and the list narrowed to them, in its address (`?favourite=yes`), as the backtests have.
+- **A family for each script**, set from its page among those in use and LuxAlgo's Library's (while its tools are on) or typed (40 characters), and the list narrowed by it (`?family=`).
+- **How it works**, a tab of each script's page: what it does, in Markdown, drawn as LuxAlgo's write-ups are, written there (Edit, with its preview), or by the AI agent.
+  - Every save is a new revision, never written over: the tab lists them, any one put back as the newest. One saved meanwhile is said, the text written kept, and saved over it only when asked.
+  - Who wrote it is said: you, the AI agent (leading to its conversation), or LuxAlgo (leading to its page). Leaving the page with one being written asks first; another tab keeps it.
+- **A script taken from LuxAlgo comes with its write-up, its family and its picture**: from the Library's page, and by the agent's `luxalgo_save_script`. A script taken before this release gets them with "Take LuxAlgo's" on its How it works tab.
+- **A Chart tab on each script's page** (not a library's): the script drawn by WATA on its own bars, its code beside it.
+  - The chart follows the draft as it is typed, saved or not, in either editor (they hold one draft, kept by the page's one Save): each draft that compiles is run in place, the last one that ran kept on the chart while a newer one fails.
+  - Its bars as the rules running it run them first (R60 on US100 for yours), then 1 to 60 minutes, on the indices and histories WATA records. The script's own inputs; nothing saved.
+- **A picture for each script**: a thumbnail in the list and a new Cards view (`?view=cards`), as LuxAlgo's Library shows its indicators.
+  - Chosen from the computer or dropped on its thumbnail (PNG, JPEG or WebP, 2 MB at most, scaled to 1,280 px in the browser, checked by its first bytes on the server), or taken from the Chart tab with **Take as picture**.
+  - Without one: LuxAlgo's picture of a script taken from it, else a stand-in tinted by its family.
+- **The AI agent**: `describe_script`, a tool of its own, writes a script's How it works and its family, a new revision each time (refused when another was saved since it read it). Two new requests on a script: "Write its How it works" and "Choose its family". `pine_list` says each script's family and star (and narrows by family), `pine_get` its How it works and whether it has a picture, for the agent and Claude Code.
+
+**On the live path:** nothing. Only the admin's container: what it keeps of a script beside its code is in the script's own folder (`details.json`, `how/rNNNN.md`, `picture.*`), never in `ta_scripts.py`, which the TA engine loads. No backtest turns stale.
+
+**Verification status:**
+- Tests:
+  - the store and the routes: the star, the family, the write-up's revisions and the 409, the picture's checks and how long a browser keeps it, a duplicate carrying them, LuxAlgo's filled in on a take;
+  - `describe_script`: a stale revision, an unknown script, a text with a secret refused;
+  - the pages: the star and the filters in the address, a picture chosen, the Cards view; How it works written, saved over another's once asked, a revision put back, leaving asked; the Chart tab drawing the draft in place from either editor, and taking its picture;
+  - the models: the filters, the families offered, the picture's address, the bars offered and opened on, who wrote a write-up.
+- Whole suites: 3,945 Python tests passed (13 skipped), 1,434 interface tests, lint and typecheck clean.
+- Seen in the browser pane on the development admin (`FAKE_AI=1 FAKE_LUXALGO=1`):
+  - the list: the stars, the families, the thumbnails and the Cards view, the filters;
+  - the Chart tab: a draft typed beside the chart drawn in place, one with a mistake said while the last drawing stays, Take as picture;
+  - How it works: the made-up agent writing it through `describe_script` (the tab read again once it answered), a revision put back, Edit with its preview, the family's dialog;
+  - an indicator taken from the made-up Library, with LuxAlgo's write-up and family;
+  - at 375 px and 1,440 px.
+- Not yet on the server.
+
 ## v0.80.0 - The TA engine keeps its rules' runs, and says when it cannot
 
 **Release date:** not released

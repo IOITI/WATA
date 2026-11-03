@@ -53,6 +53,11 @@ _SHARED_RUN_DAY = re.compile(r"The operator shares a day of the backtest run .*?
 _DAY_OF = re.compile(r'"day":"(\d{4}-\d{2}-\d{2})"')
 # The preset "Make it ready for a signal rule" (presetsFor in admin_ui/src/features/agent/model.ts).
 _READY = "Make this script ready to be a signal rule"
+# The presets "Write its How it works" and "Choose its family", which describe_script keeps on the script's page.
+_DESCRIBE = "with describe_script"
+_FAMILY_ONLY = "choose its family with describe_script"
+_INPUT = re.compile(r'input\.(?:int|float|bool|string)\(([^,)]+),\s*"([^"]+)"')
+_ALERT = re.compile(r'alertcondition\([^,]+,\s*"([^"]+)"')
 _DRAFT_OF = re.compile(r"What changed from version (\d+) of script ([0-9a-f]{12})")
 _TASK = "A research task the operator left you"
 _TASK_GOES_ON = "The research task goes on"
@@ -251,6 +256,8 @@ class FakeClaude:
             return await self._run(subject[1], done, on_event)
         if subject and subject[0] == "script" and _READY in self._prompt:
             return await self._ready(subject[1], done, on_event)
+        if subject and subject[0] == "script" and _DESCRIBE in self._prompt:
+            return await self._describe(subject[1], done, on_event)
         if subject and subject[0] == "script":
             return await self._script(subject[1], done, on_event)
         if subject and subject[0] == "incident":
@@ -344,6 +351,28 @@ class FakeClaude:
             f"[the day](/backtests/{run_id}/days/{day})): the entries came after the first swing had run, against "
             "it.\n\n- What to try: wait for the swing to turn before entering, on this day first (chart_view with "
             "other inputs)\n- Then on every day of the run, against random entries, before keeping it\n"))
+
+    async def _describe(self, script_id: str, done: dict, on_event) -> list:
+        """Its How it works and its family written from its code, kept with describe_script (made up)."""
+        if "pine_get" not in done:
+            return await self._turn(on_event, "I read the script before I write what it does.", [("pine_get", {"script_id": script_id})])
+        family_only = _FAMILY_ONLY in self._prompt.lower()
+        if "describe_script" not in done:
+            read = json.loads(done["pine_get"]) if done["pine_get"].startswith("{") else {}
+            source = self._scripts.script(script_id)["source"]
+            inputs = "\n".join(f"| {title} | {default.strip()} | Made up: what it changes. |" for default, title in _INPUT.findall(source))
+            alerts = "\n".join(f"- **{title}**: raised on the bar where its condition turns true." for title in _ALERT.findall(source))
+            text = ("What it draws on the price, written from its code by the development admin's made-up agent.\n\n"
+                    + ("## How it decides\n\n" + alerts + "\n\n" if alerts else "")
+                    + ("## Its inputs\n\n| Input | Default | What it changes |\n| --- | --- | --- |\n" + inputs + "\n" if inputs else ""))
+            arguments = {"script_id": script_id, "family": "Trend"}
+            if not family_only:
+                arguments |= {"how_it_works": text, "revision": ((read.get("how_it_works") or {}).get("revision") or 0)}
+            return await self._turn(on_event, "Its code says enough: I keep what it does on its page.", [("describe_script", arguments)])
+        return await self._turn(on_event, "It is kept on the script's page.", text=(
+            "**Its family is Trend**, kept on its page (made up by the development admin)." if family_only else
+            "**Written**: its How it works is on its page, with its family (made up by the development admin). "
+            "Every revision is kept there: put back the one before if you prefer it."))
 
     async def _script(self, script_id: str, done: dict, on_event) -> list:
         script = self._scripts.script(script_id)

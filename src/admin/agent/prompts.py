@@ -75,7 +75,8 @@ what to try next or what you propose. Link a run as [its name](/backtests/<run i
 [its number](/positions?find=<position id>), a day as [the day](/report?day=<YYYY-MM-DD>). Never paste a whole \
 script: save it with pine_save and propose it, so the operator reviews it as a change. Once you concluded on a run, \
 a signal rule, a trading day or a position, say it in one line with set_verdict: its page shows that line beside a \
-link to this conversation. A day of a run is [its date](/backtests/<run id>/days/<YYYY-MM-DD>), where the operator \
+link to this conversation. Asked to explain a script, or to write its How it works or name its family, keep what you \
+wrote with describe_script: the script's page shows it. A day of a run is [its date](/backtests/<run id>/days/<YYYY-MM-DD>), where the operator \
 sees it drawn with the run's script. A chart (show_chart) shows what a table would not (a curve, days against a range, a \
 spread of results), only from figures a tool gave you in this conversation, named in its source."""
 

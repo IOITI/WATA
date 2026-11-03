@@ -193,6 +193,9 @@ class AdminContext:
     luxalgo_sign_in: Any = None
     # Where each Pine script came from (src/admin/script_origins.py: LuxAlgo's Library), beside the scripts.
     script_origins: Any = None
+    # What the Indicators pages say of a script beside its code (src/admin/script_details.py): its star, family,
+    # picture and How it works.
+    script_details: Any = None
     # What WATA's check found of LuxAlgo's indicators, and the checks asked (src/admin/luxalgo_compat.py).
     luxalgo_compat: Any = None
     luxalgo_checks: Any = None
@@ -277,6 +280,7 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.vault import AdminVault
     from src.admin.ta_rules import RuleStore
     from src.admin.saxo import AdminSaxo
+    from src.admin.script_details import ScriptDetails
     from src.admin.script_origins import ScriptOrigins
     from src.admin.services import WataServices
     from src.admin.ta_scripts import ScriptStore
@@ -393,6 +397,7 @@ def build_context(config_manager) -> AdminContext:
         release=Release(),
         vault=vault,
         script_origins=ScriptOrigins(settings.ta_path),
+        script_details=ScriptDetails(ta_scripts),
         agent_memory=memory_of(settings.agent_path),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,

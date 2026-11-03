@@ -263,8 +263,9 @@ export function staleQueries(event: LiveEvent): string[] {
       // A paper day or report is a run too: the pages that list them read them again.
       return ['backtests', 'backtest', 'backtest-paper', 'live-paper']
     case 'agent_finished':
-      // Its runs, scripts and proposals are read again with it.
-      return ['agent', 'agent-conversations', 'agent-conversation', 'agent-artefacts', 'backtests', 'ta-script']
+      // Its runs, scripts and proposals are read again with it, and what it wrote of a script (describe_script).
+      return ['agent', 'agent-conversations', 'agent-conversation', 'agent-artefacts', 'backtests', 'ta-script', 'ta-scripts',
+        'ta-script-how', 'ta-script-how-history']
     case 'agent_question':
       return ['agent-conversations', 'agent-conversation']
     case 'prices_fetch_finished':

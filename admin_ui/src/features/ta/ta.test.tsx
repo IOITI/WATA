@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
+import { resetVela, velas } from '@/test/fakeVela'
 import { PendingRemovalsProvider } from '@/features/backtests/PendingRemovalsProvider'
 import type {
   AgentConversation,
@@ -22,6 +23,9 @@ import { WithTrail } from '@/test/WithTrail'
 
 import { IndicatorsPage } from './IndicatorsPage'
 import { ScriptEditorPage } from './ScriptEditorPage'
+
+vi.mock('@luxalgo/vela', async () => (await import('@/test/fakeVela')).fakeVelaCore)
+vi.mock('@luxalgo/vela-pinets', async () => (await import('@/test/fakeVela')).fakeVelaPinets)
 
 // CodeMirror needs a laid-out page: the editor is a plain text box here (the browser checks see the real one).
 vi.mock('./editor/PineEditor', () => ({
@@ -176,6 +180,22 @@ const RULE_CHECKS_STATE = { available: true, queued: [], testing: null, this_hou
 let sent: { method: string; path: string; body: unknown }[] = []
 /** The assets the fake server lists (the editor's test offers them). */
 let assets: unknown[] = []
+/** What the fake server keeps of the scripts beside their code: stars, families, How it works, pictures. */
+let favourites = new Set<string>()
+let families = new Map<string, string>()
+let pictures = new Set<string>()
+let hows: { text: string; revision: number; by: string; at: string; from: null }[] = []
+let howConflict = false
+
+/** A script as the fake server gives it, with what it keeps beside its code. */
+function detailed<T extends TaScriptSummary>(script: T): T {
+  const how = hows[hows.length - 1]
+  return {
+    ...script, favourite: favourites.has(script.id), family: families.get(script.id) ?? null,
+    picture: pictures.has(script.id) ? `/api/ta/scripts/${script.id}/picture?v=1` : null, own_picture: pictures.has(script.id),
+    how: script.id === EMA.id && how ? { revision: how.revision, by: how.by, at: how.at, from: null, size: how.text.length } : null,
+  }
+}
 
 function serve({ saveConflict = false, deleteConflict = false } = {}) {
   sent = []
@@ -188,11 +208,47 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
       const url = new URL(path, 'http://admin.test')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
       sent.push({ method, path: url.pathname, body })
-      if (url.pathname === '/api/ta/scripts' && method === 'GET') return json({ items: [EMA, HELPERS, DOUBLED] })
+      if (url.pathname === '/api/ta/scripts' && method === 'GET') return json({ items: [EMA, HELPERS, DOUBLED].map(detailed) })
+      if (url.pathname === '/api/ta/scripts/favourites' && method === 'POST') {
+        const asked = body as { ids: string[]; favourite: boolean }
+        for (const id of asked.ids) {
+          if (asked.favourite) favourites.add(id)
+          else favourites.delete(id)
+        }
+        return json({ changed: asked.ids, kept: [] })
+      }
+      if (url.pathname === `/api/ta/scripts/${EMA.id}/family` && method === 'PUT') {
+        const family = (body as { family: string | null }).family
+        if (family) families.set(EMA.id, family)
+        else families.delete(EMA.id)
+        return json(detailed(EMA))
+      }
+      if (url.pathname === `/api/ta/scripts/${EMA.id}/picture` && method === 'PUT') {
+        pictures.add(EMA.id)
+        return json(detailed(EMA))
+      }
+      if (url.pathname === `/api/ta/scripts/${EMA.id}/how-it-works/history`) return json({ items: [...hows].reverse() })
+      if (url.pathname === `/api/ta/scripts/${EMA.id}/how-it-works` && method === 'GET') {
+        return json(hows[hows.length - 1] ?? { text: '', revision: 0, by: null, at: null, from: null })
+      }
+      if (url.pathname === `/api/ta/scripts/${EMA.id}/how-it-works` && method === 'PUT') {
+        const asked = body as { text: string; revision: number }
+        const current = hows.length
+        if (howConflict && asked.revision !== current + 1) {
+          // Another's revision came first, once.
+          howConflict = false
+          hows.push({ text: 'Theirs.', revision: current + 1, by: 'agent:20261103-090000-a1b2c3', at: '2026-11-03T09:00:00Z', from: null })
+          return json({ detail: `Its How it works was saved meanwhile (revision ${current + 1}, you started from ${asked.revision}): read it again` }, 409)
+        }
+        if (asked.revision !== current) return json({ detail: 'Its How it works was saved meanwhile' }, 409)
+        hows.push({ text: asked.text, revision: current + 1, by: 'operator', at: '2026-11-03T10:00:00Z', from: null })
+        return json(hows[hows.length - 1])
+      }
+      if (url.pathname === '/api/luxalgo/status') return json({ enabled: false })
       if (url.pathname === '/api/ta/scripts' && method === 'POST') {
         return json({ ...EMA, id: 'cccccccccccc', name: (body as { name: string }).name, version: 1 }, 201)
       }
-      if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'GET') return json(EMA)
+      if (url.pathname === `/api/ta/scripts/${EMA.id}` && method === 'GET') return json(detailed(EMA))
       if (url.pathname === `/api/ta/scripts/${HELPERS.id}` && method === 'GET') {
         return json({ ...HELPERS, source: '//@version=6\nlibrary("Helpers")\nexport double(float x) => x * 2\n' })
       }
@@ -294,6 +350,12 @@ function rowOf(name: string): HTMLElement {
 
 beforeEach(() => {
   assets = []
+  favourites = new Set()
+  families = new Map()
+  pictures = new Set()
+  hows = []
+  howConflict = false
+  resetVela()
   serve()
 })
 afterEach(() => {
@@ -392,6 +454,141 @@ describe('the Indicators page', () => {
     expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/ta/indicators/cccccccccccc')
     // Several stay on the page, listed.
     expect(screen.getByTestId('address')).toHaveTextContent(/^\/ta\/indicators$/)
+  })
+})
+
+describe("the Indicators page's stars, families and pictures", () => {
+  const query = () => screen.getByTestId('query').textContent
+
+  it('stars a script, and narrows the list to the favourites or a family in its address', async () => {
+    const user = userEvent.setup()
+    families.set(EMA.id, 'Trend')
+    renderAt('/ta/indicators')
+
+    await screen.findByRole('link', { name: 'EMA' })
+    await user.click(within(rowOf('EMA')).getByRole('button', { name: 'Add “EMA” to favourites' }))
+    expect(sent).toContainEqual({ method: 'POST', path: '/api/ta/scripts/favourites', body: { ids: [EMA.id], favourite: true } })
+    expect(await within(rowOf('EMA')).findByRole('button', { name: 'Remove “EMA” from favourites' })).toHaveAttribute('aria-pressed', 'true')
+    // Its family beside its name.
+    expect(within(rowOf('EMA')).getByText('Trend')).toBeInTheDocument()
+
+    const narrow = screen.getByRole('group', { name: 'Narrow the list' })
+    await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Favourites' }), 'yes')
+    expect(query()).toBe('?favourite=yes')
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Doubled' })).not.toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'EMA' })).toBeInTheDocument()
+
+    await user.click(within(narrow).getByRole('link', { name: 'Every script' }))
+    await user.selectOptions(within(screen.getByRole('group', { name: 'Narrow the list' })).getByRole('combobox', { name: 'Family' }), 'Trend')
+    expect(query()).toBe('?family=Trend')
+    expect(screen.getByRole('link', { name: 'EMA' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Helpers' })).not.toBeInTheDocument()
+  })
+
+  it('takes a picture chosen on its thumbnail, and shows the scripts as cards', async () => {
+    const user = userEvent.setup()
+    renderAt('/ta/indicators')
+
+    await screen.findByRole('link', { name: 'EMA' })
+    const row = rowOf('EMA')
+    expect(within(row).getByRole('button', { name: 'Add a picture of EMA' })).toBeInTheDocument()
+    const input = row.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['png'], 'ema.png', { type: 'image/png' }))
+    await waitFor(() => expect(sent.some((call) => call.method === 'PUT' && call.path === `/api/ta/scripts/${EMA.id}/picture`)).toBe(true))
+    expect(await screen.findByRole('img', { name: 'The picture of EMA' })).toHaveAttribute('src', `/api/ta/scripts/${EMA.id}/picture?v=1`)
+
+    await user.click(screen.getByRole('link', { name: 'Cards' }))
+    expect(query()).toBe('?view=cards')
+    const cards = within(await screen.findByRole('list', { name: 'Scripts' }))
+    expect(cards.getAllByRole('listitem')).toHaveLength(3)
+    expect(cards.getByRole('link', { name: 'EMA' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}`)
+    expect(cards.getByRole('button', { name: 'Change the picture of EMA' })).toBeInTheDocument()
+  })
+})
+
+describe("a script's Chart and How it works", () => {
+  const query = () => screen.getByTestId('query').textContent
+
+  it('draws its draft beside its code, in place as either editor changes it, and takes the chart as its picture', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}?tab=chart`)
+
+    // Built as its first rule runs it (loaded when the tab is first shown), given the draft once it compiled: slow
+    // when every test file runs at once.
+    const slow = { timeout: 5_000 }
+    await waitFor(() => expect(velas).toHaveLength(1), slow)
+    expect(velas[0].options).toMatchObject({ symbol: 'capital:CAPITAL_US100', timeframe: '1', live: false })
+    await waitFor(() => expect(velas[0].indicators).toHaveLength(1), slow)
+    expect(velas[0].indicators[0].source).toContain('ta.ema(close, 20)')
+
+    const beside = screen.getByRole('textbox', { name: 'Pine source of EMA, beside its chart' })
+    await user.clear(beside)
+    await user.type(beside, '//@version=6\nindicator("EMA")\nplot(ta.ema(close, 50))\n')
+    await waitFor(() => expect(velas[0].indicators[0].codes.at(-1)).toContain('ta.ema(close, 50)'), slow)
+    // One chart: a draft is given in place, never built again.
+    expect(velas).toHaveLength(1)
+    expect(screen.getByText(/Your draft, unsaved/)).toBeInTheDocument()
+
+    // The Editor's is the same draft, kept by the page's Save.
+    await user.click(screen.getByRole('link', { name: 'Editor' }))
+    expect(screen.getByRole('textbox', { name: 'Pine source of EMA' })).toHaveValue('//@version=6\nindicator("EMA")\nplot(ta.ema(close, 50))\n')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+
+    await user.click(screen.getByRole('link', { name: 'Chart' }))
+    await user.click(await screen.findByRole('button', { name: 'Take as picture' }))
+    await waitFor(() => expect(sent.some((call) => call.method === 'PUT' && call.path === `/api/ta/scripts/${EMA.id}/picture`)).toBe(true), slow)
+    expect(await screen.findByRole('button', { name: 'Remove the picture' })).toBeInTheDocument()
+  }, 20_000)
+
+  it('says what it does, written and saved as a new revision, another one first said, and any one put back', async () => {
+    const user = userEvent.setup()
+    hows = [{ text: '# EMA\n\nAn **average** of the close.', revision: 1, by: 'operator', at: '2026-11-02T10:00:00Z', from: null }]
+    renderAt(`/ta/indicators/${EMA.id}?tab=how`)
+
+    expect(await screen.findByText('average')).toBeInTheDocument()
+    expect(screen.getByText(/Written by you/)).toHaveTextContent('revision 1')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const text = screen.getByRole('textbox', { name: 'Its text, in Markdown' })
+    // Another tab keeps what is being written; leaving the page asks first.
+    await user.type(text, ' Fast.')
+    await user.click(screen.getByRole('link', { name: 'Rules' }))
+    await user.click(screen.getByRole('link', { name: 'How it works' }))
+    expect(screen.getByRole('textbox', { name: 'Its text, in Markdown' })).toHaveValue('# EMA\n\nAn **average** of the close. Fast.')
+
+    // Another's revision saved meanwhile: said, the text kept, saved over it once asked.
+    howConflict = true
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Saved meanwhile')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Its text, in Markdown' })).toHaveValue('# EMA\n\nAn **average** of the close. Fast.')
+    await user.click(screen.getByRole('button', { name: 'Save mine over it' }))
+    expect(await screen.findByText(/Fast\./)).toBeInTheDocument()
+    expect(sent.filter((call) => call.method === 'PUT' && call.path.endsWith('/how-it-works')).map((call) => call.body)).toEqual([
+      { text: '# EMA\n\nAn **average** of the close. Fast.', revision: 1 },
+      { text: '# EMA\n\nAn **average** of the close. Fast.', revision: 2 },
+    ])
+
+    // Its revisions, the agent's among them, any one put back as the newest.
+    await user.click(screen.getByRole('button', { name: 'Its revisions' }))
+    const revisions = await screen.findByRole('list', { name: 'Its revisions' })
+    expect(within(revisions).getByRole('link', { name: 'the AI agent' })).toHaveAttribute('href', '/agent/20261103-090000-a1b2c3')
+    const first = within(revisions).getByText('Revision 1').closest('li') as HTMLElement
+    await user.click(within(first).getByRole('button', { name: 'Put this one back' }))
+    await waitFor(() => expect(sent.filter((call) => call.method === 'PUT' && call.path.endsWith('/how-it-works')).at(-1)?.body)
+      .toEqual({ text: '# EMA\n\nAn **average** of the close.', revision: 3 }))
+    expect(query()).toBe('?tab=how')
+  })
+
+  it('asks before leaving with a How it works being written', async () => {
+    const user = userEvent.setup()
+    const router = renderAt(`/ta/indicators/${EMA.id}?tab=how`)
+
+    await user.click(await screen.findByRole('button', { name: 'Write it' }))
+    await user.type(screen.getByRole('textbox', { name: 'Its text, in Markdown' }), 'It averages.')
+    await router.navigate('/ta/indicators')
+    expect(await screen.findByRole('dialog', { name: 'Leave without saving?' })).toHaveTextContent(
+      'Its How it works has changes. Nothing of them has been saved.',
+    )
   })
 })
 

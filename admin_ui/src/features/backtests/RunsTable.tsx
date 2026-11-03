@@ -11,6 +11,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import { MAX_COMPARED } from '@/components/charts/compare'
+import { FavouriteStar } from '@/components/FavouriteStar'
 import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
@@ -35,27 +36,6 @@ const VERDICT_RANK: Record<CheckState, number> = { pass: 3, open: 2, fail: 1 }
 const selectableRun = (run: BacktestRunListed) => !isActive(run.status.state)
 const runName = (run: BacktestRunListed) => run.name
 
-/** A run among the favourites, or not: its star, pressed to put it there or take it out. */
-function FavouriteStar({ run, onToggle }: { run: BacktestRunListed; onToggle: (run: BacktestRunListed) => void }) {
-  const on = Boolean(run.favourite)
-  const said = on ? `Remove “${run.name}” from favourites` : `Add “${run.name}” to favourites`
-  return (
-    <Hint content={on ? 'A favourite: press to take it out' : 'Add it to favourites'}>
-      <button
-        type="button"
-        aria-pressed={on}
-        aria-label={said}
-        onClick={() => onToggle(run)}
-        className={cn(
-          '-ml-1 mr-1 inline-grid size-6 place-items-center rounded-md align-[-0.4em] transition-colors hover:bg-surface-hover focus-ring',
-          on ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
-        )}
-      >
-        <Star className={cn('size-4', on && 'fill-current')} aria-hidden />
-      </button>
-    </Hint>
-  )
-}
 
 /** Whether a listed run can be believed, check by check: the badge says it, its hint and its page say why. */
 function VerdictCell({ run, judged, judges }: { run: BacktestRunListed; judged: Judged | null; judges: BacktestRunListed | null }) {
@@ -111,7 +91,7 @@ function runColumns(
         // Wide enough in the table to read a name on two lines at most: past it, the table scrolls in its frame.
         // Its floor in the table only: a card on a phone is narrower.
         <div className="max-w-96 whitespace-normal [td_&]:min-w-56">
-          <FavouriteStar run={row} onToggle={toggleFavourite} />
+          <FavouriteStar on={Boolean(row.favourite)} name={row.name} onToggle={() => toggleFavourite(row)} className="-ml-1 mr-1 align-[-0.4em]" />
           <Link to={`/backtests/${row.id}`} className="font-medium underline-offset-4 hover:underline">
             {row.name}
           </Link>

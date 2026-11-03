@@ -279,6 +279,11 @@ const TITLES: Record<string, (input: Input) => string> = {
   ops_release: () => 'Read what waits to be deployed',
   show_chart: (input) => `Drew a chart: ${short(input.title)}`,
   set_verdict: (input) => `Said its verdict on ${typeof input.about === 'string' ? verdictSubject(input.about) : '?'}`,
+  describe_script: (input) => {
+    const family = typeof input.family === 'string' && input.family ? short(input.family) : null
+    if (typeof input.how_it_works !== 'string' || !input.how_it_works) return `Set the family of script ${short(input.script_id)}: ${family ?? '?'}`
+    return `Wrote the How it works of script ${short(input.script_id)}${family ? `, its family ${family}` : ''}`
+  },
   propose_action: (input) => `Proposed an action: ${short(input.title)}`,
   propose_new_rule: (input) => `Proposed a new rule: ${short(input.name)}`,
   ask_operator: (input) => `Asked you: ${short(input.question)}`,
@@ -329,6 +334,7 @@ const TYPES: Record<string, ActivityType> = {
   propose_action: 'writing',
   show_chart: 'writing',
   set_verdict: 'writing',
+  describe_script: 'writing',
   ask_operator: 'writing',
   rule_shadow_save: 'writing',
   rule_shadow_remove: 'writing',
@@ -391,6 +397,7 @@ const WRITING: Record<string, string> = {
   ops_release: 'Reading what waits to be deployed',
   show_chart: 'Drawing a chart',
   set_verdict: 'Saying its verdict',
+  describe_script: 'Describing a script',
   propose_action: 'Proposing an action',
   propose_new_rule: 'Proposing a new rule',
   ask_operator: 'Asking you a question',
@@ -734,6 +741,14 @@ export function presetsFor(kind: AgentSubject['kind'] | null, options: { luxalgo
       },
       { label: 'Review it', prompt: "Review this Pine script for bugs, repainting and WATA's rules for scripts. Propose the fixes as a new version." },
       { label: 'Explain it', prompt: 'Explain what this script does: its inputs, which alerts it raises and when.' },
+      {
+        label: 'Write its How it works',
+        prompt: "Read this script with pine_get and write its How it works with describe_script: what it shows, how it decides, what each input changes, which alerts it raises and when, in Markdown, short and exact, from its code alone. Keep what is right in the one it has, if it has one.",
+      },
+      {
+        label: 'Choose its family',
+        prompt: 'Read this script and choose its family with describe_script, in one or two words (Trend, Momentum, Volatility, Breakouts…), one already in use by the other scripts when one fits (pine_list says them).',
+      },
       { label: 'Improve it', prompt: 'Suggest improvements to this script, backtest the most promising against the current version on the recorded days, and propose it if it holds.' },
       ...(luxalgo ? [SIMILAR_IN_LUXALGO] : []),
     ]

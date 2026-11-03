@@ -20,6 +20,7 @@ import threading
 import time
 
 from src.admin.errors import InvalidRequest
+from src.admin.images import image_type
 from src.logging_helper.redaction import MASK, redact
 
 FILE_ID = re.compile(r"^f[0-9a-f]{10}$")
@@ -34,13 +35,7 @@ MAX_STAGED = 10
 # A text file is known by its name.
 TEXT_SUFFIXES = (".csv", ".tsv", ".pine", ".txt", ".json", ".md")
 MAX_NAME = 120
-_SIGNATURES = (
-    (b"\x89PNG\r\n\x1a\n", IMAGE, "image/png"),
-    (b"\xff\xd8\xff", IMAGE, "image/jpeg"),
-    (b"GIF87a", IMAGE, "image/gif"),
-    (b"GIF89a", IMAGE, "image/gif"),
-    (b"%PDF-", PDF, "application/pdf"),
-)
+PDF_SIGNATURE = b"%PDF-"
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -59,11 +54,11 @@ def said_name(name) -> str:
 
 def kind_of(name: str, data: bytes) -> tuple[str, str]:
     """What a file is (an image, a PDF, a text) and its media type, or refused with why."""
-    for signature, kind, media_type in _SIGNATURES:
-        if data.startswith(signature):
-            return kind, media_type
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return IMAGE, "image/webp"
+    media_type = image_type(data)
+    if media_type is not None:
+        return IMAGE, media_type
+    if data.startswith(PDF_SIGNATURE):
+        return PDF, "application/pdf"
     if name.lower().endswith(TEXT_SUFFIXES):
         return TEXT, "text/plain"
     raise InvalidRequest("Attach an image (PNG, JPEG, GIF, WebP), a PDF, or a text file (CSV, TSV, .pine, .txt, "

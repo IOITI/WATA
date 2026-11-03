@@ -126,6 +126,7 @@ import type {
   TaRules,
   TaRuleSaved,
   TaScript,
+  TaScriptHow,
   TaScriptSummary,
   TaSignal,
   TaVersion,
@@ -516,6 +517,27 @@ export const api = {
     request<TaScript>('POST', `/api/ta/scripts/${encodeURIComponent(id)}/duplicate`, { body: { name } }),
   taScriptVersion: (id: string, number: number) =>
     request<TaVersion>('GET', `/api/ta/scripts/${encodeURIComponent(id)}/versions/${number}`),
+  // What the pages say of a script beside its code (src/admin/script_details.py): its star, family, How it works, picture.
+  favouriteTaScripts: (ids: string[], favourite: boolean) =>
+    request<{ changed: string[]; kept: { id: string; reason: string }[] }>('POST', '/api/ta/scripts/favourites', { body: { ids, favourite } }),
+  setTaScriptFamily: (id: string, family: string | null) =>
+    request<TaScript>('PUT', `/api/ta/scripts/${encodeURIComponent(id)}/family`, { body: { family } }),
+  taScriptHow: (id: string) => request<TaScriptHow>('GET', `/api/ta/scripts/${encodeURIComponent(id)}/how-it-works`),
+  /** A new version of its How it works, from the revision read (409 when another was saved meanwhile). */
+  saveTaScriptHow: (id: string, text: string, revision: number) =>
+    request<TaScriptHow>('PUT', `/api/ta/scripts/${encodeURIComponent(id)}/how-it-works`, { body: { text, revision } }),
+  taScriptHowHistory: (id: string) =>
+    request<{ items: TaScriptHow[] }>('GET', `/api/ta/scripts/${encodeURIComponent(id)}/how-it-works/history`),
+  /** Its picture: a PNG, JPEG or WebP image, 2 MB at most. */
+  setTaScriptPicture: (id: string, picture: Blob, name = 'picture') => {
+    const form = new FormData()
+    form.append('file', picture, name)
+    return request<TaScript>('PUT', `/api/ta/scripts/${encodeURIComponent(id)}/picture`, { form })
+  },
+  dropTaScriptPicture: (id: string) => request<void>('DELETE', `/api/ta/scripts/${encodeURIComponent(id)}/picture`),
+  /** LuxAlgo's write-up, family and picture of the indicator a script was taken from; ``replace`` what it has. */
+  takeLuxAlgoDetails: (id: string, replace: boolean) =>
+    request<{ filled: string[]; script: TaScript }>('POST', `/api/ta/scripts/${encodeURIComponent(id)}/from-luxalgo`, { body: { replace } }),
   // The rule check: whether a script can become a signal rule as it is. What its source says is made at once; a run
   // test on recorded bars is asked, and waits for the Pine studies.
   ruleChecks: () => request<RuleChecksListed>('GET', '/api/ta/rule-checks'),

@@ -223,6 +223,9 @@ describe('what can be asked', () => {
     // A script is asked first to be made ready for a signal rule, its rule check read and passed.
     expect(presetsFor('script')[0]).toMatchObject({ label: 'Make it ready for a signal rule' })
     expect(presetsFor('script')[0].prompt).toContain('pine_rule_check')
+    // What it writes of a script is kept on the script's page.
+    expect(presetsFor('script').filter((preset) => preset.prompt.includes('describe_script')).map((preset) => preset.label))
+      .toEqual(['Write its How it works', 'Choose its family'])
     expect(presetsFor(null)).toHaveLength(1)
     // A run's day: looked at first, and what is tried on it held to every day; LuxAlgo's only with its tools.
     const day = presetsFor('run', { day: true })
@@ -414,11 +417,14 @@ describe('the tools of the live trading, the proposals and the tasks, as their s
     expect(stepTitle('set_verdict', { about: 'run:20261030-204011-442342' }))
       .toBe('Said its verdict on run 20261030-204011-442342')
     expect(stepTitle('set_verdict', { about: 'day:2026-10-29' })).toBe('Said its verdict on the day of 2026-10-29')
+    expect(stepTitle('describe_script', { script_id: '0123456789ab', how_it_works: '# Cross', family: 'Trend' }))
+      .toBe('Wrote the How it works of script 0123456789ab, its family Trend')
+    expect(stepTitle('describe_script', { script_id: '0123456789ab', family: 'Trend' })).toBe('Set the family of script 0123456789ab: Trend')
     expect(stepTitle('propose_action', { title: 'Pause new entries' })).toBe('Proposed an action: Pause new entries')
     expect(stepTitle('propose_new_rule', { name: 'Cross 5' })).toBe('Proposed a new rule: Cross 5')
     expect(stepTitle('ask_operator', { question: 'Which days?' })).toBe('Asked you: Which days?')
     for (const tool of ['ops_trading_now', 'ops_changes', 'ops_engine', 'ops_release', 'show_chart', 'set_verdict',
-      'propose_action', 'propose_new_rule', 'ask_operator']) {
+      'describe_script', 'propose_action', 'propose_new_rule', 'ask_operator']) {
       expect(writingTitle(tool)).not.toMatch(/\?|Writing a call/)
     }
   })

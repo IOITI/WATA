@@ -2721,6 +2721,30 @@ export interface TaScriptSummary {
   made_by?: string | null
   /** Where it came from, when it was taken from LuxAlgo's Library or its header says LuxAlgo's. */
   origin?: ScriptOrigin
+  /** What the Indicators pages say of it beside its code (src/admin/script_details.py); absent from an older server. */
+  favourite?: boolean
+  family?: string | null
+  /** Where its picture is loaded from: its own (the API, its version in the address), else LuxAlgo's; null for none. */
+  picture?: string | null
+  /** Whether the picture is its own (else LuxAlgo's, or none). */
+  own_picture?: boolean
+  /** Its How it works, without its text: null while it never had one; size 0 once emptied. */
+  how?: TaScriptHowMeta | null
+}
+
+/** Who wrote a script's How it works, and when: the operator, agent:<conversation>, and where it came from. */
+export interface TaScriptHowMeta {
+  revision: number
+  by: string | null
+  at: string | null
+  /** LuxAlgo's write-up (provider, slug, url), or the script it was copied from. */
+  from: { provider?: 'luxalgo'; slug?: string; url?: string; script?: string } | null
+  size?: number
+}
+
+/** A script's How it works: Markdown, and the revision a change of it starts from. */
+export interface TaScriptHow extends TaScriptHowMeta {
+  text: string
 }
 
 /** Where a script came from (src/admin/script_origins.py): LuxAlgo's Library, under its licence. */

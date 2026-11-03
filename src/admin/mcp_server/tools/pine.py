@@ -22,6 +22,8 @@ from src.research.study import MAX_STUDY_DAYS, bars_of
 
 KINDS = ("", "indicator", "strategy", "library")
 MAX_COMPARED_ROWS = 300
+# The characters of a script's How it works pine_get gives (cut: true past them), beside its source.
+HOW_SAID = 12_000
 FITTED = ("Cut to the 32,000 characters an answer may have: ask for fewer plots (plots), fewer points, "
           "alert_titles, a lower max_alerts or fewer days")
 
@@ -76,7 +78,7 @@ def fitted(answer, limit: int = CONTEXT_CHARS):
     return tried(0, largest(lambda listed: fits(tried(0, listed)), len(alerts)))
 
 
-def _script_line(meta: dict, users: list[str], origin: dict | None = None) -> dict:
+def _script_line(meta: dict, users: list[str], origin: dict | None = None, details: dict | None = None) -> dict:
     line = {
         "id": meta["id"], "name": meta["name"], "kind": meta["kind"], "version": meta["version"],
         "updated_at": meta["updated_at"], "made_by": meta.get("made_by"),
@@ -84,6 +86,9 @@ def _script_line(meta: dict, users: list[str], origin: dict | None = None) -> di
         "imports": [entry["name"] for entry in meta.get("imports") or []],
         "used_by_rules": users,
     }
+    if details is not None:
+        # What the Indicators page says of it: among the operator's favourites, its family.
+        line = {**line, "favourite": details["favourite"], "family": details["family"]}
     # Taken from LuxAlgo's Library, or derived from one of its indicators: its licence goes with it.
     return {**line, "origin": origin} if origin else line
 
@@ -94,36 +99,44 @@ def register(server, research) -> None:
     def loaded():
         rules = research.rules.load()["rules"] if research.rules is not None else []
         scripts = research.scripts.scripts()
-        return scripts, rules, {meta["id"]: research.origin_of(meta["id"], meta["version"]) for meta in scripts}
+        return (scripts, rules, {meta["id"]: research.origin_of(meta["id"], meta["version"]) for meta in scripts},
+                {meta["id"]: research.details_of(meta["id"]) for meta in scripts})
 
     @research_tool(server, calls, name="pine_list", title="Pine scripts", read_only=True)
-    async def pine_list(kind: str = "", made_by: str = "", offset: int = 0, limit: int = DEFAULT_PAGE) -> dict:
+    async def pine_list(kind: str = "", made_by: str = "", family: str = "", offset: int = 0, limit: int = DEFAULT_PAGE) -> dict:
         """The Pine scripts WATA keeps (the Technical Analysis pages' Indicators), the last saved first: id, name,
         kind (indicator, strategy, library), current version, who made it (made_by "claude" for Claude's), the
-        libraries it imports, the signal rules that run it, and where it came from when it was taken from LuxAlgo's
-        Library or made from one of its indicators (origin, with its licence). made_by="claude" lists Claude's own."""
+        libraries it imports, the signal rules that run it, among the operator's favourites or not, its family, and
+        where it came from when it was taken from LuxAlgo's Library or made from one of its indicators (origin, with
+        its licence). made_by="claude" lists Claude's own; family lists one family's (any case)."""
         if kind not in KINDS:
             raise Refused("kind is indicator, strategy or library (or empty for all)")
-        scripts, rules, origins = await run_in_threadpool(loaded)
+        scripts, rules, origins, details = await run_in_threadpool(loaded)
         chosen = [
-            _script_line(meta, rule_users(rules, meta["id"]), origins.get(meta["id"])) for meta in scripts
+            _script_line(meta, rule_users(rules, meta["id"]), origins.get(meta["id"]), details.get(meta["id"]))
+            for meta in scripts
             if (not kind or meta["kind"] == kind) and (not made_by or meta.get("made_by") == made_by)
+            and (not family or ((details.get(meta["id"]) or {}).get("family") or "").casefold() == family.casefold())
         ]
         return compacted(page(chosen, offset, limit))
 
     @research_tool(server, calls, name="pine_get", title="A Pine script's source", read_only=True, export=True)
     async def pine_get(script_id: str, version: int = 0) -> dict:
         """One script: its source (the current version, or ``version``), its versions (when, who saved them), the
-        libraries it imports, the rules that run it and where it came from (origin: LuxAlgo's Library, its licence).
-        A long source is saved to a file on the Mac by Claude Code: read it there."""
+        libraries it imports, the rules that run it, where it came from (origin: LuxAlgo's Library, its licence), its
+        family, and its How it works (how_it_works: the Markdown the Indicators page shows, the revision a change of it
+        starts from, who wrote it). A long source is saved to a file on the Mac by Claude Code: read it there."""
         def read():
             meta = research.scripts.script(script_id)
             number = version or meta["version"]
             source = meta["source"] if number == meta["version"] else research.scripts.version(script_id, number)["source"]
             rules = research.rules.load()["rules"] if research.rules is not None else []
-            return meta, number, source, rule_users(rules, script_id), research.origin_of(script_id, number, lambda: source)
+            found = research.details_of(script_id)
+            how = research.details.how(script_id) if found is not None else None
+            return (meta, number, source, rule_users(rules, script_id), research.origin_of(script_id, number, lambda: source),
+                    found, how)
 
-        meta, number, source, users, origin = await run_in_threadpool(read)
+        meta, number, source, users, origin, details, how = await run_in_threadpool(read)
         checked = None
         if research.rule_checks is not None and meta.get("kind") != "library":
             try:
@@ -131,10 +144,17 @@ def register(server, research) -> None:
                 checked = said_rule_check(found) if found else None
             except NotPossible:
                 checked = None
+        said_how = None
+        if details is not None:
+            revision = (details["how"] or {}).get("revision", 0)
+            said_how = ({"text": how["text"][:HOW_SAID], "cut": len(how["text"]) > HOW_SAID, "revision": how["revision"],
+                         "by": how.get("by"), "at": how.get("at"), "from": how.get("from")}
+                        if how is not None else {"text": "", "revision": revision})
         return compacted({
-            **_script_line(meta, users, origin),
+            **_script_line(meta, users, origin, details),
             # Whether this version can become a signal rule as it is: pine_rule_check says more, and tests it.
             "rule_check": checked,
+            **({"how_it_works": said_how, "picture": details["picture"]} if details is not None else {}),
             "description": meta.get("description") or "",
             "pine_version": meta.get("pine_version"),
             "library_name": meta.get("library_name"),

@@ -133,6 +133,9 @@ class ResearchServices:
     release: Callable[[], dict | None] | None = None
     # Where each script came from (src/admin/script_origins.py: LuxAlgo's Library), read here.
     origins: Any = None
+    # What the pages say of each script beside its code (src/admin/script_details.py): read here; the AI agent writes
+    # a family and a How it works (describe_script), the endpoint never.
+    details: Any = None
     # Whether each script can become a signal rule as it is (src/admin/rule_checks.py): read, and run tests kept.
     rule_checks: Any = None
     clock: Callable[[], float] = field(default=time.time)
@@ -164,6 +167,7 @@ class ResearchServices:
             memory=getattr(ctx, "agent_memory", None),
             release=ctx.release.summary if getattr(ctx, "release", None) is not None else None,
             origins=getattr(ctx, "script_origins", None),
+            details=getattr(ctx, "script_details", None),
             rule_checks=getattr(ctx, "rule_checks", None),
         )
 
@@ -180,6 +184,18 @@ class ResearchServices:
         if self.origins is None or self.scripts is None:
             return None
         return self.origins.of(script_id, version, source or (lambda: self.scripts.source(script_id, version)))
+
+    def details_of(self, script_id: str) -> dict | None:
+        """A script's star, family and How it works (without its text) and whether it has a picture; None unknown."""
+        if self.details is None:
+            return None
+        try:
+            found = self.details.of(script_id)
+        except Exception:
+            # A script gone meanwhile, or details that cannot be read: listed without them.
+            return None
+        return {"favourite": found["favourite"], "family": found["family"], "how": found["how"],
+                "picture": found["picture"] is not None or found["luxalgo_picture"] is not None}
 
     def now_iso(self) -> str:
         return datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -54,10 +54,13 @@ from src.admin.agent.proposals import ProposalRefused
 from src.admin.agent.store import stamp
 from src.admin.agent_memory import FORGOTTEN, KINDS, MAX_BODY, MAX_DESCRIPTION, NAME, Author, UnknownEntry
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
+from src.admin.script_details import MAX_FAMILY, MAX_HOW
 from src.admin.ta_rules import RuleNotFound
+from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 from src.admin.logs import LEVELS, LOG_SERVICES, MAX_LINES
 from src.admin.mcp_server.gate import CALLER
 from src.admin.mcp_server.tokens import Caller
+from src.logging_helper.redaction import redact
 
 # The research tools the agent may call, in the order it is shown them. Never the tools that remove scripts or runs
 # (pine_delete, backtest_remove), set the lock box, measure the turbo model again, write down trials made elsewhere
@@ -94,6 +97,8 @@ GIVEN_OWN_TOOLS = tuple(name for name in OWN_TOOLS if name != PROPOSE_ACTION)
 # What it shows on the pages: a chart under its answer, its verdict on the thing it concluded about.
 SHOW_CHART = "show_chart"
 SET_VERDICT = "set_verdict"
+# What the Indicators pages say of a script beside its code (src/admin/script_details.py): written at once, its own.
+DESCRIBE_SCRIPT = "describe_script"
 # Its memory's changes, its own: the MCP endpoint only reads the memory.
 MEMORY_SAVE = "memory_save"
 MEMORY_FORGET = "memory_forget"
@@ -428,6 +433,32 @@ VERDICT_DEFINITION = {
             "line": {"type": "string", "minLength": 1, "maxLength": agent_verdicts.MAX_LINE},
         },
         "required": ["about", "tone", "line"],
+        "additionalProperties": False,
+    },
+}
+
+
+DESCRIBE_DEFINITION = {
+    "name": DESCRIBE_SCRIPT,
+    "description": (
+        "Write what the Indicators pages say of one of WATA's Pine scripts beside its code: its family, a short name "
+        "that groups it with the scripts of its kind (as LuxAlgo's Library does: Trend, Momentum, Volatility, Volume & "
+        "Order Flow, Market Structure, Levels, Patterns...; one already in use when one fits, pine_list says them), and "
+        "its How it works, in Markdown: what it computes and from what, its inputs, what each alert and plot means, how "
+        "to read it on a chart, what it cannot see; never a backtest's result, which changes. It is written at once as "
+        "yours, each version kept: the operator sees it on the script's page and can put an earlier one back. Rewrite a "
+        "How it works someone else wrote only when asked, from the revision pine_get gave you (0 while it has none)."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "script_id": {"type": "string", "pattern": "^[0-9a-f]{12}$"},
+            "family": {"type": "string", "maxLength": MAX_FAMILY, "description": "Its family; empty: none."},
+            "how_it_works": {"type": "string", "minLength": 1, "maxLength": MAX_HOW},
+            "revision": {"type": "integer", "minimum": 0, "description": (
+                "The revision of its How it works pine_get gave you (how_it_works.revision): a write from another is "
+                "refused, and you read it again.")},
+        },
+        "required": ["script_id"],
         "additionalProperties": False,
     },
 }
@@ -820,6 +851,8 @@ class AgentTools:
         offered = self._ops.offered() if self._ops is not None else []
         memory = [dict(own) for own in MEMORY_DEFINITIONS] if self._memory is not None else []
         shown = [dict(CHART_DEFINITION)] + ([dict(VERDICT_DEFINITION)] if self._verdicts is not None else [])
+        if getattr(self._research, "details", None) is not None:
+            shown.append(dict(DESCRIBE_DEFINITION))
         actions = [dict(ACTION_DEFINITION)] if self._actions else []
         luxalgo = [dict(own) for own in LUXALGO_DEFINITIONS
                    if own["name"] != LUXALGO_KNOWN or self._luxalgo.known is not None] if self._luxalgo is not None else []
@@ -899,6 +932,8 @@ class ToolSession:
             return self._chart(arguments)
         if name == SET_VERDICT:
             return await self._verdict(arguments, request)
+        if name == DESCRIBE_SCRIPT:
+            return await self._describe(arguments)
         if name in MEMORY_WRITES:
             return await self._remember(name, arguments, request)
         if name in OWN_TOOLS:
@@ -1218,6 +1253,38 @@ class ToolSession:
             at=stamp(self._tools._clock())))
         said = {"set": about, "next": "Its page shows it now: say it in your answer too."}
         return ToolAnswer(json.dumps(said), verdict={key: verdict[key] for key in ("about", "tone", "line")})
+
+    async def _describe(self, arguments: dict) -> ToolAnswer:
+        """A script's family and How it works, written as this conversation's: every version kept, put back by the operator."""
+        research = self._tools._research
+        family, how = arguments.get("family"), arguments.get("how_it_works")
+        if family is None and how is None:
+            return ToolAnswer("Give its family, its How it works, or both", is_error=True)
+        if any(text and redact(text) != text for text in (family, how)):
+            return ToolAnswer("It reads as if it held a secret (a key, a token, an address): leave that out", is_error=True)
+        script_id = arguments["script_id"]
+
+        def write() -> dict:
+            script = research.scripts.script(script_id)
+            said = {"described": script_id, "name": script["name"]}
+            if family is not None:
+                said["family"] = research.details.set_family(script_id, family, self._caller)["family"]
+            if how is not None:
+                saved = research.details.save_how(script_id, how, arguments.get("revision", 0), self._caller)
+                said["how_it_works_revision"] = saved["revision"]
+            return said
+
+        try:
+            said = await run_in_threadpool(write)
+        except ScriptNotFound:
+            return ToolAnswer(f"No script {script_id}: pine_list lists them", is_error=True)
+        except ScriptConflict as e:
+            return ToolAnswer(f"{e} with pine_get, then write from its revision", is_error=True)
+        except InvalidScript as e:
+            return ToolAnswer(str(e), is_error=True)
+        said["next"] = (f"Its page shows it now: [{said['name']}](/ta/indicators/{script_id}?tab=how). Say what you "
+                        "wrote in your answer.")
+        return ToolAnswer(json.dumps(said))
 
     def _ask_operator(self, arguments: dict) -> ToolAnswer:
         if not self._task:

@@ -21,11 +21,14 @@ credential's last characters, a sign-in. The values config.json's journal
 keeps are masked already where they are secrets.
 """
 
+import logging
 import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from starlette.concurrency import run_in_threadpool
+
+logger = logging.getLogger(__name__)
 
 # What one look at the changes covers at most, and the lines it gives.
 CHANGES_MAX_HOURS = 168
@@ -222,7 +225,16 @@ def luxalgo_reads(ctx):
 
     async def keep(script_id: str, found: dict, by: str) -> dict:
         origin = luxalgo_origin(found, by, time.time())
-        return await run_in_threadpool(ctx.script_origins.record, script_id, origin)
+        kept = await run_in_threadpool(ctx.script_origins.record, script_id, origin)
+        if getattr(ctx, "script_details", None) is not None:
+            from src.admin.script_details import from_luxalgo
+
+            # LuxAlgo's write-up as its How it works, its family and its picture: the script is kept whatever LuxAlgo answers.
+            try:
+                await from_luxalgo(ctx.script_details, ctx.luxalgo, script_id, found["slug"], by)
+            except Exception as e:
+                logger.warning("LuxAlgo's write-up of %s was not kept with its script: %s", found.get("slug"), e)
+        return kept
 
     async def source(slug: str) -> dict:
         found = await ctx.luxalgo.source(slug)

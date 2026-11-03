@@ -122,6 +122,24 @@ def test_an_indicator_becomes_the_operators_script_its_origin_kept(setup):
     assert len(client.get("/api/luxalgo/indicators/made-up").json()["known"]["scripts"]) == 2
 
 
+def test_an_indicator_taken_comes_with_luxalgos_write_up_and_family(setup):
+    from src.admin.script_details import ScriptDetails
+
+    client, ctx, fake = setup
+    ctx.script_details = ScriptDetails(ctx.ta_scripts)
+
+    made = client.post("/api/luxalgo/indicators/made-up/import", json={}, headers=SAME_ORIGIN).json()
+
+    assert made["filled"] == ["how", "family"]
+    script_id = made["id"]
+    assert ctx.script_details.how(script_id)["text"] == "**Made up**."
+    assert ctx.script_details.how(script_id)["from"]["slug"] == "made-up"
+    assert client.get(f"/api/ta/scripts/{script_id}").json()["family"] == "Trend"
+    # Taken again from its page, replacing what it has: a new version of its How it works.
+    again = client.post(f"/api/ta/scripts/{script_id}/from-luxalgo", json={"replace": True}, headers=SAME_ORIGIN).json()
+    assert again["filled"] == ["how", "family"] and again["script"]["how"]["revision"] == 2
+
+
 def test_a_part_of_a_source_is_never_imported(setup):
     client, ctx, fake = setup
     fake.whole = False
