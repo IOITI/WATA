@@ -2,7 +2,7 @@
 
 ## v0.81.0 - Indicators: favourites, families, How it works, a live chart, pictures
 
-**Release date:** not released
+**Release date:** 2026-11-03
 
 Technical Analysis › Indicators now works like LuxAlgo's Library for WATA's own scripts.
 - **Favourites**: a star on each script (in the list, its cards and its page) and the list narrowed to them, in its address (`?favourite=yes`), as the backtests have.
@@ -38,7 +38,7 @@ Technical Analysis › Indicators now works like LuxAlgo's Library for WATA's ow
 
 ## v0.80.0 - The TA engine keeps its rules' runs, and says when it cannot
 
-**Release date:** not released
+**Release date:** 2026-11-03
 
 Most afternoons since late October, the Engine monitor's tick time climbed to about 10 s, signals came up to 25 s after their bar, and the feed looked behind (3 Nov: from 17:52 Paris). The two shadow rules had left their continued runs: their runner's heap guard, measured at a check, counted the checked rule twice (its continued run and the whole run that checks it), against a share meant for the runs held alone, of a 256 MB heap. From then on each new R60 bar ran each script over all its ~9,000 bars (4.4 s and 5.8 s), until the daily restart. In production: 29 Oct 19:22 UTC, 30 Oct 13:45 and 17:19, 3 Nov 04:18 and 16:52, every check before them the same as a whole run.
 - **The Pine runner measures each run it holds**: at its load (the heap before it, then with it) and at each check (both runs held, then once the old one is let go). The runs held, with the largest of them again (what its next check holds), stay within 60 % of the heap; past it, the largest goes back to whole runs, its answers saying `heap: true`. A reload lets go of the rule's old run first.
