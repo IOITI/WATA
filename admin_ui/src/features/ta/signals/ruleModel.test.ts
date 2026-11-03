@@ -18,6 +18,7 @@ import {
   ruleDraftOfRun,
   ruleFields,
   updatesOf,
+  wholeLine,
 } from './ruleModel'
 
 function rule(changes: Partial<TaRule> = {}): TaRule {
@@ -257,5 +258,21 @@ describe('the comparison on the chart', () => {
       ['TV long', 'belowBar', 'arrowUp', 'neutral'],
       ['WATA short', 'aboveBar', 'arrowDown', 'warning'],
     ])
+  })
+})
+
+describe('how the engine runs a rule\'s new bars', () => {
+  it('says since when its run was let go and the heap that would hold it, or its script\'s own reason, or nothing', () => {
+    const why = "the runner's heap would be 72 % full at its next check, past the 60 % it may be at holding runs"
+
+    expect(wholeLine({ continued: false, whole: why, whole_since: '2026-11-03T16:52:51+00:00', whole_for: 'heap', runner: 'shadow' }, 'Europe/Paris')).toEqual({
+      text: `Each new bar runs it whole since 03 Nov, 17:52, until the daily restart: ${why}. A larger heap for its runner holds its run: `
+        + "trade.config.ta_engine.shadow_runner_memory_mb, read at the engine's start.",
+      letGo: true,
+    })
+    expect(wholeLine({ whole: 'a whole run differed from its continued run: x', whole_since: '2026-11-03T16:52:51+00:00', whole_for: 'differed', runner: 'live' }, 'UTC'))
+      .toEqual({ text: 'Each new bar runs it whole since 03 Nov, 16:52, until the daily restart: a whole run differed from its continued run: x.', letGo: true })
+    expect(wholeLine({ whole: 'its script reads barstate.islast' }, 'UTC')).toEqual({ text: 'Each new bar runs it whole: its script reads barstate.islast.', letGo: false })
+    expect(wholeLine({ continued: true, whole: null }, 'UTC')).toBeNull()
   })
 })

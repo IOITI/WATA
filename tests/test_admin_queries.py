@@ -611,13 +611,17 @@ def test_a_period_is_read_by_bar_of_time_and_narrowed_to_one_rule_in_every_state
         start, end, 600, "0123456789ab", signal_age_seconds=60, slow_tick_ms=10_000,
     ))
 
-    ticks, runs, signals_by_bucket, rules, deferred, checks, signals, delivery, trader, results, kept = db.calls
+    ticks, runs, signals_by_bucket, rules, deferred, checks, left_continued, signals, delivery, trader, results, kept = db.calls
     assert "date_bin($3::interval, tick_at, TIMESTAMPTZ '2000-01-01 00:00:00+00')" in ticks[0]
     assert ticks[1] == (start, end, timedelta(seconds=600), 10_000)
     assert "count(*) FILTER (WHERE kind = 'append' AND figures->>'continued' = 'true') AS continued" in rules[0]
     # Every statement but the ticks' (and the oldest tick's) is narrowed to the rule, as its last argument.
-    for query, args in (runs, signals_by_bucket, rules, deferred, checks, signals, delivery, trader, results):
+    for query, args in (runs, signals_by_bucket, rules, deferred, checks, left_continued, signals, delivery, trader, results):
         assert args[-1] == "0123456789ab" and f"= ${len(args)}" in query
+    # The moments a rule's run was let go, from its runs and from its checks: both narrowed to the rule.
+    assert left_continued[1][2:] == ("0123456789ab", "0123456789ab")
+    assert "figures ? 'left_continued' AND rule_id = $3" in left_continued[0]
+    assert "c ? 'left_continued' AND c->>'rule_id' = $4" in left_continued[0]
     assert signals_by_bucket[1][3] == CLOSE_WITH_ENTRY and signals[1][2] == 60.0
     assert "LEFT JOIN ta_rule_run r ON r.rule_id = s.rule_id AND r.tick_at = s.raised_at" in delivery[0]
     for key, _, _ in DELIVERY_STEPS:

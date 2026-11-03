@@ -27,8 +27,10 @@ run over all of the rule's bars. Such a run is run whole and compared now and
 then, at the end of a tick that has the time for it (``CHECK_SECONDS``, the
 first time at its first new bar): one that differs runs whole at each new bar
 from then on, as does every rule of a runner that ended while it held some,
-until the next restart_time. A rule whose run cannot continue is run whole at
-each new bar, over all of its bars.
+until the next restart_time, and one whose run its runner let go for its heap
+(runnerCore.ts). Each is said once on Telegram, and the moment marked on its
+measure for the Engine monitor. A rule whose run cannot continue is run whole
+at each new bar, over all of its bars.
 
 Before anything is sent: the rule is live in rules.json as it is now, alone on
 its indice; the action is long, short or close-position; the bar closed less
@@ -67,6 +69,7 @@ from src.ta_engine.bars import RangeBars, TimeBars
 from src.ta_engine.monitoring import APPEND, LOAD, RUN_ENDED, RUN_FAILED, CheckMark, Monitoring, RunMark, TickMark
 from src.ta_engine.rules import EngineRule, RulesSnapshot
 from src.ta_engine.runner import RunnerDown, RunnerFailed
+from src.ta_engine.settings import SECTION
 from src.ta_engine.signals import Candidate, interpret, payload, settled
 from src.ta_engine.tickers import parse_ticker
 from src.trade.signal_sources import ENGINE, source_of
@@ -92,6 +95,11 @@ AGENT_NOTIFY_EVERY_SECONDS = 86_400
 MESSAGE_CHARACTERS = 2000
 
 LOADING, WAITING, RUNNING, ERROR = "loading", "waiting", "running", "error"
+
+# Why a rule's new bars stopped continuing its run: its runner's heap (a larger one holds it), a whole run that gave
+# otherwise or failed where it went on, or the runner without a reason. In its state's figures and on the measure of
+# the moment (``left_continued``), which the admin's Engine monitor shows (src/admin/ta_monitor.py).
+FOR_HEAP, FOR_DIFFERENCE, FOR_RUNNER = "heap", "differed", "runner"
 
 # Why a live rule's signal is not sent (_refusal, _send), the start of what its journal says: the
 # admin's Engine monitor counts the signals not sent by them (src/admin/ta_monitor.py, tested together).
@@ -154,6 +162,9 @@ class RuleRun:
     unchecked: int = 0
     checks: int = 0
     whole_seconds: float | None = None
+    # When its new bars stopped continuing its run, and why (FOR_HEAP...): none while they continue, or never did.
+    whole_since: float | None = None
+    whole_for: str | None = None
 
 
 @dataclass
@@ -577,11 +588,16 @@ class Engine:
         run.whole = None if run.continued else answer.get("whole") or (None if asked else self._why_whole(run))
         run.checked_at, run.unchecked, run.checks = now, 0, 0
         run.whole_seconds = run.mark.ended_at - run.mark.started_at
+        run.whole_since, run.whole_for = None, None
         self._ran(run, answer, bars)
         logger.info(
             "Rule %s (%s) loaded on %d bars in %d ms; %s.", run.rule.id, run.rule.name, answer.get("bars", 0),
             answer.get("milliseconds", 0), "its new bars continue its run" if run.continued else f"each new bar runs it whole: {run.whole}",
         )
+        if asked and not run.continued and answer.get("heap") is True:
+            # Its runner could not hold its run beside the others: a larger heap would.
+            self._left_continued(run, run.whole, now, FOR_HEAP, run.mark)
+            await self._say_whole(run, now)
 
     def _why_whole(self, run: RuleRun) -> str:
         """Why the engine did not ask a rule's new bars to continue its run."""
@@ -598,16 +614,19 @@ class Engine:
             return
         run.state, run.detail = RUNNING, run.detail if run.state == RUNNING else None
         continued = answer.get("continued") is True
-        if run.continued and not continued:
-            # The runner went back to whole runs (its heap, a check): it says why.
-            run.whole = answer.get("whole") or "the runner runs it whole"
-            logger.warning("Rule %s (%s): each new bar runs it whole from now on: %s.", run.rule.id, run.rule.name, run.whole)
+        left = run.continued and not continued
+        if left:
+            # The runner let its run go (its heap, at another rule's load or check): it says why.
+            self._left_continued(run, answer.get("whole") or "the runner runs it whole", now, self._for(answer), run.mark)
         run.continued = continued
         if continued:
             run.unchecked += len(bars)
         self._ran(run, answer, bars)
         await self._signals(run, answer, bars, now)
         run.mark.done_at = self._clock()
+        if left:
+            # Once its signals are sent: none of them waits for Telegram.
+            await self._say_whole(run, now)
 
     # ── continued runs, checked against a whole run ──
 
@@ -645,7 +664,7 @@ class Engine:
         except RunnerFailed as e:
             mark.ended_with(self._clock(), RUN_FAILED, str(e))
             # The runner runs it whole from now on: its next bar says the failure again, as a whole run's.
-            await self._differed(run, f"a whole run of it failed where its continued run went on: {e}", now)
+            await self._differed(run, f"a whole run of it failed where its continued run went on: {e}", now, mark)
             return
         except RunnerDown as e:
             mark.ended_with(self._clock(), RUN_ENDED, str(e))
@@ -658,19 +677,47 @@ class Engine:
             run.whole_seconds = mark.ended_at - mark.started_at
         if answer.get("same") is False:
             differences = answer.get("differences") or ["no detail"]
-            await self._differed(run, answer.get("whole") or f"a whole run differed from its continued run: {differences[0]}", now)
+            await self._differed(run, answer.get("whole") or f"a whole run differed from its continued run: {differences[0]}", now, mark)
             return
         run.checked_at, run.unchecked = now, 0
         if answer.get("same") is True:
             run.checks += 1
         if answer.get("continued") is not True:
-            # The runner went back to whole runs for its heap: it says why.
-            run.continued, run.whole = False, answer.get("whole") or "the runner runs it whole"
-            logger.warning("Rule %s (%s): each new bar runs it whole from now on: %s.", run.rule.id, run.rule.name, run.whole)
+            # The runner let its run go for its heap: it says why.
+            self._left_continued(run, answer.get("whole") or "the runner runs it whole", now, self._for(answer), mark)
+            await self._say_whole(run, now)
 
-    async def _differed(self, run: RuleRun, why: str, now: float) -> None:
+    @staticmethod
+    def _for(answer: dict) -> str:
+        """Why the runner let a run go, as its answer says."""
+        return FOR_HEAP if answer.get("heap") is True else FOR_RUNNER
+
+    def _left_continued(self, run: RuleRun, why: str, now: float, cause: str, mark: RunMark | CheckMark | None) -> None:
+        """A rule's new bars no longer continue its run: each runs it whole from now on, the moment marked on its measure."""
+        run.continued, run.whole, run.whole_since, run.whole_for = False, why, now, cause
+        if mark is not None:
+            mark.left_continued(why, cause)
+        if cause != FOR_DIFFERENCE:
+            logger.warning("Rule %s (%s): each new bar runs it whole from now on: %s.", run.rule.id, run.rule.name, why)
+
+    async def _say_whole(self, run: RuleRun, now: float) -> None:
+        """Said once: the runner let a rule's run go, each new bar a run over all its bars until the daily restart."""
+        slot = run.slot or self._slot_of(run)
+        setting = "runner_memory_mb" if slot is self._live_slot else "shadow_runner_memory_mb"
+        more = (
+            f" A larger heap for its runner holds it: {SECTION}.{setting}, {getattr(self._settings, setting)} MB now, "
+            "read at the engine's start."
+        ) if run.whole_for == FOR_HEAP else ""
+        await self._say(
+            f"{run.rule.id}:continued",
+            f"⚠️ WATA TA engine, rule {run.rule.name!r}: {run.whole}. Each new bar runs its script whole over its "
+            f"{run.bars:,} bars from now on, slower as they grow, until the daily restart at {self._settings.restart_time} UTC.{more}",
+            now, every=self._every(run),
+        )
+
+    async def _differed(self, run: RuleRun, why: str, now: float, mark: CheckMark | None = None) -> None:
         """A whole run did not give what the rule's continued run gave: whole at each new bar from now on, said once."""
-        run.continued, run.whole = False, why
+        self._left_continued(run, why, now, FOR_DIFFERENCE, mark)
         self._whole[(run.rule.id, run.rule.run_key)] = why
         logger.warning("Rule %s (%s): %s. Each new bar runs it whole until the engine starts again.", run.rule.id, run.rule.name, why)
         await self._say(
@@ -827,6 +874,10 @@ class Engine:
                 "figures": {
                     "milliseconds": run.milliseconds, "continued": run.continued, "whole": run.whole if run.loaded else None,
                     "checks": run.checks,
+                    # Since when, and why, its new bars no longer continue its run; the runner that let it go.
+                    "whole_since": _moment(run.whole_since).isoformat() if run.loaded and run.whole_since is not None else None,
+                    "whole_for": run.whole_for if run.loaded else None,
+                    "runner": (run.slot or self._slot_of(run)).name,
                 },
             })
         for rule_id, why in self._file_errors.items():

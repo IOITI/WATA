@@ -1,5 +1,7 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -291,6 +293,23 @@ function heldContext(target: Runner, rule: string): { alerts: { time: number }[]
   return held.context
 }
 
+/** A held run's context, weakly: taken in a function of its own, so that no frame of the test keeps it. */
+function weakly(target: Runner, rule: string): WeakRef<object> {
+  return new WeakRef(heldContext(target, rule))
+}
+
+/** A heap of 100 MB measured at these shares, one a measure, in order; the last one again once they run out. */
+function measured(...shares: number[]): HeapMeasure {
+  const limit = 100_000_000
+  return () => ({ used: (shares.length > 1 ? (shares.shift() as number) : shares[0]) * limit, limit })
+}
+
+/** A collection of the whole heap, as the runner makes one before it measures (runner.ts). */
+function collector(): () => void {
+  setFlagsFromString('--expose-gc')
+  return runInNewContext('gc') as () => void
+}
+
 describe('continued runs', () => {
   // A whole run at each of the new bars of the runner it is compared with: some seconds.
   it('continue a rule\'s run on each new bar and answer what a whole run over all the bars answers', { timeout: 30_000 }, async () => {
@@ -330,6 +349,8 @@ describe('continued runs', () => {
 
     expect(loaded).toMatchObject({ continued: false, whole: 'its script reads barstate.islast' })
     expect(appended).toMatchObject({ continued: false, whole: 'its script reads barstate.islast' })
+    // Its script's own reason, never the heap's.
+    expect(loaded).not.toHaveProperty('heap')
     expect(result(appended)).toEqual(result(await whole.handle(request)))
     expect(continuing.continuing()).toEqual([])
   })
@@ -376,21 +397,97 @@ describe('continued runs', () => {
     expect(target.continuing()).toEqual([])
   })
 
-  it('go back to whole runs, the largest first, while held runs keep the heap past its share', async () => {
-    const limit = 100_000_000
-    let used = 0.3 * limit
-    const target = runner(nothingElse, () => ({ used, limit }))
+  it('go back to whole runs, the largest first, while the runs held and a check of the largest would pass their share', async () => {
+    // Each held run measured at its load: the heap before it, then with it.
+    const target = runner(nothingElse, measured(0.1, 0.2, 0.2, 0.45))
     ok(await loadMany(target, 'small', tenMinuteBars(150), { continued: true }))
-    used = 0.6 * limit
 
     const large = ok(await loadMany(target, 'large', tenMinuteBars(200), { continued: true }))
     const small = ok(await target.handle({ id: 2, op: 'append', rule: 'small', bars: tenMinuteBars(151).slice(150) }))
 
     expect(large).toMatchObject({
-      continued: false, whole: `the runner's heap was 60 % full, past the ${100 * HELD_HEAP_SHARE} % it may be at holding runs`,
+      continued: false,
+      whole: `the runner's heap would be 70 % full at its next check, past the ${100 * HELD_HEAP_SHARE} % it may be at holding runs`,
+      heap: true,
     })
     expect(small).toMatchObject({ continued: true })
+    expect(small).not.toHaveProperty('heap')
     expect(target.continuing()).toEqual(['small'])
+  })
+
+  it('measure a run again at each check: the heap with both of its runs held, less the heap once the old one is let go', async () => {
+    // Its load (before, with it); a check (both runs, then the new one alone); another check.
+    const target = runner(nothingElse, measured(0.1, 0.3, 0.55, 0.3, 0.65, 0.35))
+    const all = tenMinuteBars(153)
+    ok(await loadMany(target, 'r1', all.slice(0, 150), { continued: true }))
+    ok(await target.handle({ id: 2, op: 'append', rule: 'r1', bars: all.slice(150, 151) }))
+    const kept = ok(await target.handle({ id: 3, op: 'check', rule: 'r1' }))
+    ok(await target.handle({ id: 4, op: 'append', rule: 'r1', bars: all.slice(151, 152) }))
+    const dropped = ok(await target.handle({ id: 5, op: 'check', rule: 'r1' }))
+    const appended = ok(await target.handle({ id: 6, op: 'append', rule: 'r1', bars: all.slice(152, 153) }))
+
+    const why = `the runner's heap would be 65 % full at its next check, past the ${100 * HELD_HEAP_SHARE} % it may be at holding runs`
+    expect(kept).toMatchObject({ same: true, continued: true, whole: null })
+    expect(dropped).toMatchObject({ same: true, continued: false, whole: why, heap: true })
+    expect(appended).toMatchObject({ continued: false, whole: why, heap: true })
+    expect(target.continuing()).toEqual([])
+  })
+
+  it('let the run that takes the most go, whichever rule a check measured', async () => {
+    const target = runner(nothingElse, measured(0.05, 0.15, 0.15, 0.35, 0.68, 0.56))
+    const all = tenMinuteBars(201)
+    ok(await loadMany(target, 'small', all.slice(0, 150), { continued: true }))
+    ok(await loadMany(target, 'large', all.slice(0, 200), { continued: true }))
+    ok(await target.handle({ id: 2, op: 'append', rule: 'small', bars: all.slice(150, 151) }))
+
+    const checked = ok(await target.handle({ id: 3, op: 'check', rule: 'small' }))
+    const large = ok(await target.handle({ id: 4, op: 'append', rule: 'large', bars: all.slice(200, 201) }))
+
+    expect(checked).toMatchObject({ same: true, continued: true })
+    expect(large).toMatchObject({ continued: false, whole: expect.stringContaining('76 % full at its next check'), heap: true })
+    expect(target.continuing()).toEqual(['small'])
+  })
+
+  it('let the run a reload replaces go before the heap is measured', async () => {
+    const collect = collector()
+    let replaced: WeakRef<object> | null = null
+    const gone: boolean[] = []
+    const target = runner(nothingElse, () => {
+      collect()
+      if (replaced) gone.push(replaced.deref() === undefined)
+      return { used: 0, limit: 1 }
+    })
+    const all = tenMinuteBars(160)
+    ok(await loadMany(target, 'r1', all.slice(0, 150), { continued: true }))
+    replaced = weakly(target, 'r1')
+    // A WeakRef keeps its target until the job that made it ends.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    ok(await loadMany(target, 'r1', all, { continued: true }))
+
+    // Gone before the new run is made, and after.
+    expect(gone).toEqual([true, true])
+  })
+
+  it('let the run a check replaces go before the heap is measured again', async () => {
+    const collect = collector()
+    let replaced: WeakRef<object> | null = null
+    let measures = 0
+    const gone: boolean[] = []
+    const target = runner(nothingElse, () => {
+      collect()
+      // The check's second measure alone: a WeakRef read keeps its target until the job ends, and the check's
+      // two measures are of one job.
+      if (replaced && ++measures === 2) gone.push(replaced.deref() === undefined)
+      return { used: 0, limit: 1 }
+    })
+    const all = tenMinuteBars(151)
+    ok(await loadMany(target, 'r1', all.slice(0, 150), { continued: true }))
+    replaced = weakly(target, 'r1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    ok(await target.handle({ id: 2, op: 'append', rule: 'r1', bars: all.slice(150, 151) }))
+    expect(ok(await target.handle({ id: 3, op: 'check', rule: 'r1' }))).toMatchObject({ same: true, continued: true })
+
+    expect(gone).toEqual([true])
   })
 
   it('drop a run a new bar failed in: the engine loads the rule again', async () => {

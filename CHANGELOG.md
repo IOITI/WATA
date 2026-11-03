@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.80.0 - The TA engine keeps its rules' runs, and says when it cannot
+
+**Release date:** not released
+
+Most afternoons since late October, the Engine monitor's tick time climbed to about 10 s, signals came up to 25 s after their bar, and the feed looked behind (3 Nov: from 17:52 Paris). The two shadow rules had left their continued runs: their runner's heap guard, measured at a check, counted the checked rule twice (its continued run and the whole run that checks it), against a share meant for the runs held alone, of a 256 MB heap. From then on each new R60 bar ran each script over all its ~9,000 bars (4.4 s and 5.8 s), until the daily restart. In production: 29 Oct 19:22 UTC, 30 Oct 13:45 and 17:19, 3 Nov 04:18 and 16:52, every check before them the same as a whole run.
+- **The Pine runner measures each run it holds**: at its load (the heap before it, then with it) and at each check (both runs held, then once the old one is let go). The runs held, with the largest of them again (what its next check holds), stay within 60 % of the heap; past it, the largest goes back to whole runs, its answers saying `heap: true`. A reload lets go of the rule's old run first.
+  - Measured on the built runner: a check holding 75 to 78 % of a 512 MB heap ended well, one near 90 % ended the runner. The double count had kept checks far from that edge, so the share is 60 %, not the 80 % first planned.
+  - On a made-up run checked every 500 bars: whole from 15,500 bars instead of 13,500 at 256 MB, from 34,000 instead of 27,500 at 512 MB.
+- **When a rule's run is let go, WATA says so**:
+  - on Telegram, once per rule: for the heap, the setting that holds it (`trade.config.ta_engine.shadow_runner_memory_mb`, or `runner_memory_mb` for the live runner) and its value; a check's difference as before;
+  - on the Engine monitor:
+    - a line under the rule: since when, why, the setting;
+    - a mark on every chart at that moment ("Runs whole from here (its runner's heap): …");
+    - a note in the Now panel for a shadow rule; for a live rule, the "Continued runs as whole runs" check fails, and health says it;
+  - on the Signal rules list and a rule's page: since when its new bars run it whole, in the warning colour.
+- **The help of both runner heaps** on the Configuration page says what they hold.
+- **"Feed behind" while ticks overran** was the ticks starting off their ten-second grid, not the feed. Said here; nothing changed for it.
+- **The tests no longer crash Python on a Mac**: the fake Pine runner of the runner's tests ended by `os.abort()`, each run a crash report and a dialog on macOS (39 since 30 Oct). It is now killed (SIGKILL), and what each signal means is tested on its own.
+
+**On the live path:** nothing of the trading services. Only the TA engine's container (its runner, `engine.py`, `monitoring.py`) and the admin's change; no backtest turns stale (all outside `_CODE`). The new figures go into the JSON columns already there: no schema change.
+
+**For the server:** two Kernel VWAP rules on R60 bars hold about 6 KB a bar each, about 150 MB at 11,000 bars. A shadow runner of 768 MB (`shadow_runner_memory_mb`, set from the Configuration page, applied at the TA engine's restart) holds both on the busiest days.
+
+**Verification status:**
+- Tests:
+  - the runner: measured sizes, a check's peak, the largest let go whichever rule was checked, `heap: true`; and, with a real collection, that a reload's and a check's old run are out of reach when the heap is measured (both failed on v0.79.0);
+  - the engine: a run let go at an append, at a check and at its load, said once with the setting; a script that never continues says nothing; the moment on its measure; its state's figures;
+  - the admin: the Now panel's note, a live rule's failed check and health, the period's marks and rules, the routes, the query's text;
+  - the pages: the line, the legend, the rule pages' line.
+- Whole suites: 3,910 Python tests passed (13 skipped), 1,420 interface tests, lint and typecheck clean.
+- The new query on a real PostgreSQL 16 (pgserver): rows written by the engine's own writer, read back by `ta_monitor_period`, for every rule and one.
+- The built runner (Node 24) on made-up runs at 128 to 512 MB, v0.79.0's against this one.
+- Seen in the browser pane on the development admin, whose shadow rule on 10 s bars it shows let go two hours before:
+  - the line under the rule, the Now panel's note in the trading time zone, the marks and the legend;
+  - the Signal rules list and the rule's page;
+  - at 375 px.
+- Not yet on the server.
+
 ## v0.79.0 - The AI agent looks at a day
 
 **Release date:** 2026-11-03

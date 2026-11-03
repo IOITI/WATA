@@ -14,6 +14,7 @@ from src.ta_engine.monitoring import (
     LOAD,
     MAX_WAITING_TICKS,
     RUN_FAILED,
+    CheckMark,
     Monitoring,
     RunMark,
     TickMark,
@@ -94,6 +95,20 @@ def test_a_run_that_failed_keeps_why_and_a_clock_that_stepped_back_gives_no_nega
 
     assert (row["outcome"], len(row["detail"]), row["milliseconds"]) == ("failed", DETAIL_CHARACTERS, 0)
     assert row["done_at"] == row["ended_at"] == moment(T + 0.5) and row["bar_closed_at"] is None and row["pinets_ms"] is None
+
+
+def test_the_moment_a_rules_run_was_let_go_is_on_the_measure_of_its_run_or_its_check_and_on_no_other():
+    run = RunMark(rule_id="0123456789ab", mode="shadow", runner="shadow", kind=APPEND, tick_at=T, started_at=T,
+                  bars_given=1, bar_closed_at=T - 1)
+    check = CheckMark(rule_id="0123456789ab", mode="shadow", runner="shadow", started_at=T)
+    untouched = CheckMark(rule_id="0123456789ab", mode="shadow", runner="shadow", started_at=T)
+
+    run.left_continued("the runner's heap would be 72 % full at its next check" + "." * 2000, "heap")
+    check.left_continued("a whole run differed from its continued run: x", "differed")
+
+    assert run.row()["figures"]["cause"] == "heap" and len(run.row()["figures"]["left_continued"]) == DETAIL_CHARACTERS
+    assert (check.figure()["left_continued"], check.figure()["cause"]) == ("a whole run differed from its continued run: x", "differed")
+    assert "left_continued" not in untouched.figure() and "cause" not in untouched.figure()
 
 
 def test_a_ticks_row_counts_its_runs_and_takes_the_memory_read_as_it_ended():

@@ -31,6 +31,7 @@ from src.ta_engine.bars import RangeBars, TimeBars, bucket_end  # noqa: E402
 from src.ta_engine.engine import CHECK_SECONDS, NOT_SOURCE, Engine  # noqa: E402
 from src.ta_engine.monitoring import Monitoring  # noqa: E402
 from src.ta_engine.rules import read_rules  # noqa: E402
+from src.price_history.process import exit_said  # noqa: E402
 from src.ta_engine.runner import NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command  # noqa: E402
 from src.ta_engine.sender import Sent  # noqa: E402
 from src.ta_engine.settings import TaEngineSettings  # noqa: E402
@@ -336,7 +337,7 @@ def test_wata_stamps_its_signals_with_the_bars_close_in_whole_seconds():
 # ── the runner's protocol, with a stand-in for Node ──
 
 FAKE_RUNNER = textwrap.dedent("""
-    import json, os, sys, time
+    import json, os, signal, sys, time
     for line in sys.stdin:
         message = json.loads(line)
         if "answer" in message:
@@ -355,11 +356,12 @@ FAKE_RUNNER = textwrap.dedent("""
             time.sleep(5)
         elif op == "die":
             sys.exit(3)
-        elif op == "heap":
-            # As Node ends when its heap is full.
-            sys.stderr.write("<--- Last few GCs --->\\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\\n")
+        elif op == "killed":
+            # As the kernel stops a process it runs short of memory for. Never a signal that dumps core (os.abort(),
+            # SIGSEGV...): on a Mac, each is a crash report, and a dialog asking the user about it.
+            sys.stderr.write("Warning: a script's warning\\nThe last thing it wrote\\n")
             sys.stderr.flush()
-            os.abort()
+            os.kill(os.getpid(), signal.SIGKILL)
 """)
 
 
@@ -424,14 +426,21 @@ def test_a_runner_that_dies_says_how_and_its_last_words(fake_runner):
         runner = NodeRunner(fake_runner, answer, timeout_seconds=5)
         await runner.start()
         try:
-            await runner.request({"op": "heap"})
+            await runner.request({"op": "killed"})
         except RunnerDown as e:
             return str(e)
 
     said = asyncio.run(scenario())
 
-    assert said.startswith("The Pine runner ended (exit code -6): aborted (SIGABRT): Node does so when its heap is full.")
-    assert said.endswith("It said: <--- Last few GCs ---> | FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory")
+    assert said.startswith(f"The Pine runner ended (exit code -9): {exit_said(-9)}.")
+    assert said.endswith("It said: Warning: a script's warning | The last thing it wrote")
+
+
+def test_a_childs_end_is_said_by_the_signal_that_stopped_it_or_its_code():
+    assert exit_said(-6) == "aborted (SIGABRT): Node does so when its heap is full"
+    assert exit_said(-9).startswith("stopped by the kernel (SIGKILL), most likely for memory")
+    assert exit_said(-15).startswith("stopped (SIGTERM)")
+    assert [exit_said(-11), exit_said(3), exit_said(None)] == ["stopped by signal 11", "ended with code 3", "it had not ended"]
 
 
 def test_the_shadow_rules_runner_is_the_first_the_kernel_stops(fake_runner, monkeypatch):
@@ -509,6 +518,8 @@ class Runner:
         self.differs = None
         # The rules asked continued runs, and why each runs whole (None: it continues).
         self.modes = {}
+        # The rules whose run their next check lets go, and why: the runner's heap, as runnerCore.ts says it.
+        self.lets_go = {}
 
     async def start(self):
         self.running, self.starts = True, self.starts + 1
@@ -520,7 +531,9 @@ class Runner:
 
     def _mode(self, rule):
         whole = self.modes[rule]
-        return {"continued": whole is None, "whole": whole}
+        # As the runner answers it: a run let go for its heap says so.
+        heap = {"heap": True} if whole is not None and whole.startswith("the runner's heap") else {}
+        return {"continued": whole is None, "whole": whole, **heap}
 
     async def request(self, message):
         self.requests.append(message)
@@ -530,6 +543,8 @@ class Runner:
             return {"ok": True}
         if message["op"] == "check":
             rule = message["rule"]
+            if rule in self.lets_go and self.modes.get(rule) is None:
+                self.modes[rule] = self.lets_go.pop(rule)
             if self.differs is not None and self.modes.get(rule) is None:
                 self.modes[rule] = f"a whole run differed from its continued run: {self.differs}"
                 return {"ok": True, "op": "check", "bars": 120, "compared": 3, "from": 0, "same": False,
@@ -1525,7 +1540,9 @@ def test_a_rules_new_bars_continue_its_run_which_a_whole_run_checks_at_the_first
     }
     assert [entry["rule_id"] for entry in fourth["figures"]["checks"]] == [rule["id"]]
     [state] = journal.rule_states[-1]
-    assert state["figures"] == {"milliseconds": 3, "continued": True, "whole": None, "checks": 2}
+    assert state["figures"] == {
+        "milliseconds": 3, "continued": True, "whole": None, "checks": 2, "whole_since": None, "whole_for": None, "runner": "live",
+    }
     assert telegram.messages == []
 
 
@@ -1571,6 +1588,9 @@ def test_a_continued_run_a_whole_run_differs_from_runs_whole_from_then_on_and_is
     why = f"a whole run differed from its continued run: {differs}"
     assert ops(runner) == ["load", "append", "check", "append", "load"]
     assert [entry["same"] for entry in journal.ticks[1]["figures"]["checks"]] == [False]
+    # The moment its run was let go, on the check's measure.
+    [check] = journal.ticks[1]["figures"]["checks"]
+    assert (check["left_continued"], check["cause"]) == (why, "differed")
     assert [row["figures"] for row in journal.runs[1:]] == [{"continued": True}, {}, {}]
     assert telegram.messages == [f"⚠️ WATA TA engine, rule 'Cross on US100': {why}. Each new bar runs its script whole from now on."]
     # Loaded again the next day, whole from the start: until the engine starts again.
@@ -1628,6 +1648,77 @@ def test_a_rule_the_runner_puts_back_to_whole_runs_is_no_longer_checked(scripts)
     assert ops(runner) == ["load", "append", "append"]
     [state] = journal.rule_states[-1]
     assert state["figures"]["whole"] == "the runner's heap was 61 % full, past the 50 % it may be at holding runs"
+
+
+HEAP_FULL = "the runner's heap would be 72 % full at its next check, past the 60 % it may be at holding runs"
+
+
+def test_a_run_its_runner_lets_go_for_its_heap_is_said_once_and_its_moment_marked(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts)
+    runner.whole_because = None
+    run(ticked(engine))
+    # Let go at another rule's load or check: its next new bar says so, and the one after says nothing more.
+    runner.modes[rule["id"]] = HEAP_FULL
+    for _ in range(2):
+        new_bars(source, clock, 6)
+        run(ticked(engine))
+
+    left = [row for row in journal.runs if "left_continued" in row["figures"]]
+    assert [(row["kind"], row["figures"]) for row in left] == [("append", {"left_continued": HEAP_FULL, "cause": "heap"})]
+    [state] = journal.rule_states[-1]
+    assert state["figures"]["whole"] == HEAP_FULL
+    assert (state["figures"]["whole_for"], state["figures"]["runner"]) == ("heap", "live")
+    assert state["figures"]["whole_since"] == left[0]["tick_at"].isoformat()
+    [message] = telegram.messages
+    assert message.startswith(f"⚠️ WATA TA engine, rule {rule['name']!r}: {HEAP_FULL}. Each new bar runs its script whole over its ")
+    assert "until the daily restart at 21:15 UTC." in message
+    assert message.endswith(
+        "A larger heap for its runner holds it: trade.config.ta_engine.runner_memory_mb, 512 MB now, read at the engine's start."
+    )
+
+
+def test_a_check_after_which_its_runner_lets_the_run_go_names_the_shadow_runners_heap(scripts):
+    engine, live_rule, shadow_rule, clock, source, live, shadow, sequence, journal, sender, telegram = two_runner_engine(scripts)
+    live.whole_because = shadow.whole_because = None
+    shadow.lets_go[shadow_rule["id"]] = HEAP_FULL
+    run(ticked(engine))
+    for _ in range(2):
+        new_bars(source, clock, 6)
+        run(ticked(engine))
+
+    checks = [entry for tick in journal.ticks for entry in tick["figures"].get("checks", [])]
+    assert [(entry["rule_id"], entry.get("left_continued"), entry.get("cause")) for entry in checks] == [
+        (live_rule["id"], None, None), (shadow_rule["id"], HEAP_FULL, "heap"),
+    ]
+    states = {state["rule_id"]: state["figures"] for state in journal.rule_states[-1]}
+    assert (states[shadow_rule["id"]]["whole_for"], states[shadow_rule["id"]]["runner"]) == ("heap", "shadow")
+    assert states[live_rule["id"]]["whole_since"] is None and states[live_rule["id"]]["continued"] is True
+    [message] = [message for message in telegram.messages if HEAP_FULL in message]
+    assert "trade.config.ta_engine.shadow_runner_memory_mb, 256 MB now" in message
+
+
+def test_a_rule_its_runner_cannot_hold_from_its_load_says_so(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts)
+    runner.whole_because = HEAP_FULL
+    run(ticked(engine))
+
+    [load] = journal.runs
+    assert load["figures"] == {"left_continued": HEAP_FULL, "cause": "heap"}
+    [state] = journal.rule_states[-1]
+    assert state["figures"]["whole_for"] == "heap" and state["figures"]["whole_since"] is not None
+    assert len(telegram.messages) == 1 and HEAP_FULL in telegram.messages[0]
+
+
+def test_a_rule_whose_script_never_continues_is_whole_from_its_load_without_a_word(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts)
+    runner.whole_because = "its script reads barstate.islast"
+    run(ticked(engine))
+
+    [load] = journal.runs
+    assert load["figures"] == {}
+    [state] = journal.rule_states[-1]
+    assert (state["figures"]["whole_for"], state["figures"]["whole_since"]) == (None, None)
+    assert telegram.messages == []
 
 
 def test_one_check_a_tick_the_live_rules_first(scripts):

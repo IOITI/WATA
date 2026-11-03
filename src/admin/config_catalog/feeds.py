@@ -178,13 +178,25 @@ TA_PARAMS = (
         maximum=4096, optional=True, default=512,
         help="The Node heap of the runner of the live rules.",
         readers=("ta_engine",), risk=SERVICE,
-        caveats=("The container has 2,560 MB: a runner holds more than its heap.",),
+        caveats=(
+            "The container has 2,560 MB: a runner holds more than its heap.",
+            "Its rules' runs are held between their bars, and a check holds one of them twice: past 60 % of the heap with them, "
+            "the largest is let go, each of its new bars a whole run over all its bars until the daily restart (the Engine "
+            "monitor and Telegram say when).",
+        ),
     ),
     Param(
         path=f"{TA}.shadow_runner_memory_mb", group="ta", label="Shadow rules' runner heap", kind="int", unit="MB",
         minimum=128, maximum=4096, optional=True, default=256,
         help="The Node heap of the runner of the shadow rules, which never reloads a live rule.",
         readers=("ta_engine",), risk=SERVICE,
+        caveats=(
+            "Its rules' runs are held between their bars, and a check holds one of them twice: past 60 % of the heap with them, "
+            "the largest is let go, each of its new bars a whole run over all its bars until the daily restart (the Engine "
+            "monitor and Telegram say when).",
+            "Two Kernel VWAP rules on R60 bars of US100 hold about 6 KB a bar each, 150 MB at 11,000 bars: 256 MB let "
+            "them go each afternoon (3 Nov 2026).",
+        ),
     ),
     Param(
         path=f"{TA}.shadow_seconds_per_tick", group="ta", label="Shadow rules' time per tick", kind="int", unit="s",

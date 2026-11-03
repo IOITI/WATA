@@ -154,7 +154,7 @@ export function MonitorPage() {
       <QueryState isPending={periodQuery.isPending} error={periodQuery.error} hasData={!!period}>
         {period && (
           <div className={cn('flex flex-col gap-6 transition-opacity', periodQuery.isPlaceholderData && 'opacity-60')}>
-            <RulesPanel period={period} />
+            <RulesPanel period={period} timeZone={timezone} />
             <ChartsPanel period={period} timeZone={timezone} />
             <DeliveryPanel period={period} />
             <ResultsPanel

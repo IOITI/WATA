@@ -18,6 +18,7 @@ import {
   filledBuckets,
   limitInView,
   limitText,
+  marksLegend,
   memoryLines,
   monitorHref,
   periodLabel,
@@ -28,6 +29,7 @@ import {
   stepShares,
   tilesOf,
   toneOf,
+  wholeNowLabel,
   zoneOffset,
 } from './monitorModel'
 
@@ -242,5 +244,33 @@ describe('how a rule\'s new bars were run', () => {
     expect(differedLabel(monitorRule({ differed: 2, last_difference: null }))).toEqual({
       summary: 'A whole run gave otherwise 2 times', detail: 'Each new bar runs it whole since.',
     })
+  })
+
+  it('says since when each new bar runs it whole once its run was let go, and the heap that would hold it', () => {
+    const why = "the runner's heap would be 72 % full at its next check, past the 60 % it may be at holding runs"
+    const heap = monitorRule({
+      whole: {
+        since: '2026-11-03T16:52:51+00:00', why, cause: 'heap', runner: 'shadow',
+        setting: { path: 'trade.config.ta_engine.shadow_runner_memory_mb', mb: 256 },
+      },
+    })
+
+    expect(wholeNowLabel(heap, 'Europe/Paris')).toEqual({
+      summary: "Each new bar runs it whole since 03 Nov, 17:52 (its runner's heap)",
+      detail: "The runner's heap would be 72 % full at its next check, past the 60 % it may be at holding runs. Each new bar is a run "
+        + 'over all its bars, slower as they grow, until the daily restart. A larger heap for its runner holds its run: '
+        + "trade.config.ta_engine.shadow_runner_memory_mb, 256 MB now in the configuration, read at the engine's start.",
+    })
+    const differed = monitorRule({ whole: { since: '2026-11-03T16:52:51+00:00', why: null, cause: 'differed', runner: 'live', setting: null } })
+    expect(wholeNowLabel(differed, 'UTC')).toEqual({
+      summary: 'Each new bar runs it whole since 03 Nov, 16:52 (a whole run gave otherwise)',
+      detail: 'Each new bar is a run over all its bars, slower as they grow, until the daily restart.',
+    })
+    expect([
+      marksLegend([]), marksLegend([{ kind: 'daily_restart' }]), marksLegend([{ kind: 'run_whole' }]),
+      marksLegend([{ kind: 'runner_started' }, { kind: 'run_whole' }]),
+    ]).toEqual([undefined, 'Restarts', 'Rules run whole', 'Restarts, rules run whole'])
+    // Continued, or an older server's answer.
+    expect([wholeNowLabel(monitorRule({ whole: null }), 'UTC'), wholeNowLabel(monitorRule(), 'UTC')]).toEqual([null, null])
   })
 })

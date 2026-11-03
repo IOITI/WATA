@@ -6,6 +6,7 @@ import { formatDateTime, formatNumber, formatSpan, formatWait } from 'ioiti-ui'
 
 import type {
   BacktestPaper,
+  TaMonitorMark,
   TaMonitorNow,
   TaMonitorRecording,
   TaMonitorResult,
@@ -385,6 +386,35 @@ export function checksLabel(rule: Pick<TaMonitorRule, 'continued' | 'checks' | '
   if (rule.checks === 0) return rule.continued === 0 ? null : 'Not checked against a whole run yet'
   const longest = rule.check_ms_max === null ? '' : `, ${formatWait(rule.check_ms_max)} at most`
   return `${formatNumber(rule.checks)} check${rule.checks === 1 ? '' : 's'} against a whole run${longest}`
+}
+
+/** What the dotted lines across the charts are, as their legend names them; none without one. */
+export function marksLegend(marks: readonly Pick<TaMonitorMark, 'kind'>[]): string | undefined {
+  const whole = marks.some((mark) => mark.kind === 'run_whole')
+  const restarts = marks.some((mark) => mark.kind !== 'run_whole')
+  if (whole) return restarts ? 'Restarts, rules run whole' : 'Rules run whole'
+  return restarts ? 'Restarts' : undefined
+}
+
+/** Why a rule's run was let go, as a line under it says it. */
+const WHOLE_FOR = { heap: "its runner's heap", differed: 'a whole run gave otherwise', runner: 'its runner' } as const
+
+/**
+ * That each new bar of a rule runs it whole since its run was let go, over all its bars and slower as they grow,
+ * until the daily restart; for its runner's heap, the setting that would hold it. Null while its run continues,
+ * or never did (a script whose run cannot continue says so in its runs' column).
+ */
+export function wholeNowLabel(rule: Pick<TaMonitorRule, 'whole'>, timeZone: string): { summary: string; detail: string } | null {
+  const whole = rule.whole
+  if (!whole) return null
+  const why = whole.why ? `${whole.why[0].toUpperCase()}${whole.why.slice(1)}. ` : ''
+  const setting = whole.setting
+    ? ` A larger heap for its runner holds its run: ${whole.setting.path}, ${formatNumber(whole.setting.mb)} MB now in the configuration, read at the engine's start.`
+    : ''
+  return {
+    summary: `Each new bar runs it whole since ${formatDateTime(whole.since, timeZone, false)} (${WHOLE_FOR[whole.cause ?? 'runner']})`,
+    detail: `${why}Each new bar is a run over all its bars, slower as they grow, until the daily restart.${setting}`,
+  }
 }
 
 /** That a whole run gave otherwise than a rule's continued run, and what it gave the last time; null when they always agreed. */

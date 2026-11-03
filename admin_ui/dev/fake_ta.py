@@ -100,6 +100,8 @@ def seeded_store(root: str) -> ScriptStore:
 
 # The rule traded on paper: the same id at every start, so that its days and reports, kept with the fake's
 # backtests (var/lib/backtests), are not made again each time.
+# What the engine says of a rule whose run its runner let go for its heap (src/ta_engine/engine.py).
+LET_GO = "the runner's heap would be 64 % full at its next check, past the 60 % it may be at holding runs"
 PAPER_RULE_ID = "00000000a1a1"
 PAPER_RULE_DAYS = 10
 
@@ -272,13 +274,26 @@ class FakeEngine:
                                       "last_alert_at": None, "figures": {}}
                 continue
             last = self.signals(rule_id=rule["id"], limit=1)
+            let_go = self._let_go(rule, now)
             states[rule["id"]] = {
                 "updated_at": now, "state": "running", "detail": None, "mode": rule["mode"],
                 "script_version": rule["script"]["version"], "bars": 1380,
                 "last_bar_time": now.replace(second=0, microsecond=0) - timedelta(minutes=1),
-                "last_alert_at": last[0]["raised_at"] if last else None, "figures": {"milliseconds": 41},
+                "last_alert_at": last[0]["raised_at"] if last else None,
+                "figures": {"milliseconds": 41, "continued": True, "whole": None, "runner": "live" if rule["mode"] == LIVE else "shadow"}
+                if let_go is None else {
+                    "milliseconds": 4435, "continued": False, "whole": LET_GO, "whole_since": let_go.isoformat(), "whole_for": "heap",
+                    "runner": "shadow",
+                },
             }
         return states
+
+    def _let_go(self, rule: dict, now: datetime) -> datetime | None:
+        """When its runner let its run go for its heap: the shadow rule on ten-second bars, two hours ago, after the daily restart."""
+        if self._seconds_of(rule) != 10 or rule["mode"] == LIVE:
+            return None
+        moment = now - timedelta(hours=2)
+        return moment if moment > now - timedelta(hours=_hours_since_restart(now)) else None
 
     # ── what the engine measured of itself: the Engine monitor (AdminQueries' shapes) ──
 
@@ -442,6 +457,10 @@ class FakeEngine:
             "signals": [{"rule_id": rule_id_, "mode": mode, "outcome": outcome, "detail": detail, "signals": count, "late": 0}
                         for (rule_id_, mode, outcome, detail), count in signals.items()],
             "steps": _steps(live_sent), "trader": _trader(live_sent), "results": _results(live_sent),
+            "left_continued": [
+                {"rule_id": rule["id"], "at": at, "why": LET_GO, "cause": "heap"}
+                for rule in on if (at := self._let_go(rule, now)) is not None and start <= at < end
+            ],
         }
 
 

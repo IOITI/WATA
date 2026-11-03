@@ -70,6 +70,17 @@ def states(found):
     return {check["id"]: check["state"] for check in found}
 
 
+HEAP_FULL = "the runner's heap would be 72 % full at its next check, past the 60 % it may be at holding runs"
+
+
+def rule_state(mode="shadow", runner="shadow", cause="heap", since="2026-10-22T11:52:51+00:00", whole=HEAP_FULL, continued=False):
+    """A rule's row of ta_rule_state as the engine writes it (src/ta_engine/engine.py, rule_states)."""
+    return {"mode": mode, "state": "running", "figures": {
+        "milliseconds": 5775, "continued": continued, "whole": whole, "checks": 3, "whole_since": since, "whole_for": cause,
+        "runner": runner,
+    }}
+
+
 # ── periods and limits ──
 
 
@@ -239,6 +250,34 @@ def test_a_live_rules_continued_run_a_whole_run_gave_otherwise_fails_a_shadow_ru
     assert states(unchecked)["continued"] == "open"
 
 
+def test_a_live_rule_whose_run_was_let_go_fails_its_check_a_shadow_ones_is_a_note_naming_the_heap_to_raise():
+    shadow = {SHADOW_RULE: rule_state()}
+    live = {LIVE_RULE: rule_state("live", "live")}
+    # Continued, or whole by its script's nature from its load: nothing to say.
+    quiet = {LIVE_RULE: rule_state("live", "live", since=None, cause=None, continued=True),
+             SHADOW_RULE: rule_state(since=None, cause=None, whole="its script reads barstate.islast")}
+
+    assert states(checks(recent(), SETTINGS, RULES, shadow))["continued"] == "pass"
+    assert notes(recent(), SETTINGS, RULES, states=shadow) == [
+        f"“Claude · cross” runs whole at each new bar since 22 Oct 11:52 UTC ({HEAP_FULL}), until the daily restart at 21:15 UTC. "
+        "A larger heap for its runner holds its run: trade.config.ta_engine.shadow_runner_memory_mb, 256 MB in the configuration, "
+        "read at the engine's start."
+    ]
+    found = checks(recent(), SETTINGS, RULES, live)
+    assert states(found)["continued"] == "fail"
+    # Its moment in the trading time zone, as the page says the others.
+    assert health_warning(checks(recent(), SETTINGS, RULES, live, "Europe/Paris")).startswith(
+        "“Live cross” runs whole at each new bar since 22 Oct 13:52 CEST",
+    )
+    assert health_warning(found).startswith("“Live cross” runs whole at each new bar since 22 Oct 11:52 UTC")
+    assert "trade.config.ta_engine.runner_memory_mb, 512 MB" in health_warning(found)
+    assert notes(recent(), SETTINGS, RULES, states=live) == []
+    # A whole run that gave otherwise names no heap.
+    differed = checks(recent(), SETTINGS, RULES, {LIVE_RULE: rule_state("live", "live", cause="differed", whole="a whole run differed")})
+    assert "heap" not in health_warning(differed)
+    assert states(checks(recent(), SETTINGS, RULES, quiet))["continued"] == "pass" and notes(recent(), SETTINGS, RULES, states=quiet) == []
+
+
 def test_health_says_the_first_failed_check_and_how_many_more():
     found = checks(recent(ticks={"slow_ticks": 4, "feed_lag_max_ms": 80_000.0}), SETTINGS, RULES)
 
@@ -336,6 +375,34 @@ def test_the_charts_mark_the_daily_restart_a_runner_started_again_and_the_engine
     assert [(mark["t"], mark["kind"]) for mark in _marks(points)] == [(600, "runner_started"), (1200, "daily_restart"), (1800, "engine_started")]
 
 
+def test_a_period_marks_when_a_rules_run_was_let_go_and_says_how_each_rule_runs_now():
+    at = datetime(2026, 10, 22, 9, 52, 51, tzinfo=timezone.utc)
+    earlier = at - timedelta(hours=3)
+    rows = {"left_continued": [
+        {"rule_id": SHADOW_RULE, "at": earlier, "why": "a whole run differed from its continued run: x", "cause": "differed"},
+        {"rule_id": SHADOW_RULE, "at": at, "why": HEAP_FULL, "cause": "heap"},
+    ]}
+
+    answer = period_answer(hours=24, days=7, bucket=600, start=NOW - timedelta(hours=24), end=NOW, rule_id=None, state=None,
+                           settings=SETTINGS, mcp_limits=McpLimits(), rows=rows, rules=RULES,
+                           states={SHADOW_RULE: rule_state(since=at.isoformat())})
+
+    marks = answer["series"]["marks"]
+    assert [(mark["t"], mark["kind"]) for mark in marks] == [
+        (int(earlier.timestamp()) // 600 * 600, "run_whole"), (int(at.timestamp()) // 600 * 600, "run_whole"),
+    ]
+    assert [mark["label"] for mark in marks] == [
+        "Runs whole from here (a whole run gave otherwise): “Claude · cross”", "Runs whole from here (its runner's heap): “Claude · cross”",
+    ]
+    entries = {entry["rule_id"]: entry for entry in answer["rules"]}
+    assert entries[SHADOW_RULE]["left_continued"] == {"at": at.isoformat(), "why": HEAP_FULL, "cause": "heap"}
+    assert entries[SHADOW_RULE]["whole"] == {
+        "since": at.isoformat(), "why": HEAP_FULL, "cause": "heap", "runner": "shadow",
+        "setting": {"path": "trade.config.ta_engine.shadow_runner_memory_mb", "mb": 256},
+    }
+    assert (entries[LIVE_RULE]["whole"], entries[LIVE_RULE]["left_continued"]) == (None, None)
+
+
 # ── the routes ──
 
 
@@ -397,6 +464,23 @@ def test_health_warns_of_what_can_cost_a_live_signal_and_the_signal_rules_page_s
     said = "A run of a rule no longer there (aaaaaaaaaaaa) took 16 s, over half of its limit (30 s)."
     assert (services["ta_engine"]["status"], services["ta_engine"]["detail"]) == ("warning", said)
     assert (engine["status"], engine["detail"]) == ("warning", said)
+
+
+def test_the_monitor_and_health_read_how_each_rule_runs_now(api):
+    client, ctx = api
+    _running(ctx)
+    ctx.queries.ta_monitor_recent_rows = recent()
+    ctx.queries.ta_monitor_period_rows = {"rules": [{"rule_id": "aaaaaaaaaaaa", "runs": 12}]}
+    ctx.queries.ta_rules = {"aaaaaaaaaaaa": rule_state("live", "live")}
+
+    services = {service["id"]: service for service in client.get("/api/system/health").json()["services"]}
+    now = client.get("/api/ta/monitor/now").json()
+    period = client.get("/api/ta/monitor?hours=24").json()
+
+    said = services["ta_engine"]["detail"]
+    assert services["ta_engine"]["status"] == "warning" and said.startswith("A rule no longer there (aaaaaaaaaaaa) runs whole at each new bar")
+    assert states(now["checks"])["continued"] == "fail"
+    assert {entry["rule_id"]: entry["whole"]["cause"] for entry in period["rules"] if entry["whole"]} == {"aaaaaaaaaaaa": "heap"}
 
 
 def test_a_slow_run_on_the_shadow_runner_leaves_health_as_it_is(api):

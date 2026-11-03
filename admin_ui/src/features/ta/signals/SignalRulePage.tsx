@@ -61,6 +61,7 @@ import { barsLabel, conflictText, ENGINE_STATE, MODE_LABEL, MODE_TONE, mappedAle
 import { firstDay, historyItems, liveSignalsSaid, openingDay, readinessSaid, ruleLayer, steps } from './rulePageModel'
 import { SignalJournal } from './SignalJournal'
 import { useRuleActions } from './useRuleActions'
+import { WholeLine } from './WholeLine'
 
 // Vela only once a day of the rule is drawn.
 const RunDayChart = lazy(() => import('@/features/ta/chart/RunDayChart').then((module) => ({ default: module.RunDayChart })))
@@ -126,9 +127,10 @@ function EngineFacts({ rule, state, timeZone }: { rule: TaRule; state: TaRuleSta
         {
           term: 'Its last run',
           details: figures.milliseconds != null
-            ? `${figures.milliseconds} ms, ${figures.whole ? `run whole over all its bars: ${figures.whole}` : 'its run continued from the bar before'}`
+            ? `${figures.milliseconds} ms, ${figures.whole ? 'run whole over all its bars' : 'its run continued from the bar before'}`
             : 'Not measured yet',
         },
+        ...(figures.whole ? [{ term: 'Its new bars', details: <WholeLine figures={figures} timeZone={timeZone} /> }] : []),
         { term: 'Its last signal', details: state.last_alert_at ? formatDateTime(state.last_alert_at, timeZone) : 'None yet' },
       ]}
     />

@@ -92,6 +92,10 @@ class RunMark:
     def ended_with(self, at: float, outcome: str, detail: str) -> None:
         self.ended_at, self.outcome, self.detail = at, outcome, detail[:DETAIL_CHARACTERS]
 
+    def left_continued(self, why: str, cause: str) -> None:
+        """Its rule's new bars stopped continuing its run here: why, and what made it (the runner's heap, a difference)."""
+        self.figures["left_continued"], self.figures["cause"] = why[:DETAIL_CHARACTERS], cause
+
     def row(self) -> dict:
         """Its row of ta_rule_run."""
         ended = self.ended_at if self.ended_at is not None else self.started_at
@@ -137,6 +141,9 @@ class CheckMark:
     differences: list[str] = field(default_factory=list)
     outcome: str = RUN_OK
     detail: str | None = None
+    # The rule's new bars stopped continuing its run at this check: why, and what made it.
+    left: str | None = None
+    cause: str | None = None
 
     def answered(self, at: float, answer: dict) -> None:
         self.ended_at = at
@@ -151,6 +158,9 @@ class CheckMark:
     def ended_with(self, at: float, outcome: str, detail: str) -> None:
         self.ended_at, self.outcome, self.detail = at, outcome, detail[:DETAIL_CHARACTERS]
 
+    def left_continued(self, why: str, cause: str) -> None:
+        self.left, self.cause = why[:DETAIL_CHARACTERS], cause
+
     def figure(self) -> dict:
         """Its entry in its tick's ``figures.checks``."""
         ended = self.ended_at if self.ended_at is not None else self.started_at
@@ -158,6 +168,7 @@ class CheckMark:
             "rule_id": self.rule_id, "mode": self.mode, "runner": self.runner, "ms": _ms(ended - self.started_at),
             "pinets_ms": self.pinets_ms, "bars": self.bars, "compared": self.compared, "same": self.same,
             "differences": self.differences, "outcome": self.outcome, "detail": self.detail,
+            **({"left_continued": self.left, "cause": self.cause} if self.left is not None else {}),
         }
 
 

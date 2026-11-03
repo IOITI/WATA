@@ -744,8 +744,12 @@ async def engine_now(ctx) -> dict:
     now = datetime.now(timezone.utc)
     state = await ctx.queries.ta_engine_state()
     recent = await ctx.queries.ta_monitor_recent(now - timedelta(minutes=WINDOW_MINUTES), slow_tick_ms=TICK_SECONDS * 1000)
+    states = await ctx.queries.ta_rule_states()
     rules = await run_in_threadpool(rules_by_id, ctx.ta_scripts)
-    return now_answer(state=state, settings=settings, mcp_limits=ctx.settings.mcp_limits, recent=recent, rules=rules, now=now)
+    return now_answer(
+        state=state, settings=settings, mcp_limits=ctx.settings.mcp_limits, recent=recent, rules=rules, now=now, states=states,
+        zone=ctx.settings.timezone,
+    )
 
 
 @router.get("/monitor")
@@ -771,8 +775,9 @@ async def monitor(
     rows = await ctx.queries.ta_monitor_period(
         start, end, bucket, rule, signal_age_seconds=settings.max_signal_age_seconds, slow_tick_ms=TICK_SECONDS * 1000,
     )
+    states = await ctx.queries.ta_rule_states()
     rules = await run_in_threadpool(rules_by_id, ctx.ta_scripts)
     return period_answer(
         hours=hours, days=days, bucket=bucket, start=start, end=end, rule_id=rule, state=state, settings=settings,
-        mcp_limits=ctx.settings.mcp_limits, rows=rows, rules=rules,
+        mcp_limits=ctx.settings.mcp_limits, rows=rows, rules=rules, states=states,
     )

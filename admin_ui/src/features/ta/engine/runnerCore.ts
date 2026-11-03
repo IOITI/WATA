@@ -18,9 +18,11 @@
 // The engine has a continued run checked now and then (`check`): a whole run over
 // the same bars, compared alert by alert and plot by plot over the bars since the
 // last check, whose context the run then goes on from. A difference makes the
-// rule run whole until it is loaded again. A held run keeps its memory: past
-// HELD_HEAP_SHARE of the heap after a load or a check, the largest goes back to
-// whole runs.
+// rule run whole until it is loaded again. A held run keeps its memory, and its
+// check holds it twice (the continued run and the whole run beside it): each
+// held run is measured, at its load and at each check, and the runs held, with
+// the largest of them again, are kept within HELD_HEAP_SHARE of the heap; past
+// it, the largest goes back to whole runs.
 //
 // PineTS's live mode (updateTail) is not used: it runs its last bar again as one
 // not yet closed, after putting back what it can of the state before it. In
@@ -138,6 +140,8 @@ export interface RunMode {
   continued: boolean
   /** Why each new bar runs it whole instead; null while its run continues. */
   whole: string | null
+  /** It runs whole for the runner's heap, which a larger one would hold its run in; absent otherwise. */
+  heap?: true
 }
 
 /** A rule's continued run against a whole run over the same bars. */
@@ -159,10 +163,14 @@ export interface CheckResult extends RunMode {
 /** The differences a check says at most. */
 export const MAX_DIFFERENCES = 5
 /**
- * The share of its heap a runner holding runs may be at after a load or a check (its memory counted after
- * a collection): a whole run beside them, a check's, needs about as much again as the largest of them.
+ * The share of its heap the runs a runner holds may take, with the largest of them again: what the next check
+ * of that run holds (its continued run and a whole run beside it), counted after a collection. The rest is
+ * room for what a run makes and drops, and for the bars added until that check. Measured on the built runner
+ * (2026-11-03): a check that held 75 to 78 % of a 512 MB heap ended well, one near 90 % ended the runner.
  */
-export const HELD_HEAP_SHARE = 0.5
+export const HELD_HEAP_SHARE = 0.6
+
+const percent = (share: number) => Math.round(100 * share)
 
 /** The heap of the runner's process after a collection, and the most its old space may hold, in bytes. */
 export type HeapMeasure = () => { used: number; limit: number } | null
@@ -205,6 +213,10 @@ interface Loaded {
   whole: string | null
   /** The bars a whole run agreed with: a check compares those after. */
   checked: number
+  /** What its held run takes of the heap, in bytes, as last measured (its load, its last check); 0 unmeasured. */
+  size: number
+  /** Its run was let go for the runner's heap. */
+  forHeap: boolean
 }
 
 /**
@@ -377,6 +389,8 @@ export class Runner {
         case 'load': {
           const previous = this.rules.get(request.rule)
           this.rules.delete(request.rule)
+          // Only its compiled script is reused: the run it held goes before the new one is made, and measured.
+          if (previous) previous.held = null
           prepared = await this.prepare(request)
           return await this.load(request, prepared, previous)
         }
@@ -441,11 +455,20 @@ export class Runner {
       held: null,
       whole: continued ? wholeBecause(prepared) : null,
       checked: 0,
+      size: 0,
+      forHeap: false,
     }
-    const result = await this.run(loaded, Number.NEGATIVE_INFINITY, new Set(), request.detail === true, continued && loaded.whole === null)
+    const hold = continued && loaded.whole === null
+    // A run to hold is measured: the heap before it, then with it.
+    const before = hold ? this.heap() : null
+    const result = await this.run(loaded, Number.NEGATIVE_INFINITY, new Set(), request.detail === true, hold)
     loaded.checked = loaded.candles.length
     this.rules.set(request.rule, loaded)
-    if (loaded.held) this.keepWithinHeap()
+    if (loaded.held) {
+      const after = this.heap()
+      if (before !== null && after !== null) loaded.size = Math.max(0, after.used - before.used)
+      this.keepWithinHeap(after)
+    }
     return {
       id: request.id,
       ok: true,
@@ -460,7 +483,8 @@ export class Runner {
   }
 
   private mode(loaded: Loaded): RunMode {
-    return loaded.held ? { continued: true, whole: null } : { continued: false, whole: loaded.whole }
+    if (loaded.held) return { continued: true, whole: null }
+    return loaded.forHeap ? { continued: false, whole: loaded.whole, heap: true } : { continued: false, whole: loaded.whole }
   }
 
   private checkedCandles(rows: BarRow[], after: Candle | null): Candle[] {
@@ -547,15 +571,28 @@ export class Runner {
 
   /**
    * The held run against a whole run over the same bars, at the bars since the last check: the same, the
-   * whole run's context is the one the next bars continue; different, the rule runs whole from now on.
+   * whole run's context is the one the next bars continue; different, the rule runs whole from now on. The
+   * same, its run is measured again: the heap with both runs held, less the heap once the old one is let go.
    */
   private async check(rule: string): Promise<CheckResult> {
     const loaded = this.rules.get(rule)
     if (!loaded) throw new RunnerError(`No rule ${rule} is loaded`)
-    const held = loaded.held
-    if (!held || loaded.checked >= loaded.candles.length) {
+    if (!loaded.held || loaded.checked >= loaded.candles.length) {
       return { bars: loaded.candles.length, compared: 0, from: null, same: null, differences: [], milliseconds: 0, ...this.mode(loaded) }
     }
+    const { figures, peak } = await this.compared(loaded)
+    if (loaded.held) {
+      // Measured here, once compared() has returned: nothing of the old run is left in reach.
+      const after = this.heap()
+      if (peak !== null && after !== null) loaded.size = Math.max(0, peak - after.used)
+      this.keepWithinHeap(after)
+    }
+    return { ...figures, ...this.mode(loaded) }
+  }
+
+  /** A check's comparison, and the heap at its peak, both runs held: the whole run is the one held when they agree. */
+  private async compared(loaded: Loaded): Promise<{ figures: Omit<CheckResult, keyof RunMode>; peak: number | null }> {
+    const held = loaded.held as Held
     const started = performance.now()
     let fresh: Held
     try {
@@ -574,32 +611,48 @@ export class Runner {
       plots: plotValuesAt(context.plots as Record<string, PlotLike>, times, true),
     })
     const differences = differencesOf(answer(held.context), answer(fresh.context))
-    if (differences.length === 0) {
-      loaded.held = fresh
-      loaded.checked = loaded.candles.length
-    } else {
+    const figures = {
+      bars: loaded.candles.length, compared: times.size, from: since, same: differences.length === 0, differences, milliseconds,
+    }
+    if (differences.length > 0) {
       loaded.held = null
       loaded.whole = `a whole run differed from its continued run: ${differences[0]}`
+      return { figures, peak: null }
     }
-    this.keepWithinHeap()
-    return {
-      bars: loaded.candles.length, compared: times.size, from: since, same: differences.length === 0, differences, milliseconds,
-      ...this.mode(loaded),
-    }
+    // What a check of it takes: its continued run and the whole run, both held.
+    const peak = this.heap()?.used ?? null
+    loaded.held = fresh
+    loaded.checked = loaded.candles.length
+    return { figures, peak }
   }
 
-  /** Past HELD_HEAP_SHARE of the heap, the held run of the most bars goes back to whole runs: one at a time. */
-  private keepWithinHeap(): void {
-    const heap = this.heap()
-    if (heap === null || heap.used <= HELD_HEAP_SHARE * heap.limit) return
-    let largest: Loaded | null = null
-    for (const loaded of this.rules.values()) {
-      if (loaded.held && (largest === null || loaded.candles.length > largest.candles.length)) largest = loaded
+  /**
+   * The runs held, with the largest of them again (what its next check holds), within HELD_HEAP_SHARE of the
+   * heap as just measured: past it, the held run that takes the most goes back to whole runs, then the next.
+   */
+  private keepWithinHeap(heap: { used: number; limit: number } | null): void {
+    if (heap === null) return
+    let used = heap.used
+    for (;;) {
+      let largest: Loaded | null = null
+      for (const loaded of this.rules.values()) {
+        if (!loaded.held) continue
+        if (largest === null || loaded.size > largest.size || (loaded.size === largest.size && loaded.candles.length > largest.candles.length)) {
+          largest = loaded
+        }
+      }
+      if (largest === null) return
+      const checking = used + largest.size
+      if (checking <= HELD_HEAP_SHARE * heap.limit) return
+      largest.held = null
+      largest.forHeap = true
+      // To a tenth where a whole percent would read as the limit itself.
+      const share = percent(checking / heap.limit) > percent(HELD_HEAP_SHARE) ? percent(checking / heap.limit) : ((100 * checking) / heap.limit).toFixed(1)
+      largest.whole = `the runner's heap would be ${share} % full at its next check, past the ${percent(HELD_HEAP_SHARE)} % it may be at holding runs`
+      // A run never measured frees nothing that is known: one at a time, the next measure says the rest.
+      if (largest.size === 0) return
+      used -= largest.size
     }
-    if (largest === null) return
-    largest.held = null
-    largest.whole = `the runner's heap was ${Math.round((100 * heap.used) / heap.limit)} % full, `
-      + `past the ${Math.round(100 * HELD_HEAP_SHARE)} % it may be at holding runs`
   }
 
   /** The alerts of the bars from ``since``, once each, in the order of their bars. */

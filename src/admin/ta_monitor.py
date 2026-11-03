@@ -21,9 +21,13 @@ their turn are said on the page alone, as a rule in error is.
 
 import math
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from src.admin.ta_rules import RuleStore, timeframe_seconds
-from src.ta_engine.engine import NO_SENDER, NOT_ALONE, NOT_SOURCE, NOT_TAKEN, STALE_FEED, TICK_SECONDS, TOO_OLD
+from src.ta_engine.engine import (
+    FOR_DIFFERENCE, FOR_HEAP, FOR_RUNNER, NO_SENDER, NOT_ALONE, NOT_SOURCE, NOT_TAKEN, STALE_FEED, TICK_SECONDS, TOO_OLD,
+)
+from src.ta_engine.settings import SECTION
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
 # The minutes the checks look back over: a trouble is said for this long after it ends, never on and off.
@@ -38,6 +42,8 @@ SHARE_OF_LIMIT = 0.5
 SLOW_TICKS = 3
 MEMORY_SHARE = 0.85
 LIVE_RUNNER, SHADOW_RUNNER = "live", "shadow"
+# Why a rule's new bars stopped continuing its run (the engine's FOR_*), as the charts' marks say it.
+WHOLE_FOR = {FOR_HEAP: "its runner's heap", FOR_DIFFERENCE: "a whole run gave otherwise", FOR_RUNNER: "its runner"}
 
 # The steps of a live signal sent, each between two moments the journals keep: its signal (s), the run
 # that raised it (r: its rule's whose tick_at is the signal's raised_at), the trader's journal (j) and
@@ -220,6 +226,47 @@ def _name(rule_id: str, rules: dict) -> str:
     return f"“{rule['name']}”" if rule else f"a rule no longer there ({rule_id})"
 
 
+def _sentence(text: str) -> str:
+    """``text`` as the start of a sentence: a rule no longer there is named in lower case."""
+    return text[:1].upper() + text[1:]
+
+
+def heap_setting(runner: str | None, settings) -> dict:
+    """The heap of a runner: its key in config.json, and its value there (what the engine reads at its start)."""
+    name = "shadow_runner_memory_mb" if runner == SHADOW_RUNNER else "runner_memory_mb"
+    return {"path": f"{SECTION}.{name}", "mb": getattr(settings, name)}
+
+
+def whole_now(state: dict | None, settings) -> dict | None:
+    """
+    Since when, and why, a rule's new bars no longer continue its run, each a whole run over all its bars until
+    the daily restart, as its state says it now (src/ta_engine/engine.py); None while they continue, or never did.
+    """
+    figures = (state or {}).get("figures") or {}
+    if not figures.get("whole_since") or figures.get("continued"):
+        return None
+    cause = figures.get("whole_for")
+    return {
+        "since": figures["whole_since"], "why": figures.get("whole"), "cause": cause, "runner": figures.get("runner"),
+        "setting": heap_setting(figures.get("runner"), settings) if cause == FOR_HEAP else None,
+    }
+
+
+def whole_said(rule_id: str, whole: dict, rules: dict, settings, zone: str = "UTC") -> str:
+    """What the Now panel and health say of a rule ``whole_now`` gives, its moment in ``zone`` (the trading time zone)."""
+    since = datetime.fromisoformat(whole["since"]).astimezone(ZoneInfo(zone)).strftime("%d %b %H:%M %Z")
+    said = (
+        f"{_name(rule_id, rules)} runs whole at each new bar since {since} ({whole.get('why') or 'no reason given'}), "
+        f"until the daily restart at {settings.restart_time} UTC."
+    )
+    if whole.get("setting"):
+        said += (
+            f" A larger heap for its runner holds its run: {whole['setting']['path']}, {whole['setting']['mb']} MB in the "
+            "configuration, read at the engine's start."
+        )
+    return _sentence(said)
+
+
 # ── the checks of the last minutes ──
 
 
@@ -346,11 +393,9 @@ def _memory_check(ticks: dict) -> dict:
     return _check("memory", label, "pass", f"The container used {round(used):,} MB of its {round(limit):,} MB at most.")
 
 
-def _continued_check(found: list[dict], rules: dict) -> dict:
+def _continued_check(found: list[dict], rules: dict, states: dict, settings, zone: str) -> dict:
     label = "Continued runs as whole runs"
     live = [row for row in found if row.get("mode") == "live"]
-    if not live:
-        return _check("continued", label, "open", f"No live rule's continued run was checked in the last {WINDOW_MINUTES} minutes.")
     differed = [row for row in live if row.get("differed")]
     if differed:
         row = differed[0]
@@ -359,12 +404,22 @@ def _continued_check(found: list[dict], rules: dict) -> dict:
             f"({row.get('last_difference') or 'no detail'}): it runs whole at each new bar from now on, "
             "and its signals since its last check were the continued run's."
         ))
+    # A live rule whose run was let go earlier still runs whole: each of its bars a run over all of them.
+    for rule_id, state in states.items():
+        whole = whole_now(state, settings) if state.get("mode") == "live" else None
+        if whole is not None:
+            return _check("continued", label, "fail", whole_said(rule_id, whole, rules, settings, zone))
+    if not live:
+        return _check("continued", label, "open", f"No live rule's continued run was checked in the last {WINDOW_MINUTES} minutes.")
     count = sum(row.get("checks") or 0 for row in live)
     return _check("continued", label, "pass", f"{_plural(count, 'check')} of the live rules' continued runs against a whole run: the same.")
 
 
-def checks(recent: dict, settings, rules: dict) -> list[dict]:
-    """What the last minutes say of what can cost a live signal, in health's order."""
+def checks(recent: dict, settings, rules: dict, states: dict | None = None, zone: str = "UTC") -> list[dict]:
+    """
+    What the last minutes say of what can cost a live signal, in health's order; ``states``: the rules' (ta_rule_state),
+    ``zone`` the time zone a moment is said in.
+    """
     ticks = recent.get("ticks") or {}
     runs = recent.get("runs") or []
     return [
@@ -374,7 +429,7 @@ def checks(recent: dict, settings, rules: dict) -> list[dict]:
         _ticks_check(ticks),
         _feed_check(ticks, settings),
         _memory_check(ticks),
-        _continued_check(recent.get("checks") or [], rules),
+        _continued_check(recent.get("checks") or [], rules, states or {}, settings, zone),
     ]
 
 
@@ -387,9 +442,16 @@ def health_warning(found: list[dict]) -> str | None:
     return failed[0]["detail"] + (f" ({more} more on the Engine monitor)" if more else "")
 
 
-def notes(recent: dict, settings, rules: dict, mcp_limits=None, kept: dict | None = None) -> list[str]:
+def notes(
+    recent: dict, settings, rules: dict, mcp_limits=None, kept: dict | None = None, states: dict | None = None, zone: str = "UTC",
+) -> list[str]:
     """What the page says beside the checks: nothing a live signal waits on."""
     said = []
+    # A shadow rule whose run was let go (a live one fails a check): first, what slows the engine most.
+    for rule_id, state in (states or {}).items():
+        whole = whole_now(state, settings) if state.get("mode") != "live" else None
+        if whole is not None:
+            said.append(whole_said(rule_id, whole, rules, settings, zone))
     runs = recent.get("runs") or []
     for row in runs:
         name = _name(row["rule_id"], rules)
@@ -463,7 +525,10 @@ def _slowest_run(runs: list[dict], rules: dict, settings) -> dict | None:
     }
 
 
-def now_answer(*, state: dict | None, settings, mcp_limits, recent: dict, rules: dict, now: datetime) -> dict:
+def now_answer(
+    *, state: dict | None, settings, mcp_limits, recent: dict, rules: dict, now: datetime, states: dict | None = None,
+    zone: str = "UTC",
+) -> dict:
     """GET /api/ta/monitor/now: the last minutes, their checks and what the page says beside them."""
     ticks = recent.get("ticks") or {}
     runs = recent.get("runs") or []
@@ -501,8 +566,8 @@ def now_answer(*, state: dict | None, settings, mcp_limits, recent: dict, rules:
             ),
         },
         "slowest_run": _slowest_run(runs, rules, settings),
-        "checks": checks(recent, settings, rules),
-        "notes": notes(recent, settings, rules, mcp_limits, kept),
+        "checks": checks(recent, settings, rules, states, zone),
+        "notes": notes(recent, settings, rules, mcp_limits, kept, states, zone),
     }
 
 
@@ -538,7 +603,10 @@ def _checks_of(rows: list[dict]) -> dict[str, dict]:
     return found
 
 
-def _rule_entry(rule_id: str, rule: dict | None, row: dict, settings, deferred: int, signals: dict, checked: dict | None = None) -> dict:
+def _rule_entry(
+    rule_id: str, rule: dict | None, row: dict, settings, deferred: int, signals: dict, checked: dict | None = None,
+    state: dict | None = None, left: dict | None = None,
+) -> dict:
     checked = checked or {}
     return {
         "rule_id": rule_id,
@@ -568,6 +636,11 @@ def _rule_entry(rule_id: str, rule: dict | None, row: dict, settings, deferred: 
         "last_run_at": _iso(row.get("last_run_at")),
         "last_failure": row.get("last_failure"),
         "signals": signals or {"raised": 0, "sent": 0, "not_sent": 0, "shadow": 0},
+        # Each of its new bars a whole run since its run was let go, as it is now; the last time that happened in the period.
+        "whole": whole_now(state, settings),
+        "left_continued": (
+            {"at": _iso(left.get("at")), "why": left.get("why"), "cause": left.get("cause")} if left else None
+        ),
     }
 
 
@@ -587,6 +660,18 @@ def _marks(points: list[dict]) -> list[dict]:
         if started_max is not None:
             before = started_max
     return marks
+
+
+def _whole_marks(rows: list[dict], rules: dict, bucket: int) -> list[dict]:
+    """The moments a rule's new bars stopped continuing its run, at the start of the bar of time each falls in."""
+    return [
+        {
+            "t": int(row["at"].timestamp()) // bucket * bucket, "kind": "run_whole",
+            # What happened first: a mark near the chart's edge is cut there, and a rule's name can be long.
+            "label": f"Runs whole from here ({WHOLE_FOR.get(row.get('cause'), 'its runner')}): {_name(row['rule_id'], rules)}",
+        }
+        for row in rows if row.get("at") is not None
+    ]
 
 
 def _delivery(rows: dict, rule_id: str | None) -> dict:
@@ -652,9 +737,10 @@ def _delivery(rows: dict, rule_id: str | None) -> dict:
 
 def period_answer(
     *, hours: int, days: int, bucket: int, start: datetime, end: datetime, rule_id: str | None, state: dict | None,
-    settings, mcp_limits, rows: dict, rules: dict,
+    settings, mcp_limits, rows: dict, rules: dict, states: dict | None = None,
 ) -> dict:
     """GET /api/ta/monitor: a period of the engine's runs and ticks, its signals' delivery and results."""
+    states = states or {}
     by_rule = {row["rule_id"]: row for row in rows.get("rules") or []}
     deferred = {row["rule_id"]: row.get("ticks") or 0 for row in rows.get("deferred") or []}
     signals = _signal_counts(rows.get("signals") or [])
@@ -668,6 +754,9 @@ def period_answer(
     ticks = [{**point, "feed_lag_p50_ms": _ms(point.get("feed_lag_p50_ms")), "feed_lag_max_ms": _ms(point.get("feed_lag_max_ms")),
               "tick_p50_ms": _ms(point.get("tick_p50_ms"))} for point in rows.get("ticks") or []]
     results = {row["rule_id"]: row for row in rows.get("results") or []}
+    left = rows.get("left_continued") or []
+    # The last time each rule's run was let go in the period (the rows come oldest first).
+    last_left = {row["rule_id"]: row for row in left}
     return {
         "hours": hours,
         "periods": periods(days),
@@ -680,7 +769,7 @@ def period_answer(
         "rules": [
             _rule_entry(
                 entry, rules.get(entry), by_rule.get(entry) or {}, settings, deferred.get(entry, 0), signals.get(entry),
-                checked.get(entry),
+                checked.get(entry), states.get(entry), last_left.get(entry),
             )
             for entry in dict.fromkeys(ids)
         ],
@@ -691,7 +780,7 @@ def period_answer(
                 for point in rows.get("runs_by_bucket") or []
             ],
             "signals": rows.get("signals_by_bucket") or [],
-            "marks": _marks(ticks),
+            "marks": sorted(_marks(ticks) + _whole_marks(left, rules, bucket), key=lambda mark: mark["t"]),
         },
         "delivery": _delivery(rows, rule_id),
         "results": [

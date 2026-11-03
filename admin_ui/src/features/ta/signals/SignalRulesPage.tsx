@@ -45,6 +45,7 @@ import { DeleteRuleDialog } from './DeleteRuleDialog'
 import { RuleDialog } from './RuleDialog'
 import type { RuleDialogStart } from './RuleDialog'
 import { barsLabel, conflictText, ENGINE_STATE, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, rulePath, updatesOf } from './ruleModel'
+import { WholeLine } from './WholeLine'
 import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
 import { useRuleChecks } from '../ruleCheck/useRuleCheck'
@@ -349,7 +350,7 @@ export function SignalRulesPage() {
                 </p>
               )}
               {state.last_alert_at && <p className="text-muted-foreground">Last signal {formatDateTime(state.last_alert_at, timezone, false)}</p>}
-              {state.figures.whole && <p className="text-muted-foreground">Each new bar runs it whole: {state.figures.whole}.</p>}
+              <WholeLine figures={state.figures} timeZone={timezone} />
             </div>
           )
         },

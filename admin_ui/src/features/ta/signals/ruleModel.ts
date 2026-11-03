@@ -1,11 +1,14 @@
 // A signal rule between the page and the admin: the draft its dialog edits, what
 // is saved of it, and what a save changes. Pure, so that it is tested alone.
 
+import { formatDateTime } from 'ioiti-ui'
 import type { IPineInput } from 'pinets'
 
 import type { ChartMarker } from '@/features/prices/chartData'
 import { ApiError } from '@/lib/api'
-import type { BacktestRun, TaAlertAction, TaComparisonRow, TaRule, TaRuleBars, TaRuleFields, TaRuleMode, TaScriptSummary } from '@/lib/types'
+import type {
+  BacktestRun, TaAlertAction, TaComparisonRow, TaRule, TaRuleBars, TaRuleFields, TaRuleMode, TaRuleState, TaScriptSummary,
+} from '@/lib/types'
 
 import { timeframeOf } from '../engine/timeframes'
 
@@ -33,6 +36,29 @@ export const ENGINE_STATE: Record<string, { label: string; tone: 'neutral' | 'su
   running: { label: 'Running', tone: 'success' },
   error: { label: 'Failing', tone: 'danger' },
   off: { label: 'Off', tone: 'neutral' },
+}
+
+/** The heap of each runner of the TA engine (src/ta_engine/settings.py): what holds a run its runner let go. */
+const RUNNER_HEAP = {
+  shadow: 'trade.config.ta_engine.shadow_runner_memory_mb',
+  live: 'trade.config.ta_engine.runner_memory_mb',
+} as const
+
+/**
+ * How the engine runs a rule's new bars when they do not continue its run, as its state says it: since when its
+ * run was let go and why (for its runner's heap, the setting that would hold it), or its script's own reason.
+ * Null while they continue its run. ``letGo``: a run let go, which a page says as a warning.
+ */
+export function wholeLine(figures: TaRuleState['figures'], timeZone: string): { text: string; letGo: boolean } | null {
+  if (!figures.whole) return null
+  if (!figures.whole_since) return { text: `Each new bar runs it whole: ${figures.whole}.`, letGo: false }
+  const heap = figures.whole_for === 'heap'
+    ? ` A larger heap for its runner holds its run: ${figures.runner === 'shadow' ? RUNNER_HEAP.shadow : RUNNER_HEAP.live}, read at the engine's start.`
+    : ''
+  return {
+    text: `Each new bar runs it whole since ${formatDateTime(figures.whole_since, timeZone, false)}, until the daily restart: ${figures.whole}.${heap}`,
+    letGo: true,
+  }
 }
 
 export const MODE_TONE: Record<TaRuleMode, 'neutral' | 'warning' | 'danger'> = {

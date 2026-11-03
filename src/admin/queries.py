@@ -1304,6 +1304,25 @@ class AdminQueries:
             f"WHERE tick_at >= $1 AND tick_at < $2{of_rule} GROUP BY 1, 2, 3 ORDER BY 1, 3",
             *args,
         )
+        # The moments a rule's new bars stopped continuing its run (src/ta_engine/engine.py): on the measure of the
+        # run that found it, or of the check.
+        args = [start, end]
+        of_run = rule("rule_id", args)
+        of_check = rule("c->>'rule_id'", args)
+        left_continued = await self._fetch_optional(
+            f"""
+            SELECT rule_id, tick_at AS at, figures->>'left_continued' AS why, figures->>'cause' AS cause
+            FROM ta_rule_run
+            WHERE tick_at >= $1 AND tick_at < $2 AND figures ? 'left_continued'{of_run}
+            UNION ALL
+            SELECT c->>'rule_id', tick_at, c->>'left_continued', c->>'cause'
+            FROM ta_engine_tick, jsonb_array_elements(figures->'checks') AS c
+            WHERE tick_at >= $1 AND tick_at < $2 AND c ? 'left_continued'{of_check}
+            ORDER BY at
+            LIMIT 200
+            """,
+            *args,
+        )
         args = [start, end, float(signal_age_seconds)]
         signals = await self._fetch_optional(
             f"""
@@ -1379,6 +1398,7 @@ class AdminQueries:
             "rules": [_percentiles(_percentiles(_clean_row(row), "run"), "delay") for row in rules],
             "deferred": [_clean_row(row) for row in deferred],
             "checks": [_clean_row(row) for row in checks],
+            "left_continued": [_clean_row(row) for row in left_continued],
             "signals": [_clean_row(row) for row in signals],
             "steps": [_clean_row(row) for row in delivery],
             "trader": [_clean_row(row) for row in trader],

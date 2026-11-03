@@ -27,11 +27,13 @@ import {
   filledBuckets,
   limitInView,
   limitText,
+  marksLegend,
   memoryLines,
   monitorHref,
   ruleName,
   stepShares,
   toneOf,
+  wholeNowLabel,
 } from './monitorModel'
 import type { ResultRow } from './monitorModel'
 
@@ -62,17 +64,18 @@ function spread(values: { p50: number | null; p95: number | null }): string {
 
 // ── the rules ──
 
-function Differed({ differed }: { differed: { summary: string; detail: string } | null }) {
-  if (!differed) return null
+/** A line that opens on what it says: a whole run that gave otherwise, a run let go. */
+function Warned({ said }: { said: { summary: string; detail: string } | null }) {
+  if (!said) return null
   return (
     <details className="mt-1 text-xs">
-      <summary className="w-fit cursor-pointer select-none text-warning">{differed.summary}</summary>
-      <p className="mt-1 break-words text-muted-foreground">{differed.detail}</p>
+      <summary className="w-fit cursor-pointer select-none text-warning">{said.summary}</summary>
+      <p className="mt-1 break-words text-muted-foreground">{said.detail}</p>
     </details>
   )
 }
 
-export function RulesPanel({ period }: { period: TaMonitor }) {
+export function RulesPanel({ period, timeZone }: { period: TaMonitor; timeZone: string }) {
   const { limits } = period
   const columns = useMemo<ColumnDef<TaMonitorRule>[]>(
     () => [
@@ -91,7 +94,8 @@ export function RulesPanel({ period }: { period: TaMonitor }) {
               {row.mode && <Badge tone={MODE_TONE[row.mode]}>{MODE_LABEL[row.mode]}</Badge>}
               {row.bars && <span>{barsLabel(row.bars)}</span>}
             </p>
-            <Differed differed={differedLabel(row)} />
+            <Warned said={wholeNowLabel(row, timeZone)} />
+            <Warned said={differedLabel(row)} />
           </div>
         ),
       },
@@ -201,7 +205,7 @@ export function RulesPanel({ period }: { period: TaMonitor }) {
         ),
       },
     ],
-    [period.hours, limits.share],
+    [period.hours, limits.share, timeZone],
   )
   return (
     <Panel
@@ -281,12 +285,12 @@ export function ChartsPanel({ period, timeZone }: { period: TaMonitor; timeZone:
     const shown = limitInView(values.flatMap((point) => keys.map((key) => point[key] as number | null | undefined)), value)
     return shown === null ? null : { value: shown, label }
   }
-  const restarts = marks.length ? 'Restarts' : undefined
+  const restarts = marksLegend(series.marks)
   return (
     <Panel
       id="charts"
       title="Over time"
-      description={`In bars of ${barLength(period.bucket_seconds)}. A limit is drawn once the figures come near it; the dotted lines across are the engine's restarts (each day's, a runner started again).`}
+      description={`In bars of ${barLength(period.bucket_seconds)}. A limit is drawn once the figures come near it; the dotted lines across are the engine's restarts (each day's, a runner started again) and the moments a rule's run was let go, each of its new bars a whole run from then on.`}
     >
       <div className="grid gap-x-8 gap-y-10 lg:grid-cols-2">
         <ChartCard

@@ -137,6 +137,26 @@ describe('the Engine monitor', () => {
     expect(screen.getByText('journaled in shadow')).toBeInTheDocument()
   })
 
+  it('says under a rule since when each new bar runs it whole, and marks the moment on the charts', async () => {
+    const why = "the runner's heap would be 72 % full at its next check, past the 60 % it may be at holding runs"
+    const base = monitorPeriod()
+    period = monitorPeriod({
+      rules: [base.rules[0], {
+        ...base.rules[1],
+        whole: { since: '2026-10-22T09:52:51Z', why, cause: 'heap', runner: 'shadow', setting: { path: 'trade.config.ta_engine.shadow_runner_memory_mb', mb: 256 } },
+      }],
+      series: {
+        ...base.series,
+        marks: [...base.series.marks, { t: 1792058400, kind: 'run_whole', label: 'Runs whole from here (its runner\'s heap): “Claude · cross”' }],
+      },
+    })
+    renderPage()
+
+    const line = await screen.findByText(/^Each new bar runs it whole since 22 Oct, \d\d:52 \(its runner's heap\)$/)
+    expect(line.closest('details')).toHaveTextContent('trade.config.ta_engine.shadow_runner_memory_mb, 256 MB now in the configuration')
+    expect(screen.getAllByText('Restarts, rules run whole').length).toBeGreaterThan(0)
+  })
+
   it('says, under the charts of the runs, that a break in their lines is a time without a new bar', async () => {
     renderPage()
 

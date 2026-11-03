@@ -2912,7 +2912,17 @@ export interface TaRuleState {
    * Its last run's time; whether its new bars continue its run, or why each runs it whole over all its bars;
    * the checks of its continued run against a whole run that agreed.
    */
-  figures: { milliseconds?: number | null; continued?: boolean; whole?: string | null; checks?: number } & Record<string, unknown>
+  figures: {
+    milliseconds?: number | null
+    continued?: boolean
+    whole?: string | null
+    checks?: number
+    /** Since when its new bars no longer continue its run (ISO), and why: absent while they do, or before v0.80. */
+    whole_since?: string | null
+    whole_for?: TaWholeCause | null
+    /** The runner it runs on: live or shadow. */
+    runner?: string
+  } & Record<string, unknown>
 }
 
 export interface TaEngine {
@@ -3031,6 +3041,19 @@ export interface TaMonitorNow {
   notes: string[]
 }
 
+/** Why a rule's new bars stopped continuing its run: its runner's heap, a whole run that gave otherwise, its runner. */
+export type TaWholeCause = 'heap' | 'differed' | 'runner'
+
+/** A rule whose new bars no longer continue its run, each a whole run over all its bars until the daily restart. */
+export interface TaMonitorWhole {
+  since: string
+  why: string | null
+  cause: TaWholeCause | null
+  runner: string | null
+  /** For its runner's heap: the setting that holds its run, and its value in config.json. */
+  setting: { path: string; mb: number } | null
+}
+
 export interface TaMonitorRule {
   rule_id: string
   /** None for a rule no longer in the file. */
@@ -3062,6 +3085,10 @@ export interface TaMonitorRule {
   last_run_at: string | null
   last_failure: string | null
   signals: { raised: number; sent: number; not_sent: number; shadow: number }
+  /** How it runs now, when its run was let go; absent from an older server's answer. */
+  whole?: TaMonitorWhole | null
+  /** The last time its run was let go in the period. */
+  left_continued?: { at: string; why: string | null; cause: TaWholeCause | null } | null
 }
 
 /** A bar of time of the charts: `t` its start, epoch seconds. */
@@ -3103,7 +3130,7 @@ export interface TaMonitorSignalPoint {
 
 export interface TaMonitorMark {
   t: number
-  kind: 'daily_restart' | 'runner_started' | 'engine_started'
+  kind: 'daily_restart' | 'runner_started' | 'engine_started' | 'run_whole'
   label: string
 }
 

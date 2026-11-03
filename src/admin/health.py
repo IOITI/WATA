@@ -289,8 +289,12 @@ async def ta_engine_health(ctx, enabled_on_disk: bool, settings: TaEngineSetting
         recent = await ctx.queries.ta_monitor_recent(now - timedelta(minutes=WINDOW_MINUTES), slow_tick_ms=TICK_SECONDS * 1000)
     except DatabaseUnavailable:
         return status, detail
+    try:
+        states = await ctx.queries.ta_rule_states()
+    except DatabaseUnavailable:
+        states = {}
     rules = await run_in_threadpool(rules_by_id, getattr(ctx, "ta_scripts", None))
-    warning = health_warning(checks(recent, settings, rules))
+    warning = health_warning(checks(recent, settings, rules, states, ctx.settings.timezone))
     return (WARNING, warning) if warning else (status, detail)
 
 
