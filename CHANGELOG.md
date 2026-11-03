@@ -2,7 +2,7 @@
 
 ## v0.77.0 - Ready for a signal rule?
 
-**Release date:** not released yet
+**Release date:** 2026-11-03
 
 Whether an indicator, one of yours or one of LuxAlgo's Library, can become a signal rule as it is: does it repaint, does it raise alerts or need some added, and what else WATA serves otherwise than TradingView. Nothing of it trades.
 - **Its source, read at once** (a script's new **As a rule** tab, the Indicators list's column, the rule dialog, a LuxAlgo indicator's **As a signal rule** tab and its card, the Checked by WATA view and its filter):
