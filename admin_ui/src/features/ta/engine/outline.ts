@@ -28,7 +28,7 @@ function text(token: Token): string {
 }
 
 /** The arguments of the call whose "(" is at ``open``: each a list of tokens, and where the call ends. */
-function callArguments(tokens: Token[], open: number): { args: Token[][]; end: number } {
+export function callArguments(tokens: Token[], open: number): { args: Token[][]; end: number } {
   const args: Token[][] = [[]]
   let depth = 0
   for (let index = open; index < tokens.length; index += 1) {

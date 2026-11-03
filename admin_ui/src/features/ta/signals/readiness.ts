@@ -1,7 +1,7 @@
 // Whether a rule is ready to go live, check by check, from what the Signal rules
 // page knows of it: how long it has been in shadow, its signals, its days traded on
-// paper, how the engine runs it, the script version it pins. Said in the
-// confirmation. The server holds the same checks but the script's version
+// paper, how the engine runs it, its script as a rule (its rule check), the script
+// version it pins. Said in the confirmation. The server holds the same checks but the script's version
 // (src/admin/ta_readiness.py: a change to one is made in the other): a rule short of
 // one goes live only if the operator goes live anyway, which the audit trail
 // records with what was missing. The switch stays the operator's. Pure.
@@ -9,7 +9,7 @@
 import { formatDateTime, formatDay } from 'ioiti-ui'
 import type { Check } from 'ioiti-ui'
 
-import type { BacktestPaper, TaRule, TaRuleState } from '@/lib/types'
+import type { BacktestPaper, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
 
 import { addDays, dayIn } from '../data/wataBars'
 import { updatesOf } from './ruleModel'
@@ -33,6 +33,8 @@ export function liveReadiness(
   paper: BacktestPaper['rules'][string] | undefined,
   now: number,
   timeZone: string,
+  /** Its script as a rule (the summary of rule_checks.py's summary_of_rule): undefined while read, null while made. */
+  ruleCheck?: RuleCheckSummary | null,
 ): Check[] {
   const checks: Check[] = []
 
@@ -93,6 +95,8 @@ export function liveReadiness(
           : 'Not seen running yet.',
   })
 
+  checks.push(scriptAsRule(ruleCheck))
+
   const updates = updatesOf(rule)
   checks.push({
     id: 'script',
@@ -106,6 +110,50 @@ export function liveReadiness(
           : `It runs version ${rule.script.version}, the latest.`,
   })
   return checks
+}
+
+// What keeps a script from being a rule as it is, by its worst finding (CANNOT_BE of ta_readiness.py).
+const CANNOT_BE: Record<string, string> = {
+  'no-alerts': 'no alert', 'alert-messages': 'no alert that makes a signal', strategy: 'a strategy with no alert',
+  ticker: 'a series WATA does not have', 'live-ticker': 'a series WATA reads only in backtests',
+  'no-data': 'data WATA does not have', 'fails-on-bars': "it fails on WATA's bars",
+  version: 'it does not compile here', 'library-missing': 'a library WATA does not have',
+}
+
+/**
+ * Its script as a rule, as the server holds it (`script_unmet` of ta_readiness.py): not a script that cannot be
+ * one as it is, nor one that repaints, nor one that may and was never tested as the rule runs it.
+ */
+export function scriptAsRule(check: RuleCheckSummary | null | undefined): Check {
+  const label = 'Its script as a rule'
+  if (check === undefined) return { id: 'rule_check', label, state: 'open', detail: 'Its rule check is being read.' }
+  if (check === null) return { id: 'rule_check', label, state: 'open', detail: 'Its rule check is being made: the server makes it before the switch.' }
+  const worst = check.worst?.id ?? ''
+  switch (check.verdict) {
+    case 'blocked':
+    case 'needs_alerts':
+      return { id: 'rule_check', label, state: 'fail', detail: `Its script cannot be a rule as it is: ${CANNOT_BE[worst] ?? 'see its rule check'}.` }
+    case 'repaints':
+      return { id: 'rule_check', label, state: 'fail', detail: 'Its script repaints: its alerts differ live and in a backtest.' }
+    case 'may_repaint':
+      return {
+        id: 'rule_check',
+        label,
+        state: 'fail',
+        detail: check.as_rule
+          ? 'Its script may repaint: its run test as this rule runs it had no alert to compare.'
+          : 'Its script may repaint, and was never tested on recorded bars as this rule runs it.',
+      }
+    default:
+      return {
+        id: 'rule_check',
+        label,
+        state: 'pass',
+        detail: check.as_rule
+          ? 'Its script can be a signal rule, tested on recorded bars as this rule runs it.'
+          : 'Its script can be a signal rule, as its source reads.',
+      }
+  }
 }
 
 /**

@@ -47,6 +47,7 @@ import type { RuleDialogStart } from './RuleDialog'
 import { barsLabel, conflictText, ENGINE_STATE, MODE_LABEL, MODE_TONE, mappedAlerts, newDraft, ruleDraftOfRun, rulePath, updatesOf } from './ruleModel'
 import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
+import { useRuleChecks } from '../ruleCheck/useRuleCheck'
 import { liveReadiness } from './readiness'
 import { RuleModeDialog } from './RuleModeDialog'
 import { SignalJournal } from './SignalJournal'
@@ -143,6 +144,8 @@ export function SignalRulesPage() {
   const verdicts = verdictsQuery.data?.items
   const scripts = useMemo(() => scriptsQuery.data?.items ?? [], [scriptsQuery.data])
   const states = engineQuery.data?.rules ?? {}
+  // Each rule's script as a rule, as going live reads it.
+  const ruleChecks = useRuleChecks()
 
   const [dialog, setDialog] = useState<{ rule: TaRule | null; start: RuleDialogStart } | null>(null)
 
@@ -431,7 +434,9 @@ export function SignalRulesPage() {
   const runnable = scripts.filter((script) => script.kind !== 'library')
   const change = changing
   const readiness =
-    change?.mode === 'live' ? liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone) : []
+    change?.mode === 'live'
+      ? liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone, ruleChecks.data?.rules[change.rule.id])
+      : []
 
   return (
     <div className="flex flex-col gap-6">

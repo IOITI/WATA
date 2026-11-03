@@ -215,6 +215,9 @@ describe('what can be asked', () => {
   it('offers requests by what the conversation is about', () => {
     expect(presetsFor('run').map((preset) => preset.label)).toContain('Find better settings')
     expect(presetsFor('script').map((preset) => preset.label)).toContain('Review it')
+    // A script is asked first to be made ready for a signal rule, its rule check read and passed.
+    expect(presetsFor('script')[0]).toMatchObject({ label: 'Make it ready for a signal rule' })
+    expect(presetsFor('script')[0].prompt).toContain('pine_rule_check')
     expect(presetsFor(null)).toHaveLength(1)
   })
 

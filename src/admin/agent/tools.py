@@ -62,7 +62,7 @@ MEMORY_READS = ("memory_list", "memory_read")
 AGENT_TOOLS = (
     "status", "data_assets", "data_coverage", "data_signals", "data_trades", "data_execution", "data_position",
     "data_orders",
-    "pine_list", "pine_get", "pine_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
+    "pine_list", "pine_get", "pine_check", "pine_rule_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "backtest_start", "backtest_derive", "backtest_wait",
     "turbo_model", "rule_list", "rule_compare", "rule_shadow_save", "rule_shadow_remove", "rule_set_reference",
@@ -93,7 +93,8 @@ MEMORY_FORGET = "memory_forget"
 MEMORY_WRITES = (MEMORY_SAVE, MEMORY_FORGET)
 # The Pine studies run one at a time on the server, whoever asks: never two of them at once. A shadow rule saved is
 # run on its history first.
-STUDIES = frozenset({"pine_check", "pine_run", "pine_signals", "pine_compare", "pine_save", "rule_shadow_save"})
+STUDIES = frozenset({"pine_check", "pine_rule_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
+                     "rule_shadow_save"})
 # Each starts runs: counted in the request's max_backtests.
 STARTS = frozenset({"backtest_start", "backtest_derive"})
 # LuxAlgo's tools, through the admin's client (src/admin/luxalgo.py): its catalog, a call, an indicator brought in.

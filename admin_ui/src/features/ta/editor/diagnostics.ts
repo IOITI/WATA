@@ -3,11 +3,14 @@
 //   repainting. It knows v6 only, so a v5 script skips it;
 // - PineTS: the script prepared (libraries inlined) and compiled in the worker, its
 //   error brought back to the line it was written on;
-// - WATA: a ticker that names no asset of WATA, where the run would fail.
+// - WATA: a ticker that names no asset of WATA, where the run would fail; and what
+//   keeps it from being a signal rule as it is (engine/ruleCheck.ts), at its line.
 
 import { tokenize } from '../engine/lexer'
 import { checkedVersion, originOf, prepareLibraryCheck, prepareScript, PrepareError, SCRIPT_FILE } from '../engine/prepare'
 import type { LibraryResolver, PreparedScript } from '../engine/prepare'
+import { triedRuleCheck } from '../engine/ruleCheck'
+import type { RuleCheck } from '../engine/ruleCheck'
 import { parseTicker } from '../engine/tickers'
 import type { CompileResponse } from '../engine/pineWorkerClient'
 
@@ -28,6 +31,8 @@ export interface CheckResult {
   diagnostics: Diagnostic[]
   prepared: PreparedScript | null
   compiled: Extract<CompileResponse, { ok: true }> | null
+  /** What keeps it from being a signal rule as written; null for a library, or a script PineTS cannot take. */
+  ruleCheck: RuleCheck | null
 }
 
 export interface CheckOptions {
@@ -89,6 +94,31 @@ export function tickerChecks(source: string): Diagnostic[] {
   return found
 }
 
+// Said by PineTS's own check already, at the same place.
+const SAID_BY_PINETS = new Set(['version', 'library', 'library-missing'])
+
+/**
+ * The rule check's findings that have a place, as marks: each at its first place in the script, one in a library
+ * at the first line. What has none (no alert yet, a strategy) is the script page's "As a rule" to say, not the
+ * editor's: a script written for its plots alone is not wrong.
+ */
+export function ruleDiagnostics(check: RuleCheck): Diagnostic[] {
+  return check.findings
+    .filter((finding) => finding.places.length > 0 && !SAID_BY_PINETS.has(finding.id))
+    .map((finding) => {
+      const place = finding.places.find((entry) => entry.file === null) ?? null
+      const elsewhere = place === null ? finding.places[0] : undefined
+      const said = `${finding.message}${finding.fix ? ` ${finding.fix}` : ''}`
+      return {
+        line: place?.line ?? 1,
+        column: place?.column ?? 1,
+        severity: finding.level === 'note' ? 'info' : 'warning',
+        message: elsewhere ? `In the library ${elsewhere.file}, line ${elsewhere.line}: ${said}` : said,
+        source: 'WATA',
+      }
+    })
+}
+
 function preparedFailure(error: PrepareError): Diagnostic {
   if (error.file === SCRIPT_FILE) {
     return { line: error.line ?? 1, column: error.column ?? 1, severity: 'error', message: error.message, source: 'PineTS' }
@@ -130,7 +160,7 @@ export async function checkScript(source: string, options: CheckOptions): Promis
   try {
     version = checkedVersion(source)
   } catch (error) {
-    if (error instanceof PrepareError) return { diagnostics: [preparedFailure(error)], prepared: null, compiled: null }
+    if (error instanceof PrepareError) return { diagnostics: [preparedFailure(error)], prepared: null, compiled: null, ruleCheck: null }
     throw error
   }
 
@@ -142,12 +172,15 @@ export async function checkScript(source: string, options: CheckOptions): Promis
       ? await prepareLibraryCheck(source, options.libraryName, options.resolve)
       : await prepareScript(source, options.resolve)
   } catch (error) {
-    if (error instanceof PrepareError) return { diagnostics: [...diagnostics, preparedFailure(error)], prepared: null, compiled: null }
-    throw error
+    if (!(error instanceof PrepareError)) throw error
+    const ruleCheck = options.libraryName ? null : triedRuleCheck(source, null, error)
+    return { diagnostics: [...diagnostics, preparedFailure(error), ...(ruleCheck ? ruleDiagnostics(ruleCheck) : [])], prepared: null, compiled: null, ruleCheck }
   }
   for (const warning of prepared.warnings) {
     diagnostics.push({ line: 1, column: 1, severity: 'info', message: warning, source: 'WATA' })
   }
+  const ruleCheck = options.libraryName ? null : triedRuleCheck(source, prepared)
+  if (ruleCheck) diagnostics.push(...ruleDiagnostics(ruleCheck))
 
   const compiled = await options.compile(prepared.source)
   if (!compiled.ok) {
@@ -160,7 +193,7 @@ export async function checkScript(source: string, options: CheckOptions): Promis
       message: origin && !inScript ? `In the library ${origin.file}, line ${origin.line}: ${compiled.error.message}` : compiled.error.message,
       source: 'PineTS',
     })
-    return { diagnostics, prepared, compiled: null }
+    return { diagnostics, prepared, compiled: null, ruleCheck }
   }
-  return { diagnostics, prepared, compiled }
+  return { diagnostics, prepared, compiled, ruleCheck }
 }

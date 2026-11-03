@@ -118,6 +118,7 @@ export function useScriptCheck(
               diagnostics: [{ line: 1, column: 1, severity: 'error', message, source: 'WATA' }],
               prepared: null,
               compiled: null,
+              ruleCheck: null,
             },
           })
         },

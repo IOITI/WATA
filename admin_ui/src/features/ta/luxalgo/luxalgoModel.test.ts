@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { LuxAlgoCompat, LuxAlgoKnownShort, LuxAlgoSource, ScriptOrigin } from '@/lib/types'
+import type { LuxAlgoCompat, LuxAlgoKnownShort, LuxAlgoSource, RuleCheckSummary, ScriptOrigin } from '@/lib/types'
 
 import {
   canTake,
@@ -128,8 +128,16 @@ describe("WATA's check of an indicator", () => {
     const failing: LuxAlgoCompat = { ...RUNS, slug: 'other', state: 'fails' }
     expect(checkedOf([RUNS, failing], null)).toEqual([RUNS, failing])
     expect(checkedOf([RUNS, failing], 'fails')).toEqual([failing])
+    // And by what its rule check said of it.
+    const repainting = { ...RUNS, slug: 'b', rule_check: { ...READY_AS_RULE, verdict: 'repaints' as const } }
+    expect(checkedOf([RUNS, repainting], null, 'repaints')).toEqual([repainting])
+    expect(checkedOf([RUNS, repainting], 'runs', 'ready')).toEqual([])
   })
 })
+
+const READY_AS_RULE: RuleCheckSummary = {
+  verdict: 'ready', checked_at: '2026-10-31T20:00:00Z', counts: {}, worst: null, tested_at: null, tested_bars: null, candidates: 0,
+}
 
 describe("a card of the Library", () => {
   const KNOWN: LuxAlgoKnownShort = {
@@ -148,6 +156,17 @@ describe("a card of the Library", () => {
       { label: 'Not checked', tone: 'neutral' },
     ])
     expect(cardBadges(undefined)).toEqual([])
+  })
+
+  it('says whether it can become a signal rule once WATA read it whole, unless it does not compile', () => {
+    expect(cardBadges({ ...KNOWN, verdict: null, rule_check: { ...READY_AS_RULE, verdict: 'needs_alerts' } })).toEqual([
+      { label: 'Taken', tone: 'neutral' },
+      { label: 'Needs alerts', tone: 'warning' },
+    ])
+    expect(cardBadges({ ...KNOWN, verdict: null, compat: { ...RUNS, state: 'fails' }, rule_check: READY_AS_RULE })).toEqual([
+      { label: 'Taken', tone: 'neutral' },
+      { label: 'Does not compile', tone: 'danger' },
+    ])
   })
 
   it('knows nothing of an indicator WATA never touched', () => {

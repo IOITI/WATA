@@ -1,6 +1,7 @@
 // Technical Analysis › Indicators › a script: the Pine editor, its checks as the
 // script is written and a test on WATA's prices; and, each a tab with its address
-// (`?tab=`), its backtests, the signal rules that run it and its versions.
+// (`?tab=`), whether it can become a signal rule as it is, its backtests, the signal
+// rules that run it and its versions.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, AlertTitle, AnimatedTabs, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
@@ -30,9 +31,11 @@ import { TestResult } from './editor/TestResult'
 import { usePineReference, usePineWorker, useScriptCheck } from './editor/useScriptCheck'
 import { ScriptBacktestsTab } from './script/ScriptBacktestsTab'
 import { ScriptHistoryTab } from './script/ScriptHistoryTab'
-import { scriptTabHref, scriptTabOf, TAB_LABEL, tabsOf } from './script/scriptPageModel'
+import { lineOf, scriptTabHref, scriptTabOf, TAB_LABEL, tabsOf, versionOf } from './script/scriptPageModel'
 import type { ScriptTab } from './script/scriptPageModel'
 import { ScriptRulesTab } from './script/ScriptRulesTab'
+import { ScriptRuleTab } from './script/ScriptRuleTab'
+import { withAlerts } from './engine/ruleCheck'
 import { declaredKind, declaredTitle, isKind, KIND_LABEL, TEMPLATES } from './templates'
 
 interface Draft {
@@ -77,7 +80,8 @@ function ScriptEditor({ id }: { id: string | undefined }) {
         const params = new URLSearchParams(current)
         if (next === 'editor') params.delete('tab')
         else params.set('tab', next)
-        if (next !== 'backtests') params.delete('version')
+        if (next !== 'backtests' && next !== 'rule') params.delete('version')
+        params.delete('line')
         return params
       },
       { replace: true },
@@ -365,6 +369,7 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                     label={`Pine source of ${title}`}
                     onSave={save}
                     functions={reference?.functions}
+                    reveal={tab === 'editor' ? lineOf(searchParams.get('line')) : null}
                     className="h-[60vh] min-h-[420px]"
                   />
                   <DiagnosticsList diagnostics={check.diagnostics} checking={check.checking} />
@@ -398,6 +403,19 @@ function ScriptEditor({ id }: { id: string | undefined }) {
               </div>
               {tested && kind !== 'library' && <TestResult run={tested} scriptName={title} timeZone={timezone} />}
             </div>
+            {script && tab === 'rule' && (
+              <ScriptRuleTab
+                script={script}
+                version={versionOf(searchParams.get('version'), script) ?? script.version}
+                dirty={dirty}
+                draftCheck={check.result?.ruleCheck ?? null}
+                onAddAlerts={(chosen) => {
+                  const taken = (check.result?.ruleCheck?.alerts ?? []).map((alert) => alert.title).filter((title): title is string => title !== null)
+                  update({ source: withAlerts(source, chosen, taken) })
+                  setTab('editor')
+                }}
+              />
+            )}
             {script && tab === 'backtests' && <ScriptBacktestsTab script={script} />}
             {script && tab === 'rules' && <ScriptRulesTab script={script} />}
             {script && tab === 'history' && (

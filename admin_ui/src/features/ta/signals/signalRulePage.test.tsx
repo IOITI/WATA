@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { BacktestDayIndicator, BacktestPaper, RuleDayIndicator, Session, TaEngine, TaRule, TaRuleHistory, TaScriptSummary, TaSignal } from '@/lib/types'
+import type { BacktestDayIndicator, BacktestPaper, RuleCheckSummary, RuleDayIndicator, Session, TaEngine, TaRule, TaRuleHistory, TaScriptSummary, TaSignal } from '@/lib/types'
 import { resetVela, velas } from '@/test/fakeVela'
 import { WithTrail } from '@/test/WithTrail'
 
@@ -113,6 +113,9 @@ let rules: TaRule[] = []
 let paper: BacktestPaper = { rules: {} }
 let refusedDay: string | null = null
 let sent: { method: string; path: string }[] = []
+// Its script as a rule (the server's rule check), as going live reads it.
+let asRule: RuleCheckSummary | null = null
+const RULE_CHECKS_STATE = { available: true, queued: [], testing: null, this_hour: 0, an_hour: 6, checking: 0, last_refusal: null }
 
 function serve() {
   sent = []
@@ -135,6 +138,12 @@ function serve() {
           : json(dayOf(day[1]))
       }
       if (url.pathname === `/api/ta/rules/${ID}/history`) return json(HISTORY)
+      if (url.pathname === '/api/ta/rule-checks') return json({ scripts: {}, rules: asRule ? { [ID]: asRule } : {}, state: RULE_CHECKS_STATE })
+      if (url.pathname === `/api/ta/rules/${ID}/rule-check`) {
+        return method === 'POST'
+          ? json({ ...RULE_CHECKS_STATE, queued: [{ about: { rule: ID }, settings: {}, asked_at: 'now' }] }, 202)
+          : json({ report: { tested: null, as_rule: false }, state: RULE_CHECKS_STATE })
+      }
       const mode = /^\/api\/ta\/rules\/([0-9a-f]+)\/mode$/.exec(url.pathname)
       if (mode && method === 'POST') {
         return json({ rule: rule({ mode: (JSON.parse(init.body as string) as { mode: TaRule['mode'] }).mode }), revision: 'r2' })
@@ -186,6 +195,7 @@ beforeEach(() => {
   rules = [rule()]
   paper = { rules: {} }
   refusedDay = null
+  asRule = null
   serve()
 })
 
@@ -217,6 +227,23 @@ describe("a signal rule's page", () => {
     // Its days on paper, with the way to make it a reference run.
     expect(screen.getByRole('link', { name: 'start a run from this rule' })).toHaveAttribute('href', `/backtests/new?rule=${ID}`)
     expect(screen.getByRole('link', { name: 'Engine monitor' })).toHaveAttribute('href', `/ta/monitor?rule=${ID}`)
+  })
+
+  it('holds going live back while its script may repaint, untested as it runs it, and tests it so', async () => {
+    asRule = {
+      verdict: 'may_repaint', checked_at: '2026-10-22T09:00:00Z', counts: { risk: 1 }, tested_at: null, tested_bars: null, candidates: 0,
+      worst: { id: 'other-series', level: 'risk', message: 'Its alerts read another series.' }, as_rule: false,
+    }
+    const user = userEvent.setup()
+    renderAt(`/ta/signals/${ID}`)
+
+    const readiness = within(await screen.findByRole('list', { name: 'Is it ready to go live?' }))
+    expect(await readiness.findByText('Its script may repaint, and was never tested on recorded bars as this rule runs it.')).toBeInTheDocument()
+    expect(screen.getByText(/Not tested as it runs yet/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Its script as a rule' })).toHaveAttribute('href', `/ta/indicators/${CROSS.id}?tab=rule&version=1`)
+
+    await user.click(screen.getByRole('button', { name: 'Test its script as it runs it' }))
+    await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === `/api/ta/rules/${ID}/rule-check`)).toBe(true))
   })
 
   it('draws its day as the engine ran it, with its signals, and steps a weekday back', async () => {

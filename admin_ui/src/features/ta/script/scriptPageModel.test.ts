@@ -5,6 +5,8 @@ import type { TaRule, TaScriptSummary } from '@/lib/types'
 import { listedRun } from '@/test/backtests'
 
 import {
+  editorLineHref,
+  lineOf,
   modeCounts,
   modesSaid,
   pinnedSaid,
@@ -45,9 +47,10 @@ const RULES = [
 
 describe('the tabs of a script', () => {
   it('has a tab for each view, a library none of backtests, nor any when backtests are off', () => {
-    expect(tabsOf('indicator', true)).toEqual(['editor', 'backtests', 'rules', 'history'])
+    expect(tabsOf('indicator', true)).toEqual(['editor', 'rule', 'backtests', 'rules', 'history'])
+    // A library is no rule's script: its rule check is the scripts' that import it.
     expect(tabsOf('library', true)).toEqual(['editor', 'rules', 'history'])
-    expect(tabsOf('strategy', false)).toEqual(['editor', 'rules', 'history'])
+    expect(tabsOf('strategy', false)).toEqual(['editor', 'rule', 'rules', 'history'])
   })
 
   it('opens the tab its address names, the editor otherwise', () => {
@@ -58,6 +61,9 @@ describe('the tabs of a script', () => {
     expect(scriptTabHref('editor')).toBe('?')
     expect(scriptTabHref('history')).toBe('?tab=history')
     expect(scriptTabHref('backtests', 2)).toBe('?tab=backtests&version=2')
+    expect(scriptTabHref('rule', 3)).toBe('?tab=rule&version=3')
+    expect(editorLineHref(12)).toBe('?line=12')
+    expect([lineOf('12'), lineOf('0'), lineOf('x'), lineOf(null)]).toEqual([12, null, null, null])
     expect(versionOf('2', SCRIPT)).toBe(2)
     expect(versionOf('7', SCRIPT)).toBeNull()
     expect(versionOf(null, SCRIPT)).toBeNull()

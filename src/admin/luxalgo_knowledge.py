@@ -3,9 +3,10 @@ What WATA knows of LuxAlgo's indicators, by slug, for the LuxAlgo Library's
 pages and the AI agent's luxalgo_known: the scripts taken from each
 (src/admin/script_origins.py, those still there), the backtests of those
 scripts, the signal rules that run them with their days on paper, the agent's
-verdicts on the indicator and on those runs and rules, and what WATA's check
-found (src/admin/luxalgo_compat.py). Read from the admin's own files alone:
-nothing here asks LuxAlgo.
+verdicts on the indicator and on those runs and rules, what WATA's check
+found (src/admin/luxalgo_compat.py), and its rule check, whether it can become
+a signal rule (src/admin/rule_checks.py). Read from the admin's own files
+alone: nothing here asks LuxAlgo.
 """
 
 from src.admin.agent.verdicts import VerdictStore
@@ -47,10 +48,12 @@ def known(ctx, slugs: list[str] | None = None, *, whole: bool = True) -> dict[st
             "taken_at": origin.get("taken_at"), "by": origin.get("by"),
         })
     compat = ctx.luxalgo_compat.all() if getattr(ctx, "luxalgo_compat", None) is not None else {}
+    rule_checks = getattr(ctx, "rule_checks", None)
+    checked = rule_checks.store.luxalgo_slugs() if rule_checks is not None else []
     verdicts = VerdictStore(ctx.settings.agent_path)
     judged = {about.split(":", 1)[1]: verdict for about, verdict in verdicts.all().items()
               if about.startswith("luxalgo:")}
-    wanted = list(dict.fromkeys(slugs if slugs is not None else [*taken, *judged, *compat]))
+    wanted = list(dict.fromkeys(slugs if slugs is not None else [*taken, *judged, *compat, *checked]))
     script_ids = {script["id"]: slug for slug in wanted for script in taken.get(slug, [])}
 
     rules = RuleStore(ctx.ta_scripts).load()["rules"] if ctx.ta_scripts is not None and script_ids else []
@@ -71,6 +74,8 @@ def known(ctx, slugs: list[str] | None = None, *, whole: bool = True) -> dict[st
         entry = {
             "slug": slug, "scripts": taken.get(slug, []), "verdict": _short(judged.get(slug)),
             "compat": _compat(compat.get(slug)),
+            # Whether it can become a signal rule as it is (src/admin/rule_checks.py), from its newest report.
+            "rule_check": rule_checks.luxalgo_summary(slug) if rule_checks is not None else None,
         }
         if not whole:
             entry.update(runs=len(its_runs), rules=[{"id": rule["id"], "mode": rule["mode"]} for rule in its_rules])

@@ -15,6 +15,7 @@ import type {
   LuxAlgoKnownShort,
   LuxAlgoSource,
   LuxAlgoStatus,
+  RuleCheckReport,
   Session,
   TaScriptSummary,
 } from '@/lib/types'
@@ -83,6 +84,11 @@ let sent: { method: string; path: string; body: unknown }[] = []
 let known: LuxAlgoKnownShort[] = []
 let checked: LuxAlgoCompat[] = []
 let agent: Partial<AgentState> | null = null
+// The server's rule check of tri-star: its report, or refused (null).
+let ruleReport: RuleCheckReport | null = null
+const RULE_STATE = { available: true, queued: [], testing: null, this_hour: 0, an_hour: 6, checking: 0, last_refusal: null }
+const DRAWS: LuxAlgoSource = { ...PART, complete: true, source: `${HEADER}//@version=6\nindicator("Tri-star")\nup = close > open\nplotshape(up, "Up")\n` }
+const SIGNED_IN: LuxAlgoStatus = { ...SIGNED_OUT, signed_in: true, account: 'me@example.com' }
 
 const CHECKED_AT = '2026-10-31T09:00:00Z'
 const RUNS: LuxAlgoCompat = { slug: 'tri-star', name: 'Tri-star', state: 'runs', checked_at: CHECKED_AT, alertconditions: ['Up'] }
@@ -141,6 +147,10 @@ function serve() {
       if (url.pathname === '/api/agent' && agent) return json(agent)
       if (url.pathname === '/api/agent/verdicts') return json({ items: {} })
       if (url.pathname === '/api/luxalgo/indicators/tri-star/source') return json(source)
+      if (url.pathname === '/api/luxalgo/indicators/tri-star/rule-check') {
+        if (method === 'POST') return json({ ...RULE_STATE, queued: [{ about: { luxalgo: 'tri-star' }, settings: {}, asked_at: 'now' }] }, 202)
+        return ruleReport ? json({ report: ruleReport, state: RULE_STATE }) : json({ detail: 'The rule checks need the Pine studies' }, 409)
+      }
       if (url.pathname === '/api/luxalgo/indicators/tri-star/import' && method === 'POST') {
         return json({ id: '0123456789ab', name: (body as { name: string }).name, version: 1, kind: 'indicator',
           origin: { provider: 'luxalgo', slug: 'tri-star', licence: 'CC BY-NC-SA 4.0' } }, 201)
@@ -212,6 +222,7 @@ afterEach(() => {
   known = []
   checked = []
   agent = null
+  ruleReport = null
   resetVela()
   vi.unstubAllGlobals()
 })
@@ -262,8 +273,21 @@ describe('the LuxAlgo Library page', () => {
     expect(sent.find((request) => request.method === 'POST')).toEqual({ method: 'POST', path: '/api/luxalgo/compat', body: { slugs: ['tri-star'] } })
   })
 
+  it('says on a card whether the indicator can be a signal rule, once its whole source was checked', async () => {
+    known = [{ slug: 'tri-star', scripts: [], verdict: null, compat: RUNS, runs: 0, rules: [],
+      rule_check: { verdict: 'repaints', checked_at: CHECKED_AT, counts: { repaints: 1 }, worst: null, tested_at: CHECKED_AT, tested_bars: '1', candidates: 0 } }]
+    renderAt('/ta/luxalgo')
+    const card = (await screen.findByRole('link', { name: 'Tri-star' })).closest('li')!
+
+    expect(await within(card).findByText('Repaints')).toBeInTheDocument()
+    expect(within(card).queryByText('Runs on WATA')).toBeNull()
+  })
+
   it('lists the indicators WATA checked, by what came of it', async () => {
-    checked = [RUNS, { slug: 'broken-one', name: 'Broken one', state: 'fails', error: 'Unknown function ta.foo', checked_at: CHECKED_AT }]
+    checked = [
+      { ...RUNS, rule_check: { verdict: 'needs_alerts', checked_at: CHECKED_AT, counts: { blocks: 1 }, worst: null, tested_at: null, tested_bars: null, candidates: 1 } },
+      { slug: 'broken-one', name: 'Broken one', state: 'fails', error: 'Unknown function ta.foo', checked_at: CHECKED_AT },
+    ]
     const user = userEvent.setup()
     renderAt('/ta/luxalgo')
     await user.click(await screen.findByRole('link', { name: 'Checked by WATA' }))
@@ -275,6 +299,11 @@ describe('the LuxAlgo Library page', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: /Showing/ }), 'fails')
     expect(screen.queryByRole('link', { name: 'Tri-star' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Broken one' })).toBeInTheDocument()
+    // And by what it would be as a signal rule.
+    await user.selectOptions(screen.getByRole('combobox', { name: /Showing/ }), '')
+    await user.selectOptions(screen.getByRole('combobox', { name: /As a rule/ }), 'needs_alerts')
+    expect(within(screen.getByRole('link', { name: 'Tri-star' }).closest('li')!).getByText('Needs alerts')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Broken one' })).toBeNull()
     await user.click(screen.getByRole('link', { name: 'Library' }))
     expect(await screen.findByRole('link', { name: 'Tri-star' })).toHaveAttribute('href', '/ta/luxalgo/indicators/tri-star')
   })
@@ -414,6 +443,53 @@ describe("an indicator's page", () => {
     await waitFor(() => expect(within(panel).getByRole('button', { name: 'Check it again' })).toBeEnabled())
     await user.click(within(panel).getByRole('button', { name: 'Check it again' }))
     await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.body).toEqual({ slugs: ['tri-star'] }))
+  })
+
+  it('says on its "As a signal rule" tab what its whole source says, and asks its run test', async () => {
+    status = SIGNED_IN
+    source = DRAWS
+    const user = userEvent.setup()
+    renderAt('/ta/luxalgo/indicators/tri-star?tab=rule')
+
+    // Read in the page while the server has no report of it.
+    expect(await screen.findByText('It needs alerts before it can be a signal rule: it draws 1 event an alert could be raised on.')).toBeInTheDocument()
+    expect(screen.getByText('Take it as your script to add these alerts: its editor writes them in, unsaved.')).toBeInTheDocument()
+    expect(screen.getByText('Needs alerts')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Test on recorded bars (1 min)' }))
+    await waitFor(() =>
+      expect(sent.find((request) => request.method === 'POST' && request.path === '/api/luxalgo/indicators/tri-star/rule-check')?.body).toEqual({ bars: '1' }),
+    )
+  })
+
+  it("shows the server's report of it, each finding leading to its line in the source", async () => {
+    status = SIGNED_IN
+    source = DRAWS
+    ruleReport = {
+      digest: 'b'.repeat(64), about: { luxalgo: 'tri-star' }, checked_at: CHECKED_AT, kind: 'indicator', pine_version: 6,
+      alerts: [{ title: 'Up', message: 'Up', line: 5 }], alert_calls: [], candidates: [], plots: [], whole_because: null, tradingview_rules: [],
+      findings: [{
+        id: 'bar-end', area: 'repaint', level: 'risk', message: 'Its alerts read last_bar_index.', fix: 'Replace such a window by `true`.',
+        places: [{ file: null, line: 4, column: 7 }], count: 1, excerpt: null, through: null,
+      }],
+      verdict: 'may_repaint', tested: null, tests: [],
+    }
+    const user = userEvent.setup()
+    renderAt('/ta/luxalgo/indicators/tri-star?tab=rule')
+
+    expect(await screen.findByText('It may repaint: a run test on recorded bars says whether its alerts are the same live and in a backtest.')).toBeInTheDocument()
+    const finding = screen.getByRole('link', { name: 'The last bars' })
+    expect(finding).toHaveAttribute('href', '/ta/luxalgo/indicators/tri-star?tab=source&line=4')
+    await user.click(finding)
+    expect(screen.getByTestId('address')).toHaveTextContent('/ta/luxalgo/indicators/tri-star?tab=source&line=4')
+    expect(await screen.findByRole('textbox', { name: 'Pine source of Tri-star' })).toBeInTheDocument()
+  })
+
+  it('says its rule check reads its whole source, which comes signed in', async () => {
+    renderAt('/ta/luxalgo/indicators/tri-star?tab=rule')
+
+    expect(await screen.findByText(/Its rule check reads its whole source/)).toBeInTheDocument()
+    expect(sent.some((request) => request.path.endsWith('/rule-check'))).toBe(false)
   })
 
   it('leads to the AI agent, about it, while the agent is on', async () => {

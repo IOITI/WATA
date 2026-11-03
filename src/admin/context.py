@@ -162,7 +162,7 @@ class AdminContext:
     mcp_calls: Any = None
     # The operator's pause of the endpoint, from the System page (src/admin/mcp_server/pause.py).
     mcp_pause: Any = None
-    # Claude's Pine studies, child processes one at a time (src/admin/studies.py): with the endpoint on.
+    # The Pine studies, child processes one at a time (src/admin/studies.py): always there, each started only when asked.
     studies: Any = None
     # The control service, which restarts WATA's containers for the admin (src/admin/service_control.py),
     # and the restarts asked of it, one plan at a time (src/admin/service_restart.py).
@@ -196,6 +196,9 @@ class AdminContext:
     # What WATA's check found of LuxAlgo's indicators, and the checks asked (src/admin/luxalgo_compat.py).
     luxalgo_compat: Any = None
     luxalgo_checks: Any = None
+    # Whether each script, and each LuxAlgo indicator read whole, can become a signal rule as it is, and the run
+    # tests asked (src/admin/rule_checks.py).
+    rule_checks: Any = None
     # Its memory (src/admin/agent_memory.py), beside its conversations: there whether the agent is on or not, read by
     # the Memory page and by Claude Code's endpoint too.
     agent_memory: Any = None
@@ -337,20 +340,19 @@ def build_context(config_manager) -> AdminContext:
         if not value:
             raise ServiceUnavailable("web_server: no internal token is set (Credentials)")
         return value["token"]
-    studies = None
-    # Claude Code's endpoint and the AI agent run the same Pine studies, and LuxAlgo's indicators are checked with them.
-    if settings.mcp_enabled or settings.ai_agent.enabled or settings.luxalgo_enabled:
-        from src.admin.backtests import SIGNAL_CACHE_FOLDER
-        from src.admin.studies import StudyService
+    # Claude Code's endpoint and the AI agent run the same Pine studies, LuxAlgo's indicators are checked with them,
+    # and the run test of a script's rule check is one: there whatever is switched on, a study only starts when asked.
+    from src.admin.backtests import SIGNAL_CACHE_FOLDER
+    from src.admin.studies import StudyService
 
-        studies = StudyService(
-            root=os.path.join(settings.backtests_path, "_studies"), ta_root=settings.ta_path,
-            prices_root=settings.price_history_path,
-            # The runner's answers the backtests keep: a study and a run of the same days share them.
-            signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
-            memory_mb=settings.mcp_limits.study_memory_mb, timeout_seconds=settings.mcp_limits.study_timeout_seconds,
-            minutes_per_hour=settings.mcp_limits.study_minutes_per_hour,
-        )
+    studies = StudyService(
+        root=os.path.join(settings.backtests_path, "_studies"), ta_root=settings.ta_path,
+        prices_root=settings.price_history_path,
+        # The runner's answers the backtests keep: a study and a run of the same days share them.
+        signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
+        memory_mb=settings.mcp_limits.study_memory_mb, timeout_seconds=settings.mcp_limits.study_timeout_seconds,
+        minutes_per_hour=settings.mcp_limits.study_minutes_per_hour,
+    )
 
     ctx = AdminContext(
         config_manager=config_manager,
@@ -397,8 +399,17 @@ def build_context(config_manager) -> AdminContext:
         notifier=telegram_sender.send,
         version=version,
         closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
-                 service_control.close, *([studies.close] if studies is not None else [])],
+                 service_control.close, studies.close],
     )
+    from src.admin.rule_checks import RuleCheckStore, RuleChecks
+    from src.research.experiments import ExperimentJournal
+
+    # Claude's research lock box (beside the backtests, as the MCP endpoint keeps it): a run test asked without its
+    # days leaves those out.
+    research = os.path.join(settings.backtests_path, "_research")
+    lockbox = ExperimentJournal(os.path.join(research, "experiments.jsonl"), os.path.join(research, "lockbox.json")).lockbox
+    ctx.rule_checks = RuleChecks(RuleCheckStore(settings.ta_path), ta_scripts, studies, lockbox=lockbox)
+    ctx.closers.append(ctx.rule_checks.close)
     if settings.luxalgo_enabled:
         from src.admin.luxalgo import LuxAlgo
         from src.admin.luxalgo_auth import LuxAlgoSignIn
@@ -407,7 +418,7 @@ def build_context(config_manager) -> AdminContext:
         ctx.luxalgo_sign_in = LuxAlgoSignIn(vault=vault)
         ctx.luxalgo = LuxAlgo(bearer=ctx.luxalgo_sign_in.bearer)
         ctx.luxalgo_compat = CompatStore(settings.ta_path)
-        ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies)
+        ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies, rule_checks=ctx.rule_checks)
     if settings.ai_agent.enabled:
         from src.admin import agent_briefing, agent_debrief, agent_dossier, agent_routines, agent_telegram, agent_triage
 

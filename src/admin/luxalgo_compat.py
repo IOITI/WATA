@@ -248,10 +248,12 @@ class CompatChecker:
     Pine studies (src/admin/studies.py), None where the admin has none.
     """
 
-    def __init__(self, store: CompatStore, luxalgo, studies, clock=time.time):
+    def __init__(self, store: CompatStore, luxalgo, studies, clock=time.time, rule_checks=None):
         self.store = store
         self._luxalgo = luxalgo
         self._studies = studies
+        # Where what a check reads of a source as a signal rule is kept (src/admin/rule_checks.py).
+        self._rule_checks = rule_checks
         self._clock = clock
         self._queue: OrderedDict[str, None] = OrderedDict()
         self._done: deque = deque()
@@ -279,6 +281,9 @@ class CompatChecker:
         """A source the admin read whole elsewhere: checked when it is not as kept."""
         if not self.available or not SLUG.match(slug):
             return
+        if self._rule_checks is not None:
+            # Its rule check, from the source alone: made at once when it has none (no study, no call to LuxAlgo).
+            self._rule_checks.noticed({"luxalgo": slug}, source)
         kept = self.store.get(slug)
         if kept and kept.get("sha256") == hashlib.sha256(source.encode()).hexdigest():
             return
@@ -320,6 +325,8 @@ class CompatChecker:
         if kept and kept.get("sha256") == hashlib.sha256(found["source"].encode()).hexdigest():
             return None
         checked = await self._studies.study("check", {"source": found["source"], "name": found.get("name") or slug})
+        if self._rule_checks is not None and (checked or {}).get("rule_check"):
+            self._rule_checks.noticed({"luxalgo": slug}, found["source"], static=checked["rule_check"])
         return self.store.record(entry_of(found, checked, self._clock()))
 
     async def run(self) -> None:

@@ -84,7 +84,8 @@ luxalgo_save_script, never by copying its code: it keeps its header and its lice
 LuxAlgo's open indicators are mostly CC BY-NC-SA 4.0 (non-commercial, attribution, share-alike): when you propose \
 one, or a script made from one, say its licence and that its terms are the operator's to check before trading it. \
 An indicator's alerts are seldom WATA's: map its titles to actions, or add alertcondition() lines in a version of \
-your own, as for any script. A tracker's rows are public records, background to a question, never a signal. A \
+your own, as for any script; pine_rule_check says what keeps a source from being a signal rule, repainting \
+included, and tests it on recorded bars. A tracker's rows are public records, background to a question, never a signal. A \
 prop-firm simulation is given figures you read from WATA's runs and trades (a win rate, average wins and losses in \
 R, trades a day), never an account's value, an id, a key or the operator's words. Link one of LuxAlgo's indicators \
 as [its name](/ta/luxalgo/indicators/<slug>). Set a verdict on an indicator (luxalgo:<slug>) only once you judged \

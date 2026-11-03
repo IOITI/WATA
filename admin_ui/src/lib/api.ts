@@ -104,7 +104,11 @@ import type {
   ResearchFiles,
   ResearchLockbox,
   RestartPlan,
+  RuleCheckReport,
+  RuleChecksListed,
+  RuleChecksState,
   RuleDayIndicator,
+  RuleTestAsked,
   SaxoProviderDetails,
   SaxoStatus,
   ServicesState,
@@ -510,6 +514,22 @@ export const api = {
     request<TaScript>('POST', `/api/ta/scripts/${encodeURIComponent(id)}/duplicate`, { body: { name } }),
   taScriptVersion: (id: string, number: number) =>
     request<TaVersion>('GET', `/api/ta/scripts/${encodeURIComponent(id)}/versions/${number}`),
+  // The rule check: whether a script can become a signal rule as it is. What its source says is made at once; a run
+  // test on recorded bars is asked, and waits for the Pine studies.
+  ruleChecks: () => request<RuleChecksListed>('GET', '/api/ta/rule-checks'),
+  scriptRuleCheck: (id: string, number: number) =>
+    request<{ report: RuleCheckReport | null; state: RuleChecksState }>(
+      'GET', `/api/ta/scripts/${encodeURIComponent(id)}/versions/${number}/rule-check`),
+  testScriptAsRule: (id: string, number: number, body: RuleTestAsked) =>
+    request<RuleChecksState>('POST', `/api/ta/scripts/${encodeURIComponent(id)}/versions/${number}/rule-check`, { body }),
+  ruleRuleCheck: (id: string) =>
+    request<{ report: RuleCheckReport; state: RuleChecksState }>('GET', `/api/ta/rules/${encodeURIComponent(id)}/rule-check`),
+  /** A run test of a rule's script as the rule runs it: its pins, asset, bars, inputs and history. */
+  testRuleAsItRuns: (id: string) => request<RuleChecksState>('POST', `/api/ta/rules/${encodeURIComponent(id)}/rule-check`, { body: {} }),
+  luxalgoRuleCheck: (slug: string) =>
+    request<{ report: RuleCheckReport; state: RuleChecksState }>('GET', `/api/luxalgo/indicators/${encodeURIComponent(slug)}/rule-check`),
+  testLuxalgoAsRule: (slug: string, body: RuleTestAsked) =>
+    request<RuleChecksState>('POST', `/api/luxalgo/indicators/${encodeURIComponent(slug)}/rule-check`, { body }),
   /** The library that declares library("<name>"), with its current source. */
   taLibrary: (name: string) => request<TaScript>('GET', `/api/ta/libraries/${encodeURIComponent(name)}`),
   taWorkspace: (key: string) => request<{ value: string | null }>('GET', `/api/ta/workspaces/${encodeURIComponent(key)}`),

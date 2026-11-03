@@ -9,6 +9,7 @@ import {
   Button,
   ButtonLink,
   formatDateTime,
+  Hint,
   Input,
   PageHeader,
   QueryState,
@@ -26,10 +27,12 @@ import { useSession } from '@/features/auth/auth-context'
 import { judgedRuns } from '@/features/backtests/verdict'
 import { madeByClaude } from '@/features/system/claude'
 import { api, ApiError, taScriptSourceUrl } from '@/lib/api'
-import type { TaRuleMode, TaScriptKind, TaScriptSummary } from '@/lib/types'
+import type { RuleCheckSummary, RuleVerdict, TaRuleMode, TaScriptKind, TaScriptSummary } from '@/lib/types'
 
 import { chartsPath } from './chartLinks'
 import { LuxAlgoBadge } from './luxalgo/LuxAlgoBadge'
+import { badgeOf, summarySaid } from './ruleCheck/ruleCheckModel'
+import { useRuleChecks } from './ruleCheck/useRuleCheck'
 import { importScript, librariesFirst, MAX_SCRIPT_BYTES } from './importScripts'
 import { modeCounts, modesSaid, rulesRunning, runsOfScript, runsSaid, scriptTabHref } from './script/scriptPageModel'
 import { importersOf, KIND_LABEL, librariesOf } from './templates'
@@ -47,6 +50,8 @@ const MAX_LISTED_RUNS = 200
 // Left to itself, the browser gives it all to the scripts, whose descriptions are the longest text.
 const FIT = '1%'
 const LIBRARIES_SHARE = '28%'
+// The column "As a rule" sorted from the readiest.
+const LEVEL_ORDER_OF_VERDICT: Record<RuleVerdict, number> = { ready: 0, to_change: 1, may_repaint: 2, needs_alerts: 3, repaints: 4, blocked: 5 }
 
 /** Scripts one under the other, each a link to its page; a name WATA does not hold stays text. */
 function ScriptNames({ entries }: { entries: { name: string; script?: TaScriptSummary }[] }) {
@@ -74,6 +79,8 @@ const ICON_LINK = 'inline-flex size-8 items-center justify-center rounded-md tex
 interface ScriptUses {
   rules: Map<string, Record<TaRuleMode, number>>
   runs: Map<string, { runs: number; passing: number }>
+  /** Each script's newest version as a rule (its rule check); null while its report is made. */
+  checks: Record<string, RuleCheckSummary | null> | null
 }
 
 function scriptColumns(
@@ -169,6 +176,32 @@ function scriptColumns(
                 </Link>
               ))}
           </div>
+        )
+      },
+    },
+    {
+      id: 'rule',
+      // Whether its newest version can become a signal rule as it is: the script's "As a rule" tab says more.
+      header: 'As a rule',
+      width: FIT,
+      accessorFn: (row) => {
+        const found = uses.checks?.[row.id]
+        return found ? LEVEL_ORDER_OF_VERDICT[found.verdict] : 9
+      },
+      sortable: true,
+      cell: ({ row }) => {
+        if (row.kind === 'library') return <span className="text-xs text-muted-foreground">Through its scripts</span>
+        const found = uses.checks?.[row.id]
+        const badge = badgeOf(found)
+        if (!found || !badge) return <span className="text-xs text-muted-foreground">{uses.checks ? 'Checking…' : '—'}</span>
+        return (
+          <Hint content={summarySaid(found)}>
+            <Link to={`/ta/indicators/${row.id}${scriptTabHref('rule')}`} aria-label={`${row.name} as a rule: ${badge.label}`}>
+              <Badge tone={badge.tone} dot>
+                {badge.label}
+              </Badge>
+            </Link>
+          </Hint>
         )
       },
     },
@@ -269,6 +302,7 @@ export function IndicatorsPage() {
   // The rules that run each script, and its runs among the newest the list of backtests gives, with their verdicts.
   const rulesQuery = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules })
   const runsQuery = useQuery({ queryKey: ['backtests'], queryFn: api.backtests, enabled: backtests })
+  const checksQuery = useRuleChecks()
   const uses = useMemo((): ScriptUses => {
     const rules = rulesQuery.data?.rules ?? []
     const runs = runsQuery.data?.items ?? []
@@ -276,8 +310,9 @@ export function IndicatorsPage() {
     return {
       rules: new Map((scripts ?? []).map((script) => [script.id, modeCounts(rulesRunning(script.id, rules))])),
       runs: new Map((scripts ?? []).map((script) => [script.id, runsSaid(runsOfScript(runs, script.id), judged)])),
+      checks: checksQuery.data?.scripts ?? null,
     }
-  }, [scripts, rulesQuery.data, runsQuery.data])
+  }, [scripts, rulesQuery.data, runsQuery.data, checksQuery.data])
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['ta-scripts'] })

@@ -57,6 +57,7 @@ from src.admin.ta_rules import (
     checked_history_days,
 )
 from src.admin.ta_readiness import unmet_readiness
+from src.admin.rule_checks import DEFAULT_SETTINGS, readiness_check, settings_of
 from src.admin.script_origins import UNREAD_LICENCE, needs_licence_check, with_origin
 from src.admin.ta_scripts import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
 from src.admin.errors import ServiceUnavailable
@@ -99,6 +100,31 @@ class ScriptCopy(BaseModel):
 
 class Workspace(BaseModel):
     value: str
+
+
+class RuleTestAsked(BaseModel):
+    """A run test of a script's rule check: its bars and asset, as a rule's (the defaults: Capital.com's US100, minutes)."""
+    asset: str | None = Field(None, pattern=r"^(?:capital|dukascopy|saxo)/[A-Za-z0-9_.-]{1,40}$")
+    side: str | None = Field(None, pattern=r"^(?:bid|ask)$")
+    bars: str | None = Field(None, pattern=r"^(?:[1-9][0-9]{0,4}[Ss]?|[Rr][1-9][0-9]{0,5})$")
+    inputs: dict | None = None
+    history_days: int | None = Field(None, ge=0, le=30)
+
+
+def _rule_checks(request: Request):
+    """The rule checks of the scripts (src/admin/rule_checks.py), when the admin has them."""
+    found = getattr(request.app.state.ctx, "rule_checks", None)
+    if found is None:
+        raise HTTPException(status_code=503, detail="The rule check is not available")
+    return found
+
+
+def _saved(request: Request, meta: dict) -> dict:
+    """A version saved: what its source says of it as a rule made in the background."""
+    found = getattr(request.app.state.ctx, "rule_checks", None)
+    if found is not None and meta.get("kind") != "library":
+        found.noticed_version(meta["id"], meta["version"])
+    return meta
 
 
 def rules(store=Depends(scripts)) -> RuleStore:
@@ -193,8 +219,8 @@ async def list_scripts(request: Request, store=Depends(scripts)):
 
 
 @router.post("/scripts", status_code=201)
-async def create_script(body: ScriptCreate, store=Depends(scripts)):
-    return await run_in_threadpool(store.create, body.name, body.source, body.description)
+async def create_script(body: ScriptCreate, request: Request, store=Depends(scripts)):
+    return _saved(request, await run_in_threadpool(store.create, body.name, body.source, body.description))
 
 
 @router.get("/scripts/{script_id}")
@@ -204,10 +230,10 @@ async def get_script(script_id: str, request: Request, store=Depends(scripts)):
 
 
 @router.put("/scripts/{script_id}")
-async def update_script(script_id: str, body: ScriptUpdate, store=Depends(scripts)):
-    return await run_in_threadpool(
+async def update_script(script_id: str, body: ScriptUpdate, request: Request, store=Depends(scripts)):
+    return _saved(request, await run_in_threadpool(
         store.save, script_id, body.base_version, body.source, body.name, body.description,
-    )
+    ))
 
 
 @router.delete("/scripts/{script_id}", status_code=204)
@@ -220,8 +246,8 @@ async def delete_script(script_id: str, store=Depends(scripts), rule_store: Rule
 
 
 @router.post("/scripts/{script_id}/duplicate", status_code=201)
-async def duplicate_script(script_id: str, body: ScriptCopy, store=Depends(scripts)):
-    return await run_in_threadpool(store.duplicate, script_id, body.name)
+async def duplicate_script(script_id: str, body: ScriptCopy, request: Request, store=Depends(scripts)):
+    return _saved(request, await run_in_threadpool(store.duplicate, script_id, body.name))
 
 
 @router.get("/scripts/{script_id}/versions/{number}")
@@ -235,6 +261,32 @@ async def get_version(script_id: str, number: int, request: Request, store=Depen
         return {**found, "origin": origin} if origin else found
 
     return await run_in_threadpool(read)
+
+
+@router.get("/rule-checks")
+async def rule_checks_listed(request: Request, store=Depends(scripts)):
+    """Each script's newest version, and each version a rule pins, as a rule: what is kept, the rest being made."""
+    return await _rule_checks(request).summaries()
+
+
+@router.get("/scripts/{script_id}/versions/{number}/rule-check")
+async def version_rule_check(script_id: str, number: int, request: Request, store=Depends(scripts)):
+    """Whether a version can become a signal rule as it is: what its source says, and its newest run test."""
+    checks = _rule_checks(request)
+    await run_in_threadpool(store.version, script_id, number)
+    return {"report": await checks.of_version(script_id, number), "state": checks.state()}
+
+
+@router.post("/scripts/{script_id}/versions/{number}/rule-check", status_code=202)
+async def test_version_as_a_rule(script_id: str, number: int, body: RuleTestAsked, request: Request,
+                                 store=Depends(scripts)):
+    """A run test of a version on recorded bars, asked: it waits for the studies, one at a time."""
+    checks = _rule_checks(request)
+    found = await run_in_threadpool(store.version, script_id, number)
+    if found.get("kind") == "library":
+        raise HTTPException(status_code=422, detail="A library is tested through the scripts that import it")
+    settings = settings_of(body.bars or DEFAULT_SETTINGS["bars"], body.asset, body.side, body.inputs, body.history_days)
+    return checks.ask({"script": {"id": script_id, "version": number}}, settings)
 
 
 @router.get("/scripts/{script_id}/source.pine")
@@ -408,7 +460,8 @@ async def _unmet_readiness(request: Request, rule: dict) -> list[str]:
             paper = (await run_in_threadpool(ctx.backtests.paper))["rules"].get(rule["id"])
         except Exception:
             paper = None
-    return unmet_readiness(rule, states.get(rule["id"]), paper, datetime.now(timezone.utc), ctx.settings.timezone)
+    return unmet_readiness(rule, states.get(rule["id"]), paper, datetime.now(timezone.utc), ctx.settings.timezone,
+                           rule_check=await readiness_check(getattr(ctx, "rule_checks", None), rule))
 
 
 def _licence_to_check(ctx, store, rule: dict) -> str | None:
@@ -493,6 +546,25 @@ async def compare_rule(
 
 # The audit entries a rule's history is looked for in: the newest, as many as the trail reads at most.
 AUDIT_LOOKED_AT = 1000
+
+
+@router.get("/rules/{rule_id}/rule-check")
+async def rule_rule_check(rule_id: str, request: Request, rule_store: RuleStore = Depends(rules)):
+    """A rule's script as a rule: its pins' report, with the newest run test made as the rule runs (``as_rule``)."""
+    checks = _rule_checks(request)
+    rule = await run_in_threadpool(rule_store.rule, rule_id)
+    return {"report": await checks.of_rule(rule), "state": checks.state()}
+
+
+@router.post("/rules/{rule_id}/rule-check", status_code=202)
+async def test_rule_as_it_runs(rule_id: str, request: Request, rule_store: RuleStore = Depends(rules)):
+    """A run test of a rule's script as the rule runs it: its pins, asset, bars, inputs and history."""
+    checks = _rule_checks(request)
+    rule = await run_in_threadpool(rule_store.rule, rule_id)
+    settings = settings_of(rule["bars"], f"{rule['asset']['provider']}/{rule['asset']['key']}", rule["side"],
+                           {entry["id"]: entry["value"] for entry in rule.get("inputs") or []}, rule.get("history_days"),
+                           rule=rule["id"])
+    return checks.ask({"rule": rule["id"]}, settings)
 
 
 @router.get("/rules/{rule_id}/history")

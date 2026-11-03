@@ -37,6 +37,30 @@ describe('checkScript', () => {
     expect(result.diagnostics).toEqual([])
     expect(result.prepared?.libraries).toEqual([{ id: 'h', name: 'Helpers', version: 3 }])
     expect(result.compiled?.inputs.map((input) => input.title)).toEqual(['Length'])
+    // Nothing in it can be a signal yet: the script page says so, not the editor.
+    expect(result.ruleCheck?.verdict).toBe('needs_alerts')
+  })
+
+  it('marks at its line what keeps a script from being a signal rule, never as an error', async () => {
+    const result = await checkScript(
+      [
+        '//@version=6',
+        'indicator("x")',
+        'per = last_bar_index - bar_index <= 2000',
+        'if barstate.islast',
+        '    label.new(bar_index, high, "now")',
+        'alertcondition(per and close > open, "Up", "Up")',
+      ].join('\n'),
+      options(),
+    )
+
+    const wata = result.diagnostics.filter((diagnostic) => diagnostic.source === 'WATA')
+    expect(wata.map(({ line, severity }) => ({ line, severity }))).toEqual([
+      { line: 4, severity: 'info' },
+      { line: 3, severity: 'warning' },
+    ])
+    expect(wata[1].message).toMatch(/^Its alerts read last_bar_index: .* Replace such a window by `true`, or by an input\.$/)
+    expect(result.ruleCheck?.verdict).toBe('may_repaint')
   })
 
   it('marks a syntax error PineTS finds on the line it was written on, past the inlined library', async () => {

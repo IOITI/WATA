@@ -5,6 +5,7 @@ pine_check, pine_run and pine_signals (src/admin/studies.py):
     python -m src.research.study check   --request <file.json> --out <file.json>
     python -m src.research.study run     --request <file.json> --out <file.json>
     python -m src.research.study signals --request <file.json> --out <file.json>
+    python -m src.research.study rule    --request <file.json> --out <file.json>
 
 (``--data files:<folder>``: Capital.com's and Saxo's bars from recorded day
 files, as a backtest reads them, instead of the database.)
@@ -25,6 +26,9 @@ sent and nothing is written but the answer (``--out``, written whole).
 - signals: the engine's days, as a signal rule would raise them
   (src/ta_engine/replay.py), the runner's answers shared with the backtests
   (``--signal-cache``).
+- rule: the rule check of a script (src/research/rule_check.py): what its
+  source says, then its run test on the engine's days, each run as a backtest
+  runs it and again ended at chosen bars, as live had them.
 
 It gives way to the trading services (nice 10, ahead of the backtests at 19)
 and is the first the kernel stops when the container runs out of memory.
@@ -32,12 +36,14 @@ and is the first the kernel stops when the container runs out of memory.
 
 import argparse
 import asyncio
+import dataclasses
 import hashlib
 import json
 import math
 import os
 import sys
-from datetime import date
+import time
+from datetime import date, datetime, timezone
 
 from src.admin.ta_rules import (
     ALERT_CALL_ACTIONS,
@@ -53,6 +59,8 @@ from src.admin.ta_rules import (
 from src.admin.ta_scripts import LIBRARY, InvalidScript, ScriptNotFound, ScriptStore, pine_facts
 from src.backtest.clock import TradingClock
 from src.price_history.process import lower_priority
+from src.research import rule_check as checks
+from src.research.rule_check import CHECKER_PATH, Checker, CheckerMissing
 from src.ta_engine.replay import (
     DAY,
     REPLAY_RULE_ID,
@@ -66,9 +74,10 @@ from src.ta_engine.replay import (
 from src.ta_engine.rules import EngineRule
 from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command
 from src.ta_engine.signals import iso_seconds
+from src.ta_engine.tickers import parse_ticker
 
 STUDY_NICE = 10
-MODES = ("check", "run", "signals")
+MODES = ("check", "run", "signals", "rule")
 # A script not saved yet runs under this id: it pins nothing that is on disk.
 DRAFT_ID = "draft0000000"
 DEFAULT_MEMORY_MB = 768
@@ -87,10 +96,6 @@ CHECK_BARS = [
     [index * 60_000, 100.0 + index % 7, 101.0 + index % 7, 99.0 + index % 7, 100.0 + (index * 3) % 7, 1, (index + 1) * 60_000]
     for index in range(300)
 ]
-# TradingView's rules and WATA's tickers, checked by their own confined Node process (npm run build:checker).
-CHECKER_PATH = os.path.join(os.path.dirname(os.path.dirname(RUNNER_PATH)), "checker", "check.mjs")
-CHECKER_MEMORY_MB = 256
-CHECKER_TIMEOUT_SECONDS = 20
 LIBRARY_CHECK = """//@version=6
 indicator("Library check")
 import user/{name}/1 as checked
@@ -200,25 +205,39 @@ def _check_load(request: dict, scripts: ScriptStore) -> tuple[dict, str, str]:
     return {"script": {"source": source, "sha256": _sha256(source)}, "libraries": libraries}, facts.kind, source
 
 
-async def tradingview_rules(source: str, node: str) -> list | None:
-    """What TradingView's rules (v6) and WATA's tickers find in a source; None where the checker is not built."""
-    found = find_node(node)
-    if found is None or not os.path.isfile(CHECKER_PATH):
-        return None
-
-    async def no_series(ask: dict) -> list:
-        raise ValueError("The checker reads no series")
-
-    checker = NodeRunner(runner_command(found, CHECKER_PATH, CHECKER_MEMORY_MB), no_series,
-                         timeout_seconds=CHECKER_TIMEOUT_SECONDS)
+async def checker_answers(source: str, libraries: list[dict], node: str, probe: bool = False) -> tuple[list | None, dict | None]:
+    """
+    What the checker finds in a source: TradingView's rules (v6) and WATA's tickers, and its rule check (with the
+    run test's probe, asked); None for each where the checker is not built, or for the rules of a source without
+    its version.
+    """
+    checker = Checker(node, path=CHECKER_PATH)
     try:
-        await checker.start()
-        return (await checker.request({"op": "validate", "source": source})).get("diagnostics") or []
-    except (RunnerFailed, RunnerDown):
-        # A source without its version: PineTS's compile says so in its own words.
-        return None
+        rules = await checker.validate(source)
+        return rules, await checker.rule_check(source, libraries, probe=probe)
+    except (CheckerMissing, RunnerFailed, RunnerDown):
+        return None, None
     finally:
         await checker.stop()
+
+
+def made_up_series(ask: dict) -> list:
+    """
+    A check reads no data: another series asked is made up, in bars of the length asked, over the made-up
+    minutes. A ticker WATA has not is refused, as a run would refuse it.
+    """
+    ticker = parse_ticker(str(ask.get("ticker") or ""))
+    if ticker is None:
+        raise ValueError(f"No such asset in WATA: {ask.get('ticker')!r}")
+    seconds = timeframe_seconds(str(ask.get("timeframe") or "")) or 60
+    span = CHECK_BARS[-1][6]
+    bars = [
+        [index * seconds * 1000, 100.0 + index % 5, 101.0 + index % 5, 99.0 + index % 5, 100.0 + (index * 2) % 5, 1,
+         (index + 1) * seconds * 1000]
+        for index in range(math.ceil(span / (seconds * 1000)))
+    ]
+    start, end = ask.get("from"), ask.get("to")
+    return [bar for bar in bars if (start is None or bar[0] >= start) and (end is None or bar[0] <= end)]
 
 
 async def check(request: dict, scripts: ScriptStore, node: str, memory_mb: int, timeout: int) -> dict:
@@ -226,10 +245,10 @@ async def check(request: dict, scripts: ScriptStore, node: str, memory_mb: int, 
     if found is None or not os.path.isfile(RUNNER_PATH):
         raise StudyRefused("The Pine runner is not there: Node 24 and runner.mjs (npm run build:runner)")
     load, kind, checked_source = _check_load(request, scripts)
-    rules = await tradingview_rules(checked_source, node)
+    rules, static = await checker_answers(checked_source, load["libraries"] if kind != LIBRARY else [], node)
 
     async def no_series(ask: dict) -> list:
-        raise ValueError("A check reads no other series")
+        return made_up_series(ask)
 
     runner = NodeRunner(runner_command(found, RUNNER_PATH, memory_mb), no_series, timeout_seconds=timeout)
     try:
@@ -239,7 +258,7 @@ async def check(request: dict, scripts: ScriptStore, node: str, memory_mb: int, 
             "bars": CHECK_BARS, "detail": True,
         })
     except RunnerFailed as e:
-        return {"ok": False, "error": e.error, "tradingview_rules": rules}
+        return {"ok": False, "error": e.error, "tradingview_rules": rules, "rule_check": static}
     finally:
         await runner.stop()
     alerts: dict[str, int] = {}
@@ -258,6 +277,8 @@ async def check(request: dict, scripts: ScriptStore, node: str, memory_mb: int, 
         "warnings": answer.get("warnings") or [], "runtime_warnings": answer.get("runtimeWarnings") or [],
         # TradingView's rules (v6 only) and WATA's tickers: None where the checker is not built here.
         "tradingview_rules": rules,
+        # What keeps it from being a signal rule as written: the source's part of the rule check (``rule``).
+        "rule_check": static,
         "milliseconds": answer.get("milliseconds"),
         "note": "Made-up bars: what the alerts do on real ones is pine_run's",
     }
@@ -416,6 +437,267 @@ async def signals(request: dict, scripts: ScriptStore, config, prices_root: str,
     }
 
 
+# ── rule: the run test of a rule check ──
+
+RULE_DAYS = 2
+# How far back the engine's days are looked for, when none are asked.
+RULE_LOOK_BACK_DAYS = 12
+# What an engine day must hold to be tested: about eight hours of ten-second quotes.
+RULE_LEAST_ROWS = 3000
+# The bars a run is ended at: a script whose run continues cannot repaint but for its series, a few say it.
+CHECKPOINTS_WHOLE = 40
+CHECKPOINTS_CONTINUED = 4
+# Kept of the study's time limit for what follows the runs.
+RULE_MARGIN_SECONDS = 10
+DEFAULT_RULE_ASSET = "capital/US100"
+DEFAULT_RULE_BARS = "1"
+# What is said at most: the first differences, the warnings.
+RULE_DIFFERENCES = 10
+RULE_WARNINGS = 10
+
+
+def _rule_of_request(request: dict, scripts: ScriptStore) -> tuple[dict, EngineRule, dict]:
+    """
+    The rule a run test runs, and what it was run with: a rule as it runs (``rule``, its own pins and settings),
+    a saved version with today's libraries, or a source not saved yet. Every alert counts, read as a message.
+    """
+    if request.get("rule"):
+        stored = RuleStore(scripts).rule(request["rule"])
+        rule = {**stored, "id": REPLAY_RULE_ID, "alerts": [], "alert_calls": "message"}
+        engine_rule = engine_rule_of(rule, scripts)
+        settings = {"rule": stored["id"], "asset": f"{stored['asset']['provider']}/{stored['asset']['key']}",
+                    "side": stored["side"], "bars": stored["bars"], "inputs": {entry["id"]: entry["value"] for entry in stored["inputs"]},
+                    "history_days": stored.get("history_days")}
+        return rule, engine_rule, settings
+    asked = {**request, "asset": request.get("asset") or DEFAULT_RULE_ASSET, "bars": request.get("bars") or DEFAULT_RULE_BARS,
+             "alerts": {}, "alert_calls": "message"}
+    rule, engine_rule = study_rule(asked, scripts)
+    settings = {"rule": None, "asset": asked["asset"], "side": rule["side"], "bars": rule["bars"],
+                "inputs": request.get("inputs") or {}, "history_days": checked_history_days(request.get("history_days"))}
+    return rule, engine_rule, settings
+
+
+def _avoided(begin: int, end: int, avoid: list) -> bool:
+    days = {datetime.fromtimestamp(moment, timezone.utc).date() for moment in (begin, end - 1)}
+    for entry in avoid or []:
+        try:
+            first = date.fromisoformat(entry[0])
+            last = date.fromisoformat(entry[1]) if entry[1] else date.max
+        except (TypeError, ValueError, IndexError):
+            continue
+        if any(first <= day <= last for day in days):
+            return True
+    return False
+
+
+async def _rule_days(request: dict, rule: dict, rows, restart_minute: int) -> list[tuple[int, int, tuple[int, int]]]:
+    """
+    The engine's days a test runs, each with the period its alerts count in: those asked, or the newest that
+    ended on a weekday's session (Tuesday to Friday), outside the days to avoid (the research lock box), with
+    the asset's quotes for most of the day.
+    """
+    if request.get("from"):
+        first, last = _days(request)
+        clock = TradingClock(request.get("timezone") or "Europe/Paris")
+        period = (clock.day_bounds(first)[0], clock.day_bounds(last)[1])
+        return [(begin, end, period) for begin, end in engine_windows(period[0], period[1], restart_minute)]
+    now = int(time.time())
+    windows = [window for window in engine_windows(now - RULE_LOOK_BACK_DAYS * DAY, now, restart_minute) if window[1] <= now]
+    chosen = []
+    wanted = request.get("days") or RULE_DAYS
+    for begin, end in reversed(windows):
+        if datetime.fromtimestamp(end, timezone.utc).weekday() not in (1, 2, 3, 4) or _avoided(begin, end, request.get("avoid")):
+            continue
+        found, _ = await rows.rows(rule["asset"]["provider"], rule["asset"]["key"], begin, end)
+        if len(found) >= RULE_LEAST_ROWS:
+            chosen.append((begin, end, (begin, end)))
+        if len(chosen) >= wanted:
+            break
+    return list(reversed(chosen))
+
+
+def _pairs(window) -> list[tuple[list, dict]]:
+    """A window's alerts as (bar, alert), each with the confidence its rule would read in it."""
+    return [(replayed.bar, {**replayed.alert, "confidence": replayed.candidate.confidence if replayed.candidate else None})
+            for replayed in window.alerts]
+
+
+def _values_at(series: dict | None, bar_time: int) -> dict:
+    """Each plot's value at a bar (by its open time), from a run in detail."""
+    if not series:
+        return {}
+    try:
+        at = series["times"].index(bar_time)
+    except ValueError:
+        return {}
+    return {title: values[at] for title, values in series["plots"].items()}
+
+
+async def rule(request: dict, scripts: ScriptStore, config, prices_root: str, node: str, memory_mb: int, timeout: int,
+               files_root: str | None = None) -> dict:
+    started = time.monotonic()
+    deadline = started + max(15, timeout - RULE_MARGIN_SECONDS)
+    rule_, engine_rule, settings = _rule_of_request(request, scripts)
+    libraries = [dict(pin) for pin in engine_rule.libraries]
+    rules, static = await checker_answers(engine_rule.source, libraries, node, probe=True)
+    if static is None:
+        raise StudyRefused("The checker is not there: Node 24 and check.mjs (npm run build:checker)")
+    probe = static.pop("probe", None)
+    static = {**static, "tradingview_rules": rules or []}
+    check_ = static["check"]
+    blocking = {finding["id"] for finding in check_.get("findings") or [] if finding["level"] == "blocks"}
+    if blocking & {"version", "library", "library-missing"}:
+        return {"ok": True, "format": checks.RUN_FORMAT, "static": static, "tested": None, **checks.combined(static, None)}
+
+    _, _, engine_history, restart = ta_settings(config)
+    history_days = settings["history_days"] if settings["history_days"] is not None else engine_history
+    settings["history_days"] = history_days
+    restart_minute = restart_minute_of(request.get("restart_time") or restart)
+    rows, pg = await asset_rows_for(config, prices_root, rule_["asset"]["provider"], files_root)
+    session = ReplaySession(rule_, engine_rule, rows, node=node, history_days=history_days, restart_minute=restart_minute,
+                            messages=True, memory_mb=memory_mb, timeout_seconds=timeout)
+    whole = check_.get("wholeBecause") is not None
+    # A script with no alert of its own is judged on the events it draws: what it would raise once they are added.
+    drawn = not check_.get("alerts") and not check_.get("alertCalls")
+    candidate_titles = {candidate["title"] for candidate in check_.get("candidates") or []}
+    tested = {
+        "format": checks.RUN_FORMAT, "settings": settings, "days": [], "alerts": [], "same_bar": [], "candidates": [],
+        "checkpoints": {"planned": 0, "run": 0, "skipped": 0, "stopped": False, "with_alerts": 0, "probed": 0, "at_the_bar": [],
+                        "earlier": [], "plots_differ": [], "live_titles": []},
+        "history": None, "na_plots": [], "runtime_warnings": [], "failure": None,
+    }
+    days = []
+    try:
+        await session.start()
+        windows = await _rule_days(request, rule_, rows, restart_minute)
+        per_day = max(2, (CHECKPOINTS_WHOLE if whole else CHECKPOINTS_CONTINUED) // max(1, len(windows)))
+        # Where live may alert: only a script run whole at each new bar can alert otherwise there.
+        live = await _live_bars(session, rule_, engine_rule, probe, windows, drawn, candidate_titles) if probe and whole else {}
+        tested["checkpoints"]["probed"] = sum(len(bars) for bars in live.values())
+        marked: dict[str, int] = {}
+        na: dict[str, bool] = {}
+        tested_ends: list[int] = []
+        differ: set[str] = set()
+        for begin, end, period in windows:
+            window = await session.window(begin, end, period=period, detail=True)
+            pairs = _pairs(window)
+            bars = [bar for bar in window.strategy_bars if period[0] * 1000 <= bar[0] < period[1] * 1000 and begin * 1000 < bar[6] <= end * 1000]
+            if not bars:
+                # An engine day the days asked only touch, with no bar of theirs.
+                continue
+            tested_ends.append(end)
+            days.append({"bars": bars, "alerts": pairs})
+            tested["days"].append({"from": iso_seconds(begin), "to": iso_seconds(end), "bars": len(bars), "alerts": len(pairs),
+                                   "milliseconds": window.milliseconds})
+            series = window.series or {"times": [], "plots": {}}
+            # The day's own bars: those of its history are the day before's, counted with it.
+            own = {bar[0] for bar in bars}
+            inside = [index for index, moment in enumerate(series["times"]) if moment in own]
+            for title, values in series["plots"].items():
+                studied = [values[index] for index in inside]
+                na[title] = na.get(title, True) and all(value is None for value in studied)
+                if title in candidate_titles:
+                    marked[title] = marked.get(title, 0) + checks.marked(studied)
+            for warning in window.runtime_warnings:
+                message = warning.get("message")
+                if message and message not in tested["runtime_warnings"] and len(tested["runtime_warnings"]) < RULE_WARNINGS:
+                    tested["runtime_warnings"].append({"message": message})
+            plan = checks.plan_checkpoints(bars, {bar[0] for bar, _ in pairs}, per_day, live=live.get(end, set()))
+            tested["checkpoints"]["planned"] += len(plan)
+            for index in plan:
+                if time.monotonic() > deadline:
+                    tested["checkpoints"]["stopped"] = True
+                    break
+                bar = bars[index]
+                prefix = await session.window(begin, bar[6] // 1000, period=period, detail=drawn)
+                # A range bar cut by a pause is made only when the next quote comes: a run ending at its close lacks it.
+                if not any(built[0] == bar[0] for built in prefix.strategy_bars):
+                    tested["checkpoints"]["skipped"] += 1
+                    continue
+                tested["checkpoints"]["run"] += 1
+                ended = _pairs(prefix)
+                compared = checks.compare_at({"alerts": pairs}, {"alerts": ended}, bar[6])
+                alerted = any(at[6] == bar[6] for at, _ in pairs) or any(at[6] == bar[6] for at, _ in ended)
+                live_titles = tested["checkpoints"]["live_titles"]
+                live_titles += sorted({entry[2] for entry in compared["live_only"] if entry[2]} - set(live_titles))
+                said = [checks.said_difference(entry, "live") for entry in compared["live_only"]] + [
+                    checks.said_difference(entry, "backtest") for entry in compared["backtest_only"]]
+                if drawn:
+                    # The events it draws, as the alerts it would have once they are added.
+                    mine, theirs = _values_at(prefix.series, bar[0]), _values_at(window.series, bar[0])
+                    for title in sorted(candidate_titles & set(mine) & set(theirs)):
+                        drawn_live, drawn_backtest = checks.marked([mine[title]]), checks.marked([theirs[title]])
+                        alerted = alerted or bool(drawn_live or drawn_backtest)
+                        if drawn_live != drawn_backtest:
+                            said.append(f"the event “{title}” at {checks.moment_text(bar[0])} drawn only "
+                                        f"{'live' if drawn_live else 'in the backtest'}")
+                    differ.update(title for title in set(mine) & set(theirs) - candidate_titles if mine[title] != theirs[title])
+                tested["checkpoints"]["with_alerts"] += 1 if alerted else 0
+                if said and len(tested["checkpoints"]["at_the_bar"]) < RULE_DIFFERENCES:
+                    tested["checkpoints"]["at_the_bar"].append({"bar_time": iso_seconds(bar[0] / 1000), "said": "; ".join(said)})
+                if compared["earlier"] and len(tested["checkpoints"]["earlier"]) < RULE_DIFFERENCES:
+                    first = compared["earlier"][0]
+                    tested["checkpoints"]["earlier"].append({
+                        "bar_time": iso_seconds(bar[0] / 1000), "count": len(compared["earlier"]),
+                        "said": f"Ended at {checks.moment_text(bar[0])}, a run gave {_plural_alerts(len(compared['earlier']))} "
+                                f"otherwise at the bars before, the first “{first[2] or first[1]}” at {checks.moment_text(first[0])}",
+                    })
+        tested["checkpoints"]["plots_differ"] = sorted(differ)[:RULE_DIFFERENCES]
+        tested["alerts"] = checks.alert_stats(days)
+        tested["same_bar"] = checks.same_bar(days)[:5]
+        tested["candidates"] = [{"title": title, "marked": count} for title, count in marked.items()]
+        tested["na_plots"] = sorted(title for title, empty in na.items() if empty)[:RULE_DIFFERENCES]
+        tested["spoken"] = checks.spoken_days(tested_ends)
+        # One more day of history: the same days' alerts, from an earlier start.
+        if windows and time.monotonic() < deadline:
+            session.history_days = history_days + 1
+            ours = {checks.alert_key(alert, bar[0]) for day in days for bar, alert in day["alerts"]}
+            theirs: set = set()
+            for begin, end, period in windows:
+                if end in tested_ends:
+                    theirs |= {checks.alert_key(alert, bar[0]) for bar, alert in _pairs(await session.window(begin, end, period=period))}
+            tested["history"] = {"history_days": history_days + 1, "compared": len(ours), "differing": len(ours ^ theirs)}
+    except RunnerFailed as e:
+        tested["failure"] = {"message": e.error.get("message"), "file": e.error.get("file"), "line": e.error.get("line")}
+    finally:
+        await session.stop()
+        if pg is not None:
+            await pg.close()
+    tested["seconds"] = round(time.monotonic() - started, 1)
+    return {"ok": True, "format": checks.RUN_FORMAT, "static": static, "tested": tested, **checks.combined(static, tested)}
+
+
+async def _live_bars(session: ReplaySession, rule_: dict, engine_rule: EngineRule, probe: str, windows: list,
+                     drawn: bool, titles: set[str]) -> dict[int, set[int]]:
+    """
+    Where live may alert, by engine day (its end): the bars a run of the probe (the script with every bar read as
+    the last of its run, liveProbe of ruleCheck.ts) alerted at, or drew one of its events at. Only where runs are
+    ended first: what a run of the script ending there raises decides. A probe the runner refuses gives nothing.
+    """
+    found: dict[int, set[int]] = {}
+    session.engine_rule = dataclasses.replace(engine_rule, source=probe)
+    # The runner runs only the source its pin names.
+    session.rule = {**rule_, "script": {**rule_["script"], "sha256": hashlib.sha256(probe.encode()).hexdigest()}}
+    try:
+        for begin, end, period in windows:
+            window = await session.window(begin, end, period=period, detail=drawn)
+            bars = {bar[0] for bar, _ in _pairs(window)}
+            if drawn and window.series:
+                for title, values in window.series["plots"].items():
+                    if title in titles:
+                        bars |= {moment for moment, value in zip(window.series["times"], values) if checks.marked([value])}
+            found[end] = bars
+    except RunnerFailed:
+        return {}
+    finally:
+        session.engine_rule, session.rule = engine_rule, rule_
+    return found
+
+
+def _plural_alerts(count: int) -> str:
+    return f"{count:,} alert{'' if count == 1 else 's'}"
+
+
 # ── the command ──
 
 
@@ -459,6 +741,8 @@ async def study(args: argparse.Namespace) -> dict:
             return await check(request, scripts, args.node, args.memory_mb, args.timeout)
         if args.mode == "run":
             return await run(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, files_root)
+        if args.mode == "rule":
+            return await rule(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, files_root)
         return await signals(request, scripts, config, prices, args.node, args.memory_mb, args.timeout, args.signal_cache,
                              files_root)
     except RunnerFailed as e:

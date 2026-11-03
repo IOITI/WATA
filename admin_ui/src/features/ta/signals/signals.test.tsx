@@ -162,6 +162,12 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
       const one = /^\/api\/ta\/rules\/([0-9a-f]+)$/.exec(url.pathname)
       if (one && method === 'DELETE') return json(null, 204)
       if (url.pathname === '/api/ta/scripts') return json({ items: [CROSS] })
+      if (url.pathname === '/api/ta/rule-checks') {
+        return json({
+          scripts: { [CROSS.id]: { verdict: 'ready', checked_at: null, counts: {}, worst: null, tested_at: null, tested_bars: null, candidates: 0, version: 1 } },
+          rules: {}, state: { available: true, queued: [], testing: null, this_hour: 0, an_hour: 6, checking: 0, last_refusal: null },
+        })
+      }
       if (url.pathname === `/api/ta/scripts/${CROSS.id}/versions/1`) {
         return json({ ...CROSS.versions[0], source: SOURCE, ...(pinnedOrigin ? { origin: pinnedOrigin } : {}) })
       }
@@ -470,6 +476,9 @@ describe('the Signal rules page', () => {
       '1Scriptwhat it runs', '2Marketits bars, its indice', '3Inputs and alertswhat makes a signal', '4Review',
     ])
     expect(within(dialog).getByRole('combobox', { name: 'Script' })).toHaveValue(CROSS.id)
+    // Whether the version chosen can become a signal rule as it is, and where its rule check says more.
+    expect(await within(dialog).findByText('Ready for a rule')).toBeInTheDocument()
+    expect(within(dialog).getByRole('link', { name: 'its rule check' })).toHaveAttribute('href', `/ta/indicators/${CROSS.id}?tab=rule&version=1`)
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     // Bars of seconds too, any other length typed, or range bars.
     const bars = await within(dialog).findByRole('combobox', { name: 'Bars' })

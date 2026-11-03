@@ -45,6 +45,17 @@ WATA runs Pine with **PineTS** in Node, not TradingView. Most of Pine v5 and v6 
 - **Libraries**: `import user/Name/1 as alias` imports the WATA library that declares `library("Name")`, inlined before the run.
 - **PineTS is lenient**: what runs here can fail in TradingView, and the other way round.
 
+## What repaints on WATA
+
+Live, each new bar is the last bar of its run; a backtest runs each engine day once, and only the day's last bar is the last. So a script repaints on WATA, its alerts not the same live and in a backtest, when they read:
+- **`barstate.islast`, `isrealtime`, `islastconfirmedhistory`**: true at every bar live, at the day's last bar alone in a backtest (`ishistory` the other way round). `barstate.isconfirmed` and `isnew` are always true on WATA: harmless, but they cost a whole run at each bar.
+- **`last_bar_index`, `last_bar_time`**: the current bar live, the day's last bar in a backtest. LuxAlgo's `per = last_bar_index - bar_index <= 2000` hides early signals from backtests on short bars: replace it by `true`.
+- **`timenow`, `math.random`**: never the same twice.
+- **`request.security` of a longer timeframe**: live, its series holds only bars that are over, so inside one still open it reads na, where a backtest has a value (the bar before, or with `lookahead_on` its final value). `fixnan(request.security(sym, tf, expr))` holds the last value, and live and a backtest then read the same (tested on the real runner, 1 Nov 2026).
+- What only draws (a table under `if barstate.islast`, a label) changes nothing a rule sends.
+
+`pine_rule_check` says it for a saved version or a source: its alerts, the events it only draws (alerts to add), what may repaint followed to its alerts with its line, what WATA serves otherwise, and a verdict. With `test` (the default) it also runs it on two recorded days as a backtest runs them and ended at chosen bars as live runs them, and compares their alerts: a job past 45 s. A rule goes live only once its script passes or was tested as the rule runs it (its asset, bars, inputs, history).
+
 ## Nothing that looks ahead
 
 - Nothing from bars not yet closed: no `lookahead` in `request.security`.
@@ -61,7 +72,8 @@ WATA runs Pine with **PineTS** in Node, not TradingView. Most of Pine v5 and v6 
   1. `pine_check`: it compiles, and lists the inputs `in_N`, the plots and the alerts on made-up bars;
   2. `pine_run` on two or three days: does it plot what you think, and how many alerts?
   3. `pine_signals`: what a rule would send, day by day, with confidence;
-  4. `pine_save`.
+  4. `pine_rule_check`: whether it can be a rule as it is (it repaints, it lacks alerts, what to change);
+  5. `pine_save`.
 
 ## A skeleton
 

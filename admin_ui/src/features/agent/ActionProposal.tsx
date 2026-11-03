@@ -14,6 +14,7 @@ import { PauseDialog } from '@/features/dashboard/PauseDialog'
 import { ClosePositionDialog } from '@/features/positions/ClosePositionDialog'
 import { RestartDialog } from '@/features/system/RestartViews'
 import { useServices } from '@/features/system/useServices'
+import { useRuleChecks } from '@/features/ta/ruleCheck/useRuleCheck'
 import { liveReadiness } from '@/features/ta/signals/readiness'
 import { RuleModeDialog } from '@/features/ta/signals/RuleModeDialog'
 import { api } from '@/lib/api'
@@ -78,11 +79,12 @@ function RuleModeOfProposal({ action, proposal, onClose, onDone, onRefused }: {
   const rules = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules })
   const engine = useQuery({ queryKey: ['ta-engine'], queryFn: api.taEngine })
   const paper = useQuery({ queryKey: ['backtest-paper'], queryFn: api.backtestPaper, enabled: backtests, staleTime: 60_000 })
+  const ruleChecks = useRuleChecks()
   const rule = rules.data?.rules.find((entry) => entry.id === action.rule?.id)
   if (!rules.data || !rule) return null
   const mode = action.kind === 'rule_live' ? 'live' : 'shadow'
   const readiness = mode === 'live'
-    ? liveReadiness(rule, engine.data?.rules?.[rule.id], paper.data?.rules[rule.id], now, timezone)
+    ? liveReadiness(rule, engine.data?.rules?.[rule.id], paper.data?.rules[rule.id], now, timezone, ruleChecks.data?.rules[rule.id])
     : []
   return (
     <RuleModeDialog change={{ rule, mode }} revision={rules.data.revision} readiness={readiness} onClose={onClose}

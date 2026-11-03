@@ -8,8 +8,11 @@ import type {
   LuxAlgoKnownShort,
   LuxAlgoSource,
   LuxAlgoStatus,
+  RuleVerdict,
   ScriptOrigin,
 } from '@/lib/types'
+
+import { badgeOf } from '../ruleCheck/ruleCheckModel'
 
 export const LUXALGO_PATH = '/ta/luxalgo'
 const SITE = 'https://www.luxalgo.com'
@@ -166,13 +169,19 @@ export function compatSaid(compat: LuxAlgoCompat): string {
   return `It compiles on WATA and ${alertsSaid(compat)}: a signal rule maps them to actions.${strategy}`
 }
 
-/** The badges of a card of the Library, for an indicator WATA knows: taken, tested, checked or not. */
+/**
+ * The badges of a card of the Library, for an indicator WATA knows: taken, tested, and what its check found:
+ * whether it can become a signal rule once its whole source was read, else whether it compiles, or nothing yet.
+ */
 export function cardBadges(known: LuxAlgoKnownShort | undefined): { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] {
   if (!known) return []
   const badges: { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] = []
   if (known.scripts.length > 0) badges.push({ label: 'Taken', tone: 'neutral' })
   if (known.verdict) badges.push({ label: `Tested: ${TESTED[known.verdict.tone]}`, tone: VERDICT_TONE[known.verdict.tone] })
-  badges.push(known.compat
+  const asRule = badgeOf(known.rule_check)
+  // What does not compile, or was read in part, says so first: its source's verdict would rest on too little.
+  if (asRule && known.compat?.state !== 'fails' && known.compat?.state !== 'cut') badges.push(asRule)
+  else badges.push(known.compat
     ? { label: COMPAT_LABEL[known.compat.state], tone: COMPAT_TONE[known.compat.state] }
     : { label: 'Not checked', tone: 'neutral' })
   return badges
@@ -188,9 +197,9 @@ export function knowsNothing(known: Pick<LuxAlgoKnown, 'scripts' | 'runs' | 'rul
   return !known || (known.scripts.length === 0 && known.runs.length === 0 && known.rules.length === 0 && !known.verdict && !known.compat)
 }
 
-/** The checked indicators a filter keeps: every one, or those of one state. */
-export function checkedOf(items: LuxAlgoCompat[], state: LuxAlgoCompat['state'] | null): LuxAlgoCompat[] {
-  return state ? items.filter((item) => item.state === state) : items
+/** The checked indicators the filters keep: every one, or those of one state, or of one verdict as a rule. */
+export function checkedOf(items: LuxAlgoCompat[], state: LuxAlgoCompat['state'] | null, verdict: RuleVerdict | null = null): LuxAlgoCompat[] {
+  return items.filter((item) => (!state || item.state === state) && (!verdict || item.rule_check?.verdict === verdict))
 }
 
 // ── LuxAlgo's pictures ──

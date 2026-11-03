@@ -3975,6 +3975,8 @@ export interface LuxAlgoCompat {
   inputs?: number
   /** Why a source was not checked whole. */
   why?: string
+  /** Whether it can become a signal rule as it is (the Checked view's listing). */
+  rule_check?: RuleCheckSummary | null
 }
 
 export interface LuxAlgoKnownRun {
@@ -4003,6 +4005,8 @@ export interface LuxAlgoKnown {
   scripts: LuxAlgoTaken[]
   verdict: LuxAlgoVerdict | null
   compat: LuxAlgoCompat | null
+  /** Whether it can become a signal rule as it is, from its newest report. */
+  rule_check?: RuleCheckSummary | null
   runs: LuxAlgoKnownRun[]
   more_runs?: number
   rules: LuxAlgoKnownRule[]
@@ -4014,8 +4018,109 @@ export interface LuxAlgoKnownShort {
   scripts: LuxAlgoTaken[]
   verdict: LuxAlgoVerdict | null
   compat: LuxAlgoCompat | null
+  rule_check?: RuleCheckSummary | null
   runs: number
   rules: { id: string; mode: TaRuleMode }[]
+}
+
+// ── the rule check: whether a script can become a signal rule as it is (src/admin/rule_checks.py) ──
+
+import type { AlertCandidate, FindingLevel, RuleFinding, RuleVerdict } from '@/features/ta/engine/ruleCheck'
+export type { AlertCandidate, FindingLevel, RuleFinding, RuleVerdict }
+
+/** What a run test was run with: a rule's asset, side, bars, inputs and history. */
+export interface RuleTestSettings {
+  asset: string
+  side: string
+  bars: TaRuleBars
+  inputs: Record<string, unknown>
+  history_days: number | null
+  /** The rule it was run as, when it was. */
+  rule: string | null
+}
+
+export interface RuleTestDay {
+  from: string
+  to: string
+  bars: number
+  alerts: number
+  milliseconds: number | null
+}
+
+/** A run test of a report, as the study kept it. */
+export interface RuleTested {
+  settings: RuleTestSettings
+  at: string
+  spoken?: string
+  days?: RuleTestDay[]
+  alerts?: { title: string; count: number; repeats: number; longest: number; share: number | null }[]
+  checkpoints?: { planned: number; run: number; skipped: number; stopped: boolean }
+  history?: { history_days: number; compared: number; differing: number } | null
+  failure?: { message: string; file: string | null; line: number | null } | null
+  seconds?: number
+}
+
+/** Whether a script, at a version, or a LuxAlgo source can become a signal rule as it is. */
+export interface RuleCheckReport {
+  digest: string
+  about: { script?: { id: string; version: number }; luxalgo?: string; rule?: string } | null
+  checked_at: string | null
+  kind: 'indicator' | 'strategy' | 'library' | null
+  pine_version: number | null
+  alerts: { title: string | null; message: string | null; line: number }[]
+  alert_calls: { message: string | null; line: number }[]
+  candidates: AlertCandidate[]
+  plots: string[]
+  whole_because: string | null
+  tradingview_rules: { line: number; column: number; severity: string; message: string; source: string }[]
+  findings: (RuleFinding & { tested?: boolean; examples?: unknown[] })[]
+  verdict: RuleVerdict
+  tested: RuleTested | null
+  tests: { settings: RuleTestSettings; at: string; verdict: RuleVerdict }[]
+  /** A rule's report: whether the test shown was made as the rule runs. */
+  as_rule?: boolean
+}
+
+/** A report in a few words: for the lists, the cards and going live. */
+export interface RuleCheckSummary {
+  verdict: RuleVerdict
+  checked_at: string | null
+  counts: Partial<Record<FindingLevel, number>>
+  worst: { id: string; level: FindingLevel; message: string } | null
+  tested_at: string | null
+  tested_bars: string | null
+  candidates: number
+  /** A script's: the version it is of. */
+  version?: number
+  /** A rule's: whether it was tested as the rule runs. */
+  as_rule?: boolean
+}
+
+/** The run tests asked and under way. */
+export interface RuleChecksState {
+  available: boolean
+  queued: { about: RuleCheckReport['about']; settings: RuleTestSettings; asked_at: string }[]
+  testing: { about: RuleCheckReport['about']; settings: RuleTestSettings } | null
+  this_hour: number
+  an_hour: number
+  /** Reports being made in the background. */
+  checking: number
+  last_refusal: { about: RuleCheckReport['about']; message: string | null; at: string } | null
+}
+
+export interface RuleChecksListed {
+  scripts: Record<string, RuleCheckSummary | null>
+  rules: Record<string, RuleCheckSummary | null>
+  state: RuleChecksState
+}
+
+/** A run test asked: its bars and asset, as a rule's. */
+export interface RuleTestAsked {
+  bars?: string
+  asset?: string
+  side?: 'bid' | 'ask'
+  inputs?: Record<string, unknown>
+  history_days?: number | null
 }
 
 /** The checks asked and under way. */

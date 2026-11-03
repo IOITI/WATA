@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.77.0 - Ready for a signal rule?
+
+**Release date:** not released yet
+
+Whether an indicator, one of yours or one of LuxAlgo's Library, can become a signal rule as it is: does it repaint, does it raise alerts or need some added, and what else WATA serves otherwise than TradingView. Nothing of it trades.
+- **Its source, read at once** (a script's new **As a rule** tab, the Indicators list's column, the rule dialog, a LuxAlgo indicator's **As a signal rule** tab and its card, the Checked by WATA view and its filter):
+  - its `alertcondition()`s and `alert()`s; the events it only draws (plotshape, plotchar, a background or bar colour, an `alert()` or a `strategy.entry()` under an `if`), each an alert it could have;
+  - what repaints on WATA, where each new bar is the last of its run live and only the engine day's last bar is in a backtest: `barstate.islast`/`isrealtime`/`ishistory`, `last_bar_index`/`last_bar_time` (LuxAlgo's "only the last 2,000 bars"), `session.islastbar`, `timenow`, `math.random`, `request.security`, `lookahead_on`, the chart's visible range, a strategy's own state. Each is followed to the alerts, through what carries it, so what only draws a table or a label is said and not counted;
+  - what WATA serves otherwise: `syminfo.mintick` na, a time with no time zone read in UTC, volume a count of quote changes, a series it has not or reads only in backtests, data it has not;
+  - each finding at its line, with what to change: the editor marks them as you type, as warnings, never as errors. A verdict: Ready for a rule, To adapt, May repaint, Repaints, Needs alerts, Cannot be a rule.
+- **"Add them in the editor"** writes an `alertcondition()` on each event it only draws, after the line it is drawn on, unsaved.
+- **The run test on recorded bars**, only when asked: the script run on two finished days WATA recorded as a backtest runs it, then ended at chosen bars as live runs it, and the alerts compared at those bars and before them; then with one more day of history. The bars are chosen first where live may alert: a copy of the script with every bar read as the last of its run (`barstate.islast` true, `last_bar_index` the bar's own) is run once a day to show where; it only chooses, a run ending there decides. A test where no alert came at the bars tested says it could compare nothing, and the risk stays. It says the bars where they differ, an alert that fires at every bar or never, two raised on one bar, and what a run costs. One at a time behind Claude's studies, six an hour at most, never on the research lock box's days.
+- **Measured on the real runner**: an alert behind `barstate.isrealtime` fires only live; a `last_bar_index - bar_index <= 50` window changes its past alerts; a longer timeframe read with `request.security` is na live inside its bar not yet over, where a backtest has a value, and `fixnan(request.security(...))` makes them the same.
+- **Going live** has one more readiness item, "Its script as a rule": a rule whose script cannot be a rule as it is, repaints, or may repaint and was never tested as that rule runs it (its asset, side, bars, inputs and history) is held back. "Test its script as it runs it" is on the rule's page; "Go live anyway" still goes past, and the audit trail names what was missing.
+- **The AI agent**: "Make it ready for a signal rule", the first request offered on a script (and the LuxAlgo ones), fixes a copy, checks it again and proposes it as a new version, never live. **Claude Code and the agent** get `pine_rule_check` (a job past 45 s), and `pine_get` and `rule_list` carry the check.
+- Kept by the digest of a source and its libraries' pins (`var/lib/admin/ta/rule_checks/`), so a report never speaks of code it did not read.
+
+**On the live path:** nothing. Only the admin's container changes (the release manifest, compared with v0.76.0's): nothing of the trader, the position monitor, the TA engine or the recorders, the Pine runner byte for byte the same (`runner.mjs`), and the backtests' code digest unchanged (`7446dd27f5df9a7e`): no run turns stale. The admin now always builds its Pine studies' service, a study starting only when asked.
+
+**Verification status:**
+- Tests:
+  - the static check on made-up scripts, finding by finding, with its line and its trace; its sources held to the engine's `wholeBecause`; the candidates and the alerts written in;
+  - the run test's comparisons, statistics, findings and verdict; the `rule` study on the real Pine runner (Node 24) on made-up day files, for each case measured above; the store, the queue behind the studies, a rule's matching test, LuxAlgo's reports; the routes; the readiness sentence; the MCP tool lists;
+  - the pages: the script's tab and its alerts written into the editor, its run test asked on the rule's bars, the Indicators column, the rule dialog's line, the rule page's item and test, LuxAlgo's tab, cards and filter.
+- The 3,880 Python tests and the interface's 1,408 pass, with lint and typecheck; the checker and the runner built.
+- The static check run over the 20 Pine scripts of `wata-tradingview-scripts` and the lab: none failed, each read in 12 ms or less. It found two events drawn under one title (now titled apart) and wrote "time of day" of a date part (now "the bar's time or day").
+- Seen in the browser pane on the development admin (`FAKE_AI=1 FAKE_LUXALGO=1`), on its recorded days of 29 and 30 Oct:
+  - the Indicators column; a script that only draws two events, "Needs alerts", "Add them in the editor", saved, "Ready for a rule";
+  - an EMA cross tested as its rule runs it: the same live and in a backtest;
+  - an alert behind `barstate.isrealtime` on a cross: the first run test called it the same live and in a backtest, no bar spread evenly falling on a cross. Hence the probe: tested again, "At 10 of the 40 bars tested, a run ending there, as live has it, raised other alerts". A shadow rule on it was held back ("may repaint, never tested as this rule runs it", then "repaints" once tested so), its go-live confirmation saying so (closed, not switched);
+  - LuxAlgo's made-up Library: an indicator's "As a signal rule" tab and At a glance;
+  - the AI agent's "Make it ready for a signal rule": `pine_rule_check` called, a version with the two alerts proposed;
+  - at 375 px and in the dark theme, nothing wider than the screen (the tabs' strip scrolls).
+- LuxAlgo's real "Market Structure (Breakers)", read whole through Claude Code's LuxAlgo connector and saved as a script there: "Needs alerts", its two breakouts and its support and resistance candles offered; written in, saved and tested on recorded bars: "Ready for a rule", the same live and in a backtest.
+- Not seen against the server's recorded days.
+
 ## v0.76.0 - Exits judged on the index between Saxo's quotes
 
 **Release date:** 2026-10-31

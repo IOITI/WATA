@@ -10,10 +10,12 @@ from starlette.concurrency import run_in_threadpool
 
 from src.admin.mcp_server.budget import CONTEXT_CHARS, Refused, compact, research_tool
 from src.admin.mcp_server.facade import CLAUDE
+from src.admin.errors import NotPossible
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, page, period, refuse_lockbox
 from src.admin.ta_compare import compare, default_tolerance
 from src.admin.ta_rules import rule_users
 from src.backtest.clock import TradingClock
+from src.research.rule_check import combined
 from src.research.study import MAX_STUDY_DAYS, bars_of
 
 KINDS = ("", "indicator", "strategy", "library")
@@ -120,8 +122,17 @@ def register(server, research) -> None:
             return meta, number, source, rule_users(rules, script_id), research.origin_of(script_id, number, lambda: source)
 
         meta, number, source, users, origin = await run_in_threadpool(read)
+        checked = None
+        if research.rule_checks is not None and meta.get("kind") != "library":
+            try:
+                found = await research.rule_checks.of_version(script_id, number)
+                checked = said_rule_check(found) if found else None
+            except NotPossible:
+                checked = None
         return compacted({
             **_script_line(meta, users, origin),
+            # Whether this version can become a signal rule as it is: pine_rule_check says more, and tests it.
+            "rule_check": checked,
             "description": meta.get("description") or "",
             "pine_version": meta.get("pine_version"),
             "library_name": meta.get("library_name"),
@@ -139,6 +150,28 @@ def register(server, research) -> None:
 # ── studies: checked, run and replayed on the server ──
 
 ALERT_CALLS = ("ignore", "message")
+# What a rule check says of each finding's places, at most.
+RULE_CHECK_PLACES = 5
+
+
+def said_rule_check(report: dict) -> dict:
+    """A rule check as Claude reads it: its verdict, each finding with where and what to change, the alerts to add."""
+    tested = report.get("tested") or None
+    return {
+        "verdict": report.get("verdict"),
+        "findings": [
+            {**{key: finding.get(key) for key in ("id", "area", "level", "message", "fix", "excerpt", "through")
+                if finding.get(key) is not None},
+             "places": [f"{place.get('file') or 'script'}:{place.get('line')}" for place in (finding.get("places") or [])[:RULE_CHECK_PLACES]]}
+            for finding in report.get("findings") or []
+        ],
+        "alerts": [alert.get("title") for alert in report.get("alerts") or []],
+        "candidates": [{key: candidate.get(key) for key in ("title", "condition", "call", "line")}
+                       for candidate in report.get("candidates") or []],
+        "whole_because": report.get("whole_because"),
+        "tested": {key: tested.get(key) for key in ("settings", "at", "spoken", "days", "checkpoints", "history", "alerts")
+                   if tested.get(key) is not None} if tested else None,
+    }
 
 
 def _study_request(research, *, script_id: str, version: int, source: str, name: str, asset: str, bars: str, side: str,
@@ -171,6 +204,57 @@ def register_studies(server, research) -> None:
     calls = research.calls
     # A study may outlast a call: these tools answer with a job then (job_wait).
     jobs = research.jobs
+
+    @research_tool(server, calls, name="pine_rule_check", title="Whether a script can become a signal rule",
+                   read_only=True, jobs=jobs)
+    async def pine_rule_check(script_id: str = "", version: int = 0, source: str = "", name: str = "", test: bool = True,
+                              asset: str = "capital/US100", bars: str = "1", side: str = "bid", inputs: dict | None = None,
+                              history_days: int | None = None, start_day: date | None = None,
+                              end_day: date | None = None) -> dict:
+        """Whether a script (saved, or a source not saved yet) can become a signal rule as it is. Its source: the
+        alerts a rule maps, the events it only draws (candidates: the alertcondition() each would be), what may make
+        its signals differ live and in a backtest, followed to its alerts, and what WATA serves otherwise, each at its
+        line with what to change (fix). With ``test``, its run test on recorded bars: each engine day run as a backtest
+        runs it, then ended at chosen bars as live had them, compared; how often each alert fires; one more day of
+        history. verdict: blocked, needs_alerts, repaints, may_repaint, to_change or ready. Days: start_day and
+        end_day, or the two newest finished weekdays outside the lock box. A saved version's test is kept for its
+        page, beside the operator's."""
+        if bool(source) == bool(script_id):
+            raise Refused("Name a saved script (script_id, version) or give a source not saved yet, one of them")
+        if not test:
+            if script_id:
+                if research.rule_checks is None:
+                    raise Refused("The rule check is not available here")
+                report = await research.rule_checks.of_version(script_id, version or None)
+                if report is None:
+                    raise Refused("A library: it is checked through the scripts that import it")
+                return compacted(said_rule_check(report))
+            static = (await _studies(research).study("check", {"source": source, "name": name or "Draft"})).get("rule_check")
+            if not static:
+                raise Refused("The checker is not built here (npm run build:checker)")
+            check = static["check"]
+            return compacted(said_rule_check({**check, "alert_calls": check.get("alertCalls"), "whole_because": check.get("wholeBecause"),
+                                              **combined(static, None)}))
+        request = {"asset": asset, "bars": bars, "side": side, "inputs": inputs or {}, "history_days": history_days}
+        if start_day is not None:
+            first, last = period(start_day, end_day, MAX_STUDY_DAYS)
+            refuse_lockbox(research.journal, first, last)
+            request.update({"from": first.isoformat(), "to": last.isoformat(), "timezone": research.timezone})
+        else:
+            box = research.journal.lockbox()
+            request["avoid"] = [[box["from"].isoformat(), box["to"].isoformat() if box["to"] else None]] if box else []
+        if source:
+            request.update(source=source, name=name or "Draft")
+        else:
+            request["script"] = {"id": script_id, "version": version or None}
+        answer = await _studies(research).study("rule", request)
+        if not answer.get("ok"):
+            return compacted(answer)
+        if script_id and research.rule_checks is not None:
+            await research.rule_checks.keep_answer(script_id, version or None, answer)
+        check = (answer.get("static") or {}).get("check") or {}
+        return compacted(said_rule_check({**check, "whole_because": check.get("wholeBecause"), "findings": answer["findings"],
+                                          "verdict": answer["verdict"], "tested": answer.get("tested")}))
 
     @research_tool(server, calls, name="pine_check", title="Check a Pine script", read_only=True, jobs=jobs)
     async def pine_check(source: str = "", script_id: str = "", version: int = 0, name: str = "") -> dict:
@@ -285,6 +369,9 @@ def register_studies(server, research) -> None:
             return scripts.create(name, source, description, made_by=CLAUDE)
 
         saved = await run_in_threadpool(save)
+        if research.rule_checks is not None and saved["kind"] != "library":
+            # Its rule check made in the background, as for a version the operator saves.
+            research.rule_checks.noticed_version(saved["id"], saved["version"])
         return compacted({
             "saved": True, "id": saved["id"], "name": saved["name"], "kind": saved["kind"], "version": saved["version"],
             "inputs": checked.get("inputs"), "plots": checked.get("plots"), "warnings": checked.get("warnings"),

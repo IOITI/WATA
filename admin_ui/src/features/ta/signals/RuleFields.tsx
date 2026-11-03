@@ -2,13 +2,17 @@
 // runs, the script's own inputs (read by PineTS in the page's worker), what
 // each alert becomes, the price side and the bars.
 
-import { Alert, AlertDescription, Checkbox, cn, Input, Select } from 'ioiti-ui'
+import { Alert, AlertDescription, Badge, Checkbox, cn, Input, Select } from 'ioiti-ui'
 import type { IPineInput } from 'pinets'
 import { useId, useState } from 'react'
+import { Link } from 'react-router'
 
 import type { TaAlertAction, TaScriptSummary } from '@/lib/types'
 
 import { messageAction } from '../engine/outline'
+import { badgeOf, summarySaid } from '../ruleCheck/ruleCheckModel'
+import { useRuleChecks } from '../ruleCheck/useRuleCheck'
+import { scriptTabHref } from '../script/scriptPageModel'
 import { readTimeframe, TIMEFRAME_HINT, TIMEFRAMES, unevenNote } from '../engine/timeframes'
 import { ACTION_LABEL, ALERT_ACTIONS, inputSections, inputValueOf } from './ruleModel'
 import type { InputValue, RuleDraft } from './ruleModel'
@@ -80,6 +84,31 @@ function InputField({
   )
 }
 
+/**
+ * Whether the version chosen can become a signal rule as it is, in a line: its rule check's verdict, what it found
+ * worst, and its script's "As a rule" tab, which says more. The newest version's, from the list; another's there.
+ */
+function AsARule({ scriptId, version, newest }: { scriptId: string; version: number; newest: number | null }) {
+  const listed = useRuleChecks()
+  const found = version === newest ? listed.data?.scripts[scriptId] : undefined
+  const badge = badgeOf(found)
+  return (
+    <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
+      {badge && found ? (
+        <>
+          <Badge tone={badge.tone} dot>{badge.label}</Badge>
+          <span>{summarySaid(found)}</span>
+        </>
+      ) : (
+        <span>Whether this version can become a signal rule as it is:</span>
+      )}
+      <Link to={`/ta/indicators/${scriptId}${scriptTabHref('rule', version)}`} className="underline underline-offset-4">
+        its rule check
+      </Link>
+    </p>
+  )
+}
+
 /** The script and its version. A script chosen again starts with its own inputs and no alert mapped. */
 export function ScriptChoice({
   draft,
@@ -119,6 +148,7 @@ export function ScriptChoice({
           }))}
         />
       </label>
+      {script && <AsARule scriptId={script.id} version={draft.version} newest={script.version} />}
     </>
   )
 }

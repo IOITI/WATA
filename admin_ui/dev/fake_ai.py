@@ -8,7 +8,9 @@ A run shared: its edge read, an experiment opened, a stress test of it started
 and waited for, a tighter stop proposed for config.json, then an answer with a
 table and links. A script shared: a copy of it saved as Claude's with an input
 changed, proposed as a new version and as a new script, and the change of a
-rule that runs it (one not live), proposed after it. A position, a signal, a
+rule that runs it (one not live), proposed after it; asked to make it ready for
+a signal rule, its rule check read, the events it only draws written in as
+alerts in a copy, proposed as a new version. A position, a signal, a
 day or an incident shared: an account of it, the health and logs read for an
 incident. A research task: a look at the backtests, then, at its next request,
 task_done and its conclusion. A daily debrief: an account of the day. Anything
@@ -45,6 +47,8 @@ _SHARED_TRADING = re.compile(r"The operator shares the (position|signal|trading 
 _SHARED_RULE = re.compile(r"The operator shares the signal rule .*?\(([0-9a-f]{12})\), as your tools")
 _SHARED_REVIEW = re.compile(r"The operator shares (a change, to review before it is saved:|an unsaved draft of the script,) ")
 _SHARED_LUXALGO = re.compile(r"The operator shares the indicator of LuxAlgo's Library .*?\(([a-z0-9][a-z0-9-]{0,120})\), as your tools")
+# The preset "Make it ready for a signal rule" (presetsFor in admin_ui/src/features/agent/model.ts).
+_READY = "Make this script ready to be a signal rule"
 _DRAFT_OF = re.compile(r"What changed from version (\d+) of script ([0-9a-f]{12})")
 _TASK = "A research task the operator left you"
 _TASK_GOES_ON = "The research task goes on"
@@ -80,6 +84,8 @@ class FakeClaude:
         # The agent's conversations (agent_of sets it): the proposals a turn follows up.
         self.store = None
         self._opening = ""
+        # The prompt of the request under way.
+        self._prompt = ""
 
     async def close(self) -> None:
         pass
@@ -121,6 +127,7 @@ class FakeClaude:
                     subject = ("change", "")
         done = self._done(messages)
         asked = self._asked(messages)
+        self._prompt = asked
         shared, files = self._given(messages)
         # The conversation's first words: its memory's list, when it has one.
         self._opening = next((block.get("text", "") for block in _blocks_of(messages[0])
@@ -233,6 +240,8 @@ class FakeClaude:
     async def _next(self, subject, done: dict, on_event) -> list:
         if subject and subject[0] == "run":
             return await self._run(subject[1], done, on_event)
+        if subject and subject[0] == "script" and _READY in self._prompt:
+            return await self._ready(subject[1], done, on_event)
         if subject and subject[0] == "script":
             return await self._script(subject[1], done, on_event)
         if subject and subject[0] == "incident":
@@ -390,6 +399,31 @@ class FakeClaude:
         return await self._turn(on_event, "I have its case.", text=(
             "## Not ready yet\n\nIts paper days stay inside its reference's range, but they are **three**, and its "
             "report rests on 9 trades (made up by the development admin). Two more weekdays in shadow, then ask again."))
+
+    async def _ready(self, script_id: str, done: dict, on_event) -> list:
+        """A script made ready for a signal rule: its rule check read, its drawn events written in as alerts, proposed."""
+        script = self._scripts.script(script_id)
+        if "pine_rule_check" not in done:
+            return await self._turn(on_event, "First, what keeps it from being a signal rule: its rule check.", [
+                ("pine_rule_check", {"script_id": script_id, "version": script["version"], "test": False})])
+        answer = done["pine_rule_check"]
+        found = json.loads(answer) if isinstance(answer, str) and answer.startswith("{") else {}
+        if "propose_script_change" not in done:
+            lines = [f'alertcondition({candidate["condition"]}, "{candidate["title"]}", "{candidate["title"]}") // added for a signal rule'
+                     for candidate in found.get("candidates") or []]
+            source = script["source"].rstrip("\n") + "\n" + ("\n".join(lines) or "// Ready for a signal rule (made up)") + "\n"
+            # As pine_save would have saved it, the studies aside.
+            fix = self._scripts.create(f"{script['name']} ready by Claude {secrets.token_hex(2)}", source, made_by="claude")
+            return await self._turn(on_event, f"Its rule check says {found.get('verdict') or 'nothing I can read'}: "
+                                              "I write the events it draws in as alerts, in a copy of mine.", [
+                ("propose_script_change", {"script_id": script_id, "base_version": script["version"],
+                                           "from_script_id": fix["id"], "from_version": 1, "title": "Its events as alerts",
+                                           "rationale": "Made up by the development admin: each event it draws, an alertcondition()."})])
+        said = ", ".join(f"**{finding['id']}**" for finding in found.get("findings") or []) or "nothing"
+        return await self._turn(on_event, "The copy is proposed.", text=(
+            f"## Ready for a signal rule?\n\nIts rule check found {said} (made up by the development admin). I wrote "
+            f"{len(found.get('candidates') or [])} of the events it draws in as alerts and proposed it as a new version: "
+            "review it below, then test it on recorded bars from its **As a rule** tab. Nothing goes live."))
 
     async def _draft(self, script_id: str, base: int, done: dict, on_event) -> list:
         if "propose_script_change" not in done:

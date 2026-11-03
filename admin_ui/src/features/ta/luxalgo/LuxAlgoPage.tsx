@@ -29,8 +29,9 @@ import { Link, useSearchParams } from 'react-router'
 
 import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
-import type { LuxAlgoCompat, LuxAlgoFamily, LuxAlgoKnownShort, LuxAlgoSearchResult, LuxAlgoStatus } from '@/lib/types'
+import type { LuxAlgoCompat, LuxAlgoFamily, LuxAlgoKnownShort, LuxAlgoSearchResult, LuxAlgoStatus, RuleVerdict } from '@/lib/types'
 
+import { VERDICT_LABEL, VERDICT_TONE } from '../ruleCheck/ruleCheckModel'
 import { IndicatorCard } from './IndicatorCard'
 import { cardBadges, checkedOf, COMPAT_LABEL, COMPAT_TONE, compatSaid, conceptPath, indicatorPath, pageCount, returnSaid } from './luxalgoModel'
 import { SignInPanel } from './SignInPanel'
@@ -42,6 +43,7 @@ const VIEWS = [
   { id: 'checked', label: 'Checked by WATA', href: '?view=checked' },
 ]
 const STATES = Object.keys(COMPAT_LABEL) as LuxAlgoCompat['state'][]
+const VERDICTS = Object.keys(VERDICT_LABEL) as RuleVerdict[]
 
 /** What WATA knows of each indicator it touched, by slug, its newest check included: the cards' badges. */
 function useKnown() {
@@ -189,8 +191,9 @@ function SearchResults({ query, family, families, known }: {
 function Checked() {
   const { timezone } = useSession()
   const [state, setState] = useState<LuxAlgoCompat['state'] | ''>('')
+  const [verdict, setVerdict] = useState<RuleVerdict | ''>('')
   const listed = useLuxAlgoChecks()
-  const items = checkedOf(listed.data?.items ?? [], state || null)
+  const items = checkedOf(listed.data?.items ?? [], state || null, verdict || null)
   const checks = listed.data?.checks
   return (
     <Panel
@@ -200,11 +203,18 @@ function Checked() {
         : `Each indicator WATA read whole, checked as a script is: whether it compiles in PineTS and what alerts it declares.${
           checks?.queued?.length ? ` ${checks.queued.length} waiting.` : ''}`}
       action={
-        <label className="flex w-48 flex-col gap-1 text-xs">
-          <span className="text-text-secondary">Showing</span>
-          <Select value={state} onChange={(event) => setState(event.target.value as LuxAlgoCompat['state'] | '')}
-            options={[{ value: '', label: 'Every one' }, ...STATES.map((value) => ({ value, label: COMPAT_LABEL[value] }))]} />
-        </label>
+        <div className="flex flex-wrap gap-2">
+          <label className="flex w-44 flex-col gap-1 text-xs">
+            <span className="text-text-secondary">Showing</span>
+            <Select value={state} onChange={(event) => setState(event.target.value as LuxAlgoCompat['state'] | '')}
+              options={[{ value: '', label: 'Every one' }, ...STATES.map((value) => ({ value, label: COMPAT_LABEL[value] }))]} />
+          </label>
+          <label className="flex w-44 flex-col gap-1 text-xs">
+            <span className="text-text-secondary">As a rule</span>
+            <Select value={verdict} onChange={(event) => setVerdict(event.target.value as RuleVerdict | '')}
+              options={[{ value: '', label: 'Every one' }, ...VERDICTS.map((value) => ({ value, label: VERDICT_LABEL[value] }))]} />
+          </label>
+        </div>
       }
       dense
     >
@@ -213,8 +223,9 @@ function Checked() {
         <ul className="flex flex-col divide-y divide-border">
           {items.map((item) => (
             <li key={item.slug} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:gap-4">
-              <div className="flex min-w-48 items-center gap-2">
+              <div className="flex min-w-48 flex-wrap items-center gap-2">
                 <Badge tone={COMPAT_TONE[item.state]} dot>{COMPAT_LABEL[item.state]}</Badge>
+                {item.rule_check && <Badge tone={VERDICT_TONE[item.rule_check.verdict]}>{VERDICT_LABEL[item.rule_check.verdict]}</Badge>}
               </div>
               <div className="min-w-0 flex-1 text-sm">
                 {item.slug && (

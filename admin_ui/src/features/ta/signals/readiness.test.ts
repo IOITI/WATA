@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import type { BacktestPaper, TaRule, TaRuleState } from '@/lib/types'
+import type { BacktestPaper, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
 
-import { holdingBack, liveReadiness, weekdaysBetween } from './readiness'
+import { holdingBack, liveReadiness, scriptAsRule, weekdaysBetween } from './readiness'
 
 const ZONE = 'Europe/Paris'
 
@@ -26,6 +26,9 @@ function state(changes: Partial<TaRuleState> = {}): TaRuleState {
 }
 
 const states = (checks: ReturnType<typeof liveReadiness>) => Object.fromEntries(checks.map((check) => [check.id, check.state]))
+const READY: RuleCheckSummary = {
+  verdict: 'ready', checked_at: '2026-10-28T20:00:00Z', counts: {}, worst: null, tested_at: null, tested_bars: null, candidates: 0, as_rule: false,
+}
 const detail = (checks: ReturnType<typeof liveReadiness>, id: string) => checks.find((check) => check.id === id)?.detail
 
 describe('whether a rule is ready to go live', () => {
@@ -43,7 +46,7 @@ describe('whether a rule is ready to go live', () => {
     }
     const checks = liveReadiness(rule(), state(), paper, Date.parse('2026-10-22T07:03:21+02:00'), ZONE)
 
-    expect(states(checks)).toEqual({ shadow: 'open', signals: 'fail', paper: 'open', engine: 'pass', script: 'pass' })
+    expect(states(checks)).toEqual({ shadow: 'open', signals: 'fail', paper: 'open', engine: 'pass', rule_check: 'open', script: 'pass' })
     expect(detail(checks, 'shadow')).toBe('In shadow since 21 Oct 2026: 1 weekday of 5.')
     expect(detail(checks, 'signals')).toBe('None yet: what it would send is not known.')
     expect(detail(checks, 'paper')).toBe('1 day on paper, and no reference run to set them against: make one a run of this rule.')
@@ -67,8 +70,8 @@ describe('whether a rule is ready to go live', () => {
       ],
       reference: { run_id: 'ref', name: 'Cross, 3 months', days: 60, low: -1.5, median: 0.2, high: 2.75 },
     }
-    const checks = liveReadiness(rule(), state({ last_alert_at: '2026-10-28T14:00:00Z' }), paper, Date.parse('2026-10-29T09:00:00Z'), ZONE)
-    expect(states(checks)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'pass', engine: 'pass', script: 'pass' })
+    const checks = liveReadiness(rule(), state({ last_alert_at: '2026-10-28T14:00:00Z' }), paper, Date.parse('2026-10-29T09:00:00Z'), ZONE, READY)
+    expect(states(checks)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'pass', engine: 'pass', rule_check: 'pass', script: 'pass' })
   })
 
   it('fails a rule the engine cannot run, with days outside its range, and says a newer version is saved', () => {
@@ -82,13 +85,14 @@ describe('whether a rule is ready to go live', () => {
       paper,
       Date.parse('2026-10-29T09:00:00Z'),
       ZONE,
+      { ...READY, verdict: 'repaints', worst: { id: 'repaints-at-the-bar', level: 'repaints', message: '…' } },
     )
-    expect(states(checks)).toEqual({ shadow: 'fail', signals: 'fail', paper: 'fail', engine: 'fail', script: 'open' })
+    expect(states(checks)).toEqual({ shadow: 'fail', signals: 'fail', paper: 'fail', engine: 'fail', rule_check: 'fail', script: 'open' })
     expect(detail(checks, 'engine')).toBe('Failing: Undeclared identifier (script, line 4).')
     expect(detail(checks, 'paper')).toBe('1 of 1 day on paper fell outside the range of its reference run.')
     expect(detail(checks, 'script')).toBe('Version 6 of its script is saved: it runs version 5.')
     // All but the script's version hold it back, as the server's unmet_readiness does.
-    expect(holdingBack(checks).map((check) => check.id)).toEqual(['shadow', 'signals', 'paper', 'engine'])
+    expect(holdingBack(checks).map((check) => check.id)).toEqual(['shadow', 'signals', 'paper', 'engine', 'rule_check'])
   })
 
   it('holds back what the server holds back: a week in shadow until it has passed, the others once they failed', () => {
@@ -102,8 +106,32 @@ describe('whether a rule is ready to go live', () => {
       undefined,
       Date.parse('2026-10-29T09:00:00Z'),
       ZONE,
+      READY,
     )
-    expect(states(ready)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'open', engine: 'pass', script: 'open' })
+    expect(states(ready)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'open', engine: 'pass', rule_check: 'pass', script: 'open' })
     expect(holdingBack(ready)).toEqual([])
+  })
+
+  it('says its script as a rule as the server holds it: what cannot be one, repaints, or was never tested as it runs', () => {
+    const said = (changes: Partial<RuleCheckSummary>) => scriptAsRule({ ...READY, ...changes })
+
+    expect(said({ verdict: 'needs_alerts', worst: { id: 'no-alerts', level: 'blocks', message: '…' } })).toMatchObject({
+      state: 'fail', detail: 'Its script cannot be a rule as it is: no alert.',
+    })
+    expect(said({ verdict: 'blocked', worst: { id: 'live-ticker', level: 'blocks', message: '…' } }).detail).toBe(
+      'Its script cannot be a rule as it is: a series WATA reads only in backtests.',
+    )
+    expect(said({ verdict: 'may_repaint' })).toMatchObject({
+      state: 'fail', detail: 'Its script may repaint, and was never tested on recorded bars as this rule runs it.',
+    })
+    expect(said({ verdict: 'may_repaint', as_rule: true }).detail).toBe(
+      'Its script may repaint: its run test as this rule runs it had no alert to compare.',
+    )
+    expect(said({ verdict: 'to_change', as_rule: true })).toMatchObject({
+      state: 'pass', detail: 'Its script can be a signal rule, tested on recorded bars as this rule runs it.',
+    })
+    // Being read, or made by the server first: nothing to hold back on yet, the server checks it again.
+    expect(scriptAsRule(undefined).state).toBe('open')
+    expect(scriptAsRule(null).detail).toBe('Its rule check is being made: the server makes it before the switch.')
   })
 })

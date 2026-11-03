@@ -44,6 +44,9 @@ import { paperTradingHref } from '@/features/backtests/paperModel'
 import { usePaper } from '@/features/backtests/usePaper'
 import { madeByClaude } from '@/features/system/claude'
 import { monitorHref } from '@/features/ta/monitor/monitorModel'
+import { TESTING_SAID, testingOf } from '@/features/ta/ruleCheck/ruleCheckModel'
+import { useAskRuleTest, useRuleChecks, useRuleRuleCheck } from '@/features/ta/ruleCheck/useRuleCheck'
+import { scriptTabHref } from '@/features/ta/script/scriptPageModel'
 import { api } from '@/lib/api'
 import type { TaRule, TaRuleState } from '@/lib/types'
 
@@ -132,6 +135,32 @@ function EngineFacts({ rule, state, timeZone }: { rule: TaRule; state: TaRuleSta
   )
 }
 
+/**
+ * A run test of the rule's script as the rule runs it (its pins, asset, bars, inputs and history): what going live
+ * reads of a script that may repaint. Its report is the script's "As a rule".
+ */
+function TestAsItRuns({ rule }: { rule: TaRule }) {
+  const { timezone } = useSession()
+  const checked = useRuleRuleCheck(rule.id)
+  const ask = useAskRuleTest(() => api.testRuleAsItRuns(rule.id))
+  const testing = testingOf(checked.data?.state, { rule: rule.id })
+  const report = checked.data?.report
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+      <Button size="sm" variant="outline" disabled={testing !== null || checked.data?.state.available === false}
+        isLoading={ask.isPending} onClick={() => ask.mutate({})}>
+        {testing ? TESTING_SAID[testing] : 'Test its script as it runs it'}
+      </Button>
+      <span>
+        {report?.as_rule && report.tested ? `Tested ${formatDateTime(report.tested.at, timezone)} as it runs.` : 'Not tested as it runs yet.'}{' '}
+        <Link to={`/ta/indicators/${rule.script.id}${scriptTabHref('rule', rule.script.version)}`} className="underline underline-offset-4">
+          Its script as a rule
+        </Link>
+      </span>
+    </div>
+  )
+}
+
 export function SignalRulePage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
@@ -142,6 +171,8 @@ export function SignalRulePage() {
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts })
   const engineQuery = useQuery({ queryKey: ['ta-engine'], queryFn: api.taEngine, refetchInterval: 10_000 })
   const paperQuery = usePaper(backtestsEnabled)
+  // Its script as a rule, as going live reads it.
+  const ruleChecks = useRuleChecks()
   const rules = rulesQuery.data
   const rule = rules?.rules.find((entry) => entry.id === id)
   const state = engineQuery.data?.rules[id]
@@ -196,11 +227,14 @@ export function SignalRulePage() {
 
   if (rules && !rule) return <NotFoundState {...RULE_NOT_FOUND} />
 
-  const checks = rule ? liveReadiness(rule, state, paper, now, timezone) : []
+  const checks = rule ? liveReadiness(rule, state, paper, now, timezone, ruleChecks.data?.rules[rule.id]) : []
   const readiness = readinessSaid(checks)
   const engineShown = state ? (ENGINE_STATE[state.state] ?? { label: state.state, tone: 'neutral' as const }) : null
   const modeReadiness =
-    changing?.mode === 'live' ? liveReadiness(changing.rule, engineQuery.data?.rules[changing.rule.id], paperQuery.data?.rules[changing.rule.id], now, timezone) : []
+    changing?.mode === 'live'
+      ? liveReadiness(changing.rule, engineQuery.data?.rules[changing.rule.id], paperQuery.data?.rules[changing.rule.id], now, timezone,
+        ruleChecks.data?.rules[changing.rule.id])
+      : []
   const updates = rule ? updatesOf(rule) : null
   const mapped = rule ? mappedAlerts(rule) : []
   const items = historyQuery.data ? historyItems(historyQuery.data.events, timezone) : []
@@ -319,6 +353,7 @@ export function SignalRulePage() {
                     </p>
                   )}
                   <CheckList checks={checks} label="Is it ready to go live?" />
+                  <TestAsItRuns rule={rule} />
                   <p className="text-xs text-muted-foreground">
                     Short of its readiness, only “Go live anyway” goes past, and the audit trail records what was missing.
                   </p>

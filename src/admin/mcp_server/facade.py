@@ -126,6 +126,8 @@ class ResearchServices:
     release: Callable[[], dict | None] | None = None
     # Where each script came from (src/admin/script_origins.py: LuxAlgo's Library), read here.
     origins: Any = None
+    # Whether each script can become a signal rule as it is (src/admin/rule_checks.py): read, and run tests kept.
+    rule_checks: Any = None
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
@@ -155,6 +157,7 @@ class ResearchServices:
             memory=getattr(ctx, "agent_memory", None),
             release=ctx.release.summary if getattr(ctx, "release", None) is not None else None,
             origins=getattr(ctx, "script_origins", None),
+            rule_checks=getattr(ctx, "rule_checks", None),
         )
 
     def service(self):

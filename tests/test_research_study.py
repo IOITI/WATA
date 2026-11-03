@@ -9,6 +9,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timezone
@@ -229,3 +230,131 @@ def test_a_check_says_what_tradingviews_rules_and_watas_tickers_find(tmp_path, s
     said = {(finding["source"], finding["line"]) for finding in found["tradingview_rules"]}
     assert ("TradingView rules", 3) in said and ("WATA", 5) in said
     assert any("ta.sma" in finding["message"] for finding in found["tradingview_rules"])
+
+
+CHECKER_BUILT = pytest.mark.skipif(
+    not os.path.isfile(os.path.join(os.path.dirname(os.path.dirname(RUNNER)), "checker", "check.mjs")),
+    reason="the checker is not built (npm run build:checker)")
+
+
+def rule_test(tmp_path, scripts, prices, source: str, **more) -> dict:
+    """The run test of a source on the two recorded days, on minutes: what the script page asks."""
+    return study(tmp_path, scripts, prices, "rule", {"source": source, "asset": "dukascopy/us100", "bars": "1",
+                                                     "from": "2026-10-13", "to": "2026-10-14", **more}, "--timeout", "90")
+
+
+def found_ids(answer: dict) -> list[str]:
+    return [f"{finding['level']} {finding['id']}" for finding in answer["findings"]]
+
+
+@CHECKER_BUILT
+def test_a_check_gives_the_rule_check_and_answers_another_series_with_made_up_bars(tmp_path, scripts, prices):
+    source = '//@version=6\nindicator("x")\nh = request.security("CAPITAL_US100", "5", close)\nalertcondition(close > h, "Up", "Up")\n'
+
+    found = study(tmp_path, scripts, prices, "check", {"source": source})
+
+    # Until v0.77.0 any other series was refused, and the check failed.
+    assert found["ok"], found
+    assert found["rule_check"]["check"]["verdict"] == "may_repaint"
+    assert [finding["id"] for finding in found["rule_check"]["check"]["findings"]] == ["other-series", "whole-runs"]
+
+
+@CHECKER_BUILT
+def test_the_run_test_finds_alerts_the_same_live_and_in_a_backtest_when_nothing_repaints(tmp_path, scripts, prices):
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Cross")\nfast = ta.ema(close, 9)\nslow = ta.ema(close, 21)\n'
+                       'alertcondition(ta.crossover(fast, slow), "Long", "Long")\nalertcondition(ta.crossunder(fast, slow), "Short", "Short")\n')
+
+    assert answer["ok"] and answer["verdict"] == "ready"
+    assert found_ids(answer) == ["note same-live-and-backtest"]
+    assert answer["findings"][0]["message"] == ("At the 4 bars tested on 13 and 14 Oct, its alerts were the same live "
+                                                "and in a backtest.")
+    tested = answer["tested"]
+    assert [day["bars"] for day in tested["days"]] == [840, 840]
+    assert tested["history"] == {"history_days": 2, "compared": 36, "differing": 0}
+    assert {entry["title"] for entry in tested["alerts"]} == {"Long", "Short"}
+
+
+@CHECKER_BUILT
+def test_the_run_test_finds_an_alert_only_live_that_a_run_gives_at_its_last_bar(tmp_path, scripts, prices):
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Now")\nalertcondition(barstate.isrealtime and close > open, "Now", "Now")\n')
+
+    assert answer["verdict"] == "repaints"
+    assert "repaints repaints-at-the-bar" in found_ids(answer)
+    said = next(finding for finding in answer["findings"] if finding["id"] == "repaints-at-the-bar")["message"]
+    # The bars a run is ended at are first where the probe alerted, so where live may alert.
+    assert re.match(r"At \d+ of the 26 bars tested, a run ending there, as live has it, raised other alerts than the "
+                    r"day's run, as a backtest has it: “Now” at 13 Oct \d\d:\d\d UTC only live", said)
+
+
+@CHECKER_BUILT
+def test_the_run_test_ends_runs_where_live_may_alert_so_a_rare_alert_only_live_is_found(tmp_path, scripts, prices):
+    # A cross, a few times a day, raised only at the last bar of a run: the day's run never alerts, and bars spread
+    # evenly seldom fall on one. The probe (every bar read as the last of its run) shows where live may alert.
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Cross now")\nfast = ta.ema(close, 9)\n'
+                       'slow = ta.ema(close, 21)\nalertcondition(ta.crossover(fast, slow) and barstate.isrealtime, "Long", "Long")\n')
+
+    assert answer["verdict"] == "repaints"
+    assert "repaints repaints-at-the-bar" in found_ids(answer)
+    checkpoints = answer["tested"]["checkpoints"]
+    assert checkpoints["probed"] > 0 and checkpoints["with_alerts"] > 0
+    # It fired, live: never firing in the days' runs is its repainting, not an alert to check.
+    assert checkpoints["live_titles"] == ["Long"] and "change never-fires" not in found_ids(answer)
+
+
+@CHECKER_BUILT
+def test_the_run_test_says_when_no_alert_came_to_compare(tmp_path, scripts, prices):
+    # An alert that never fires, live or in a backtest: nothing compared, so nothing said the same.
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Never")\n'
+                       'alertcondition(close < 0 and barstate.isrealtime, "Never", "Never")\n')
+
+    assert answer["verdict"] == "may_repaint"
+    assert "note no-alert-compared" in found_ids(answer)
+    assert "note same-live-and-backtest" not in found_ids(answer)
+
+
+@CHECKER_BUILT
+def test_the_run_test_finds_alerts_of_earlier_bars_that_change_with_where_the_run_ends(tmp_path, scripts, prices):
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Last")\nper = last_bar_index - bar_index <= 50\n'
+                       'alertcondition(per and ta.crossover(ta.ema(close, 9), ta.ema(close, 21)), "Long", "Long")\n')
+
+    assert answer["verdict"] == "repaints"
+    assert found_ids(answer)[:1] == ["risk bar-end"] and "repaints repaints-earlier" in found_ids(answer)
+
+
+@CHECKER_BUILT
+def test_the_run_test_says_an_alert_fires_at_every_bar_its_condition_holds(tmp_path, scripts, prices):
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Above")\nalertcondition(close > ta.ema(close, 20), "Above", "Above")\n')
+
+    assert answer["verdict"] == "to_change"
+    every = next(finding for finding in answer["findings"] if finding["id"] == "fires-every-bar")
+    assert every["message"].startswith("“Above” fires at every bar while its condition holds: 815 times on 13 and 14 Oct, 795 of them")
+
+
+@CHECKER_BUILT
+def test_a_longer_timeframe_read_live_is_missing_its_open_bar_and_fixnan_holds_it(tmp_path, scripts, prices):
+    plain = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("HTF")\nh = request.security("DUKASCOPY_US100", "5", close)\n'
+                      'alertcondition(ta.crossover(close, h), "Up", "Up")\n')
+    held = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("HTF")\nh = fixnan(request.security("DUKASCOPY_US100", "5", close))\n'
+                     'alertcondition(ta.crossover(close, h), "Up", "Up")\n')
+
+    # The advice of the other-series finding rests on this: live, the bar of five minutes still open is na.
+    differences = next(finding for finding in plain["findings"] if finding["id"] == "repaints-at-the-bar")
+    assert "only in the backtest" in differences["message"]
+    assert "repaints repaints-at-the-bar" not in found_ids(held)
+    assert "note same-live-and-backtest" in found_ids(held) and "note other-series" in found_ids(held)
+
+
+@CHECKER_BUILT
+def test_the_run_test_counts_the_events_a_script_only_draws(tmp_path, scripts, prices):
+    answer = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("Drawn")\nup = ta.crossover(ta.ema(close, 9), ta.ema(close, 21))\n'
+                       'plotshape(up, "Up", shape.triangleup)\n')
+
+    assert answer["verdict"] == "needs_alerts"
+    assert answer["tested"]["candidates"] == [{"title": "Up", "marked": 18}]
+
+
+@CHECKER_BUILT
+def test_the_run_test_of_a_library_or_a_script_whose_library_is_missing_runs_nothing(tmp_path, scripts, prices):
+    missing = rule_test(tmp_path, scripts, prices, '//@version=6\nindicator("x")\nimport user/Nowhere/1 as n\nplot(close)\n')
+
+    assert not missing["ok"] and 'No library "Nowhere"' in missing["error"]["message"]

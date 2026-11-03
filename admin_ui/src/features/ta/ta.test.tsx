@@ -159,6 +159,20 @@ const STRESSED: BacktestRunListed = listedRun({
       values: [order, slip], tuning: null, held_out: null, whole: { total_percent: total, days: 25 } })) } },
 })
 
+/** EMA's newest version as a rule: it draws an event, and raises no alert. */
+const RULE_CHECK = {
+  digest: 'a'.repeat(64), about: { script: { id: EMA.id, version: 2 } }, checked_at: '2026-10-31T20:00:00Z', kind: 'indicator',
+  pine_version: 6, alerts: [], alert_calls: [], plots: [], whole_because: null, tradingview_rules: [], tested: null, tests: [],
+  candidates: [{ title: 'Up', condition: 'up', call: 'plotshape', line: 3, at: { line: 3, where: 'after' }, risks: [] }],
+  findings: [{
+    id: 'no-alerts', area: 'alerts', level: 'blocks', fix: 'Add an alertcondition() on each event a rule should act on.',
+    message: 'Nothing in it can become a signal: it has no alertcondition() and no alert(). It draws 1 event an alert could be raised on: “Up”.',
+    places: [], count: 1, excerpt: null, through: null,
+  }],
+  verdict: 'needs_alerts',
+}
+const RULE_CHECKS_STATE = { available: true, queued: [], testing: null, this_hour: 0, an_hour: 6, checking: 0, last_refusal: null }
+
 let sent: { method: string; path: string; body: unknown }[] = []
 /** The assets the fake server lists (the editor's test offers them). */
 let assets: unknown[] = []
@@ -200,6 +214,16 @@ function serve({ saveConflict = false, deleteConflict = false } = {}) {
       }
       if (url.pathname.endsWith('/duplicate')) return json({ ...EMA, id: 'dddddddddddd', name: (body as { name: string }).name }, 201)
       if (url.pathname.startsWith('/api/ta/libraries/')) return json({ detail: 'No library' }, 404)
+      if (url.pathname === '/api/ta/rule-checks') {
+        return json({ scripts: { [EMA.id]: { verdict: 'needs_alerts', checked_at: null, counts: { blocks: 1 }, candidates: 1, tested_at: null,
+          tested_bars: null, worst: { id: 'no-alerts', level: 'blocks', message: RULE_CHECK.findings[0].message }, version: 2 } }, rules: {}, state: RULE_CHECKS_STATE })
+      }
+      if (/^\/api\/ta\/rules\/[0-9a-z]+\/rule-check$/.test(url.pathname) && method === 'POST') return json(RULE_CHECKS_STATE, 202)
+      if (/^\/api\/ta\/scripts\/[0-9a-f]+\/versions\/\d+\/rule-check$/.test(url.pathname)) {
+        return method === 'POST'
+          ? json({ ...RULE_CHECKS_STATE, queued: [{ about: RULE_CHECK.about, settings: {}, asked_at: 'now' }] }, 202)
+          : json({ report: RULE_CHECK, state: RULE_CHECKS_STATE })
+      }
       if (url.pathname === '/api/data/assets') return json({ timezone: 'Europe/Paris', seen: 'all', items: assets, truncated: false, max: 5000, saxo_error: null })
       if (url.pathname === '/api/ta/rules') {
         return json({ revision: 'r1', rules: RULES, indices: ['us100'], instruments: [{ epic: 'US100', label: 'us100' }], engine_history_days: 1, engine_restart_time: '21:15' })
@@ -288,6 +312,15 @@ describe('the Indicators page', () => {
     expect(within(rowOf('Helpers')).getByRole('link', { name: '1 off' })).toBeInTheDocument()
     expect(within(rowOf('Helpers')).queryByText(/run/)).toBeNull()
     expect(within(rowOf('Doubled')).getByText('No run')).toBeInTheDocument()
+  })
+
+  it('says of each script whether its newest version can be a signal rule, leading to its "As a rule" tab', async () => {
+    renderAt('/ta/indicators')
+
+    expect(await screen.findByRole('link', { name: 'EMA as a rule: Needs alerts' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=rule`)
+    // A library is a rule through the scripts importing it; a script whose report is being made says so.
+    expect(within(rowOf('Helpers')).getByText('Through its scripts')).toBeInTheDocument()
+    expect(within(rowOf('Doubled')).getByText('Checking…')).toBeInTheDocument()
   })
 
   it('lists the scripts, their kind, and which scripts use a library', async () => {
@@ -533,6 +566,7 @@ describe("a script's page", () => {
 
     expect(await screen.findByRole('textbox', { name: 'Pine source of EMA' })).toBeInTheDocument()
     expect(tabs().getByRole('link', { name: 'Editor' })).toHaveAttribute('aria-current', 'page')
+    expect(tabs().getByRole('link', { name: 'As a rule' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=rule`)
     expect(tabs().getByRole('link', { name: 'Rules' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=rules`)
     expect(tabs().getByRole('link', { name: 'History' })).toHaveAttribute('href', `/ta/indicators/${EMA.id}?tab=history`)
 
@@ -601,12 +635,41 @@ describe("a script's page", () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
   })
 
+  it('says on its "As a rule" tab whether it can become a signal rule, and writes in the alerts it could have', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}?tab=rule`)
+
+    expect(await screen.findByText('It needs alerts before it can be a signal rule: it draws 1 event an alert could be raised on.')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Its alerts' })).getByText('No alert')).toBeInTheDocument()
+    expect(screen.getByText('Not tested on recorded bars yet: only its source was read.')).toBeInTheDocument()
+
+    // Its event written in after the line it is drawn on, unsaved, the editor shown.
+    await user.click(screen.getByRole('button', { name: 'Add them in the editor' }))
+    await waitFor(() => expect(query()).toBe(''))
+    expect(screen.getByRole('textbox', { name: 'Pine source of EMA' })).toHaveValue(
+      `${EMA_SOURCE.trimEnd()}\nalertcondition(up, "Up", "Up") // added for a signal rule\n`,
+    )
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('asks the run test of a version as a rule that runs it runs it', async () => {
+    const user = userEvent.setup()
+    renderAt(`/ta/indicators/${EMA.id}?tab=rule&version=2`)
+
+    // Its asset, side, bars, inputs and history: the test its going live counts.
+    await user.click(await screen.findByRole('button', { name: 'Test as EMA in shadow runs it (1 min)' }))
+    await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === '/api/ta/rules/r00000000002/rule-check')).toBe(true))
+    expect(sent.some((request) => request.method === 'POST' && request.path.endsWith('/versions/2/rule-check'))).toBe(false)
+  })
+
   it('has no backtests of a library, whose rules are those of the scripts importing it', async () => {
     const user = userEvent.setup()
     renderAt(`/ta/indicators/${HELPERS.id}`)
 
     await screen.findByRole('link', { name: 'Rules' })
     expect(tabs().queryByRole('link', { name: 'Backtests' })).toBeNull()
+    // Nor is it a rule of its own: it is checked in the scripts importing it.
+    expect(tabs().queryByRole('link', { name: 'As a rule' })).toBeNull()
     await user.click(tabs().getByRole('link', { name: 'Rules' }))
     expect(within(await screen.findByRole('list', { name: 'Rules running it' })).getByRole('link', { name: 'Doubled off' })).toBeInTheDocument()
     expect(screen.getByText(/Runs v1, the newest/)).toBeInTheDocument()

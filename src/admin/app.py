@@ -246,6 +246,10 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.luxalgo_checks is not None and ctx.luxalgo_checks.available:
             # LuxAlgo's indicators checked for running on WATA, one at a time while no study runs.
             background.append(asyncio.create_task(ctx.luxalgo_checks.run()))
+        if ctx.rule_checks is not None:
+            # What each script's source says of it as a rule, as asked; the run tests asked, one at a time while no
+            # study runs.
+            background.append(asyncio.create_task(ctx.rule_checks.run()))
         if ctx.vault is not None:
             # Its own credentials laid over its configuration: the Telegram bot of its direct fallback.
             background.append(asyncio.create_task(_load_own_credentials(ctx)))

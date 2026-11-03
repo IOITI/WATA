@@ -14,6 +14,7 @@ from src.admin.mcp_server.budget import research_tool
 from src.admin.mcp_server.shadow import ShadowRules
 from src.admin.mcp_server.shape import compacted
 from src.admin.ta_compare import compare, default_tolerance
+from src.admin.rule_checks import readiness_check
 from src.admin.ta_readiness import unmet_readiness
 from src.admin.ta_rules import bars_label
 
@@ -56,7 +57,8 @@ def register(server, research) -> None:
         was made (paper.report.run_id, read with backtest_result and backtest_trades), made again after each
         finished day; paper.next_report is the one being made, or why it was not. readiness: what keeps a rule
         from going live (a week of weekdays in shadow, a signal journaled, no paper day outside its reference's
-        range, the engine running it without fault), empty once ready; going live stays the operator's."""
+        range, the engine running it without fault, its script as a rule: pine_rule_check), empty once ready; going
+        live stays the operator's."""
         def read():
             paper = research.backtests.paper() if research.backtests is not None else {}
             rules = research.rules.load()["rules"]
@@ -67,10 +69,12 @@ def register(server, research) -> None:
         states = await research.queries.ta_rule_states()
         papers = paper.get("rules") or {}
         now = datetime.fromtimestamp(research.clock(), timezone.utc)
+        # Its script as a rule, as going live reads it; unread where the checker is not built.
+        checked = {rule["id"]: await readiness_check(research.rule_checks, rule) for rule in rules}
         return compacted({
             "rules": [rule_line(rule, scripts_by_id, states.get(rule["id"]), papers.get(rule["id"]),
                                 unmet_readiness(rule, states.get(rule["id"]), papers.get(rule["id"]), now,
-                                                research.timezone), origins.get(rule["id"]))
+                                                research.timezone, rule_check=checked[rule["id"]]), origins.get(rule["id"]))
                       for rule in rules],
             "shadow_rules_switch": research.limits.shadow_rules,
         })

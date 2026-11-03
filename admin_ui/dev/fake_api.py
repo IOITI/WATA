@@ -107,6 +107,7 @@ from src.admin.queries import (
     json_safe,
     summarise_trades,
 )
+from src.admin.rule_checks import RuleCheckStore, RuleChecks
 from src.admin.studies import StudyService
 from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
 from src.configuration import ConfigurationManager
@@ -1588,16 +1589,15 @@ def build_dev_context(work_dir: str) -> AdminContext:
     closers = [backtests.close, downloads.close]
     settings.mcp_tokens_path = os.path.join(work_dir, "lib", "admin", "mcp_tokens.json")
     mcp_tokens = TokenStore(settings.mcp_tokens_path)
-    studies = None
-    # Claude Code's endpoint and the AI agent run the same Pine studies, and LuxAlgo's indicators are checked with them.
-    if mcp or ai or luxalgo:
-        studies = StudyService(
-            root=os.path.join(settings.backtests_path, "_studies"), ta_root=ta_scripts.root,
-            prices_root=prices_root, signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
-            memory_mb=settings.mcp_limits.study_memory_mb, timeout_seconds=settings.mcp_limits.study_timeout_seconds,
-            minutes_per_hour=settings.mcp_limits.study_minutes_per_hour, data=f"files:{recorded_root}",
-        )
-        closers.append(studies.close)
+    # Claude Code's endpoint and the AI agent run the same Pine studies, LuxAlgo's indicators are checked with them,
+    # and a script's rule check is tested with one: there whatever is switched on, as in the admin.
+    studies = StudyService(
+        root=os.path.join(settings.backtests_path, "_studies"), ta_root=ta_scripts.root,
+        prices_root=prices_root, signal_cache=os.path.join(settings.backtests_path, SIGNAL_CACHE_FOLDER),
+        memory_mb=settings.mcp_limits.study_memory_mb, timeout_seconds=settings.mcp_limits.study_timeout_seconds,
+        minutes_per_hour=settings.mcp_limits.study_minutes_per_hour, data=f"files:{recorded_root}",
+    )
+    closers.append(studies.close)
     if mcp:
         token, _ = mcp_tokens.create("dev")
         print(f"Claude's MCP endpoint on http://{HOST}:{PORT}/mcp, token: {token}")
@@ -1663,10 +1663,13 @@ def build_dev_context(work_dir: str) -> AdminContext:
         ctx.luxalgo_sign_in = fake_luxalgo.FakeSignIn()
         ctx.luxalgo = LuxAlgo(bearer=ctx.luxalgo_sign_in.bearer, server=fake_luxalgo.server(ctx.luxalgo_sign_in))
         print("LuxAlgo's tools are on, over a Library made up (fake_luxalgo.py)")
+    # Each script's rule check: the made-up recorded days have no research lock box.
+    ctx.rule_checks = RuleChecks(RuleCheckStore(ta_scripts.root), ta_scripts, studies)
+    ctx.closers.append(ctx.rule_checks.close)
     if luxalgo:
         # Whether its indicators run on WATA, checked with the Pine studies above.
         ctx.luxalgo_compat = CompatStore(ta_scripts.root)
-        ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies)
+        ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies, rule_checks=ctx.rule_checks)
     if ai and os.getenv("FAKE_NO_KEYS") != "1":
         import fake_ai
 

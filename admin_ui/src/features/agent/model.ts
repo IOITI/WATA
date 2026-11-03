@@ -669,9 +669,9 @@ const FUNDED_CHALLENGE: Preset = {
   prompt: "Would this run's strategy pass a funded-account challenge? Read its trades as R-multiples (backtest_result, part r_series) and send them with luxalgo_call propfirms_validate_strategy: futures, a risk of 0.5 % of the balance per trade, the bar of a pass per attempt of one in two. Say which challenges it passes, what that rests on and LuxAlgo's flags: a screen of distributions, not a ranking.",
 }
 const LUXALGO_PRESETS: Preset[] = [
-  { label: 'Worth testing on WATA?', prompt: "Is this indicator worth testing on WATA? Read it and what WATA already knows of it, take it whole if LuxAlgo gives its source whole, count its signals on the last five recorded days with pine_signals (adding alertcondition() lines in a version of your own if it has none), and say whether it deserves a backtest and why. Start no backtest." },
+  { label: 'Worth testing on WATA?', prompt: "Is this indicator worth testing on WATA? Read it and what WATA already knows of it, take it whole if LuxAlgo gives its source whole, read what keeps it from being a signal rule with pine_rule_check, count its signals on the last five recorded days with pine_signals (adding alertcondition() lines in a version of your own if it has none), and say whether it deserves a backtest and why. Start no backtest." },
   { label: 'Test it', prompt: "Test this indicator on WATA: take it whole, add WATA alerts if it has none, open an experiment, backtest it within your limits on the recorded turbos and judge it by the bar. Set your verdict on the indicator, and propose it as a new script of mine if it holds." },
-  { label: 'Make it a signal rule', prompt: "Make this indicator a signal rule of mine: take it whole, map its alerts to WATA's actions (adding alertcondition() lines in a version of your own if it needs them), check its signals on recorded days, and propose a new rule in shadow. Never live." },
+  { label: 'Make it a signal rule', prompt: "Make this indicator a signal rule of mine: take it whole, test it with pine_rule_check, fix in a version of your own what keeps it from being one (alertcondition() lines where it only draws its events, what repaints), check that version with pine_rule_check and its signals on recorded days, then map its alerts to WATA's actions and propose a new rule in shadow. Never live." },
 ]
 
 /** Requests to start from, by what the conversation is about; ``luxalgo``: the agent has LuxAlgo's tools. */
@@ -689,6 +689,10 @@ export function presetsFor(kind: AgentSubject['kind'] | null, options: { luxalgo
   }
   if (kind === 'script') {
     return [
+      {
+        label: 'Make it ready for a signal rule',
+        prompt: "Make this script ready to be a signal rule: read its rule check (pine_rule_check, testing it on recorded bars), fix what keeps it from being one in a copy of your own (alertcondition() lines on the events it only draws, nothing that repaints, no syminfo.mintick, sessions given their time zone, alerts on changes rather than states), check the copy with pine_rule_check until it passes, and propose it as a new version. Never live.",
+      },
       { label: 'Review it', prompt: "Review this Pine script for bugs, repainting and WATA's rules for scripts. Propose the fixes as a new version." },
       { label: 'Explain it', prompt: 'Explain what this script does: its inputs, which alerts it raises and when.' },
       { label: 'Improve it', prompt: 'Suggest improvements to this script, backtest the most promising against the current version on the recorded days, and propose it if it holds.' },

@@ -4,14 +4,19 @@
 import type { Judged } from '@/features/backtests/verdict'
 import type { BacktestRunListed, TaRule, TaRuleMode, TaScriptKind, TaScriptSummary } from '@/lib/types'
 
-export const SCRIPT_TABS = ['editor', 'backtests', 'rules', 'history'] as const
+export const SCRIPT_TABS = ['editor', 'rule', 'backtests', 'rules', 'history'] as const
 export type ScriptTab = (typeof SCRIPT_TABS)[number]
 
-export const TAB_LABEL: Record<ScriptTab, string> = { editor: 'Editor', backtests: 'Backtests', rules: 'Rules', history: 'History' }
+export const TAB_LABEL: Record<ScriptTab, string> = {
+  editor: 'Editor', rule: 'As a rule', backtests: 'Backtests', rules: 'Rules', history: 'History',
+}
 
-/** The tabs a script has: a library runs inside the scripts that import it, and is never backtested alone. */
+/**
+ * The tabs a script has: a library runs inside the scripts that import it, is never backtested alone, and is no
+ * rule's script (its rule check is theirs).
+ */
 export function tabsOf(kind: TaScriptKind, backtests: boolean): ScriptTab[] {
-  return SCRIPT_TABS.filter((tab) => tab !== 'backtests' || (backtests && kind !== 'library'))
+  return SCRIPT_TABS.filter((tab) => (tab !== 'backtests' || (backtests && kind !== 'library')) && (tab !== 'rule' || kind !== 'library'))
 }
 
 /** The tab an address names; one the script has not is its editor. */
@@ -19,10 +24,21 @@ export function scriptTabOf(value: string | null, tabs: readonly ScriptTab[]): S
   return tabs.find((tab) => tab === value) ?? 'editor'
 }
 
-/** A tab's address: the editor is the script's own address; the backtests of one version keep it. */
+/** A tab's address: the editor is the script's own address; the backtests and the rule check of one version keep it. */
 export function scriptTabHref(tab: ScriptTab, version: number | null = null): string {
   if (tab === 'editor') return '?'
-  return tab === 'backtests' && version !== null ? `?tab=backtests&version=${version}` : `?tab=${tab}`
+  return (tab === 'backtests' || tab === 'rule') && version !== null ? `?tab=${tab}&version=${version}` : `?tab=${tab}`
+}
+
+/** The editor at a line: where a finding of the rule check leads. */
+export function editorLineHref(line: number): string {
+  return `?line=${line}`
+}
+
+/** The line an address names in the editor, null when none. */
+export function lineOf(value: string | null): number | null {
+  const line = Number(value)
+  return Number.isInteger(line) && line >= 1 ? line : null
 }
 
 /** The version an address names among the script's; null for every version. */

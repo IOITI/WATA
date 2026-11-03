@@ -31,6 +31,8 @@ from src.admin.errors import InvalidRequest, NotPossible
 from src.admin.luxalgo import SLUG, LuxAlgoRefused, LuxAlgoUnknown, licence_of
 from src.admin.luxalgo_knowledge import known as known_of
 from src.admin.routers.config import require_config_edit_enabled
+from src.admin.routers.ta import RuleTestAsked, _rule_checks
+from src.admin.rule_checks import DEFAULT_SETTINGS, settings_of
 from src.admin.script_origins import luxalgo_origin
 from src.admin.ta_scripts import MAX_NAME_LENGTH
 
@@ -199,8 +201,40 @@ async def import_indicator(slug: str, body: ImportRequest, request: Request):
         return script
 
     script = await run_in_threadpool(made)
+    if getattr(ctx, "rule_checks", None) is not None and script["kind"] != "library":
+        ctx.rule_checks.noticed_version(script["id"], script["version"])
     return {"id": script["id"], "name": script["name"], "version": script["version"], "kind": script["kind"],
             "origin": origin}
+
+
+# ── whether one can become a signal rule ──
+
+
+async def _whole_source(request: Request, slug: str) -> str:
+    try:
+        found = await _luxalgo(request).source(_slug(slug))
+    except LuxAlgoUnknown as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except LuxAlgoRefused as e:
+        raise NotPossible(str(e)) from None
+    _noticed(request.app.state.ctx, slug, found)
+    return found["source"]
+
+
+@router.get("/indicators/{slug}/rule-check")
+async def indicator_rule_check(slug: str, request: Request):
+    """Whether an indicator can become a signal rule as it is: what its whole source says, and its newest run test."""
+    checks = _rule_checks(request)
+    return {"report": await checks.of_luxalgo(slug, await _whole_source(request, slug)), "state": checks.state()}
+
+
+@router.post("/indicators/{slug}/rule-check", status_code=202)
+async def test_indicator_as_a_rule(slug: str, body: RuleTestAsked, request: Request):
+    """A run test of an indicator's whole source on recorded bars, asked: it waits for the studies, one at a time."""
+    checks = _rule_checks(request)
+    source = await _whole_source(request, slug)
+    settings = settings_of(body.bars or DEFAULT_SETTINGS["bars"], body.asset, body.side, body.inputs, body.history_days)
+    return checks.ask({"luxalgo": _slug(slug)}, settings, source=source)
 
 
 # ── whether its indicators run on WATA ──
@@ -213,6 +247,10 @@ async def compat(request: Request):
     _luxalgo(request)
     items = sorted((await run_in_threadpool(ctx.luxalgo_compat.all)).values() if ctx.luxalgo_compat else [],
                    key=lambda entry: entry.get("checked_at") or "", reverse=True)
+    if getattr(ctx, "rule_checks", None) is not None:
+        # Each with its rule check's verdict, for the Checked view.
+        said = await run_in_threadpool(lambda: {entry["slug"]: ctx.rule_checks.luxalgo_summary(entry["slug"]) for entry in items})
+        items = [{**entry, "rule_check": said.get(entry["slug"])} for entry in items]
     checks = ctx.luxalgo_checks.state() if ctx.luxalgo_checks is not None else {"available": False}
     return {"items": items, "checks": checks}
 

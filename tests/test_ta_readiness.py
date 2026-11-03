@@ -54,3 +54,18 @@ def test_a_rule_without_its_moment_of_change_has_no_day_in_shadow():
     assert unmet_readiness({"id": "r1", "mode": "shadow"}, RUNNING, None, NOW, "Europe/Paris") == [
         f"0 weekday(s) in shadow of {SHADOW_DAYS}",
     ]
+
+
+def test_its_script_holds_it_back_when_it_cannot_be_a_rule_repaints_or_was_never_tested_as_it_runs():
+    def said(verdict, worst=None, **more):
+        check = {"verdict": verdict, "worst": {"id": worst, "level": "blocks"} if worst else None, **more}
+        return unmet_readiness(rule(), RUNNING, None, NOW, "Europe/Paris", rule_check=check)
+
+    assert said("needs_alerts", "no-alerts") == ["its script cannot be a rule as it is (no alert)"]
+    assert said("blocked", "live-ticker") == ["its script cannot be a rule as it is (a series WATA reads only in backtests)"]
+    assert said("repaints") == ["its script repaints: its alerts differ live and in a backtest"]
+    assert said("may_repaint") == ["its script may repaint, and was never tested on recorded bars as this rule runs it"]
+    assert said("may_repaint", as_rule=True) == ["its script may repaint: its run test as this rule runs it had no alert to compare"]
+    # What only asks a change, and a script whose check could not be read, hold nothing back.
+    assert said("to_change") == [] and said("ready") == []
+    assert unmet_readiness(rule(), RUNNING, None, NOW, "Europe/Paris", rule_check=None) == []

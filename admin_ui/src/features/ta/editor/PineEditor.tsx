@@ -35,6 +35,8 @@ export interface PineEditorProps {
   onSave?: () => void
   /** The built-in functions to complete (the TradingView reference), when loaded. */
   functions?: PineFunction[]
+  /** A line to show, its start chosen: what a finding of the rule check leads to (1-based). */
+  reveal?: number | null
   className?: string
 }
 
@@ -71,7 +73,7 @@ const theme = EditorView.theme({
   '.cm-diagnostic': { fontFamily: 'var(--font-sans)' },
 })
 
-export function PineEditor({ value, onChange, diagnostics, label, readOnly = false, onSave, functions, className }: PineEditorProps) {
+export function PineEditor({ value, onChange, diagnostics, label, readOnly = false, onSave, functions, reveal = null, className }: PineEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const callbacks = useRef({ onChange, onSave })
@@ -161,6 +163,13 @@ export function PineEditor({ value, onChange, diagnostics, label, readOnly = fal
       effects: completion.current.reconfigure(autocompletion({ override: [pineCompletions(functions)] })),
     })
   }, [functions])
+
+  useEffect(() => {
+    const editor = view.current
+    if (!editor || reveal === null || reveal < 1 || reveal > editor.state.doc.lines) return
+    const line = editor.state.doc.line(reveal)
+    editor.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
+  }, [reveal, value])
 
   // Its frame shows where the focus is, as a field's border does: what takes text has no ring (ioiti-ui 0.5.3),
   // its search's fields included.

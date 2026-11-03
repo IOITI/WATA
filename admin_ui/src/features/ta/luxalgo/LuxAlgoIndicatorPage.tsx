@@ -1,7 +1,8 @@
 // An indicator of LuxAlgo's Library, chart first: the indicator run on a chart of WATA's bars from its whole source
 // (nothing taken, nothing saved: IndicatorPreviewChart.tsx), or LuxAlgo's picture of it while its source comes cut;
-// then how it works, its Pine source in colour and what WATA knows of it, beside the facts at a glance; and its
-// taking as one of the operator's scripts, whole, its origin kept.
+// then how it works, its Pine source in colour, whether it can become a signal rule as it is (its rule check, its
+// source's part read here, its run test on recorded bars asked of the server) and what WATA knows of it, beside the
+// facts at a glance; and its taking as one of the operator's scripts, whole, its origin kept.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -28,7 +29,7 @@ import {
 } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { ExternalLink, FileDown } from 'lucide-react'
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
@@ -37,8 +38,15 @@ import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { useSession } from '@/features/auth/auth-context'
 import { PREVIEW_TIMEFRAME, PREVIEW_TIMEFRAMES, previewAssets, previewSymbol } from '@/features/ta/chart/previewModel'
+import { ruleDiagnostics } from '@/features/ta/editor/diagnostics'
+import { triedRuleCheck } from '@/features/ta/engine/ruleCheck'
+import type { RuleCheck } from '@/features/ta/engine/ruleCheck'
+import { RuleCheckPanel } from '@/features/ta/ruleCheck/RuleCheckPanel'
+import { draftReport, testingOf, VERDICT_LABEL } from '@/features/ta/ruleCheck/ruleCheckModel'
+import { useAskRuleTest, useLuxalgoRuleCheck } from '@/features/ta/ruleCheck/useRuleCheck'
+import { lineOf } from '@/features/ta/script/scriptPageModel'
 import { api, isNotFound } from '@/lib/api'
-import type { LuxAlgoCompat, LuxAlgoFamily, LuxAlgoIndicator, LuxAlgoSource } from '@/lib/types'
+import type { LuxAlgoCompat, LuxAlgoFamily, LuxAlgoIndicator, LuxAlgoSource, RuleCheckSummary, RuleFinding } from '@/lib/types'
 
 import { InWataPanel } from './InWataPanel'
 import { LuxAlgoPicture } from './LuxAlgoPicture'
@@ -65,10 +73,11 @@ const OUT = 'inline-flex items-center gap-1 text-sm text-foreground underline un
 const TABS = [
   { id: 'about', label: 'How it works' },
   { id: 'source', label: 'Pine source' },
+  { id: 'rule', label: 'As a signal rule' },
   { id: 'wata', label: 'In WATA' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
-const tabOf = (value: string | null): Tab => (value === 'source' || value === 'wata' ? value : 'about')
+const tabOf = (value: string | null): Tab => (value === 'source' || value === 'rule' || value === 'wata' ? value : 'about')
 const nothing = () => undefined
 
 function TakeDialog({ indicator, source, onClose }: { indicator: LuxAlgoIndicator; source: LuxAlgoSource; onClose: () => void }) {
@@ -205,9 +214,18 @@ function OnAChart({ indicator, source, signedIn }: {
   )
 }
 
-/** Its Pine source, coloured as the editor colours it, read only. */
-function SourceTab({ indicator, source, signedIn }: { indicator: LuxAlgoIndicator; source: LuxAlgoSource | undefined; signedIn: boolean }) {
+/** Its Pine source, coloured as the editor colours it, read only: what keeps it from being a signal rule marked at its lines. */
+function SourceTab({ indicator, source, signedIn, check, line }: {
+  indicator: LuxAlgoIndicator
+  source: LuxAlgoSource | undefined
+  signedIn: boolean
+  /** What its whole source says as a rule, marked at its lines. */
+  check: RuleCheck | null
+  /** The line a finding of its rule check leads to. */
+  line: number | null
+}) {
   const cut = source ? sourceSaid(source) : null
+  const marks = useMemo(() => (check ? ruleDiagnostics(check) : []), [check])
   return (
     <div className="space-y-3">
       {source?.licence && (
@@ -236,8 +254,8 @@ function SourceTab({ indicator, source, signedIn }: { indicator: LuxAlgoIndicato
             <CopyButton value={source.source} label="Copy the code" showLabel size="sm" />
           </div>
           <Suspense fallback={<div className="h-[24rem] rounded-xl border border-border sm:h-[32rem]" />}>
-            <PineEditor value={source.source} onChange={nothing} diagnostics={[]} label={`Pine source of ${indicator.name}`}
-              readOnly className="h-[24rem] sm:h-[32rem]" />
+            <PineEditor value={source.source} onChange={nothing} diagnostics={marks} label={`Pine source of ${indicator.name}`}
+              readOnly reveal={line} className="h-[24rem] sm:h-[32rem]" />
           </Suspense>
         </>
       )}
@@ -245,11 +263,54 @@ function SourceTab({ indicator, source, signedIn }: { indicator: LuxAlgoIndicato
   )
 }
 
+/**
+ * Whether it can become a signal rule as it is: what its whole source says, read here at once, and its run test on
+ * recorded bars, asked of the server. Its alerts are added once it is taken as the operator's script, in its editor.
+ */
+function RuleTab({ slug, source, check, lineHref }: {
+  slug: string
+  source: LuxAlgoSource | undefined
+  /** What its whole source says, read here: shown until the server's report comes. */
+  check: RuleCheck | null
+  lineHref: (finding: RuleFinding) => string | null
+}) {
+  const whole = !!source?.source && !!source.complete
+  const served = useLuxalgoRuleCheck(slug, whole)
+  const ask = useAskRuleTest((body) => api.testLuxalgoAsRule(slug, body))
+  if (!source) return <p className="text-sm text-muted-foreground">Its source is being read.</p>
+  if (!whole) {
+    return (
+      <Alert tone="neutral">
+        <AlertDescription>Its rule check reads its whole source: {sourceSaid(source) ?? 'LuxAlgo gives a part of it'}</AlertDescription>
+      </Alert>
+    )
+  }
+  const report = served.data?.report ?? (check ? draftReport(check) : null)
+  const state = served.data?.state
+  if (!report) return <p className="text-sm text-muted-foreground">{served.isPending ? 'Its rule check is being read.' : 'Its rule check could not be made.'}</p>
+  return (
+    <RuleCheckPanel
+      report={report}
+      testing={testingOf(state, { luxalgo: slug })}
+      onTest={() => ask.mutate({ bars: '1' })}
+      testLabel="Test on recorded bars (1 min)"
+      testRefusal={state && !state.available ? 'The run test is a Pine study, which this admin does not run' : null}
+      testPending={ask.isPending}
+      lineHref={lineHref}
+      aside={report.candidates.length > 0 ? (
+        <p className="text-xs text-muted-foreground">Take it as your script to add these alerts: its editor writes them in, unsaved.</p>
+      ) : null}
+    />
+  )
+}
+
 /** What there is to know of it at a glance, and where it lives outside WATA. */
-function AtAGlance({ indicator, source, compat, families, picture }: {
+function AtAGlance({ indicator, source, compat, asRule, families, picture }: {
   indicator: LuxAlgoIndicator
   source: LuxAlgoSource | undefined
   compat: LuxAlgoCompat | null
+  /** Whether it can become a signal rule: its newest report, else what its whole source says. */
+  asRule: Pick<RuleCheckSummary, 'verdict'> | null
   families?: LuxAlgoFamily[]
   /** Its picture, unless the chart's panel shows it already. */
   picture: boolean
@@ -270,6 +331,7 @@ function AtAGlance({ indicator, source, compat, families, picture }: {
             { term: 'Licence', details: source?.licence ? `${source.licence}${source.owner ? `, © ${source.owner}` : ''}` : 'Not read yet' },
             { term: 'Source', details: sourceLinesSaid(source) },
             { term: 'On WATA', details: compat ? COMPAT_LABEL[compat.state] : 'Not checked yet' },
+            { term: 'As a rule', details: asRule ? VERDICT_LABEL[asRule.verdict] : 'Not checked yet' },
           ]}
         />
         {terms && <p className="text-xs text-muted-foreground">Its licence: {terms}. Its terms are yours to check before trading it.</p>}
@@ -322,6 +384,11 @@ export function LuxAlgoIndicatorPage() {
   })
   const compat = useIndicatorCheck(slug, indicator.data?.known?.compat)
   const [taking, setTaking] = useState(false)
+  // What its whole source says as a rule, read once: a source runs to a thousand lines.
+  const sourceCheck = useMemo(
+    () => (source.data?.source && source.data.complete ? triedRuleCheck(source.data.source) : null),
+    [source.data],
+  )
 
   if (isNotFound(indicator.error)) {
     return (
@@ -347,6 +414,16 @@ export function LuxAlgoIndicatorPage() {
     return `?${next.toString()}`
   }
   const tabs = TABS.map((entry) => ({ ...entry, href: tabHref(entry.id) }))
+  // A finding of its rule check leads to its line in the source.
+  const sourceLineHref = (finding: RuleFinding) => {
+    const place = finding.places[0]
+    if (!place || place.file !== null) return null
+    const next = new URLSearchParams(params)
+    next.set('tab', 'source')
+    next.set('line', String(place.line))
+    return `?${next.toString()}`
+  }
+  const asRule = found?.known?.rule_check ?? sourceCheck
   return (
     <div className="space-y-6">
       <PageHeader
@@ -408,13 +485,14 @@ export function LuxAlgoIndicatorPage() {
                 {tab === 'source' && (
                   <Panel>
                     <QueryState isPending={source.isPending} error={source.error} hasData={!!source.data}>
-                      <SourceTab indicator={found} source={source.data} signedIn={signedIn} />
+                      <SourceTab indicator={found} source={source.data} signedIn={signedIn} check={sourceCheck} line={lineOf(params.get('line'))} />
                     </QueryState>
                   </Panel>
                 )}
+                {tab === 'rule' && <RuleTab slug={slug} source={source.data} check={sourceCheck} lineHref={sourceLineHref} />}
                 {tab === 'wata' && found.known && <InWataPanel slug={slug} known={found.known} />}
               </div>
-              <AtAGlance indicator={found} source={source.data} compat={compat} families={families.data?.families}
+              <AtAGlance indicator={found} source={source.data} compat={compat} asRule={asRule} families={families.data?.families}
                 picture={takeable} />
             </div>
           </div>

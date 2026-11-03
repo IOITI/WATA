@@ -1,5 +1,6 @@
 """
-Pine studies for Claude's tools (pine_check, pine_run, pine_signals): the
+Pine studies for Claude's tools (pine_check, pine_run, pine_signals,
+pine_rule_check) and the rule checks' run tests (src/admin/rule_checks.py): the
 command ``python -m src.research.study`` run as a child process of the admin,
 one at a time, with its own Node heap and time limit, so that a script that
 loops or a long run never holds the admin's own answers.
@@ -22,7 +23,7 @@ from src.admin.errors import NotPossible
 from src.admin.processes import launch, tail
 from src.price_history.process import cgroup_memory, exit_said, oom_kills
 
-MODES = ("check", "run", "signals")
+MODES = ("check", "run", "signals", "rule")
 # How long a study waits for the one before it.
 WAIT_SECONDS = 15
 # Beyond the study's own time limit: Python's and Node's start, reading the bars.

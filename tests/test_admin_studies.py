@@ -88,6 +88,20 @@ def test_a_study_is_the_command_with_its_limits_and_leaves_nothing_behind(tmp_pa
     assert os.listdir(tmp_path / "_studies") == []
 
 
+def test_the_admin_asks_every_study_the_command_runs_and_no_other(tmp_path):
+    from src.research.study import MODES as COMMAND_MODES
+    from src.admin.studies import MODES
+
+    assert MODES == COMMAND_MODES
+    launcher = Launcher({"ok": True, "verdict": "ready"})
+    studies = service(tmp_path, launcher)
+
+    assert asyncio.run(studies.study("rule", {"script": {"id": "a" * 12, "version": 1}})) == {"ok": True, "verdict": "ready"}
+    assert launcher.commands[0][:2] == ["src.research.study", "rule"]
+    with pytest.raises(NotPossible, match="A study is one of check, run, signals, rule"):
+        asyncio.run(studies.study("trade", {}))
+
+
 def test_a_study_reads_recorded_day_files_when_told_to(tmp_path):
     launcher = Launcher()
     asyncio.run(service(tmp_path, launcher, data=f"files:{tmp_path}").study("run", {}))

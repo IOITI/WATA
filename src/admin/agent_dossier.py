@@ -42,7 +42,7 @@ def judged_as(rule: dict) -> str:
 
 class RuleDossiers:
     def __init__(self, *, agent, config_path: str, path: str, rules, states, paper, timezone_name: str, teller=None,
-                 clock=time.time):
+                 clock=time.time, rule_check=None):
         self._agent = agent
         self._config_path = config_path
         self._file = JobFile(path, "rules", KEPT)
@@ -53,6 +53,8 @@ class RuleDossiers:
         self._timezone = timezone_name
         self._teller = teller
         self._clock = clock
+        # async (rule) -> its script as a rule, as going live reads it (src/admin/rule_checks.py); None: not read.
+        self._rule_check = rule_check
 
     def asked(self) -> dict:
         return self._file.read()
@@ -88,7 +90,8 @@ class RuleDossiers:
         for rule in rules:
             if rule.get("mode") != "shadow" or rule.get("made_by") == "claude" or judged_as(rule) in asked:
                 continue
-            if unmet_readiness(rule, states.get(rule["id"]), paper.get(rule["id"]), moment, self._timezone):
+            script = await self._rule_check(rule) if self._rule_check is not None else None
+            if unmet_readiness(rule, states.get(rule["id"]), paper.get(rule["id"]), moment, self._timezone, rule_check=script):
                 continue
             try:
                 meta = await self._agent.create(
@@ -123,6 +126,11 @@ def dossiers_of(ctx, teller) -> RuleDossiers:
     def paper() -> dict:
         return (ctx.backtests.paper(with_reports=False).get("rules") or {}) if ctx.backtests is not None else {}
 
+    async def rule_check(rule: dict) -> dict | None:
+        from src.admin.rule_checks import readiness_check
+
+        return await readiness_check(getattr(ctx, "rule_checks", None), rule)
+
     return RuleDossiers(agent=ctx.agent, config_path=ctx.settings.config_path,
                         path=os.path.join(ctx.settings.agent_path, FILE), rules=rules, states=states, paper=paper,
-                        timezone_name=ctx.settings.timezone, teller=teller)
+                        timezone_name=ctx.settings.timezone, teller=teller, rule_check=rule_check)
