@@ -2,7 +2,7 @@
 
 ## v0.79.0 - The AI agent looks at a day
 
-**Release date:** not released
+**Release date:** 2026-11-03
 
 Asked about a day ("this day lost: find a better indicator or configuration for it", "find a LuxAlgo indicator that fits this day"), the AI agent reads the day's chart with the script applied before it changes anything. Its conversations on the server showed it backtesting blind: it had no way to see a day's price and indicator together.
 - **`chart_view`, a new research tool** (the agent's and Claude Code's): one day as a backtest ran it, from the TA engine's restart with its days of history before, a script applied (a run's own, a saved one, a source not saved yet, or none for the prices alone).
