@@ -20,6 +20,7 @@ import { judgedRuns } from './verdict'
 
 /** What each filter of the list offers: the first, empty, leaves the list whole. */
 const FILTERS: Record<Exclude<keyof RunFilter, 'experiment' | 'tag'>, { label: string; options: [string, string][] }> = {
+  favourite: { label: 'Favourites', options: [['', 'Every run'], ['yes', 'Favourites only']] },
   state: { label: 'State', options: [['', 'Any'], ['active', 'Waiting or running'], ['done', 'Done'], ['failed', 'Failed'], ['stopped', 'Stopped']] },
   verdict: { label: 'Verdict', options: [['', 'Any'], ['pass', 'Passes'], ['open', 'Checks open'], ['fail', 'Fails']] },
   by: { label: 'Made by', options: [['', 'Anyone'], ['me', 'You'], ['claude', 'Claude']] },
@@ -28,8 +29,8 @@ const FILTERS: Record<Exclude<keyof RunFilter, 'experiment' | 'tag'>, { label: s
 }
 
 /**
- * The list narrowed by state, verdict, who made the runs, experiment, turbos,
- * code and tag: in the address, so that a list narrowed can be opened elsewhere,
+ * The list narrowed to the favourites, by state, verdict, who made the runs,
+ * experiment, turbos, code and tag: in the address, so that a list narrowed can be opened elsewhere,
  * kept or sent. Search and sort stay the table's.
  */
 function RunFilters({

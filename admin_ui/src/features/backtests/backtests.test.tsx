@@ -263,6 +263,11 @@ function serve() {
       }
       if (route === '/api/backtests/former' && method === 'DELETE') return json({ removed: 7 })
       if (route === '/api/backtests/remove' && method === 'POST') return json({ removed: (body as { ids: string[] }).ids, kept: [] })
+      if (route === '/api/backtests/favourites' && method === 'POST') {
+        const { ids, favourite } = body as { ids: string[]; favourite: boolean }
+        for (const id of ids) runs = { ...runs, [id]: { ...runs[id], favourite } }
+        return json({ changed: ids, kept: [] })
+      }
       if (route === '/api/research/experiments') return json({ experiments: [], lockbox: null })
       if (route === '/api/backtests/research') {
         if (method === 'PUT') research = { ...research, ...(body as object), state: 'waiting_for_close' }
@@ -388,6 +393,7 @@ const address = () => screen.getByRole('status', { name: 'address' }).textConten
 let undoMs = 50
 
 const removals = () => sent.filter((request) => request.method === 'POST' && request.path === '/api/backtests/remove')
+const favourings = () => sent.filter((request) => request.method === 'POST' && request.path === '/api/backtests/favourites').map((request) => request.body)
 
 beforeEach(() => {
   undoMs = 50
@@ -480,6 +486,32 @@ describe('the list of backtests', () => {
     expect(await screen.findByRole('link', { name: 'Stop at 10' })).toBeInTheDocument()
     expect(screen.getByText('Kept: nothing was deleted')).toBeInTheDocument()
     expect(removals()).toEqual([])
+  })
+
+  it('puts a run among the favourites from its star, several from the selection, and narrows the list to them', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    // One from its row: its star is pressed at once.
+    await user.click(await screen.findByRole('button', { name: 'Add “Stop at 10” to favourites' }))
+    expect(screen.getByRole('button', { name: 'Remove “Stop at 10” from favourites' })).toHaveAttribute('aria-pressed', 'true')
+    expect(favourings()).toEqual([{ ids: ['20261019-210000-bbbbbb'], favourite: true }])
+
+    // Several from the selection: added while one of them is not in, taken out once all are.
+    await user.click(screen.getByRole('checkbox', { name: 'Select Stop at 10' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Select Smoke EMA cross' }))
+    const basket = within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' }))
+    await user.click(basket.getByRole('button', { name: 'Add 2 to favourites' }))
+    expect(favourings().at(-1)).toEqual({ ids: expect.arrayContaining([RUN_ID, '20261019-210000-bbbbbb']), favourite: true })
+    expect(await basket.findByRole('button', { name: 'Remove 2 from favourites' })).toBeInTheDocument()
+
+    // The list narrowed to them, in its address.
+    await user.click(screen.getByRole('button', { name: 'Remove “Smoke EMA cross” from favourites' }))
+    const narrow = screen.getByRole('group', { name: 'Narrow the list' })
+    await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Favourites' }), 'yes')
+    expect(address()).toBe('/backtests?favourite=yes')
+    expect(await screen.findByRole('link', { name: 'Stop at 10' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Smoke EMA cross' })).not.toBeInTheDocument())
   })
 
   it('narrows the list as its address says, and keeps what is chosen in the address', async () => {
@@ -923,6 +955,17 @@ describe('a run', () => {
     const menu = within(screen.getByRole('menu', { name: 'More actions on this run' }))
     expect(menu.getByRole('menuitem', { name: 'Make a shadow rule' })).toHaveAttribute('href', `/ta/signals?from-run=${RUN_ID}`)
     expect(menu.getByRole('menuitem', { name: /^Remove/ })).toBeInTheDocument()
+  })
+
+  it('is put among the favourites from its page, and taken out of them', async () => {
+    const user = userEvent.setup()
+    renderAt(`/backtests/${RUN_ID}`)
+
+    await user.click(await screen.findByRole('button', { name: 'Add to favourites' }))
+    expect(screen.getByRole('button', { name: 'Remove from favourites' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'Remove from favourites' }))
+    expect(await screen.findByRole('button', { name: 'Add to favourites' })).toHaveAttribute('aria-pressed', 'false')
+    expect(favourings()).toEqual([{ ids: [RUN_ID], favourite: true }, { ids: [RUN_ID], favourite: false }])
   })
 
   it('is removed from its menu, the list shown at once with an Undo', async () => {

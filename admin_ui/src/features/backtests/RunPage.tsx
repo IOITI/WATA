@@ -7,6 +7,7 @@ import {
   Badge,
   Button,
   ButtonLink,
+  cn,
   formatDateTime,
   formatDay,
   formatMoney,
@@ -25,7 +26,7 @@ import {
 } from 'ioiti-ui'
 import type { SplitButtonOption } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { Flag, Pencil, Radar, RotateCcw, Sparkles, Square, Trash2 } from 'lucide-react'
+import { Flag, Pencil, Radar, RotateCcw, Sparkles, Square, Star, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
@@ -54,6 +55,7 @@ import {
 import { EdgePanel } from './EdgePanel'
 import { BacktestsDisabled, Measure, SettingChanges, StateBadge } from './parts'
 import { useRemoveRuns } from './pending-removals-context'
+import { useSetFavourites } from './useFavourites'
 import { ReconciliationPanel } from './ReconciliationPanel'
 import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
 import { DaysTable, SignalsTable, TradesTable } from './runTables'
@@ -281,6 +283,8 @@ export function RunPage() {
       setRenaming(false)
     },
   })
+  // Among the favourites, or out of them: the list's filter keeps them.
+  const { mutate: favour } = useSetFavourites()
   // Made again on today's code, one at a time once no other run waits: followed through the list of runs.
   const remake = useMutation({
     mutationFn: () => api.remakeBacktests({ runs: [runId] }),
@@ -377,6 +381,18 @@ export function RunPage() {
         actions={
           run && (
             <>
+              {/* A paper run is kept by paper trading, not in the list of runs: not one of the favourites. */}
+              {!run.paper && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-pressed={Boolean(run.favourite)}
+                  leftIcon={<Star className={cn('size-3.5', run.favourite && 'fill-current text-warning')} aria-hidden />}
+                  onClick={() => favour({ ids: [run.id], favourite: !run.favourite })}
+                >
+                  {run.favourite ? 'Remove from favourites' : 'Add to favourites'}
+                </Button>
+              )}
               <ButtonLink to={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}>
                 Ask the AI agent
               </ButtonLink>

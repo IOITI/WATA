@@ -120,6 +120,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests"),
     ("POST", "/api/backtests"),
     ("POST", "/api/backtests/remove"),
+    ("POST", "/api/backtests/favourites"),
     ("DELETE", "/api/backtests/former"),
     ("GET", "/api/backtests/research"),
     ("PUT", "/api/backtests/research"),
@@ -3367,8 +3368,12 @@ class FakeBacktests:
     def get(self, run_id):
         return self._answer("get", run_id, answer={"id": run_id})
 
-    def update(self, run_id, name=None, tags=None):
-        return self._answer("update", run_id, name, tags, answer={"id": run_id, "name": name, "tags": tags})
+    def update(self, run_id, name=None, tags=None, favourite=None):
+        return self._answer("update", run_id, name, tags, favourite,
+                            answer={"id": run_id, "name": name, "tags": tags, "favourite": bool(favourite)})
+
+    def set_favourites(self, run_ids, favourite):
+        return self._answer("set_favourites", run_ids, favourite, answer={"changed": run_ids, "kept": []})
 
     def cancel(self, run_id):
         return self._answer("cancel", run_id, answer={"id": run_id})
@@ -3639,10 +3644,17 @@ def test_runs_are_listed_read_renamed_stopped_and_removed(client, backtests):
     assert client.post("/api/backtests/remove", json={"ids": [RUN]}, headers=SAME_ORIGIN).json()["removed"] == [RUN]
     assert client.post("/api/backtests/remove", json={"ids": ["x"] * 201}, headers=SAME_ORIGIN).status_code == 422
     assert client.delete("/api/backtests/former", headers=SAME_ORIGIN).json() == {"removed": 3}
+    # Among the favourites, one from its page, several from the list's selection.
+    assert client.patch(f"/api/backtests/{RUN}", json={"favourite": True}, headers=SAME_ORIGIN).json()["favourite"] is True
+    assert client.post("/api/backtests/favourites", json={"ids": [RUN], "favourite": False},
+                       headers=SAME_ORIGIN).json() == {"changed": [RUN], "kept": []}
+    assert client.post("/api/backtests/favourites", json={"ids": [RUN]}, headers=SAME_ORIGIN).status_code == 422
+    assert client.post("/api/backtests/favourites", json={"ids": ["x"] * 201, "favourite": True}, headers=SAME_ORIGIN).status_code == 422
 
     assert [entry[0] for entry in backtests.asked] == [
-        "list_runs", "get", "update", "cancel", "delete", "delete_many", "delete_former",
+        "list_runs", "get", "update", "cancel", "delete", "delete_many", "delete_former", "update", "set_favourites",
     ]
+    assert backtests.asked[-2][1:] == (RUN, None, None, True) and backtests.asked[-1][1:] == ([RUN], False)
     # A script's page asks for the runs of that script alone; what is not a script's id is refused.
     assert client.get("/api/backtests?script=0123456789ab").json()["items"] == [{"id": RUN}]
     assert backtests.asked[-1] == ("list_runs", "0123456789ab")
@@ -3770,5 +3782,8 @@ def test_a_path_that_tries_to_leave_the_runs_folder_finds_no_run(ctx, tmp_path, 
             assert client.delete(f"/api/backtests/{run_id}", headers=SAME_ORIGIN).status_code in (404, 405)
         outcome = client.post("/api/backtests/remove", json={"ids": ["..", "_fetch", "../prices"]}, headers=SAME_ORIGIN).json()
         assert (outcome["removed"], [entry["reason"] for entry in outcome["kept"]]) == ([], ["No such backtest"] * 3)
+        outcome = client.post("/api/backtests/favourites", json={"ids": ["..", "_fetch", "../prices"], "favourite": True},
+                              headers=SAME_ORIGIN).json()
+        assert (outcome["changed"], [entry["reason"] for entry in outcome["kept"]]) == ([], ["No such backtest"] * 3)
     assert (tmp_path / "backtests" / "status.json").exists()
 

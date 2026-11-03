@@ -539,6 +539,17 @@ def test_runs_are_named_tagged_removed_and_what_the_former_backtester_left_too(t
     renamed = backtests.update(first["id"], name="September", tags=["keep"])
     with pytest.raises(InvalidRequest):
         backtests.update(first["id"], name="   ")
+    # Among the favourites from its page, and several at once from the list; what is not a run is said to be.
+    assert backtests.update(first["id"], favourite=True)["favourite"] is True
+    assert backtests.set_favourites([second["id"], "nope", "../x"], True) == {
+        "changed": [second["id"]], "kept": [{"id": "nope", "reason": "No such backtest"}, {"id": "../x", "reason": "No such backtest"}],
+    }
+    assert {run["id"]: run["favourite"] for run in backtests.list_runs()} == {first["id"]: True, second["id"]: True}
+    backtests.set_favourites([first["id"]], False)
+    assert "favourite" not in json.loads((folder_of(tmp_path, first["id"]) / "request.json").read_text())
+    # Its name and tags stay as they were.
+    assert (backtests.get(first["id"])["name"], backtests.get(first["id"])["tags"], backtests.get(first["id"])["favourite"]) == \
+        ("September", ["keep"], False)
     storage = backtests.storage()
     with pytest.raises(NotPossible, match="Stop this backtest"):
         backtests.delete(second["id"])
@@ -677,6 +688,7 @@ def test_a_replay_keeps_wata_s_positions_beside_it_and_its_combinations_too(tmp_
 def test_a_finished_run_is_stressed_with_later_and_worse_fills_its_own_first(tmp_path, scripts, config):
     backtests = service(tmp_path, scripts, config)
     run_id = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {}}})
+    backtests.update(run_id, favourite=True)
 
     async def stress():
         return backtests.stress(run_id)
@@ -685,6 +697,8 @@ def test_a_finished_run_is_stressed_with_later_and_worse_fills_its_own_first(tmp
 
     assert stressed["kind"] == "sweep" and stressed["stress_of"] == run_id
     request = json.loads((folder_of(tmp_path, stressed["id"]) / "request.json").read_text())
+    # A favourite is the operator's choice of the run, not of what is made from it.
+    assert "favourite" not in request and stressed["favourite"] is False
     settings = json.loads((folder_of(tmp_path, run_id) / "settings.json").read_text())["settings"]
     assert [(axis["name"], axis["values"][0]) for axis in request["sweep"]["axes"]] == [
         ("order_seconds", settings["order_seconds"]), ("slippage", settings["slippage"]),
@@ -759,7 +773,7 @@ def test_a_stale_run_is_made_again_with_what_it_had_once_nothing_else_waits(tmp_
     backtests = service(tmp_path, scripts, config, launcher, clock=Ticking())
     old = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}},
                                                      "journal.json": [{"signal_uuid": "a"}]})
-    backtests.update(old, name="September", tags=["keep"])
+    backtests.update(old, name="September", tags=["keep"], favourite=True)
     done_at(tmp_path, old, "2026-10-19T20:00:00Z", "2026-10-19T20:10:00Z")
     backtests._write_paper("references.json", {"abcdef123456": old, "live": "20261001-000000-aaaaaa"})
     launcher.code = backtests.code
@@ -792,6 +806,8 @@ def test_a_stale_run_is_made_again_with_what_it_had_once_nothing_else_waits(tmp_
     assert {key: value for key, value in new_request.items() if key not in ("asked_at", "remade_from")} == \
         {key: value for key, value in old_request.items() if key != "asked_at"}
     assert new_request["remade_from"] == old and (new_request["name"], new_request["tags"]) == ("September", ["keep"])
+    # Made again, it stays among the favourites.
+    assert new_request["favourite"] is True
     for name in ("settings.json", "journal.json"):
         assert json.loads((folder_of(tmp_path, new) / name).read_text()) == json.loads((folder_of(tmp_path, old) / name).read_text())
     assert sorted(os.listdir(folder_of(tmp_path, new) / "sources")) == sorted(os.listdir(folder_of(tmp_path, old) / "sources"))

@@ -444,6 +444,8 @@ export function researchSentence(status: ResearchFiles): string {
 
 /** What the list of runs is narrowed to, as its address says it (?state=failed&by=claude…). */
 export interface RunFilter {
+  /** Among the favourites alone. */
+  favourite: 'yes' | null
   state: 'active' | 'done' | 'failed' | 'stopped' | null
   by: 'me' | 'claude' | null
   experiment: string | null
@@ -455,7 +457,7 @@ export interface RunFilter {
   verdict: CheckState | null
 }
 
-export const RUN_FILTER_NAMES = ['state', 'by', 'experiment', 'turbos', 'code', 'tag', 'verdict'] as const
+export const RUN_FILTER_NAMES = ['favourite', 'state', 'by', 'experiment', 'turbos', 'code', 'tag', 'verdict'] as const
 
 const STATE_GROUP: Record<BacktestState, NonNullable<RunFilter['state']>> = {
   queued: 'active',
@@ -473,6 +475,7 @@ export function runFilterOf(params: URLSearchParams): RunFilter {
     return known.includes(value as T) ? (value as T) : null
   }
   return {
+    favourite: one('favourite', ['yes']),
     state: one('state', ['active', 'done', 'failed', 'stopped']),
     by: one('by', ['me', 'claude']),
     experiment: params.get('experiment') || null,
@@ -491,6 +494,7 @@ export function filterRuns(
 ): BacktestRunListed[] {
   return runs.filter(
     (run) =>
+      (!filter.favourite || Boolean(run.favourite)) &&
       (!filter.state || STATE_GROUP[run.status.state] === filter.state) &&
       (!filter.by || (filter.by === 'claude') === madeByClaude(run)) &&
       (!filter.experiment || run.experiment === filter.experiment) &&
@@ -499,6 +503,12 @@ export function filterRuns(
       (!filter.tag || run.tags.includes(filter.tag)) &&
       (!filter.verdict || verdicts.get(run.id) === filter.verdict),
   )
+}
+
+/** What putting the runs chosen among the favourites, or out of them, is: out once every one of them is in. */
+export function favouriteAction(runs: readonly Pick<BacktestRunListed, 'favourite'>[]): { favourite: boolean; label: string } {
+  const all = runs.length > 0 && runs.every((run) => run.favourite)
+  return all ? { favourite: false, label: `Remove ${runs.length} from favourites` } : { favourite: true, label: `Add ${runs.length} to favourites` }
 }
 
 /** The tags the runs carry, each once, in the order of their names. */

@@ -42,10 +42,17 @@ def backtests(request: Request):
 class Renaming(BaseModel):
     name: str | None = None
     tags: list[str] | None = None
+    # Among the favourites, or out of them.
+    favourite: bool | None = None
 
 
 class Removal(BaseModel):
     ids: list[str] = Field(max_length=200)
+
+
+class Favouring(BaseModel):
+    ids: list[str] = Field(max_length=200)
+    favourite: bool
 
 
 class Remaking(BaseModel):
@@ -149,6 +156,12 @@ async def create(request: Request, body: dict = Body(...), service=Depends(backt
 async def remove_several(body: Removal, service=Depends(backtests)):
     """Remove several runs at once: those that wait or run are left, and named."""
     return await run_in_threadpool(service.delete_many, body.ids)
+
+
+@router.post("/favourites")
+async def set_favourites(body: Favouring, service=Depends(backtests)):
+    """Several runs put among the favourites, or out of them: those not there are named."""
+    return await run_in_threadpool(service.set_favourites, body.ids, body.favourite)
 
 
 @router.delete("/former")
@@ -259,8 +272,8 @@ async def run(run_id: str, service=Depends(backtests)):
 
 @router.patch("/{run_id}")
 async def rename(run_id: str, body: Renaming, service=Depends(backtests)):
-    """Name a run again, or tag it."""
-    return await run_in_threadpool(lambda: service.update(run_id, name=body.name, tags=body.tags))
+    """Name a run again, tag it, or put it among the favourites or out of them."""
+    return await run_in_threadpool(lambda: service.update(run_id, name=body.name, tags=body.tags, favourite=body.favourite))
 
 
 @router.post("/{run_id}/cancel")

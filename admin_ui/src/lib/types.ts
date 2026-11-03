@@ -2129,6 +2129,8 @@ export interface BacktestRunListed {
   kind: 'run' | 'sweep'
   name: string
   tags: string[]
+  /** Among the operator's favourites: the list's filter, a run page's button. */
+  favourite?: boolean
   from: string
   to: string
   indice: string

@@ -13,6 +13,7 @@ import {
   differingSettings,
   distribution,
   failureLine,
+  favouriteAction,
   filterRuns,
   heldFor,
   localDay,
@@ -301,6 +302,18 @@ describe('the list of runs', () => {
     expect(ids('verdict=maybe')).toEqual(['kept', 'other', 'untagged'])
     expect(ids('verdict=open')).toEqual([])
     expect(tagsInUse(runs)).toEqual(['ema', 'october', 'vwap'])
+  })
+
+  it('narrows the list to the favourites, and says what the selection’s action does to them', () => {
+    const runs = [listedRun({ id: 'kept', favourite: true }), listedRun({ id: 'other' }), listedRun({ id: 'off', favourite: false })]
+    const ids = (query: string) => filterRuns(runs, runFilterOf(new URLSearchParams(query))).map((run) => run.id)
+
+    expect(ids('favourite=yes')).toEqual(['kept'])
+    expect(ids('favourite=no')).toEqual(['kept', 'other', 'off'])
+    // In once one of them is not; out once all are.
+    expect(favouriteAction(runs)).toEqual({ favourite: true, label: 'Add 3 to favourites' })
+    expect(favouriteAction(runs.slice(0, 1))).toEqual({ favourite: false, label: 'Remove 1 from favourites' })
+    expect(favouriteAction([]).favourite).toBe(true)
   })
 
   it('makes one tag of what is typed, without commas, within its length', () => {

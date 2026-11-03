@@ -29,6 +29,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import time
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -327,9 +328,10 @@ def _research_fields(made_by, made_via, experiment, lockbox) -> dict:
 def _derived(request: dict) -> dict:
     """
     What a run made from another (a stress sweep, a sweep's combination, a model check) keeps of its request: it
-    says by itself who asked for it, and it is an ordinary run, never a paper day or report of its own.
+    says by itself who asked for it, and it is an ordinary run, never a paper day or report of its own, nor one of
+    the favourites (the operator's choice of the run it comes from).
     """
-    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS and key != "paper"}
+    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS and key not in ("paper", "favourite")}
 
 
 def compact_grid(sweep: dict | None) -> dict | None:
@@ -420,6 +422,8 @@ class BacktestService:
         self._code = code_digest()
         # Each sweep's grid as the list's verdict reads it, with the time its file was written.
         self._grids: dict[str, tuple[float, dict | None]] = {}
+        # A run's request changed by one at a time (its name, tags, favourite), from the routes' threads.
+        self._lock = threading.Lock()
 
     # ── the live settings ──
 
@@ -1211,18 +1215,41 @@ class BacktestService:
                 kept.append({"id": run_id, "reason": str(e)})
         return {"removed": removed, "kept": kept}
 
-    def update(self, run_id: str, *, name: str | None = None, tags: list[str] | None = None) -> dict:
-        """Name a run again, or tag it: what it is called, not what it was asked."""
+    def update(self, run_id: str, *, name: str | None = None, tags: list[str] | None = None,
+               favourite: bool | None = None) -> dict:
+        """
+        Name a run again, tag it, or put it among the favourites or out of them: what it is called and how it is
+        kept, not what it was asked. A run made again on today's code keeps them all; one made from it does not
+        take its favourite (``_derived``).
+        """
         path = self._file(run_id, "request.json")
-        request = read_json(path)
-        if request is None:
-            raise NotPossible("What was asked of this backtest cannot be read")
-        if name is not None:
-            request["name"] = _text(name, "The name", MAX_NAME_LENGTH, required=True)
-        if tags is not None:
-            request["tags"] = checked_tags(tags)
-        write_json(path, request)
+        with self._lock:
+            request = read_json(path)
+            if request is None:
+                raise NotPossible("What was asked of this backtest cannot be read")
+            if name is not None:
+                request["name"] = _text(name, "The name", MAX_NAME_LENGTH, required=True)
+            if tags is not None:
+                request["tags"] = checked_tags(tags)
+            if favourite is True:
+                request["favourite"] = True
+            elif favourite is False:
+                request.pop("favourite", None)
+            write_json(path, request)
         return self.get(run_id)
+
+    def set_favourites(self, run_ids: list[str], favourite: bool) -> dict:
+        """Several runs put among the favourites, or out of them, at once; one that is not there is said to be."""
+        changed, kept = [], []
+        for run_id in run_ids:
+            try:
+                self.update(run_id, favourite=favourite)
+                changed.append(run_id)
+            except UnknownRun:
+                kept.append({"id": run_id, "reason": "No such backtest"})
+            except NotPossible as e:
+                kept.append({"id": run_id, "reason": str(e)})
+        return {"changed": changed, "kept": kept}
 
     async def close(self) -> None:
         """The admin is stopping: the runs, and a measure of the turbos, stop with it."""
@@ -1355,6 +1382,8 @@ class BacktestService:
             "kind": request.get("kind"),
             "name": request.get("name"),
             "tags": request.get("tags") or [],
+            # Among the operator's favourites (the list's filter, a run page's button).
+            "favourite": bool(request.get("favourite")),
             "from": request.get("from"),
             "to": request.get("to"),
             "indice": request.get("indice"),

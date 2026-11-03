@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.78.0 - Favourite backtests
+
+**Release date:** not released yet
+
+Backtests can be kept among your favourites, and the list narrowed to them.
+- **One run**: its star in the list, or "Add to favourites" on its page ("Remove from favourites" once it is one).
+- **Several at once**: chosen in the list, then "Add N to favourites" in the selection's bar, or "Remove N from favourites" once all of them are.
+- **The list narrowed to them**: "Favourites only", the first of the list's filters, kept in the address (`?favourite=yes`) as the others are. The word "favourite" also finds them in the list's search.
+- **Kept with the run, on the server** (its `request.json`, beside its name and tags): a phone and a computer see the same. A run made again on today's code stays a favourite; a stress test, a model check or a sweep's cell made from one does not. Paper runs are kept by paper trading and have no star. A script's Backtests tab has the stars and the selection's action too.
+
+**On the live path:** nothing. The admin alone (a route, `POST /api/backtests/favourites`, and `favourite` on a run's `PATCH`); no run turns stale.
+
+**Verification status:**
+- Tests: the service (kept, listed, several at once, a run that is not there named, kept by a remake, not taken by a stress test), the routes, the list's filter and the selection's label, and the pages (a row's star, the selection's action, the filter in the address, a run page's button).
+- Seen in the browser pane on the development admin: two runs starred from their rows and from the selection, one taken out, the list narrowed to the other after a reload; a run page's button; at 375 px and in the dark theme, nothing wider than the screen.
+
 ## v0.77.0 - Ready for a signal rule?
 
 **Release date:** 2026-11-03

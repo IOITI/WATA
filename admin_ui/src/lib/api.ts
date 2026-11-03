@@ -414,8 +414,10 @@ export const api = {
   stopRemaking: () => request<{ remaking: BacktestRemaking | null }>('DELETE', '/api/backtests/remake'),
   backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
   createBacktest: (body: BacktestRequestBody) => request<BacktestRun>('POST', '/api/backtests', { body }),
-  renameBacktest: (runId: string, body: { name?: string; tags?: string[] }) =>
+  renameBacktest: (runId: string, body: { name?: string; tags?: string[]; favourite?: boolean }) =>
     request<BacktestRun>('PATCH', `/api/backtests/${encodeURIComponent(runId)}`, { body }),
+  favouriteBacktests: (ids: string[], favourite: boolean) =>
+    request<{ changed: string[]; kept: { id: string; reason: string }[] }>('POST', '/api/backtests/favourites', { body: { ids, favourite } }),
   cancelBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cancel`),
   deleteBacktest: (runId: string) => request<void>('DELETE', `/api/backtests/${encodeURIComponent(runId)}`),
   removeBacktests: (ids: string[]) =>

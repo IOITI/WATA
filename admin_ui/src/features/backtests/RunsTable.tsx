@@ -1,11 +1,12 @@
 // The table of runs: the Backtests page's, and a script's page's (its Backtests tab). Each run with what
 // it ran and made, its verdict from the list itself (verdict.ts), the runs it made again and the failed
-// attempts folded under it, a basket to compare or remove what is chosen.
+// attempts folded under it, its star among the favourites, a basket to compare, put among the favourites
+// or remove what is chosen.
 
-import { AdvancedDataTable, Badge, Button, formatDateTime, formatDay, formatNumber, formatPercent, Hint, SignedValue } from 'ioiti-ui'
+import { AdvancedDataTable, Badge, Button, cn, formatDateTime, formatDay, formatNumber, formatPercent, Hint, SignedValue } from 'ioiti-ui'
 import type { BadgeTone, CheckState, ColumnDef } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { Columns3, Trash2 } from 'lucide-react'
+import { Columns3, Star, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
@@ -15,9 +16,10 @@ import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import type { BacktestRunListed } from '@/lib/types'
 
-import { collapseAttempts, comparable, failureLine, isActive, sourceLabel, STATE_LABEL } from './model'
+import { collapseAttempts, comparable, failureLine, favouriteAction, isActive, sourceLabel, STATE_LABEL } from './model'
 import { StateBadge } from './parts'
 import { useHiddenRuns, useRemoveRuns } from './pending-removals-context'
+import { useSetFavourites } from './useFavourites'
 import type { Judged } from './verdict'
 
 const VERDICT_BADGE: Record<CheckState, { tone: BadgeTone; label: (open: number) => string }> = {
@@ -32,6 +34,28 @@ const VERDICT_RANK: Record<CheckState, number> = { pass: 3, open: 2, fail: 1 }
 /** A run that waits or runs can neither be compared nor removed: it has no box. */
 const selectableRun = (run: BacktestRunListed) => !isActive(run.status.state)
 const runName = (run: BacktestRunListed) => run.name
+
+/** A run among the favourites, or not: its star, pressed to put it there or take it out. */
+function FavouriteStar({ run, onToggle }: { run: BacktestRunListed; onToggle: (run: BacktestRunListed) => void }) {
+  const on = Boolean(run.favourite)
+  const said = on ? `Remove “${run.name}” from favourites` : `Add “${run.name}” to favourites`
+  return (
+    <Hint content={on ? 'A favourite: press to take it out' : 'Add it to favourites'}>
+      <button
+        type="button"
+        aria-pressed={on}
+        aria-label={said}
+        onClick={() => onToggle(run)}
+        className={cn(
+          '-ml-1 mr-1 inline-grid size-6 place-items-center rounded-md align-[-0.4em] transition-colors hover:bg-surface-hover focus-ring',
+          on ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        <Star className={cn('size-4', on && 'fill-current')} aria-hidden />
+      </button>
+    </Hint>
+  )
+}
 
 /** Whether a listed run can be believed, check by check: the badge says it, its hint and its page say why. */
 function VerdictCell({ run, judged, judges }: { run: BacktestRunListed; judged: Judged | null; judges: BacktestRunListed | null }) {
@@ -73,18 +97,21 @@ function runColumns(
   remaking: ReadonlyMap<string, BacktestRunListed>,
   tagHref: (tag: string) => string,
   removeAttempts: (attempts: BacktestRunListed[]) => void,
+  toggleFavourite: (run: BacktestRunListed) => void,
 ): ColumnDef<BacktestRunListed>[] {
   return [
     {
       id: 'run',
       header: 'Backtest',
-      // Searched by its name, what it runs and its tags, and "Claude" for Claude's.
-      accessorFn: (row) => [row.name, sourceLabel(row), ...row.tags, ...(madeByClaude(row) ? ['Claude'] : [])].join(' '),
+      // Searched by its name, what it runs and its tags, "Claude" for Claude's and "favourite" for a favourite.
+      accessorFn: (row) =>
+        [row.name, sourceLabel(row), ...row.tags, ...(madeByClaude(row) ? ['Claude'] : []), ...(row.favourite ? ['favourite'] : [])].join(' '),
       sortable: true,
       cell: ({ row }) => (
         // Wide enough in the table to read a name on two lines at most: past it, the table scrolls in its frame.
         // Its floor in the table only: a card on a phone is narrower.
         <div className="max-w-96 whitespace-normal [td_&]:min-w-56">
+          <FavouriteStar run={row} onToggle={toggleFavourite} />
           <Link to={`/backtests/${row.id}`} className="font-medium underline-offset-4 hover:underline">
             {row.name}
           </Link>
@@ -317,6 +344,8 @@ export function RunsTable({
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const hidden = useHiddenRuns()
   const removeRuns = useRemoveRuns()
+  const { mutate: favour } = useSetFavourites()
+  const toggleFavourite = useCallback((run: BacktestRunListed) => favour({ ids: [run.id], favourite: !run.favourite }), [favour])
   // Without the runs whose removal waits for its Undo, or is on its way.
   const listed = useMemo(() => all.filter((run) => !hidden.has(run.id)), [all, hidden])
   const byId = useMemo(() => new Map(listed.map((run) => [run.id, run])), [listed])
@@ -337,14 +366,16 @@ export function RunsTable({
     [removeRuns, setSelected],
   )
   const columns = useMemo(
-    () => runColumns(timezone, earlier, before, judged, byId, remaking, tagHref, remove),
-    [timezone, earlier, before, judged, byId, remaking, tagHref, remove],
+    () => runColumns(timezone, earlier, before, judged, byId, remaking, tagHref, remove, toggleFavourite),
+    [timezone, earlier, before, judged, byId, remaking, tagHref, remove, toggleFavourite],
   )
   // A run removed meanwhile, or now waiting or running, is no longer selected.
   const chosen = useMemo(() => listed.filter((run) => selected.has(run.id) && selectableRun(run)), [listed, selected])
   const chosenIds = useMemo(() => new Set(chosen.map((run) => run.id)), [chosen])
   const compared = comparable(listed, chosenIds)
   const canCompare = compared.length >= 2 && compared.length <= MAX_COMPARED
+  // Out of the favourites once every run chosen is in them, else in.
+  const favouring = favouriteAction(chosen)
 
   return (
     <AdvancedDataTable<BacktestRunListed>
@@ -372,6 +403,12 @@ export function RunsTable({
             href: canCompare ? `/backtests/compare?runs=${compared.map((run) => run.id).join(',')}` : undefined,
             disabled: !canCompare,
             title: canCompare ? undefined : `Two to ${MAX_COMPARED} finished runs can be compared`,
+          },
+          {
+            id: 'favourite',
+            label: favouring.label,
+            icon: <Star className={cn('size-3.5', !favouring.favourite && 'fill-current')} />,
+            onClick: () => favour({ ids: chosen.map((run) => run.id), favourite: favouring.favourite }),
           },
           {
             id: 'remove',
