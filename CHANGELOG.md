@@ -2,7 +2,7 @@
 
 ## v0.83.0 - Claude Fable 5.2 for the AI agent
 
-**Release date:** not released
+**Release date:** 2026-11-09
 
 - **Claude Fable 5.2** (`claude-fable-5-2`, released by Anthropic on 2026-11-09) can be chosen for a request, a new conversation's default, the debrief, the briefing and the triage. It costs $8 in and $40 out per million tokens, with cache reads at $0.20: less than Fable 5.1's $10 and $50. Its window is 1M tokens and its answers 128K.
   - It reads the notes (thinking) of every model the agent offers: a conversation moved onto it keeps its reasoning.
