@@ -63,7 +63,9 @@ def prepare(tmp_path, request: dict, settings_changes: dict | None = None, journ
     settings = from_config(EXAMPLE).to_dict()
     settings.update({"trailing_enabled": False, "time_scaling_enabled": False, "confidence_enabled": False,
                      "day_profit_target": 50.0, "no_entry_above_day_profit": 50.0, "cooldown_after_loss_minutes": 0,
-                     "max_trades_per_day": 0, "capital": 10_000.0, **(settings_changes or {})})
+                     "max_trades_per_day": 0, "capital": 10_000.0,
+                     # Room for a fill a cent dearer than the ask an order was sized on, which Saxo would refuse.
+                     "funds_percent": 95, **(settings_changes or {})})
     (folder / "settings.json").write_text(json.dumps({"settings": settings, "changed": {}, "live_before": {}}))
     (folder / "request.json").write_text(json.dumps({
         "format": 1, "kind": "run", "name": "Hours", "from": DAYS[0].isoformat(), "to": DAYS[-1].isoformat(),

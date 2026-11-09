@@ -1,5 +1,101 @@
 # Changelog
 
+## v0.82.0 - Backtests as Saxo serves the turbos: holes, frozen quotes, knock-outs, refusals
+
+**Release date:** not released
+
+A review of how far a backtest's result can be believed, from one question: what becomes of an order when Saxo stops quoting a turbo for some minutes? The recorded data holds two kinds of outage:
+- **a hole**: Saxo flags the turbo (no market, a null bid), and the recorder writes no bar;
+- **a frozen quote**: Saxo sends nothing for the turbo while the stream lives, and the recorder writes its last quote again every 10 s (`updates` 0). Neither the backtests nor the data quality page saw it.
+
+A backtest sold through a hole at the first bar after it, crediting the cash at once, sold at the quote from before a silence of the whole stream, bought and sold at frozen prices, judged nothing during a hole, and missed most knock-outs. Each case was pinned by a test on today's code (`tests/test_backtest_gaps.py`), then measured on WATA's real days through the research tools.
+
+**What a backtest does when Saxo does not quote a turbo**
+- **A sale waits for a quote, as the monitor's close intents wait.** This covers a signal's close, the day's close, an entry selling the other side, and an exit.
+  - It is tried again with live's growing waits (`retry_after` of `src/trade/close_intents.py`), and filled at Saxo's first new quote after the hole, never at a quote from before a silence of the stream.
+  - The cash comes in only then, so the next entry is sized on what the account holds.
+- **Held through a hole**, a position is judged on the index as the monitor judges it (with `index_between_quotes` on, within 90 s of Saxo's last quote). It is also sold before a release whose window began inside the hole.
+- **A turbo never quoted again that day is still held.** Its sale waits for the next recorded day's first quote. A position never quoted again by the run's end is closed at its last bid and said unresolved.
+- **Knock-outs are read on the index.**
+  - When the run's index (the one the monitor would follow) reaches the turbo's knock-out level after its last quote, the turbo is knocked out there, at nothing. What Saxo pays back is not known.
+  - Without the index, the old guess stays: a bid under a quarter of the day's high.
+  - That guess missed 2 of the 3 real knock-outs of 5 Nov: their last bids were 31 % and 35 % of the day's high.
+- **A quote frozen two minutes or more when an order fills is priced from the index**, with the euros per index point learned from the turbo's own quote changes, not at the frozen price. With measured fills, a note says so.
+  - It is rare: once in 14 turbo-days of WATA's real turbos.
+  - But such a price can be several percent off.
+
+**Fills and the account as Saxo takes them**
+- **An order that costs more than the account holds at the price paid is refused**, as Saxo refuses it (InsufficientFunds); the other side is already sold. Before, the account went below zero with a note: 13 of the 37 entries of run 20261107-094634-379b76 did.
+- **The monitor's exits sell 0.1 % under the bid that decided them** (`exit_slippage_percent`, 0 for the runs made before). WATA's real exits sold about that much under, at the median of 9 positions.
+  - A stop crossed inside ten seconds still fills as `stop_fill` says.
+  - Every other exit sells at the quote that decided it, after a hole too: one rule.
+- **A quote Saxo says is delayed is not bought**, as live refuses it (`delayed_minutes`, now read from the recorder).
+- **Signals that reach a busy trader go through the web server's store first.** Only the newest of each indice is executed, and a close of the same moment never replaces an entry. The others are journaled as superseded. The test holds this mirror to `SignalStore`.
+
+**What a run says of its data**
+- **`rests_on` in each run's summary**:
+  - its trades by what they rested on beyond the recorded quotes, each with its `flags`;
+  - the share of trades priced off those quotes;
+  - the entries refused for funds;
+  - the days recorded for less than 95 % of their trading hours (`partial`, with `recorded.share`).
+- **A new check in every run's verdict, "Priced at recorded quotes"**: more than 10 % of a run's trades priced off the recorded quotes fails it.
+  - The same line is in the MCP's "Do not believe", so the pages, Claude Code and the AI agent judge alike.
+  - A run made before stays open on it.
+- **The run's page**:
+  - its trust panel says what the run rests on;
+  - the days table marks the days recorded in part;
+  - each trade says what it rested on (`rested_on` in its CSV).
+- **A fill-noise stress** ("Move its fills at random" on the run's page; `POST /api/backtests/{id}/stress?kind=noise`; MCP `backtest_derive` kind `noise_stress`).
+  - Each fill moves at random by up to 0.1, 0.3 and 0.5 %, either way, four draws each: how far the total rests on the luck of its fills (`summary.noise`).
+  - It is kept apart from the stress of later and dearer fills, which the verdict reads.
+- **A combination of a stress made a run is an ordinary run.** It used to carry `stress_of` and be taken for the run's stress.
+
+**Measures**
+- **The reconciliation of a journal replay**:
+  - its exit price was always empty: it read `price` where the simulator writes `bid`;
+  - each pair now says how far the backtest's prices were from WATA's, and the summary gives the medians of prices paid and got and of when it sold;
+  - its totals are compounded, as a run's are.
+- **WATA's measured orders**:
+  - the quote an order is compared with is the bar at or after it, which is what the backtests price at;
+  - order times over 30 s are left out and counted (the 60 s waits before v0.48.0);
+  - a signal that bought counts as decided when its order left, not when Saxo filled it.
+- **The code that decides a result**:
+  - `_CODE` adds `src/trade/close_intents.py`, `src/admin/prices.py`, `src/admin/ta_rules.py`, `src/price_history/files.py` and the built Pine runner when present;
+  - a test lists every file of WATA a backtest imports.
+
+**The data quality page**
+- **Frozen quotes**: each instrument's stretches of two minutes or more in which Saxo sent it nothing, in trading hours and outside the recorder's own gaps (`AdminQueries.price_silent`).
+- They are said apart from what is missing, since bars exist for them: in the Assets View's mark, an opened row, and under an asset's recording gaps.
+
+**On the live path:** nothing. No trading service imports `src/backtest/`; only the admin's container changes. Every run made before turns stale: making them again is yours, from the list's "Make them again". The days on paper are made again after the close by themselves, a few a tick, each with the settings of its night.
+
+**To know:**
+- **An order is sized on the standing ask with one turbo of margin.** That is 0.5 % of a 1,000 € account for a 5 € turbo, and Saxo fills at its live price.
+  - On run 379b76, the next quote was 1 % or more from the standing ask for 19 of 37 entries (up to +6.5 %).
+  - Ten of those 19 were a stale quote catching up.
+  - Backtests now refuse the entries that cost more than the account; live, Saxo would too.
+  - A lower `max_account_funds_to_use_percentage` leaves more room.
+- **Fills against WATA's 31 real trades** (median offset from the real price):
+
+  | | Standing quote | Next quote, as the backtests price | Index estimate |
+  |---|---|---|---|
+  | Purchases | −0.31 % | −0.05 % | −0.10 % |
+  | Sales | +0.31 % | +0.11 % | +0.17 % |
+
+**Verification status:**
+- Tests:
+  - every outage case through the recorder's real `BarBuilder` (`tests/test_backtest_gaps.py`): holes at the choice, the fill and while held; frozen quotes with and without the index; a sale through a hole and through a silence of the stream; the carry-over; unresolved positions; knock-outs; the flatten before a release through a hole; superseded signals; partial days; the funds refusal; delayed quotes; the noise;
+  - the parity tests with the live code, the reconciliation, the measures, the code digest's files, the stress routes, the availability's frozen quotes;
+  - the new SQL run for real on a PostgreSQL 16 (pgserver).
+- Whole suites: 3,972 Python tests passed (50 skipped), 1,442 interface tests, lint and typecheck clean.
+- Seen in the browser pane on the development admin, with runs made by the real child process on its made-up days:
+  - a run's verdict with "Priced at recorded quotes", its trust panel, a trade held through the recorder's own gap;
+  - a fill-noise stress asked from the run's page, its spread there and on its own page;
+  - a journal replay's sale prices and medians beside WATA's made-up positions, today marked as recorded in part;
+  - a made-up turbo's frozen quote in the Assets View and under its asset's recording gaps.
+- The built Pine runner, now in the code digest, comes out the same bytes at each build, with no path in it.
+- Not yet on the server.
+
 ## v0.81.0 - Indicators: favourites, families, How it works, a live chart, pictures
 
 **Release date:** 2026-11-03

@@ -34,6 +34,10 @@ STOP_FILLS = ("worst", "level")
 # it left plus a drawn slippage, as the measure compares, whatever this says.
 STANDING, NEXT = "standing", "next"
 FILL_PRICES = (STANDING, NEXT)
+# The position monitor's exits fill a little under the bid that decided them: of WATA's eight measured exits of
+# 13-20 October 2026, 0.1 % at the median (0.4 % at worst in a calm market, 1.2 % at the CPI of 14 October). A new
+# run charges it on each of the monitor's exits; the runs made before charge nothing (0, from_dict).
+EXIT_SLIPPAGE_PERCENT = 0.1
 
 # The account every run starts with unless it says another: one that pays for a turbo at
 # each entry. The live balance, which may not (21.82 € paid for none of 34 entries on
@@ -170,6 +174,11 @@ FIELDS = (
     Field("fill_price", "execution", "choice", "An order is priced at the turbo's quote standing then, or at its next",
           choices=FILL_PRICES),
     Field("slippage", "execution", "number", "Worse price per turbo on each fill", 0, 1000),
+    Field("exit_slippage_percent", "execution", "number", "The monitor's exits fill this much under the bid that decided them",
+          0, 10, unit="%"),
+    Field("fill_noise_percent", "execution", "number", "Each fill moved at random by up to this share of its price", 0, 10,
+          unit="%"),
+    Field("fill_noise_seed", "execution", "integer", "The draw of the fills' random moves", 1, 1_000_000),
     Field("commission_per_order", "execution", "number", "Commission per order", 0, 1000, unit="€"),
     Field("commission_percent", "execution", "number", "Commission on the amount of each order", 0, 10, unit="%"),
     # ── how a Pine script is run (the TA engine's) ──
@@ -275,6 +284,11 @@ class BacktestSettings:
     # The standing quote for the runs made before it existed; a new run is priced at the next one (from_config).
     fill_price: str = STANDING
     slippage: float = 0.0
+    # Nothing for the runs made before it existed; a new run charges what WATA's exits cost (from_config).
+    exit_slippage_percent: float = 0.0
+    # A stress step's random move of each fill (src/backtest/execution.py): none unless asked.
+    fill_noise_percent: float = 0.0
+    fill_noise_seed: int = 1
     commission_per_order: float = 0.0
     commission_percent: float = 0.0
     # The TA engine's.
@@ -450,6 +464,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         ),
         capital=DEFAULT_CAPITAL if capital is None else float(capital),
         fill_price=NEXT,
+        exit_slippage_percent=EXIT_SLIPPAGE_PERCENT,
         history_days=engine.history_days,
         restart_time=engine.restart_time,
     )

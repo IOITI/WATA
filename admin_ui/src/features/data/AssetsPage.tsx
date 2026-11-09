@@ -86,14 +86,20 @@ export function AssetsPage() {
     refetchInterval: AVAILABILITY_REFRESH_MS,
     staleTime: AVAILABILITY_REFRESH_MS / 2,
   })
-  const flags = useMemo(() => {
+  const { flags, missing, frozen } = useMemo(() => {
     const found = new Map<string, string>()
+    let missingCount = 0
+    let frozenCount = 0
     for (const row of rows) {
       if (row.last_t === null || dayOf(row.last_t, timezone) !== today) continue
       const item = availabilityOf(availabilityQuery.data, row)
-      if (item && isFlagged(item)) found.set(row.ref, flagText(item, timezone, false))
+      if (!item || !isFlagged(item)) continue
+      found.set(row.ref, flagText(item, timezone, false))
+      // A frozen quote is not missing: bars were written, Saxo's last quote again.
+      if (item.issues.some((issue) => issue !== 'frozen')) missingCount += 1
+      if (item.issues.includes('frozen')) frozenCount += 1
     }
-    return found
+    return { flags: found, missing: missingCount, frozen: frozenCount }
   }, [rows, availabilityQuery.data, timezone, today])
   const columns = useMemo(() => assetColumns(timezone, flags), [timezone, flags])
 
@@ -101,9 +107,13 @@ export function AssetsPage() {
   const search = searchParams.get('q') ?? ''
   // The table keeps its filters itself: another link (another provider) starts it again.
   const tableKey = [seen, ...['provider', 'type', 'status', 'q'].map((name) => searchParams.get(name) ?? '')].join('|')
+  const flagged = [
+    missing > 0 ? `${missing} with missing data` : null,
+    frozen > 0 ? `${frozen} with a frozen quote` : null,
+  ].filter(Boolean)
   const title =
     flags.size > 0
-      ? `${rows.length} assets · ${flags.size} with missing data today`
+      ? `${rows.length} assets · ${flagged.join(' · ')} today`
       : `${rows.length} asset${rows.length === 1 ? '' : 's'}`
 
   return (

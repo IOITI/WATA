@@ -39,12 +39,12 @@ const runName = (run: BacktestRunListed) => run.name
 
 /** Whether a listed run can be believed, check by check: the badge says it, its hint and its page say why. */
 function VerdictCell({ run, judged, judges }: { run: BacktestRunListed; judged: Judged | null; judges: BacktestRunListed | null }) {
-  const judgedId = run.stress_of ?? run.model_check_of
+  const judgedId = run.stress_of ?? run.noise_of ?? run.model_check_of
   if (judgedId) {
     // The run it judges is named when it is listed; a paper day is not, and its page says if it is gone.
     return (
       <span className="text-xs whitespace-normal text-muted-foreground">
-        {run.stress_of ? 'Stresses' : 'Checks'}{' '}
+        {run.stress_of ? 'Stresses' : run.noise_of ? 'Moves the fills of' : 'Checks'}{' '}
         <Link to={`/backtests/${judgedId}`} className="underline-offset-2 hover:underline">
           {judges?.name ?? 'its run'}
         </Link>
@@ -160,7 +160,11 @@ function runColumns(
       },
       sortable: true,
       cell: ({ row }) => (
-        <VerdictCell run={row} judged={judged.get(row.id) ?? null} judges={byId.get(row.stress_of ?? row.model_check_of ?? '') ?? null} />
+        <VerdictCell
+          run={row}
+          judged={judged.get(row.id) ?? null}
+          judges={byId.get(row.stress_of ?? row.noise_of ?? row.model_check_of ?? '') ?? null}
+        />
       ),
     },
     {

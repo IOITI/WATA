@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, formatDay, formatNumber, Panel, QueryState, SignedValue } from 'ioiti-ui'
+import { Alert, AlertDescription, formatDay, formatNumber, formatPercent, Panel, QueryState, SignedValue } from 'ioiti-ui'
 
 import { api } from '@/lib/api'
 import type { BacktestReconciliation } from '@/lib/types'
@@ -57,6 +57,9 @@ export function ReconciliationPanel({ runId }: { runId: string }) {
                         Seconds after WATA
                       </th>
                       <th scope="col" className="p-2 text-right font-medium">
+                        Sold at, backtest / WATA
+                      </th>
+                      <th scope="col" className="p-2 text-right font-medium">
                         Result, backtest
                       </th>
                       <th scope="col" className="p-2 text-right font-medium">
@@ -78,6 +81,12 @@ export function ReconciliationPanel({ runId }: { runId: string }) {
                           {price(pair.entry_price.backtest)} / {price(pair.entry_price.real)}
                         </td>
                         <td className="p-2 text-right">{pair.entry_seconds === null ? '-' : formatNumber(pair.entry_seconds, 1)}</td>
+                        <td className="p-2 text-right whitespace-nowrap">
+                          {price(pair.exit_price.backtest)} / {price(pair.exit_price.real)}
+                          {pair.exit_price_percent !== null && pair.exit_price_percent !== undefined && (
+                            <span className="block text-xs text-muted-foreground">{formatPercent(pair.exit_price_percent, true)}</span>
+                          )}
+                        </td>
                         <td className="p-2 text-right">
                           <SignedValue value={pair.result.backtest} kind="percent" />
                         </td>

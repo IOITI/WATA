@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { BacktestReconciliationSummary } from '@/lib/types'
 
-import { reconciliationVerdict } from './reconciliation'
+import { pricesSentence, reconciliationVerdict } from './reconciliation'
 
 const SUMMARY: BacktestReconciliationSummary = {
   paired: 20,
@@ -30,6 +30,18 @@ describe('a replay beside the real trades', () => {
       'Only the backtest traded 1: 1 refused by WATA.',
       'Only WATA traded 2: 1 refused by the backtest’s rules, 1 outside the days replayed.',
     ])
+  })
+
+  it('says how far its prices and its sales were from WATA’s, once measured', () => {
+    const measured = { ...SUMMARY, median_entry_price_percent: 0.31, median_exit_price_percent: -0.12, median_exit_seconds: -3 }
+    expect(reconciliationVerdict(measured).sentences[2]).toBe(
+      'In the middle, the backtest paid 0.31 % more than WATA, got 0.12 % less on a sale and sold 3.0 s earlier.',
+    )
+    expect(pricesSentence({ ...SUMMARY, median_exit_price_percent: 0 })).toBe('In the middle, the backtest got what WATA got on a sale.')
+    expect(pricesSentence({ ...SUMMARY, median_exit_seconds: -1090 })).toBe('In the middle, the backtest sold 18 min 10 s earlier.')
+    // A run made before they were measured says nothing of them.
+    expect(pricesSentence(SUMMARY)).toBeNull()
+    expect(reconciliationVerdict(SUMMARY).sentences).toHaveLength(4)
   })
 
   it('says when the backtest bought before WATA', () => {

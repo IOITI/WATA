@@ -168,6 +168,17 @@ def test_a_stress_reads_as_a_table_of_later_and_dearer_fills_and_neighbours_as_a
     assert f"above zero in {sum(1 for total in totals if total > 0)} of 16" in shown
     assert "one step worse on both: +2.70" in shown
 
+    noisy = {**FINISHED, "kind": "sweep", "noise_of": "20261020-100000-aaaaaa", "summary": {"noise": [
+        {"percent": 0.1, "draws": 4, "lowest": 1.2, "highest": 2.6, "median": 1.9},
+        {"percent": 0.3, "draws": 4, "lowest": -0.8, "highest": 3.1, "median": 1.1},
+    ]}}
+    said = runs.noise_summary(noisy)
+    assert "fills of 20261020-100000-aaaaaa moved at random" in said and "0.3 %" in said
+    assert "a draw ends in a loss from 0.3 %" in said
+    # A run that lost whatever its fills: nothing rests on their luck.
+    lost = {**noisy, "summary": {"noise": [{"percent": 0.1, "draws": 4, "lowest": -45.5, "highest": -44.9, "median": -45.2}]}}
+    assert "ends in a loss" not in runs.noise_summary(lost)
+
     def around(values_totals):
         return {"axes": [{"kind": "input", "name": "in_0", "values": [value for value, _ in values_totals]}],
                 "cells": [{"values": [value], "whole": figures(total)} for value, total in values_totals]}

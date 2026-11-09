@@ -508,6 +508,25 @@ def stress_summary(run: dict, sweep: dict) -> str:
     return "\n".join(lines)
 
 
+def noise_summary(run: dict) -> str:
+    """A fill-noise stress: the run's total with each fill moved at random, at each level of noise (summary.noise)."""
+    levels = (run.get("summary") or {}).get("noise") or []
+    lines = [
+        f"{run['name']}  [{run['status']['state']}]  {run['id']}  (fills of {run.get('noise_of')} moved at random)",
+        "the total of all days, each fill moved at random by up to this much of its price, either way:",
+        text.table(
+            ["moved by up to", "draws", "lowest", "median", "highest"],
+            [[f"{level['percent']:g} %", level["draws"], level["lowest"], level["median"], level["highest"]] for level in levels],
+            {2, 3, 4},
+        ),
+    ]
+    # The luck of its fills alone turns it into a loss: some draws lose, others do not.
+    losing = [level for level in levels if level["lowest"] < 0 <= level["highest"]]
+    if losing:
+        lines.append(f"a draw ends in a loss from {losing[0]['percent']:g} %: the result rests on the luck of its fills")
+    return "\n".join(lines)
+
+
 def neighbours_summary(run: dict, sweep: dict, own) -> str:
     """A sweep of one parameter around a run's value: a plateau, or a peak among worse values."""
     (axis,) = sweep["axes"]

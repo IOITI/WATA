@@ -1236,8 +1236,10 @@ export interface PriceStretch {
   /**
    * "unquoted": between two of its bars of the same day. "stopped": after its
    * last bar of a day, while other turbos of its indice were still quoted.
+   * "frozen": its bars written, Saxo sending nothing for it (its last quote
+   * again), two minutes or more.
    */
-  reason: 'unquoted' | 'stopped'
+  reason: 'unquoted' | 'stopped' | 'frozen'
 }
 
 /** What was recorded of one instrument in a period, and what is missing from it. */
@@ -1262,8 +1264,12 @@ export interface InstrumentAvailability {
   knocked_out_at: string | null
   without_ask: number
   delayed_minutes: number
-  /** What flags the instrument: holes in its day, or no more quote for the rest of one. */
-  issues: ('holes' | 'stopped')[]
+  /** Its quote frozen (bars written, nothing from Saxo) two minutes or more: how often, how long, the longest twenty in time order. */
+  frozen: number
+  frozen_seconds: number
+  frozen_stretches: PriceStretch[]
+  /** What flags the instrument: holes in its day, no more quote for the rest of one, its quote frozen. */
+  issues: ('holes' | 'stopped' | 'frozen')[]
 }
 
 export interface PriceAvailability {
@@ -1761,6 +1767,12 @@ export interface BacktestReconciliationSummary {
   same_exit_percent: number | null
   same_turbo_percent: number | null
   median_entry_seconds: number | null
+  /** Seconds the backtest sold after (positive) or before WATA, in the middle; absent from runs of before. */
+  median_exit_seconds?: number | null
+  /** How far the backtest's prices paid and got were from WATA's, in percent of WATA's, in the middle; absent from runs of before. */
+  median_entry_price_percent?: number | null
+  median_exit_price_percent?: number | null
+  /** Compounded, as a run's results are (summed before v0.82.0). */
   backtest_total_percent: number | null
   real_total_percent: number | null
 }
@@ -1777,6 +1789,9 @@ export interface BacktestReconciledPair {
   same_turbo: boolean | null
   entry_price: { backtest: number | null; real: number | null }
   exit_price: { backtest: number | null; real: number | null }
+  /** The backtest's price against WATA's, in percent of WATA's; absent from runs of before. */
+  entry_price_percent?: number | null
+  exit_price_percent?: number | null
   result: { backtest: number | null; real: number | null }
   exit: { backtest: string; real: string }
   same_exit: boolean
@@ -2039,6 +2054,8 @@ export interface BacktestStoredRequest {
   from_sweep?: { id: string; cell: number }
   /** A stress sweep: the run it made again with later and dearer fills. */
   stress_of?: string
+  /** A fill-noise stress: the run it made again with each fill moved at random. */
+  noise_of?: string
   /** A model check: the run on the recorded turbos it made again on made-up ones. */
   model_check_of?: string
   turbos?: BacktestTurbos
@@ -2089,6 +2106,38 @@ export interface BacktestHeadline {
   model_check?: Pick<BacktestModelCheck, 'paired' | 'correlation'> | null
   /** A sweep's grid with its totals alone. */
   grid?: BacktestSweepGrid | null
+  rests_on?: BacktestRestsOn | null
+}
+
+/**
+ * What a trade rested on beyond the recorded quotes (src/backtest/simulator.py ``FLAGS``): a hole met while held, a
+ * sale that waited for Saxo to quote the turbo again, an order on a quote frozen past two minutes (priced from the
+ * index or not), a knock-out (seen on the index, or guessed without it), a sale on a later day, a turbo never quoted
+ * again while the run lasted.
+ */
+export type BacktestTradeFlag =
+  | 'hole'
+  | 'sold_after_hole'
+  | 'frozen_quote'
+  | 'index_priced'
+  | 'knocked_out'
+  | 'knock_out_guess'
+  | 'carried'
+  | 'unresolved'
+
+/** What a run's result rests on beyond the recorded quotes (src/backtest/figures.py ``rests_on``); absent from runs of before. */
+export interface BacktestRestsOn {
+  trades: number
+  /** Trades by flag, each counted once per trade. */
+  flags: Partial<Record<BacktestTradeFlag, number>>
+  /** The trades with a flag that changed how they were priced (every flag but ``hole``). */
+  trades_priced_off_quotes: number
+  /** Their share of the trades; null without a trade. */
+  share_percent: number | null
+  /** The entries Saxo would have refused, their cost more than the account held. */
+  funds_refused: number
+  /** The days the recorder listened to less than 95 % of the trading hours. */
+  partial_days: string[]
 }
 
 /** A combination's totals, as a sweep's verdict reads them. */
@@ -2150,6 +2199,8 @@ export interface BacktestRunListed {
   stale?: boolean
   /** A stress sweep: the run it made again with later and dearer fills. */
   stress_of?: string | null
+  /** A fill-noise stress: the run it made again with each fill moved at random. */
+  noise_of?: string | null
   /** A model check: the run on the recorded turbos it made again on made-up ones. */
   model_check_of?: string | null
   turbos?: BacktestTurbos
@@ -2388,8 +2439,22 @@ export interface BacktestSummary {
   walk_forward?: BacktestWalkForward | null
   pbo?: BacktestPbo | null
   deflated_sharpe?: BacktestDeflatedSharpe | null
+  /** A run's: absent from runs made before it was. */
+  rests_on?: BacktestRestsOn | null
+  /** A fill-noise stress's: its totals by level of noise. */
+  noise?: BacktestNoiseLevel[]
   warnings: string[]
   cells?: number
+}
+
+/** A fill-noise stress's totals at one level of noise, drawn several times. */
+export interface BacktestNoiseLevel {
+  /** How far each fill may be moved, either way (%). */
+  percent: number
+  draws: number
+  lowest: number
+  highest: number
+  median: number
 }
 
 export interface BacktestProgress {
@@ -2417,7 +2482,17 @@ export interface BacktestDay {
   day_percent: number
   profit_loss: number
   equity: number | null
-  recorded: { long: number; short: number; minutes: number; first: string | null; last: string | null } | null
+  recorded: {
+    long: number
+    short: number
+    minutes: number
+    first: string | null
+    last: string | null
+    /** The share (0 to 1) of the day's trading hours the recorder listened to; absent from runs of before. */
+    share?: number | null
+  } | null
+  /** Recorded for less than 95 % of its trading hours: its result rests on what was missed. Absent from runs of before. */
+  partial?: boolean
   strategy_bars: number | null
 }
 
@@ -2542,6 +2617,8 @@ export interface BacktestTrade {
   day_percent_before: number
   cash_after: number
   notes: string[]
+  /** What it rested on beyond the recorded quotes; absent from runs of before. */
+  flags?: BacktestTradeFlag[]
 }
 
 export interface BacktestGroupRow {

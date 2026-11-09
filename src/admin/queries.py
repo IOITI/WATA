@@ -23,6 +23,7 @@ from src.admin.order_requests import refusal_runs, requests_by_order
 from src.admin.prices import BAR_COLUMNS as PRICE_BAR_COLUMNS
 from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.admin.prices import Run as PriceRun
+from src.admin.prices import Silent as PriceSilent
 from src.admin.prices import interval_served
 from src.admin.ta_monitor import DELIVERY_STEPS
 from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
@@ -499,6 +500,38 @@ class AdminQueries:
             start, end, limit,
         )
         return [PriceRun(*(_finite(row[column]) for column in PriceRun._fields)) for row in rows]
+
+    async def price_silent(self, start: datetime, end: datetime, least_bars: int, limit: int) -> list[PriceSilent]:
+        """
+        The stretches of [start, end) in which Saxo sent an instrument nothing
+        while the recorder wrote its bars: ``least_bars`` bars or more in a row,
+        ten seconds apart, each without a quote received (``updates`` 0: the
+        bar is its last quote again), by instrument and in time order. The
+        bars without one are numbered on their own, as ``price_runs`` numbers
+        every bar: those ten seconds apart share their time less ten seconds
+        per bar before them.
+        """
+        rows = await self._fetch_optional(
+            f"""
+            SELECT instrument_id,
+                   extract(epoch FROM min(ts))::bigint AS first,
+                   extract(epoch FROM max(ts))::bigint AS last,
+                   count(*)::int AS bars
+            FROM (
+                SELECT instrument_id, ts,
+                       extract(epoch FROM ts)::bigint
+                           - {PRICE_INTERVALS[0]} * row_number() OVER (PARTITION BY instrument_id ORDER BY ts) AS run
+                FROM price_bar_10s
+                WHERE ts >= $1 AND ts < $2 AND updates = 0
+            ) silent
+            GROUP BY instrument_id, run
+            HAVING count(*) >= $3
+            ORDER BY instrument_id, min(ts)
+            LIMIT $4
+            """,
+            start, end, least_bars, limit,
+        )
+        return [PriceSilent(*(row[column] for column in PriceSilent._fields)) for row in rows]
 
     async def price_volumes(self, start: datetime, end: datetime) -> dict[int, float]:
         """

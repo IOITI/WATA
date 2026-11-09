@@ -64,6 +64,7 @@ from src.admin.health import UNKNOWN, recorder_running, recorder_state
 from src.admin.prices import (
     AVAILABILITY_MAX_DAYS,
     BAR_COLUMNS,
+    FROZEN_BARS,
     GAPS_MAX_DAYS,
     INTERVALS,
     MAX_BUCKETS,
@@ -611,7 +612,8 @@ async def saxo_availability(
         return answer
 
     runs = await ctx.queries.price_runs(start, end, MAX_RUNS + 1)
-    if len(runs) > MAX_RUNS:
+    silent = await ctx.queries.price_silent(start, end, FROZEN_BARS, MAX_RUNS + 1)
+    if len(runs) > MAX_RUNS or len(silent) > MAX_RUNS:
         raise HTTPException(
             status_code=422,
             detail="Too many interruptions in the bars of this period to work them out: choose a shorter one",
@@ -628,6 +630,7 @@ async def saxo_availability(
         _recording_gaps(settings, await ctx.queries.price_coverage(start, end), start, end),
         settings.is_trading_time,
         pytz.timezone(ctx.settings.timezone),
+        silent,
     )
     return answer
 

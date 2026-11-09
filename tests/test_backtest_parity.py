@@ -10,6 +10,7 @@ src/backtest/rules.py (or src/backtest/simulator.py) fails here.
 
 import asyncio
 import json
+from dataclasses import replace
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -633,7 +634,8 @@ def live_between_quotes(config: dict, open_price: float, path, log_path: str, *,
 def mirrored_between_quotes(config: dict, open_price: float, path, *, day_percent: float = 0.0,
                             barrier: float = 28_000.0) -> dict | None:
     """The simulator's monitor (``_look_at_bar``) along the same path: the exit of its first sale."""
-    settings = from_config(config)
+    # The bid it sold on, as the monitor decides it: what a fill costs beyond it is the backtest's own measure.
+    settings = replace(from_config(config), exit_slippage_percent=0.0)
     simulator = Simulator(settings, CLOCK)
     series = TurboSeries(TurboRef(
         instrument_id=1, uic=1, asset_type="WarrantOpenEndKnockOut", symbol="T1",

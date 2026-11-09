@@ -99,6 +99,7 @@ export const SUMMARY: BacktestSummary = {
   ],
   against_random: { repetitions: 20, seed: 1, entries: 113, beaten: 85, median: 5.19, low: -26.15, high: 5.25, level: 90, worst: -26.21, best: 5.34 },
   stress: { monte_carlo: null, without_best_days: [{ removed: 1, total_percent: 3.45 }, { removed: 2, total_percent: 1.7 }] },
+  rests_on: { trades: 3, flags: {}, trades_priced_off_quotes: 0, share_percent: 0, funds_refused: 0, partial_days: [] },
   warnings: [],
 }
 

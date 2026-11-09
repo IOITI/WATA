@@ -15,6 +15,7 @@ sys.modules.setdefault("asyncpg", asyncpg_stub)
 from src.admin.errors import DatabaseUnavailable
 from src.admin.prices import (
     DOWN,
+    FROZEN,
     INTERVALS,
     MAX_BUCKETS,
     RANGE_COLUMNS,
@@ -23,6 +24,7 @@ from src.admin.prices import (
     STRETCHES_KEPT,
     UNQUOTED,
     Run,
+    Silent,
     TooManyBars,
     auto_range_ticks,
     availability,
@@ -370,6 +372,23 @@ def test_the_bars_of_a_period_are_read_as_stretches_without_a_break():
     assert args == (START, END, 500)
 
 
+def test_the_bars_saxo_sent_nothing_for_are_read_as_stretches_of_two_minutes_or_more():
+    db = FakeDb(rows=[{"instrument_id": 3, "first": 1791792000, "last": 1791792230, "bars": 24}])
+
+    silent = asyncio.run(AdminQueries(db, "Europe/Paris").price_silent(START, END, 12, 500))
+
+    assert silent == [Silent(3, 1791792000, 1791792230, 24)]
+    statement, args = db.calls[0]
+    # The bars without a quote received numbered on their own: those ten seconds apart share their time less ten
+    # seconds per bar before them, as every bar does in price_runs.
+    assert (
+        "extract(epoch FROM ts)::bigint - 10 * row_number() OVER (PARTITION BY instrument_id ORDER BY ts) AS run"
+    ) in statement
+    assert "FROM price_bar_10s WHERE ts >= $1 AND ts < $2 AND updates = 0 ) silent GROUP BY instrument_id, run" in statement
+    assert statement.endswith("HAVING count(*) >= $3 ORDER BY instrument_id, min(ts) LIMIT $4")
+    assert args == (START, END, 12, 500)
+
+
 def test_a_stretch_with_a_price_that_is_not_a_number_is_still_read():
     db = FakeDb(rows=[{**RUN_ROW, "high": float("nan")}])
 
@@ -468,6 +487,7 @@ def test_coverage_is_read_in_time_order():
     lambda queries: queries.price_series(2, START, END, "bid", 100),
     lambda queries: queries.price_trades({"role": "underlying", "indice": "us100"}, START, END),
     lambda queries: queries.price_runs(START, END, 100),
+    lambda queries: queries.price_silent(START, END, 12, 100),
     lambda queries: queries.price_assets(100),
 ])
 def test_before_the_recorder_ever_ran_its_tables_read_as_empty(read):
@@ -498,8 +518,14 @@ def run(instrument_id, start, end, *, high=8.0, last_bid=7.5, **figures):
     )
 
 
-def available(runs, gaps=(), turbos=TURBOS):
-    return availability(runs, turbos, list(gaps), SETTINGS.is_trading_time, PARIS)
+def available(runs, gaps=(), turbos=TURBOS, silent=()):
+    return availability(runs, turbos, list(gaps), SETTINGS.is_trading_time, PARIS, silent)
+
+
+def silent_bars(instrument_id, start, end):
+    """Bars of an instrument over [start, end) in which Saxo sent it nothing."""
+    first, last = int(start.timestamp()), int(end.timestamp()) - 10
+    return Silent(instrument_id, first, last, bars=(last - first) // 10 + 1)
 
 
 def stretches_of(found):
@@ -565,6 +591,28 @@ def test_a_hole_is_only_counted_in_trading_hours():
     runs = [run(2, at(5, 30), at(5, 40)), run(2, at(6, 10), at(20))]
 
     assert stretches_of(available(runs)[2]) == [(at(6), at(6, 10), UNQUOTED)]
+
+
+def test_a_turbo_whose_quote_saxo_left_frozen_two_minutes_is_said_apart_from_what_is_missing():
+    # Its bars all day, Saxo sending it nothing from 11:00 to 11:04: its last quote written again.
+    found = available([run(2, at(6), at(20))], silent=[silent_bars(2, at(11), at(11, 4))])[2]
+
+    assert (found["issues"], found["frozen"], found["frozen_seconds"]) == (["frozen"], 1, 240)
+    assert [(stretch["start"], stretch["end"], stretch["reason"]) for stretch in found["frozen_stretches"]] == [
+        (at(11), at(11, 4), FROZEN),
+    ]
+    # A quote was there, an old one: nothing is missing, and no gap of the bars is said.
+    assert (found["missing_seconds"], found["stretches"], found["holes"]) == (0, [], 0)
+
+
+def test_a_frozen_quote_counts_in_trading_hours_and_outside_the_recorders_gaps_alone():
+    runs = [run(2, at(5), at(20))]
+    # Before the open at 08:00 in Paris: nothing to say.
+    assert available(runs, silent=[silent_bars(2, at(5, 30), at(5, 50))])[2]["issues"] == []
+    # The recorder silent from 11:01: one minute of it left, under two.
+    assert available(runs, [gap(at(11, 1), at(11, 10), SILENT)], silent=[silent_bars(2, at(11), at(11, 4))])[2]["frozen"] == 0
+    # Under two minutes, an issuer's pause between two quotes.
+    assert available(runs, silent=[silent_bars(2, at(11), at(11, 1, 50))])[2]["issues"] == []
 
 
 def test_a_turbo_with_no_more_quote_while_the_others_went_on_has_stopped():

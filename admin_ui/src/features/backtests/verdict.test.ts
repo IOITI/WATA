@@ -58,7 +58,8 @@ describe('the verdict of a run', () => {
   it('fails a run of too few trades and days, whose entries random ones match', () => {
     // The fixture: 3 trades over 3 days, 85 % of random runs beaten, no edge measured, not stressed.
     const checks = runChecks(run())
-    expect(states(checks)).toEqual({ sample: 'fail', random: 'fail', edge: 'open', stress: 'open', code: 'pass' })
+    expect(states(checks)).toEqual({ sample: 'fail', data: 'pass', random: 'fail', edge: 'open', stress: 'open', code: 'pass' })
+    expect(checks.find((check) => check.id === 'data')?.detail).toBe('Each of its 3 trades was bought and sold at a recorded quote.')
     expect(checks.find((check) => check.id === 'sample')?.detail).toBe(
       '3 trades over 3 days: too few to conclude. Under 30 trades or 20 days, these figures describe those days and nothing else.',
     )
@@ -68,7 +69,7 @@ describe('the verdict of a run', () => {
 
   it('passes a run that clears every bar, its stress included', () => {
     const checks = runChecks(run({ summary: STRONG }), stressed(1.2))
-    expect(states(checks)).toEqual({ sample: 'pass', random: 'pass', edge: 'pass', stress: 'pass', code: 'pass' })
+    expect(states(checks)).toEqual({ sample: 'pass', data: 'pass', random: 'pass', edge: 'pass', stress: 'pass', code: 'pass' })
     expect(checks.find((check) => check.id === 'edge')?.detail).toBe('At its strongest, after 15 min: t 3.1, 98% of random moments beaten.')
     // Enough to pass, not yet to rely on a figure: said as the page says it.
     expect(checks.find((check) => check.id === 'sample')?.detail).toContain('40 trades over 25 days: enough to see a direction')
@@ -124,9 +125,42 @@ describe('the verdict of a run', () => {
     })
   })
 
+  it('fails a run whose trades rest too much on what was not recorded, and says on what', () => {
+    const guessed: BacktestSummary = {
+      ...STRONG,
+      rests_on: {
+        trades: 40,
+        flags: { hole: 4, index_priced: 2, frozen_quote: 2, sold_after_hole: 3 },
+        trades_priced_off_quotes: 5,
+        share_percent: 12.5,
+        funds_refused: 2,
+        partial_days: ['2026-10-23'],
+      },
+    }
+    const check = runChecks(run({ summary: guessed }), stressed(1.2)).find((found) => found.id === 'data')!
+    expect(check).toMatchObject({ state: 'fail', label: 'Priced at recorded quotes', section: 'trust' })
+    expect(check.detail).toContain(
+      '5 of its 40 trades (12.5%) were priced off the recorded quotes: 3 sold once Saxo quoted the turbo again, ' +
+        '2 ordered on a quote frozen for over two minutes, 2 priced from the index (a trade may be counted twice). ' +
+        '4 trades were held through a hole in the turbo’s quotes. ' +
+        '2 entries refused as Saxo refuses them: the turbos cost more than the account held at the price paid. ' +
+        '1 day recorded for less than 95% of the trading hours (',
+    )
+    expect(check.detail.endsWith('Over 10 % of its trades rest on what was not recorded.')).toBe(true)
+    expect(verdictOf(runChecks(run({ summary: guessed }), stressed(1.2))).sentence).toBe('Not to be believed yet: priced at recorded quotes.')
+
+    // A tenth of its trades at most: what it says stays, the check passes.
+    const fewer = { ...guessed, rests_on: { ...guessed.rests_on!, trades_priced_off_quotes: 4, share_percent: 10 } }
+    expect(runChecks(run({ summary: fewer })).find((found) => found.id === 'data')?.state).toBe('pass')
+    // A run made before it was counted: open, to be made again.
+    const before = runChecks(run({ summary: { ...STRONG, rests_on: undefined } })).find((found) => found.id === 'data')
+    expect(before).toMatchObject({ state: 'open', detail: 'Not counted: the run was made before what its trades rest on was. Make it again to know.' })
+  })
+
   it('judges nothing that is not a run of its own, or not done', () => {
     expect(runChecks(run({ status: { state: 'running' } }))).toEqual([])
     expect(runChecks(run({ stress_of: 'other' }))).toEqual([])
+    expect(runChecks(run({ noise_of: 'other' }))).toEqual([])
     expect(runChecks(run({ model_check_of: 'other' }))).toEqual([])
   })
 })
@@ -179,6 +213,7 @@ function listedOf(of: BacktestRun, grid: BacktestSweep | null = null): BacktestR
     stale: of.stale,
     turbos: of.turbos,
     stress_of: of.stress_of,
+    noise_of: of.noise_of,
     model_check_of: of.model_check_of,
     headline: {
       total_percent: summary.figures?.total_percent ?? null,
@@ -196,6 +231,7 @@ function listedOf(of: BacktestRun, grid: BacktestSweep | null = null): BacktestR
       pbo: summary.pbo ? { probability: summary.pbo.probability } : null,
       deflated_sharpe: summary.deflated_sharpe ? { probability: summary.deflated_sharpe.probability, trials: summary.deflated_sharpe.trials } : null,
       model_check: summary.model_check ? { paired: summary.model_check.paired, correlation: summary.model_check.correlation } : null,
+      rests_on: summary.rests_on ?? null,
       grid: grid
         ? { axes: grid.axes, cells: grid.cells.map((cell) => ({ values: cell.values, tuning: part(cell.tuning), held_out: part(cell.held_out), whole: part(cell.whole) })) }
         : null,
@@ -228,6 +264,12 @@ describe('the verdict in the list', () => {
         deflated_sharpe: { probability: 0.97, sharpe_daily: 0.2, expected_max_sharpe_daily: 0.1, trials: 12, days: 21, sentence: '' } },
     })
 
+    const guessed = run({
+      id: 'guessed-1',
+      summary: { ...STRONG, rests_on: { trades: 40, flags: { sold_after_hole: 6 }, trades_priced_off_quotes: 6, share_percent: 15, funds_refused: 0, partial_days: [] } },
+    })
+    const uncounted = run({ id: 'uncounted-1', summary: { ...STRONG, rests_on: undefined } })
+
     // Each run, the derived runs its page reads, and the list it is listed with (newest first).
     const cases: [BacktestRun, Parameters<typeof runChecks>[1], BacktestRunListed[]][] = [
       [run(), NO_DERIVED, [listedOf(run())]],
@@ -236,6 +278,9 @@ describe('the verdict in the list', () => {
       [strong, { ...NO_DERIVED, stress: { run: listedOf(stressRun, stress(-0.4)), sweep: stress(-0.4) } },
         [listedOf(stressRun, stress(-0.4)), listedOf(strong)]],
       [run({ summary: STRONG, stale: true }), NO_DERIVED, [listedOf(run({ summary: STRONG, stale: true }))]],
+      // Its trades priced off the recorded quotes, and a run of before that has no count.
+      [guessed, NO_DERIVED, [listedOf(guessed)]],
+      [uncounted, NO_DERIVED, [listedOf(uncounted)]],
       [modelled, { ...NO_DERIVED, modelCheck: { run: listedOf(checkRun), found: checkRun.summary!.model_check! } },
         [listedOf(checkRun), listedOf(modelled)]],
       [sweepRun, { ...NO_DERIVED, sweep }, [listedOf(sweepRun, sweep)]],

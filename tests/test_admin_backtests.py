@@ -714,6 +714,47 @@ def test_a_finished_run_is_stressed_with_later_and_worse_fills_its_own_first(tmp
         asyncio.run(asyncio.to_thread(backtests.stress, stressed["id"]))
 
 
+def test_a_finished_run_is_stressed_with_fills_moved_at_random_apart_from_its_stress(tmp_path, scripts, config):
+    backtests = service(tmp_path, scripts, config)
+    run_id = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {}}})
+
+    async def stress():
+        return backtests.stress(run_id, kind="noise")
+
+    noisy = asyncio.run(stress())
+
+    request = json.loads((folder_of(tmp_path, noisy["id"]) / "request.json").read_text())
+    assert [(axis["name"], axis["values"]) for axis in request["sweep"]["axes"]] == [
+        ("fill_noise_percent", [0.1, 0.3, 0.5]), ("fill_noise_seed", [1, 2, 3, 4]),
+    ]
+    # Not the run's stress, which its verdict reads: said apart.
+    assert request["noise_of"] == run_id and "stress_of" not in request
+    assert request["name"].startswith("Fill noise: ") and request["baseline"] is None
+    assert [(listed["noise_of"], listed["stress_of"]) for listed in backtests.list_runs() if listed["id"] == noisy["id"]] == [
+        (run_id, None),
+    ]
+    backtests._waiting.clear()
+    with pytest.raises(NotPossible):
+        asyncio.run(asyncio.to_thread(backtests.stress, run_id, kind="sideways"))
+
+
+def test_a_combination_of_a_stress_made_a_run_is_an_ordinary_run(tmp_path, scripts, config):
+    backtests = service(tmp_path, scripts, config)
+    run_id = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {}}})
+    for kind, values in (("fills", [3.0, 0.01]), ("noise", [0.3, 2])):
+        stressed = asyncio.run(asyncio.to_thread(backtests.stress, run_id, kind=kind))
+        (folder_of(tmp_path, stressed["id"]) / "sweep.json").write_text(json.dumps({"cells": [{"values": values}]}))
+        backtests._waiting.clear()
+
+        single = asyncio.run(asyncio.to_thread(backtests.run_cell, stressed["id"], 0))
+
+        request = json.loads((folder_of(tmp_path, single["id"]) / "request.json").read_text())
+        # It judges no run: its verdict is its own, and the run's stress stays the sweep.
+        assert "stress_of" not in request and "noise_of" not in request
+        assert request["from_sweep"] == {"id": stressed["id"], "cell": 0}
+        backtests._waiting.clear()
+
+
 # ── the list's verdict, and runs made again on today's code ──
 
 

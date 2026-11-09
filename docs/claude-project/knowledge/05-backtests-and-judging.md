@@ -10,7 +10,9 @@
 - **Fills**:
   - a signal reaches the trader 3 s after its bar closed (0.5 s for the journal);
   - an order is filled 1 s later, at the turbo's **next quote** (Saxo quotes again every ~30 s);
-  - a stop crossed inside 10 s sells at the worst bid;
+  - a stop crossed inside 10 s sells at the worst bid; every exit of the monitor 0.1 % under the bid that decided it (since v0.82.0);
+  - when Saxo does not quote a turbo (a hole, or a quote frozen two minutes or more), a sale waits for its next quote, a frozen quote is priced from the index, a knock-out is read on the index; each trade's `flags` say so, the summary's `rests_on` counts them;
+  - an order that costs more than the account holds at the price paid is refused, as Saxo refuses it;
   - slippage and commissions are 0 unless set. **Set `"slippage": 0.005`** (03) and read the 0.01 stress.
   - `execution: "measured"` instead draws each order's delay and price from WATA's own orders.
 - **Results** are percent counted as WATA counts a day: each trade the whole stake, compounded. Money comes from a 1,000 € account.
@@ -81,6 +83,7 @@ Then:
 The same bar as WATA's pages and its AI agent:
 - fewer than **30 trades** or **20 days**;
 - random entries beaten less than **95 %** of the time;
+- over **10 %** of its trades priced off the recorded quotes (`rests_on`);
 - no edge: **t under 2.6** at the best horizon (the best of five horizons is picked, so the 5 % is shared among them);
 - a best value whose **neighbours** do badly, or a **held-out** result far below the chosen-on one;
 - a **probability of overfitting above 0.5**, or a **deflated Sharpe ratio under 95 %** (every trial of the family is counted);
@@ -95,7 +98,8 @@ Say on how many days and trades each conclusion rests.
 
 - **The day target makes knife-edge results.** With the whole account and a +0.5 % target, most winning days end exactly at +0.5 %, and a quarter of a cent per fill turns some into −14 % days. The kernel/VWAP rule made +4.67 % at slippage 0, −23.5 % at 0.0025 and −37.5 % at 0.01. Always read the cost stress.
 - **Nine days decide nothing.** A day-loss cap that halved the losses on 9 recorded days lost on 60 modelled ones. A +1 % target that beat 87 % of random entries on 9 days was negative on every held-out cell of 60.
-- **Paper days are traded at slippage 0**, and overstate a rule.
+- **Paper days are traded at slippage 0** on purchases (exits 0.1 % under their bid since v0.82.0), and overstate a rule.
+- **A fill a few tenths of a percent off changes which exit fires**, then a whole day's later trades: read the fill-noise stress (`backtest_derive` kind `noise_stress`) beside the cost stress.
 - **Map exit titles with care.** A script that raises an entry and the opposite exit on a reversal bar, both mapped, would sell what it just bought. One bar, one trade now drops that close, but an exit title firing on its own at the wrong moment still sells.
 - **Count the ticks.** R60 on Dukascopy is 0.06 points: hundreds of thousands of bars a day, killed for memory. Use R6000 there.
 - **Compare runs of the same code.** Runs made by older backtest code are marked stale; compare runs with the same code digest (`status`).

@@ -148,6 +148,10 @@ RUN_TIMEOUT_SECONDS = 3 * 3600
 # added to its orders' time, and euros taken from each fill of a turbo (a tick is 0.01).
 STRESS_LATER_SECONDS = (0, 2, 5, 15)
 STRESS_WORSE_PRICE = (0, 0.01, 0.02, 0.05)
+# A fill-noise stress: each fill moved at random by up to this much of its price, each level drawn four times.
+NOISE_PERCENT = (0.1, 0.3, 0.5)
+NOISE_SEEDS = (1, 2, 3, 4)
+STRESS_KINDS = ("fills", "noise")
 # Turbos made up from an index (src/backtest/turbo_model.py): measured on the recorded ones, kept here.
 TURBO_MODEL_FOLDER = "_turbo_model"
 MODEL_FILE = "turbo_model.json"
@@ -896,7 +900,9 @@ class BacktestService:
             raise InvalidRequest(str(e)) from None
         described = ", ".join(f"{axis['name']} {value}" for axis, value in zip(axes, values))
         new_request = {
-            **_derived(request), "kind": "run", "sweep": None, "changes": changes, "source": source,
+            # An ordinary run, even made from a stress: it judges none (its verdict is its own).
+            **{key: value for key, value in _derived(request).items() if key not in ("stress_of", "noise_of")},
+            "kind": "run", "sweep": None, "changes": changes, "source": source,
             "name": f"{request['name']} ({described})"[:MAX_NAME_LENGTH],
             "baseline": {"repetitions": DEFAULT_REPETITIONS, "seed": DEFAULT_SEED},
             "asked_at": utc(self._clock()), "from_sweep": {"id": run_id, "cell": cell},
@@ -939,14 +945,18 @@ class BacktestService:
         return self._queue_run(new_request, {**settings_doc, "turbo_model": model}, [], journal, copy_from=folder,
                                recorded_trades=trades)
 
-    def stress(self, run_id: str, *, made_by: str | None = None, made_via: str | None = None,
+    def stress(self, run_id: str, *, kind: str = "fills", made_by: str | None = None, made_via: str | None = None,
                experiment: str | None = None, lockbox: dict | None = None) -> dict:
         """
         A finished run made again as a sweep, with each order filled later and
         at a worse price than it was: the same signals on the same days, the
         run's own fills first. What it says is how much of the result its
-        fills hold.
+        fills hold. ``kind`` "noise": each fill moved at random by a few tenths
+        of a percent instead, each level drawn four times (``noise_of``): how
+        much of the result rests on fill luck.
         """
+        if kind not in STRESS_KINDS:
+            raise NotPossible(f"A stress is one of {', '.join(STRESS_KINDS)}")
         self._check_room()
         folder = self._directory(run_id)
         request = read_json(os.path.join(folder, "request.json")) or {}
@@ -959,6 +969,9 @@ class BacktestService:
              "values": [round(settings.order_seconds + later, 6) for later in STRESS_LATER_SECONDS]},
             {"kind": SETTING, "name": "slippage",
              "values": [round(settings.slippage + worse, 6) for worse in STRESS_WORSE_PRICE]},
+        ] if kind == "fills" else [
+            {"kind": SETTING, "name": "fill_noise_percent", "values": list(NOISE_PERCENT)},
+            {"kind": SETTING, "name": "fill_noise_seed", "values": list(NOISE_SEEDS)},
         ]
         try:
             for axis in checked_axes(axes, inputs_known=None):
@@ -966,11 +979,12 @@ class BacktestService:
                     with_changes(settings, {axis.name: value})
         except (InvalidSweep, InvalidSettings) as e:
             raise NotPossible(f"This run cannot be stressed: {e}") from None
+        # A stress is the run's (stress_of, which its verdict reads); a fill-noise one is said apart (noise_of).
         new_request = {
             **_derived(request), "kind": "sweep", "baseline": None,
-            "name": f"Stress: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
+            "name": f"{'Stress' if kind == 'fills' else 'Fill noise'}: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
             "sweep": {"axes": axes, "held_out": DEFAULT_HELD_OUT, "walk_forward": None, "trials_before": 0},
-            "asked_at": utc(self._clock()), "stress_of": run_id,
+            "asked_at": utc(self._clock()), ("stress_of" if kind == "fills" else "noise_of"): run_id,
             **_research_fields(made_by, made_via, experiment, lockbox),
         }
         journal = read_json(os.path.join(folder, "journal.json"))
@@ -1351,6 +1365,9 @@ class BacktestService:
             "pbo": kept(summary.get("pbo"), "probability"),
             "deflated_sharpe": kept(summary.get("deflated_sharpe"), "probability", "trials"),
             "model_check": kept(summary.get("model_check"), "paired", "correlation"),
+            # What its result rests on beyond the recorded quotes (src/backtest/figures.py ``rests_on``), whole: a
+            # few counts and the days recorded in part, which the list's verdict says as the run's page does.
+            "rests_on": summary.get("rests_on"),
             "grid": grid,
         }
 
@@ -1397,8 +1414,9 @@ class BacktestService:
             },
             "chart": request.get("chart"),
             "changes": request.get("changes") or {},
-            # The run a stress sweep made again with worse fills.
+            # The run a stress sweep made again with worse fills, or with fills moved at random (a fill-noise one).
             "stress_of": request.get("stress_of"),
+            "noise_of": request.get("noise_of"),
             # The run on the recorded turbos a model check made again on made-up ones.
             "model_check_of": request.get("model_check_of"),
             "turbos": request.get("turbos") or RECORDED,
@@ -1667,7 +1685,7 @@ class BacktestService:
             raise NotPossible("What was asked of this backtest cannot be read")
         new_request = {**request, "asked_at": utc(self._clock()), "remade_from": old}
         recorded_trades = None
-        for key in ("stress_of", "model_check_of"):
+        for key in ("stress_of", "noise_of", "model_check_of"):
             base = request.get(key)
             if not base:
                 continue

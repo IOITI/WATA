@@ -223,6 +223,8 @@ def test_stress_and_neighbours_are_made_from_a_finished_run_and_counted_as_the_l
 
     stressed = answer(research, "backtest_derive", {"run_id": run_id, "kind": "stress", "experiment_id": experiment})
     research.backtests._waiting.clear()
+    noisy = answer(research, "backtest_derive", {"run_id": run_id, "kind": "noise_stress", "experiment_id": experiment})
+    research.backtests._waiting.clear()
     neighbours = answer(research, "backtest_derive", {"run_id": run_id, "kind": "neighbours", "experiment_id": experiment,
                                                       "parameter": "stoploss_percent"})
     research.backtests._waiting.clear()
@@ -230,6 +232,8 @@ def test_stress_and_neighbours_are_made_from_a_finished_run_and_counted_as_the_l
                                                   "parameter": "in_0", "values": [10, 12, 14]})
 
     assert stressed["trials_recorded"] == 0 and stressed["stress_of"] == run_id
+    # Its fills moved at random: no trial either, and not the run's stress.
+    assert noisy["trials_recorded"] == 0 and noisy["noise_of"] == run_id and not noisy.get("stress_of")
     request = json.loads((folder_of(tmp_path, neighbours["id"]) / "request.json").read_text())
     # A whole number moves by whole steps, a tenth of it at least one (the lab's rule).
     assert request["sweep"]["axes"][0] == {"kind": "setting", "name": "stoploss_percent", "values": [-19, -17, -15, -13, -11]}

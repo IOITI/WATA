@@ -57,6 +57,9 @@ DAILY_HOLES = {3: ((11, 5, 12), (16, 30, 4))}
 DAILY_STOPS = {6: 13 * 60 + 20}
 # ... and the one at which it is knocked out, its price falling to nothing over the twenty minutes before.
 DAILY_KNOCK_OUTS = {4: 17 * 60 + 45}
+# The stretches each day it is quoted with nothing received from Saxo, its last quote written again, as
+# (hour, minute, minutes): a frozen quote, which no hole shows.
+DAILY_FROZEN = {7: ((12, 15, 4),)}
 KNOCK_OUT_SLIDE_MINUTES = 20
 # What Saxo counts as traded in a day on the turbos it counts a volume for.
 DAILY_VOLUMES = {2: 15300.0, 3: 2100.0, 5: 4200.0}
@@ -112,6 +115,15 @@ def quoted(instrument_id: int, t: float) -> bool:
     return not any(
         hour * 60 + start <= minute < hour * 60 + start + minutes
         for hour, start, minutes in DAILY_HOLES.get(instrument_id, ())
+    )
+
+
+def frozen_at(instrument_id: int, t: float) -> bool:
+    """Whether Saxo sends the instrument nothing at that moment of a trading day, while its bars go on."""
+    minute = _minute_of_day(t)
+    return any(
+        hour * 60 + start <= minute < hour * 60 + start + minutes
+        for hour, start, minutes in DAILY_FROZEN.get(instrument_id, ())
     )
 
 
@@ -199,12 +211,36 @@ def runs(start: datetime, end: datetime, now: datetime) -> list[tuple]:
                 run = {"first": bucket, "last": bucket, "bars": 0, "updates": 0, "high": 0.0}
             run["last"] = bucket
             run["bars"] += 1
-            run["updates"] += (bucket // BAR_SECONDS) % 9
+            run["updates"] += 0 if frozen_at(instrument["id"], bucket) else (bucket // BAR_SECONDS) % 9
             # The high of a minute is near enough for a made-up price.
             if bucket % 60 == 0 or run["bars"] == 1:
                 run["high"] = max(run["high"], bid_ask_at(instrument, bucket)[0])
         if run is not None:
             found.append(_as_run(instrument, run))
+    return found
+
+
+def silent(start: datetime, end: datetime, now: datetime, least_bars: int) -> list[tuple]:
+    """
+    The stretches of the period in which Saxo sent an instrument nothing, its bars going on, ``least_bars``
+    long or more: (instrument id, first, last, bars), like ``AdminQueries.price_silent``.
+    """
+    last = min(int(end.timestamp()), int(now.timestamp()) - BAR_SECONDS)
+    first = _first_bucket(start, BAR_SECONDS)
+    found = []
+    for instrument_id in DAILY_FROZEN:
+        stretch = None
+        for bucket in range(first, last - BAR_SECONDS + 1, BAR_SECONDS):
+            frozen = (is_trading_time(bucket) and _gap_at(bucket) is None and quoted(instrument_id, bucket)
+                      and frozen_at(instrument_id, bucket))
+            if frozen and stretch is not None and bucket - stretch[2] == BAR_SECONDS:
+                stretch = (instrument_id, stretch[1], bucket, stretch[3] + 1)
+                continue
+            if stretch is not None and stretch[3] >= least_bars:
+                found.append(stretch)
+            stretch = (instrument_id, bucket, bucket, 1) if frozen else None
+        if stretch is not None and stretch[3] >= least_bars:
+            found.append(stretch)
     return found
 
 

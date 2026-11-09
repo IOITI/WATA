@@ -11,6 +11,7 @@ from dataclasses import replace
 import pytest
 
 from src.admin.errors import NotPossible
+from src.backtest.clock import TradingClock
 from src.backtest.execution import EXECUTION_FILE, FixedFills, MeasuredFills, fills_for, missing
 from src.backtest.execution_calibration import samples
 from src.backtest.settings import BacktestSettings
@@ -88,9 +89,32 @@ def test_the_measure_keeps_each_order_one_by_one():
 
     found = samples(rows)
 
-    assert found["order_seconds"] == [60.0, 1.0] and found["signal_delay_seconds"] == [3.0]
+    # The 60 s order waited for Saxo's order limit, which WATA no longer waits for (v0.48.0): left out.
+    assert found["order_seconds"] == [1.0] and found["signal_delay_seconds"] == [3.0]
     assert [round(value, 4) for value in found["slippage_buy"]] == [0.05]
     assert [round(value, 4) for value in found["slippage_sell"]] == [0.05]
+
+
+def test_a_signal_that_bought_was_decided_when_its_order_left_not_when_saxo_filled_it():
+    from datetime import datetime, timedelta, timezone
+
+    from src.backtest.execution_calibration import measure
+
+    sent = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    rows = {
+        # Journaled once the purchase was filled, 62 s after its signal; its order left 2 s after it.
+        "signals": [{"signal_timestamp": sent, "received_timestamp": sent, "decided_at": sent + timedelta(seconds=62),
+                     "outcome": "executed", "position_id": "p1"}],
+        "orders": [{"order_id": "1", "purpose": "open", "position_id": "p1", "sent_at": sent + timedelta(seconds=2),
+                    "accepted_at": sent + timedelta(seconds=62), "outcome": "confirmed", "instrument_uic": 7,
+                    "position_open_price": 5.05, "position_close_price": None}],
+        "quotes": [], "requests": [],
+    }
+
+    assert samples(rows)["signal_delay_seconds"] == [2.0]
+    found = measure(rows, TradingClock("Europe/Paris"))
+    assert found["signal_delay_seconds"]["from_signal"]["median"] == 2.0
+    assert (found["order_seconds"]["count"], found["order_seconds"]["left_out"]) == (0, 1)
 
 
 # ── the service keeps the orders with the run ──

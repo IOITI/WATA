@@ -204,7 +204,12 @@ def _show(run_id: str, as_json: bool) -> int:
         return 0
     if found["kind"] == "sweep" and found["status"]["state"] == "done":
         sweep = reader.sweep(run_id)
-        print(runs.stress_summary(found, sweep) if found.get("stress_of") else runs.sweep_summary(found, sweep))
+        if found.get("stress_of"):
+            print(runs.stress_summary(found, sweep))
+        elif found.get("noise_of"):
+            print(runs.noise_summary(found))
+        else:
+            print(runs.sweep_summary(found, sweep))
     else:
         print(runs.summary(found))
     return 0 if found["status"]["state"] == "done" else 1

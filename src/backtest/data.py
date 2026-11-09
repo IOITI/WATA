@@ -34,6 +34,8 @@ LONG, SHORT = "long", "short"
 NEXT_QUOTE_SECONDS = 120
 # Buckets of the recorder's coverage for a day that has no row of its own: told by the bars themselves.
 UNKNOWN_COVERAGE = None
+# How far back a turbo's last quote change is looked for (``TurboSeries.last_change``).
+LAST_CHANGE_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -69,8 +71,11 @@ class TurboSeries:
     # NaN where the turbo had no ask.
     ask_open: array = field(default_factory=lambda: array("d"))
     ask_close: array = field(default_factory=lambda: array("d"))
+    # Saxo's own delay of the bar's last quote, in minutes (``DelayedByMinutes``): above 0, the account receives
+    # that instrument late, and the trader buys nothing on it.
+    delayed: array = field(default_factory=lambda: array("i"))
 
-    def append(self, ts: int, bid_open, bid_high, bid_low, bid_close, ask_open, ask_close) -> None:
+    def append(self, ts: int, bid_open, bid_high, bid_low, bid_close, ask_open, ask_close, delayed=0) -> None:
         self.ts.append(int(ts))
         self.bid_open.append(float(bid_open))
         self.bid_high.append(float(bid_high))
@@ -78,6 +83,7 @@ class TurboSeries:
         self.bid_close.append(float(bid_close))
         self.ask_open.append(NAN if ask_open is None or ask_open == "" else float(ask_open))
         self.ask_close.append(NAN if ask_close is None or ask_close == "" else float(ask_close))
+        self.delayed.append(int(float(delayed)) if delayed not in (None, "") else 0)
 
     def __len__(self) -> int:
         return len(self.ts)
@@ -143,6 +149,30 @@ class TurboSeries:
                 return self.bid_close[index], None if math.isnan(ask) else ask
             index += 1
         return None
+
+    def last_change(self, boundary: int, within: int = LAST_CHANGE_SECONDS) -> tuple[float, int] | None:
+        """
+        When Saxo last sent the turbo a new quote before ``boundary`` (in the middle of the ten seconds it came in,
+        as the simulator takes a quote to come), and the bar it came in; None when it did not within ``within``
+        seconds. While Saxo sends nothing, the recorder writes the standing quote again every ten seconds, and the
+        bars alone tell how old it is.
+        """
+        index = bisect_left(self.ts, boundary) - 1
+        while index >= 0 and self.ts[index] >= boundary - within:
+            # The day's first bar is its first quote.
+            if index == 0 or self.changed(index):
+                return self.ts[index] + BAR_SECONDS / 2, index
+            index -= 1
+        return None
+
+    def quote_age(self, boundary: int) -> float | None:
+        """How long the quote standing at ``boundary`` had stood; None when it is older than the look back."""
+        found = self.last_change(boundary)
+        return boundary - found[0] if found is not None else None
+
+    def delayed_at(self, index: int) -> int:
+        """Saxo's delay of the bar's quote in minutes (0 when Saxo said none, or the file did not say)."""
+        return self.delayed[index] if index < len(self.delayed) else 0
 
     def alive_at(self, boundary: int) -> bool:
         """Recorded around ``boundary``: its first bar is not after it, its last not before it."""
@@ -220,6 +250,28 @@ class IndexSeries:
         """The index in the middle of the bar ``place``: when a turbo's quote of those ten seconds is taken to come."""
         return (self.open[place] + self.close[place]) / 2
 
+    def level_at(self, moment: float, *, fresh: int = 30) -> float | None:
+        """
+        The index at ``moment``: the middle of the bar holding it, else of the last bar before it within ``fresh``
+        seconds; None when the index was not quoted then.
+        """
+        place = bisect_right(self.ts, moment) - 1
+        if place < 0 or moment - self.ts[place] > fresh:
+            return None
+        return self.middle(place)
+
+    def crossing(self, start: float, end: float, level: float, direction: str) -> int | None:
+        """
+        The first bar from ``start`` to ``end`` in which the index reached ``level`` from the side a turbo of
+        ``direction`` lives on (a long's knock-out level from above, a short's from below); its start, or None.
+        """
+        place = bisect_left(self.ts, int(start) - int(start) % BAR_SECONDS)
+        while place < len(self.ts) and self.ts[place] < end:
+            if (self.low[place] <= level) if direction == LONG else (self.high[place] >= level):
+                return self.ts[place]
+            place += 1
+        return None
+
 
 def index_series(rows) -> IndexSeries:
     """
@@ -261,6 +313,15 @@ class DayData:
 
     def all_turbos(self) -> list[TurboSeries]:
         return [series for direction in (LONG, SHORT) for series in self.turbos.get(direction, [])]
+
+    def covered_share(self, start: int, end: int) -> float | None:
+        """The share of the ten-second buckets from ``start`` to ``end`` the recorder listened in (worked out once)."""
+        shares = self.__dict__.setdefault("_shares", {})
+        if (start, end) not in shares:
+            buckets = range(start, end, BAR_SECONDS)
+            shares[(start, end)] = round(sum(1 for stamp in buckets if self.is_covered(stamp)) / len(buckets), 3) \
+                if buckets else None
+        return shares[(start, end)]
 
     def recorded_minutes(self) -> int:
         if self.covered is not None:
@@ -358,7 +419,7 @@ class FileData:
                     currency=row.get("currency") or None,
                 ))
             series.append(at, row["bid_open"], row["bid_high"], row["bid_low"], row["bid_close"],
-                          row.get("ask_open"), row.get("ask_close"))
+                          row.get("ask_open"), row.get("ask_close"), row.get("delayed_minutes"))
         by_direction: dict[str, list[TurboSeries]] = {}
         for series in turbos.values():
             order = sorted(range(len(series.ts)), key=lambda index: series.ts[index])
@@ -381,7 +442,7 @@ def _reordered(series: TurboSeries, order: list[int]) -> TurboSeries:
     for index in order:
         sorted_series.append(
             series.ts[index], series.bid_open[index], series.bid_high[index], series.bid_low[index],
-            series.bid_close[index], series.ask_open[index], series.ask_close[index],
+            series.bid_close[index], series.ask_open[index], series.ask_close[index], series.delayed_at(index),
         )
     return sorted_series
 
@@ -422,7 +483,8 @@ class DatabaseData:
                 continue
             rows = await self._db.fetch(
                 """
-                SELECT extract(epoch FROM ts)::bigint AS t, bid_open, bid_high, bid_low, bid_close, ask_open, ask_close
+                SELECT extract(epoch FROM ts)::bigint AS t, bid_open, bid_high, bid_low, bid_close, ask_open, ask_close,
+                       delayed_minutes
                 FROM price_bar_10s
                 WHERE instrument_id = $1 AND ts >= $2 AND ts < $3
                 ORDER BY ts
@@ -438,7 +500,7 @@ class DatabaseData:
             ))
             for row in rows:
                 series.append(row["t"], row["bid_open"], row["bid_high"], row["bid_low"], row["bid_close"],
-                              row["ask_open"], row["ask_close"])
+                              row["ask_open"], row["ask_close"], row.get("delayed_minutes"))
             by_direction.setdefault(direction, []).append(series)
         coverage = await self._db.fetch(
             """

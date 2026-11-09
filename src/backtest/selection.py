@@ -21,10 +21,14 @@ from src.trade.async_services import (
     filter_items_with_valid_bid,
     filter_items_within_spread,
     filter_tradable_market_items,
+    no_market_reason,
     no_turbo_within_spread,
     select_best_price_candidate,
     select_candidate_instruments,
 )
+
+# The exchange the live search names in its refusal (trade.config.turbo_preference.exchange_id of the example).
+EXCHANGE = "CATS_SAXO"
 
 # How an entry ends up without a turbo.
 NO_RECORDED_TURBO = "no_recorded_turbo"
@@ -66,6 +70,10 @@ def _row(series: TurboSeries, boundary: int) -> dict:
     if quote is not None:
         bid, ask = quote
         row["Quote"] = {"Bid": bid, "Ask": ask}
+        # Saxo's own delay of that quote: the live filter leaves a delayed turbo out.
+        delayed = series.delayed_at(series.index_at(boundary))
+        if delayed:
+            row["Quote"]["DelayedByMinutes"] = delayed
     return row
 
 
@@ -107,7 +115,9 @@ def select_turbo(day: DayData, direction: str, boundary: int, low: float, high: 
     if not valid:
         return NotSelected("failed", NO_MARKET, "NoMarketAvailableException: No instruments with Bid data after filtering.", candidates)
     if not tradable:
-        return NotSelected("failed", NO_MARKET, f"NoMarketAvailableException: No markets available for {direction}.", candidates)
+        delayed = any(row["Quote"].get("DelayedByMinutes") for row in valid)
+        reason = no_market_reason(valid, direction, EXCHANGE) if delayed else f"No markets available for {direction}."
+        return NotSelected("failed", NO_MARKET, f"NoMarketAvailableException: {reason}", candidates)
     if not in_range:
         return NotSelected("failed", NO_TURBO_IN_RANGE, f"NoTurbosAvailableException: No turbos in price range {low}-{high}.", candidates)
     if chosen is None:

@@ -1,7 +1,16 @@
 import { formatDay, formatNumber, formatPercent } from 'ioiti-ui'
 
 import type { NamedCurve } from '@/components/charts/PerformanceCharts'
-import type { BacktestRisk, BacktestStress, BacktestSummary, BacktestSweep, BacktestSweepAxis, BacktestSweepGrid, BacktestWalkForward } from '@/lib/types'
+import type {
+  BacktestNoiseLevel,
+  BacktestRisk,
+  BacktestStress,
+  BacktestSummary,
+  BacktestSweep,
+  BacktestSweepAxis,
+  BacktestSweepGrid,
+  BacktestWalkForward,
+} from '@/lib/types'
 
 import { axisName } from './sweep'
 
@@ -122,6 +131,27 @@ export function stressVerdict(sweep: BacktestSweepGrid): StressVerdict | null {
 export const STRESS_AXES: Record<string, string> = {
   order_seconds: 'Order to fill (s)',
   slippage: 'Worse price a turbo (€)',
+}
+
+/** The labels a fill-noise stress's axes are shown with. */
+export const NOISE_AXES: Record<string, string> = {
+  fill_noise_percent: 'Each fill moved by up to (%)',
+  fill_noise_seed: 'Draw',
+}
+
+/**
+ * A fill-noise stress (``noise`` of its summary) a sentence a level: how far the total moved when each fill was
+ * moved at random by up to that share of its price, either way, beside the run's own total when it is known.
+ */
+export function noiseSentences(levels: readonly BacktestNoiseLevel[], own: number | null = null): string[] {
+  return levels.map(
+    (level) =>
+      `Each fill moved by up to ${formatPercent(level.percent, false, 1)} either way, ${formatNumber(level.draws)} draws: ` +
+      `from ${formatPercent(level.lowest, true)} to ${formatPercent(level.highest, true)}, ${formatPercent(level.median, true)} in the middle` +
+      (own === null ? '.' : ` (the run: ${formatPercent(own, true)}).`) +
+      // Said when the luck of the fills alone turns it into a loss: some draws lose, others do not.
+      (level.lowest < 0 && level.highest >= 0 ? ' Some draws end in a loss.' : ''),
+  )
 }
 
 /** A walk-forward in a sentence. */

@@ -387,10 +387,9 @@ async def run(arguments) -> int:
             if previous_close is not None:
                 break
         features: dict[str, dict] = {}
-        # The index between the turbos' quotes, read only when a simulator of the run judges on it.
-        between_quotes = bool(settings.index_epic) and (
-            settings.index_between_quotes or any(cell["simulator"].settings.index_between_quotes for cell in cells)
-        )
+        # The index of the indice (the Capital.com feed's, as the position monitor reads it): what a frozen quote is
+        # priced from, what tells a knock-out, and what the monitor judges on between quotes when a simulator does.
+        between_quotes = bool(settings.index_epic)
         for place, day in enumerate(days):
             progress("days", place, len(days), day)
             day_start, day_end = clock.day_bounds(day)
@@ -413,6 +412,11 @@ async def run(arguments) -> int:
             features[key] = regimes.day_features(recorded.asset, previous_close, day, hours_of(day), calendar.on(day))
             previous_close = regimes.session_close(recorded.asset, hours_of(day)) or previous_close
             del recorded
+        # What is still to be sold when the run ends was never quoted again: said unresolved, in the last day.
+        for cell in cells:
+            cell["simulator"].finish()
+        if baseline is not None:
+            baseline.finish()
         records = cell_days[0]
         regimes.label_days([features[key] for key in sorted(features)])
         for cell_records in cell_days:
@@ -495,7 +499,9 @@ async def run(arguments) -> int:
                 "days": {"asked": len(days), "tested": len(tested), "by_status": dict(statuses)},
                 "cells": len(out_cells),
                 # A stress sweep chooses nothing: there is no choice to measure the fitting of.
-                **({} if request.get("stress_of") else sweep_robustness(out_cells, sweep, first_held)),
+                **({} if request.get("stress_of") or request.get("noise_of")
+                   else sweep_robustness(out_cells, sweep, first_held)),
+                **({"noise": figures.noise_spread(out_cells)} if request.get("noise_of") else {}),
                 "warnings": warnings,
             }
         else:
@@ -548,6 +554,7 @@ async def run(arguments) -> int:
                 },
                 "signals": figures.signal_tallies(signals),
                 **report,
+                "rests_on": figures.rests_on(trades, signals, [record for record in records if record["status"] == TESTED]),
                 "against_random": against,
                 "edge": edge_headline(edge_report),
                 "reconciliation": {**reconciled["summary"], "sentence": reconciliation_sentence(reconciled["summary"])}

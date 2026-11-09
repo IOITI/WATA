@@ -531,7 +531,7 @@ export function remakable(run: BacktestRunListed): boolean {
 function requestKey(run: BacktestRunListed): string {
   return JSON.stringify([
     run.kind, run.name, run.from, run.to, run.indice, run.source.kind, run.source.script?.id ?? null, run.source.script?.version ?? null,
-    run.chart, run.changes, run.turbos ?? 'recorded', run.stress_of ?? null, run.model_check_of ?? null,
+    run.chart, run.changes, run.turbos ?? 'recorded', run.stress_of ?? null, run.noise_of ?? null, run.model_check_of ?? null,
   ])
 }
 

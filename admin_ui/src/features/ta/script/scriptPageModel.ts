@@ -90,7 +90,7 @@ export function runsOfScript(runs: readonly BacktestRunListed[], scriptId: strin
 
 /** What a script's runs say together: those of its own (not a stress or a model check of one), and how many pass every check. */
 export function runsSaid(runs: readonly BacktestRunListed[], judged: ReadonlyMap<string, Judged>): { runs: number; passing: number } {
-  const own = runs.filter((run) => !run.stress_of && !run.model_check_of)
+  const own = runs.filter((run) => !run.stress_of && !run.noise_of && !run.model_check_of)
   return { runs: own.length, passing: own.filter((run) => judged.get(run.id)?.verdict.tone === 'pass').length }
 }
 

@@ -196,6 +196,48 @@ def signal_tallies(signals: list[dict]) -> dict:
     }
 
 
+# A run whose trades rest more than this share on what the recorded quotes do not say (a hole, a frozen quote, a
+# knock-out, a turbo never quoted again, src/backtest/simulator.py ``FLAGS``) is said so (the run's verdict).
+RESTS_ON_SHARE = 10.0
+# Of a trade's flags, those that are no guess: a hole met while held that changed nothing of its sale.
+_NOT_A_GUESS = ("hole",)
+
+
+def rests_on(trades: list[dict], signals: list[dict], days: list[dict]) -> dict:
+    """
+    What a run's result rests on beyond the recorded quotes: its trades by flag (each counted once per trade), the
+    share of trades with one that changed how they were priced, the entries Saxo would have refused for funds, and
+    the days recorded for less of their trading hours than the simulator's PARTIAL_SHARE.
+    """
+    flags = Counter(flag for trade in trades for flag in set(trade.get("flags") or []))
+    priced = sum(1 for trade in trades if set(trade.get("flags") or []) - set(_NOT_A_GUESS))
+    return {
+        "trades": len(trades),
+        "flags": dict(sorted(flags.items())),
+        "trades_priced_off_quotes": priced,
+        "share_percent": _rounded(priced / len(trades) * 100, 1) if trades else None,
+        "funds_refused": sum(1 for signal in signals if signal.get("rule") == "funds_refused"),
+        "partial_days": [day["day"] for day in days if day.get("partial")],
+    }
+
+
+def noise_spread(cells: list[dict]) -> list[dict]:
+    """
+    A fill-noise stress's totals by level of noise (its first axis), each drawn several times (its second): how far
+    the run's total moves when each fill is a few tenths of a percent off, either way.
+    """
+    by_level: dict[float, list[float]] = {}
+    for cell in cells:
+        total = (cell.get("whole") or {}).get("total_percent")
+        if total is not None:
+            by_level.setdefault(cell["values"][0], []).append(total)
+    return [
+        {"percent": level, "draws": len(totals), "lowest": min(totals), "highest": max(totals),
+         "median": _rounded(median(totals))}
+        for level, totals in sorted(by_level.items())
+    ]
+
+
 def curve(days: list[dict]) -> list[dict]:
     """Day after day, its result and the run's so far, in percent and in money."""
     points, total = [], 1.0
@@ -253,12 +295,20 @@ def histogram(values: list[float], bins: int = 24) -> list[dict]:
 # Of the TA engine, the files a replay runs: its live loop (engine.py, what it measures of itself, how it
 # sends, the service) decides nothing a backtest finds, and a change there leaves every run as it was.
 # A file of src/ta_engine that the code listed here imports must be listed too (tests/test_backtest_code_digest.py).
+# Of WATA's other code, every file the code listed here imports that decides what a run finds (the trader's and the
+# monitor's rules, how prices and ranges are read, how a script's alerts become actions) is listed too; what only
+# serves it (a store of scripts, the admin's settings, a child process's memory) is not
+# (tests/test_backtest_code_digest.py holds the two lists).
 _CODE = ("src/backtest", "src/ta_engine/replay.py", "src/ta_engine/rules.py", "src/ta_engine/runner.py",
          "src/ta_engine/tickers.py", "src/ta_engine/signals.py", "src/ta_engine/settings.py", "src/ta_engine/bars.py",
          "src/ta_engine/source.py", "src/price_recorder/bars.py", "src/price_recorder/range_bars.py",
          "src/trade/async_services.py", "src/trade/fresh_quote.py", "src/trade/index_estimate.py",
          "src/trade/macro_calendar.py", "src/trade/market_calendar.py", "src/trade/account_guard.py",
-         "src/trade/day_breakers.py", "src/admin/analysis.py")
+         "src/trade/day_breakers.py", "src/trade/close_intents.py", "src/admin/analysis.py", "src/admin/prices.py",
+         "src/admin/ta_rules.py", "src/price_history/files.py")
+# The built Pine runner (PineTS and WATA's runner around it, git-ignored): counted when it is there, so that a new
+# PineTS marks the runs made with the one before.
+_RUNNER = "src/ta_engine/runner/runner.mjs"
 
 
 def code_digest(root: str | None = None) -> str:
@@ -278,4 +328,10 @@ def code_digest(root: str | None = None) -> str:
                     digest.update(in_file.read())
             except OSError:
                 continue
+    try:
+        with open(os.path.join(root, _RUNNER), "rb") as in_file:
+            digest.update(_RUNNER.encode())
+            digest.update(in_file.read())
+    except OSError:
+        pass
     return digest.hexdigest()[:16]

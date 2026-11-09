@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from statistics import fmean, median
 
 from src.admin.analysis import exit_group
+from src.backtest.rules import compounded
 
 
 def _moment(value) -> float | None:
@@ -38,6 +39,18 @@ def _difference(first, second, digits: int = 3) -> float | None:
     return _rounded(first - second, digits) if first is not None and second is not None else None
 
 
+def _percent_off(backtest, real) -> float | None:
+    """How far the backtest's price is from the real one, in percent of the real one."""
+    if backtest is None or not real:
+        return None
+    return _rounded((backtest / real - 1) * 100, 2)
+
+
+def _median(values: list) -> float | None:
+    found = [value for value in values if value is not None]
+    return _rounded(median(found), 2) if found else None
+
+
 def _pair(trade: dict, position: dict, uuid: str) -> dict:
     entry = trade.get("entry") or {}
     exit_ = trade.get("exit") or {}
@@ -55,7 +68,10 @@ def _pair(trade: dict, position: dict, uuid: str) -> dict:
         "same_turbo": (trade.get("turbo") or {}).get("uic") == position.get("instrument_uic")
         if position.get("instrument_uic") is not None else None,
         "entry_price": {"backtest": entry.get("price"), "real": position.get("position_open_price")},
-        "exit_price": {"backtest": exit_.get("price"), "real": position.get("position_close_price")},
+        # The simulator writes the price a sale was filled at as the exit's bid (src/backtest/simulator.py ``_sell``).
+        "exit_price": {"backtest": exit_.get("bid", exit_.get("price")), "real": position.get("position_close_price")},
+        "entry_price_percent": _percent_off(entry.get("price"), position.get("position_open_price")),
+        "exit_price_percent": _percent_off(exit_.get("bid", exit_.get("price")), position.get("position_close_price")),
         "result": {"backtest": _rounded(trade.get("performance_percent"), 2),
                    "real": _rounded(position.get("position_total_performance_percent"), 2)},
         "exit": {"backtest": reason, "real": real_reason},
@@ -122,8 +138,13 @@ def reconcile(trades: list[dict], signals: list[dict], journal: list[dict], posi
             "same_exit_percent": _rounded(sum(1 for pair in pairs if pair["same_exit"]) / len(pairs) * 100, 1) if pairs else None,
             "same_turbo_percent": _rounded(sum(1 for same in turbos if same) / len(turbos) * 100, 1) if turbos else None,
             "median_entry_seconds": _rounded(median(entry_delays), 1) if entry_delays else None,
-            "backtest_total_percent": _rounded(sum(backtest_results), 2) if backtest_results else None,
-            "real_total_percent": _rounded(sum(real_results), 2) if real_results else None,
+            "median_exit_seconds": _median([pair["exit_seconds"] for pair in pairs]),
+            # Prices paid and got by the backtest against WATA's, a percent of WATA's: the fill model's error.
+            "median_entry_price_percent": _median([pair["entry_price_percent"] for pair in pairs]),
+            "median_exit_price_percent": _median([pair["exit_price_percent"] for pair in pairs]),
+            # Compounded, as a run's and a day's results are.
+            "backtest_total_percent": _rounded(compounded(backtest_results), 2) if backtest_results else None,
+            "real_total_percent": _rounded(compounded(real_results), 2) if real_results else None,
         },
         "pairs": pairs,
         "backtest_only": backtest_only,

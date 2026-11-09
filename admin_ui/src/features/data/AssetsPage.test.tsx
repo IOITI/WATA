@@ -60,7 +60,7 @@ function recorded(missing: Partial<InstrumentAvailability> = {}): InstrumentAvai
   return {
     bars: 5040, updates: 12840, first_bar: '2026-10-12T06:00:00Z', last_bar: '2026-10-12T19:59:50Z',
     quoted_seconds: 50400, missing_seconds: 0, holes: 0, hole_seconds: 0, stops: [], stretches: [], stretch_count: 0,
-    knocked_out_at: null, without_ask: 0, delayed_minutes: 0, issues: [], ...missing,
+    knocked_out_at: null, without_ask: 0, delayed_minutes: 0, frozen: 0, frozen_seconds: 0, frozen_stretches: [], issues: [], ...missing,
   }
 }
 const HOLED = recorded({
@@ -202,6 +202,20 @@ describe('the assets stored', () => {
     expect(screen.getByText('5 assets · 1 with missing data today')).toBeInTheDocument()
     // What is missing is read for today alone: the ended turbo and the history are not in it.
     expect(requests).toContain(`/api/data/providers/saxo/availability?from=${TODAY}&to=${TODAY}`)
+  })
+
+  it('mark a turbo whose quote Saxo left frozen, counted apart from what is missing', async () => {
+    const frozen = recorded({
+      issues: ['frozen'], frozen: 1, frozen_seconds: 240,
+      frozen_stretches: [{ start: '2026-10-12T09:15:00Z', end: '2026-10-12T09:19:00Z', seconds: 240, reason: 'frozen' }],
+    })
+    serve({ availability: { 1: recorded(), 2: HOLED, 5: frozen } })
+    renderPage()
+    await listed()
+
+    const short = within(table()).getByRole('link', { name: 'Short 25,900 · BNP' }).closest('tr') as HTMLElement
+    await waitFor(() => expect(short).toHaveTextContent('Its quote frozen for 4 min from 11:15:00'))
+    expect(screen.getByText('5 assets · 1 with missing data · 1 with a frozen quote today')).toBeInTheDocument()
   })
 
   it('are found by a few letters or digits', async () => {

@@ -412,7 +412,7 @@ def day_with(series: TurboSeries, index: IndexSeries | None) -> DayData:
 SIMULATED = replace(
     from_config(configured()), time_scaling_enabled=False, confidence_enabled=False, trailing_enabled=False,
     cooldown_after_loss_minutes=0, max_trades_per_day=0, day_profit_target=50.0, no_entry_above_day_profit=50.0,
-    capital=10_000.0, fill_price="standing", wait_for_fresh_quote=False,
+    capital=10_000.0, fill_price="standing", wait_for_fresh_quote=False, exit_slippage_percent=0.0,
 )
 
 
@@ -440,7 +440,8 @@ def test_the_simulator_sells_on_the_estimate_in_ten_seconds_without_a_quote_of_t
 
 
 def test_the_simulator_judges_as_before_without_the_setting_or_the_index():
-    path = [10.0] * 60
+    # Quoted past the close at T0 + 600, which sells it.
+    path = [10.0] * 70
     levels = [29000.0] * 4 + [(29000.0, 29000.0, 28800.0, 28820.0)] + [28820.0] * 55
 
     for day, settings in ((day_with(turbo(path), index_of(levels)), replace(SIMULATED, index_between_quotes=False)),

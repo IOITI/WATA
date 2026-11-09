@@ -9,6 +9,7 @@ const REASONS: Record<PriceGap['reason'] | PriceStretch['reason'], string> = {
   silent: 'No quote arriving',
   unquoted: 'No quote for this instrument',
   stopped: 'No more quote for this instrument',
+  frozen: 'Its quote frozen',
 }
 
 interface GapsPanelProps {
@@ -88,6 +89,21 @@ export function GapsPanel({ gaps: recorded, own, error, timeZone, hours = 'tradi
             </tbody>
           </table>
         </div>
+      )}
+      {own && own.frozen_stretches.length > 0 && (
+        <section aria-label="Frozen quotes" className="mt-4">
+          <h3 className="text-xs font-medium text-muted-foreground">
+            Its quote frozen: bars written, nothing received from Saxo, its last quote again
+            {own.frozen > own.frozen_stretches.length ? ` (the ${own.frozen_stretches.length} longest of ${own.frozen})` : ''}
+          </h3>
+          <ul className="mt-2 flex flex-col gap-1 text-xs tabular-nums">
+            {own.frozen_stretches.map((stretch) => (
+              <li key={stretch.start}>
+                {formatDateTime(stretch.start, timeZone)} to {formatTime(stretch.end, timeZone)}, {formatDuration(stretch.seconds * 1000)}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </Panel>
   )

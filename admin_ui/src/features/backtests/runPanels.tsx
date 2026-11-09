@@ -10,6 +10,7 @@ import type { BacktestBreakdowns, BacktestFigures, BacktestGroupRow, BacktestSum
 
 import { curveDays, distribution, FATE_LABEL, RANDOM_VERDICT, randomSentence, randomVerdict, roomSentences, ruleLabel, signalFunnel, tally } from './model'
 import { Measure } from './parts'
+import { restsOnSentences } from './restsOn'
 import { riskNote, riskRows, stressSentences } from './robustness'
 
 function Heading({ children }: { children: ReactNode }) {
@@ -76,6 +77,20 @@ export function TrustPanel({ runId, summary }: { runId: string; summary: Backtes
                 ))}
               </dl>
               {note && <p className="mt-2 text-xs text-muted-foreground">{note}</p>}
+            </section>
+          )}
+          {summary.rests_on && (
+            <section aria-label="Beyond the recorded quotes">
+              <Heading>Beyond the recorded quotes</Heading>
+              <ul className="mt-2 flex flex-col gap-1.5 text-sm leading-relaxed">
+                {restsOnSentences(summary.rests_on).map((sentence) => (
+                  <li key={sentence}>{sentence}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                When Saxo sent nothing for a turbo, a trade is priced as WATA would have been served: sold once it was quoted again, from
+                the index on a quote frozen for over two minutes, at nothing once the index reached its knock-out level.
+              </p>
             </section>
           )}
         </div>

@@ -76,7 +76,7 @@ def _run_line(run: dict) -> dict:
         "failure": status.get("failure"),
         "position": run.get("position"), "headline": run.get("headline"), "stale": run.get("stale"),
         "made_by": run.get("made_by"), "experiment": run.get("experiment"), "stress_of": run.get("stress_of"),
-        "model_check_of": run.get("model_check_of"), "tags": run.get("tags") or [],
+        "noise_of": run.get("noise_of"), "model_check_of": run.get("model_check_of"), "tags": run.get("tags") or [],
     }
 
 
@@ -393,7 +393,7 @@ START_DESCRIPTION = (
     "unless changes sets it. Days of the lock box only with lockbox_final. Claude's runs wait behind the "
     "operator's, a few at most at once. Then backtest_wait."
 )
-DERIVED = ("stress", "cell", "neighbours", "model_check")
+DERIVED = ("stress", "noise_stress", "cell", "neighbours", "model_check")
 # Under the 60 s after which Claude Code ends a call: wait again for longer.
 WAIT_MOST_SECONDS = 45
 WAIT_MOST_RUNS = 10
@@ -447,7 +447,9 @@ def register_writing(server, research) -> None:
                               values: list[float] | None = None, step: float = 0.0, count: int = 2,
                               lockbox_final: bool = False) -> dict:
         """From a finished run or sweep, for an open experiment. kind="stress": the run again with each order later
-        and each fill dearer (a sweep that chooses nothing: no trial counted). kind="cell": a sweep's combination
+        and each fill dearer (a sweep that chooses nothing: no trial counted). kind="noise_stress": the run again
+        with each fill moved at random by up to 0.1, 0.3 and 0.5 % of its price, each level drawn four times (no
+        trial counted; summary.noise says how far the total moved). kind="cell": a sweep's combination
         ``cell`` made a run of its own, with random entries (already counted). kind="neighbours": a sweep of
         ``parameter`` (a setting, or a script input in_N) around the run's value, ``count`` steps of ``step`` each
         side (a tenth of the value by default) or the given ``values``: a plateau, or a peak among worse values?
@@ -466,6 +468,10 @@ def register_writing(server, research) -> None:
         if kind == "stress":
             guards.check_room(research, days * 16)
             return await started(service.stress(run_id, **research_fields), experiment_id, 0, lockbox, note=f"stress of {run_id}")
+        if kind == "noise_stress":
+            guards.check_room(research, days * 12)
+            return await started(service.stress(run_id, kind="noise", **research_fields), experiment_id, 0, lockbox,
+                                 note=f"fill-noise stress of {run_id}")
         if kind == "model_check":
             guards.check_room(research, days)
             return await started(service.model_check(run_id, **research_fields), experiment_id, 0, lockbox,

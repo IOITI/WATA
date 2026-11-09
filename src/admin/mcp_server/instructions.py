@@ -44,8 +44,8 @@ reference (`rule_set_reference`), then its paper days in `rule_list`, and its re
 # the other. The admin's AI agent (src/admin/agent/prompts.py) says it too.
 DO_NOT_BELIEVE = """\
 Do not believe: fewer than 30 trades or 20 days; random entries beaten less than 95 % of the time; no edge \
-(t under 2.6 at the best horizon); a best value whose neighbours do badly, or a held-out result far below the \
-chosen-on one; a probability of overfitting above 0.5 or a deflated Sharpe ratio under 95 %; a result that fails \
+(t under 2.6 at the best horizon); over 10 % of its trades priced off the recorded quotes (rests_on); a best \
+value whose neighbours do badly, or a held-out result far below the chosen-on one; a probability of overfitting above 0.5 or a deflated Sharpe ratio under 95 %; a result that fails \
 one stress step; results on the lock box's days, except for a candidate's final check. Recorded turbos start on \
 2026-10-13: say on how few days each conclusion rests."""
 

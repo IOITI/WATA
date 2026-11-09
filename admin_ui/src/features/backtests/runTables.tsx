@@ -19,6 +19,7 @@ import type { BacktestDay, BacktestSignal, BacktestTrade, BacktestTurbos } from 
 
 import { DAY_STATUS_LABEL, dayStatusLabel, FATE_LABEL, heldFor, ruleLabel } from './model'
 import { FateBadge } from './parts'
+import { tradeFlags } from './restsOn'
 
 const SOURCE_LABEL: Record<BacktestSignal['source'], string> = { pine: 'Script', journal: 'Received', schedule: 'Day close' }
 
@@ -55,7 +56,12 @@ export function DaysTable({ runId, days, turbos = 'recorded' }: { runId: string;
           value: dayStatusLabel(status, turbos),
           label: dayStatusLabel(status, turbos),
         })),
-        cell: ({ row }) => <Badge tone={row.status === 'tested' ? 'success' : 'neutral'}>{dayStatusLabel(row.status, turbos)}</Badge>,
+        cell: ({ row }) => (
+          <span className="flex flex-wrap gap-1">
+            <Badge tone={row.status === 'tested' ? 'success' : 'neutral'}>{dayStatusLabel(row.status, turbos)}</Badge>
+            {row.partial && <Badge tone="warning">Partly recorded</Badge>}
+          </span>
+        ),
       },
       {
         id: 'recorded',
@@ -67,6 +73,9 @@ export function DaysTable({ runId, days, turbos = 'recorded' }: { runId: string;
           row.recorded ? (
             <span className="tabular-nums" title={`${formatNumber(row.recorded.minutes)} min listened`}>
               {row.recorded.long} long, {row.recorded.short} short
+              {row.partial && row.recorded.share !== null && row.recorded.share !== undefined && (
+                <span className="block text-xs text-warning">{formatPercent(row.recorded.share * 100, false, 0)} of the hours</span>
+              )}
             </span>
           ) : (
             '-'
@@ -118,6 +127,8 @@ export function DaysTable({ runId, days, turbos = 'recorded' }: { runId: string;
     { header: 'long_turbos', value: (row) => row.recorded?.long },
     { header: 'short_turbos', value: (row) => row.recorded?.short },
     { header: 'recorder_minutes', value: (row) => row.recorded?.minutes },
+    { header: 'recorded_share', value: (row) => row.recorded?.share },
+    { header: 'partly_recorded', value: (row) => (row.partial === undefined ? null : row.partial ? 'yes' : 'no') },
     { header: 'signals', value: (row) => Object.values(row.signals).reduce((sum: number, count) => sum + (count ?? 0), 0) },
     { header: 'entries', value: (row) => row.entries },
     { header: 'trades', value: (row) => row.trades },
@@ -174,6 +185,7 @@ const TRADE_CSV: CsvColumn<BacktestTrade>[] = [
   { header: 'sold_on', value: (row) => row.exit.reason },
   { header: 'asset_at_entry', value: (row) => row.entry.asset_price },
   { header: 'asset_at_exit', value: (row) => row.exit.asset_price },
+  { header: 'rested_on', value: (row) => (row.flags ?? []).join(' ') },
 ]
 
 /** A trade's address: its day, with it opened. */
@@ -307,6 +319,7 @@ export function TradesTable({
         cell: ({ row }) => (
           <span className="block max-w-56 whitespace-normal" title={row.exit.reason}>
             {row.exit.group}
+            {tradeFlags(row).length > 0 && <span className="block text-xs text-warning">{tradeFlags(row).join(' · ')}</span>}
             {row.notes.length > 0 && <span className="block text-xs text-warning">{row.notes.length} note{row.notes.length === 1 ? '' : 's'}</span>}
           </span>
         ),

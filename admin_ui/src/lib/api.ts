@@ -463,7 +463,9 @@ export const api = {
   turboModel: () => request<BacktestTurboModel>('GET', '/api/backtests/turbo-model'),
   measureTurbos: (period: { from: string; to: string }) => request<BacktestTurboModel>('POST', '/api/backtests/turbo-model', { body: period }),
   /** The run made again as a sweep, with each order filled later and at a worse price. */
-  stressBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/stress`),
+  /** The run made again with later and dearer fills, or ("noise") with each fill moved at random. */
+  stressBacktest: (runId: string, kind: 'fills' | 'noise' = 'fills') =>
+    request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/stress${kind === 'noise' ? '?kind=noise' : ''}`),
   modelCheckBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/model-check`),
   /** The run's last check against funded challenges, and its figures as they would be sent. */
   propFirms: (runId: string) => request<PropFirmState>('GET', `/api/backtests/${encodeURIComponent(runId)}/propfirms`),

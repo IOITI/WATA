@@ -18,7 +18,7 @@ function recorded(missing: Partial<InstrumentAvailability> = {}): InstrumentAvai
   return {
     bars: 5040, updates: 12840, first_bar: at('06:00:00'), last_bar: at('19:59:50'), quoted_seconds: 50400,
     missing_seconds: 0, holes: 0, hole_seconds: 0, stops: [], stretches: [], stretch_count: 0, knocked_out_at: null,
-    without_ask: 0, delayed_minutes: 0, issues: [], ...missing,
+    without_ask: 0, delayed_minutes: 0, frozen: 0, frozen_seconds: 0, frozen_stretches: [], issues: [], ...missing,
   }
 }
 
@@ -99,6 +99,35 @@ describe('what flags an instrument', () => {
 
   it('has nothing to say of an instrument that misses nothing', () => {
     expect(flagText(recorded(), PARIS, false)).toBe('')
+  })
+
+  it('says a frozen quote apart from what is missing: bars were written, Saxo sent nothing', () => {
+    const once = recorded({
+      issues: ['frozen'], frozen: 1, frozen_seconds: 240,
+      frozen_stretches: [{ start: at('09:00:00'), end: at('09:04:00'), seconds: 240, reason: 'frozen' }],
+    })
+    expect(flagText(once, PARIS, false)).toBe('Its quote frozen for 4 min from 11:00:00')
+    expect(facts(once).Frozen).toEqual({
+      label: 'Frozen',
+      value: 'Its quote frozen for 4 min from 11:00:00: bars written, nothing from Saxo, its last quote again',
+      warning: true,
+    })
+    // Nothing is missing for all that.
+    expect(facts(once).Availability.value).toBe('100.0% · nothing missing between its bars')
+
+    const twice = recorded({
+      issues: ['holes', 'frozen'], holes: 1, hole_seconds: 720, missing_seconds: 720, stretch_count: 1,
+      stretches: [{ start: at('07:00:00'), end: at('07:12:00'), seconds: 720, reason: 'unquoted' }],
+      frozen: 2, frozen_seconds: 420,
+      frozen_stretches: [
+        { start: at('09:00:00'), end: at('09:04:00'), seconds: 240, reason: 'frozen' },
+        { start: at('12:00:00'), end: at('12:03:00'), seconds: 180, reason: 'frozen' },
+      ],
+    })
+    expect(flagText(twice, PARIS, false)).toBe('Missing data: no quote for 12 min from 09:00:00. Its quote frozen 2 times')
+    expect(facts(twice).Frozen.value).toBe(
+      'Its quote frozen 2 times, 7 min in all, the longest 4 min from 11:00:00: bars written, nothing from Saxo, its last quote again',
+    )
   })
 })
 

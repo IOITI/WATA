@@ -78,9 +78,9 @@ const ANCHORED = 'scroll-mt-14'
 function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
   const summary = run.summary
   if (run.status.state !== 'done' || !summary) return []
-  const judged = !run.stress_of && !run.model_check_of
+  const judged = !run.stress_of && !run.noise_of && !run.model_check_of
   if (run.kind === 'sweep') {
-    const choosing = !run.stress_of && (choiceTrust(summary).length > 0 || summary.walk_forward !== undefined)
+    const choosing = !run.stress_of && !run.noise_of && (choiceTrust(summary).length > 0 || summary.walk_forward !== undefined)
     return [
       ...(judged ? [{ id: 'verdict', label: 'Verdict' }] : []),
       { id: 'sweep', label: 'Combinations' },
@@ -425,12 +425,17 @@ export function RunPage() {
             <div className="flex flex-col gap-6">
               <div className="flex flex-wrap items-center gap-2">
                 <StateBadge status={run.status} />
-                {run.kind === 'sweep' && <Badge tone="neutral">{run.stress_of ? 'Stress' : 'Sweep'}</Badge>}
+                {run.kind === 'sweep' && <Badge tone="neutral">{run.stress_of ? 'Stress' : run.noise_of ? 'Fill noise' : 'Sweep'}</Badge>}
                 {run.turbos === 'modelled' && <Badge tone="warning">Modelled turbos</Badge>}
                 {run.model_check_of && <Badge tone="neutral">Model check</Badge>}
                 {run.stress_of && (
                   <RunPeekLink id={run.stress_of} className="text-sm font-medium underline-offset-4 hover:underline">
                     The run it stresses
+                  </RunPeekLink>
+                )}
+                {run.noise_of && (
+                  <RunPeekLink id={run.noise_of} className="text-sm font-medium underline-offset-4 hover:underline">
+                    The run whose fills it moves
                   </RunPeekLink>
                 )}
                 {run.model_check_of && (
@@ -493,9 +498,9 @@ export function RunPage() {
                     <VerdictPanel run={run} />
                   </div>
                   <div id="sweep" className={ANCHORED}>
-                    <SweepPanel runId={run.id} fields={fields} stress={Boolean(run.stress_of)} />
+                    <SweepPanel runId={run.id} fields={fields} stress={Boolean(run.stress_of)} noise={run.noise_of ? (summary.noise ?? []) : undefined} />
                   </div>
-                  {!run.stress_of && (
+                  {!run.stress_of && !run.noise_of && (
                     <div id="choice" className={ANCHORED}>
                       <ChoicePanel runId={run.id} summary={summary} fields={fields} />
                     </div>

@@ -630,6 +630,11 @@ class FakeQueries:
 
         return [Run(*row) for row in fake_prices.runs(start, end, datetime.now(timezone.utc))][:limit]
 
+    async def price_silent(self, start, end, least_bars, limit):
+        from src.admin.prices import Silent
+
+        return [Silent(*row) for row in fake_prices.silent(start, end, datetime.now(timezone.utc), least_bars)][:limit]
+
     async def price_volumes(self, start, end):
         return fake_prices.volumes(start, end, datetime.now(timezone.utc))
 

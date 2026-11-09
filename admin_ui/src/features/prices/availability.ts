@@ -58,6 +58,19 @@ function holesText(item: InstrumentAvailability, timeZone: string, severalDays: 
   return `${formatNumber(item.holes)} holes in its quotes, ${formatSpan(item.hole_seconds)} in all${longest}`
 }
 
+/** Its quote frozen: how often, and the longest. */
+function frozenText(item: InstrumentAvailability, timeZone: string, severalDays: boolean): string {
+  const longest = item.frozen_stretches.reduce<PriceStretch | undefined>(
+    (found, stretch) => (found === undefined || stretch.seconds > found.seconds ? stretch : found),
+    undefined,
+  )
+  if (item.frozen === 1 && longest) {
+    return `its quote frozen for ${formatSpan(longest.seconds)} from ${moment(longest.start, timeZone, severalDays)}`
+  }
+  const most = longest ? `, the longest ${formatSpan(longest.seconds)} from ${moment(longest.start, timeZone, severalDays)}` : ''
+  return `its quote frozen ${formatNumber(item.frozen)} times, ${formatSpan(item.frozen_seconds)} in all${most}`
+}
+
 function stopText(item: InstrumentAvailability, timeZone: string, severalDays: boolean): string {
   const others = item.stops.length - 1
   const again = others > 0 ? `, and on ${others === 1 ? 'one other day' : `${others} other days`}` : ''
@@ -72,7 +85,10 @@ export function flagText(item: InstrumentAvailability, timeZone: string, several
     parts.push(item.holes === 1 ? holesText(item, timeZone, severalDays) : `${formatNumber(item.holes)} holes in its quotes`)
   }
   if (item.stops.length > 0) parts.push(stopText(item, timeZone, severalDays))
-  return parts.length > 0 ? `Missing data: ${parts.join(', ')}` : ''
+  const said = parts.length > 0 ? [`Missing data: ${parts.join(', ')}`] : []
+  // Not missing: a quote was there, Saxo's last one, written again while it sent nothing.
+  if (item.frozen > 0) said.push(item.frozen === 1 ? sentence(frozenText(item, timeZone, severalDays)) : `Its quote frozen ${formatNumber(item.frozen)} times`)
+  return said.join('. ')
 }
 
 export interface Fact {
@@ -147,6 +163,13 @@ export function instrumentFacts(
       facts.push({
         label: 'Stopped',
         value: `${sentence(stopText(item, timeZone, severalDays))}, while other turbos were still quoted`,
+        warning: true,
+      })
+    }
+    if (item.frozen > 0) {
+      facts.push({
+        label: 'Frozen',
+        value: `${sentence(frozenText(item, timeZone, severalDays))}: bars written, nothing from Saxo, its last quote again`,
         warning: true,
       })
     }

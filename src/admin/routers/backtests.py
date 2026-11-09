@@ -352,9 +352,12 @@ async def reference(run_id: str, service=Depends(backtests)):
 
 
 @router.post("/{run_id}/stress", status_code=202)
-async def stress(run_id: str, service=Depends(backtests)):
-    """The run made again with each order filled later and at a worse price."""
-    return service.stress(run_id)
+async def stress(run_id: str, kind: str = "fills", service=Depends(backtests)):
+    """
+    The run made again with each order filled later and at a worse price; ``kind`` "noise": with each fill moved at
+    random by a few tenths of a percent.
+    """
+    return service.stress(run_id, kind=kind)
 
 
 @router.get("/{run_id}/propfirms")

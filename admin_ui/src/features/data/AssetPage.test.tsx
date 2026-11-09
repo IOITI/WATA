@@ -88,7 +88,7 @@ function recorded(missing: Partial<InstrumentAvailability> = {}): InstrumentAvai
   return {
     bars: 5040, updates: 12840, first_bar: '2026-10-12T06:00:00Z', last_bar: '2026-10-12T19:59:50Z',
     quoted_seconds: 50400, missing_seconds: 0, holes: 0, hole_seconds: 0, stops: [], stretches: [], stretch_count: 0,
-    knocked_out_at: null, without_ask: 0, delayed_minutes: 0, issues: [], ...missing,
+    knocked_out_at: null, without_ask: 0, delayed_minutes: 0, frozen: 0, frozen_seconds: 0, frozen_stretches: [], issues: [], ...missing,
   }
 }
 /** Twelve minutes without a quote from 11:00 in Paris. */

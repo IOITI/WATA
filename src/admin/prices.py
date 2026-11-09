@@ -57,6 +57,13 @@ SILENT = "silent"   # the recorder was running, no quote was arriving
 # One instrument without a quote while the recorder was receiving others.
 UNQUOTED = "unquoted"   # between two of its bars of the same day
 STOPPED = "stopped"     # after its last bar of a day, while other turbos of its indice went on
+# Its bars written, nothing received from Saxo for it: each bar its last quote again ("updates" 0), which no hole
+# shows. Saxo quotes a turbo about every 30 s.
+FROZEN = "frozen"
+# Two minutes without one quote received: as the backtests count a frozen quote (src/backtest/simulator.py
+# ``FROZEN_QUOTE_SECONDS``, priced from the index there).
+FROZEN_SECONDS = 120
+FROZEN_BARS = FROZEN_SECONDS // BAR_SECONDS
 # Every bar of the period is read to find them: not worked out for longer periods.
 AVAILABILITY_MAX_DAYS = 7
 # Stretches of consecutive bars read at most: an instrument quoted without a break is one a day.
@@ -186,6 +193,16 @@ class Run(NamedTuple):
 RUN_COLUMNS = Run._fields
 
 
+class Silent(NamedTuple):
+    """Bars of one instrument, ten seconds apart, in which Saxo sent it nothing: its last quote written again."""
+
+    instrument_id: int
+    # Start of its first and of its last bar, epoch seconds.
+    first: int
+    last: int
+    bars: int
+
+
 def _moment(seconds: int) -> datetime:
     return datetime.fromtimestamp(seconds, timezone.utc)
 
@@ -220,13 +237,16 @@ def availability(
     gaps: Sequence[dict],
     is_trading_time: Callable[[datetime], bool],
     trading_timezone: tzinfo,
+    silent: Iterable[Silent] = (),
 ) -> dict[int, dict]:
     """
     What was recorded of each instrument, and the times Saxo left it without a
     quote while the recorder was receiving others. ``runs`` are the stretches
     of consecutive bars of the period, by instrument and in time order;
     ``turbos`` gives the indice of each instrument that is a turbo; ``gaps``
-    are the recorder's own (``recording_gaps``).
+    are the recorder's own (``recording_gaps``); ``silent`` the stretches of
+    its bars in which Saxo sent it nothing (``AdminQueries.price_silent``),
+    said apart as frozen quotes: bars exist for them, its last quote again.
 
     Two things are looked for, both only in trading time and outside the
     recorder's gaps:
@@ -258,6 +278,9 @@ def availability(
     by_instrument: dict[int, list[Run]] = {}
     for run in runs:
         by_instrument.setdefault(run.instrument_id, []).append(run)
+    silent_of: dict[int, list[Silent]] = {}
+    for stretch in silent:
+        silent_of.setdefault(stretch.instrument_id, []).append(stretch)
 
     # The last bar of each turbo on each day, and the two latest of them per indice:
     # a turbo is compared with the others, so the latest one with the one before it.
@@ -309,8 +332,19 @@ def availability(
                 stops.append(_moment(run.last + BAR_SECONDS))
                 stretches += _stretches(parts, STOPPED)
 
+        # Two minutes or more of its quote frozen, in trading time and outside the recorder's own gaps.
+        frozen = _stretches(
+            [
+                (start, end) for stretch in silent_of.get(instrument_id, [])
+                for start, end in unquoted(stretch.first, stretch.last + BAR_SECONDS)
+                if (end - start).total_seconds() >= FROZEN_SECONDS
+            ],
+            FROZEN,
+        )
+
         bars = sum(run.bars for run in own)
         longest = sorted(stretches, key=lambda stretch: stretch["seconds"], reverse=True)[:STRETCHES_KEPT]
+        longest_frozen = sorted(frozen, key=lambda stretch: stretch["seconds"], reverse=True)[:STRETCHES_KEPT]
         found[instrument_id] = {
             "bars": bars,
             "updates": sum(run.updates for run in own),
@@ -329,8 +363,13 @@ def availability(
             "knocked_out_at": knocked_out_at,
             "without_ask": sum(run.without_ask for run in own),
             "delayed_minutes": max(run.delayed_minutes for run in own),
+            # Its quote frozen: bars written, nothing from Saxo. Not missing (a quote was there, an old one), so
+            # apart from the stretches above; the longest, in time order.
+            "frozen": len(frozen),
+            "frozen_seconds": sum(stretch["seconds"] for stretch in frozen),
+            "frozen_stretches": sorted(longest_frozen, key=lambda stretch: stretch["start"]),
             # What flags the instrument on the page.
-            "issues": [issue for issue, present in (("holes", holes), ("stopped", stops)) if present],
+            "issues": [issue for issue, present in (("holes", holes), ("stopped", stops), ("frozen", frozen)) if present],
         }
     return found
 

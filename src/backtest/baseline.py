@@ -88,6 +88,11 @@ class Baseline:
             events = random_entries(day, moments, entries, self.seed, repetition, first_id=1_000_000)
             simulator.run_day(day, events + closing)
 
+    def finish(self) -> None:
+        """The run is over: each repetition closes what it still had to sell, as the run does."""
+        for simulator in self.simulators:
+            simulator.finish()
+
     def totals(self, tested: set[str]) -> list[float]:
         """The total of each repetition over the days tested, compounded as a run's total is."""
         return [

@@ -297,6 +297,7 @@ class FakeQueries:
         self.price_series_rows = {}
         # Stretches of consecutive bars (src.admin.prices.Run), and Saxo's volume per instrument.
         self.price_run_rows = []
+        self.price_silent_rows = []
         self.price_volume_by_instrument = {}
         # What price_assets adds to an instrument's row, by id, and Saxo's volume by instrument and day.
         self.price_asset_extras = {}
@@ -453,6 +454,10 @@ class FakeQueries:
     async def price_runs(self, start, end, limit):
         self.calls.append(("price_runs", start, end, limit))
         return self.price_run_rows[:limit]
+
+    async def price_silent(self, start, end, least_bars, limit):
+        self.calls.append(("price_silent", start, end, least_bars, limit))
+        return self.price_silent_rows[:limit]
 
     async def price_volumes(self, start, end):
         self.calls.append(("price_volumes", start, end))
@@ -2576,6 +2581,13 @@ def _run(instrument_id, first, last, **figures):
     )
 
 
+def _silent(instrument_id, first, last):
+    from src.admin.prices import Silent
+
+    start, end = (int(datetime(2026, 10, 12, *clock, tzinfo=timezone.utc).timestamp()) for clock in (first, last))
+    return Silent(instrument_id, start, end - 10, bars=(end - start) // 10)
+
+
 def test_availability_says_which_instruments_saxo_left_without_a_quote(client, ctx):
     # Monday 12 Oct 2026, 08:00 to 22:00 in Paris. A second turbo, quoted all day, and the first with twelve
     # minutes missing in the morning; the recorder itself was down for five of them.
@@ -2591,6 +2603,9 @@ def test_availability_says_which_instruments_saxo_left_without_a_quote(client, c
         for n in range(14 * 360)
         if not 9 * 360 <= n + 6 * 360 < 9 * 360 + 30
     ]
+    # The third turbo's quote frozen four minutes at noon, and for four around the recorder's own gap, which
+    # leaves a minute of it outside: too short to say.
+    ctx.queries.price_silent_rows = [_silent(3, (8, 59), (9, 3)), _silent(3, (12, 0), (12, 4))]
 
     with patch_now(datetime(2026, 10, 20, tzinfo=timezone.utc)):
         response = client.get("/api/data/providers/saxo/availability?from=2026-10-12")
@@ -2605,7 +2620,16 @@ def test_availability_says_which_instruments_saxo_left_without_a_quote(client, c
         {"start": "2026-10-12T09:05:00+00:00", "end": "2026-10-12T09:12:00+00:00", "seconds": 420, "reason": "unquoted"},
     ]
     assert (turbo["first_bar"], turbo["last_bar"]) == ("2026-10-12T06:00:00+00:00", "2026-10-12T19:59:50+00:00")
-    assert body["items"]["3"]["issues"] == []
+    assert (turbo["frozen"], turbo["frozen_stretches"]) == (0, [])
+    # Frozen: bars exist, Saxo's last quote again. Said apart from what is missing.
+    frozen = body["items"]["3"]
+    assert (frozen["issues"], frozen["frozen"], frozen["frozen_seconds"], frozen["missing_seconds"]) == (["frozen"], 1, 240, 0)
+    assert frozen["frozen_stretches"] == [
+        {"start": "2026-10-12T12:00:00+00:00", "end": "2026-10-12T12:04:00+00:00", "seconds": 240, "reason": "frozen"},
+    ]
+    assert frozen["stretches"] == []
+    # Two minutes of bars without a quote are asked for, as the backtests count a frozen quote.
+    assert next(call[3] for call in ctx.queries.calls if call[0] == "price_silent") == 12
     # The index, quoted in its own hours only, is not said to have stopped.
     assert body["items"]["1"]["issues"] == []
 
@@ -3435,8 +3459,8 @@ class FakeBacktests:
     def measure_turbos(self, first, last):
         return self._answer("measure_turbos", first, last, answer={"state": "running"})
 
-    def stress(self, run_id):
-        return self._answer("stress", run_id, answer={"id": RUN, "stress_of": run_id})
+    def stress(self, run_id, kind="fills"):
+        return self._answer("stress", run_id, kind, answer={"id": RUN, "stress_of" if kind == "fills" else "noise_of": run_id})
 
     def remaking(self):
         return None
@@ -3706,9 +3730,12 @@ def test_what_a_run_found_is_read_by_day_and_fate(client, backtests):
     assert client.post(f"/api/backtests/{RUN}/cells/second/run", headers=SAME_ORIGIN).status_code == 422
     assert backtests.asked[-1] == ("run_cell", RUN, 2)
     assert client.post(f"/api/backtests/{RUN}/stress", headers=SAME_ORIGIN).json() == {"id": RUN, "stress_of": RUN}
+    assert backtests.asked[-1] == ("stress", RUN, "fills")
+    # Each fill moved at random instead: asked by its kind.
+    assert client.post(f"/api/backtests/{RUN}/stress?kind=noise", headers=SAME_ORIGIN).json() == {"id": RUN, "noise_of": RUN}
 
     assert backtests.asked[1] == ("signals", RUN, date(2026, 10, 13), "refused")
-    assert backtests.asked[-1] == ("stress", RUN)
+    assert backtests.asked[-1] == ("stress", RUN, "noise")
 
 
 def test_the_turbos_are_measured_for_the_runs_on_made_up_turbos(client, backtests):

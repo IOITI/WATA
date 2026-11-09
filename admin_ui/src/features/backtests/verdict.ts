@@ -1,10 +1,20 @@
 import { formatNumber, formatPercent } from 'ioiti-ui'
 import type { Check, CheckState } from 'ioiti-ui'
 
-import type { BacktestModelCheck, BacktestRun, BacktestRunListed, BacktestSample, BacktestSummary, BacktestSweepGrid, BacktestTurbos } from '@/lib/types'
+import type {
+  BacktestModelCheck,
+  BacktestRestsOn,
+  BacktestRun,
+  BacktestRunListed,
+  BacktestSample,
+  BacktestSummary,
+  BacktestSweepGrid,
+  BacktestTurbos,
+} from '@/lib/types'
 
 import { EDGE_BEATEN, EDGE_T, headlineEdge, horizonLabel, LEAST_SIGNALS } from './edge'
 import { isActive, sampleWarning } from './model'
+import { restsOnCheck } from './restsOn'
 import { MAX_OVERFITTING, MIN_DEFLATED_SHARPE, stressVerdict } from './robustness'
 import { sweepVerdict } from './sweep'
 
@@ -25,7 +35,7 @@ export const MIN_BEATEN = 95
 export type RunSection = 'trust' | 'edge' | 'stress' | 'model-check' | 'choice' | 'setup'
 
 export interface RunCheck extends Check {
-  id: 'sample' | 'random' | 'edge' | 'stress' | 'model' | 'held-out' | 'overfitting' | 'deflated' | 'code'
+  id: 'sample' | 'data' | 'random' | 'edge' | 'stress' | 'model' | 'held-out' | 'overfitting' | 'deflated' | 'code'
   section: RunSection
 }
 
@@ -57,6 +67,8 @@ interface Evidence {
   edge: NonNullable<BacktestSummary['edge']> | null
   pbo: { probability: number } | null
   deflated: { probability: number; trials: number } | null
+  /** What a run's result rests on beyond the recorded quotes; none for a run of before. */
+  restsOn: BacktestRestsOn | null
 }
 
 function evidenceOfRun(run: BacktestRun): Evidence | null {
@@ -74,6 +86,7 @@ function evidenceOfRun(run: BacktestRun): Evidence | null {
     edge: summary.edge ?? null,
     pbo: summary.pbo ?? null,
     deflated: summary.deflated_sharpe ?? null,
+    restsOn: summary.rests_on ?? null,
   }
 }
 
@@ -94,6 +107,7 @@ function evidenceOfListed(run: BacktestRunListed): Evidence | null {
     edge: headline.edge ?? null,
     pbo: headline.pbo ?? null,
     deflated: headline.deflated_sharpe ?? null,
+    restsOn: headline.rests_on ?? null,
   }
 }
 
@@ -145,6 +159,8 @@ function singleChecks(evidence: Evidence, derived: Derived): RunCheck[] {
   const figures = evidence.figures
   if (!figures) return []
   const checks: RunCheck[] = [sampleCheck(figures.trades, figures.days, figures.sample)]
+
+  checks.push({ id: 'data', label: 'Priced at recorded quotes', ...restsOnCheck(evidence.restsOn), section: 'trust' })
 
   const random = evidence.random
   checks.push({
@@ -262,9 +278,9 @@ function checksOf(evidence: Evidence | null, derived: Derived): RunCheck[] {
   return evidence.kind === 'sweep' ? sweepChecks(evidence, derived) : singleChecks(evidence, derived)
 }
 
-/** Whether a run is judged at all: a stress sweep or a model check judges another run; a run not done, nothing yet. */
-export function isJudged(run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'model_check_of'>): boolean {
-  return run.status.state === 'done' && !run.stress_of && !run.model_check_of
+/** Whether a run is judged at all: a stress sweep (of either kind) or a model check judges another run; a run not done, nothing yet. */
+export function isJudged(run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'noise_of' | 'model_check_of'>): boolean {
+  return run.status.state === 'done' && !run.stress_of && !run.noise_of && !run.model_check_of
 }
 
 /**

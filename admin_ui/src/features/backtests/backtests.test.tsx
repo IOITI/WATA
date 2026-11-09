@@ -23,7 +23,7 @@ import type {
   TaRule,
   TaScriptSummary,
 } from '@/lib/types'
-import { day, listedRun, OPTIONS, run, RUN_ID, SETTINGS, signal, trade } from '@/test/backtests'
+import { day, listedRun, OPTIONS, run, RUN_ID, SETTINGS, signal, SUMMARY, trade } from '@/test/backtests'
 import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
 import { engines, resetVela, velas } from '@/test/fakeVela'
 import { stubSystemTheme } from '@/test/systemTheme'
@@ -568,13 +568,17 @@ describe('the list of backtests', () => {
 
   it('says in a column whether each run can be believed, and narrows the list to a verdict', async () => {
     const user = userEvent.setup()
-    // As the server lists it: the figures its checks read (3 trades over 3 days, 85 % of 20 random runs beaten).
-    runs = { ...runs, [RUN_ID]: run({ headline: { ...listedRun().headline!, days: 3, repetitions: 20, edge: null } }) }
+    // As the server lists it: the figures its checks read (3 trades over 3 days, each priced at a recorded quote,
+    // 85 % of 20 random runs beaten).
+    runs = {
+      ...runs,
+      [RUN_ID]: run({ headline: { ...listedRun().headline!, days: 3, repetitions: 20, edge: null, rests_on: SUMMARY.rests_on } }),
+    }
     renderAt('/backtests')
 
     const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
     expect(within(row).getByRole('link', { name: /Fails/ })).toHaveAttribute('href', `/backtests/${RUN_ID}#trust`)
-    expect(within(row).getByText('1 of 5 checks')).toBeInTheDocument()
+    expect(within(row).getByText('2 of 6 checks')).toBeInTheDocument()
     // A run listed without the figures its checks read is not judged here.
     const other = screen.getByRole('link', { name: 'Stop at 10' }).closest('tr') as HTMLElement
     expect(within(other).queryByText(/of \d+ checks/)).toBeNull()

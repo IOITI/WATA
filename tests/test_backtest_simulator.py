@@ -32,7 +32,7 @@ with open("etc/config_example.json", encoding="utf-8") as config_file:
 PLAIN = replace(
     LIVE, time_scaling_enabled=False, confidence_enabled=False, trailing_enabled=False, cooldown_after_loss_minutes=0,
     max_trades_per_day=0, day_profit_target=50.0, no_entry_above_day_profit=50.0, capital=10_000.0,
-    fill_price="standing", wait_for_fresh_quote=False,
+    fill_price="standing", wait_for_fresh_quote=False, exit_slippage_percent=0.0,
 )
 
 
@@ -82,8 +82,10 @@ def close_of_day(number: int = 99) -> SignalEvent:
 
 
 def run(day: DayData, events, settings=PLAIN) -> Simulator:
+    """One day traded, then the run's end (src/backtest/run.py): what is still to be sold is said unresolved."""
     simulator = Simulator(settings, CLOCK)
     simulator.run_day(day, events)
+    simulator.finish()
     return simulator
 
 
@@ -290,16 +292,18 @@ def test_a_stop_crossed_inside_ten_seconds_sells_at_the_bid_that_crossed_it_or_a
     assert worst["exit"]["filled_at"] == "2026-10-14T06:30:10Z"
 
 
-def test_a_take_profit_crossed_inside_ten_seconds_sells_at_its_level_never_better():
+def test_a_take_profit_crossed_inside_ten_seconds_sells_at_the_quote_that_crossed_it():
+    # Saxo's quote jumped from 5.0 to 9.0: the monitor sees 9.0 and sells on it, as on a stop; never at a level
+    # (8.08) that no quote reached.
     path = flat(5.0, 30) + [(5.0, 9.0, 5.0, 8.5)] + flat(8.5, 780)
     take = replace(PLAIN, max_profit_percent=60)
 
     trade = run(day_of(series(2, "long", 24_800, path)), [signal(1, "long", "08:00:01"), close_of_day()], take).trades[0]
 
     assert trade["exit"]["reason"].startswith("Performance (Takeprofit (60%) hit at")
-    assert trade["exit"]["bid"] == pytest.approx(5.05 * 1.6)
-    assert trade["performance_percent"] == 60.0
-    assert trade["max_performance_percent"] == 60.0
+    assert trade["exit"]["bid"] == 9.0
+    assert trade["performance_percent"] == 78.22
+    assert trade["max_performance_percent"] == 78.22
 
 
 def test_the_trailing_stop_sells_once_the_best_was_high_enough_and_fell_far_enough():
@@ -406,7 +410,8 @@ def test_a_gap_of_the_recorder_while_a_position_is_open_is_noted_on_the_trade():
 
 
 def test_commission_and_slippage_are_taken_on_both_orders():
-    costly = replace(PLAIN, commission_per_order=2.5, commission_percent=0.1, slippage=0.01)
+    # Not all the account in the order: room for the commissions, which Saxo counts and the live sizing does not.
+    costly = replace(PLAIN, commission_per_order=2.5, commission_percent=0.1, slippage=0.01, funds_percent=90)
 
     trade = run(day_of(series(2, "long", 24_800, flat(5.0, 840))), [signal(1, "long", "09:00"), close_of_day()], costly).trades[0]
 
@@ -515,7 +520,8 @@ def requoted_turbo() -> TurboSeries:
     return series(2, "long", 29_041.634, bars, start="12:37:00", spread=0.009, issuer="Saxo")
 
 
-NEXT_QUOTE = replace(PLAIN, fill_price="next", wait_for_fresh_quote=True, stoploss_percent=-7)
+# Room in the account for a next quote dearer than the ask the order was sized on (else Saxo refuses it).
+NEXT_QUOTE = replace(PLAIN, fill_price="next", wait_for_fresh_quote=True, stoploss_percent=-7, funds_percent=90)
 
 
 def test_an_order_is_priced_at_the_turbos_next_quote_and_judged_from_it():

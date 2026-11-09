@@ -5,9 +5,9 @@ import { useNavigate } from 'react-router'
 
 import { CompareCurvesChart, CurvesLegend } from '@/components/charts/PerformanceCharts'
 import { api } from '@/lib/api'
-import type { BacktestField, BacktestSummary, BacktestSweep } from '@/lib/types'
+import type { BacktestField, BacktestNoiseLevel, BacktestSummary, BacktestSweep } from '@/lib/types'
 
-import { choiceTrust, daysRange, STRESS_AXES, stressVerdict, walkForwardCurves, walkForwardSentence } from './robustness'
+import { choiceTrust, daysRange, NOISE_AXES, noiseSentences, STRESS_AXES, stressVerdict, walkForwardCurves, walkForwardSentence } from './robustness'
 import { axisName, heat, METRICS, sweepGrid, sweepVerdict } from './sweep'
 import type { Metric, Part } from './sweep'
 
@@ -102,16 +102,35 @@ export function SweepTable({
   )
 }
 
-/** A sweep's combinations side by side, what it says about choosing a value, and a combination made a run of its own. */
-export function SweepPanel({ runId, fields, stress = false }: { runId: string; fields: readonly BacktestField[]; stress?: boolean }) {
+/**
+ * A sweep's combinations side by side, what it says about choosing a value, and a combination made a run of its own.
+ * ``stress``: a stress sweep (later and dearer fills); ``noise``: a fill-noise stress, its levels as its summary says them.
+ */
+export function SweepPanel({
+  runId,
+  fields,
+  stress = false,
+  noise,
+}: {
+  runId: string
+  fields: readonly BacktestField[]
+  stress?: boolean
+  noise?: readonly BacktestNoiseLevel[]
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [metricId, setMetricId] = useState(METRICS[0].id)
-  // A stress sweep chooses nothing: all its days are what it says.
-  const [part, setPart] = useState<Part>(stress ? 'whole' : 'tuning')
+  const noisy = noise !== undefined
+  // A stress chooses nothing: all its days are what it says.
+  const choosing = !stress && !noisy
+  const [part, setPart] = useState<Part>(choosing ? 'tuning' : 'whole')
   const sweepQuery = useQuery({ queryKey: ['backtest-sweep', runId], queryFn: () => api.backtestSweep(runId), staleTime: Infinity })
   const sweep = sweepQuery.data
-  const labels = { ...Object.fromEntries(fields.map((field) => [field.name, field.label])), ...(stress ? STRESS_AXES : {}) }
+  const labels = {
+    ...Object.fromEntries(fields.map((field) => [field.name, field.label])),
+    ...(stress ? STRESS_AXES : {}),
+    ...(noisy ? NOISE_AXES : {}),
+  }
   const cellRun = useMutation({
     mutationFn: (cell: number) => api.runSweepCell(runId, cell),
     onSuccess: async (run) => {
@@ -123,18 +142,21 @@ export function SweepPanel({ runId, fields, stress = false }: { runId: string; f
 
   return (
     <Panel
-      title={stress ? 'Later and dearer fills' : 'The combinations'}
+      title={stress ? 'Later and dearer fills' : noisy ? 'Fills moved at random' : 'The combinations'}
       description={
         stress
           ? 'The same signals on the same days, each order filled later (rows) and at a worse price a turbo (columns) than the run was. Its own fills are the first cell.'
-          : 'Each combination traded on the same days and the same signals, with its own account. The values are chosen on the first days; the last ones, held out, say whether the choice holds.'
+          : noisy
+            ? 'The same signals on the same days, each fill moved at random by up to a share of its price, either way (rows), each share drawn several times (columns). What the total keeps of the luck of its fills.'
+            : 'Each combination traded on the same days and the same signals, with its own account. The values are chosen on the first days; the last ones, held out, say whether the choice holds.'
       }
     >
       <QueryState isPending={sweepQuery.isPending} error={sweepQuery.error} hasData={!!sweep}>
         {sweep &&
           (() => {
-            const verdict = stress ? null : sweepVerdict(sweep, labels)
+            const verdict = choosing ? sweepVerdict(sweep, labels) : null
             const stressed = stress ? stressVerdict(sweep) : null
+            const spread = noise ? noiseSentences(noise) : []
             return (
               <div className="flex flex-col gap-4">
                 {verdict && (
@@ -147,6 +169,17 @@ export function SweepPanel({ runId, fields, stress = false }: { runId: string; f
                     <AlertDescription>{stressed.sentence}</AlertDescription>
                   </Alert>
                 )}
+                {spread.length > 0 && (
+                  <Alert tone="neutral">
+                    <AlertDescription>
+                      <ul className="flex flex-col gap-1">
+                        {spread.map((sentence) => (
+                          <li key={sentence}>{sentence}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Figure shown">
                   {METRICS.map((entry) => (
                     <Button key={entry.id} size="sm" variant={entry.id === metric.id ? 'primary' : 'outline'} aria-pressed={entry.id === metric.id} onClick={() => setMetricId(entry.id)}>
@@ -154,7 +187,7 @@ export function SweepPanel({ runId, fields, stress = false }: { runId: string; f
                     </Button>
                   ))}
                 </div>
-                {!stress && (
+                {choosing && (
                   <div className="flex flex-wrap gap-2" role="group" aria-label="Days shown">
                     {PARTS.map((entry) => (
                       <Button key={entry.id} size="sm" variant={entry.id === part ? 'primary' : 'outline'} aria-pressed={entry.id === part} onClick={() => setPart(entry.id)}>
@@ -168,12 +201,12 @@ export function SweepPanel({ runId, fields, stress = false }: { runId: string; f
                   metric={metric}
                   part={part}
                   labels={labels}
-                  marked={stress ? 0 : verdict?.best}
+                  marked={stress ? 0 : choosing ? verdict?.best : undefined}
                   onPick={(cell) => cellRun.mutate(cell)}
                   disabled={cellRun.isPending}
                 />
                 <p className="text-xs text-muted-foreground">
-                  {stress
+                  {!choosing
                     ? 'All the days of the run, each trade as the whole stake.'
                     : sweep.held_out_from
                       ? `Days from ${formatDay(sweep.held_out_from)} are held out (the last ${Math.round(sweep.held_out * 100)} %).`

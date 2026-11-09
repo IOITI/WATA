@@ -14,7 +14,8 @@ def trade(number: int, signal: int, result: float, reason: str, uic: int = 40_00
     return {
         "id": number, "signal_id": signal, "day": "2026-10-14", "direction": "long", "performance_percent": result,
         "turbo": {"uic": uic}, "entry": {"filled_at": f"2026-10-14T{opened}Z", "price": 5.02},
-        "exit": {"filled_at": "2026-10-14T08:00:00Z", "price": 5.2, "reason": reason},
+        # As the simulator writes it: the price a sale filled at is the exit's bid.
+        "exit": {"filled_at": "2026-10-14T08:00:00Z", "bid": 5.2, "reason": reason},
     }
 
 
@@ -62,15 +63,20 @@ def test_each_trade_is_set_beside_the_real_position_of_its_signal():
     assert (first["signal_uuid"], first["position_id"], first["entry_seconds"], first["exit_seconds"]) == ("a", "p-a", 3.0, -3.0)
     assert first["same_exit"] and first["same_turbo"] and not second["same_turbo"]
     assert first["result"] == {"backtest": 3.5, "real": 3.0}
+    assert first["exit_price"] == {"backtest": 5.2, "real": 5.18}
+    assert (first["entry_price_percent"], first["exit_price_percent"]) == (-0.2, 0.39)
     summary = found["summary"]
     assert (summary["paired"], summary["backtest_only"], summary["live_only"]) == (2, 1, 2)
     assert summary["backtest_only_live_outcomes"] == {"refused": 1}
     assert summary["live_only_backtest_fates"] == {"refused": 1, "not_replayed": 1}
     assert summary["mean_result_difference"] == pytest.approx(0.5)
     assert summary["same_exit_percent"] == 100.0 and summary["same_turbo_percent"] == 50.0
-    assert (summary["backtest_total_percent"], summary["real_total_percent"]) == (3.0, 2.0)
+    # Compounded, as a run's total is: +3.5 % then -0.5 %, against +3 % then -1 %.
+    assert (summary["backtest_total_percent"], summary["real_total_percent"]) == (2.98, 1.97)
+    assert (summary["median_entry_price_percent"], summary["median_exit_price_percent"]) == (-0.2, 0.39)
+    assert summary["median_exit_seconds"] == -3.0
     assert sentence(summary) == (
-        "2 trades set beside WATA's positions of the same signals: the backtest made +3.00 % where WATA made +2.00 %, "
+        "2 trades set beside WATA's positions of the same signals: the backtest made +2.98 % where WATA made +1.97 %, "
         "+0.50 points a trade in the middle; the same exit 100 % of the time."
     )
 

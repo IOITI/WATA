@@ -145,7 +145,8 @@ const RULES: TaRule[] = [
 
 /** EMA's runs: one of each version, the newest passing every check it is held to. */
 const PASSING = { days: 25, repetitions: 100, beaten: 97, trades: 40, sample: 'few' as const, edge: {
-  horizons: [{ minutes: 15, signals: 60, mean_bp: 6, hit_rate: 60, t: 3.1, independent: 30, random_mean_bp: 0.2, beaten: 98 }], unpriced: 0 } }
+  horizons: [{ minutes: 15, signals: 60, mean_bp: 6, hit_rate: 60, t: 3.1, independent: 30, random_mean_bp: 0.2, beaten: 98 }], unpriced: 0 },
+  rests_on: { trades: 40, flags: {}, trades_priced_off_quotes: 0, share_percent: 0, funds_refused: 0, partial_days: [] } }
 const RUNS: BacktestRunListed[] = [
   listedRun({ id: '20261020-090000-aaaaaa', name: 'EMA v2 in October', source: { kind: 'pine', script: { id: EMA.id, version: 2, name: 'EMA' }, from_rule: null, signals: null },
     headline: { ...listedRun().headline!, ...PASSING } }),

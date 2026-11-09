@@ -21,33 +21,36 @@ from src.backtest.clock import TradingClock
 # Fewer than this many measures of a kind: no value is suggested from them.
 LEAST_MEASURES = 10
 TICK = 0.01
-# The recorded quote of a turbo is taken from the bars that ended within this before an order left.
-QUOTE_WITHIN_SECONDS = 60
+# The recorded quote an order is set against: the open of its turbo's bar beginning at or after the moment it left,
+# within this, as a backtest reads the quote standing at an order (``TurboSeries.quote_at`` at ``ceil10``).
+QUOTE_WITHIN_SECONDS = 10
+# An order Saxo took longer than this to accept waited for Saxo's order limit, which WATA waited 60 s for until
+# v0.48.0 (``wait_after_refusal``): not what an order takes now, and left out of the measure.
+ORDER_SECONDS_MOST = 30.0
 
 SIGNALS_SQL = """
-SELECT signal_timestamp, received_timestamp, decided_at, outcome
+SELECT signal_timestamp, received_timestamp, decided_at, outcome, position_id
 FROM signal_journal
 WHERE decided_at >= $1 AND decided_at < $2 AND action IN ('long', 'short')
 """
 
 ORDERS_SQL = """
-SELECT e.order_id, e.purpose, e.sent_at, e.accepted_at, e.outcome,
+SELECT e.order_id, e.purpose, e.position_id, e.sent_at, e.accepted_at, e.outcome,
        p.instrument_uic, p.position_open_price, p.position_close_price
 FROM order_execution e
 LEFT JOIN turbo_data_position p ON p.position_id = e.position_id
 WHERE e.sent_at >= $1 AND e.sent_at < $2 AND e.purpose IN ('open', 'close')
 """
 
-# The quote standing when each order left: the last bar of its turbo that ended by then.
+# The quote standing when each order left, as a backtest reads it: the open of the bar beginning at or after then.
 QUOTES_SQL = f"""
-SELECT q.order_id, b.bid_close, b.ask_close
+SELECT q.order_id, b.bid_open AS bid_close, b.ask_open AS ask_close
 FROM unnest($1::text[], $2::int[], $3::timestamptz[]) AS q(order_id, uic, at)
 JOIN price_instrument i ON i.uic = q.uic AND i.role = 'turbo'
 JOIN LATERAL (
-    SELECT bid_close, ask_close FROM price_bar_10s b
-    WHERE b.instrument_id = i.id AND b.ts <= q.at - interval '10 seconds'
-      AND b.ts > q.at - interval '{QUOTE_WITHIN_SECONDS + 10} seconds'
-    ORDER BY b.ts DESC LIMIT 1
+    SELECT bid_open, ask_open FROM price_bar_10s b
+    WHERE b.instrument_id = i.id AND b.ts >= q.at AND b.ts < q.at + interval '{QUOTE_WITHIN_SECONDS} seconds'
+    ORDER BY b.ts LIMIT 1
 ) b ON true
 """
 
@@ -100,6 +103,22 @@ def _finite(values) -> list[float]:
     return [float(value) for value in values if value is not None and math.isfinite(value)]
 
 
+def _order_seconds(orders: list[dict]) -> list[float]:
+    """From an order leaving to Saxo's acceptance, the waits for Saxo's order limit left out (ORDER_SECONDS_MOST)."""
+    return [seconds for seconds in _finite(_seconds(row["accepted_at"], row["sent_at"]) for row in orders)
+            if seconds <= ORDER_SECONDS_MOST]
+
+
+def _decided(signals: list[dict], orders: list[dict]) -> list[tuple[dict, object]]:
+    """
+    Each signal with the moment the trader decided on it: when its purchase left for Saxo, for a signal that bought;
+    the journal's ``decided_at`` otherwise, which a purchase stamps only once Saxo filled it.
+    """
+    left = {str(row["position_id"]): row["sent_at"] for row in orders
+            if row.get("purpose") == "open" and row.get("position_id") is not None and row.get("sent_at") is not None}
+    return [(row, left.get(str(row.get("position_id")), row["decided_at"])) for row in signals]
+
+
 def samples(rows: dict) -> dict:
     """
     Each measure one by one: what a run on measured fills draws from
@@ -121,20 +140,22 @@ def samples(rows: dict) -> dict:
         elif row["purpose"] == "close" and row["position_close_price"] is not None and quote["bid_close"] is not None:
             paid["close"].append(quote["bid_close"] - row["position_close_price"])
     return {
-        "order_seconds": _finite(_seconds(row["accepted_at"], row["sent_at"]) for row in orders),
+        "order_seconds": _order_seconds(orders),
         "slippage_buy": _finite(paid["open"]),
         "slippage_sell": _finite(paid["close"]),
-        "signal_delay_seconds": _finite(_seconds(row["decided_at"], row["signal_timestamp"]) for row in signals),
+        "signal_delay_seconds": _finite(_seconds(decided, row["signal_timestamp"]) for row, decided in _decided(signals, orders)),
     }
 
 
 def measure(rows: dict, clock: TradingClock) -> dict:
     """What WATA's orders took and cost, and the values a backtest would be given from them."""
     signals = rows.get("signals") or []
-    from_bar = _spread([_seconds(row["decided_at"], row["signal_timestamp"]) for row in signals])
-    from_receipt = _spread([_seconds(row["decided_at"], row["received_timestamp"]) for row in signals])
     orders = rows.get("orders") or []
-    order_seconds = _spread([_seconds(row["accepted_at"], row["sent_at"]) for row in orders], 3)
+    decided = _decided(signals, orders)
+    from_bar = _spread([_seconds(moment, row["signal_timestamp"]) for row, moment in decided])
+    from_receipt = _spread([_seconds(moment, row["received_timestamp"]) for row, moment in decided])
+    order_seconds = _spread(_order_seconds(orders), 3)
+    waited = len(_finite(_seconds(row["accepted_at"], row["sent_at"]) for row in orders)) - order_seconds["count"]
     measured = samples(rows)
     paid = {"open": measured["slippage_buy"], "close": measured["slippage_sell"]}
     every = paid["open"] + paid["close"]
@@ -167,7 +188,7 @@ def measure(rows: dict, clock: TradingClock) -> dict:
         "requests": len(requests),
         # From the signal's own time (a script's bar close, TradingView's alert) and from the web server's receipt.
         "signal_delay_seconds": {"from_signal": from_bar, "from_receipt": from_receipt},
-        "order_seconds": order_seconds,
+        "order_seconds": {**order_seconds, "left_out": waited, "left_out_over": ORDER_SECONDS_MOST},
         # Euros a turbo worse than the quote recorded when the order left (positive: worse).
         "slippage": slippage,
         "refusals": {
