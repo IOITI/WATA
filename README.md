@@ -1306,11 +1306,11 @@ The agent keeps what a later conversation needs as **entries of its memory** (`m
 
 Under the field a request is typed in:
 
-- **The model**: Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 or Fable 5.1, each with its prices and its window; one the key cannot use is greyed. A conversation goes on with the model of its last request; the settings give a new one's.
+- **The model**: Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.2 or Fable 5.1, each with its prices and its window; one the key cannot use is greyed. A conversation goes on with the model of its last request; the settings give a new one's.
 - **The effort**, from low to max: how much Claude thinks, and how many tools it calls, before it answers. The conversation's last, likewise.
 - **The context window**: how much of the model's window the conversation fills. Opened, the Claude API counts it as the next request would be sent (a count costs nothing): the system prompt, the tool definitions, Claude's thinking, the rest of the conversation split by its length, what context editing leaves out, and what the last answer used, cached or not.
 
-A model reads the notes of some others only: Opus 5.5 reads Sonnet 5.5's and Haiku 5.5's, Sonnet 5.5 Haiku 5.5's, Fable 5.1 Opus 5.5's. A switch to a model that cannot read the conversation's notes says so, and that model answers without them. Its first request also reads the whole conversation again, without the cache another model wrote.
+A model reads the notes of some others only: Opus 5.5 reads Sonnet 5.5's and Haiku 5.5's, Sonnet 5.5 Haiku 5.5's, Fable 5.1 Opus 5.5's, Fable 5.2 every one of theirs; no other model reads Fable 5.2's. A switch to a model that cannot read the conversation's notes says so, and that model answers without them. Its first request also reads the whole conversation again, without the cache another model wrote.
 
 ### Setting it up
 
@@ -1322,7 +1322,7 @@ A model reads the notes of some others only: Opus 5.5 reads Sonnet 5.5's and Hai
 |---|---|---|
 | `enabled` | `false` | Whether the agent is on |
 | `provider` | `anthropic` | The Claude API, the only provider for now |
-| `model` | `claude-opus-5-5` | A new conversation's model, Claude Opus 5.5; or Claude Sonnet 5.5, Claude Haiku 5.5, Claude Fable 5.1. Each request may choose another |
+| `model` | `claude-opus-5-5` | A new conversation's model, Claude Opus 5.5; or Claude Sonnet 5.5, Claude Haiku 5.5, Claude Fable 5.2, Claude Fable 5.1. Each request may choose another |
 | `effort` | `high` | A new conversation's effort: `low`, `medium`, `high`, `xhigh`, `max`. Each request may choose another |
 | `max_tool_calls` | `60` | Tool calls a request may make (5 to 200) |
 | `max_backtests` | `8` | Backtests a request may start, stress tests and checks included (0 to 30; with 0 it reads and proposes only) |

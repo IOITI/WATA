@@ -19,7 +19,7 @@ from src.logging_helper.redaction import register_secret
 
 logger = logging.getLogger(__name__)
 
-PRICES_OF = "2026-10"
+PRICES_OF = "2026-11"
 # Above this many tokens of prompt, Haiku 5.5 bills its second rate.
 LONG_PROMPT_TOKENS = 100_000
 CACHE_WRITE_5M = 1.25
@@ -71,6 +71,10 @@ MODELS = {model.id: model for model in (
     Model("claude-haiku-5-5", "Claude Haiku 5.5", 0.10, 0.50, 0.01, long_input=0.50, long_output=2.50,
           long_cache_read=0.05, fallbacks=False, updates=False,
           reads=("claude-haiku-5-5", "claude-sonnet-5", "claude-opus-4-8")),
+    # Released 2026-11-09: it reads every current model's thinking, and no other model reads its own.
+    Model("claude-fable-5-2", "Claude Fable 5.2", 8.0, 40.0, 0.20,
+          reads=("claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+                 "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5")),
     Model("claude-fable-5-1", "Claude Fable 5.1", 10.0, 50.0, 0.25,
           reads=("claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8")),
     Model("claude-opus-5", "Claude Opus 5", 5.0, 25.0, 0.50),

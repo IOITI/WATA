@@ -89,6 +89,9 @@ def test_a_model_reads_the_notes_of_the_models_it_can_and_says_which_it_cannot()
     assert claude.unread_by("claude-sonnet-5-5", writers) == ["claude-opus-5-5"]
     assert claude.unread_by("claude-haiku-5-5", writers) == ["claude-opus-5-5", "claude-sonnet-5-5"]
     assert claude.unread_by("claude-fable-5-1", writers) == ["claude-sonnet-5-5"]
+    # Fable 5.2 reads every current model's notes; no other model reads its own.
+    assert claude.unread_by("claude-fable-5-2", writers) == []
+    assert claude.unread_by("claude-opus-5-5", writers | {"claude-fable-5-2"}) == ["claude-fable-5-2"]
     assert transcript.thinking_written(LINES, claude.MODELS["claude-opus-5-5"].reads) == 550
 
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.83.0 - Claude Fable 5.2 for the AI agent
+
+**Release date:** not released
+
+- **Claude Fable 5.2** (`claude-fable-5-2`, released by Anthropic on 2026-11-09) can be chosen for a request, a new conversation's default, the debrief, the briefing and the triage. It costs $8 in and $40 out per million tokens, with cache reads at $0.20: less than Fable 5.1's $10 and $50. Its window is 1M tokens and its answers 128K.
+  - It reads the notes (thinking) of every model the agent offers: a conversation moved onto it keeps its reasoning.
+  - No other model reads its notes: a conversation moved from it to another model goes on without them, as the composer says before it is sent.
+  - Fable 5.1 stays, for the conversations that use it.
+- Prices noted as of 2026-11.
+
+**On the live path:** nothing; the admin alone.
+
+**Verification status:** tests of its prices, of which notes it reads, and the agent's and catalog's suites (952 passed). Not tried against the Claude API: "Test the connection" on the Configuration page reads the model's entry, which costs nothing.
+
 ## v0.82.0 - Backtests as Saxo serves the turbos: holes, frozen quotes, knock-outs, refusals
 
 **Release date:** 2026-11-09

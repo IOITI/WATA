@@ -10,7 +10,7 @@ No key holds "token" in its name: the editor masks such keys as secrets.
 from dataclasses import dataclass, fields
 
 PROVIDERS = ("anthropic",)
-MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1")
+MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2", "claude-fable-5-1")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 # name: (default, choices)

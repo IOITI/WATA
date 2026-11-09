@@ -102,6 +102,10 @@ def test_an_answer_costs_its_tokens_at_its_model_s_prices():
     expected = (1000 * 4 + 2000 * 20 + 100_000 * 0.20 + 4000 * 4 * 1.25 + 6000 * 4 * 2) / 1e6
     assert provider.cost_of(usage, "claude-opus-5-5") == pytest.approx(expected)
 
+    # Fable 5.2: $8 in, $40 out, $0.20 cache read; its writes $10 for five minutes and $16 for an hour.
+    fable = (1000 * 8 + 2000 * 40 + 100_000 * 0.20 + 4000 * 10 + 6000 * 16) / 1e6
+    assert provider.cost_of(usage, "claude-fable-5-2") == pytest.approx(fable)
+
     without_split = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 1000}
     assert provider.cost_of(without_split, "claude-sonnet-5-5") == pytest.approx(1000 * 2 * 1.25 / 1e6)
 

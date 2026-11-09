@@ -204,8 +204,8 @@ ADMIN_PARAMS = (
         path=f"{AGENT}.model", group="agent", label="Default model", kind="enum", choices=MODELS, optional=True,
         default="claude-opus-5-5",
         help="The model a new conversation starts with: each request may choose another under the field it is typed "
-             "in. Claude Opus 5.5 by default. Sonnet 5.5 costs half as much, Haiku 5.5 a fortieth, Fable 5.1 two and a "
-             "half times as much.",
+             "in. Claude Opus 5.5 by default. Sonnet 5.5 costs half as much, Haiku 5.5 a fortieth, Fable 5.2 twice as "
+             "much (Fable 5.1, which it replaces, two and a half times).",
         readers=(ADMIN,), risk=NONE,
         caveats=("A conversation goes on with the model of its last request.",
                  "A model reads the notes of some others only: a switch to one that cannot answers without them.")
