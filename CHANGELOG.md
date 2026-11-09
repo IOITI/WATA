@@ -2,7 +2,7 @@
 
 ## v0.82.0 - Backtests as Saxo serves the turbos: holes, frozen quotes, knock-outs, refusals
 
-**Release date:** not released
+**Release date:** 2026-11-09
 
 A review of how far a backtest's result can be believed, from one question: what becomes of an order when Saxo stops quoting a turbo for some minutes? The recorded data holds two kinds of outage:
 - **a hole**: Saxo flags the turbo (no market, a null bid), and the recorder writes no bar;
