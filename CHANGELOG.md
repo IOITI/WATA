@@ -2,7 +2,7 @@
 
 ## v0.84.0 - A purchase Saxo refuses for funds is sent again with fewer turbos
 
-**Release date:** not released
+**Release date:** 2026-11-11
 
 WATA sizes an order on the turbo's last quote and leaves one turbo aside. Saxo sends that quote only about every 30 s, and it checks the cash at its live price. In a fast market the live price is a few percent dearer, and an order sized on the whole account no longer fits: Saxo refuses it (`InsufficientFunds`) and the entry was lost.
 
