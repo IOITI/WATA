@@ -150,6 +150,32 @@ def test_the_bots_commands_are_switched_by_a_boolean(tmp_path, value, accepted):
             ConfigurationManager(str(path))
 
 
+@pytest.mark.parametrize("margins, refusal", [
+    ({}, None),
+    ({"funds_retry_percent": 4, "funds_retries": 2}, None),
+    ({"funds_retry_percent": 0}, None),
+    ({"funds_retry_percent": 2.5, "funds_retries": 3}, None),
+    ({"funds_retry_percent": -1}, "funds_retry_percent must be between 0 and 25"),
+    ({"funds_retry_percent": 30}, "funds_retry_percent must be between 0 and 25"),
+    ({"funds_retry_percent": "4"}, "funds_retry_percent must be between 0 and 25"),
+    ({"funds_retries": 4}, "funds_retries must be a whole number from 0 to 3"),
+    ({"funds_retries": 1.5}, "funds_retries must be a whole number from 0 to 3"),
+    ({"funds_retries": True}, "funds_retries must be a whole number from 0 to 3"),
+])
+def test_an_order_refused_for_funds_is_sent_again_within_bounds(tmp_path, margins, refusal):
+    with open("tests/test_config.json") as config_file:
+        config = json.load(config_file)
+    config["trade"]["config"]["buying_power"]["safety_margins"].update(margins)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+
+    if refusal is None:
+        ConfigurationManager(str(path))
+    else:
+        with pytest.raises(ValueError, match=refusal):
+            ConfigurationManager(str(path))
+
+
 @pytest.mark.parametrize("section, refusal", [
     ({"full_trading_level": True}, None),
     ({"full_trading_level": False}, None),

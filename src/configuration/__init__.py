@@ -6,6 +6,7 @@ import pytz
 
 from src.trade.account_guard import refusal as account_guard_refusal
 from src.trade.day_breakers import refusal as day_breakers_refusal
+from src.trade.funds_retry import refusal as funds_retry_refusal
 from src.trade.macro_calendar import NewsRule
 from src.trade.signal_sources import CONFIG_PATH as SIGNAL_SOURCES_PATH, refusal as signal_sources_refusal
 
@@ -457,6 +458,14 @@ class ConfigurationManager:
                 isinstance(max_spread, bool) or not isinstance(max_spread, (int, float)) or not 0 <= max_spread <= 100
             ):
                 error_msg = "Config field 'trade.config.turbo_preference.max_spread_percent' must be between 0 and 100 (0: no limit)"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # A purchase Saxo refuses for funds is sent again with fewer turbos (src/trade/funds_retry.py): 4 % and
+            # twice unless set
+            retry_error = funds_retry_refusal(self.get_config_value("trade.config.buying_power.safety_margins"))
+            if retry_error:
+                error_msg = f"Config field 'trade.config.buying_power.safety_margins': {retry_error}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 

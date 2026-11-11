@@ -365,6 +365,82 @@ def test_an_order_is_scaled_and_sized_as_live(now, confidence, spending_power, a
     assert units_for(settings, spending_power, ask, scale) == live_units
 
 
+@pytest.mark.parametrize("margin", [4.0, 8.0, 12.0, 2.5])
+@pytest.mark.parametrize("spending_power, ask", [(1_000.0, 5.05), (1_200.28, 10.294), (3_000.0, 13.9), (30.0, 10.1)])
+def test_an_order_sent_again_after_a_refusal_for_funds_is_sized_as_live(margin, spending_power, ask):
+    from src.trade.funds_retry import sizing_ask
+
+    config = config_with()
+    orchestrator = AsyncTradingOrchestrator(MagicMock(), MagicMock(), MagicMock(), Config(config), MagicMock(), MagicMock())
+    try:
+        live_units = orchestrator._calculate_bid_amount({"selected_instrument": {"latest_ask": ask}}, spending_power, 0.75,
+                                                        margin)
+    except InsufficientFundsException:
+        live_units = 0
+
+    assert units_for(from_config(config), spending_power, sizing_ask(ask, margin), 0.75) == live_units
+
+
+def test_the_live_trader_and_the_simulator_send_the_same_orders_after_refusals_for_funds():
+    from src.backtest.data import TurboRef, TurboSeries, sort_turbos
+    from src.backtest.simulator import SignalEvent
+
+    config = config_with()
+    sizing = config["trade"]["config"]["position_sizing"]
+    sizing["time_of_day_scaling"]["enabled"] = sizing["confidence_scaling"]["enabled"] = False
+    # Saxo's price when the orders arrive: 5.45, where the turbo's last quote said 5.05.
+    live_price, account = 5.45, 1_000.0
+
+    # Live: Saxo refuses every order the account does not cover at its price.
+    orchestrator = AsyncTradingOrchestrator(MagicMock(), MagicMock(), MagicMock(), Config(config), MagicMock(), MagicMock())
+    orchestrator.watchlist_client = MagicMock()
+    orchestrator.watchlist_client.get_best_turbo = AsyncMock(return_value={"selected_instrument": {
+        "uic": 7, "asset_type": "WarrantKnockOut", "latest_ask": 5.05, "latest_bid": 5.0,
+        "description": "NASDAQ 100 Turbo Long 24800", "symbol": "T7", "currency": "EUR",
+    }})
+    orchestrator.position_service.get_spending_power = AsyncMock(return_value=account)
+    orchestrator.position_service.find_position_by_order_id_with_retry = AsyncMock(
+        return_value={"PositionId": "p1", "PositionBase": {}, "DisplayAndFormat": {}},
+    )
+    orchestrator.db_order_manager.insert_turbo_order_data = AsyncMock()
+    orchestrator.db_position_manager.insert_turbo_open_position_data = AsyncMock()
+
+    async def saxo(*, amount, **order):
+        if amount * live_price > account:
+            raise async_services.OrderPlacementError(
+                "API error placing order", status_code=400,
+                saxo_error_details={"ErrorInfo": {"ErrorCode": "InsufficientFunds", "Message": "No"}},
+            )
+        return {"OrderId": "o1"}
+
+    orchestrator.order_service.place_market_order = AsyncMock(side_effect=saxo)
+    asyncio.run(orchestrator.execute_trade_signal("exchange", "1909050", "long"))
+    live_orders = [call.kwargs["amount"] for call in orchestrator.order_service.place_market_order.await_args_list]
+
+    # The backtest: the turbo quoted 5.00 / 5.05, then 5.40 / 5.45 from the bar the orders fill in.
+    day = paris("08:00").date()
+    turbo = TurboSeries(TurboRef(instrument_id=7, uic=7, asset_type="WarrantKnockOut", symbol="T7",
+                                 description="NASDAQ 100 Turbo Long 24800", issuer="Saxo", barrier=24_800,
+                                 direction="long", currency="EUR"))
+    for step in range(6 * 60 * 6):
+        moment = int(CLOCK.epoch(day, "08:00")) + 10 * step
+        if moment < CLOCK.epoch(day, "09:00:40"):
+            turbo.append(moment, 5.0, 5.0, 5.0, 5.0, 5.05, 5.05)
+        elif moment == CLOCK.epoch(day, "09:00:40"):
+            turbo.append(moment, 5.0, 5.4, 5.0, 5.4, 5.05, live_price)
+        else:
+            turbo.append(moment, 5.4, 5.4, 5.4, 5.4, live_price, live_price)
+    start, end = CLOCK.day_bounds(day)
+    data = DayData(day=day, start=start, end=end, indice="us100", turbos=sort_turbos({"long": [turbo]}))
+    simulator = Simulator(replace(from_config(config), capital=account), CLOCK)
+    simulator.run_day(data, [SignalEvent(1, "pine", "long", arrived_at=CLOCK.epoch(day, "09:00:30"),
+                                         alert_at=CLOCK.epoch(day, "09:00:30"), indice="us100")])
+    [trade] = simulator.trades
+    mirrored_orders = [attempt["units"] for attempt in simulator.signals[0]["refused_for_funds"]] + [trade["units"]]
+
+    assert live_orders == mirrored_orders == [197, 189, 182]
+
+
 def test_a_cash_reserve_leaves_its_share_aside_as_live():
     config = config_with()
     config["trade"]["config"]["buying_power"]["reserve_cash_percent"] = 20

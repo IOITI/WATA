@@ -206,8 +206,9 @@ _NOT_A_GUESS = ("hole",)
 def rests_on(trades: list[dict], signals: list[dict], days: list[dict]) -> dict:
     """
     What a run's result rests on beyond the recorded quotes: its trades by flag (each counted once per trade), the
-    share of trades with one that changed how they were priced, the entries Saxo would have refused for funds, and
-    the days recorded for less of their trading hours than the simulator's PARTIAL_SHARE.
+    share of trades with one that changed how they were priced, the entries Saxo would have refused for funds and
+    those bought only once their order was sent again with fewer turbos, and the days recorded for less of their
+    trading hours than the simulator's PARTIAL_SHARE.
     """
     flags = Counter(flag for trade in trades for flag in set(trade.get("flags") or []))
     priced = sum(1 for trade in trades if set(trade.get("flags") or []) - set(_NOT_A_GUESS))
@@ -217,6 +218,10 @@ def rests_on(trades: list[dict], signals: list[dict], days: list[dict]) -> dict:
         "trades_priced_off_quotes": priced,
         "share_percent": _rounded(priced / len(trades) * 100, 1) if trades else None,
         "funds_refused": sum(1 for signal in signals if signal.get("rule") == "funds_refused"),
+        # Bought once Saxo had refused their first orders for funds, with fewer turbos (src/trade/funds_retry.py).
+        "funds_retried": sum(
+            1 for signal in signals if signal.get("trade_id") is not None and signal.get("refused_for_funds")
+        ),
         "partial_days": [day["day"] for day in days if day.get("partial")],
     }
 
@@ -302,7 +307,8 @@ def histogram(values: list[float], bins: int = 24) -> list[dict]:
 _CODE = ("src/backtest", "src/ta_engine/replay.py", "src/ta_engine/rules.py", "src/ta_engine/runner.py",
          "src/ta_engine/tickers.py", "src/ta_engine/signals.py", "src/ta_engine/settings.py", "src/ta_engine/bars.py",
          "src/ta_engine/source.py", "src/price_recorder/bars.py", "src/price_recorder/range_bars.py",
-         "src/trade/async_services.py", "src/trade/fresh_quote.py", "src/trade/index_estimate.py",
+         "src/trade/async_services.py", "src/trade/fresh_quote.py", "src/trade/funds_retry.py",
+         "src/trade/index_estimate.py",
          "src/trade/macro_calendar.py", "src/trade/market_calendar.py", "src/trade/account_guard.py",
          "src/trade/day_breakers.py", "src/trade/close_intents.py", "src/admin/analysis.py", "src/admin/prices.py",
          "src/admin/ta_rules.py", "src/price_history/files.py")

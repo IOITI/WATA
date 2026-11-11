@@ -328,6 +328,15 @@ async def handle_trading_signal(
             if confidence is not None:
                 scale_info += f" (confidence: {confidence})"
             composer.add_text_section("Position Sizing", scale_info)
+        refused = result.get("refused_for_funds") or []
+        if refused:
+            # Sent again with fewer turbos after Saxo refused it for funds (src/trade/funds_retry.py).
+            bought = (result.get("order_details") or {}).get("order_amount")
+            composer.add_text_section(
+                "Refused for funds",
+                f"Saxo refused {', then '.join(str(units) for units in refused)} turbos for funds: "
+                f"{bought} bought at attempt {len(refused) + 1}",
+            )
 
         # Journaled before the notification: the trade is done whatever happens to the message.
         journal_signal(

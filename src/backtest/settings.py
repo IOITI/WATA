@@ -20,6 +20,7 @@ from src.ta_engine.settings import TaEngineSettings
 from src.trade.account_guard import AccountGuard
 from src.trade.day_breakers import DayBreakers
 from src.trade.fresh_quote import wait_for_fresh_quote
+from src.trade.funds_retry import MAX_PERCENT as MAX_FUNDS_RETRY_PERCENT, MAX_RETRIES as MAX_FUNDS_RETRIES, funds_retry
 from src.trade.index_estimate import followed_epic, index_between_quotes
 from src.trade.macro_calendar import NewsRule
 
@@ -159,6 +160,11 @@ FIELDS = (
           source="trade.config.buying_power.reserve_cash_percent"),
     Field("safety_units", "sizing", "number", "Turbos left out of each order, for safety", 0, 1000,
           source="trade.config.buying_power.safety_margins.bid_calculation"),
+    Field("funds_retry_percent", "sizing", "number",
+          "An order Saxo refuses for funds is sent again sized this much above the ask, more each time (0: never)",
+          0, MAX_FUNDS_RETRY_PERCENT, unit="%", source="trade.config.buying_power.safety_margins.funds_retry_percent"),
+    Field("funds_retries", "sizing", "integer", "Times an order refused for funds is sent again", 0, MAX_FUNDS_RETRIES,
+          source="trade.config.buying_power.safety_margins.funds_retries"),
     Field("time_scaling_enabled", "sizing", "boolean", "Smaller orders at some hours",
           source="trade.config.position_sizing.time_of_day_scaling.enabled"),
     Field("confidence_enabled", "sizing", "boolean", "Orders sized by the signal's confidence",
@@ -268,6 +274,10 @@ class BacktestSettings:
     funds_percent: float = 100
     reserve_cash_percent: float = 0
     safety_units: float = 1
+    # A purchase Saxo refuses for funds is sent again with fewer turbos (src/trade/funds_retry.py): never for the runs
+    # made before, which kept no such setting; a new run takes config.json's, 4 % and twice unless set.
+    funds_retry_percent: float = 0.0
+    funds_retries: int = 0
     time_scaling_enabled: bool = False
     time_periods: tuple[TimePeriod, ...] = ()
     confidence_enabled: bool = False
@@ -443,6 +453,8 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         funds_percent=buying.get("max_account_funds_to_use_percentage", 100),
         reserve_cash_percent=buying.get("reserve_cash_percent", 0),
         safety_units=(buying.get("safety_margins") or {"bid_calculation": 1}).get("bid_calculation", 1),
+        funds_retry_percent=funds_retry(buying).percent,
+        funds_retries=funds_retry(buying).retries,
         time_scaling_enabled=bool(time_scaling.get("enabled", False)),
         time_periods=tuple(
             TimePeriod(

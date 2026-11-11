@@ -747,6 +747,112 @@ def test_cached_spending_power_older_than_max_age_is_refetched(tmp_path):
     assert position_service.get_spending_power.await_count == 2
 
 
+# ── A purchase Saxo refuses for funds is sent again with fewer turbos (src/trade/funds_retry.py) ──
+
+def _refused_for_funds():
+    # As the order service raises Saxo's refusal of an order: its code under ErrorInfo.
+    return OrderPlacementError(
+        "API error placing order", status_code=400,
+        saxo_error_details={"ErrorInfo": {"ErrorCode": "InsufficientFunds", "Message": "Fonds insuffisants"}},
+    )
+
+
+def _amounts_sent(orchestrator):
+    calls = orchestrator.order_service.place_market_order.await_args_list
+    return [call.kwargs["amount"] for call in calls], [call.kwargs["context"].reason for call in calls]
+
+
+def test_an_order_refused_for_funds_is_sent_again_sized_above_the_ask(tmp_path):
+    # 1,000 € at an ask of 10.1, one turbo aside: 98; then sized on 10.504 (4 % above): 94.
+    orchestrator, _ = _orchestrator(tmp_path)
+    orchestrator.order_service.place_market_order.side_effect = [_refused_for_funds(), {"OrderId": "order-1"}]
+
+    result = asyncio.run(_execute(orchestrator))
+
+    amounts, reasons = _amounts_sent(orchestrator)
+    assert amounts == [98, 94]
+    assert reasons == [None, "Sent again with 94 turbos, sized 4 % above the ask: Saxo refused 98 for funds"]
+    assert result["order_details"]["order_amount"] == 94
+    assert result["refused_for_funds"] == [98]
+    orchestrator.db_order_manager.insert_turbo_order_data.assert_awaited_once()
+
+
+def test_an_order_refused_for_funds_every_time_is_given_up_after_the_retries(tmp_path):
+    orchestrator, _ = _orchestrator(tmp_path)
+    orchestrator.order_service.place_market_order.side_effect = [_refused_for_funds() for _ in range(5)]
+
+    with pytest.raises(OrderPlacementError):
+        asyncio.run(_execute(orchestrator))
+
+    # Twice by default: 4 % then 8 % above the ask (10.908: 90 turbos).
+    assert _amounts_sent(orchestrator)[0] == [98, 94, 90]
+    orchestrator.db_order_manager.insert_turbo_order_data.assert_not_awaited()
+
+
+def test_a_refusal_for_funds_saxo_gives_at_its_top_level_is_retried_too(tmp_path):
+    orchestrator, _ = _orchestrator(tmp_path)
+    top_level = InsufficientFundsException(
+        "Fonds insuffisants", saxo_error_details={"ErrorCode": "InsufficientFunds", "Message": "Fonds insuffisants"},
+    )
+    orchestrator.order_service.place_market_order.side_effect = [top_level, {"OrderId": "order-1"}]
+
+    result = asyncio.run(_execute(orchestrator))
+
+    assert _amounts_sent(orchestrator)[0] == [98, 94]
+    assert result["refused_for_funds"] == [98]
+
+
+@pytest.mark.parametrize("refusal", [
+    OrderPlacementError("API error placing order", status_code=409, saxo_error_details={"Message": "Conflict"}),
+    OrderPlacementError("API error placing order", status_code=400,
+                        saxo_error_details={"ErrorInfo": {"ErrorCode": "InstrumentNotTradable", "Message": "No"}}),
+    ApiRequestException("Unexpected request error: timed out"),
+])
+def test_an_order_refused_for_another_reason_is_not_sent_again(tmp_path, refusal):
+    orchestrator, _ = _orchestrator(tmp_path)
+    orchestrator.order_service.place_market_order.side_effect = [refusal, {"OrderId": "order-1"}]
+
+    with pytest.raises(type(refusal)):
+        asyncio.run(_execute(orchestrator))
+
+    assert _amounts_sent(orchestrator)[0] == [98]
+
+
+@pytest.mark.parametrize("retry", [{"funds_retry_percent": 0}, {"funds_retries": 0}])
+def test_no_order_is_sent_again_once_the_retry_is_switched_off(tmp_path, retry):
+    orchestrator, _ = _orchestrator(tmp_path, safety_margins={"bid_calculation": 1, **retry})
+    orchestrator.order_service.place_market_order.side_effect = [_refused_for_funds(), {"OrderId": "order-1"}]
+
+    with pytest.raises(OrderPlacementError):
+        asyncio.run(_execute(orchestrator))
+
+    assert _amounts_sent(orchestrator)[0] == [98]
+
+
+def test_an_order_sent_again_always_asks_for_fewer_turbos(tmp_path):
+    # 30 € at 10.1: 1 turbo. At 4 % above the ask it is still 1; the next order would be no smaller, so none is sent.
+    async def thirty_euros():
+        return 30.0
+
+    orchestrator, _ = _orchestrator(tmp_path, get_spending_power=thirty_euros)
+    orchestrator.order_service.place_market_order.side_effect = [_refused_for_funds(), {"OrderId": "order-1"}]
+
+    with pytest.raises(OrderPlacementError):
+        asyncio.run(_execute(orchestrator))
+
+    assert _amounts_sent(orchestrator)[0] == [1]
+
+
+def test_the_sizing_of_an_order_sent_again_is_the_sizing_on_a_dearer_ask(tmp_path):
+    orchestrator, _ = _orchestrator(tmp_path)
+    turbo = {"selected_instrument": {"latest_ask": 10.1}}
+
+    assert orchestrator._calculate_bid_amount(turbo, 1000.0, 1.0) == 98
+    assert orchestrator._calculate_bid_amount(turbo, 1000.0, 1.0, 0.0) == 98
+    assert orchestrator._calculate_bid_amount(turbo, 1000.0, 1.0, 4.0) == 94
+    assert orchestrator._calculate_bid_amount(turbo, 1000.0, 1.0, 8.0) == 90
+
+
 # ── AsyncPerformanceMonitor: closing positions ──
 
 OPEN_POSITION = {

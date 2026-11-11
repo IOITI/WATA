@@ -28,6 +28,20 @@ def saxo_error_parts(details) -> tuple[str | None, str | None]:
     return (None if code is None else str(code)), (None if message is None else str(message))
 
 
+# Saxo's code for an order the account's cash does not cover.
+INSUFFICIENT_FUNDS = "InsufficientFunds"
+
+
+def refused_for_funds(error: BaseException) -> bool:
+    """
+    Whether Saxo refused a request because the account's cash does not cover it: its code, under ``ErrorInfo`` (how
+    it refuses an order) or at the top level. WATA's own "Insufficient funds", raised before any order is sent,
+    carries no answer from Saxo and does not count.
+    """
+    details = getattr(error, "saxo_error_details", None)
+    return details is not None and saxo_error_parts(details)[0] == INSUFFICIENT_FUNDS
+
+
 def _saxo_suffix(saxo_error_details) -> str:
     """What Saxo answered, as the messages of these exceptions end: its message and its code."""
     if not saxo_error_details:

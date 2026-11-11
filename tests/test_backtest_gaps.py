@@ -26,8 +26,8 @@ import json
 import os
 import sys
 import types
-from dataclasses import replace
-from datetime import date
+from dataclasses import asdict, replace
+from datetime import date, datetime
 
 import pytest
 
@@ -47,7 +47,7 @@ from src.backtest.figures import rests_on  # noqa: E402
 from src.backtest.reconciliation import reconcile  # noqa: E402
 from src.backtest.run import TESTED, _day_status  # noqa: E402
 from src.backtest.selection import NotSelected, select_turbo  # noqa: E402
-from src.backtest.settings import from_config  # noqa: E402
+from src.backtest.settings import BacktestSettings, from_config  # noqa: E402
 from src.backtest.simulator import SignalEvent, Simulator, stored  # noqa: E402
 from src.price_recorder.bars import BarBuilder, Quote  # noqa: E402
 from src.price_recorder.export import COLUMNS  # noqa: E402
@@ -330,11 +330,75 @@ def test_an_order_that_costs_more_than_the_account_holds_is_refused_as_saxo_refu
     turbos, covered = stream.recorded("22:00", ref(1))
 
     simulator = run(day_of(turbos.values(), covered), [signal(1, "long", "09:00:30"), close_of_day()],
-                    replace(NEW_RUN, capital=1_000.0))
+                    replace(NEW_RUN, capital=1_000.0, funds_retries=0))
 
     # Sized on the ask standing at the choice (5.05: 197 turbos), it fills at the next quote (5.45): 1,073.65 €.
     assert simulator.trades == []
     assert fates(simulator)[1] == ("failed", "funds_refused")
+    assert simulator.signals[0]["reason"] == (
+        "Order rejected: 197 turbos at 5.45 cost 1073.65, the account held 1000.00 [InsufficientFunds]"
+    )
+    assert "refused_for_funds" not in simulator.signals[0]
+
+
+def test_an_order_refused_for_funds_is_sent_again_with_fewer_turbos_as_live():
+    stream = Stream()
+    stream.quote(1, "09:00:02", 5.00)
+    stream.quote(1, "09:00:44", 5.40)
+    turbos, covered = stream.recorded("22:00", ref(1))
+
+    # A new run sends it again as the live trader does: 4 % then 8 % above the ask it was sized on.
+    assert (NEW_RUN.funds_retry_percent, NEW_RUN.funds_retries) == (4.0, 2)
+    simulator = run(day_of(turbos.values(), covered), [signal(1, "long", "09:00:30"), close_of_day()],
+                    replace(NEW_RUN, capital=1_000.0))
+
+    # 197 turbos at 5.45 cost 1,073.65 €, 189 (sized on 5.252) 1,030.05 €, 182 (sized on 5.454) 991.90 €.
+    [trade] = simulator.trades
+    assert trade["units"] == 182 and trade["entry"]["price"] == 5.45
+    assert fates(simulator)[1] == ("executed", None)
+    refused = [{"units": 197, "price": 5.45, "cost": 1073.65}, {"units": 189, "price": 5.45, "cost": 1030.05}]
+    assert simulator.signals[0]["refused_for_funds"] == refused
+    assert trade["entry"]["refused_for_funds"] == refused
+    assert trade["notes"][0] == (
+        "Bought at attempt 3: Saxo refused 197 turbos at 5.45 (1,073.65 €), then 189 turbos at 5.45 (1,030.05 €) "
+        "for funds, the account holding 1,000.00 €; sized again 8 % above the ask"
+    )
+    # Each order left once Saxo had refused the one before: an order's time later each time.
+    filled, selected = (datetime.fromisoformat(trade["entry"][key]) for key in ("filled_at", "selected_at"))
+    assert (filled - selected).total_seconds() == 3 * NEW_RUN.order_seconds
+
+
+def test_an_order_refused_for_funds_every_time_says_each_attempt():
+    stream = Stream()
+    stream.quote(1, "09:00:02", 5.00)
+    stream.quote(1, "09:00:44", 6.00)
+    turbos, covered = stream.recorded("22:00", ref(1))
+
+    simulator = run(day_of(turbos.values(), covered), [signal(1, "long", "09:00:30"), close_of_day()],
+                    replace(NEW_RUN, capital=1_000.0))
+
+    assert simulator.trades == []
+    assert fates(simulator)[1] == ("failed", "funds_refused")
+    assert simulator.signals[0]["reason"] == (
+        "Order rejected 3 times for funds, the account holding 1000.00: 197 turbos at 6.05 cost 1191.85, then 189 "
+        "turbos at 6.05 cost 1143.45, then 182 turbos at 6.05 cost 1101.10 [InsufficientFunds]"
+    )
+    assert [attempt["units"] for attempt in simulator.signals[0]["refused_for_funds"]] == [197, 189, 182]
+
+
+def test_a_run_made_before_the_retry_still_refuses_as_it_did():
+    stream = Stream()
+    stream.quote(1, "09:00:02", 5.00)
+    stream.quote(1, "09:00:44", 5.40)
+    turbos, covered = stream.recorded("22:00", ref(1))
+    # Its settings.json has no retry: read again, it sends nothing again.
+    kept = asdict(replace(NEW_RUN, capital=1_000.0))
+    del kept["funds_retry_percent"], kept["funds_retries"]
+
+    simulator = run(day_of(turbos.values(), covered), [signal(1, "long", "09:00:30"), close_of_day()],
+                    BacktestSettings.from_dict(kept))
+
+    assert simulator.trades == []
     assert simulator.signals[0]["reason"] == (
         "Order rejected: 197 turbos at 5.45 cost 1073.65, the account held 1000.00 [InsufficientFunds]"
     )
@@ -691,7 +755,11 @@ def test_a_day_recorded_for_less_of_its_trading_hours_is_said_partly_recorded():
 
 def test_what_a_run_rests_on_counts_its_trades_flags_refusals_and_partial_days():
     trades = [{"flags": []}, {"flags": ["hole"]}, {"flags": ["hole", "sold_after_hole"]}, {"flags": ["knocked_out"]}]
-    signals = [{"rule": "funds_refused"}, {"rule": "duplicate"}, {"rule": "funds_refused"}]
+    signals = [
+        {"rule": "funds_refused"}, {"rule": "duplicate"}, {"rule": "funds_refused"},
+        {"rule": None, "trade_id": 3, "refused_for_funds": [{"units": 197, "price": 5.45, "cost": 1073.65}]},
+        {"rule": None, "trade_id": 4},
+    ]
     days = [{"day": "2026-10-22"}, {"day": "2026-10-23", "partial": True}]
 
     found = rests_on(trades, signals, days)
@@ -700,7 +768,8 @@ def test_what_a_run_rests_on_counts_its_trades_flags_refusals_and_partial_days()
         "trades": 4, "flags": {"hole": 2, "knocked_out": 1, "sold_after_hole": 1},
         # A hole met while held changed nothing of how the trade was priced; a sale after it did.
         "trades_priced_off_quotes": 2, "share_percent": 50.0,
-        "funds_refused": 2, "partial_days": ["2026-10-23"],
+        # Refused for funds every time, and bought once sent again with fewer turbos.
+        "funds_refused": 2, "funds_retried": 1, "partial_days": ["2026-10-23"],
     }
 
 

@@ -434,6 +434,30 @@ SIZE = (
         readers=(TRADER,), consumers=("backtests",), risk=TRADING,
     ),
     Param(
+        path=f"{BUYING_POWER}.safety_margins.funds_retry_percent", group="sizing",
+        label="Sized again after a refusal for funds", kind="number", unit="%", minimum=0, maximum=25,
+        optional=True, default=4,
+        help="When Saxo refuses a purchase because the account's cash does not cover it, the order is sent again "
+             "sized this much above the ask, and twice as much the second time. 0: it is not sent again.",
+        readers=(TRADER,), consumers=("backtests",), risk=TRADING,
+        effects=("Saxo checks the cash at its live price. In a fast market that price is a few percent above the "
+                 "quote the order was sized on, and an order for the whole account no longer fits.",),
+        related=(f"{BUYING_POWER}.safety_margins.funds_retries", f"{BUYING_POWER}.safety_margins.bid_calculation",
+                 f"{BUYING_POWER}.max_account_funds_to_use_percentage"),
+        caveats=("On the backtest of 15 October to 11 November 2026 (run 20261111-130923-8c1c4c), 22 of the 54 orders "
+                 "cost more than the account at their fill, 0.7 to 13.9 % above the ask they were sized on. At 4 % and "
+                 "twice, 21 of them were bought with 96 to 98 % of the account.",
+                 "Each attempt is a new order, sent a second or more after the one Saxo refused.",),
+    ),
+    Param(
+        path=f"{BUYING_POWER}.safety_margins.funds_retries", group="sizing",
+        label="Times sent again after a refusal for funds", kind="int", minimum=0, maximum=3, optional=True, default=2,
+        help="How many times at most a purchase Saxo refused for funds is sent again, each time with fewer turbos. "
+             "0: never.",
+        readers=(TRADER,), consumers=("backtests",), risk=TRADING,
+        related=(f"{BUYING_POWER}.safety_margins.funds_retry_percent",),
+    ),
+    Param(
         path=f"{SIZING}.time_of_day_scaling.enabled", group="sizing", label="Size by time of day", kind="bool",
         optional=True, default=False,
         help="A position's size scaled by the period of the day it is taken in.",

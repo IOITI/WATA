@@ -31,6 +31,17 @@ describe('what a run rests on beyond the recorded quotes', () => {
     ])
   })
 
+  it('says the entries bought only once their order was sent again with fewer turbos', () => {
+    const retried: BacktestRestsOn = { ...NOTHING, trades: 3, share_percent: 0, funds_refused: 1, funds_retried: 2 }
+    expect(restsOnSentences(retried)).toEqual([
+      'Each of its 3 trades was bought and sold at a recorded quote.',
+      '1 entry refused as Saxo refuses one: the turbos cost more than the account held at the price paid.',
+      '2 entries bought with fewer turbos, as WATA sends an order again once Saxo refused it for funds.',
+    ])
+    // A run of before has no count of them.
+    expect(restsOnSentences({ ...NOTHING, trades: 1, share_percent: 0 })).toHaveLength(1)
+  })
+
   it('shows a trade’s flags in the order they are said, a hole last', () => {
     expect(tradeFlags({ flags: ['hole', 'index_priced', 'frozen_quote'] })).toEqual(['Frozen quote', 'Priced from the index', 'Held through a hole'])
     expect(tradeFlags({})).toEqual([])

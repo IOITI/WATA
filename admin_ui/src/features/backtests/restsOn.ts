@@ -88,6 +88,12 @@ export function restsOnSentences(restsOn: BacktestRestsOn): string[] {
         'the turbos cost more than the account held at the price paid.',
     )
   }
+  const retried = restsOn.funds_retried ?? 0
+  if (retried > 0) {
+    sentences.push(
+      `${plural(retried, 'entry', 'entries')} bought with fewer turbos, as WATA sends an order again once Saxo refused it for funds.`,
+    )
+  }
   const partial = restsOn.partial_days
   if (partial.length > 0) {
     const named = partial.slice(0, 3).map((day) => formatDay(day)).join(', ')

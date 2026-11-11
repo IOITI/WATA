@@ -2136,6 +2136,8 @@ export interface BacktestRestsOn {
   share_percent: number | null
   /** The entries Saxo would have refused, their cost more than the account held. */
   funds_refused: number
+  /** The entries bought only once their order was sent again with fewer turbos (src/trade/funds_retry.py); absent from runs of before. */
+  funds_retried?: number
   /** The days the recorder listened to less than 95 % of the trading hours. */
   partial_days: string[]
 }

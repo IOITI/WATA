@@ -70,6 +70,7 @@ from src.backtest.selection import NotSelected, select_turbo
 from src.backtest.settings import NEXT, BacktestSettings
 from src.trade.close_intents import MAX_RETRY_SECONDS, retry_after
 from src.trade.fresh_quote import FreshQuotes
+from src.trade.funds_retry import FundsRetry, next_amount, sizing_ask
 from src.trade.index_estimate import (
     MOST_STEP,
     QUOTE_FRESH_SECONDS,
@@ -469,43 +470,49 @@ class Simulator:
             self.trader_free_at = max(selection_at, self.trader_free_at)
             return
 
-        fill_at = selection_at + self.fills.order_seconds()
-        fill_boundary = ceil10(fill_at)
-        quote = choice.series.quote_at(fill_boundary)
-        if quote is None or quote[1] is None:
-            closed += self._sell_after_failed_entry(event, fill_at)
-            self._signal(
-                event, decided, FAILED, ORDER_REJECTED, "Order rejected: the turbo was not quoted when the order arrived",
-                closed_trade_ids=closed, candidates=counted, selection=choice.candidates,
-            )
-            self.trader_free_at = max(fill_at, self.trader_free_at)
-            return
-        bid, ask = quote
-        later = self._next_quote(choice.series, fill_boundary)
-        fill_ask = later[1] if later is not None and later[1] is not None else ask
-        notes, flags = [], []
-        if ask > 0 and abs(fill_ask / ask - 1) >= NOTED_REQUOTE_SHARE:
-            notes.append(f"Priced at the turbo's next quote, {fill_ask:g}: the ask standing at the fill was {ask:g}")
-        if later is None:
-            # No new quote by then: a frozen ask is priced from the index, as Saxo fills at its live price.
-            fill_ask = self._unfrozen(choice.series, fill_boundary, ask, ask - bid, notes, flags, "ask")
-        # Fixed: the ask at the fill (or the next one Saxo sent), a slippage worse; measured: the quote when the order
-        # left, a drawn slippage worse.
-        price = round(self.fills.purchase(choice.ask, fill_ask), 6)
-        cost = units * price
-        commission = self._commission(cost)
-        if cost + commission > self.cash + 1e-9:
+        retry = FundsRetry(settings.funds_retry_percent, settings.funds_retries)
+        refused: list[tuple[int, float, float]] = []  # (turbos, price, cost) of each order Saxo refused for funds
+        departed, departure_ask = selection_at, choice.ask
+        while True:
+            fill_at = departed + self.fills.order_seconds()
+            fill_boundary = ceil10(fill_at)
+            filled = self._purchase_fill(choice, fill_boundary, departure_ask)
+            if filled is None:
+                closed += self._sell_after_failed_entry(event, fill_at)
+                self._signal(
+                    event, decided, FAILED, ORDER_REJECTED,
+                    "Order rejected: the turbo was not quoted when the order arrived",
+                    closed_trade_ids=closed, candidates=counted, selection=choice.candidates, **_refused_record(refused),
+                )
+                self.trader_free_at = max(fill_at, self.trader_free_at)
+                return
+            bid, ask, price, notes, flags = filled
+            cost = units * price
+            commission = self._commission(cost)
+            if cost + commission <= self.cash + 1e-9:
+                break
             # Sized on the ask standing at the choice, it costs more at the price it fills at: Saxo refuses an order
-            # the cash does not cover (the live sizing leaves one turbo aside and counts neither commission nor slippage).
-            closed += self._sell_after_failed_entry(event, fill_at)
-            self._signal(
-                event, decided, FAILED, FUNDS_REFUSED,
-                f"Order rejected: {units} turbos at {price:g} cost {cost + commission:.2f}, the account held "
-                f"{self.cash:.2f} [InsufficientFunds]",
-                closed_trade_ids=closed, candidates=counted, selection=choice.candidates,
-            )
-            self.trader_free_at = max(fill_at, self.trader_free_at)
-            return
+            # the cash does not cover (the live sizing leaves one turbo aside and counts neither commission nor
+            # slippage). Live, it is then sent again with fewer turbos (src/trade/funds_retry.py).
+            refused.append((units, price, cost + commission))
+            attempt = len(refused)
+            smaller = 0
+            if retry.on and attempt <= retry.retries:
+                sized = units_for(settings, self.cash, sizing_ask(choice.ask, retry.margin(attempt)), scale)
+                smaller = next_amount(units, sized)
+            if smaller <= 0:
+                closed += self._sell_after_failed_entry(event, fill_at)
+                self._signal(
+                    event, decided, FAILED, FUNDS_REFUSED, _funds_refusal(refused, self.cash),
+                    closed_trade_ids=closed, candidates=counted, selection=choice.candidates,
+                    **(_refused_record(refused) if attempt > 1 else {}),
+                )
+                self.trader_free_at = max(fill_at, self.trader_free_at)
+                return
+            # Saxo's refusal came back with the fill's moment: the next order leaves then, on the ask standing then.
+            units, departed, departure_ask = smaller, fill_at, ask
+        if refused:
+            notes.insert(0, _bought_after_refusals(refused, self.cash, retry.margin(len(refused))))
 
         self.cash -= cost + commission
         self._entries_today += 1
@@ -533,6 +540,7 @@ class Simulator:
                 "price": price,
                 "asset_price": self._asset_price(fill_at),
                 "candidates": choice.candidates,
+                **_refused_record(refused),
             },
             cursor=choice.series.first_from(fill_boundary),
             notes=notes,
@@ -542,6 +550,7 @@ class Simulator:
         self.positions.append(position)
         self._signal(
             event, decided, EXECUTED, None, None, trade_id=position.trade_id, closed_trade_ids=closed, candidates=counted,
+            **_refused_record(refused),
         )
         self.trader_free_at = fill_at
         if settings.reserve_cash_percent > 0:
@@ -967,6 +976,30 @@ class Simulator:
         position.pending_sale = {"reason": reason, "kind": "explicit", "signal_id": signal_id, "since": moment}
         return position.trade_id
 
+    def _purchase_fill(self, choice, fill_boundary: int, departure_ask: float) -> tuple | None:
+        """
+        What a buy order filled at ``fill_boundary`` pays, as (bid, ask, price, notes, flags): the bid and ask
+        standing then, the price (the ask at the fill or the next one Saxo sent, a frozen ask priced from the index,
+        as the fills say), and what says how it was priced. ``departure_ask`` is the ask standing when the order left,
+        which measured fills price from. None when the turbo was not quoted at the fill.
+        """
+        quote = choice.series.quote_at(fill_boundary)
+        if quote is None or quote[1] is None:
+            return None
+        bid, ask = quote
+        later = self._next_quote(choice.series, fill_boundary)
+        fill_ask = later[1] if later is not None and later[1] is not None else ask
+        notes, flags = [], []
+        if ask > 0 and abs(fill_ask / ask - 1) >= NOTED_REQUOTE_SHARE:
+            notes.append(f"Priced at the turbo's next quote, {fill_ask:g}: the ask standing at the fill was {ask:g}")
+        if later is None:
+            # No new quote by then: a frozen ask is priced from the index, as Saxo fills at its live price.
+            fill_ask = self._unfrozen(choice.series, fill_boundary, ask, ask - bid, notes, flags, "ask")
+        # Fixed: the ask at the fill (or the next one Saxo sent), a slippage worse; measured: the quote when the order
+        # left, a drawn slippage worse.
+        price = round(self.fills.purchase(departure_ask, fill_ask), 6)
+        return bid, ask, price, notes, flags
+
     def _next_quote(self, series: TurboSeries, boundary: int) -> tuple[float, float | None] | None:
         """
         The turbo's next quote after the one standing at ``boundary``, when orders
@@ -1063,6 +1096,32 @@ def stored(waiting: list[SignalEvent]) -> list[SignalEvent]:
             continue
         store[event.indice] = event
     return sorted(store.values(), key=lambda event: (event.arrived_at, event.id))
+
+
+def _refused_record(refused: list[tuple[int, float, float]]) -> dict:
+    """The orders Saxo refused for funds before the last one, as a signal and a trade keep them (none: nothing)."""
+    if not refused:
+        return {}
+    return {"refused_for_funds": [
+        {"units": units, "price": price, "cost": round(cost, 2)} for units, price, cost in refused
+    ]}
+
+
+def _funds_refusal(refused: list[tuple[int, float, float]], cash: float) -> str:
+    """Why an entry failed when Saxo refused each of its orders for funds: as a single refusal was always said."""
+    if len(refused) == 1:
+        units, price, cost = refused[0]
+        return (f"Order rejected: {units} turbos at {price:g} cost {cost:.2f}, the account held {cash:.2f} "
+                "[InsufficientFunds]")
+    attempts = ", then ".join(f"{units} turbos at {price:g} cost {cost:.2f}" for units, price, cost in refused)
+    return f"Order rejected {len(refused)} times for funds, the account holding {cash:.2f}: {attempts} [InsufficientFunds]"
+
+
+def _bought_after_refusals(refused: list[tuple[int, float, float]], cash: float, margin: float) -> str:
+    """The note of a trade bought once Saxo had refused its first orders for funds."""
+    attempts = ", then ".join(f"{units} turbos at {price:g} ({cost:,.2f} €)" for units, price, cost in refused)
+    return (f"Bought at attempt {len(refused) + 1}: Saxo refused {attempts} for funds, the account holding "
+            f"{cash:,.2f} €; sized again {margin:g} % above the ask")
 
 
 def _counted(candidates: list[dict]) -> dict:

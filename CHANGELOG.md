@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.84.0 - A purchase Saxo refuses for funds is sent again with fewer turbos
+
+**Release date:** not released
+
+WATA sizes an order on the turbo's last quote and leaves one turbo aside. Saxo sends that quote only about every 30 s, and it checks the cash at its live price. In a fast market the live price is a few percent dearer, and an order sized on the whole account no longer fits: Saxo refuses it (`InsufficientFunds`) and the entry was lost.
+
+- **The backtest of 15 October to 11 November 2026 (run 20261111-130923-8c1c4c)** had 22 of its 54 orders refused this way. Their fills were 0.7 to 13.9 % above the ask the order was sized on, 2.9 % at the median. For example, signal #97 on 26 October sized 115 turbos on an ask of 10.294 and filled at 10.454 for 1,202.21 €, with 1,200.28 € in the account.
+- **Live never showed it:** orders were 3 to 5 turbos, so the turbo left aside was 20 to 33 % of the order. Saxo refused none of the 42 order requests of 13 October to 11 November for funds.
+- **Now, once Saxo refuses a purchase for funds, it is sent again** sized on the ask raised by 4 %, then 8 %, each time with fewer turbos than the order refused. The trader never retries more than twice, and only for a refusal for funds.
+  - `src/trade/funds_retry.py`, shared by the trader and the backtests.
+  - `trade.config.buying_power.safety_margins.funds_retry_percent` (4 unless set; 0: never sent again) and `funds_retries` (2 unless set, at most 3), on the Configuration page under Buying power.
+  - At 4 % and twice, 21 of the run's 22 refused entries were bought, with 96 to 98 % of the account. Entries in a calm market still use the whole share of the account.
+  - Each attempt is its own order, a second or more after the one refused, kept in `order_request` with its reason. The Orders page shows the refusals with the order that went through after them, and the trade's Telegram message says how many turbos Saxo refused.
+- **Backtests send it again as the live trader does** (parity tested). Each attempt fills an order's time after the refusal, priced at its own next quote. The trade's note, the signal (`refused_for_funds`) and the summary's trust panel (`rests_on.funds_retried`) say so.
+  - A refusal after every attempt lists each one.
+  - Runs made before send nothing again, remakes included: their settings say nothing of it. Start a new run to see the retry.
+  - The two settings are in the Backtests form, `backtest_options` and the AI agent's proposable settings.
+
+**On the live path:** the trader, from its next start. Every container that loads the configuration's check is recreated by the deploy. Every backtest run reads as made with older code (the simulator changed); making them again is the operator's choice.
+
+**Verification status:** unit tests of the retry live (a fake order service refusing for funds under `ErrorInfo` and at the top level, other refusals not retried, the retry off, never more turbos), the parity of the live trader and the simulator on the same refusing prices (197, 189, then 182 turbos bought), the backtest's days, the configuration's bounds, the trust sentence. Not tried against Saxo: the refusal's shape is the one WATA records for orders (`ErrorInfo.ErrorCode`).
+
 ## v0.83.0 - Claude Fable 5.2 for the AI agent
 
 **Release date:** 2026-11-09

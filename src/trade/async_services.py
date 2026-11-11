@@ -20,6 +20,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from dataclasses import replace as dataclass_replace
 from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
 
@@ -51,10 +52,12 @@ from .exceptions import (
     DatabaseOperationException,
     SaxoApiError,
     OrderPlacementError,
+    refused_for_funds,
     saxo_error_parts,
 )
 from .close_intents import CloseIntent, CloseIntents
 from .fresh_quote import FreshQuotes, opened_at, wait_for_fresh_quote
+from .funds_retry import funds_retry, next_amount, sizing_ask
 from .index_estimate import (
     INDEX_FRESH_SECONDS,
     TURBO_DIRECTIONS,
@@ -1275,6 +1278,8 @@ class AsyncTradingOrchestrator:
         self.order_tracker = order_tracker
         self.buying_power_config = self.config.get_config_value("trade.config.buying_power", {})
         self.safety_margins = self.buying_power_config.get("safety_margins", {"bid_calculation": 1})
+        # A purchase Saxo refuses for funds is sent again with fewer turbos (src/trade/funds_retry.py).
+        self.funds_retry = funds_retry(self.buying_power_config)
         self.reserve_cash_percent = self.buying_power_config.get("reserve_cash_percent", 0)
         # 0 = always ask Saxo for the balance when sizing an order.
         self.balance_cache_max_age_seconds = self.buying_power_config.get("balance_cache_max_age_seconds", 0)
@@ -1317,12 +1322,16 @@ class AsyncTradingOrchestrator:
         logger.info("Position scale: tod=%.2f × conf=%.2f = %.2f", tod, conf, combined)
         return combined
 
-    def _calculate_bid_amount(self, turbo_info: dict, spending_power: float, position_scale: float = 1.0) -> int:
+    def _calculate_bid_amount(
+        self, turbo_info: dict, spending_power: float, position_scale: float = 1.0, margin_percent: float = 0.0,
+    ) -> int:
         ask_price = turbo_info["selected_instrument"].get("latest_ask")
         if ask_price is None:
             ask_price = turbo_info["selected_instrument"].get("quote", {}).get("Ask")
         if not ask_price or ask_price <= 0:
             raise ValueError(f"Invalid ask price: {ask_price}")
+        # After Saxo refused an order for funds: sized on the ask raised by a margin (src/trade/funds_retry.py).
+        ask_price = sizing_ask(ask_price, margin_percent)
 
         reserve = self.reserve_cash_percent
         max_pct = self.buying_power_config.get("max_account_funds_to_use_percentage", 100)
@@ -1477,6 +1486,7 @@ class AsyncTradingOrchestrator:
         confirmed_position = None
         turbo_info = None
         amount = None
+        refused_amounts: list[int] = []  # the orders Saxo refused for funds before the one it took
         trace = OrderTrace(OPEN)
 
         try:
@@ -1503,16 +1513,36 @@ class AsyncTradingOrchestrator:
             amount = self._calculate_bid_amount(turbo_info, spending_power, position_scale)
             timestamps["amount_calculated"] = time.time()
 
-            # 4. Place order
+            # 4. Place order: sent again with fewer turbos while Saxo refuses it for funds (src/trade/funds_retry.py)
             context = self._entry_context(keywords, turbo_info, signal_uuid)
-            trace.sent()
-            validated_order = await self.order_service.place_market_order(
-                uic=turbo_info["selected_instrument"]["uic"],
-                asset_type=turbo_info["selected_instrument"]["asset_type"],
-                amount=amount,
-                buy_sell="Buy",
-                context=context,
-            )
+            while True:
+                trace.sent()
+                try:
+                    validated_order = await self.order_service.place_market_order(
+                        uic=turbo_info["selected_instrument"]["uic"],
+                        asset_type=turbo_info["selected_instrument"]["asset_type"],
+                        amount=amount,
+                        buy_sell="Buy",
+                        context=context,
+                    )
+                    break
+                except Exception as refusal:
+                    attempt = len(refused_amounts) + 1
+                    smaller = self._amount_after_refusal(refusal, turbo_info, spending_power, position_scale, amount, attempt)
+                    if smaller is None:
+                        raise
+                    margin = self.funds_retry.margin(attempt)
+                    logger.warning(
+                        "Saxo refused %d turbos for funds: sending %d, sized %g %% above the ask (retry %d of %d)",
+                        amount, smaller, margin, attempt, self.funds_retry.retries,
+                    )
+                    refused_amounts.append(amount)
+                    context = dataclass_replace(
+                        context,
+                        reason=f"Sent again with {smaller} turbos, sized {margin:g} % above the ask: "
+                               f"Saxo refused {amount} for funds",
+                    )
+                    amount = smaller
             self.invalidate_spending_power()
             order_id = validated_order["OrderId"]
             timestamps["order_placed"] = time.time()
@@ -1570,6 +1600,7 @@ class AsyncTradingOrchestrator:
                 "raw_timestamps": timestamps,
                 "position_scale": position_scale,
                 "confidence": confidence,
+                "refused_for_funds": refused_amounts,
                 "message": f"Successfully executed trade for {keywords}.",
             }
 
@@ -1593,6 +1624,24 @@ class AsyncTradingOrchestrator:
                     trace.failed(detail=f"{type(e).__name__}: {e}", cancel_accepted=cancelled)
                     self._track_entry_without_position(trace, keywords, amount, turbo_info)
             raise
+
+    def _amount_after_refusal(
+        self, refusal: BaseException, turbo_info: dict, spending_power: float, position_scale: float, amount: int,
+        attempt: int,
+    ) -> int | None:
+        """
+        How many turbos the ``attempt``-th order after a refusal (1, 2...) asks for, once Saxo refused ``amount`` for
+        funds: sized on the ask raised by the retry's margin, always fewer than ``amount``. None when it is not sent
+        again: another refusal, the retries used up, or nothing smaller fits. Never raises.
+        """
+        retry = self.funds_retry
+        if not retry.on or attempt > retry.retries or not refused_for_funds(refusal):
+            return None
+        try:
+            sized = self._calculate_bid_amount(turbo_info, spending_power, position_scale, retry.margin(attempt))
+        except Exception:
+            return None
+        return next_amount(amount, sized) or None
 
     @staticmethod
     def _entry_context(keywords, turbo_info: dict, signal_uuid) -> OrderContext:
