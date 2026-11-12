@@ -49,6 +49,9 @@ BETWEEN_QUOTES = "between quotes"
 REASON_MOST_CHARACTERS = 128 - len("Performance ()")
 # How a turbo's bid follows the index, by the direction it was bought for.
 TURBO_DIRECTIONS = {"long": 1, "short": -1}
+# What the Capital.com feed records when its section names no instrument: the feed's DEFAULT_INSTRUMENTS
+# (src/capital_feed/settings.py, which this module does not import), held to it by tests/test_index_estimate.py.
+FEED_DEFAULT_INSTRUMENTS = ({"epic": "US100", "label": "us100"},)
 
 
 def index_between_quotes(position_management: dict | None) -> bool:
@@ -56,12 +59,24 @@ def index_between_quotes(position_management: dict | None) -> bool:
     return (position_management or {}).get("index_between_quotes") is True
 
 
+def feed_instruments(capital_feed: dict | None) -> list:
+    """
+    The instruments the Capital.com feed records, as its section names them: the feed's own default (US100, labelled
+    us100) when the section names none, as the feed itself reads it (``src/capital_feed/settings.py``). Until
+    v0.85.0 a section without instruments named no index here, while the feed recorded US100.
+    """
+    feed = capital_feed if isinstance(capital_feed, dict) else {}
+    if "instruments" not in feed:
+        return [dict(instrument) for instrument in FEED_DEFAULT_INSTRUMENTS]
+    return feed["instruments"] if isinstance(feed["instruments"], list) else []
+
+
 def index_epic(capital_feed: dict | None, indice: str) -> str | None:
     """The Capital.com instrument an indice's index is read from, while the feed records it (``trade.config.capital_feed``)."""
     feed = capital_feed if isinstance(capital_feed, dict) else {}
     if not feed.get("enabled"):
         return None
-    return next((str(instrument["epic"]) for instrument in feed.get("instruments") or []
+    return next((str(instrument["epic"]) for instrument in feed_instruments(feed)
                  if isinstance(instrument, dict) and instrument.get("label") == indice and instrument.get("epic")), None)
 
 

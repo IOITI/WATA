@@ -173,12 +173,31 @@ def register(server, research) -> None:
         }
 
     @research_tool(server, calls, name="data_execution", title="What WATA's orders took and cost", read_only=True)
-    async def data_execution(start_day: date | None = None, end_day: date | None = None) -> dict:
-        """Measured on WATA's own orders (the last three months by default): delays from a signal to the trader's
-        decision and from an order to Saxo's acceptance, the price paid against the recorded quote (slippage), the
-        refusals by hour, and the values a backtest would take from them (signal_delay_seconds, order_seconds,
-        slippage), suggested only from 10 measures."""
-        return compacted(await backtest_requests.execution(research.queries, research.timezone, start_day, end_day))
+    async def data_execution(start_day: date | None = None, end_day: date | None = None, part: str = "orders",
+                             offset: int = 0, limit: int = DEFAULT_PAGE) -> dict:
+        """Measured on WATA's own orders (the last three months by default). part="orders": delays from a signal to
+        the trader's decision and from an order to Saxo's acceptance, the price paid against the recorded quote
+        (slippage), the refusals by hour, and the values a backtest would take from them (signal_delay_seconds,
+        order_seconds, slippage), suggested only from 10 measures. part="ledger": what the real trades lost between
+        their signal and their fills, in points of their result (delay, entry slippage against the ask the order
+        was sized on, exit slippage against the price the sale was decided on, the spread apart), with the signal's
+        way to WATA and Saxo's times, in all, by exit, by what an exit was decided on and by signal source.
+        part="trades": the same, trade by trade (offset, limit)."""
+        if part == "orders":
+            return compacted(await backtest_requests.execution(research.queries, research.timezone, start_day, end_day))
+        if part not in ("ledger", "trades"):
+            raise Refused('part is "orders", "ledger" or "trades"')
+        from src.admin.execution_ledger import LedgerPeriodRefused, period_ledger
+
+        try:
+            found = await period_ledger(research.queries, research.timezone, start_day, end_day)
+        except LedgerPeriodRefused as e:
+            raise Refused(str(e)) from None
+        refuse_lockbox(research.journal, date.fromisoformat(found["from"]), date.fromisoformat(found["to"]))
+        trades = found.pop("trades")
+        if part == "ledger":
+            return compacted(found)
+        return compacted({"from": found["from"], "to": found["to"], **page(trades, offset, limit)})
 
     @research_tool(server, calls, name="data_position", title="One of WATA's positions, whole", read_only=True)
     async def data_position(position_id: str) -> dict:

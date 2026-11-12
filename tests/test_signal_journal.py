@@ -127,6 +127,8 @@ def test_journal_writes_in_the_background_and_keeps_the_signal_details():
     assert entry["outcome"] == "executed"
     assert (entry["position_id"], entry["order_id"]) == ("42", "order-1")
     assert entry["received_timestamp"] == "2026-10-12T08:00:00.500Z"
+    # When the alert fired where it was raised: TradingView's {{timenow}}, its signal_timestamp being the bar's open.
+    assert entry["alert_timestamp"] == "2026-10-12T08:00:00Z"
     assert entry["decided_at"].tzinfo is not None
 
 

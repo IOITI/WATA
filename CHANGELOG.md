@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.85.0 - What execution cost each trade, and exits on the index that work on the server
+
+**Release date:** not released yet
+
+What a real trade loses between its signal and its fills was not measured: nothing compared the price a sale was decided on with the price it got, nor split a trade's cost into its causes. And the exits judged on the index between Saxo's quotes (v0.76.0) never worked on the server.
+
+- **The execution ledger.** For each closed trade, from what WATA already recorded and the turbo's recorded quotes:
+  - its times: the signal's way to WATA, WATA's decision, Saxo's acceptance and fill, and a sale's attempts;
+  - its costs, in points of its result:
+    - the delay: the turbo's recorded ask when the purchase left, against when the signal was raised;
+    - the entry slippage: the price paid above the ask the order was sized on, a quote up to 30 s old;
+    - the exit slippage: the price sold at under the one the sale was decided on (Saxo's bid, or the index's estimate);
+    - the spread, shown apart since it is already in the result.
+  - The figures are given in all, by exit, by what an exit was decided on and by signal source.
+  - Shown on the Orders page as "What execution cost" (`GET /api/execution`) and in the MCP's `data_execution` (`part` `ledger`, or `trades` trade by trade), so WATA's AI agent reads it too.
+  - In the admin alone (`src/admin/execution_ledger.py`): no backtest turns stale for it.
+- **When a signal's alert fired is kept** (`signal_alert_time`, beside the journal): TradingView's `{{timenow}}`, since its `signal_timestamp` is the bar's open. How long TradingView took to deliver a signal is known from this release on; the engine's signals are timed from their bar close.
+- **Exits judged on the index now follow the index when the feed's section names no instrument.**
+  - The Capital.com feed records US100 by default, but the code that picks the index read only the instruments listed, so `index_between_quotes` followed no index. Switched on, it did nothing, live and in the backtests: a run with it on gave exactly the run with it off (12 Nov 2026).
+  - The feed's default now counts (`feed_instruments` in `src/trade/index_estimate.py`), as it does for the paper days' and real positions' index (`index_asset`).
+  - The setting itself stays off unless switched on.
+- **A shadow rule's readiness no longer forgets its signals each morning.** It said "no signal journaled yet" after each daily restart of the engine until the rule's next alert. It now reads the rule's newest journaled signal (`ta_signal`).
+
+**On the live path:** the trader journals the alert's moment in the background, after the journal's row, and nothing is awaited for it. The position monitor follows the index when `index_between_quotes` is switched on. The deploy recreates every container that loads `src/trade/index_estimate.py`. Every backtest run reads as made with older code, since that module is in the backtests' code digest; making them again is the operator's choice.
+
+**Verification status:**
+- Unit tests of the ledger: the costs, a trade decided on the index, a trade with nothing recorded, the figures, the rows read and the period.
+- The route, the MCP part (lock box included), the journal's write and the feed's default held to the feed's.
+- The new SQL run on a real PostgreSQL 16: the ledger's queries, `ta_signal` absent, the rule states and the alert's insert.
+- The interface's suite.
+- Not seen on the server's data yet.
+
 ## v0.84.0 - A purchase Saxo refuses for funds is sent again with fewer turbos
 
 **Release date:** 2026-11-11

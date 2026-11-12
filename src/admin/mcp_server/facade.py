@@ -48,6 +48,8 @@ class ReadQueries:
         "ta_engine_state",
         # Saxo's order requests and one position whole, never the requests' bodies (src/admin/queries.py).
         "order_attempts", "position_record",
+        # What the real trades lost between their signal and their fills (src/admin/execution_ledger.py).
+        "execution_ledger_rows",
     })
 
     def __init__(self, queries):

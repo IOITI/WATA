@@ -244,6 +244,25 @@ async def list_orders(
     return await request.app.state.ctx.queries.list_orders(start=start, end=end, limit=limit)
 
 
+@router.get("/execution")
+async def execution_ledger(
+    request: Request,
+    start: date | None = Query(None, alias="from"),
+    end: date | None = Query(None, alias="to"),
+):
+    """
+    What each real trade lost between its signal and its fills (src/admin/execution_ledger.py): its times, its delay,
+    slippage at entry and at exit and its spread, in points of its result; in all, by exit and by signal source.
+    """
+    from src.admin.execution_ledger import LedgerPeriodRefused, period_ledger
+
+    ctx = request.app.state.ctx
+    try:
+        return await period_ledger(ctx.queries, ctx.settings.timezone, start, end)
+    except LedgerPeriodRefused as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
 @router.get("/journal")
 async def signal_journal(
     request: Request,

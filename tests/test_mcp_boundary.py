@@ -39,6 +39,8 @@ ALLOWED_IMPORTS = (
     "src.admin.order_requests",
     # Pure: a run's trades as R-multiples, for LuxAlgo's prop-firm simulator (backtest_result part r_series).
     "src.admin.propfirm_check",
+    # Pure but for its SQL: what the real trades lost between their signal and their fills (data_execution's ledger).
+    "src.admin.execution_ledger",
     # Whether a script can become a signal rule: its reports read, Claude's run tests kept beside the operator's.
     "src.admin.rule_checks",
     "src.backtest.clock", "src.ta_engine.runner", "src.ta_engine.replay", "src.ta_engine.bars", "src.ta_engine.rules",

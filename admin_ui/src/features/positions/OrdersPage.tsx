@@ -23,6 +23,7 @@ import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 
 import { ORDER_CSV, orderColumns } from './columns'
+import { ExecutionLedgerPanel } from './ExecutionLedgerPanel'
 import { OrderTimeline } from './OrderTimeline'
 import { entryFigures } from './orderLife'
 import type { EntryFigures } from './orderLife'
@@ -135,6 +136,7 @@ export function OrdersPage() {
         {page && (
           <div className={cn('space-y-4 transition-opacity', ordersQuery.isPlaceholderData && 'opacity-60')}>
             <EntryTiles figures={figures} refused={refused} timeZone={timezone} />
+            <ExecutionLedgerPanel params={params} />
             <div className="space-y-2">
               <AdvancedDataTable<OrderRow>
                 // The search starts over when a link brings another order.

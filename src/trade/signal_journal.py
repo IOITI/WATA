@@ -58,6 +58,8 @@ class SignalJournal:
                 "confidence": signal.get("confidence"),
                 "signal_timestamp": signal.get("signal_timestamp"),
                 "received_timestamp": signal.get("received_timestamp"),
+                # When the alert fired where it was raised: the time the signal took to reach WATA (signal_alert_time).
+                "alert_timestamp": signal.get("alert_timestamp"),
                 "decided_at": datetime.now(pytz.utc),
                 "outcome": outcome,
                 "reason": reason,

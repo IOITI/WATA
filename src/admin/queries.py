@@ -1110,12 +1110,18 @@ class AdminQueries:
         return row
 
     async def ta_rule_states(self) -> dict[str, dict]:
-        """Each rule as the TA engine runs it, by rule id."""
+        """
+        Each rule as the TA engine runs it, by rule id. Its last alert is the newer of the engine's (kept in memory,
+        so none after each daily restart) and of its journaled signals (``ta_signal``): until v0.85.0 a shadow rule
+        that alerted the day before read "no signal journaled yet" every morning until its next alert.
+        """
         rows = await self._fetch_optional(
             """
-            SELECT rule_id, updated_at, state, detail, mode, script_version, bars, last_bar_time,
-                   last_alert_at, figures
-            FROM ta_rule_state
+            SELECT s.rule_id, s.updated_at, s.state, s.detail, s.mode, s.script_version, s.bars, s.last_bar_time,
+                   GREATEST(s.last_alert_at, (SELECT max(t.raised_at) FROM ta_signal t WHERE t.rule_id = s.rule_id))
+                       AS last_alert_at,
+                   s.figures
+            FROM ta_rule_state s
             """
         )
         states = {}
@@ -1524,6 +1530,12 @@ class AdminQueries:
     async def execution_rows(self, start: datetime, end: datetime) -> dict:
         """What WATA's orders took and cost between two moments: the rows src/backtest/execution_calibration.py measures."""
         from src.backtest.execution_calibration import read_rows
+
+        return await read_rows(self._fetch_optional, start, end)
+
+    async def execution_ledger_rows(self, start: datetime, end: datetime) -> dict:
+        """What each position opened between two moments lost between its signal and its fills: src/admin/execution_ledger.py."""
+        from src.admin.execution_ledger import read_rows
 
         return await read_rows(self._fetch_optional, start, end)
 

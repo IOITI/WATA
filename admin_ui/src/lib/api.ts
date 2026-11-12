@@ -58,6 +58,7 @@ import type {
   DataAssets,
   DataProviders,
   DukascopyProviderDetails,
+  ExecutionLedger,
   ExecutionTimings,
   Exits,
   Experiments,
@@ -282,6 +283,9 @@ export const api = {
   performance: (params: DateRangeParams = {}) =>
     request<Performance>('GET', `/api/performance${query({ ...params })}`),
   exits: (params: DateRangeParams = {}) => request<Exits>('GET', `/api/exits${query({ ...params })}`),
+  /** What the real trades lost between their signal and their fills: delay, slippage, spread, Saxo's times. */
+  executionLedger: (params: DateRangeParams = {}) =>
+    request<ExecutionLedger>('GET', `/api/execution${query({ ...params })}`),
   /** The daily report's figures: of today, or as of ``day`` (YYYY-MM-DD). */
   report: (day?: string) => request<Report>('GET', `/api/report${query({ day })}`),
   journal: (params: DateRangeParams = {}) =>

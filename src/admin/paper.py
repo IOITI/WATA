@@ -49,6 +49,7 @@ from src.admin.live_drift import live_days, warning
 from src.admin.processes import QUEUED, RUNNING
 from src.backtest.clock import TradingClock
 from src.backtest.execution import missing
+from src.trade.index_estimate import index_epic
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +73,8 @@ def index_asset(config: dict, indice: str) -> dict:
     history while the feed is off. The live paper days, and a real position's chart, are drawn on it.
     """
     feed = ((config.get("trade") or {}).get("config") or {}).get("capital_feed") or {}
-    epic = next((instrument.get("epic") for instrument in feed.get("instruments") or []
-                 if feed.get("enabled") and instrument.get("label") == indice and instrument.get("epic")), None)
+    # The feed's own default instruments count when its section names none (src/trade/index_estimate.py).
+    epic = index_epic(feed, indice)
     return {"provider": "capital", "key": epic} if epic else {"provider": "dukascopy", "key": indice}
 
 

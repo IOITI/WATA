@@ -719,6 +719,78 @@ export interface Exits {
 
 export type NamedGroupStats = GroupStats & { group: string }
 
+/** A measure of the execution ledger over trades (src/admin/execution_ledger.py): none counted, all null. */
+export interface LedgerFigures {
+  count: number
+  median: number | null
+  mean: number | null
+  p90: number | null
+  sum: number | null
+}
+
+/** One real trade's times (seconds) and costs (points of its result, a cost positive). */
+export interface LedgerTrade {
+  position_id: string
+  action: string | null
+  instrument_name: string | null
+  opened_at: string | null
+  closed_at: string | null
+  result_percent: number | null
+  exit_group: string
+  source: string
+  decided_on: string | null
+  signal_to_received: number | null
+  received_to_order: number | null
+  order_to_accepted: number | null
+  accepted_to_fill: number | null
+  sale_attempts: number | null
+  sale_to_fill: number | null
+  delay_percent: number | null
+  entry_slippage_percent: number | null
+  exit_slippage_percent: number | null
+  spread_percent: number | null
+  cost_percent: number | null
+  price_paid: number | null
+  ask_decided: number | null
+  price_sold: number | null
+  price_decided: number | null
+}
+
+export interface LedgerGroup {
+  group: string
+  trades: number
+  result_percent: LedgerFigures
+  cost_percent: LedgerFigures
+  signal_to_received: LedgerFigures
+  entry_slippage_percent: LedgerFigures
+  exit_slippage_percent: LedgerFigures
+}
+
+export type LedgerMeasure =
+  | 'signal_to_received'
+  | 'received_to_order'
+  | 'order_to_accepted'
+  | 'accepted_to_fill'
+  | 'sale_attempts'
+  | 'sale_to_fill'
+  | 'delay_percent'
+  | 'entry_slippage_percent'
+  | 'exit_slippage_percent'
+  | 'spread_percent'
+  | 'cost_percent'
+  | 'result_percent'
+
+/** What WATA's real trades lost between their signal and their fills (``GET /api/execution``). */
+export interface ExecutionLedger {
+  from: string
+  to: string
+  trades: LedgerTrade[]
+  summary: { trades: number } & Record<LedgerMeasure, LedgerFigures>
+  by_exit: LedgerGroup[]
+  by_decided_on: LedgerGroup[]
+  by_source: LedgerGroup[]
+}
+
 export interface LiveBreakdowns {
   by_confidence: NamedGroupStats[]
   by_source: NamedGroupStats[]

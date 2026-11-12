@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { Order, OrderRequest, Position, Refusal, Session } from '@/lib/types'
+import type { ExecutionLedger, LedgerFigures, Order, OrderRequest, Position, Refusal, Session } from '@/lib/types'
 
 import { OrdersPage } from './OrdersPage'
 import { PositionsPage } from './PositionsPage'
@@ -133,6 +133,68 @@ const OLD = {
 
 let requests: string[] = []
 
+const NO_FIGURES: LedgerFigures = { count: 0, median: null, mean: null, p90: null, sum: null }
+const measured = (median: number, count = 3): LedgerFigures => ({ count, median, mean: median, p90: median, sum: median * count })
+const EMPTY_LEDGER: ExecutionLedger = {
+  from: '2026-10-01',
+  to: '2026-10-30',
+  trades: [],
+  summary: {
+    trades: 0,
+    signal_to_received: NO_FIGURES,
+    received_to_order: NO_FIGURES,
+    order_to_accepted: NO_FIGURES,
+    accepted_to_fill: NO_FIGURES,
+    sale_attempts: NO_FIGURES,
+    sale_to_fill: NO_FIGURES,
+    delay_percent: NO_FIGURES,
+    entry_slippage_percent: NO_FIGURES,
+    exit_slippage_percent: NO_FIGURES,
+    spread_percent: NO_FIGURES,
+    cost_percent: NO_FIGURES,
+    result_percent: NO_FIGURES,
+  },
+  by_exit: [],
+  by_decided_on: [],
+  by_source: [],
+}
+const LEDGER: ExecutionLedger = {
+  ...EMPTY_LEDGER,
+  summary: {
+    ...EMPTY_LEDGER.summary,
+    trades: 3,
+    signal_to_received: measured(14.9),
+    order_to_accepted: measured(0.25),
+    delay_percent: measured(0.4),
+    entry_slippage_percent: measured(0.6),
+    exit_slippage_percent: measured(1.2),
+    spread_percent: measured(0.3),
+    cost_percent: measured(2.2),
+  },
+  by_exit: [
+    {
+      group: 'Stop-loss',
+      trades: 2,
+      result_percent: measured(-8.5, 2),
+      cost_percent: measured(2.9, 2),
+      signal_to_received: NO_FIGURES,
+      entry_slippage_percent: measured(0.6, 2),
+      exit_slippage_percent: measured(1.6, 2),
+    },
+  ],
+  by_source: [
+    {
+      group: 'TradingView',
+      trades: 3,
+      result_percent: measured(-3),
+      cost_percent: measured(2.2),
+      signal_to_received: measured(14.9),
+      entry_slippage_percent: measured(0.6),
+      exit_slippage_percent: measured(1.2),
+    },
+  ],
+}
+
 function serve(
   orders: Order[],
   {
@@ -140,6 +202,7 @@ function serve(
     positionOrders = [BUY, SELL],
     refusals = undefined as Refusal[] | undefined,
     positionRequests = undefined as OrderRequest[] | undefined,
+    ledger = EMPTY_LEDGER,
   } = {},
 ) {
   requests = []
@@ -152,6 +215,7 @@ function serve(
       const url = new URL(path, 'http://admin.test')
       if (url.pathname === '/api/orders') return json({ items: orders, total: orders.length, refusals })
       if (url.pathname === '/api/positions') return json({ items: [position], total: 1 })
+      if (url.pathname === '/api/execution') return json(ledger)
       if (url.pathname === `/api/positions/${position.position_id}`) {
         return json({ position, orders: positionOrders, requests: positionRequests, requests_total: positionRequests?.length })
       }
@@ -277,6 +341,30 @@ describe('the orders table', () => {
     expect(within(slowest).getByText('Order 5012')).toBeInTheDocument()
     const without = screen.getByText('Without a position').parentElement as HTMLElement
     expect(within(without).getByText('1')).toBeInTheDocument()
+  })
+
+  it('says what execution cost the trades of the period, in all, by cause and by exit', async () => {
+    serve([BUY, SELL], { ledger: LEDGER })
+    renderAt('/orders')
+
+    const lost = (await screen.findByText('Lost to execution')).parentElement as HTMLElement
+    expect(within(lost).getByText('+2.20 pt')).toBeInTheDocument()
+    expect(within(lost).getByText(/over 3 trades/)).toBeInTheDocument()
+    const exit = screen.getByText('Exit slippage', { selector: 'p, span, div, dt' }).parentElement as HTMLElement
+    expect(within(exit).getByText('+1.20 pt')).toBeInTheDocument()
+    const stops = screen.getByText('Stop-loss').closest('tr') as HTMLElement
+    expect(within(stops).getByText('−8.50 %')).toBeInTheDocument()
+    expect(within(stops).getByText('+1.60 pt')).toBeInTheDocument()
+    expect(screen.getByText(/Signals reached WATA in, typically: TradingView 15 s/)).toBeInTheDocument()
+    expect(requests.some((path) => path.startsWith('/api/execution?from='))).toBe(true)
+  })
+
+  it('says when no trade was closed in the period', async () => {
+    serve([BUY])
+    renderAt('/orders')
+
+    expect(await screen.findByText('No trade was closed in this period.')).toBeInTheDocument()
+    expect(screen.queryByText('Lost to execution')).not.toBeInTheDocument()
   })
 
   it('says that older orders have no moments instead of showing empty figures', async () => {

@@ -8,6 +8,7 @@ import pytest
 
 from src.trade.index_estimate import (
     BETWEEN_QUOTES,
+    FEED_DEFAULT_INSTRUMENTS,
     INDEX_FRESH_SECONDS,
     LEAST_MOVES,
     MIN_MOVE_POINTS,
@@ -17,6 +18,7 @@ from src.trade.index_estimate import (
     TurboSensitivity,
     between_quotes_reason,
     estimated_bid,
+    feed_instruments,
     followed_epic,
     index_between_quotes,
     index_epic,
@@ -147,6 +149,28 @@ def test_the_index_followed_is_the_feeds_of_the_one_indice_the_trader_takes():
     assert followed_epic(FEED, {"us100": "1909050", "de40": "1"}) is None
     assert followed_epic({**FEED, "enabled": False}, {"us100": "1909050"}) is None
     assert followed_epic(None, None) is None
+
+
+def test_a_feed_section_naming_no_instrument_follows_the_feeds_own_default():
+    # The server's section named none: the feed recorded US100, and until v0.85.0 no index was followed.
+    assert index_epic({"enabled": True}, "us100") == "US100"
+    assert followed_epic({"enabled": True}, {"us100": "1909050"}) == "US100"
+    assert index_epic({"enabled": True}, "de40") is None
+    assert index_epic({"enabled": False}, "us100") is None
+    # A list given is the list: an empty one names nothing (the feed refuses it).
+    assert index_epic({"enabled": True, "instruments": []}, "us100") is None
+    assert feed_instruments({"instruments": "US100"}) == []
+
+
+def test_the_default_is_the_feeds_own():
+    from src.capital_feed.settings import DEFAULT_INSTRUMENTS
+
+    assert [dict(instrument) for instrument in FEED_DEFAULT_INSTRUMENTS] == [
+        {"epic": instrument.epic, "label": instrument.label} for instrument in DEFAULT_INSTRUMENTS
+    ]
+    # Each call gets its own copies: a caller changing one changes nothing for the next.
+    feed_instruments({})[0]["epic"] = "changed"
+    assert feed_instruments({})[0]["epic"] == "US100"
 
 
 @pytest.mark.parametrize("reason", [

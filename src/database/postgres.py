@@ -336,6 +336,13 @@ CREATE TABLE IF NOT EXISTS signal_journal (
     order_id           VARCHAR(64)
 );
 
+-- When a signal's alert fired where it was raised (TradingView's {{timenow}}, the engine's sending), beside the
+-- journal (whose signal_timestamp is TradingView's bar open): the time a signal took to reach WATA. Since v0.85.0.
+CREATE TABLE IF NOT EXISTS signal_alert_time (
+    signal_uuid        VARCHAR(64) PRIMARY KEY,
+    alert_timestamp    TIMESTAMPTZ NOT NULL
+);
+
 -- What became of each order sent to Saxo, and when, as the service that sent it
 -- saw it. Written in the background for the admin interface; nothing trades on it.
 CREATE TABLE IF NOT EXISTS order_execution (
@@ -1035,6 +1042,17 @@ class AsyncDbSignalJournalManager:
             normalized.get("position_id"),
             normalized.get("order_id"),
         )
+        # When the alert fired, apart: a signal without one keeps its journal row all the same.
+        alert = _normalize_temporal_fields(entry, datetime_fields=frozenset({"alert_timestamp"})).get("alert_timestamp")
+        if alert is not None:
+            await self.db.execute(
+                """
+                INSERT INTO signal_alert_time (signal_uuid, alert_timestamp) VALUES ($1, $2)
+                ON CONFLICT (signal_uuid) DO NOTHING
+                """,
+                normalized["signal_uuid"],
+                alert,
+            )
 
 
 class AsyncDbOrderExecutionManager:

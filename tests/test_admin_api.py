@@ -54,6 +54,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/orders"),
     ("GET", "/api/performance"),
     ("GET", "/api/exits"),
+    ("GET", "/api/execution"),
     ("GET", "/api/report"),
     ("GET", "/api/journal"),
     ("GET", "/api/signals"),
@@ -397,6 +398,20 @@ class FakeQueries:
         self._check()
         self.calls.append(("closed_positions", start, end))
         return [CLOSED_POSITION]
+
+    async def execution_ledger_rows(self, start, end):
+        self._check()
+        self.calls.append(("execution_ledger_rows", start, end))
+        return {"positions": [{
+            "position_id": "5001", "action": "long", "instrument_uic": 1, "instrument_name": "Turbo",
+            "position_open_price": 10.1, "position_close_price": 9.2, "position_total_performance_percent": -8.9,
+            "position_close_reason": "Performance (Stoploss (-7%) hit at -7.4%)",
+            "execution_time_open": datetime(2026, 10, 13, 7, 0, 15, tzinfo=timezone.utc),
+            "execution_time_close": datetime(2026, 10, 13, 7, 10, tzinfo=timezone.utc),
+            "buy_sent_at": None, "buy_accepted_at": None, "buy_price_seen": 10.0, "signal_uuid": None,
+            "signal_timestamp": None, "received_timestamp": None, "first_sale_at": None, "sale_requested_at": None,
+            "sale_price_seen": 9.4, "sale_reason": None, "sale_accepted_at": None,
+        }], "alerts": [], "engine": [], "quotes": []}
 
     async def execution_rows(self, start, end):
         self._check()
@@ -3756,6 +3771,19 @@ def test_the_execution_of_wata_s_orders_is_measured_over_local_days(client, ctx,
                                      datetime(2026, 10, 14, 22, 0, tzinfo=timezone.utc))
     assert client.get("/api/backtests/execution?from=2026-10-14&to=2026-10-13").status_code == 422
     assert client.get("/api/backtests/execution").json()["requests"] == 1
+
+
+def test_the_real_trades_say_what_execution_cost_them_over_local_days(client, ctx):
+    found = client.get("/api/execution?from=2026-10-13&to=2026-10-14").json()
+
+    assert (found["from"], found["to"], found["summary"]["trades"]) == ("2026-10-13", "2026-10-14", 1)
+    trade = found["trades"][0]
+    assert (trade["position_id"], trade["exit_group"]) == ("5001", "Stop-loss")
+    assert trade["entry_slippage_percent"] == pytest.approx(1.0) and trade["exit_slippage_percent"] == pytest.approx(1.98, abs=0.01)
+    assert ctx.queries.calls[-1] == ("execution_ledger_rows", datetime(2026, 10, 12, 22, 0, tzinfo=timezone.utc),
+                                     datetime(2026, 10, 14, 22, 0, tzinfo=timezone.utc))
+    assert client.get("/api/execution?from=2026-10-14&to=2026-10-13").status_code == 422
+    assert client.get("/api/execution").json()["summary"]["trades"] == 1
 
 
 def test_the_form_reads_what_was_recorded_each_day(client, ctx, backtests, history):

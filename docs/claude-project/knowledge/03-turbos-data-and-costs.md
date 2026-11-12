@@ -35,6 +35,7 @@ So WATA's exits are tiny in index terms. On a 4–5 € long, the day target is 
   - On a 4–5 € turbo the usual spread is 0.2–0.25 % of the stake and the wide one 0.6–0.9 %: more than the +0.5 % day target.
 - **Real fills sit at the recorded quotes.** Real entry minus the backtest's, on 21 paired positions of 13–20 Oct: median −0.003 €, mean +0.005 €. Hence a backtest slippage of **0.005 € per turbo** as normal, and **0.01** as the stress.
   - `data_execution`'s "slippage" (median 0.036 €) is measured against the price WATA saw when the order left, which is sometimes stale: it overstates the cost.
+  - Since v0.85.0, `data_execution` with `part: "ledger"` (or `"trades"`, trade by trade) says what each real trade lost between its signal and its fills, in points of its result: the delay, the entry slippage, the exit slippage and the spread, by exit and by signal source, with how long signals took to reach WATA.
 - **A round trip costs** the spread plus two slippages:
   - ≈ 0.02 € (≈ 2.3 index points, 0.8 bp of the index) at the usual spread;
   - ≈ 0.045 € (≈ 5 points) at the wide one;

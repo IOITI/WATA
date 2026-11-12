@@ -843,6 +843,50 @@ class FakeQueries:
         ]
         return {"signals": signals, "orders": orders, "quotes": quotes, "requests": requests}
 
+    async def execution_ledger_rows(self, start, end):
+        """
+        The rows the execution ledger reads (src/admin/execution_ledger.py): each closed position with its orders,
+        the ask its purchase was sized on and the bid its sale was decided on a little better than its fills, its
+        signal raised 5 to 40 s before it reached WATA, and made-up quotes of then.
+        """
+        rng = random.Random(17)
+        rows, alerts, quotes = [], [], []
+        for position in self.positions:
+            opened = position.get("execution_time_open")
+            if position["position_status"] != "Closed" or opened is None or not start <= opened < end:
+                continue
+            pid = position["position_id"]
+            paid, sold = position.get("position_open_price"), position.get("position_close_price")
+            buy = next((order for order in self.orders if order.get("position_id") == pid and order.get("purpose") == "open"), {})
+            sale = next((order for order in self.orders if order.get("position_id") == pid and order.get("purpose") == "close"), {})
+            signal = next((entry for entry in self.journal if entry.get("position_id") == pid), {})
+            sent = buy.get("sent_at") or opened - timedelta(seconds=1)
+            received = signal.get("received_timestamp") or sent - timedelta(seconds=0.05)
+            uuid = signal.get("signal_uuid")
+            first_sale = (sale.get("sent_at") or position["execution_time_close"]) - timedelta(seconds=rng.choice((0, 0, 0, 2, 9)))
+            rows.append({
+                "position_id": pid, "action": position.get("action"), "instrument_uic": position.get("instrument_uic"),
+                "instrument_name": position.get("instrument_name"), "position_open_price": paid,
+                "position_close_price": sold,
+                "position_total_performance_percent": position.get("position_total_performance_percent"),
+                "position_close_reason": position.get("position_close_reason"), "execution_time_open": opened,
+                "execution_time_close": position.get("execution_time_close"), "buy_sent_at": sent,
+                "buy_accepted_at": buy.get("accepted_at") or sent + timedelta(seconds=0.25),
+                "buy_price_seen": None if paid is None else round(paid * (1 - rng.choice((0, 0.002, 0.004, 0.01, 0.03))), 3),
+                "signal_uuid": uuid, "signal_timestamp": signal.get("signal_timestamp"), "received_timestamp": received,
+                "first_sale_at": first_sale, "sale_requested_at": sale.get("sent_at") or position["execution_time_close"],
+                "sale_price_seen": None if sold is None else round(sold * (1 + rng.choice((0, 0.001, 0.003, 0.008, 0.02))), 3),
+                "sale_reason": position.get("position_close_reason"), "sale_accepted_at": sale.get("accepted_at"),
+            })
+            if uuid:
+                alerts.append({"signal_uuid": uuid, "alert_timestamp": received - timedelta(seconds=rng.uniform(5, 40))})
+                if paid is not None:
+                    ask = round(paid * (1 - rng.uniform(-0.004, 0.012)), 3)
+                    quotes.append({"order_id": f"{pid}|signal", "bid_close": round(ask * 0.995, 3), "ask_close": round(ask * 0.997, 3)})
+            if paid is not None:
+                quotes.append({"order_id": f"{pid}|buy", "bid_close": round(paid * 0.994, 3), "ask_close": round(paid * 0.999, 3)})
+        return {"positions": rows, "alerts": alerts, "engine": [], "quotes": quotes}
+
     async def exits(self, start=None, end=None):
         closed = [p for p in self.positions if p["position_status"] == "Closed"]
         closed = [p for p in closed if in_range(p["execution_time_close"], start, end)]

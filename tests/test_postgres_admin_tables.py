@@ -192,6 +192,19 @@ def test_journal_entry_is_stored_with_parsed_timestamps_and_kept_if_already_ther
     assert entry["signal_timestamp"] == "2026-10-12T08:00:00Z"
 
 
+def test_the_moment_an_alert_fired_is_kept_beside_the_journal():
+    db = FakeConnMgr()
+    entry = {"signal_uuid": "uuid-3", "outcome": "executed", "alert_timestamp": "2026-10-12T08:00:01Z"}
+
+    asyncio.run(AsyncDbSignalJournalManager(db).record_decision(entry))
+
+    assert len(db.calls) == 2
+    query, args = db.calls[1]
+    assert "INSERT INTO signal_alert_time" in query and "ON CONFLICT (signal_uuid) DO NOTHING" in query
+    assert args == ("uuid-3", datetime(2026, 10, 12, 8, 0, 1, tzinfo=timezone.utc))
+    assert "CREATE TABLE IF NOT EXISTS signal_alert_time" in SCHEMA_SQL
+
+
 def test_journal_entry_with_only_the_required_fields_is_accepted():
     db = FakeConnMgr()
 

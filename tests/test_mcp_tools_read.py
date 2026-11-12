@@ -122,6 +122,18 @@ class FakeQueries:
     async def execution_rows(self, start, end):
         return {"signals": [], "orders": [], "quotes": [], "requests": []}
 
+    async def execution_ledger_rows(self, start, end):
+        return {"positions": [{
+            "position_id": "5001", "action": "long", "instrument_uic": 1, "instrument_name": "Turbo",
+            "position_open_price": 10.0, "position_close_price": 10.5, "position_total_performance_percent": 5.0,
+            "position_close_reason": "Performance (Trailing Stop: peak 7%, now 5%)",
+            "execution_time_open": datetime(2026, 10, 13, 7, 0, tzinfo=timezone.utc),
+            "execution_time_close": datetime(2026, 10, 13, 8, 0, tzinfo=timezone.utc),
+            "buy_sent_at": None, "buy_accepted_at": None, "buy_price_seen": 9.9, "signal_uuid": None,
+            "signal_timestamp": None, "received_timestamp": None, "first_sale_at": None, "sale_requested_at": None,
+            "sale_price_seen": 10.6, "sale_reason": None, "sale_accepted_at": None,
+        }], "alerts": [], "engine": [], "quotes": []}
+
     async def ta_signals(self, start=None, end=None, rule_id=None, limit=500):
         return [{"id": 1, "rule_id": rule_id or "r1", "action": "long", "bar_time": datetime(2026, 10, 13, 7, 0, tzinfo=timezone.utc),
                  "outcome": "shadow", "trader": None}]
@@ -320,6 +332,18 @@ def test_execution_is_measured_on_the_orders_there_are(research):
     found = answer(research, "data_execution", {"start_day": "2026-10-01", "end_day": "2026-10-19"})
 
     assert found["from"] == "2026-10-01" and found["to"] == "2026-10-19"
+
+
+def test_the_ledger_says_what_the_real_trades_lost_in_all_and_trade_by_trade(research, journal):
+    ledger = answer(research, "data_execution", {"start_day": "2026-10-01", "end_day": "2026-10-19", "part": "ledger"})
+    trades = answer(research, "data_execution", {"start_day": "2026-10-01", "end_day": "2026-10-19", "part": "trades"})
+
+    assert "trades" not in ledger and ledger["summary"]["trades"] == 1
+    assert ledger["by_exit"][0]["group"] == "Trailing stop"
+    assert trades["total"] == 1 and trades["items"][0]["entry_slippage_percent"] == 1.01
+    assert "part is" in refusal(research, "data_execution", {"part": "everything"})
+    journal.set_lockbox(date(2026, 10, 14), date(2026, 10, 20))
+    assert "lock box" in refusal(research, "data_execution", {"start_day": "2026-10-13", "end_day": "2026-10-15", "part": "trades"})
 
 
 # ── Pine scripts ──
