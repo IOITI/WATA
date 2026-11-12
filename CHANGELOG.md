@@ -2,7 +2,7 @@
 
 ## v0.85.0 - What execution cost each trade, and exits on the index that work on the server
 
-**Release date:** not released yet
+**Release date:** 2026-11-12
 
 What a real trade loses between its signal and its fills was not measured: nothing compared the price a sale was decided on with the price it got, nor split a trade's cost into its causes. And the exits judged on the index between Saxo's quotes (v0.76.0) never worked on the server.
 
