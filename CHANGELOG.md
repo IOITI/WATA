@@ -2,7 +2,7 @@
 
 ## v0.88.0 - A run's settings applied to WATA, and the palettes on ioiti-ui's newer search
 
-**Release date:** not released yet
+**Release date:** 2026-11-16
 
 - **"Apply to WATA" on a run's page.** A finished run of one combination (not a sweep, not a day on paper) lists every setting it traded with that differs from config.json now, before and after. Each row says whether the run changed it or it was WATA's own on the day the run was asked and has changed since. Every row that can be applied is ticked, and each can be unticked.
   - **What is not one key:** the window around US releases (the `macro_news` rule added with the run's minutes and releases, or removed), its releases (one list) and the trading timezone (the key removed) are handled. A rule a setting is kept in is added.
