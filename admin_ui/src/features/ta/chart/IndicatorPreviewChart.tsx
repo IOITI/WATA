@@ -14,6 +14,7 @@ import velaWorkerUrl from 'virtual:vela-pine-worker'
 import { WataBars } from '../data/wataBars'
 import { prepareScript } from '../engine/prepare'
 import { PROVIDERS } from '../engine/tickers'
+import { SECONDS_FORMATTERS } from './secondsFormatters'
 import { sharedAssets, wataProvider } from './wataProvider'
 
 export interface IndicatorPreviewChartProps {
@@ -48,7 +49,10 @@ export function IndicatorPreviewChart({ source, name, symbol, timeframe, timeZon
     for (const provider of PROVIDERS) void feed.registerProvider(provider, wataProvider(provider, deps))
     const chart = new Vela(
       host.current,
-      { symbol, timeframe, live: false, drawings: false, volume: false, currentPriceLine: false, theme: shown.current },
+      {
+        symbol, timeframe, live: false, drawings: false, volume: false, currentPriceLine: false, theme: shown.current,
+        formatters: SECONDS_FORMATTERS,
+      },
       { dataFeed: feed, engines: [pine] },
     )
     chart.renderer.set('timezone', timeZone)

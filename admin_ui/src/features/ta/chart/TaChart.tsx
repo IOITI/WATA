@@ -29,6 +29,7 @@ import { parseTicker, PROVIDERS, tickerText } from '../engine/tickers'
 import type { ProviderId, WataTicker } from '../engine/tickers'
 import { DEFAULT_TIMEFRAME, readTimeframe, shortName, TIMEFRAME_HINT, TIMEFRAMES, timeframeOf, unevenNote } from '../engine/timeframes'
 import { fullRunEngine } from './pineEngine'
+import { SECONDS_FORMATTERS } from './secondsFormatters'
 import { sharedAssets, wataProvider } from './wataProvider'
 import { LAYOUT_KEY, layoutStorage, scriptEntries } from './workspace'
 
@@ -190,6 +191,7 @@ export function TaChart(props: TaChartProps) {
       live: true,
       theme,
       timezone: timeZone,
+      formatters: SECONDS_FORMATTERS,
       timeframes: TIMEFRAMES.map((length) => length.pine),
       providers,
       engines: {

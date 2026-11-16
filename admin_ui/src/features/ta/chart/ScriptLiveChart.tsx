@@ -17,6 +17,7 @@ import type { ChartSnapshot } from '@/features/prices/chartSnapshot'
 
 import { WataBars } from '../data/wataBars'
 import { PROVIDERS } from '../engine/tickers'
+import { SECONDS_FORMATTERS } from './secondsFormatters'
 import { sharedAssets, wataProvider } from './wataProvider'
 
 export interface ScriptLiveChartProps {
@@ -78,7 +79,10 @@ export function ScriptLiveChart({ source, name, symbol, timeframe, timeZone, cla
     for (const provider of PROVIDERS) void feed.registerProvider(provider, wataProvider(provider, deps))
     const chart = new Vela(
       host.current,
-      { symbol, timeframe, live: false, drawings: false, volume: false, currentPriceLine: false, theme: latest.current.theme },
+      {
+        symbol, timeframe, live: false, drawings: false, volume: false, currentPriceLine: false, theme: latest.current.theme,
+        formatters: SECONDS_FORMATTERS,
+      },
       { dataFeed: feed, engines: [pine] },
     )
     chart.renderer.set('timezone', timeZone)

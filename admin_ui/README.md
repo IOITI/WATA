@@ -222,7 +222,8 @@ are loaded with these pages only (lazy routes), and the TradingView reference of
 |---|---|---|
 | `pinets` | 0.13.1 | AGPL-3.0-only |
 | `@luxalgo/vela-pinets` | 0.3.4 | AGPL-3.0-only |
-| `@luxalgo/vela` | 0.8.5 | Apache-2.0, with a NOTICE to keep |
+| `@luxalgo/vela` | 0.10.8 | Apache-2.0, with a NOTICE to keep |
+| `@luxalgo/vela-ui` (Vela's own kit, its dependency) | 0.4.2 | Apache-2.0, with the same NOTICE |
 | `@codemirror/*`, `pinescript-v6-validator` | | MIT |
 
 The three LuxAlgo packages are pinned exactly: Vela's interface is young and changes. `public/third-party-notices.txt`
@@ -259,9 +260,11 @@ which is the source the AGPL asks to offer.
 - **Bars of seconds** (`engine/timeframes.ts`): a chart, the editor's test and a backtest take any length
   from 10 seconds to a day, named as Pine names it (`10S`, `45S`, `1`, `60`); a signal rule keeps the minutes
   (`RULE_TIMEFRAMES`). Vela's menu offers the usual lengths, the Length field above the chart takes any other.
-  Vela's chart itself reads no seconds (`10S` would be an hour, its times stop at the minute):
-  `vite/velaSeconds.ts` patches it when it is built, in the dev server too, and stops the build if a new
-  version of Vela no longer has the code it changes.
+  Vela reads bars of seconds itself since 0.10.5, but writes its times to the minute: every Vela chart of the
+  pages is given `chart/secondsFormatters.ts` (Vela's `formatters` option), which writes the seconds on the time
+  axis and at the crosshair, and `vite/velaSeconds.ts` teaches the data window, which does not go through
+  them, when Vela is built (in the dev server too); the build stops if a new version of Vela no longer has the
+  code it changes.
 - **PineTS keeps a formatter per time zone** (`vite/pinetsZoneFormat.ts`): PineTS makes an
   `Intl.DateTimeFormat` at each `hour(time, "Europe/Paris")` or `timestamp("Europe/Paris", ...)` (0.11.1 did,
   0.13.1 still does), most of the time of a script that reads the time in a zone. The plugin changes the two

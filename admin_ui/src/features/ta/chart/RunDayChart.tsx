@@ -26,6 +26,7 @@ import { PROVIDERS } from '../engine/tickers'
 import { dayStartIn, inputOverrides, runLayer, runProvider, runSymbol, visibleRangeOf } from './runDayModel'
 import type { LayerOf, RunColors } from './runDayModel'
 import { RUN_LANGUAGE, runMarksEngine } from './runMarksEngine'
+import { SECONDS_FORMATTERS } from './secondsFormatters'
 import { sharedAssets, wataProvider } from './wataProvider'
 
 export interface RunDayChartProps {
@@ -123,6 +124,7 @@ export function RunDayChart({ answer, day, signals, trades, selected, timeZone, 
         volume: false,
         currentPriceLine: false,
         theme: shown,
+        formatters: SECONDS_FORMATTERS,
       },
       // A bar cache of its own: the page-wide one could serve the Charts page's bars of the same symbol.
       { dataFeed: feed, engines: [pine, runMarksEngine()] },

@@ -30,9 +30,11 @@ LuxAlgo nor WATA is affiliated with, sponsored by or endorsed by TradingView.
 
 Vela (Apache License 2.0)
 -------------------------
-@luxalgo/vela 0.8.5 - https://github.com/LuxAlgo/Vela
+@luxalgo/vela 0.10.8 - https://github.com/LuxAlgo/Vela
+@luxalgo/vela-ui 0.4.2 (Vela's own interface kit) - https://github.com/LuxAlgo/Vela
 Licence: https://www.apache.org/licenses/LICENSE-2.0
-Its NOTICE file, reproduced as section 4(d) of the licence asks:
+Their NOTICE file (both carry the same), reproduced as section 4(d) of the
+licence asks:
 
 Vela
 Copyright (c) 2026 LuxAlgo
@@ -64,6 +66,9 @@ License, Version 2.0: redistributions of this software, in source or binary
 form, must include a readable copy of these attribution notices.
 
 The attribution mark is kept on every chart of the Charts page.
+
+Under the same licence, used by Zag.js's number field in Vela's kit:
+@internationalized/number (Copyright Adobe) and @swc/helpers.
 
 
 Other libraries of the Technical Analysis pages (MIT licence)

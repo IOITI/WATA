@@ -1,10 +1,10 @@
-// Vela offers bars of seconds in its menus and its timeframe dialog ("10S"), but its
-// chart does not read them: `timeframeToMs` takes "10S" for an hour (its fallback),
-// which is what the chart then counts on to load history, heal a gap and tell a new
-// bar from the last; and its times stop at the minute. The Technical Analysis pages
-// have bars of ten seconds and more (src/features/ta/engine/timeframes.ts): this plugin
-// teaches the pinned package seconds where it reads a timeframe and where it writes a
-// time (the time axis, the crosshair, the data window).
+// Vela reads bars of seconds since 0.10.5 (`timeframeToMs("10S")` is ten seconds: it loads
+// history, heals a gap and tells a new bar from the last by it), and its time axis marks
+// ticks within a minute as seconds. It still writes every time to the minute: the axis and
+// the crosshair go through its formatters, which the charts give
+// (src/features/ta/chart/secondsFormatters.ts); the data window does not, and this plugin
+// teaches it the seconds of a bar that is no whole minutes. Until 0.8.5 the plugin also
+// taught `timeframeToMs`, the axis and the crosshair, which then took "10S" for an hour.
 //
 // Each change replaces one exact piece of Vela's code, found once in the chunk that
 // holds them all. The build stops when one is not there, so that a new version of
@@ -20,59 +20,10 @@ export interface VelaPatch {
   replace: string
 }
 
-// How the chunk of Vela's core that reads timeframes is recognised.
-export const VELA_CHUNK_MARK = 'function timeframeToMs(timeframe) {'
+// How the chunk of Vela's core that writes the data window's times is recognised.
+export const VELA_CHUNK_MARK = 'function formatStampParts('
 
 export const VELA_SECONDS_PATCHES: VelaPatch[] = [
-  {
-    what: 'timeframeToMs reads a number of seconds ("10S")',
-    find: [
-      '  const m = /^(\\d+)\\s*(m|h|d|w)?$/i.exec(tf);',
-      '  if (m) {',
-      '    const n = parseInt(m[1], 10);',
-      '    const unit = (m[2] ?? "m").toLowerCase();',
-      '    const mult = unit === "m" ? 6e4 : unit === "h" ? 36e5 : unit === "d" ? 864e5 : 6048e5;',
-    ].join('\n'),
-    replace: [
-      '  const m = /^(\\d+)\\s*(s|m|h|d|w)?$/i.exec(tf);',
-      '  if (m) {',
-      '    const n = parseInt(m[1], 10);',
-      '    const unit = (m[2] ?? "m").toLowerCase();',
-      '    const mult = unit === "s" ? 1e3 : unit === "m" ? 6e4 : unit === "h" ? 36e5 : unit === "d" ? 864e5 : 6048e5;',
-    ].join('\n'),
-  },
-  {
-    what: 'the crosshair writes the seconds of a bar that is no whole minutes',
-    find: [
-      '  if (barIntervalMs >= DAY) return date;',
-      '  return `${date} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;',
-    ].join('\n'),
-    replace: [
-      '  if (barIntervalMs >= DAY) return date;',
-      '  if (barIntervalMs > 0 && barIntervalMs % MIN !== 0) return `${date} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;',
-      '  return `${date} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;',
-    ].join('\n'),
-  },
-  {
-    what: 'the time axis writes the seconds of a tick within a minute',
-    find: [
-      '      if (h === 0 && m === 0) {',
-      '        label = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;',
-      '        major = true;',
-      '      } else {',
-      '        label = `${pad2(h)}:${pad2(m)}`;',
-      '      }',
-    ].join('\n'),
-    replace: [
-      '      const s = d.getUTCSeconds();',
-      '      if (h === 0 && m === 0 && s === 0) {',
-      '        label = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;',
-      '        major = true;',
-      '      } else {',
-      '        label = s !== 0 ? `${pad2(h)}:${pad2(m)}:${pad2(s)}` : `${pad2(h)}:${pad2(m)}`;',
-      '      }',
-    ].join('\n'),
-  },
   {
     what: 'the data window writes the seconds of a bar that is no whole minutes',
     find: [
@@ -99,8 +50,10 @@ export const VELA_SECONDS_PATCHES: VelaPatch[] = [
   },
   {
     what: "the data window is given the chart's bar length",
-    find: '    const parts = bar ? formatStampParts(bar.time, this.scene.timezone) : { date: "", time: "" };',
-    replace: '    const parts = bar ? formatStampParts(bar.time, this.scene.timezone, this.coords.barInterval) : { date: "", time: "" };',
+    find: '    const parts = bar ? formatStampParts(bar.time, displayZone(this.scene.timezone, this.coords.barInterval)) : { date: "", time: "" };',
+    replace:
+      '    const parts = bar ? formatStampParts(bar.time, displayZone(this.scene.timezone, this.coords.barInterval), ' +
+      'this.coords.barInterval) : { date: "", time: "" };',
   },
 ]
 
