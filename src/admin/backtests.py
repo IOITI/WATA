@@ -2038,6 +2038,24 @@ class BacktestService:
         """The settings a run was made with (those of its settings.json)."""
         return (read_json(self._file(run_id, "settings.json")) or {}).get("settings") or {}
 
+    def to_live(self, run_id: str) -> dict:
+        """A run whose settings may be applied to WATA (the run page's "Apply to WATA"): its name and settings.json whole.
+
+        Only a finished run of one combination: a sweep's cells each ran with other values, and a paper day traded the
+        live settings of its night (applied, it would only undo what changed since).
+        """
+        request = read_json(self._file(run_id, "request.json")) or {}
+        if request.get("kind") != "run":
+            raise NotPossible("A sweep's combinations each ran with their own values: make one a run of its own first")
+        if request.get("paper"):
+            raise NotPossible("A day on paper traded WATA's settings of its night: there is nothing of its own to apply")
+        if self._status(run_id).get("state") != DONE:
+            raise NotPossible("Only a finished run's settings can be applied")
+        settings = read_json(self._file(run_id, "settings.json"))
+        if not isinstance(settings, dict) or not isinstance(settings.get("settings"), dict):
+            raise NotPossible("The settings this run was made with cannot be read")
+        return {"id": run_id, "name": request.get("name") or run_id, "settings": settings}
+
     def kept(self, run_id: str, name: str):
         """A file an admin feature keeps beside a run's results (KEPT_FILES), None while it has none."""
         if name not in KEPT_FILES:

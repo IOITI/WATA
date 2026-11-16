@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.88.0 - A run's settings applied to WATA, and the palettes on ioiti-ui's newer search
+
+**Release date:** not released yet
+
+- **"Apply to WATA" on a run's page.** A finished run of one combination (not a sweep, not a day on paper) lists every setting it traded with that differs from config.json now, before and after. Each row says whether the run changed it or it was WATA's own on the day the run was asked and has changed since. Every row that can be applied is ticked, and each can be unticked.
+  - **What is not one key:** the window around US releases (the `macro_news` rule added with the run's minutes and releases, or removed), its releases (one list) and the trading timezone (the key removed) are handled. A rule a setting is kept in is added.
+  - **What cannot be applied:** a value outside the catalog's bounds (a run may stop entries at 24 h, config.json at 23 h), or a section config.json does not have, is shown with the reason. The capital, the fills and the commissions are a backtest's alone: said, never applied.
+  - **The review and the save** are the Configuration page's own: the services' validator, each key changed, its warnings and the services it restarts, a slide to save. The save is refused once the file moved on, the file of before kept, journaled "saved from the backtest '…'" and audited (Telegram too) with each setting from the live value to the run's. The page then offers the restart, as the Configuration page does.
+  - Routes `GET /api/backtests/{id}/to-live`, `POST …/to-live/preview`, `POST …/to-live/apply` (`src/admin/run_to_live.py`, outside the backtests' code digest: no run turns stale). The difference is shown with config editing off; saving needs `admin.config_edit_enabled`.
+- **⌘K uses ioiti-ui 0.19's palette.**
+  - With nothing typed it lists each kind as a list of its own (backtest runs, signal rules, scripts, assets, the AI agent's conversations and memory), searched alone. Typing still searches everything at once.
+  - The five entries chosen last come first, kept in this browser until the operator signs out.
+  - It says "Searching…" while a list is still being read rather than "No results", and offers to try again when one could not be read.
+  - Its key is drawn as each computer writes it (⌘ K or Ctrl K).
+- **The AI agent's paperclip attaches several things in one opening**: each is ticked once attached, chosen again it is taken back, and a line under the list says how many more may be.
+  - LuxAlgo's Library is a list of its own, searched by LuxAlgo only for what is typed in it: a search for a run's name no longer costs a call to LuxAlgo.
+  - Its entries chosen last come first too.
+
+**On the live path:** nothing of the trader, the position monitor, the web server or the TA engine changes; only the admin's container. A setting applied from a run reaches the services as any save of the Configuration page does: at their next start.
+
+**Verification status:**
+- The interface: lint, types, 1,488 tests, the build, `build:runner` and `build:checker`.
+- Python: the whole suite with Node 24 (the real runner's tests run): 4,148 passed, 24 skipped.
+- In the fake admin, built:
+  - ⌘K: its lists, one opened and searched alone, a search at the top.
+  - The paperclip: two things attached in one opening, LuxAlgo's list searched (the fake LuxAlgo).
+  - A run made from the form with two settings changed, after the stop-loss was changed live: the dialog told the two kinds apart; two applied, the stop-loss unticked. The card offered the restart, the journal said "saved from the backtest 'EMA cross on US100'", and the stop-loss alone still differed afterwards.
+  - The dialog at phone width in the dark theme.
+- Not seen: config.json of the server through the dialog.
+
 ## v0.87.0 - PineTS 0.13.1, Vela-pinets 0.3.4 and Vela 0.10.8
 
 **Release date:** 2026-11-16

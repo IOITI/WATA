@@ -23,10 +23,11 @@ import {
   SignedValue,
   SplitButton,
   useMainScroll,
+  useToast,
 } from 'ioiti-ui'
 import type { SplitButtonOption } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { Flag, Pencil, Radar, RotateCcw, Sparkles, Square, Star, Trash2 } from 'lucide-react'
+import { Flag, Pencil, Radar, RotateCcw, SlidersHorizontal, Sparkles, Square, Star, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
@@ -35,11 +36,12 @@ import { AgentSheet } from '@/features/agent/AgentSheet'
 import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
+import { ApplyCard } from '@/features/config/ApplyCard'
 import { useLuxAlgoStatus } from '@/features/ta/luxalgo/useLuxAlgo'
 import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { RulePeekName } from '@/features/ta/signals/RulePeek'
 import { api, isNotFound } from '@/lib/api'
-import type { BacktestRun, BacktestRunListed } from '@/lib/types'
+import type { BacktestRun, BacktestRunListed, ConfigSaved } from '@/lib/types'
 
 import {
   assetLabel,
@@ -52,6 +54,7 @@ import {
   sourceLabel,
   STATE_LABEL,
 } from './model'
+import { ApplyToLiveDialog } from './ApplyToLiveDialog'
 import { EdgePanel } from './EdgePanel'
 import { BacktestsDisabled, Measure, SettingChanges, StateBadge } from './parts'
 import { useRemoveRuns } from './pending-removals-context'
@@ -254,6 +257,11 @@ export function RunPage() {
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
   const [tags, setTags] = useState<string[]>([])
+  const toast = useToast()
+  // Its settings applied to WATA: the dialog, then what the save did, until dismissed.
+  const [applying, setApplying] = useState(false)
+  const [applied, setApplied] = useState<ConfigSaved | null>(null)
+  const appliedCatalog = useQuery({ queryKey: ['config-catalog'], queryFn: api.configCatalog, enabled: !!applied, staleTime: Infinity })
 
   const runQuery = useQuery({
     queryKey: ['backtest', runId],
@@ -396,6 +404,12 @@ export function RunPage() {
               <ButtonLink to={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}>
                 Ask the AI agent
               </ButtonLink>
+              {/* A finished run of one combination, not a day on paper: its settings may become WATA's. */}
+              {single && !run.paper && (
+                <Button size="sm" variant="outline" leftIcon={<SlidersHorizontal className="size-3.5" />} onClick={() => setApplying(true)}>
+                  Apply to WATA
+                </Button>
+              )}
               {/* Urgent, so never in a menu. */}
               {isActive(run.status.state) && (
                 <Button variant="outline" size="sm" leftIcon={<Square className="size-3.5" />} isLoading={cancel.isPending} onClick={() => cancel.mutate()}>
@@ -417,6 +431,31 @@ export function RunPage() {
         }
       />
       {run && <AgentSheet subject={{ kind: 'run', id: run.id, label: run.name }} />}
+      {run && single && !run.paper && (
+        <ApplyToLiveDialog
+          runId={run.id}
+          open={applying}
+          onClose={() => setApplying(false)}
+          onSaved={(saved) => {
+            setApplying(false)
+            setApplied(saved)
+            toast({
+              title: 'Saved in config.json',
+              description: `Previous version kept as ${saved.backup}. Each service named applies it at its next start.`,
+              variant: 'success',
+            })
+            // The Configuration page holds the file's revision: it must read the new one, or its next save is refused.
+            for (const key of ['config', 'config-backups', 'config-history', 'session', 'backtest-options', 'backtest-to-live']) {
+              void queryClient.invalidateQueries({ queryKey: [key] })
+            }
+          }}
+        />
+      )}
+      {applied && appliedCatalog.data && (
+        <div className="mb-4">
+          <ApplyCard catalog={appliedCatalog.data} saved={applied} onDismiss={() => setApplied(null)} />
+        </div>
+      )}
       {!enabled ? (
         <BacktestsDisabled />
       ) : (

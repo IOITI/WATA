@@ -268,6 +268,32 @@ def flatten(config) -> dict[str, object]:
     return leaves
 
 
+_RULE_SOURCE = f"{RULES}."
+
+
+def catalog_path(source: str) -> str:
+    """Where config.json keeps a setting a backtest reads (its ``source``), in the catalog's words: a rule's key is in its
+    ``rule_config``."""
+    if source.startswith(_RULE_SOURCE):
+        rule_type, _, key = source[len(_RULE_SOURCE):].partition(".")
+        return f"{RULES}[{rule_type}].rule_config.{key}"
+    return source
+
+
+def out_of_bounds(param: Param, value) -> str | None:
+    """Why config.json's validator would refuse ``value`` for ``param`` (the catalog's own bounds, which may be narrower
+    than a run's), or None."""
+    if param.kind == "int" and isinstance(value, (int, float)) and not isinstance(value, bool) and value != int(value):
+        return "a whole number in config.json"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if (param.minimum is not None and value < param.minimum) or (param.maximum is not None and value > param.maximum):
+        least = "" if param.minimum is None else f"from {param.minimum:g}"
+        most = "" if param.maximum is None else f"up to {param.maximum:g}"
+        return f"{' '.join(part for part in (least, most) if part)} in config.json"
+    return None
+
+
 def place(config: dict, path: str, value) -> None:
     """Set ``value`` at the catalog's ``path`` in ``config``; a rule not there yet is added, named by its type."""
     if path.startswith(f"{RULES}["):

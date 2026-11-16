@@ -19,9 +19,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Reques
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from src.admin import backtest_requests, propfirm_check
-from src.admin.auth import require_session
-from src.admin.errors import InvalidRequest
+from src.admin import backtest_requests, propfirm_check, run_to_live
+from src.admin.auth import client_ip, require_session
+from src.admin.config_editor import ConfigConflict, ConfigInvalid
+from src.admin.errors import InvalidRequest, NotPossible
+from src.admin.routers.config import changes_said, require_config_edit_enabled
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
 
@@ -68,6 +70,16 @@ class ResearchSwitch(BaseModel):
 class TurboMeasure(BaseModel):
     first: date = Field(alias="from")
     last: date = Field(alias="to")
+
+
+class ToLive(BaseModel):
+    # The settings of the run to apply, by name (the differences' rows), and the revision of config.json reviewed.
+    settings: list[str] = Field(min_length=1, max_length=80)
+    revision: str | None = Field(default=None, max_length=128)
+
+
+# A run's name in config.json's journal of changes, at most.
+NAME_IN_JOURNAL = 80
 
 
 class PropFirmAsked(BaseModel):
@@ -413,3 +425,76 @@ async def model_check(run_id: str, service=Depends(backtests)):
 async def run_cell(run_id: str, cell: int, service=Depends(backtests)):
     """Make a run of its own of one combination of a sweep."""
     return service.run_cell(run_id, cell)
+
+
+# ── a run's settings applied to WATA ──
+
+
+def _live_rules(ctx) -> list[str]:
+    from src.admin.ta_monitor import rules_by_id
+
+    rules = rules_by_id(getattr(ctx, "ta_scripts", None))
+    return sorted({rule["indice"] for rule in rules.values() if rule.get("mode") == "live"})
+
+
+async def _run_and_config(request: Request, service, run_id: str) -> tuple[dict, dict, str]:
+    """The run whose settings are applied, config.json as the editor loads it (secrets masked), and its revision."""
+    run = await run_in_threadpool(service.to_live, run_id)
+    loaded = await run_in_threadpool(request.app.state.ctx.config_editor.load)
+    return run, loaded["config"], loaded["revision"]
+
+
+def _differences(run: dict, config: dict) -> dict:
+    try:
+        return run_to_live.differences(run["settings"], config)
+    except ValueError as e:
+        raise NotPossible(f"config.json cannot be read as the backtests read it: {e}") from e
+
+
+@router.get("/{run_id}/to-live")
+async def to_live(run_id: str, request: Request, service=Depends(backtests)):
+    """What differs between the run's settings and WATA's now, setting by setting: read without the switch that lets
+    config.json be changed, so that the difference can be seen anyway."""
+    run, config, revision = await _run_and_config(request, service, run_id)
+    return {"run": {"id": run["id"], "name": run["name"]}, "revision": revision, **_differences(run, config)}
+
+
+@router.post("/{run_id}/to-live/preview", dependencies=[Depends(require_config_edit_enabled)])
+async def to_live_preview(run_id: str, body: ToLive, request: Request, service=Depends(backtests)):
+    """The chosen settings in config.json as a save of the Configuration page is previewed: each key, what it reaches,
+    its warnings, and the revision it was read at."""
+    ctx = request.app.state.ctx
+    run, config, revision = await _run_and_config(request, service, run_id)
+    _differences(run, config)
+    changed = run_to_live.placed(run["settings"], config, body.settings)
+    live_indices = await run_in_threadpool(_live_rules, ctx)
+    try:
+        said = await run_in_threadpool(ctx.config_editor.preview, changed, live_indices)
+    except ConfigInvalid as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"revision": revision, **said}
+
+
+@router.post("/{run_id}/to-live/apply", dependencies=[Depends(require_config_edit_enabled)])
+async def to_live_apply(run_id: str, body: ToLive, request: Request, service=Depends(backtests)):
+    """The chosen settings saved in config.json, as the Configuration page saves: refused (409) once the file was
+    saved since the revision reviewed, kept in its journal as saved from this backtest, audited (Telegram too)."""
+    if not body.revision:
+        raise InvalidRequest("The revision of config.json that was reviewed is needed")
+    ctx = request.app.state.ctx
+    run, config, _ = await _run_and_config(request, service, run_id)
+    rows = _differences(run, config)["differences"]
+    changed = run_to_live.placed(run["settings"], config, body.settings)
+    by = client_ip(request, ctx.trusted_proxies)
+    name = run["name"][:NAME_IN_JOURNAL]
+    try:
+        saved = await run_in_threadpool(ctx.config_editor.save, changed, body.revision, by, f"saved from the backtest {name!r}")
+    except ConfigInvalid as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ConfigConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    ctx.audit(request, "configuration saved", f"From the backtest {name!r} ({run_id}): "
+                                              f"{run_to_live.said(rows, body.settings)}. {changes_said(saved)} "
+                                              f"Previous version kept as {saved['backup']}.")
+    return {**saved, "restart_required": bool(saved["impact"]["services"])}
+

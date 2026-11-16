@@ -74,7 +74,8 @@ _SAID_IN_WORDS = frozenset({
     "news_gdp", "news_jolts", "history_days", "restart_time",
 })
 PROPOSED_SETTINGS = tuple(entry.name for entry in FIELDS if entry.source and entry.name not in _SAID_IN_WORDS)
-_RULES = "trade.rules."
+# Where config.json keeps a setting a backtest reads, in the catalog's words (shared with run_to_live.py).
+catalog_path = config_catalog.catalog_path
 
 
 def testable_settings(changes: list[dict]) -> dict[str, str]:
@@ -126,24 +127,11 @@ def _bars_of(text) -> dict:
     return {"type": "time", "timeframe": text}
 
 
-def catalog_path(source: str) -> str:
-    """Where config.json keeps a setting, in the catalog's words: a rule's key is in its ``rule_config``."""
-    if source.startswith(_RULES):
-        rule_type, _, key = source[len(_RULES):].partition(".")
-        return f"trade.rules[{rule_type}].rule_config.{key}"
-    return source
-
-
 def _in_catalog_bounds(entry, param, value) -> None:
     """A value config.json's validator would take: the catalog's own bounds, which may be narrower than a run's."""
-    if param.kind == "int" and value != int(value):
-        raise ProposalRefused(f"'{entry.label}' is a whole number in config.json")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return
-    if (param.minimum is not None and value < param.minimum) or (param.maximum is not None and value > param.maximum):
-        least = "" if param.minimum is None else f"from {param.minimum:g}"
-        most = "" if param.maximum is None else f"up to {param.maximum:g}"
-        raise ProposalRefused(f"'{entry.label}' is {' '.join(part for part in (least, most) if part)} in config.json")
+    refused = config_catalog.out_of_bounds(param, value)
+    if refused:
+        raise ProposalRefused(f"'{entry.label}' is {refused}")
 
 
 def _lines_changed(before: str, after: str) -> dict:

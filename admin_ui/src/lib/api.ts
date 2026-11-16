@@ -110,6 +110,7 @@ import type {
   RuleChecksState,
   RuleDayIndicator,
   RuleTestAsked,
+  RunToLive,
   SaxoProviderDetails,
   SaxoStatus,
   ServicesState,
@@ -420,6 +421,13 @@ export const api = {
     request<{ remaking: BacktestRemaking | null }>('POST', '/api/backtests/remake', { body }),
   stopRemaking: () => request<{ remaking: BacktestRemaking | null }>('DELETE', '/api/backtests/remake'),
   backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
+  /** What differs between a run's settings and WATA's now, setting by setting (the run page's "Apply to WATA"). */
+  backtestToLive: (runId: string) => request<RunToLive>('GET', `/api/backtests/${encodeURIComponent(runId)}/to-live`),
+  /** The chosen settings in config.json as a save of the Configuration page is previewed, with the revision read. */
+  previewBacktestToLive: (runId: string, settings: string[]) =>
+    request<ConfigPreview & { revision: string }>('POST', `/api/backtests/${encodeURIComponent(runId)}/to-live/preview`, { body: { settings } }),
+  applyBacktestToLive: (runId: string, settings: string[], revision: string) =>
+    request<ConfigSaved>('POST', `/api/backtests/${encodeURIComponent(runId)}/to-live/apply`, { body: { settings, revision } }),
   createBacktest: (body: BacktestRequestBody) => request<BacktestRun>('POST', '/api/backtests', { body }),
   renameBacktest: (runId: string, body: { name?: string; tags?: string[]; favourite?: boolean }) =>
     request<BacktestRun>('PATCH', `/api/backtests/${encodeURIComponent(runId)}`, { body }),

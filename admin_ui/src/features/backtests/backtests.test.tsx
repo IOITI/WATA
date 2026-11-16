@@ -974,6 +974,8 @@ describe('a run', () => {
     const menu = within(screen.getByRole('menu', { name: 'More actions on this run' }))
     expect(menu.getByRole('menuitem', { name: 'Make a shadow rule' })).toHaveAttribute('href', `/ta/signals?from-run=${RUN_ID}`)
     expect(menu.getByRole('menuitem', { name: /^Remove/ })).toBeInTheDocument()
+    // Its settings may become WATA's, through their own dialog.
+    expect(screen.getByRole('button', { name: 'Apply to WATA' })).toBeInTheDocument()
   })
 
   it('is put among the favourites from its page, and taken out of them', async () => {

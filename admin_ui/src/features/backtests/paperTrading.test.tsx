@@ -283,6 +283,8 @@ describe('a report', () => {
     await user.click(screen.getByRole('button', { name: 'More actions on this run' }))
     const menu = within(screen.getByRole('menu', { name: 'More actions on this run' }))
     expect(menu.queryByRole('menuitem', { name: /^Remove/ })).toBeNull()
+    // It traded WATA's settings of its nights: nothing of its own to apply.
+    expect(screen.queryByRole('button', { name: 'Apply to WATA' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Run again with changes' })).toHaveAttribute('href', `/backtests/new?again=${PAPER_REPORT_ID}`)
   })
 

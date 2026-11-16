@@ -1766,6 +1766,31 @@ export type BacktestState = 'queued' | 'running' | 'done' | 'failed' | 'cancelle
 export type BacktestFate = 'executed' | 'refused' | 'failed' | 'unpriced' | 'closed' | 'ignored' | 'not_a_signal'
 export type BacktestDayStatus = 'tested' | 'no_recorded_turbos' | 'no_strategy_bars' | 'closed'
 export type BacktestValue = string | number | boolean
+
+/** A setting of a run that differs from WATA's now (src/admin/run_to_live.py). */
+export interface RunSettingDifference {
+  setting: string
+  label: string
+  unit: string
+  group: string
+  /** WATA's value now, and the run's: a list for the releases the window is kept around. */
+  before: BacktestValue | string[]
+  after: BacktestValue | string[]
+  /** Changed by the run itself; otherwise WATA's on the day it was asked, changed since. */
+  own: boolean
+  paths: string[]
+  apply: boolean
+  why_not: string | null
+  note: string | null
+}
+
+export interface RunToLive {
+  run: { id: string; name: string }
+  revision: string
+  differences: RunSettingDifference[]
+  /** What the run changed that only a backtest has (its capital, its fills): nothing to apply. */
+  backtest_only: { setting: string; label: string; unit: string; value: BacktestValue }[]
+}
 export type BacktestProvider = 'capital' | 'dukascopy' | 'saxo'
 
 /** A setting a run may change, with its value in the live configuration. */
