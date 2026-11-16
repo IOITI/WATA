@@ -2,7 +2,7 @@
 
 ## v0.86.0 - Edge Watch: is a strategy broken, or just unlucky?
 
-**Release date:** not released yet
+**Release date:** 2026-11-16
 
 When the live trades lost, nothing said whether the strategy was broken or in a drawdown its backtest always allowed. The check there was (two days in a row outside the reference's daily 5 % to 95 %) could not work under a day target: a shadow rule's reference spanned +0.50 to +0.52 %, and all 11 of its paper days were "outside". A rule's readiness counted a week, which is time, not evidence.
 
