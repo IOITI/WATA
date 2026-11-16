@@ -295,6 +295,8 @@ async def check(request: dict, scripts: ScriptStore, node: str, memory_mb: int, 
         # What keeps it from being a signal rule as written: the source's part of the rule check (``rule``).
         "rule_check": static,
         "milliseconds": answer.get("milliseconds"),
+        # What it ran on: a verdict kept of it is made again on another PineTS (src/admin/luxalgo_compat.py).
+        "runner": runner.versions,
         "note": "Made-up bars: what the alerts do on real ones is pine_run's",
     }
 

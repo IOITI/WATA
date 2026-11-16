@@ -43,9 +43,10 @@ interface ContextLike {
 }
 
 /**
- * An alert's title and message. PineTS 0.11.1 hands the named arguments of
+ * An alert's title and message. PineTS 0.11.1 and 0.12.0 hand the named arguments of
  * alertcondition(cond, title = …, message = …) over as one object in place of the
- * title, the message left empty: they are taken back from it.
+ * title, the message left empty: they are taken back from it. From 0.12.1 (#461) they
+ * come as they should, and this changes nothing.
  */
 export function alertParts(alert: Pick<AlertLike, 'title' | 'message'>): { title: string | null; message: string } {
   const raw = alert.title

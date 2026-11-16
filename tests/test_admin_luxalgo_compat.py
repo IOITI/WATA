@@ -8,8 +8,13 @@ import pytest
 from src.admin import luxalgo_compat
 from src.admin.errors import NotPossible
 from src.admin.luxalgo import LuxAlgo
-from src.admin.luxalgo_compat import CUT, FAILS, NO_ALERTS, RUNS, CompatChecker, CompatStore, declared, entry_of
+from src.admin.luxalgo_compat import (
+    CUT, FAILS, NO_ALERTS, RUNS, CompatChecker, CompatStore, declared, entry_of, runner_pinets,
+)
 from tests.test_admin_luxalgo import WHOLE, FakeLuxAlgo
+
+# The PineTS the checks of these tests run on.
+PINETS = "0.13.1+zone-format"
 
 
 class FakeStudies:
@@ -19,7 +24,8 @@ class FakeStudies:
         self.asked = []
         self.busy = False
         self.answer = answer or {"ok": True, "plots": ["Fast", "Slow"], "inputs": [{"id": "in_0"}],
-                                 "alerts_on_made_up_bars": {"Long": 2}, "tradingview_rules": []}
+                                 "alerts_on_made_up_bars": {"Long": 2}, "tradingview_rules": [],
+                                 "runner": {"pinets": PINETS, "node": "v24.21.0"}}
 
     async def study(self, mode, request):
         self.asked.append((mode, request))
@@ -66,9 +72,40 @@ def test_the_store_keeps_one_entry_by_indicator(tmp_path):
         store.record({"slug": "../account"})
 
 
-def checker(tmp_path, fake, studies=None, now=None):
+def checker(tmp_path, fake, studies=None, now=None, pinets=PINETS):
     clock = (lambda: now[0]) if now is not None else (lambda: 1_800_000_000.0)
-    return CompatChecker(CompatStore(str(tmp_path)), LuxAlgo(server=fake.server), studies, clock=clock)
+    return CompatChecker(CompatStore(str(tmp_path)), LuxAlgo(server=fake.server), studies, clock=clock,
+                         pinets=lambda: pinets)
+
+
+def test_a_check_made_on_another_pinets_is_made_again(tmp_path):
+    studies = FakeStudies()
+    checks = checker(tmp_path, FakeLuxAlgo(), studies)
+    # Kept from before the upgrade: the same source, checked on PineTS 0.12.0 (or before checks said their PineTS).
+    for pinets in ("0.12.0+zone-format", None):
+        checks.store.record({**entry_of({"slug": "made-up", "name": "Made up", "source": WHOLE}, {"ok": True},
+                                        1_800_000_000), "pinets": pinets})
+        checks._queue.clear()
+        checks.noticed("made-up", WHOLE)
+        assert checks.state()["queued"] == ["made-up"]
+
+    entry = asyncio.run(checks.check("made-up"))
+
+    assert entry["pinets"] == PINETS and len(studies.asked) == 1
+    assert asyncio.run(checks.check("made-up")) is None
+    # Where the runner's PineTS cannot be told (no runner built), what is kept stands.
+    blind = checker(tmp_path, FakeLuxAlgo(), FakeStudies(), pinets=None)
+    blind.store.record({**entry, "pinets": "0.12.0+zone-format"})
+    assert asyncio.run(blind.check("made-up")) is None
+
+
+def test_the_runners_pinets_is_read_from_the_built_file(tmp_path):
+    runner = tmp_path / "runner.mjs"
+    assert runner_pinets(str(runner)) is None
+    runner.write_text('const hello = {\n\tpinets: "0.13.1+zone-format",\n\tnode: process.version\n};\n', encoding="utf-8")
+    assert runner_pinets(str(runner)) == "0.13.1+zone-format"
+    runner.write_text('const hello = { pinets: "0.14.0+zone-format", node: process.version };\n', encoding="utf-8")
+    assert runner_pinets(str(runner)) == "0.14.0+zone-format"
 
 
 def test_a_whole_source_is_checked_once_and_a_cut_one_noted(tmp_path):
@@ -97,7 +134,8 @@ def test_checks_are_asked_once_each_and_a_cut_one_again_after_a_sign_in(tmp_path
     assert checks.state()["queued"] == ["made-up"]
     # A source already as it was kept is not asked again.
     checks._queue.clear()
-    checks.store.record(entry_of({"slug": "kept", "name": "Kept", "source": WHOLE}, {"ok": True}, 1_800_000_000))
+    checks.store.record(entry_of({"slug": "kept", "name": "Kept", "source": WHOLE},
+                                 {"ok": True, "runner": {"pinets": PINETS}}, 1_800_000_000))
     checks.noticed("kept", WHOLE)
     checks.noticed("changed", WHOLE)
     assert checks.state()["queued"] == ["changed"]

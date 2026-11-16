@@ -3,9 +3,11 @@ Whether LuxAlgo's indicators run on WATA ("Runs on WATA?"): each source the
 admin reads whole is checked as WATA checks a script (a Pine study's check,
 src/research/study.py: TradingView's rules, a compile and a run of PineTS on
 made-up bars), and what it declares is read from it (its alertcondition()
-titles, its alert() calls, whether it is a strategy()). Kept by slug and by
-the source's sha256 (``luxalgo_compat.json`` beside the scripts' origins), so
-that a source is never checked twice.
+titles, its alert() calls, whether it is a strategy()). Kept by slug, by the
+source's sha256 and by the PineTS it ran on (``luxalgo_compat.json`` beside the
+scripts' origins), so that a source is never checked twice on one PineTS, and
+a verdict made on the PineTS before an upgrade is made again when the source is
+next read or asked for.
 
 - A source is checked only whole: signed out, LuxAlgo gives the first lines of
   most indicators, noted ``cut`` and asked again once the admin signs in.
@@ -22,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections import OrderedDict, deque
@@ -29,6 +32,7 @@ from datetime import datetime, timezone
 
 from src.admin.errors import NotPossible
 from src.admin.luxalgo import SLUG, LuxAlgoRefused, LuxAlgoUnknown
+from src.ta_engine.runner import RUNNER_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +48,31 @@ RUNS, NO_ALERTS, FAILS, CUT = "runs", "no_alerts", "fails", "cut"
 STATES = (RUNS, NO_ALERTS, FAILS, CUT)
 # What an entry keeps of the first errors.
 ERRORS_KEPT = 3
+# The runner's hello, as the build writes it into runner.mjs (admin_ui/vite.runner.config.ts: "0.13.1+zone-format").
+_RUNNER_PINETS = re.compile(rb'pinets: *"([^"]+)"')
+_built_pinets: dict = {}
 
 
 def stamp(seconds: float) -> str:
     return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def runner_pinets(path: str = RUNNER_PATH) -> str | None:
+    """The PineTS of the built runner, which a check runs on (read again when the file changes); None without one."""
+    try:
+        seen = os.stat(path)
+    except OSError:
+        return None
+    key = (path, seen.st_mtime_ns, seen.st_size)
+    if key not in _built_pinets:
+        try:
+            with open(path, "rb") as runner_file:
+                found = _RUNNER_PINETS.search(runner_file.read())
+        except OSError:
+            return None
+        _built_pinets.clear()
+        _built_pinets[key] = found.group(1).decode() if found else None
+    return _built_pinets[key]
 
 
 def _code_and_strings(source: str) -> list[tuple[str, str]]:
@@ -199,6 +224,8 @@ def entry_of(found: dict, checked: dict | None, at: float, *, cut: str | None = 
         state = NO_ALERTS
     return {
         **entry, "state": state, "sha256": hashlib.sha256(source.encode()).hexdigest(), "compiles": compiles,
+        # The PineTS it ran on (the runner's hello): a check made on another one is made again.
+        "pinets": ((checked or {}).get("runner") or {}).get("pinets"),
         "error": (error or "")[:300] or None, "rules_errors": rules_errors, **said,
         "alerts_on_made_up_bars": (checked or {}).get("alerts_on_made_up_bars") or {},
         "plots": len((checked or {}).get("plots") or []), "inputs": len((checked or {}).get("inputs") or []),
@@ -248,13 +275,15 @@ class CompatChecker:
     Pine studies (src/admin/studies.py), None where the admin has none.
     """
 
-    def __init__(self, store: CompatStore, luxalgo, studies, clock=time.time, rule_checks=None):
+    def __init__(self, store: CompatStore, luxalgo, studies, clock=time.time, rule_checks=None, pinets=runner_pinets):
         self.store = store
         self._luxalgo = luxalgo
         self._studies = studies
         # Where what a check reads of a source as a signal rule is kept (src/admin/rule_checks.py).
         self._rule_checks = rule_checks
         self._clock = clock
+        # The PineTS a check would run on now: None when it cannot be told (no runner built), which keeps every entry.
+        self._pinets = pinets
         self._queue: OrderedDict[str, None] = OrderedDict()
         self._done: deque = deque()
         self._wake = asyncio.Event()
@@ -284,12 +313,19 @@ class CompatChecker:
         if self._rule_checks is not None:
             # Its rule check, from the source alone: made at once when it has none (no study, no call to LuxAlgo).
             self._rule_checks.noticed({"luxalgo": slug}, source)
-        kept = self.store.get(slug)
-        if kept and kept.get("sha256") == hashlib.sha256(source.encode()).hexdigest():
+        if self._kept(slug, source):
             return
         if slug not in self._queue and slug != self._checking and len(self._queue) < QUEUED_MOST:
             self._queue[slug] = None
             self._wake.set()
+
+    def _kept(self, slug: str, source: str) -> bool:
+        """Whether this source's check is kept already, made on the PineTS a check would run on now."""
+        kept = self.store.get(slug)
+        if not kept or kept.get("sha256") != hashlib.sha256(source.encode()).hexdigest():
+            return False
+        now = self._pinets()
+        return now is None or kept.get("pinets") == now
 
     def signed_in(self) -> None:
         """The admin signed in to LuxAlgo: the sources found cut are asked for again, whole now."""
@@ -321,8 +357,7 @@ class CompatChecker:
             if "sign in" not in str(e):
                 raise
             return self.store.record(entry_of({"slug": slug}, None, self._clock(), cut=str(e)[:300]))
-        kept = self.store.get(slug)
-        if kept and kept.get("sha256") == hashlib.sha256(found["source"].encode()).hexdigest():
+        if self._kept(slug, found["source"]):
             return None
         checked = await self._studies.study("check", {"source": found["source"], "name": found.get("name") or slug})
         if self._rule_checks is not None and (checked or {}).get("rule_check"):

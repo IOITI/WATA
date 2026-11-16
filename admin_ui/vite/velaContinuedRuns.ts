@@ -30,9 +30,10 @@ export interface WorkerPatch {
 /** A whole run at least this often (ms), whatever continued it meanwhile: the engine's CHECK_SECONDS. */
 export const WHOLE_EVERY_MS = 600_000
 
-// What the worker calls its functions, pinned by the pieces below: Au (Vela's bars as PineTS's candles), Jc and
-// ny (whether a context makes a model, and the model), ay and oy (an alert and a warning as Vela takes them),
-// Je (a message to the page), hD (a whole run of a session, which says it is done).
+// What the worker calls its functions, pinned by the pieces below: $h (Vela's bars as PineTS's candles), oh and
+// C0 (whether a context makes a model, and the model), D0 and O0 (an alert and a warning as Vela takes them),
+// q0 (the worker), st (a message to the page), u5 (a whole run of a session, which says it is done). Each build
+// of Vela-pinets names them anew: 0.2.17's were Au, Jc, ny, ay, oy, py, Je and hD.
 const ADDED =
   `var __wataEvery=${WHOLE_EVERY_MS};` +
   'function __wataSame(a,b){return!!a&&!!b&&a.time===b.time&&a.open===b.open&&a.high===b.high&&a.low===b.low&&' +
@@ -41,62 +42,62 @@ const ADDED =
   'function __wataContinues(t){let h=t.held;return!!h&&!t.stopped&&t.prepared?.token?.wataContinue===!0&&' +
   'Date.now()-h.at<__wataEvery&&t.bars.length>h.count&&__wataSame(t.bars[0],h.first)&&__wataSame(t.bars[h.count-1],h.last)}' +
   'async function __wataContinue(t){let h=t.held,b=t.bars;try{' +
-  'let x=h.pine,f=t.lastCtx,c=Au(b.slice(h.count),t.market.timeframe,t.market.symbolInfo),a=x.data.length,' +
+  'let x=h.pine,f=t.lastCtx,c=$h(b.slice(h.count),t.market.timeframe,t.market.symbolInfo),a=x.data.length,' +
   'ka=(f.alerts??[]).length,kw=(f.warnings??[]).length;' +
   'for(let e of c){let m=f.marketData;Array.isArray(m)&&m!==x.data&&m.push(e),x._appendCandle(e)}' +
   'f.length=x.data.length;await x._executeIterations(f,x._transpiledCode,a,x.data.length);' +
-  'h.count=b.length,h.last=b[b.length-1],py.__wataContinued=(py.__wataContinued??0)+1;if(t.stopped)return;' +
-  'for(let r of(f.alerts??[]).slice(ka))Je({kind:"alert",sessionId:t.id,alert:ay(r)});' +
-  'for(let r of(f.warnings??[]).slice(kw))Je({kind:"warning",sessionId:t.id,warning:oy(r)});' +
-  'let e=t.prepared.token,o=Jc(f)?ny(f,e.instanceId,t.prepared,t.inputs,t.props??{},b[0]?.time):null;' +
-  'o&&Je({kind:"model",sessionId:t.id,model:o}),Je({kind:"done",sessionId:t.id})' +
+  'h.count=b.length,h.last=b[b.length-1],q0.__wataContinued=(q0.__wataContinued??0)+1;if(t.stopped)return;' +
+  'for(let r of(f.alerts??[]).slice(ka))st({kind:"alert",sessionId:t.id,alert:D0(r)});' +
+  'for(let r of(f.warnings??[]).slice(kw))st({kind:"warning",sessionId:t.id,warning:O0(r)});' +
+  'let e=t.prepared.token,o=oh(f)?C0(f,e.instanceId,t.prepared,t.inputs,t.props??{},b[0]?.time):null;' +
+  'o&&st({kind:"model",sessionId:t.id,model:o}),st({kind:"done",sessionId:t.id})' +
   // Part of the new bars may have run: what was held is let go, and the bars run whole.
-  '}catch{t.held=null,await hD(t)}}' +
-  'function __wataRun(t){t.chain=t.chain.then(()=>__wataContinues(t)?__wataContinue(t):hD(t))}'
+  '}catch{t.held=null,await u5(t)}}' +
+  'function __wataRun(t){t.chain=t.chain.then(()=>__wataContinues(t)?__wataContinue(t):u5(t))}'
 
 export const CONTINUED_RUN_PATCHES: WorkerPatch[] = [
   {
-    what: 'the names of the worker this patch calls (its post function and its sessions)',
-    find: 'var py=self,Je=t=>py.postMessage(t),ur=new Map,',
-    replace: 'var py=self,Je=t=>py.postMessage(t),ur=new Map,',
+    what: 'the names of the worker this patch calls (the worker and its post function)',
+    find: 'var q0=self,st=t=>q0.postMessage(t);',
+    replace: 'var q0=self,st=t=>q0.postMessage(t);',
   },
   {
     what: 'the name of the function that makes candles of Vela\'s bars',
-    find: 'let h=Au(n,r.timeframe,r.symbolInfo),',
-    replace: 'let h=Au(n,r.timeframe,r.symbolInfo),',
+    find: 'let h=$h(n,r.timeframe,r.symbolInfo),',
+    replace: 'let h=$h(n,r.timeframe,r.symbolInfo),',
   },
   {
     // The names of the model and of an alert and a warning are pinned here too.
     what: 'a whole run hands back the PineTS that ran it',
     find:
-      'model:Jc(f)?ny(f,a,s,o,l??{},n[0]?.time):null,alerts:(f.alerts??[]).map(ay),warnings:(f.warnings??[]).map(oy),' +
-      'reactsToViewport:m,ctx:f}}function ny(',
+      'model:oh(m)?C0(m,a,s,o,l??{},n[0]?.time):null,alerts:(m.alerts??[]).map(D0),warnings:(m.warnings??[]).map(O0),' +
+      'reactsToViewport:y,ctx:m}}function C0(',
     replace:
-      'model:Jc(f)?ny(f,a,s,o,l??{},n[0]?.time):null,alerts:(f.alerts??[]).map(ay),warnings:(f.warnings??[]).map(oy),' +
-      'reactsToViewport:m,ctx:f,pine:d}}function ny(',
+      'model:oh(m)?C0(m,a,s,o,l??{},n[0]?.time):null,alerts:(m.alerts??[]).map(D0),warnings:(m.warnings??[]).map(O0),' +
+      'reactsToViewport:y,ctx:m,pine:d}}function C0(',
   },
   {
     what: 'a whole run is made on the bars of its start, which a message may replace meanwhile',
-    find: 'async function hD(t){if(!t.stopped)try{let e=t.prepared.token,n=await ty({ind:Eu(t.cache,e.source,t.inputs,t.props),bars:t.bars,',
+    find: 'async function u5(t){if(!t.stopped)try{let e=t.prepared.token,n=await T0({ind:Vh(t.cache,e.source,t.inputs,t.props),bars:t.bars,',
     replace:
-      'async function hD(t){if(!t.stopped)try{let e=t.prepared.token,__b=t.bars,n=await ty({ind:Eu(t.cache,e.source,t.inputs,t.props),bars:__b,',
+      'async function u5(t){if(!t.stopped)try{let e=t.prepared.token,__b=t.bars,n=await T0({ind:Vh(t.cache,e.source,t.inputs,t.props),bars:__b,',
   },
   {
     what: 'a session keeps the run its next bars may continue',
-    find: 't.lastCtx=n.ctx,n.model&&Je({kind:"model",sessionId:t.id,model:n.model}),Je({kind:"done",sessionId:t.id})',
+    find: 't.lastCtx=n.ctx,n.model&&st({kind:"model",sessionId:t.id,model:n.model}),st({kind:"done",sessionId:t.id})',
     replace:
       't.lastCtx=n.ctx,t.held=n.pine?{pine:n.pine,count:__b.length,first:__b[0],last:__b[__b.length-1],at:Date.now()}:null,' +
-      'n.model&&Je({kind:"model",sessionId:t.id,model:n.model}),Je({kind:"done",sessionId:t.id})',
+      'n.model&&st({kind:"model",sessionId:t.id,model:n.model}),st({kind:"done",sessionId:t.id})',
   },
   {
     what: 'the bars a chart sends continue its run when they can',
-    find: 'case"notifyBars":{let n=ur.get(e.sessionId);if(!n||n.mode==="live")return;n.bars=e.bars,n.deferred=!1,eo(n);return}',
-    replace: 'case"notifyBars":{let n=ur.get(e.sessionId);if(!n||n.mode==="live")return;n.bars=e.bars,n.deferred=!1,__wataRun(n);return}',
+    find: 'case"notifyBars":{let n=Vr.get(e.sessionId);if(!n||n.mode==="live")return;n.bars=e.bars,n.deferred=!1,Zo(n);return}',
+    replace: 'case"notifyBars":{let n=Vr.get(e.sessionId);if(!n||n.mode==="live")return;n.bars=e.bars,n.deferred=!1,__wataRun(n);return}',
   },
   {
     what: 'where a whole run is asked for, the functions a continued run is made with',
-    find: 'function eo(t){t.chain=t.chain.then(()=>hD(t))}',
-    replace: `${ADDED}function eo(t){t.chain=t.chain.then(()=>hD(t))}`,
+    find: 'function Zo(t){t.chain=t.chain.then(()=>u5(t))}',
+    replace: `${ADDED}function Zo(t){t.chain=t.chain.then(()=>u5(t))}`,
   },
 ]
 

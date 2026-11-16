@@ -220,8 +220,8 @@ are loaded with these pages only (lazy routes), and the TradingView reference of
 
 | Library | Version | Licence |
 |---|---|---|
-| `pinets` | 0.12.0 | AGPL-3.0-only |
-| `@luxalgo/vela-pinets` | 0.2.17 | AGPL-3.0-only |
+| `pinets` | 0.13.1 | AGPL-3.0-only |
+| `@luxalgo/vela-pinets` | 0.3.4 | AGPL-3.0-only |
 | `@luxalgo/vela` | 0.8.5 | Apache-2.0, with a NOTICE to keep |
 | `@codemirror/*`, `pinescript-v6-validator` | | MIT |
 
@@ -264,9 +264,9 @@ which is the source the AGPL asks to offer.
   version of Vela no longer has the code it changes.
 - **PineTS keeps a formatter per time zone** (`vite/pinetsZoneFormat.ts`): PineTS makes an
   `Intl.DateTimeFormat` at each `hour(time, "Europe/Paris")` or `timestamp("Europe/Paris", ...)` (0.11.1 did,
-  0.12.0 still does), most of the time of a script that reads the time in a zone. The plugin changes the two
+  0.13.1 still does), most of the time of a script that reads the time in a zone. The plugin changes the two
   pieces of PineTS that make them, in the three copies the admin ships: the TA engine's runner
-  (`vite.runner.config.ts`, whose hello names it: `0.12.0+zone-format`), the pages' Pine worker
+  (`vite.runner.config.ts`, whose hello names it: `0.13.1+zone-format`), the pages' Pine worker
   (`worker.plugins`, and `optimizeDeps` in the dev server) and Vela-pinets' worker (`vite/velaPineWorker.ts`).
   The build stops if a new version of PineTS no longer has them; `vite/pinetsZoneFormat.test.ts` runs PineTS
   patched beside PineTS as it is around the clock changes.

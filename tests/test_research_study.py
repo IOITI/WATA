@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 import pytest
 from mcp import Client
 
+from src.admin.luxalgo_compat import runner_pinets
 from src.admin.mcp_server.server import build_server
 from src.admin.processes import launch
 from src.admin.studies import StudyService
@@ -76,6 +77,8 @@ def test_a_saved_script_a_library_and_a_draft_are_checked_on_made_up_bars(tmp_pa
 
     assert saved["ok"] and saved["kind"] == "indicator" and saved["inputs"][0]["id"] == "in_0"
     assert saved["plots"] == ["Mid"] and set(saved["alerts_on_made_up_bars"]) == {"Enter Long", "Exit"}
+    # What it ran on, as the runner's hello says it and as the admin reads it from the built file without a run.
+    assert saved["runner"]["pinets"].endswith("+zone-format") and saved["runner"]["pinets"] == runner_pinets()
     assert library["ok"] and library["kind"] == "library"
     assert not broken["ok"] and (broken["error"]["file"], broken["error"]["line"]) == ("script", 3)
 

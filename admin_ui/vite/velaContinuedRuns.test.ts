@@ -125,7 +125,7 @@ describe('Vela-pinets\' worker, its runs continued', () => {
     const source = servedWorker()
 
     expect(source).toContain('function __wataRun(t)')
-    expect(source).toContain('ctx:f,pine:d}}')
+    expect(source).toContain('ctx:m,pine:d}}')
     expect(() => patchContinuedRuns('nothing of the worker')).toThrow('@luxalgo/vela-pinets changed')
     expect(() => patchContinuedRuns(`${CONTINUED_RUN_PATCHES[0].find}${CONTINUED_RUN_PATCHES[0].find}`)).toThrow('found 2 times')
   })

@@ -220,7 +220,7 @@ interface Loaded {
 }
 
 /**
- * What of PineTS a continued run uses, none of it public (PineTS.class.ts, 0.12.0): the bars it holds and how
+ * What of PineTS a continued run uses, none of it public (PineTS.class.ts, 0.12.0 to 0.13.1): the bars it holds and how
  * it adds one (as its live mode adds them), the script it compiled, and the loop of its runs, which a whole
  * run calls twice on one context, its last bar apart.
  */
