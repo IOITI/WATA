@@ -266,6 +266,10 @@ def test_status_says_what_is_wrong_in_capitals():
     assert "Trader: DOWN, last heartbeat 5 min ago" in said
     assert "Position monitor: WARNING, selling a position since 14:29 (3 failed attempts)" in said
     assert "Entries: PAUSED by the account guard since Wed 4 Nov 14:32" in said
+    clock = commands_module.Clock("Europe/Paris", at(0))
+    assert commands_module.pause_line({"entries_paused_since": at(-60 * 24 * 5),
+                                       "entries_paused_by_edge_guard": at(-60 * 24 * 5)}, clock).startswith(
+        "Entries: PAUSED by the edge guard since")
     assert "Saxo login: NEEDS AUTHORISING since 14:20 (the admin's Saxo page)" in said
     assert "Capital.com feed: SILENT, last sign 12 min ago" in said
     assert POSITION_ID not in said

@@ -110,6 +110,9 @@ class RiskState:
     async def get_entries_paused_by_guard(self):
         return self.paused_by_guard
 
+    async def get_entries_paused_by_edge_guard(self):
+        return None
+
     async def get_entries_resumed_at(self):
         return None
 

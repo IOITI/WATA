@@ -605,6 +605,13 @@ class FakeQueries:
         # The fake's pause is always the operator's.
         return None
 
+    async def entries_paused_by_edge_guard(self):
+        # FAKE_EDGE=broken: the edge guard paused entries (src/admin/edge_watch.py), shown on the dashboard.
+        return self.paused_since if os.getenv("FAKE_EDGE") == "broken" and self.paused_since else None
+
+    async def entries_resumed_at(self):
+        return None
+
     async def today_closed_results(self):
         return [-0.8, 0.6, -1.2]
 
@@ -1471,6 +1478,75 @@ class FakeReadiness:
         return True, "At work again (made up)"
 
 
+class FakeEdgeWatch:
+    """
+    Edge Watch over made-up references (src/admin/edge_watch_service.py): the real model and verdicts
+    (src/admin/edge_watch.py), its reference's days and the trades judged made up. The live trades are worth watching
+    unless FAKE_EDGE=broken (broken, entries paused by the edge guard); each rule on paper as its reference led to
+    expect, the second one too early.
+    """
+
+    def __init__(self, rules):
+        import random
+
+        from src.admin import edge_watch as ew
+
+        self._rules = rules
+        self._ew = ew
+        draw = random.Random(7)
+        blocks = [[round(draw.gauss(0.9, 4.0), 3) for _ in range(draw.choice([0, 1, 2, 2, 3]))] for _ in range(40)]
+        baseline = {"totals": [((1 - 0.012) ** 70 - 1) * 100] * 50, "trades": [70] * 50}
+        self._model = ew.build_model(blocks, baseline, run_id="20261001-120000-a1b2c3", paths=800, h1_paths=150)
+        broken = os.getenv("FAKE_EDGE") == "broken"
+        self._live = [round(draw.gauss(-1.4 if broken else -0.2, 4.0), 3) for _ in range(44 if broken else 26)]
+        self._paper = [round(draw.gauss(0.8, 4.0), 3) for _ in range(9)]
+
+    @staticmethod
+    def _path(results):
+        level, path = 1.0, []
+        for number, result in enumerate(results, start=1):
+            level *= 1 + result / 100
+            path.append({"n": number, "at": (datetime.now(timezone.utc) - timedelta(hours=len(results) - number)).isoformat(),
+                         "result": result, "cumulative": round((level - 1) * 100, 2)})
+        return path
+
+    def _owner(self, owner, name, mode, results, main):
+        ew = self._ew
+        reference = {"run_id": self._model["run_id"], "name": "Replay of September (made up)", "done": True, "days": 40,
+                     "first_day": "2026-08-20", "last_day": "2026-10-14", "stale": False, "made_with": "dev"}
+        track = {**ew.judge(self._model, results), "path": self._path(results), "stale_days": []}
+        tracks = {main: track}
+        if owner == "live":
+            tracks["paper"] = {**ew.judge(self._model, self._paper), "path": self._path(self._paper), "stale_days": []}
+        model = {key: self._model.get(key) for key in ("usable", "why_not", "reference", "test", "horizon")}
+        return {"owner": owner, "name": name, "mode": mode, "reference": reference, "since": "2026-10-15", "model": model,
+                "cone": self._model["cone"], "tracks": tracks, "verdict": track["verdict"], "main": main}
+
+    async def judgements(self, *, max_age=30):
+        rules = {}
+        for index, rule in enumerate(self._rules.load()["rules"]):
+            rules[rule["id"]] = self._owner(rule["id"], rule["name"], rule.get("mode"),
+                                            self._paper if index else self._paper * 3, "paper")
+        return {"live": self._owner("live", "the live trades", None, self._live, "real"), "rules": rules,
+                "judged_at": datetime.now(timezone.utc).isoformat(),
+                "guard": {"on": os.getenv("FAKE_EDGE") == "broken", "least_trades": self._ew.GUARD_LEAST_TRADES}}
+
+    @staticmethod
+    def listed(found):
+        from src.admin.edge_watch_service import EdgeWatch
+
+        return EdgeWatch.listed(found)
+
+    def state(self):
+        return {"judgements": None, "age": None}
+
+    def guard_on(self):
+        return os.getenv("FAKE_EDGE") == "broken"
+
+    async def keep(self):
+        return None
+
+
 class FakePaperTrading(PaperTrading):
     """Paper trading at any hour: the fake's made-up market is closed whenever its days are due."""
 
@@ -1679,6 +1755,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
         mcp_pause=McpPause(os.path.join(work_dir, "lib", "admin", "mcp_pause.json")),
         studies=studies,
         paper=paper,
+        # The live trades and the rules' paper trades judged against made-up references.
+        edge_watch=FakeEdgeWatch(RuleStore(ta_scripts)),
         # The containers, as the heartbeats say: started three hours ago.
         service_control=FakeControl(datetime.now(timezone.utc) - timedelta(hours=3)),
         # What watadeploy would say of the server, made up; an apply asked from the System page plays out here.

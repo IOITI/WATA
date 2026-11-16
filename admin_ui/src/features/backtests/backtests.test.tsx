@@ -475,7 +475,7 @@ describe('the list of backtests', () => {
     await user.click(basket.getByRole('button', { name: 'All (2)' }))
     expect(screen.getByRole('checkbox', { name: 'Select Smoke EMA cross' })).toBeChecked()
     expect(basket.getByRole('button', { name: 'Select none' })).toBeInTheDocument()
-    await user.click(basket.getByRole('button', { name: 'Clear selection' }))
+    await user.click(basket.getByRole('button', { name: 'Select none' }))
     await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions toolbar' })).not.toBeInTheDocument())
     expect(screen.getByRole('checkbox', { name: 'Select Stop at 10' })).not.toBeChecked()
 

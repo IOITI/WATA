@@ -84,7 +84,7 @@ LOG_OF = {
     "trader": "wata-trader-async", "saxo": "wata-trader-async", "position_monitor": "wata-position-monitor",
     "web_server": "wata-api", "scheduler": "wata-scheduler", "telegram": "wata-telegram",
     "watchlist_manager": "wata-watchlist-manager", "capital_feed": "wata-capital-feed", "ta_engine": "wata-ta-engine",
-    "admin": "wata-admin", "live_drift": "wata-admin", "backups": "wata-admin", "account_guard": "wata-trader-async",
+    "admin": "wata-admin", "edge_watch": "wata-admin", "backups": "wata-admin", "account_guard": "wata-trader-async",
 }
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MOMENT = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
@@ -639,9 +639,9 @@ class AgentService:
         if found.get("day_percent") is not None:
             said += f": {found['day_percent']:+.2f} % on {found.get('trades') or 0} trades"
         reference = live.get("reference") or {}
-        if reference.get("low") is not None:
-            said += (f"; the live reference's daily range is {reference['low']:+.2f} % to {reference['high']:+.2f} %"
-                     f"{', and the day is outside it' if found.get('outside') else ''}")
+        if reference.get("run_id"):
+            said += (f"; the live reference is run {reference['run_id']} ({reference.get('name') or 'unnamed'}): "
+                     f"edge_watch says whether the live trades are what it led to expect")
         return f"{said}. Its trades: backtest_trades of that run."
 
     # ── the conversation's stream ──

@@ -179,15 +179,16 @@ class PaperDays:
                       "trades": 4, "outside": True},
                      {"day": "2026-10-27", "run_id": None, "state": "no_entry", "day_percent": 0.0, "trades": 0,
                       "outside": None}],
-            "reference": {"run_id": "20261020-090000-fedcba", "low": -2.1, "median": 0.3, "high": 2.4}}}
+            "reference": {"run_id": "20261020-090000-fedcba", "name": "Replay of October", "days": 20}}}
 
 
 def test_a_day_is_shared_with_how_it_traded_on_paper(agent):
     agent._backtests = PaperDays()
 
     assert asyncio.run(agent._paper_day("2026-10-28")) == (
-        "Run 20261028-220000-abcdef (done): -3.25 % on 4 trades; the live reference's daily range is -2.10 % to "
-        "+2.40 %, and the day is outside it. Its trades: backtest_trades of that run.")
+        "Run 20261028-220000-abcdef (done): -3.25 % on 4 trades; the live reference is run 20261020-090000-fedcba "
+        "(Replay of October): edge_watch says whether the live trades are what it led to expect. Its trades: "
+        "backtest_trades of that run.")
     assert asyncio.run(agent._paper_day("2026-10-27")).startswith("No entry signal that day")
     assert asyncio.run(agent._paper_day("2026-10-26")).startswith("Not traded on paper")
     agent._backtests = None

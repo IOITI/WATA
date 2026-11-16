@@ -358,6 +358,7 @@ export function DashboardPage() {
               <PauseControl
                 pausedSince={overview.entries_paused_since}
                 pausedByGuard={overview.entries_paused_by_account_guard ?? null}
+                pausedByEdgeGuard={overview.entries_paused_by_edge_guard ?? null}
                 timeZone={timezone}
                 actionsEnabled={actionsEnabled}
               />

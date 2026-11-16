@@ -1901,35 +1901,43 @@ class BacktestService:
         self._write_paper("references.json", references)
         return self.paper()
 
-    def _reference_range(self, run_id: str) -> dict | None:
+    def reference_of(self, run_id: str) -> dict | None:
+        """
+        What a reference run is, without its results: its name, its tested days and the last of them, whether it is
+        done and made with the server's code. None for a run that is gone. Edge Watch (src/admin/edge_watch.py)
+        judges the trades after its last day against it.
+        """
         try:
-            days = read_json(self._file(run_id, "days.json")) or []
-            name = (read_json(self._file(run_id, "request.json")) or {}).get("name")
+            request = read_json(self._file(run_id, "request.json")) or {}
+            done = self._status(run_id).get("state") == DONE
+            days = (read_json(self._file(run_id, "days.json")) or []) if done else []
+            made_with = self._made_with(run_id) if done else {}
         except UnknownRun:
             return None
-        results = sorted(day["day_percent"] for day in days if day.get("status") == "tested" and day.get("day_percent") is not None)
-        if len(results) < 5:
-            return {"run_id": run_id, "name": name, "days": len(results), "low": None, "median": None, "high": None}
-        pick = lambda share: results[min(len(results) - 1, max(0, round(share * (len(results) - 1))))]  # noqa: E731
-        return {"run_id": run_id, "name": name, "days": len(results), "low": pick(0.05), "median": pick(0.5), "high": pick(0.95)}
+        tested = sorted(day["day"] for day in days if day.get("status") == "tested")
+        return {
+            "run_id": run_id, "name": request.get("name"), "done": done, "days": len(tested),
+            "first_day": tested[0] if tested else None, "last_day": tested[-1] if tested else None,
+            "stale": self._stale(made_with) if done else None, "made_with": made_with.get("version"),
+        }
 
     def paper(self, *, with_reports: bool = True) -> dict:
         """
-        Each rule's paper days, newest first, beside the daily range of its reference run, and its report since it
-        began; and apart (``live``), the same of the signals WATA received, beside the range of the live reference.
-        ``with_reports`` False: the days and references alone (the drift, read at each look at health).
+        Each rule's paper days, newest first, with the reference run Edge Watch judges them against, and its report
+        since it began; and apart (``live``), the same of the signals WATA received, with the live reference.
+        ``with_reports`` False: the days and references alone.
         """
         references = self.references()
         index = self.paper_index()
         rules = {}
         for rule_id in sorted(set(index) | (set(self.paper_reports()) if with_reports else set())):
             days = index.get(rule_id) or {}
-            reference = self._reference_range(references[rule_id]) if rule_id in references else None
+            reference = self.reference_of(references[rule_id]) if rule_id in references else None
             listed = []
             for day, run_id in sorted(days.items(), reverse=True):
                 if run_id == NO_ENTRY:
                     listed.append({"day": day, "run_id": None, "state": "no_entry", "day_percent": 0.0, "trades": 0,
-                                   "outside": None, "stale": None, "made_with": None})
+                                   "stale": None, "made_with": None})
                     continue
                 try:
                     status = self._status(run_id)
@@ -1939,12 +1947,9 @@ class BacktestService:
                 except UnknownRun:
                     continue
                 result = record.get("day_percent") if record and record.get("status") == "tested" else None
-                outside = None
-                if result is not None and reference and reference["low"] is not None:
-                    outside = result < reference["low"] or result > reference["high"]
                 listed.append({
                     "day": day, "run_id": run_id, "state": status.get("state"), "day_percent": result,
-                    "trades": record.get("trades") if record else None, "outside": outside,
+                    "trades": record.get("trades") if record else None,
                     # Made with other backtest code than the server's: paper trading makes it again (stale_paper_days).
                     "stale": self._stale(made_with), "made_with": made_with.get("version"),
                 })
@@ -1952,7 +1957,7 @@ class BacktestService:
                               **(self._reports_of(rule_id) if with_reports else {})}
         live = rules.pop(LIVE_PAPER, None)
         if live is None and LIVE_PAPER in references:
-            live = {"days": [], "reference": self._reference_range(references[LIVE_PAPER]),
+            live = {"days": [], "reference": self.reference_of(references[LIVE_PAPER]),
                     **({"report": None, "next_report": None} if with_reports else {})}
         return {"rules": rules, "live": live}
 

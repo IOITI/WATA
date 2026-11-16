@@ -102,6 +102,7 @@ STATEMENTS = (
 # The keys of trade_risk_state that say the pause (src/database/postgres.py, AsyncDbRiskStateManager).
 PAUSED_SINCE_KEY = "entries_paused_since"
 PAUSED_BY_GUARD_KEY = "entries_paused_by_account_guard"
+PAUSED_BY_EDGE_KEY = "entries_paused_by_edge_guard"
 _LONG_NUMBER = re.compile(r"\b\d{7,}\b")
 
 
@@ -332,7 +333,12 @@ def pause_line(state: dict, clock: Clock) -> str:
     since = state.get(PAUSED_SINCE_KEY)
     if since is None:
         return "Entries: taken (not paused)"
-    who = "by the account guard" if state.get(PAUSED_BY_GUARD_KEY) is not None else "from the admin"
+    if state.get(PAUSED_BY_GUARD_KEY) is not None:
+        who = "by the account guard"
+    elif state.get(PAUSED_BY_EDGE_KEY) is not None:
+        who = "by the edge guard"
+    else:
+        who = "from the admin"
     return f"Entries: PAUSED {who} since {clock.at(since)}"
 
 
@@ -528,7 +534,7 @@ class Commands:
         settings = self.settings
         beats = {row["service"]: row for row in await reader.rows(HEARTBEATS_SQL)}
         state = {row["key"]: row["value_time"]
-                 for row in await reader.rows(RISK_STATE_SQL, [PAUSED_SINCE_KEY, PAUSED_BY_GUARD_KEY])}
+                 for row in await reader.rows(RISK_STATE_SQL, [PAUSED_SINCE_KEY, PAUSED_BY_GUARD_KEY, PAUSED_BY_EDGE_KEY])}
         lines = [
             f"WATA at {clock.at(clock.now)} ({clock.name})",
             trader_line(beats.get("trader"), clock),

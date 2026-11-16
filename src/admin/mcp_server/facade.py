@@ -116,6 +116,9 @@ class ResearchServices:
     backtests_path: str = ""
     # Backtests asked for and their results (src/admin/backtests.py).
     backtests: Any = None
+    # The live trades and the rules' paper trades judged against their reference (src/admin/edge_watch_service.py):
+    # read here, its guard never acted on.
+    edge_watch: Any = None
     # The Pine scripts (src/admin/ta_scripts.py) and the signal rules (src/admin/ta_rules.py, read here).
     scripts: Any = None
     rules: Any = None
@@ -159,6 +162,7 @@ class ResearchServices:
             backtests_path=ctx.settings.backtests_path,
             # Switched off in the configuration, backtests are off for Claude too.
             backtests=ctx.backtests if ctx.settings.backtests_enabled else None,
+            edge_watch=getattr(ctx, "edge_watch", None) if ctx.settings.backtests_enabled else None,
             scripts=ctx.ta_scripts,
             rules=RecordedRuleStore(ctx.ta_scripts) if ctx.ta_scripts is not None else None,
             queries=ReadQueries(ctx.queries) if ctx.queries is not None else None,

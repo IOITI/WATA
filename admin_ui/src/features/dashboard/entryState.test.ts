@@ -18,6 +18,7 @@ function overview(changes: {
   saxoLogin?: Overview['saxo_login']
   marketDay?: Overview['market_day']
   pausedByGuard?: string | null
+  pausedByEdgeGuard?: string | null
   breakers?: Overview['breakers']
 } = {}): Overview {
   return {
@@ -51,6 +52,7 @@ function overview(changes: {
     cooldown: { last_loss_at: null, ends_at: null, active: false, ...changes.cooldown },
     entries_paused_since: changes.paused ?? null,
     entries_paused_by_account_guard: changes.pausedByGuard ?? null,
+    entries_paused_by_edge_guard: changes.pausedByEdgeGuard ?? null,
     breakers: changes.breakers ?? null,
     news: changes.news ?? null,
     saxo_login: changes.saxoLogin ?? null,
@@ -235,6 +237,14 @@ describe('the account guard and the day’s breakers', () => {
     const [paused] = entryBlockers(overview({ paused: '2026-10-12T12:00:00Z', pausedByGuard: '2026-10-12T12:00:00Z' }), NOW)
     expect(paused).toEqual({ code: 'paused', reason: 'Paused by the account guard: resume entries once you have looked' })
     expect(entryBlockers(overview({ paused: '2026-10-12T12:00:00Z' }), NOW)[0].reason).toBe('Paused by the operator')
+  })
+
+  it('says the edge guard paused entries when it did', () => {
+    const [paused] = entryBlockers(overview({ paused: '2026-10-12T12:00:00Z', pausedByEdgeGuard: '2026-10-12T12:00:00Z' }), NOW)
+    expect(paused).toEqual({
+      code: 'paused',
+      reason: 'Paused by the edge guard: the live trades look like random entries, not like their reference',
+    })
   })
 
   it('refuses after that many losses in a row, as the trader counts them', () => {

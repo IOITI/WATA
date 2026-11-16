@@ -1,17 +1,17 @@
 """
 Paper trading of the signal rules in shadow: each finished day, the signals
 a rule raised that day (``ta_signal``, journaled by the TA engine) traded by
-a one-day run, as WATA would have traded them. Set beside the daily range of
-a run the operator chose as the rule's reference (on its page), they say
-whether the rule does live what its backtest said it would.
+a one-day run, as WATA would have traded them. Judged against a run the
+operator chose as the rule's reference (on its page), they say
+whether the rule does live what its backtest said it would (Edge Watch,
+src/admin/edge_watch.py, trade by trade).
 
 The signals WATA receives (TradingView's alerts, the journal) are traded on
 paper the same way, under the live settings and with WATA's measured fills
 (fixed fills while too few orders were measured): while entries are paused,
 the day the trader would have had; once trading again, the day beside the
-real one. Set beside a replay of the journal chosen as the live reference,
-two days in a row outside its range are said once on Telegram, and in health
-(src/admin/live_drift.py).
+real one. A replay of the journal chosen as the live reference is what Edge
+Watch judges the live trades against.
 
 Each of them also has its report: one run of its days since it began (a rule
 since it was made, the signals received since their first day on paper), held
@@ -45,7 +45,7 @@ from src.admin.backtest_requests import ask_backtest, local_day, measured_orders
 from src.admin.backtests import LIVE_PAPER, MAX_RAISED_SIGNALS, NO_ENTRY_SIGNAL
 from src.admin.downloads import market_is_open, trading_timezone
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, UnknownRun
-from src.admin.live_drift import live_days, warning
+from src.admin.live_drift import live_days
 from src.admin.processes import QUEUED, RUNNING
 from src.backtest.clock import TradingClock
 from src.backtest.execution import missing
@@ -57,10 +57,8 @@ TICK_SECONDS = 900
 # The finished days a rule is caught up on, and those its paper runs are kept for.
 CATCH_UP_DAYS = 5
 KEEP_DAYS = 60
-# The real days set beside the live paper days and the reference: as many as the paper runs are kept.
+# The real days set beside the live paper days: as many as the paper runs are kept.
 REAL_DAYS = KEEP_DAYS
-# Where the day the drift was last said for is kept, beside the paper index.
-DRIFT_FILE = "drift.json"
 # A report waiting its turn or running: nothing more is asked for its owner meanwhile.
 UNDER_WAY = (QUEUED, RUNNING)
 # The days made with older backtest code made again in one tick, once no other run waits.
@@ -106,7 +104,7 @@ class PaperTrading:
         self._rules = rules
         self._config_path = config_path
         self._clock = clock
-        # How the drift of the live settings is said (Telegram, through the admin's notifier).
+        # Kept for the callers that hand one: what is said of the live days is Edge Watch's now.
         self._notify = notify
         # The owners whose report is being asked (its signals read meanwhile): never asked twice at once.
         self._asking: set[str] = set()
@@ -339,14 +337,11 @@ class PaperTrading:
                     pass
         return asked
 
-    # ── the drift of the live settings ──
+    # ── the live days ──
 
-    async def drift(self) -> tuple[list[dict], str | None, dict | None]:
-        """The live days against the live reference, and what is to be said of them; nothing without a reference."""
+    async def live_days(self) -> list[dict]:
+        """The live days, newest first: each day's paper result beside WATA's real one."""
         live = (self._backtests.paper(with_reports=False).get("live") or {})
-        reference = live.get("reference")
-        if not reference:
-            return [], None, None
         today = self._today()
         try:
             daily = (await self._queries.performance(start=today - timedelta(days=REAL_DAYS)))["daily"]
@@ -354,21 +349,7 @@ class PaperTrading:
             daily = []
         real = {str(row["day_date"])[:10]: row["performance_percent"] for row in daily
                 if row.get("trade_count") and row.get("performance_percent") is not None}
-        days = live_days(live.get("days") or [], real, reference)
-        return days, warning(days, reference), reference
-
-    async def _say_drift(self) -> None:
-        """The drift said once on Telegram, for the newest of the days it rests on."""
-        if self._notify is None:
-            return
-        days, said, _ = await self.drift()
-        if said is None:
-            return
-        newest = next(day["day"] for day in days if day["real_outside"] is not None or day["paper_outside"] is not None)
-        if (self._backtests.paper_file(DRIFT_FILE) or {}).get("said_for") == newest:
-            return
-        await self._notify(f"⚠️ WATA: {said}. The Performance page sets each day beside the reference.")
-        self._backtests.write_paper_file(DRIFT_FILE, {"said_for": newest})
+        return live_days(live.get("days") or [], real)
 
     async def catch_up(self, now: float | None = None) -> int:
         """The paper runs that are due, asked for, then the reports, then the days made with older code; how many."""
@@ -408,10 +389,6 @@ class PaperTrading:
         self._backtests.prune_paper(KEEP_DAYS, self._today(now))
         # Last, once the rest is asked and the oldest let go: the days made with older backtest code, made again.
         asked += await self._remake_stale()
-        try:
-            await self._say_drift()
-        except Exception as e:
-            logger.warning(f"The live settings' drift could not be said: {e}")
         return asked
 
     async def keep(self) -> None:

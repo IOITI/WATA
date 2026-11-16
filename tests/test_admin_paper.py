@@ -146,7 +146,7 @@ def test_a_full_queue_leaves_the_rest_for_later(paper):
     assert len(backtests.paper_index()[SHADOW]) == 1
 
 
-def test_paper_days_are_set_beside_the_daily_range_of_the_rule_s_reference(tmp_path, paper, scripts):  # noqa: F811
+def test_paper_days_name_the_rule_s_reference(tmp_path, paper, scripts):  # noqa: F811
     backtests, _, trading = paper
     asyncio.run(trading.catch_up())
     backtests._waiting.clear()
@@ -155,7 +155,7 @@ def test_paper_days_are_set_beside_the_daily_range_of_the_rule_s_reference(tmp_p
         (folder / "days.json").write_text(json.dumps([{"day": day, "status": "tested", "day_percent": result, "trades": 2}]))
         (folder / "status.json").write_text(json.dumps({"state": "done"}))
 
-    # A run made from the rule, of twenty days from -1.75 % to +3 %: its 5 % and 95 % points are -1.5 and +2.75.
+    # A run made from the rule, of twenty days.
     reference = finished(tmp_path, backtests, scripts, {
         "days.json": [{"day": f"2026-09-{day:02d}", "status": "tested", "day_percent": -2 + day * 0.25} for day in range(1, 21)],
     })
@@ -169,13 +169,15 @@ def test_paper_days_are_set_beside_the_daily_range_of_the_rule_s_reference(tmp_p
     found = backtests.set_reference(reference)["rules"][SHADOW]
 
     assert found["reference"]["run_id"] == reference and found["reference"]["days"] == 20
-    assert (found["reference"]["low"], found["reference"]["high"]) == (-1.5, 2.75)
+    # Edge Watch judges the trades after its last day against it (src/admin/edge_watch.py).
+    assert (found["reference"]["first_day"], found["reference"]["last_day"]) == ("2026-09-01", "2026-09-20")
+    assert "low" not in found["reference"]
     days = {day["day"]: day for day in found["days"]}
     assert [entry["day"] for entry in found["days"]] == ["2026-10-19", "2026-10-16", "2026-10-15"]
-    assert (days["2026-10-15"]["day_percent"], days["2026-10-15"]["outside"]) == (0.4, False)
-    assert (days["2026-10-16"]["day_percent"], days["2026-10-16"]["outside"]) == (-6.0, True)
-    # Still to run: no result, nothing said.
-    assert (days["2026-10-19"]["day_percent"], days["2026-10-19"]["outside"]) == (None, None)
+    assert days["2026-10-15"]["day_percent"] == 0.4 and days["2026-10-16"]["day_percent"] == -6.0
+    assert "outside" not in days["2026-10-15"]
+    # Still to run: no result.
+    assert days["2026-10-19"]["day_percent"] is None
 
 
 def test_the_oldest_paper_days_are_let_go(tmp_path, paper):
@@ -245,43 +247,21 @@ def test_with_enough_orders_measured_the_live_paper_days_draw_their_fills_from_t
     assert request["changes"] == {"execution": "measured"}
 
 
-def test_two_days_outside_the_live_reference_are_said_once(tmp_path, paper, scripts):  # noqa: F811
+def test_the_live_days_set_each_paper_day_beside_the_real_one(tmp_path, paper, scripts):  # noqa: F811
     from tests.test_admin_backtests import finished
 
     backtests, queries, trading = paper
-    said = []
-
-    async def notify(message):
-        said.append(message)
-
-    trading._notify = notify
-    # The reference: a replay of the journal whose days made -1 to +1 %.
-    reference = finished(tmp_path, backtests, scripts, {"days.json": [
-        {"day": f"2026-09-{day:02d}", "status": "tested", "day_percent": result}
-        for day, result in zip(range(1, 11), (-1, -0.5, 0, 0.2, 0.5, 1, -0.2, 0.1, 0.3, -0.8))
-    ]})
-    request_path = folder_of(tmp_path, reference) / "request.json"
-    request = json.loads(request_path.read_text())
-    request["source"] = {"kind": "journal", "signals": 10, "entries": 10}
-    request_path.write_text(json.dumps(request))
-    backtests.set_reference(reference)
-    assert backtests.paper()["live"]["reference"]["low"] == -1
-    # Paused: no real day; the paper days of 16 and 19 October fell under the range.
     for day, result in (("2026-10-16", -6.0), ("2026-10-19", -9.5)):
         run_id = finished(tmp_path, backtests, scripts, {"days.json": [
             {"day": day, "status": "tested", "day_percent": result, "trades": 3}]})
         backtests._index_paper(LIVE_PAPER, day, run_id)
-
-    asyncio.run(trading._say_drift())
-    asyncio.run(trading._say_drift())
-
-    assert len(said) == 1
-    assert said[0].startswith("⚠️ WATA: 2 days in a row outside the live reference's daily range (-1.00 to +1.00 %)")
-    assert "2026-10-19 paper -9.50 %; 2026-10-16 paper -6.00 %" in said[0]
-    # A real day back in the range ends it.
     queries.daily = [{"day_date": "2026-10-20", "trade_count": 2, "performance_percent": 0.4}]
-    days, warning, _ = asyncio.run(trading.drift())
-    assert warning is None and days[0]["day"] == "2026-10-20" and days[0]["real_outside"] is False
+
+    days = asyncio.run(trading.live_days())
+
+    assert [(day["day"], day["real_percent"], day["paper_percent"]) for day in days] == [
+        ("2026-10-20", 0.4, None), ("2026-10-19", None, -9.5), ("2026-10-16", None, -6.0),
+    ]
 
 
 # ── the reports: one run of the days since it began ──
@@ -544,7 +524,7 @@ def test_reports_that_end_too_long_ago_are_let_go(tmp_path, paper):
     assert backtests.paper_reports()[SHADOW]["runs"] == [] and not folder_of(tmp_path, run_id).exists()
 
 
-def test_the_drift_reads_the_days_without_the_reports(paper):
+def test_the_days_are_read_without_the_reports(paper):
     backtests, _, trading = paper
     asyncio.run(trading.catch_up())
 
@@ -692,7 +672,7 @@ def test_a_day_of_the_signals_received_made_with_older_code_is_made_again_under_
     _made_with(tmp_path, backtests, old, OLDER)
     backtests._waiting.clear()
 
-    row = next(day for day in live_days(backtests.paper()["live"]["days"], {}, None) if day["day"] == "2026-10-19")
+    row = next(day for day in live_days(backtests.paper()["live"]["days"], {}) if day["day"] == "2026-10-19")
     assert (row["paper_stale"], row["paper_made_with"]) == (True, "0.33.0")
 
     assert asyncio.run(trading.catch_up()) == 1

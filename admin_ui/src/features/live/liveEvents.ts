@@ -22,6 +22,7 @@ export const LIVE_EVENT_TYPES = [
   'release',
   'agent_finished',
   'agent_question',
+  'edge_watch_changed',
 ] as const
 
 export interface EventNotice {
@@ -96,6 +97,17 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         title: count > 1 ? `${what} (×${count})` : what,
         body: [text(event.instrument_name), position && `position ${position}`, answer].filter(Boolean).join(' · '),
         variant: 'error',
+      }
+    }
+    case 'edge_watch_changed': {
+      // Said when a track comes to, or leaves, a verdict worth a look; the rest refreshes its panels quietly.
+      const verdict = text(event.verdict) ?? ''
+      if (!['broken', 'watch', 'as_expected', 'better_than_expected'].includes(verdict)) return null
+      const owner = text(event.owner) === 'live' ? (text(event.track) === 'paper' ? 'The signals received, on paper' : 'The live trades') : 'A signal rule on paper'
+      return {
+        title: `Edge Watch: ${owner.toLowerCase()} ${verdict === 'broken' ? 'look broken' : verdict === 'watch' ? 'are worth watching' : 'are as expected again'}`,
+        body: verdict === 'broken' ? 'They look like random entries’ rather than their reference’s.' : undefined,
+        variant: verdict === 'broken' ? 'error' : verdict === 'watch' ? 'warning' : 'success',
       }
     }
     case 'signal_decided': {
@@ -211,6 +223,10 @@ export function eventLink(event: LiveEvent): string | null {
     }
     case 'signal_decided':
       return '/signals'
+    case 'edge_watch_changed': {
+      const owner = text(event.owner)
+      return owner && owner !== 'live' ? `/ta/signals/${encodeURIComponent(owner)}#edge-watch` : '/performance#edge-watch'
+    }
     case 'entries_paused':
     case 'entries_resumed':
       return '/'
@@ -268,6 +284,8 @@ export function staleQueries(event: LiveEvent): string[] {
         'ta-script-how', 'ta-script-how-history']
     case 'agent_question':
       return ['agent-conversations', 'agent-conversation']
+    case 'edge_watch_changed':
+      return ['edge-watch']
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
       return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']

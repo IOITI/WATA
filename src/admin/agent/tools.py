@@ -75,8 +75,8 @@ AGENT_TOOLS = (
     "pine_list", "pine_get", "pine_check", "pine_rule_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "backtest_start", "backtest_derive", "backtest_wait",
-    "turbo_model", "rule_list", "rule_compare", "rule_shadow_save", "rule_shadow_remove", "rule_set_reference",
-    "exp_new", "exp_get", "exp_conclude", *MEMORY_READS,
+    "turbo_model", "rule_list", "edge_watch", "rule_compare", "rule_shadow_save", "rule_shadow_remove",
+    "rule_set_reference", "exp_new", "exp_get", "exp_conclude", *MEMORY_READS,
 )
 PROPOSE_SCRIPT = "propose_script_change"
 PROPOSE_RULE = "propose_rule_change"
@@ -676,7 +676,8 @@ OPS_DEFINITIONS = {
             "end and what is held is sold; closed_today counts the closed dates and US holidays alone, and on a "
             "Saturday or a Sunday of the market's weekday the US market is closed all the same: no signal comes and "
             "Saxo quotes no turbo), the trading hours and their timezone, the window around a US release in "
-            "force or next, the pause of new entries (the operator's, or the account guard's), Saxo refusing to renew "
+            "force or next, the pause of new entries (the operator's, the account guard's or the edge guard's: edge_watch "
+            "says why), Saxo refusing to renew "
             "WATA's login, today's figures (trades, result) against their limits, the cooldown after a loss, the day's "
             "breakers' figures, and each open position with its live value and the sales Saxo refused. A long or short "
             "signal is refused, in the trader's order: entries paused; Saxo's login not renewed; a closed day, outside "

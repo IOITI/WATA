@@ -95,6 +95,18 @@ describe('describeEvent', () => {
     expect(eventLink({ type: 'agent_question', conversation_id: '20261028-080000-a1b2c3' })).toBe('/agent/20261028-080000-a1b2c3')
   })
 
+  it('says Edge Watch’s verdicts worth a look, leads to their panel, and refreshes it', () => {
+    expect(describeEvent({ type: 'edge_watch_changed', owner: 'live', track: 'real', verdict: 'broken' })).toEqual({
+      title: 'Edge Watch: the live trades look broken', body: 'They look like random entries’ rather than their reference’s.', variant: 'error' })
+    expect(describeEvent({ type: 'edge_watch_changed', owner: 'live', track: 'paper', verdict: 'watch' })?.title).toBe(
+      'Edge Watch: the signals received, on paper are worth watching')
+    expect(describeEvent({ type: 'edge_watch_changed', owner: '0123456789ab', track: 'paper', verdict: 'too_early' })).toBeNull()
+    expect(eventLink({ type: 'edge_watch_changed', owner: 'live' })).toBe('/performance#edge-watch')
+    expect(eventLink({ type: 'edge_watch_changed', owner: '0123456789ab' })).toBe('/ta/signals/0123456789ab#edge-watch')
+    expect(staleQueries({ type: 'edge_watch_changed' })).toEqual(['edge-watch'])
+    expect(LIVE_EVENT_TYPES).toContain('edge_watch_changed')
+  })
+
   it('says how a download of prices ended, and that days are usually still missing', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done' })).toEqual({
       title: 'Prices downloaded', body: undefined, variant: 'success',

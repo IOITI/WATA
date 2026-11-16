@@ -93,6 +93,20 @@ def test_the_breakers_settings_are_checked(config, problem):
     assert (found is None) if problem is None else (problem in found)
 
 
+@pytest.mark.parametrize("config, problem", [
+    ({}, None),
+    ({"pause_when_edge_broken": True}, None),
+    ({"pause_when_edge_broken": False}, None),
+    ({"pause_when_edge_broken": 1}, "pause_when_edge_broken"),
+    ({"pause_when_edge_broken": "true"}, "pause_when_edge_broken"),
+])
+def test_the_edge_guard_s_switch_is_true_or_false(config, problem):
+    from src.configuration import edge_guard_refusal
+
+    found = edge_guard_refusal(config)
+    assert (found is None) if problem is None else (problem in found)
+
+
 # ── as the trader keeps them ──
 
 
@@ -107,6 +121,9 @@ class RiskState:
 
     async def get_entries_paused_by_guard(self):
         return self.by_guard
+
+    async def get_entries_paused_by_edge_guard(self):
+        return None
 
     async def get_entries_resumed_at(self):
         return self.resumed_at

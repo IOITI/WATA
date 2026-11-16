@@ -103,8 +103,13 @@ def dossiers_of(tmp_path, agent, found, open_market=False, teller=None):
     async def states():
         return {rule["id"]: {"state": "running", "last_alert_at": "2026-10-29T15:00:00Z"} for rule in found}
 
+    async def edges():
+        # Each rule's paper trades as its reference led to expect (src/admin/edge_watch.py).
+        return {rule["id"]: {"tracks": {"paper": {"verdict": "as_expected", "n": 24, "rank": 40.0, "reasons": []}}}
+                for rule in found}
+
     return RuleDossiers(agent=agent, config_path=str(config), path=str(tmp_path / "dossiers.json"),
-                        rules=lambda: found, states=states, paper=lambda: {}, timezone_name="Europe/Paris",
+                        rules=lambda: found, states=states, edges=edges, timezone_name="Europe/Paris",
                         teller=teller, clock=lambda: NOW)
 
 

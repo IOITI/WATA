@@ -132,6 +132,8 @@ import type {
   TaSignal,
   TaVersion,
   LivePaper,
+  EdgeOwner,
+  EdgeWatchList,
   PositionChartRefs,
   Watchlist,
   WebhookState,
@@ -461,6 +463,8 @@ export const api = {
   askPaperReport: (owner: string) => request<BacktestPaper>('POST', `/api/backtests/paper/${encodeURIComponent(owner)}/report`),
   /** The signals WATA received traded on paper under the live settings, beside the real days and the live reference. */
   livePaper: () => request<LivePaper>('GET', '/api/backtests/paper/live'),
+  edgeWatch: () => request<EdgeWatchList>('GET', '/api/edge-watch'),
+  edgeWatchOwner: (owner: string) => request<EdgeOwner>('GET', `/api/edge-watch/${encodeURIComponent(owner)}`),
   /** A run made from a rule becomes the one its paper days are set against. */
   setBacktestReference: (runId: string) => request<BacktestPaper>('POST', `/api/backtests/${encodeURIComponent(runId)}/reference`),
   /** The measure of the turbos made up from the index, and whether one is being made. */

@@ -214,7 +214,10 @@ def test_a_rule_s_history_says_what_it_ran_and_its_switches_into_and_out_of_live
     assert (made_event["runs"]["inputs"], made_event["runs"]["bars"]) == (1, {"type": "time", "timeframe": "1"})
     assert changed["kind"] == "changed" and changed["live"] is False
     assert changed["changes"] == [{"what": "input", "id": "in_0", "name": "Fast", "before": 12, "after": 20}]
-    assert went_live["kind"] == "live" and went_live["unmet"] == ["0 weekday(s) in shadow of 5", "no signal journaled yet"]
+    assert went_live["kind"] == "live" and went_live["unmet"] == [
+        "0 weekday(s) in shadow of 5", "no signal journaled yet",
+        "Edge Watch is not running (it needs the backtests): its paper trades are not judged",
+    ]
     assert (went_live["licence"], went_live["proposed"]) == (None, None)
     # The live rule's change said once: what it runs from its line, its name from the audit trail.
     assert while_live["kind"] == "changed" and while_live["live"] is True and while_live["also"] == ["name"]

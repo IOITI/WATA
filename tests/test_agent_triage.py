@@ -48,7 +48,7 @@ def test_what_is_worth_a_triage_and_what_it_is_about():
     engine = {**DOWN, "id": "ta_engine", "name": "TA engine"}
     assert alert_of(engine, "x", live_rules=False) is None and alert_of(engine, "x", live_rules=True) is not None
     assert alert_of({**DOWN, "status": "warning"}, "x", live_rules=True) is None
-    assert alert_of({"type": "service_status", "id": "live_drift", "status": "warning"}, "x", False).key == "service:live_drift"
+    assert alert_of({"type": "service_status", "id": "edge_watch", "status": "warning"}, "x", False).key == "service:edge_watch"
     assert alert_of({"type": "saxo_authorisation_required"}, "x", False).subject["id"] == "saxo"
     assert alert_of({"type": "entries_paused"}, "x", False).guard
     assert alert_of({"type": "position_opened", "position_id": "1"}, "x", False) is None

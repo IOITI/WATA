@@ -882,6 +882,8 @@ class AsyncDbRiskStateManager:
     ENTRIES_PAUSED_KEY = "entries_paused_since"
     # Set beside it when the account guard paused them (src/trade/account_guard.py).
     PAUSED_BY_GUARD_KEY = "entries_paused_by_account_guard"
+    # Set beside it when the admin's edge guard paused them (src/admin/edge_watch.py: the live trades broken).
+    PAUSED_BY_EDGE_KEY = "entries_paused_by_edge_guard"
     # When entries were last resumed: the account guard's highest value is counted from then.
     RESUMED_KEY = "entries_resumed_at"
 
@@ -924,10 +926,31 @@ class AsyncDbRiskStateManager:
             self.PAUSED_BY_GUARD_KEY, ts,
         )
 
+    async def pause_entries_by_edge_guard(self, ts: datetime, judged_after: datetime) -> bool:
+        """
+        The pause the admin's edge guard sets, said to be its own, in one statement: only while entries are not
+        paused already (the operator's pause or a guard's is never relabelled) and not resumed since
+        ``judged_after``, the moment the judgement that asks for it starts from (a resume meanwhile wins).
+        True when it paused them.
+        """
+        rows = await self.db.fetch(
+            """
+            INSERT INTO trade_risk_state (key, value_time)
+            SELECT paused_key, $1::timestamptz FROM unnest($2::text[]) AS paused_key
+            WHERE NOT EXISTS (SELECT 1 FROM trade_risk_state WHERE key = $3)
+              AND NOT EXISTS (SELECT 1 FROM trade_risk_state WHERE key = $4 AND value_time > $5::timestamptz)
+            ON CONFLICT (key) DO NOTHING
+            RETURNING key
+            """,
+            ts, [self.ENTRIES_PAUSED_KEY, self.PAUSED_BY_EDGE_KEY], self.ENTRIES_PAUSED_KEY, self.RESUMED_KEY,
+            judged_after,
+        )
+        return any(row["key"] == self.ENTRIES_PAUSED_KEY for row in rows)
+
     async def resume_entries(self):
         await self.db.execute(
             "DELETE FROM trade_risk_state WHERE key = ANY($1::text[])",
-            [self.ENTRIES_PAUSED_KEY, self.PAUSED_BY_GUARD_KEY],
+            [self.ENTRIES_PAUSED_KEY, self.PAUSED_BY_GUARD_KEY, self.PAUSED_BY_EDGE_KEY],
         )
         await self.db.execute(
             """
@@ -947,6 +970,12 @@ class AsyncDbRiskStateManager:
         return await self.db.fetchval(
             "SELECT value_time FROM trade_risk_state WHERE key = $1",
             self.PAUSED_BY_GUARD_KEY,
+        )
+
+    async def get_entries_paused_by_edge_guard(self) -> datetime | None:
+        return await self.db.fetchval(
+            "SELECT value_time FROM trade_risk_state WHERE key = $1",
+            self.PAUSED_BY_EDGE_KEY,
         )
 
     async def get_entries_resumed_at(self) -> datetime | None:

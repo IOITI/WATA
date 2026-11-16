@@ -24,8 +24,8 @@ from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, agent, backtests, config, credentials, data, luxalgo, release, research, saxo, services, session, system,
-    ta, trading,
+    actions, agent, backtests, config, credentials, data, edge_watch, luxalgo, release, research, saxo, services, session,
+    system, ta, trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -221,6 +221,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.paper is not None and ctx.settings.backtests_enabled:
             # Trades each shadow rule's finished days on paper, the market closed.
             background.append(asyncio.create_task(ctx.paper.keep()))
+        if ctx.edge_watch is not None and ctx.settings.backtests_enabled:
+            # Judges the live trades and the rules' paper trades against their reference; the edge guard.
+            background.append(asyncio.create_task(ctx.edge_watch.keep()))
         if ctx.mcp_tokens is not None and hasattr(ctx.mcp_tokens, "keep_fresh"):
             # The MCP endpoint's tokens, read again from PostgreSQL every few seconds for the gate.
             background.append(asyncio.create_task(ctx.mcp_tokens.keep_fresh()))
@@ -330,8 +333,8 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, saxo, trading, system, services, release, actions, config, credentials, data, backtests, ta,
-                   research, agent, luxalgo):
+    for module in (session, saxo, trading, system, services, release, actions, config, credentials, data, backtests,
+                   edge_watch, ta, research, agent, luxalgo):
         app.include_router(module.router)
     # LuxAlgo sends the browser back there from its own site: the state admits it (src/admin/routers/luxalgo.py).
     app.include_router(luxalgo.callback_router)

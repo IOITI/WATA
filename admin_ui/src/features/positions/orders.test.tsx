@@ -312,7 +312,7 @@ describe('the orders table', () => {
       for (const part of parts) expect(within(steps[index]).getByText(part)).toBeInTheDocument()
     })
     // The step a reader looks at first: the last, nothing having gone wrong.
-    expect(within(steps[4]).getByRole('button', { name: 'Seen by WATA - completed' })).toHaveAttribute('aria-expanded', 'true')
+    expect(within(steps[4]).getByRole('button', { name: 'Seen by WATA: completed' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('WATA saw the position 520 ms after the order left.')).toBeInTheDocument()
     expect(screen.getByText('Performance (Trailing Stop)')).toBeInTheDocument()
     expect(screen.getByText(/120 at €9.31 → €9.52/)).toBeInTheDocument()
@@ -334,12 +334,12 @@ describe('the orders table', () => {
     serve([BUY, SELL, GIVEN_UP, OLD])
     renderAt('/orders')
 
-    const typical = (await screen.findByText('Order to position')).parentElement as HTMLElement
+    const typical = (await screen.findByText('Order to position')).closest('.glass-tile') as HTMLElement
     expect(within(typical).getByText('520 ms')).toBeInTheDocument()
     expect(within(typical).getByText(/2 entries in this period/)).toBeInTheDocument()
-    const slowest = screen.getByText('Slowest entry').parentElement as HTMLElement
+    const slowest = screen.getByText('Slowest entry').closest('.glass-tile') as HTMLElement
     expect(within(slowest).getByText('Order 5012')).toBeInTheDocument()
-    const without = screen.getByText('Without a position').parentElement as HTMLElement
+    const without = screen.getByText('Without a position').closest('.glass-tile') as HTMLElement
     expect(within(without).getByText('1')).toBeInTheDocument()
   })
 
@@ -347,10 +347,10 @@ describe('the orders table', () => {
     serve([BUY, SELL], { ledger: LEDGER })
     renderAt('/orders')
 
-    const lost = (await screen.findByText('Lost to execution')).parentElement as HTMLElement
+    const lost = (await screen.findByText('Lost to execution')).closest('.glass-tile') as HTMLElement
     expect(within(lost).getByText('+2.20 pt')).toBeInTheDocument()
     expect(within(lost).getByText(/over 3 trades/)).toBeInTheDocument()
-    const exit = screen.getByText('Exit slippage', { selector: 'p, span, div, dt' }).parentElement as HTMLElement
+    const exit = screen.getByText('Exit slippage', { selector: 'p, span, div, dt' }).closest('.glass-tile') as HTMLElement
     expect(within(exit).getByText('+1.20 pt')).toBeInTheDocument()
     const stops = screen.getByText('Stop-loss').closest('tr') as HTMLElement
     expect(within(stops).getByText('−8.50 %')).toBeInTheDocument()
@@ -385,7 +385,7 @@ describe('the orders table', () => {
 
     await screen.findByText('5012')
     expect(screen.queryByText('Market · main')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Toggle visible columns' }))
+    await user.click(screen.getByRole('button', { name: 'Columns shown' }))
     await user.click(screen.getByRole('checkbox', { name: /Type/ }))
 
     expect(screen.getByText('Market · main')).toBeInTheDocument()
@@ -575,7 +575,7 @@ describe('orders Saxo did not take', () => {
     expect(at('5013')).toBeLessThan(at('Refused by Saxo ×37'))
     expect(at('Refused by Saxo ×37')).toBeLessThan(at('5012'))
 
-    const tile = screen.getByText('Refused by Saxo', { selector: 'p' }).parentElement as HTMLElement
+    const tile = screen.getByText('Refused by Saxo', { selector: 'p' }).closest('.glass-tile') as HTMLElement
     expect(within(tile).getByText('37')).toBeInTheDocument()
     expect(within(tile).getByText(/1 run of attempts\. Last at 10:02:10/)).toBeInTheDocument()
   })
@@ -657,7 +657,7 @@ describe('orders Saxo did not take', () => {
     // Its timeline ends on the sell Saxo did not take, after the entry's moments.
     const events = within(screen.getByRole('list', { name: 'The events of position 5098' })).getAllByRole('listitem')
     expect(within(events[0]).getByText('Entry')).toBeInTheDocument()
-    expect(within(events[events.length - 1]).getByRole('button', { name: 'Sell refused - failed' })).toBeInTheDocument()
+    expect(within(events[events.length - 1]).getByRole('button', { name: 'Sell refused: failed' })).toBeInTheDocument()
     const list = screen.getByRole('list', { name: 'The requests about position 5098' })
     expect(within(list).getByText('Sell 120 · Market')).toBeInTheDocument()
     expect(within(list).getByText(`“${LIMIT_ONLY}” (OtherError, HTTP 400)`)).toBeInTheDocument()

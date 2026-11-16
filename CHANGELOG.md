@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.86.0 - Edge Watch: is a strategy broken, or just unlucky?
+
+**Release date:** not released yet
+
+When the live trades lost, nothing said whether the strategy was broken or in a drawdown its backtest always allowed. The check there was (two days in a row outside the reference's daily 5 % to 95 %) could not work under a day target: a shadow rule's reference spanned +0.50 to +0.52 %, and all 11 of its paper days were "outside". A rule's readiness counted a week, which is time, not evidence.
+
+- **Edge Watch** judges the live trades (since the live reference's last day) and each signal rule's paper trades (since its reference's) against their reference run:
+  - the reference's days drawn again whole, 2,000 times: a cone of where the compounded result, the deepest fall and the longest losing streak stood after each number of trades, and how rare the trades' own are;
+  - a sequential test (Page's CUSUM) between the reference's trades and what random entries made of the same days, its threshold set on the drawn paths (at most 5 % false alarms within the horizon, measured 4 to 5.6 %), and how many trades it takes to tell a dead edge;
+  - a verdict: as expected, better than expected, worth watching, broken, too early, no edge over random entries, cannot be watched;
+  - on the Performance page and on each rule's page (its cone drawn by ioiti-ui 0.21.0's `FanChart`), in the Signal rules list, health (`edge_watch` in place of `live_drift`), the bell, Telegram once per change, MCP `edge_watch` (and `rule_list`'s `edge_watch`) and the AI agent's go-live dossier.
+- **The edge guard** (`risk_management.pause_when_edge_broken`, off unless true): a broken verdict on 20 real trades or more, with a reference of 30 trades and 20 days made under the live settings, pauses new entries as the operator's pause does, until resumed. The admin holds it; the trader only says who paused (`entries_paused_by_edge_guard`).
+- **A rule's readiness** keeps its week in shadow, and replaces "no paper day outside the range" with its paper trades as its reference led to expect: 20 at least, not broken, not under 5 % of its paths.
+- **The daily range is gone**: its Telegram line, its health entry and the "Outside" marks of paper days. The live days stay listed, real and on paper.
+- **The admin interface moves to ioiti-ui 0.21.0** (from 0.7.0; 0.21.0 adds `FanChart` to 0.20.3): the look picker's choices and the palette in layers of their own, fields said wrong in every look, a new page in a frame of its own, ⌘K on a Mac and Ctrl K elsewhere.
+
+**On the live path:** the trader's refusal names the edge guard (`src/trade/rules.py`); `src/database/postgres.py` gains the guard's pause, whose SQL was run on PostgreSQL 16 (pgserver): it pauses once, never relabels the operator's pause, and loses to a resume made after its judgement. The trading containers are recreated by this release for those two files and the configuration's check. No backtest turns stale: Edge Watch lives in `src/admin`.
+
+**Verification status:**
+- Python: the whole suite in an environment built from `requirements.txt`; the model's calibration checked on fresh made-up tracks (independent and day-target-shaped).
+- The interface: lint, types, 1,468 tests, the build, on ioiti-ui 0.21.0; the panels seen in the fake admin (light and dark, desktop and phone).
+- ioiti-ui 0.21.0: its own checks (lint, types, 923 tests, builds, `check:package`).
+- Not seen: the server's references and trades.
+
 ## v0.85.0 - What execution cost each trade, and exits on the index that work on the server
 
 **Release date:** 2026-11-12

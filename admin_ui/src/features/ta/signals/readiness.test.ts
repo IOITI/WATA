@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import type { BacktestPaper, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
+import type { EdgeOwner, EdgeTrack, EdgeWatchList, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
 
-import { holdingBack, liveReadiness, scriptAsRule, weekdaysBetween } from './readiness'
+import { edgeOf, holdingBack, liveReadiness, scriptAsRule, weekdaysBetween } from './readiness'
 
 const ZONE = 'Europe/Paris'
 
@@ -31,6 +31,21 @@ const READY: RuleCheckSummary = {
 }
 const detail = (checks: ReturnType<typeof liveReadiness>, id: string) => checks.find((check) => check.id === id)?.detail
 
+/** A rule's Edge Watch: its paper trades as its reference led to expect, unless said otherwise. */
+function edge(track: Partial<EdgeTrack> = {}): EdgeOwner {
+  return {
+    owner: 'aaaaaaaaaaaa', name: 'Cross on US100', mode: 'shadow', reference: null, since: '2026-10-10', model: null,
+    verdict: track.verdict ?? 'as_expected', main: 'paper',
+    tracks: {
+      paper: {
+        verdict: 'as_expected', reasons: ["its trades are what its reference led to expect"], n: 24, cumulative: 1.2, rank: 40,
+        drawdown: -3, drawdown_rank: 60, streak: 2, streak_rank: 70, cusum: 0.4, h: 3, alarm_at: null, trades_to_tell: 90,
+        progress: 0.27, settings_differ: [], ...track,
+      },
+    },
+  }
+}
+
 describe('whether a rule is ready to go live', () => {
   it('counts the weekdays after a day', () => {
     // Wednesday 21 to Monday 26 October: Thursday, Friday and Monday.
@@ -39,17 +54,13 @@ describe('whether a rule is ready to go live', () => {
   })
 
   it('says of a rule a day in shadow, with no signal yet, what is still missing', () => {
-    // The server's rule on 22 October: in shadow since the evening before, no signal, one day on paper, no reference.
-    const paper: BacktestPaper['rules'][string] = {
-      days: [{ day: '2026-10-21', run_id: '20261021-221446-206dc7', state: 'done', day_percent: 0, trades: 0, outside: null }],
-      reference: null,
-    }
-    const checks = liveReadiness(rule(), state(), paper, Date.parse('2026-10-22T07:03:21+02:00'), ZONE)
+    // The server's rule on 22 October: in shadow since the evening before, no signal, no reference run.
+    const checks = liveReadiness(rule(), state(), null, Date.parse('2026-10-22T07:03:21+02:00'), ZONE)
 
-    expect(states(checks)).toEqual({ shadow: 'open', signals: 'fail', paper: 'open', engine: 'pass', rule_check: 'open', script: 'pass' })
+    expect(states(checks)).toEqual({ shadow: 'open', signals: 'fail', edge_watch: 'fail', engine: 'pass', rule_check: 'open', script: 'pass' })
     expect(detail(checks, 'shadow')).toBe('In shadow since 21 Oct 2026: 1 weekday of 5.')
     expect(detail(checks, 'signals')).toBe('None yet: what it would send is not known.')
-    expect(detail(checks, 'paper')).toBe('1 day on paper, and no reference run to set them against: make one a run of this rule.')
+    expect(detail(checks, 'edge_watch')).toBe('No reference run to judge its paper trades against (set one from a run of the rule).')
     expect(detail(checks, 'engine')).toBe('Running, its last bar 22 Oct, 07:02.')
   })
 
@@ -62,54 +73,56 @@ describe('whether a rule is ready to go live', () => {
     expect(detail(before, 'shadow')).toBe('In shadow since 21 Oct 2026: 6 weekdays of 5.')
   })
 
-  it('passes a rule a week in shadow, its days on paper within its reference’s range', () => {
-    const paper: BacktestPaper['rules'][string] = {
-      days: [
-        { day: '2026-10-28', run_id: 'r2', state: 'done', day_percent: 0.4, trades: 2, outside: false },
-        { day: '2026-10-27', run_id: 'r1', state: 'done', day_percent: -0.2, trades: 1, outside: false },
-      ],
-      reference: { run_id: 'ref', name: 'Cross, 3 months', days: 60, low: -1.5, median: 0.2, high: 2.75 },
-    }
-    const checks = liveReadiness(rule(), state({ last_alert_at: '2026-10-28T14:00:00Z' }), paper, Date.parse('2026-10-29T09:00:00Z'), ZONE, READY)
-    expect(states(checks)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'pass', engine: 'pass', rule_check: 'pass', script: 'pass' })
+  it('passes a rule a week in shadow whose paper trades are what its reference led to expect', () => {
+    const checks = liveReadiness(rule(), state({ last_alert_at: '2026-10-28T14:00:00Z' }), edge(), Date.parse('2026-10-29T09:00:00Z'), ZONE, READY)
+    expect(states(checks)).toEqual({ shadow: 'pass', signals: 'pass', edge_watch: 'pass', engine: 'pass', rule_check: 'pass', script: 'pass' })
+    expect(detail(checks, 'edge_watch')).toBe('As expected after 24 trades, +1.20%: consistent with its reference, which is no proof of an edge.')
   })
 
-  it('fails a rule the engine cannot run, with days outside its range, and says a newer version is saved', () => {
-    const paper: BacktestPaper['rules'][string] = {
-      days: [{ day: '2026-10-28', run_id: 'r2', state: 'done', day_percent: -6, trades: 3, outside: true }],
-      reference: { run_id: 'ref', name: null, days: 60, low: -1.5, median: 0.2, high: 2.75 },
-    }
+  it('fails a rule the engine cannot run, whose paper trades look random, and says a newer version is saved', () => {
     const checks = liveReadiness(
       rule({ mode: 'off', latest: { script: 6, libraries: {} } }),
       state({ state: 'error', detail: 'Undeclared identifier (script, line 4)' }),
-      paper,
+      edge({ verdict: 'broken', n: 31, rank: 2, cumulative: -18.4 }),
       Date.parse('2026-10-29T09:00:00Z'),
       ZONE,
       { ...READY, verdict: 'repaints', worst: { id: 'repaints-at-the-bar', level: 'repaints', message: '…' } },
     )
-    expect(states(checks)).toEqual({ shadow: 'fail', signals: 'fail', paper: 'fail', engine: 'fail', rule_check: 'fail', script: 'open' })
+    expect(states(checks)).toEqual({ shadow: 'fail', signals: 'fail', edge_watch: 'fail', engine: 'fail', rule_check: 'fail', script: 'open' })
     expect(detail(checks, 'engine')).toBe('Failing: Undeclared identifier (script, line 4).')
-    expect(detail(checks, 'paper')).toBe('1 of 1 day on paper fell outside the range of its reference run.')
+    expect(detail(checks, 'edge_watch')).toBe("Its paper trades look like random entries', not like its reference's.")
     expect(detail(checks, 'script')).toBe('Version 6 of its script is saved: it runs version 5.')
     // All but the script's version hold it back, as the server's unmet_readiness does.
-    expect(holdingBack(checks).map((check) => check.id)).toEqual(['shadow', 'signals', 'paper', 'engine', 'rule_check'])
+    expect(holdingBack(checks).map((check) => check.id)).toEqual(['shadow', 'signals', 'edge_watch', 'engine', 'rule_check'])
   })
 
-  it('holds back what the server holds back: a week in shadow until it has passed, the others once they failed', () => {
-    const fresh = liveReadiness(rule(), state(), undefined, Date.parse('2026-10-22T07:03:21+02:00'), ZONE)
-    expect(holdingBack(fresh).map((check) => check.id)).toEqual(['shadow', 'signals'])
+  it('holds back what the server holds back: a week in shadow and its paper trades until they pass, the others once they failed', () => {
+    const fresh = liveReadiness(rule(), state(), edge({ verdict: 'too_early', n: 7 }), Date.parse('2026-10-22T07:03:21+02:00'), ZONE)
+    expect(states(fresh).edge_watch).toBe('open')
+    expect(detail(fresh, 'edge_watch')).toBe('7 paper trade(s) since its reference of 20.')
+    expect(holdingBack(fresh).map((check) => check.id)).toEqual(['shadow', 'signals', 'edge_watch'])
 
-    // A week in shadow, a signal journaled, nothing on paper yet, a newer script saved: nothing held.
+    // A week in shadow, a signal journaled, its paper trades as expected, a newer script saved: nothing held.
     const ready = liveReadiness(
       rule({ latest: { script: 6, libraries: {} } }),
       state({ last_alert_at: '2026-10-28T14:00:00Z' }),
-      undefined,
+      edge(),
       Date.parse('2026-10-29T09:00:00Z'),
       ZONE,
       READY,
     )
-    expect(states(ready)).toEqual({ shadow: 'pass', signals: 'pass', paper: 'open', engine: 'pass', rule_check: 'pass', script: 'open' })
     expect(holdingBack(ready)).toEqual([])
+    // Edge Watch not read (the backtests off): held back, as the server holds it.
+    const unread = liveReadiness(rule(), state({ last_alert_at: '2026-10-28T14:00:00Z' }), undefined, Date.parse('2026-10-29T09:00:00Z'), ZONE, READY)
+    expect(holdingBack(unread).map((check) => check.id)).toEqual(['edge_watch'])
+  })
+
+  it('finds a rule’s Edge Watch in the list: null without a reference, undefined while not read', () => {
+    const list: EdgeWatchList = { live: null, rules: { aaaaaaaaaaaa: edge() }, judged_at: '2026-10-29T09:00:00Z', guard: { on: false, least_trades: 20 } }
+    expect(edgeOf(list, 'aaaaaaaaaaaa', true)).toBe(list.rules.aaaaaaaaaaaa)
+    expect(edgeOf(list, 'bbbbbbbbbbbb', true)).toBeNull()
+    expect(edgeOf(undefined, 'aaaaaaaaaaaa', true)).toBeUndefined()
+    expect(edgeOf(list, 'aaaaaaaaaaaa', false)).toBeUndefined()
   })
 
   it('says its script as a rule as the server holds it: what cannot be one, repaints, or was never tested as it runs', () => {

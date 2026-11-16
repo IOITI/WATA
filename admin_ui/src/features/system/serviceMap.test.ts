@@ -4,11 +4,11 @@ import type { ServiceHealth } from '@/lib/types'
 
 import { MAP_LINKS, MAP_NODES, serviceMap } from './serviceMap'
 
-// The ids src/admin/health.py gives its entries (the calendars, the backups and the live drift are files and
+// The ids src/admin/health.py gives its entries (the calendars, the backups and Edge Watch are files and
 // figures, not services: not on the map).
 const HEALTH_IDS = [
   'saxo', 'postgres', 'web_server', 'watchlist_manager', 'price_recorder', 'capital_feed', 'ta_engine',
-  'macro_calendar', 'market_calendar', 'backups', 'live_drift', 'rabbitmq', 'position_monitor', 'telegram', 'trader',
+  'macro_calendar', 'market_calendar', 'backups', 'edge_watch', 'rabbitmq', 'position_monitor', 'telegram', 'trader',
   'scheduler',
 ]
 
@@ -25,7 +25,7 @@ describe('the map of the services', () => {
   it('reads each service’s health under the id the health summary gives it, and draws every service', () => {
     const named = MAP_NODES.flatMap((node) => (node.health ? [node.health] : []))
     for (const id of named) expect(HEALTH_IDS, id).toContain(id)
-    expect(HEALTH_IDS.filter((id) => !named.includes(id))).toEqual(['macro_calendar', 'market_calendar', 'backups', 'live_drift'])
+    expect(HEALTH_IDS.filter((id) => !named.includes(id))).toEqual(['macro_calendar', 'market_calendar', 'backups', 'edge_watch'])
   })
 
   it('gives each node its health, in words too, and leaves the outside ones without', () => {

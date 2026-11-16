@@ -336,6 +336,8 @@ export interface Overview {
   entries_paused_since: string | null
   /** Set beside it while the pause is the account guard's own; null or absent otherwise. */
   entries_paused_by_account_guard?: string | null
+  /** Set beside it while the pause is the edge guard's (Edge Watch judged the live trades broken); absent before. */
+  entries_paused_by_edge_guard?: string | null
   /** The day's figures the breakers are counted on, as the trader counts them; null or absent while they are off. */
   breakers?: OverviewBreakers | null
   /** No entry around US releases (the macro_news rule); null or absent while the rule is off. */
@@ -1884,8 +1886,6 @@ export interface BacktestPaperDay {
   state: BacktestState | 'no_entry'
   day_percent: number | null
   trades: number | null
-  /** Outside the 5 % to 95 % of its reference run's days; none without a result or a reference. */
-  outside: boolean | null
   /**
    * Its run made with other backtest code than the server's (stale, as a run's page says): paper trading makes it
    * again once the market is closed. None while it is not done or when its run names no code; absent before v0.59.0.
@@ -1930,13 +1930,18 @@ export interface BacktestPaperEntry {
   next_report?: BacktestPaperNextReport | null
 }
 
+/** The run a rule's paper trades, or the live trades, are judged against (Edge Watch). */
 export interface BacktestPaperReference {
   run_id: string
   name: string | null
+  done: boolean
+  /** Its tested days, the first and the last: Edge Watch judges the trades after its last day. */
   days: number
-  low: number | null
-  median: number | null
-  high: number | null
+  first_day: string | null
+  last_day: string | null
+  /** Made with other backtest code than the server's. */
+  stale: boolean | null
+  made_with: string | null
 }
 
 export interface BacktestPaper {
@@ -1949,9 +1954,7 @@ export interface BacktestPaper {
 export interface LivePaperDay {
   day: string
   real_percent: number | null
-  real_outside: boolean | null
   paper_percent: number | null
-  paper_outside: boolean | null
   /** The paper run's state; 'no_entry' when no entry signal came that day. */
   paper_state: BacktestState | 'no_entry' | null
   paper_run_id: string | null
@@ -1965,11 +1968,116 @@ export interface LivePaperDay {
 export interface LivePaper {
   days: LivePaperDay[]
   reference: BacktestPaperReference | null
-  /** Said once on Telegram, and in health, when the last two days with a result were outside the range. */
-  warning: string | null
   /** Their report since their first day on paper; absent before v0.53.0. */
   report?: BacktestPaperReport | null
   next_report?: BacktestPaperNextReport | null
+}
+
+/** What Edge Watch says of a track's trades against its reference (src/admin/edge_watch.py). */
+export type EdgeVerdict =
+  | 'too_early'
+  | 'no_model'
+  | 'no_edge_over_random'
+  | 'broken'
+  | 'watch'
+  | 'better_than_expected'
+  | 'as_expected'
+
+/** A track judged: the live trades ('real'), or paper trades ('paper'). */
+export interface EdgeTrack {
+  verdict: EdgeVerdict
+  reasons: string[]
+  n: number
+  /** The trades' results compounded, in percent. */
+  cumulative: number
+  /** The share of the reference's paths at or below the result after n trades, in percent; null past the cone. */
+  rank: number | null
+  /** 'at_most': as rare as the cone's outer level or rarer; 'at_least' the other way. */
+  rank_bound?: 'at_most' | 'at_least' | null
+  /** The deepest fall from a peak so far, in percent (0 or less), and the share of paths that fell as deep. */
+  drawdown: number
+  drawdown_rank: number | null
+  streak: number
+  /** The share of paths that lost as many trades in a row or more. */
+  streak_rank: number | null
+  cusum: number | null
+  h: number | null
+  /** The trade at which the test passed its threshold: broken. */
+  alarm_at: number | null
+  /** The trades the test reads (the live test restarts when entries are resumed). */
+  tested?: number
+  trades_to_tell: number | null
+  progress: number | null
+  past_horizon?: boolean
+  run_id?: string | null
+  settings_differ: string[]
+  sample?: 'too_few' | 'few' | 'fair' | null
+  stale_days?: string[]
+  test_since?: string
+  /** Whole only: each trade's result and the compounded result after it. */
+  path?: { n: number; at: string; result: number; cumulative: number }[]
+}
+
+/** How far a reference's paths went, after each number of trades of its grid, at each level. */
+export interface EdgeCone {
+  levels: number[]
+  n: number[]
+  cumulative: number[][]
+  drawdown: number[][]
+  streak_at_least: number[][]
+}
+
+export interface EdgeModel {
+  usable: boolean
+  why_not: string | null
+  reference: {
+    days: number
+    trades: number
+    per_day: number
+    mean: number
+    sd: number
+    t: number | null
+    sample: 'too_few' | 'few' | 'fair'
+    clip?: [number, number]
+    mean_clipped?: number
+    random_mean?: number | null
+    h1?: 'random' | 'zero'
+    h1_mean?: number
+    edge_over_random?: number
+  }
+  test: {
+    alpha: number
+    h: number
+    trades_to_tell: number | null
+    detect: { median: number | null; p80: number | null; within_horizon: number | null; followed: number }
+  } | null
+  horizon?: number
+}
+
+/** An owner Edge Watch judges: the live trades ('live') or a signal rule on paper. */
+export interface EdgeOwner {
+  owner: string
+  name: string | null
+  mode: string | null
+  reference: BacktestPaperReference | null
+  /** The day its trades are judged from: the day after its reference's last day. */
+  since: string | null
+  model: EdgeModel | null
+  verdict: EdgeVerdict
+  /** The track its verdict is of. */
+  main: 'real' | 'paper'
+  tracks: Partial<Record<'real' | 'paper', EdgeTrack>>
+  /** Whole only. */
+  cone?: EdgeCone | null
+  guard?: { on: boolean; least_trades: number }
+  judged_at?: string
+}
+
+export interface EdgeWatchList {
+  live: EdgeOwner | null
+  rules: Record<string, EdgeOwner>
+  judged_at: string
+  guard: { on: boolean; least_trades: number }
 }
 
 /** Recorded by WATA, or made up from an index (src/backtest/turbo_model.py). */

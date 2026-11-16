@@ -1084,11 +1084,21 @@ Every page says when a run's turbos were made up, and with what measure. **It is
 
 ### Shadow rules on paper
 
-Each finished day, once the market is closed, every signal rule in shadow is traded on the signals it raised that day, as WATA would have traded them. The Signal rules page shows each rule's days on paper. On a run made from a rule, **"Set as the rule's reference"** makes it the run those days are set against: a day outside the range of 90 % of the reference's days is marked. A rule that does live what its backtest said can go live; one that does not, stays in shadow.
+Each finished day, once the market is closed, every signal rule in shadow is traded on the signals it raised that day, as WATA would have traded them. The Signal rules page shows each rule's days on paper. On a run made from a rule, **"Set as the rule's reference"** makes it the run Edge Watch judges its paper trades against (below). A rule that does live what its backtest said can go live; one that does not, stays in shadow.
 
 ### The signals WATA receives, on paper
 
-The signals WATA received each finished weekday (TradingView's alerts) are traded on paper the same way, under the live settings, with WATA's own measured fills once enough orders were measured: while new entries are paused, the day the trader would have had; once it trades again, the day beside the real one. On a replay of the signals WATA received, **"Set as the live reference"** makes its daily range the one each paper day and each real day is set against. Two days in a row outside it are said once on Telegram and are a warning on the System page. The Performance page lists the days: real, on paper, outside the range or not (since v0.49.0).
+The signals WATA received each finished weekday (TradingView's alerts) are traded on paper the same way, under the live settings, with WATA's own measured fills once enough orders were measured: while new entries are paused, the day the trader would have had; once it trades again, the day beside the real one. On a replay of the signals WATA received, **"Set as the live reference"** makes it the backtest Edge Watch judges the real trades against (below). The Performance page lists the days, real and on paper (since v0.49.0).
+
+### Edge Watch: broken, or just unlucky?
+
+When a strategy loses, is it broken, or in a drawdown it was always going to have? **Edge Watch** (since v0.86.0) answers it for the live trades (on the Performance page) and for each signal rule on paper (on its page), against their reference run:
+
+- **The cone.** The reference's tested days are drawn again, whole (the day target and the day's breakers shape a day's trades), 2,000 times: where the compounded result, the deepest fall and the longest losing streak stood after each number of trades. The real or paper trades since the reference's last day are drawn over it, and each figure says how rare it is ("1 % or fewer of the reference's paths did as badly after 44 trades").
+- **The test.** A sequential test (Page's CUSUM) between the reference's trades and what random entries made of the same days, which pay the same spread and costs. Its threshold is set on the drawn paths: trades like the reference's pass it within the horizon 5 % of the time at most. It also says how many trades it takes to tell a dead edge: a thin edge takes hundreds, which is itself worth knowing.
+- **The verdict.** As expected, better than expected (luck: no reason to trust it more), worth watching, broken, too early, no edge over random entries, or cannot be watched (a reference under 10 days or 15 trades). A verdict that comes or goes is said on Telegram and in the bell.
+- **The edge guard** (`risk_management.pause_when_edge_broken`, off unless set): on a broken verdict on 20 real trades or more, a reference of 30 trades and 20 days at least, made under the live settings, new entries are paused as the dashboard's pause does, until you resume them (which starts the test afresh). The admin holds it: while the admin is stopped, nothing is judged.
+- **Readiness.** A rule goes live once, besides its week in shadow, its paper trades are what its reference led to expect: 20 of them at least, not broken, not under 5 % of its paths. That is consistency, never proof of an edge.
 
 ### Paper trading reports, in Backtests
 

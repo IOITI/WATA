@@ -1067,9 +1067,9 @@ describe('the statistics of a period', () => {
     renderPage('/data/assets/saxo/2?tab=statistics')
 
     const changed = await screen.findByText('Change over the period')
-    expect(changed.parentElement).toHaveTextContent('+0.80')
-    expect(screen.getByText('Range of a day, on average').parentElement).toHaveTextContent('0.80')
-    expect(screen.getByText('Spread, on average').parentElement).toHaveTextContent('0.05')
+    expect(changed.closest('.glass-tile')).toHaveTextContent('+0.80')
+    expect(screen.getByText('Range of a day, on average').closest('.glass-tile')).toHaveTextContent('0.80')
+    expect(screen.getByText('Spread, on average').closest('.glass-tile')).toHaveTextContent('0.05')
     // The days' table; the figures of the spread are a table of their own, under its chart.
     const [table] = screen.getAllByRole('table')
     expect(within(table).getAllByRole('row')).toHaveLength(3)
@@ -1098,7 +1098,7 @@ describe('the statistics of a period', () => {
     const [table] = await screen.findAllByRole('table')
     expect(await within(table).findByText('Spread')).toBeInTheDocument()
     expect(within(table).queryByText('Widest spread')).not.toBeInTheDocument()
-    expect(screen.getByText('Spread, on average').parentElement).toHaveTextContent('Widest 0.09')
+    expect(screen.getByText('Spread, on average').closest('.glass-tile')).toHaveTextContent('Widest 0.09')
   })
 
   it('are worked out for a month at most, without asking', async () => {
@@ -1159,7 +1159,7 @@ describe('the trades on the asset', () => {
       'href',
       '/positions?find=5001',
     )
-    expect(screen.getByText('Won').parentElement).toHaveTextContent('1 of 1')
+    expect(screen.getByText('Won').closest('.glass-tile')).toHaveTextContent('1 of 1')
   })
 
   it('of an index are those on the turbos the recorder followed', async () => {

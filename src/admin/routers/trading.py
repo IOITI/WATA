@@ -174,6 +174,8 @@ async def overview_of(ctx) -> dict:
         "entries_paused_since": await ctx.queries.entries_paused_since(),
         # Set while the pause is the account guard's own (src/trade/account_guard.py).
         "entries_paused_by_account_guard": await ctx.queries.entries_paused_by_guard(),
+        # Set while the pause is the admin's edge guard's (src/admin/edge_watch.py: the live trades judged broken).
+        "entries_paused_by_edge_guard": await ctx.queries.entries_paused_by_edge_guard(),
         # The day's breakers' figures (losses in a row, the day's best and now); None while they are off.
         "breakers": await _breakers(ctx, limits),
         # Saxo refusing to renew the login keeps entries out (the trader's heartbeat); None while not heard from.

@@ -68,7 +68,7 @@ describe('closed positions table', () => {
     const user = userEvent.setup()
     renderTable('closed')
 
-    await user.click(screen.getByRole('button', { name: 'Toggle visible columns' }))
+    await user.click(screen.getByRole('button', { name: 'Columns shown' }))
     await user.click(screen.getByRole('checkbox', { name: /Open price/ }))
 
     expect(headers()).toContain('Open price')

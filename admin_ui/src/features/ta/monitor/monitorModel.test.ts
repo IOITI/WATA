@@ -200,9 +200,9 @@ describe('the delivery and the results', () => {
       rules: {
         bbbbbbbbbbbb: {
           days: [
-            { day: '2026-10-21', run_id: '20261022-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2, outside: false },
-            { day: '2026-10-20', run_id: '20261021-010000-bbbbbb', state: 'done', day_percent: -0.1, trades: 1, outside: false },
-            { day: '2026-10-14', run_id: '20261015-010000-cccccc', state: 'done', day_percent: 3, trades: 4, outside: false },
+            { day: '2026-10-21', run_id: '20261022-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2 },
+            { day: '2026-10-20', run_id: '20261021-010000-bbbbbb', state: 'done', day_percent: -0.1, trades: 1 },
+            { day: '2026-10-14', run_id: '20261015-010000-cccccc', state: 'done', day_percent: 3, trades: 4 },
           ],
           reference: null,
         },

@@ -34,6 +34,7 @@ import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { ABOUT_PARAM, subjectOf } from '@/features/agent/model'
 import { useVerdicts } from '@/features/agent/useConversation'
 import { useSession } from '@/features/auth/auth-context'
+import { useEdgeWatch } from '@/features/edgeWatch/useEdgeWatch'
 import { paperReportHref, paperTradingHref } from '@/features/backtests/paperModel'
 import { madeByClaude } from '@/features/system/claude'
 import { monitorHref } from '@/features/ta/monitor/monitorModel'
@@ -49,7 +50,7 @@ import { WholeLine } from './WholeLine'
 import type { RuleDraft } from './ruleModel'
 import { paperLine } from './paper'
 import { useRuleChecks } from '../ruleCheck/useRuleCheck'
-import { liveReadiness } from './readiness'
+import { edgeOf, liveReadiness } from './readiness'
 import { RuleModeDialog } from './RuleModeDialog'
 import { SignalJournal } from './SignalJournal'
 import { useRuleActions } from './useRuleActions'
@@ -139,6 +140,8 @@ export function SignalRulesPage() {
   // Each shadow rule's finished days traded on paper, by the backtests.
   const paperQuery = useQuery({ queryKey: ['backtest-paper'], queryFn: api.backtestPaper, enabled: backtestsEnabled, staleTime: 60_000 })
   const paper = paperQuery.data
+  // Each rule's paper trades against its reference: the list's line and its readiness to go live.
+  const edges = useEdgeWatch(backtestsEnabled).data
   const rules: TaRules | undefined = rulesQuery.data
   // What the AI agent last concluded on each rule (its go-live dossier, say).
   const verdictsQuery = useVerdicts((rules?.rules ?? []).map((rule) => `rule:${rule.id}`))
@@ -360,7 +363,7 @@ export function SignalRulesPage() {
         header: 'On paper',
         cell: ({ row }) => {
           const entry = paper?.rules[row.id]
-          const line = paperLine(entry, row.mode)
+          const line = paperLine(entry, row.mode, edges?.rules[row.id])
           if (!line) return <span className="text-xs text-muted-foreground">-</span>
           const last = entry?.days.find((day) => day.day_percent !== null)
           return (
@@ -385,10 +388,7 @@ export function SignalRulesPage() {
                 </p>
               )}
               {line.reference && (
-                <p className={line.tone === 'warning' ? 'text-warning' : 'text-muted-foreground'}>
-                  {line.outside > 0 ? `${line.outside} day${line.outside === 1 ? '' : 's'} outside it. ` : ''}
-                  {line.reference}
-                </p>
+                <p className={line.tone === 'warning' ? 'text-warning' : 'text-muted-foreground'}>{line.reference}</p>
               )}
               {entry && (entry.days.length > 0 || entry.report) && (
                 <Link className="text-muted-foreground underline underline-offset-2 hover:text-foreground" to={paperTradingHref(row.id)}>
@@ -436,7 +436,7 @@ export function SignalRulesPage() {
   const change = changing
   const readiness =
     change?.mode === 'live'
-      ? liveReadiness(change.rule, states[change.rule.id], paper?.rules[change.rule.id], Date.now(), timezone, ruleChecks.data?.rules[change.rule.id])
+      ? liveReadiness(change.rule, states[change.rule.id], edgeOf(edges, change.rule.id, backtestsEnabled), Date.now(), timezone, ruleChecks.data?.rules[change.rule.id])
       : []
 
   return (

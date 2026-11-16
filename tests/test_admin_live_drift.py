@@ -1,53 +1,55 @@
-"""The live settings against their reference (src/admin/live_drift.py), and what health says of it."""
+"""The live days (src/admin/live_drift.py), and what health says of Edge Watch (src/admin/health.py)."""
 
-from src.admin.health import OK, WARNING, live_drift_entry
-from src.admin.live_drift import live_days, warning
-
-REFERENCE = {"run_id": "r1", "name": "Replay of September", "days": 20, "low": -2.0, "median": 0.1, "high": 1.5}
+from src.admin.edge_watch import AS_EXPECTED, BROKEN
+from src.admin.health import OK, WARNING, edge_watch_entry
+from src.admin.live_drift import live_days
 
 
 def paper(day: str, result: float | None, state: str = "done") -> dict:
-    return {"day": day, "run_id": f"p-{day}", "state": state, "day_percent": result, "trades": 2, "outside": None}
+    return {"day": day, "run_id": f"p-{day}", "state": state, "day_percent": result, "trades": 2}
 
 
-def test_each_day_sets_its_real_and_paper_results_beside_the_range_newest_first():
-    days = live_days([paper("2026-10-19", -3.0), paper("2026-10-20", 0.5)], {"2026-10-20": 2.0}, REFERENCE)
+def test_each_day_sets_its_real_and_paper_results_side_by_side_newest_first():
+    days = live_days([paper("2026-10-19", -3.0), paper("2026-10-20", 0.5)], {"2026-10-20": 2.0})
 
     assert [day["day"] for day in days] == ["2026-10-20", "2026-10-19"]
-    assert (days[0]["real_percent"], days[0]["real_outside"], days[0]["paper_outside"]) == (2.0, True, False)
-    assert (days[1]["real_percent"], days[1]["real_outside"], days[1]["paper_outside"]) == (None, None, True)
-    # Without a reference nothing is judged.
-    assert live_days([paper("2026-10-19", -3.0)], {}, None)[0]["paper_outside"] is None
+    assert (days[0]["real_percent"], days[0]["paper_percent"]) == (2.0, 0.5)
+    assert (days[1]["real_percent"], days[1]["paper_percent"], days[1]["paper_run_id"]) == (None, -3.0, "p-2026-10-19")
+    assert "real_outside" not in days[0]
 
 
-def test_the_warning_needs_the_last_two_days_with_a_result_outside():
-    two = live_days([paper("2026-10-19", -3.0), paper("2026-10-20", -2.5)], {}, REFERENCE)
-    one = live_days([paper("2026-10-19", -3.0), paper("2026-10-20", 0.0)], {}, REFERENCE)
-    # A day still to run has no result and is passed over.
-    pending = live_days([paper("2026-10-16", -4.0), paper("2026-10-19", -3.0), paper("2026-10-20", None, "running")],
-                        {}, REFERENCE)
-
-    assert warning(two, REFERENCE) == (
-        "2 days in a row outside the live reference's daily range (-2.00 to +1.50 %): "
-        "2026-10-20 paper -2.50 %; 2026-10-19 paper -3.00 %"
-    )
-    assert warning(one, REFERENCE) is None
-    assert warning(pending, REFERENCE).endswith("2026-10-19 paper -3.00 %; 2026-10-16 paper -4.00 %")
-    assert warning(live_days([paper("2026-10-20", -9.0)], {}, REFERENCE), REFERENCE) is None
+def _state(verdict: str | None, *, rules: dict | None = None, differ: list[str] | None = None, age: float = 10.0) -> dict:
+    real = None if verdict is None else {
+        "verdict": verdict, "n": 24, "reasons": ["its trades look like random entries' rather than its reference's"],
+        "settings_differ": differ or [],
+    }
+    live = None if verdict is None else {"tracks": {"real": real}}
+    return {"judgements": {"live": live, "rules": rules or {}}, "age": age}
 
 
-def test_a_real_day_outside_counts_as_a_paper_one_does():
-    days = live_days([paper("2026-10-19", -3.0)], {"2026-10-20": 3.1}, REFERENCE)
+def test_health_warns_when_the_live_trades_are_broken_and_says_as_expected_otherwise():
+    [broken] = edge_watch_entry(_state(BROKEN), guard_on=False)
+    [calm] = edge_watch_entry(_state(AS_EXPECTED), guard_on=False)
 
-    assert warning(days, REFERENCE).endswith("2026-10-20 real +3.10 %; 2026-10-19 paper -3.00 %")
+    assert (broken["id"], broken["status"]) == ("edge_watch", WARNING)
+    assert broken["detail"].startswith("The live trades: broken after 24 trades: its trades look like random")
+    assert (calm["status"], calm["detail"]) == (OK, "The live trades: as expected after 24 trades")
 
 
-def test_health_warns_with_what_is_said_and_says_nothing_without_a_reference():
-    days = live_days([paper("2026-10-19", -3.0), paper("2026-10-20", -2.5)], {}, REFERENCE)
+def test_health_says_nothing_while_nothing_is_watched_and_the_guard_is_off():
+    assert edge_watch_entry(_state(None), guard_on=False) == []
+    assert edge_watch_entry({"judgements": None, "age": None}, guard_on=False) == []
+    [rules] = edge_watch_entry(_state(None, rules={"a1": {}, "b2": {}}), guard_on=False)
+    assert (rules["status"], rules["detail"]) == (OK, "2 rules watched on paper; no live reference")
 
-    [warned] = live_drift_entry(days, warning(days, REFERENCE), REFERENCE)
-    [calm] = live_drift_entry(live_days([paper("2026-10-20", 0.0)], {}, REFERENCE), None, REFERENCE)
 
-    assert (warned["id"], warned["status"]) == ("live_drift", WARNING) and warned["detail"].startswith("2 days in a row")
-    assert (calm["status"], calm["detail"]) == (OK, "Within the range of Replay of September: 1 day set beside it")
-    assert live_drift_entry([], None, None) == []
+def test_health_warns_when_the_guard_is_on_and_cannot_act():
+    [no_reference] = edge_watch_entry(_state(None), guard_on=True)
+    [differ] = edge_watch_entry(_state(AS_EXPECTED, differ=["stoploss_percent"]), guard_on=True)
+    [silent] = edge_watch_entry(_state(AS_EXPECTED, age=600.0), guard_on=True)
+
+    assert no_reference["status"] == WARNING and "no live reference" in no_reference["detail"]
+    assert differ["status"] == WARNING and "stoploss_percent" in differ["detail"]
+    assert silent["status"] == WARNING and "has not judged" in silent["detail"]
+    # The guard off, settings that differ are said on the Performance page, not as a warning.
+    assert edge_watch_entry(_state(AS_EXPECTED, differ=["stoploss_percent"]), guard_on=False)[0]["status"] == OK

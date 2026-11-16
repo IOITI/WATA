@@ -89,8 +89,8 @@ DAY = (
     ),
     Param(
         path="trade.rules[risk_management]", group="day", label="Risk limits", kind="rule", optional=True,
-        help="A pause after a loss, a limit on the trades of a day, the day's breakers and the account guard. "
-             "Absent, none applies.",
+        help="A pause after a loss, a limit on the trades of a day, the day's breakers, the account guard and the "
+             "edge guard. Absent, none applies.",
         readers=(TRADER, ADMIN), consumers=("dashboard", "backtests"), risk=TRADING,
         rule_default={"cooldown_after_loss_minutes": 0, "max_trades_per_day": 0},
         effects=("The trader refuses entries during the pause, once the day's trades are made, after the losses or "
@@ -142,6 +142,22 @@ DAY = (
         related=(rule("risk_management", "pause_below_balance_eur"),),
         caveats=("A deposit raises the highest; a withdrawal reads as a fall.",
                  "Resuming entries starts the highest afresh."),
+    ),
+    Param(
+        path=rule("risk_management", "pause_when_edge_broken"), group="day",
+        label="Pause entries when Edge Watch says the live trades are broken", kind="bool", optional=True,
+        default=False,
+        help="When the live trades since the live reference look like random entries' rather than the reference's "
+             "(Edge Watch's test, at most 5 % of false alarms), new entries are paused until you resume them.",
+        readers=(ADMIN,), consumers=("dashboard",), risk=TRADING,
+        effects=("The admin judges the live trades every 30 s while the market is open and, on a broken verdict "
+                 "with 20 real trades or more, pauses new entries as the dashboard's pause does, said on Telegram.",),
+        related=(rule("risk_management", "pause_below_balance_eur"),),
+        caveats=("It needs a live reference (a replay of the signals WATA received, chosen on its run's page) that "
+                 "rests on 30 trades and 20 days at least, made under the live settings: otherwise it does nothing, "
+                 "and health says why.",
+                 "It is the admin's: while the admin is stopped, nothing is judged and nothing is paused.",
+                 "Resuming entries starts the test afresh."),
     ),
     Param(
         path=COOLDOWN, group="day", label="Pause after a loss", kind="int", unit="min", minimum=0, optional=True,

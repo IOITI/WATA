@@ -182,7 +182,7 @@ describe('the Engine monitor', () => {
     paper = {
       rules: {
         bbbbbbbbbbbb: {
-          days: [{ day: '2026-10-21', run_id: '20261022-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2, outside: false }],
+          days: [{ day: '2026-10-21', run_id: '20261022-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2 }],
           reference: null,
         },
       },

@@ -1,28 +1,42 @@
 import { describe, expect, it } from 'vitest'
 
-import type { BacktestPaper } from '@/lib/types'
+import type { BacktestPaper, EdgeOwner } from '@/lib/types'
 
 import { paperLine } from './paper'
 
 const ENTRY: BacktestPaper['rules'][string] = {
   days: [
-    { day: '2026-10-19', run_id: 'r3', state: 'done', day_percent: 0.4, trades: 2, outside: false },
-    { day: '2026-10-16', run_id: 'r2', state: 'done', day_percent: -6, trades: 3, outside: true },
-    { day: '2026-10-15', run_id: 'r1', state: 'queued', day_percent: null, trades: null, outside: null },
+    { day: '2026-10-19', run_id: 'r3', state: 'done', day_percent: 0.4, trades: 2 },
+    { day: '2026-10-16', run_id: 'r2', state: 'done', day_percent: -6, trades: 3 },
+    { day: '2026-10-15', run_id: 'r1', state: 'queued', day_percent: null, trades: null },
   ],
-  reference: { run_id: 'ref', name: 'EMA cross, 3 months', days: 60, low: -1.5, median: 0.2, high: 2.75 },
+  reference: { run_id: 'ref', name: 'EMA cross, 3 months', days: 60, done: true, first_day: '2026-07-14', last_day: '2026-10-09', stale: false, made_with: '0.85.0' },
 }
 
 describe('a rule traded on paper', () => {
-  it('says its days, the last one, and those outside its reference', () => {
+  it('says its days, the last one, and its reference before Edge Watch has judged it', () => {
     expect(paperLine(ENTRY, 'shadow')).toEqual({
       total: '2 days, −5.60%',
       report: null,
       last: 'Last, 19 Oct: +0.40% in 2 trades',
-      reference: 'Its reference (EMA cross, 3 months) made −1.50% to +2.75% on 90 % of its days.',
-      outside: 1,
-      tone: 'warning',
+      reference: 'Its reference (EMA cross, 3 months): Edge Watch judges its paper trades after it.',
+      tone: 'neutral',
     })
+  })
+
+  it('says what Edge Watch says of its paper trades, in its tone', () => {
+    const edge: EdgeOwner = {
+      owner: 'r', name: 'EMA cross', mode: 'shadow', reference: null, since: '2026-10-10', model: null, verdict: 'watch', main: 'paper',
+      tracks: {
+        paper: {
+          verdict: 'watch', reasons: [], n: 24, cumulative: -3.1, rank: 4, drawdown: -6, drawdown_rank: 10, streak: 4, streak_rank: 9,
+          cusum: 2, h: 5, alarm_at: null, trades_to_tell: 80, progress: 0.3, settings_differ: [],
+        },
+      },
+    }
+    expect(paperLine(ENTRY, 'shadow', edge)).toMatchObject({ reference: 'Edge Watch: Worth watching after 24 trades, −3.10%.', tone: 'warning' })
+    const fine = { ...edge, tracks: { paper: { ...edge.tracks.paper!, verdict: 'as_expected' as const } } }
+    expect(paperLine(ENTRY, 'shadow', fine)?.tone).toBe('ok')
   })
 
   it('without a reference, or before its first day', () => {

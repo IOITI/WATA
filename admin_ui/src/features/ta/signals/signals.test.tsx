@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { BacktestPaper, ScriptOrigin, Session, TaEngine, TaHistory, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
+import type { BacktestPaper, EdgeWatchList, ScriptOrigin, Session, TaEngine, TaHistory, TaRule, TaScriptSummary, TaSignal } from '@/lib/types'
 import { run as backtest } from '@/test/backtests'
 import { WithTrail } from '@/test/WithTrail'
 
@@ -124,6 +124,23 @@ const HISTORY: TaHistory = {
 
 let rules: TaRule[] = []
 let paper: BacktestPaper = { rules: {} }
+// Edge Watch: the rule's paper trades as its reference led to expect, 24 of them.
+const EDGES: EdgeWatchList = {
+  live: null, judged_at: '2026-10-19T10:00:00Z', guard: { on: false, least_trades: 20 },
+  rules: {
+    aaaaaaaaaaaa: {
+      owner: 'aaaaaaaaaaaa', name: 'Cross on US100', mode: 'shadow', reference: null, since: '2026-10-10', model: null,
+      verdict: 'as_expected', main: 'paper',
+      tracks: {
+        paper: {
+          verdict: 'as_expected', reasons: ['its trades are what its reference led to expect'], n: 24, cumulative: 1.2, rank: 40,
+          drawdown: -3, drawdown_rank: 60, streak: 2, streak_rank: 70, cusum: 0.4, h: 3, alarm_at: null, trades_to_tell: 90,
+          progress: 0.27, settings_differ: [],
+        },
+      },
+    },
+  },
+}
 let sent: { method: string; path: string; body: unknown }[] = []
 
 // Where the version a rule pins came from: LuxAlgo's Library, in the test that says so.
@@ -178,6 +195,7 @@ function serve({ modeError }: { modeError?: { status: number; detail: string } }
       }
       if (url.pathname.startsWith('/api/data/assets/')) return json({ bars: [] })
       if (url.pathname === '/api/backtests/paper') return json(paper)
+      if (url.pathname === '/api/edge-watch') return json(EDGES)
       if (url.pathname === `/api/backtests/${FROM_RUN.id}`) return json(FROM_RUN)
       if (url.pathname === '/api/data/assets') {
         return json({
@@ -285,15 +303,15 @@ describe('the Signal rules page', () => {
     }
   })
 
-  it('shows each shadow rule traded on paper, beside its reference', async () => {
+  it('shows each shadow rule traded on paper, and what Edge Watch says of it', async () => {
     paper = {
       rules: {
         aaaaaaaaaaaa: {
           days: [
-            { day: '2026-10-19', run_id: '20261020-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2, outside: false },
-            { day: '2026-10-16', run_id: '20261017-010000-bbbbbb', state: 'done', day_percent: -6, trades: 3, outside: true },
+            { day: '2026-10-19', run_id: '20261020-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2 },
+            { day: '2026-10-16', run_id: '20261017-010000-bbbbbb', state: 'done', day_percent: -6, trades: 3 },
           ],
-          reference: { run_id: '20261012-010000-cccccc', name: 'Cross, 3 months', days: 60, low: -1.5, median: 0.2, high: 2.75 },
+          reference: { run_id: '20261012-010000-cccccc', name: 'Cross, 3 months', days: 60, done: true, first_day: '2026-07-14', last_day: '2026-10-09', stale: false, made_with: '0.85.0' },
         },
       },
     }
@@ -301,7 +319,7 @@ describe('the Signal rules page', () => {
 
     expect(await screen.findByText('2 days, −5.60%')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Last, 19 Oct: +0.40% in 2 trades' })).toHaveAttribute('href', '/backtests/20261020-010000-aaaaaa')
-    expect(screen.getByText(/^1 day outside it\. Its reference \(Cross, 3 months\)/)).toBeInTheDocument()
+    expect(screen.getByText('Edge Watch: As expected after 24 trades, +1.20%.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Every day on paper' })).toHaveAttribute('href', '/backtests/paper#rule-aaaaaaaaaaaa')
   })
 
@@ -309,7 +327,7 @@ describe('the Signal rules page', () => {
     paper = {
       rules: {
         aaaaaaaaaaaa: {
-          days: [{ day: '2026-10-19', run_id: '20261020-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2, outside: false }],
+          days: [{ day: '2026-10-19', run_id: '20261020-010000-aaaaaa', state: 'done', day_percent: 0.4, trades: 2 }],
           reference: null,
           report: {
             run_id: '20261020-213500-dddddd', from: '2026-10-14', to: '2026-10-19', made_at: '2026-10-20T21:40:00Z', signals: 12, versions: [1],

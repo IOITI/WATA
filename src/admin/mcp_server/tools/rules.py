@@ -10,17 +10,29 @@ from datetime import date, datetime, timezone
 
 from starlette.concurrency import run_in_threadpool
 
-from src.admin.mcp_server.budget import research_tool
+from src.admin.mcp_server.budget import Refused, research_tool
 from src.admin.mcp_server.shadow import ShadowRules
 from src.admin.mcp_server.shape import compacted
 from src.admin.ta_compare import compare, default_tolerance
 from src.admin.rule_checks import readiness_check
-from src.admin.ta_readiness import unmet_readiness
+from src.admin.ta_readiness import EDGE_OFF, unmet_readiness
 from src.admin.ta_rules import bars_label
 
 
+def edge_line(entry: dict | None) -> dict | None:
+    """A rule's Edge Watch in short: the verdict of its paper trades against its reference, and why."""
+    if not entry or entry.get("off"):
+        return None
+    track = (entry.get("tracks") or {}).get("paper") or {}
+    return {
+        "reference": (entry.get("reference") or {}).get("run_id"), "since": entry.get("since"),
+        **{key: track.get(key) for key in ("verdict", "reasons", "n", "cumulative", "rank", "drawdown_rank",
+                                          "streak_rank", "cusum", "h", "trades_to_tell", "progress", "sample")},
+    }
+
+
 def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict | None,
-              readiness: list[str] | None = None, origin: dict | None = None) -> dict:
+              readiness: list[str] | None = None, origin: dict | None = None, edge: dict | None = None) -> dict:
     script = scripts_by_id.get(rule["script"]["id"]) or {}
     line = {
         "id": rule["id"], "name": rule["name"], "mode": rule["mode"], "made_by": rule.get("made_by"),
@@ -36,6 +48,8 @@ def rule_line(rule: dict, scripts_by_id: dict, state: dict | None, paper: dict |
         "engine": {key: state.get(key) for key in ("state", "detail", "last_bar_time", "last_alert_at", "updated_at")}
         if state else None,
         "paper": paper,
+        # Its paper trades against its reference (Edge Watch): broken, worth watching, as expected...
+        "edge_watch": edge_line(edge),
         # What keeps it from going live, as the Signal rules page's checks say (the operator's alone to switch).
         "readiness": readiness,
     }
@@ -53,12 +67,12 @@ def register(server, research) -> None:
         """Every signal rule the TA engine runs: its mode (live sends signals to the trader, shadow only journals
         them, off), who made it (made_by "claude" for Claude's), the script version it pins, its asset and bars, its
         inputs, what each alert becomes, how the engine runs it now, and for a shadow rule its days traded on paper
-        beside the daily range (5 % to 95 %) of its reference run, and its report: one run of its signals since it
-        was made (paper.report.run_id, read with backtest_result and backtest_trades), made again after each
-        finished day; paper.next_report is the one being made, or why it was not. readiness: what keeps a rule
-        from going live (a week of weekdays in shadow, a signal journaled, no paper day outside its reference's
-        range, the engine running it without fault, its script as a rule: pine_rule_check), empty once ready; going
-        live stays the operator's."""
+        with its reference run, and its report: one run of its signals since it was made (paper.report.run_id, read
+        with backtest_result and backtest_trades), made again after each finished day; paper.next_report is the one
+        being made, or why it was not. edge_watch: its paper trades since its reference against what the reference
+        led to expect (edge_watch for the whole). readiness: what keeps a rule from going live (a week of weekdays
+        in shadow, a signal journaled, 20 paper trades its reference led to expect, the engine running it without
+        fault, its script as a rule: pine_rule_check), empty once ready; going live stays the operator's."""
         def read():
             paper = research.backtests.paper() if research.backtests is not None else {}
             rules = research.rules.load()["rules"]
@@ -68,15 +82,50 @@ def register(server, research) -> None:
         rules, scripts_by_id, paper, origins = await run_in_threadpool(read)
         states = await research.queries.ta_rule_states()
         papers = paper.get("rules") or {}
+        edges = ((await research.edge_watch.judgements()).get("rules") or {}) if research.edge_watch is not None else None
         now = datetime.fromtimestamp(research.clock(), timezone.utc)
         # Its script as a rule, as going live reads it; unread where the checker is not built.
         checked = {rule["id"]: await readiness_check(research.rule_checks, rule) for rule in rules}
         return compacted({
             "rules": [rule_line(rule, scripts_by_id, states.get(rule["id"]), papers.get(rule["id"]),
-                                unmet_readiness(rule, states.get(rule["id"]), papers.get(rule["id"]), now,
-                                                research.timezone, rule_check=checked[rule["id"]]), origins.get(rule["id"]))
+                                unmet_readiness(rule, states.get(rule["id"]),
+                                                EDGE_OFF if edges is None else edges.get(rule["id"]), now,
+                                                research.timezone, rule_check=checked[rule["id"]]), origins.get(rule["id"]),
+                                None if edges is None else edges.get(rule["id"]))
                       for rule in rules],
             "shadow_rules_switch": research.limits.shadow_rules,
+        })
+
+    @research_tool(server, calls, name="edge_watch", title="Broken, or just unlucky?", read_only=True)
+    async def edge_watch(owner: str = "live") -> dict:
+        """Edge Watch: trades since a reference run set against it. owner "live": WATA's real trades since the
+        live reference (a replay of the signals WATA received), and the signals received traded on paper; or a
+        signal rule's id: its paper trades since its reference. Each track: its verdict (as_expected, watch, broken,
+        better_than_expected, too_early, no_model, no_edge_over_random) and why; rank, the share of the reference's
+        paths (whole days drawn again) at or below its result after as many trades (drawdown_rank, streak_rank: as
+        deep, as long or worse); the test (cusum against h, a CUSUM between the reference's trades and what random
+        entries made of the same days, at most 5 % false alarms within the horizon); trades_to_tell, the trades it
+        takes to tell a dead edge, 80 % of the time; settings_differ. Per-trade results in percent of the turbo,
+        never money. The cone: the reference's paths at levels of n."""
+        if research.edge_watch is None:
+            raise Refused("Edge Watch is off: backtests are switched off in the configuration")
+        found = await research.edge_watch.judgements()
+        entry = found.get("live") if owner == "live" else (found.get("rules") or {}).get(owner)
+        if entry is None:
+            raise Refused("No live reference: the operator chooses one on a replay's page" if owner == "live"
+                              else f"No rule {owner!r} with a reference run (rule_set_reference)")
+        cone = entry.get("cone") or {}
+        return compacted({
+            **{key: entry.get(key) for key in ("owner", "name", "mode", "reference", "since", "model", "verdict", "main")},
+            "tracks": {name: {**{key: value for key, value in track.items() if key not in ("reference", "path")},
+                              "path": [step["cumulative"] for step in track.get("path") or []]}
+                       for name, track in (entry.get("tracks") or {}).items()},
+            # Every fifth point past the first ten, the levels' cumulative result there: what fits an answer.
+            "cone": {"levels": cone.get("levels"),
+                     "points": [{"n": number, "cumulative": levels}
+                                for place, (number, levels) in enumerate(zip(cone.get("n") or [], cone.get("cumulative") or []))
+                                if place < 10 or place % 5 == 0]} if cone else None,
+            "guard": found.get("guard"),
         })
 
     @research_tool(server, calls, name="rule_compare", title="A rule's signals beside TradingView's", read_only=True)
@@ -144,6 +193,6 @@ def register_shadow(server, research) -> None:
                    read_only=False, idempotent=True)
     async def rule_set_reference(run_id: str) -> dict:
         """Make a finished run the reference of the rule it was made from (one of Claude's own: backtest_start with
-        source.from_rule {"id": <rule id>}): the rule's paper days are then set beside that run's daily range, 5 % to
-        95 %, and a day outside it is marked. Only once the operator switched Claude's shadow rules on."""
+        source.from_rule {"id": <rule id>}): Edge Watch then judges the rule's paper trades after that run's last day
+        against it (edge_watch). Only once the operator switched Claude's shadow rules on."""
         return compacted(await shadow.set_reference(run_id))

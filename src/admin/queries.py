@@ -400,6 +400,14 @@ class AdminQueries:
         """When the account guard paused entries, while its pause holds (src/trade/account_guard.py)."""
         return await self._risk_state.get_entries_paused_by_guard()
 
+    async def entries_paused_by_edge_guard(self):
+        """When the admin's edge guard paused entries, while its pause holds (src/admin/edge_watch.py)."""
+        return await self._risk_state.get_entries_paused_by_edge_guard()
+
+    async def entries_resumed_at(self):
+        """When the operator last resumed new entries: the live test of Edge Watch starts again from then."""
+        return await self._risk_state.get_entries_resumed_at()
+
     async def today_closed_results(self) -> list[float]:
         """The day's closed results in the order they closed, as the trader counts its breakers."""
         return await self._positions.get_today_closed_results()
@@ -1556,6 +1564,24 @@ class AdminQueries:
             LIMIT {MAX_REPLAYED_ROWS}
             """,
             *args,
+        )
+        return [_clean_row(row) for row in rows]
+
+    async def closed_results_since(self, moment: datetime) -> list[dict]:
+        """
+        The results of the positions closed from ``moment`` on, in the order they closed: what Edge Watch judges the
+        live trades on (src/admin/edge_watch.py).
+        """
+        rows = await self.db.fetch(
+            f"""
+            SELECT position_id, execution_time_close, position_total_performance_percent
+            FROM turbo_data_position
+            WHERE position_status = 'Closed' AND execution_time_close >= $1
+              AND position_total_performance_percent IS NOT NULL
+            ORDER BY execution_time_close ASC, position_id ASC
+            LIMIT {MAX_REPLAYED_ROWS}
+            """,
+            moment,
         )
         return [_clean_row(row) for row in rows]
 

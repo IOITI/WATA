@@ -53,12 +53,14 @@ export function entryBlockers(overview: Overview, now: number): EntryBlocker[] {
   const blockers: EntryBlocker[] = []
 
   if (overview.entries_paused_since !== null) {
-    // The account guard pauses entries as the operator does: until the operator resumes them.
+    // The account guard and the edge guard pause entries as the operator does: until the operator resumes them.
     blockers.push({
       code: 'paused',
       reason: overview.entries_paused_by_account_guard
         ? 'Paused by the account guard: resume entries once you have looked'
-        : 'Paused by the operator',
+        : overview.entries_paused_by_edge_guard
+          ? 'Paused by the edge guard: the live trades look like random entries, not like their reference'
+          : 'Paused by the operator',
     })
   }
 

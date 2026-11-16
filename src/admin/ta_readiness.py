@@ -6,8 +6,10 @@ ready does not go live unless the operator goes live anyway, which the audit
 trail records with what was missing: the switch stays the operator's.
 
 Held: a week of weekdays in shadow (its signals journaled, never sent), a
-signal journaled, no day on paper outside the range of its reference run, the
-engine running it without fault, and its script as a rule (its rule check,
+signal journaled, its paper trades what its reference run led to expect (Edge
+Watch, src/admin/edge_watch.py: a reference that beats random entries, 20
+paper trades since it, not broken, not under 5 % of its paths), the engine
+running it without fault, and its script as a rule (its rule check,
 src/admin/rule_checks.py): not a script that cannot be one as it is, nor one
 that repaints, nor one that may and was never tested as the rule runs. A newer
 version of its script is only said. The week counts from the later of its going into shadow and the last
@@ -19,8 +21,12 @@ from datetime import date, datetime, timedelta
 
 import pytz
 
+from src.admin.edge_watch import readiness_unmet
+
 # Weekdays in shadow before a rule goes live: a week of the engine's signals.
 SHADOW_DAYS = 5
+# Handed for ``edge`` while Edge Watch is not there (it needs the backtests): its paper trades cannot be judged.
+EDGE_OFF = {"off": True}
 
 
 def weekdays_between(start: date, end: date) -> int:
@@ -66,9 +72,20 @@ def script_unmet(check: dict | None) -> str | None:
     return None
 
 
-def unmet_readiness(rule: dict, state: dict | None, paper: dict | None, now: datetime, timezone_name: str,
+def edge_unmet(edge: dict | None) -> list[str]:
+    """What the rule's Edge Watch (its entry, None without a reference, EDGE_OFF without Edge Watch) holds back."""
+    if (edge or {}).get("off"):
+        return ["Edge Watch is not running (it needs the backtests): its paper trades are not judged"]
+    track = ((edge or {}).get("tracks") or {}).get("paper") if edge else None
+    return readiness_unmet(track)
+
+
+def unmet_readiness(rule: dict, state: dict | None, edge: dict | None, now: datetime, timezone_name: str,
                     rule_check: dict | None = None) -> list[str]:
-    """What keeps ``rule`` from being ready to go live, in words; empty once it is."""
+    """
+    What keeps ``rule`` from being ready to go live, in words; empty once it is. ``edge``: the rule's Edge Watch
+    (src/admin/edge_watch_service.py, an owner's entry, listed or whole), None while it has no reference run.
+    """
     zone = pytz.timezone(timezone_name)
     unmet = []
     if rule.get("mode") != "shadow":
@@ -81,9 +98,7 @@ def unmet_readiness(rule: dict, state: dict | None, paper: dict | None, now: dat
             unmet.append(f"{days} weekday(s) in shadow of {SHADOW_DAYS}")
     if not (state or {}).get("last_alert_at"):
         unmet.append("no signal journaled yet")
-    outside = [day for day in (paper or {}).get("days") or [] if day.get("outside")]
-    if outside:
-        unmet.append(f"{len(outside)} day(s) on paper outside the range of its reference run")
+    unmet.extend(edge_unmet(edge))
     if (state or {}).get("state") == "error":
         unmet.append(f"the engine fails to run it ({(state or {}).get('detail') or 'no more said'})")
     said = script_unmet(rule_check)

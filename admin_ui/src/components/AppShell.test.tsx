@@ -321,11 +321,15 @@ describe('scrolling', () => {
 
     main.scrollTop = 600
     await user.click(screen.getByRole('link', { name: 'The ask' }))
+    // The same page: the same frame, where it was scrolled.
+    expect(screen.getByRole('main')).toBe(main)
     expect(main.scrollTop).toBe(600)
 
     await user.click(screen.getByRole('link', { name: 'To the positions' }))
     await screen.findByRole('heading', { name: 'Positions' })
-    expect(main.scrollTop).toBe(0)
+    // Another page: a frame of its own (ioiti-ui 0.12), at its top.
+    expect(screen.getByRole('main')).not.toBe(main)
+    expect(screen.getByRole('main').scrollTop).toBe(0)
   })
 })
 
@@ -373,7 +377,8 @@ describe('the palette (⌘K)', () => {
     renderShell({ bodies: BODIES })
     await screen.findByText('Up')
 
-    await user.keyboard('{Meta>}k{/Meta}')
+    // ⌘K on a Mac, Ctrl K elsewhere (ioiti-ui 0.16 reads the platform): jsdom names none.
+    await user.keyboard('{Control>}k{/Control}')
     const palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
     await waitFor(() => expect(palette.getByRole('combobox', { name: 'Search' })).toHaveFocus())
     await user.keyboard('smoke')

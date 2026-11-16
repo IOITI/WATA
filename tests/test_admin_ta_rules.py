@@ -537,12 +537,14 @@ def test_a_rule_not_ready_does_not_go_live_unless_the_operator_goes_live_anyway(
 
     assert refused.status_code == 409
     assert refused.json()["detail"] == (
-        "Not ready to go live: 0 weekday(s) in shadow of 5; no signal journaled yet. "
-        "Go live anyway to switch it all the same: that is recorded"
+        "Not ready to go live: 0 weekday(s) in shadow of 5; no signal journaled yet; Edge Watch is not running (it "
+        "needs the backtests): its paper trades are not judged. Go live anyway to switch it all the same: that is "
+        "recorded"
     )
     assert anyway.status_code == 200 and anyway.json()["rule"]["mode"] == "live"
     assert ctx.audit_log.read(1)[0]["action"] == (
-        "signal rule live WITHOUT its readiness (0 weekday(s) in shadow of 5; no signal journaled yet)"
+        "signal rule live WITHOUT its readiness (0 weekday(s) in shadow of 5; no signal journaled yet; Edge Watch is "
+        "not running (it needs the backtests): its paper trades are not judged)"
     )
 
 

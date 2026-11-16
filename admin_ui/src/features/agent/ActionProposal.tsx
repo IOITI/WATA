@@ -10,12 +10,13 @@ import { Zap } from 'lucide-react'
 import { useState } from 'react'
 
 import { useSession } from '@/features/auth/auth-context'
+import { useEdgeWatch } from '@/features/edgeWatch/useEdgeWatch'
 import { PauseDialog } from '@/features/dashboard/PauseDialog'
 import { ClosePositionDialog } from '@/features/positions/ClosePositionDialog'
 import { RestartDialog } from '@/features/system/RestartViews'
 import { useServices } from '@/features/system/useServices'
 import { useRuleChecks } from '@/features/ta/ruleCheck/useRuleCheck'
-import { liveReadiness } from '@/features/ta/signals/readiness'
+import { edgeOf, liveReadiness } from '@/features/ta/signals/readiness'
 import { RuleModeDialog } from '@/features/ta/signals/RuleModeDialog'
 import { api } from '@/lib/api'
 import type { AgentAction, AgentProposal } from '@/lib/types'
@@ -78,13 +79,13 @@ function RuleModeOfProposal({ action, proposal, onClose, onDone, onRefused }: {
   const now = useNow(60_000)
   const rules = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules })
   const engine = useQuery({ queryKey: ['ta-engine'], queryFn: api.taEngine })
-  const paper = useQuery({ queryKey: ['backtest-paper'], queryFn: api.backtestPaper, enabled: backtests, staleTime: 60_000 })
+  const edges = useEdgeWatch(backtests)
   const ruleChecks = useRuleChecks()
   const rule = rules.data?.rules.find((entry) => entry.id === action.rule?.id)
   if (!rules.data || !rule) return null
   const mode = action.kind === 'rule_live' ? 'live' : 'shadow'
   const readiness = mode === 'live'
-    ? liveReadiness(rule, engine.data?.rules?.[rule.id], paper.data?.rules[rule.id], now, timezone, ruleChecks.data?.rules[rule.id])
+    ? liveReadiness(rule, engine.data?.rules?.[rule.id], edgeOf(edges.data, rule.id, backtests), now, timezone, ruleChecks.data?.rules[rule.id])
     : []
   return (
     <RuleModeDialog change={{ rule, mode }} revision={rules.data.revision} readiness={readiness} onClose={onClose}

@@ -163,10 +163,10 @@ beforeEach(() => {
     rules: {
       [PAPER_RULE.id]: {
         days: [
-          { day: '2026-10-19', run_id: '20261019-223000-cccccc', state: 'done', day_percent: 0.4, trades: 2, outside: false },
-          { day: '2026-10-16', run_id: '20261016-223000-dddddd', state: 'done', day_percent: -6, trades: 3, outside: true },
+          { day: '2026-10-19', run_id: '20261019-223000-cccccc', state: 'done', day_percent: 0.4, trades: 2 },
+          { day: '2026-10-16', run_id: '20261016-223000-dddddd', state: 'done', day_percent: -6, trades: 3 },
         ],
-        reference: { run_id: '20261012-100000-eeeeee', name: 'Kernel VWAP, 3 months', days: 60, low: -1.5, median: 0.2, high: 2.75 },
+        reference: { run_id: '20261012-100000-eeeeee', name: 'Kernel VWAP, 3 months', days: 60, done: true, first_day: '2026-07-14', last_day: '2026-10-09', stale: false, made_with: '0.85.0' },
         report: REPORT,
         next_report: null,
       },
@@ -202,7 +202,6 @@ describe('Paper trading', () => {
 
     const days = screen.getByRole('region', { name: 'Days on paper of Kernel VWAP' })
     expect(within(days).getByRole('link', { name: '19 Oct 2026' })).toHaveAttribute('href', '/backtests/20261019-223000-cccccc')
-    expect(within(days).getByText('Outside')).toBeInTheDocument()
     expect(within(days).getByRole('link', { name: 'Kernel VWAP, 3 months' })).toHaveAttribute('href', '/backtests/20261012-100000-eeeeee')
     // The signals WATA received have their place too.
     expect(screen.getByText('The signals WATA received')).toBeInTheDocument()
@@ -215,7 +214,7 @@ describe('Paper trading', () => {
     rule.days[1] = { ...rule.days[1], stale: true, made_with: '0.33.0' }
     rule.days[0] = { ...rule.days[0], stale: false, made_with: '0.59.0' }
     liveDays = [{
-      day: '2026-10-15', real_percent: null, real_outside: null, paper_percent: 0.51, paper_outside: null, paper_state: 'done',
+      day: '2026-10-15', real_percent: null, paper_percent: 0.51, paper_state: 'done',
       paper_run_id: '20261015-223500-ffffff', paper_trades: 6, paper_stale: true, paper_made_with: '0.33.0',
     }]
     renderAt('/backtests/paper')

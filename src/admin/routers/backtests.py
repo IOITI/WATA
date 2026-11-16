@@ -22,7 +22,6 @@ from starlette.concurrency import run_in_threadpool
 from src.admin import backtest_requests, propfirm_check
 from src.admin.auth import require_session
 from src.admin.errors import InvalidRequest
-from src.admin.live_drift import live_days
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
 
@@ -184,7 +183,7 @@ async def research_switch(body: ResearchSwitch, export=Depends(research)):
 
 @router.get("/paper")
 async def paper(service=Depends(backtests)):
-    """Each shadow rule's days traded on paper, beside the daily range of its reference run, and its report."""
+    """Each shadow rule's days traded on paper, with its reference run (Edge Watch judges them), and its report."""
     return await run_in_threadpool(service.paper)
 
 
@@ -211,18 +210,15 @@ async def paper_report(
 @router.get("/paper/live")
 async def live_paper(request: Request, service=Depends(backtests)):
     """
-    The signals WATA received traded on paper under the live settings, each day beside the real one and the
-    daily range of the live reference, with the warning said once two days in a row were outside it.
+    The signals WATA received traded on paper under the live settings, each day beside the real one, with the live
+    reference Edge Watch judges them against (GET /api/edge-watch/live for its verdict).
     """
     paper_trading = getattr(request.app.state.ctx, "paper", None)
     if paper_trading is None:
-        return {"days": [], "reference": None, "warning": None, "report": None, "next_report": None}
-    days, warning, reference = await paper_trading.drift()
+        return {"days": [], "reference": None, "report": None, "next_report": None}
+    days = await paper_trading.live_days()
     live = (await run_in_threadpool(service.paper)).get("live") or {}
-    if reference is None:
-        # No reference yet: the paper days alone.
-        days = live_days(live.get("days") or [], {}, None)
-    return {"days": days, "reference": reference, "warning": warning,
+    return {"days": days, "reference": live.get("reference"),
             "report": live.get("report"), "next_report": live.get("next_report")}
 
 

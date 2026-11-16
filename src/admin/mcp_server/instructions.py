@@ -37,7 +37,7 @@ check of a recorded run (`backtest_derive` kind model_check).
 6. `exp_conclude`: kept, rejected or inconclusive, with what it rests on.
 7. What survives may become one of Claude's shadow rules, once the operator switched them on: `rule_shadow_save` \
 (the engine journals its signals, never sends them), a run made from it (`source.from_rule`) set as its \
-reference (`rule_set_reference`), then its paper days in `rule_list`, and its report since it was made \
+reference (`rule_set_reference`), then `edge_watch` on its paper trades, and its report since it was made \
 (`paper.report.run_id`, read as any run: made again after each finished day, no random entries)."""
 
 # The bar a result must clear, mirrored by admin_ui/src/features/backtests/verdict.ts: a change to one is made in
@@ -88,6 +88,6 @@ recorded ones (`backtest_derive` kind model_check, then `backtest_result` part m
 7. `exp_conclude` with the verdict and what it rests on, then tell the operator: what was tried, what survived, \
 on how many days. Recorded turbos only start on 2026-10-13.
 8. A strategy that survives may become a shadow rule (`rule_shadow_save`, when the operator has switched those \
-on): it journals its signals without sending them, and its paper days are set beside the backtest's range. \
+on): it journals its signals without sending them, and `edge_watch` judges its paper trades against the backtest. \
 Going live is the operator's alone.
 """

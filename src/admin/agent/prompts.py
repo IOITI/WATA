@@ -190,7 +190,9 @@ def memory_changes(lines: list[dict]) -> str | None:
 DOSSIER_PROMPT = """\
 Write this signal rule's go-live dossier: the case for and against taking it live, which the operator reads before \
 deciding.
-1. Its paper days against its reference run's daily range: how many, how many outside it, and when.
+1. Its paper trades against its reference run (edge_watch with the rule's id): the verdict, how many trades and how \
+many it takes to tell (trades_to_tell), and the ranks. "As expected" on few trades is consistent with the reference, \
+never proof of an edge.
 2. Its report since it began (paper.report of rule_list): the bar a result must clear, and on how many trades and \
 days it rests.
 3. Its reference run under worse fills (backtest_derive stress, within your limits), unless one is done already.

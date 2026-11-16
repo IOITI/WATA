@@ -567,29 +567,51 @@ def with_heartbeats(services: list[dict], beats: dict[str, dict], now: datetime,
     return result
 
 
-def live_drift_entry(days: list[dict], warning: str | None, reference: dict | None) -> list[dict]:
+def edge_watch_entry(state: dict, guard_on: bool) -> list[dict]:
     """
-    The live settings against their reference (src/admin/live_drift.py): a warning once two days in a row
-    were outside its range; nothing while no reference is chosen.
+    Edge Watch (src/admin/edge_watch.py): a warning when the live trades are judged broken or worth watching, when the
+    edge guard is on and cannot act (no live reference, settings not the reference's, nothing judged lately);
+    nothing while it watches nothing and the guard is off.
     """
-    if not reference:
+    from src.admin.edge_watch import BROKEN, LABELS, WATCH
+    from src.admin.edge_watch_service import REAL, guard_silent
+
+    name = "Edge Watch"
+    judgements = state.get("judgements")
+    if guard_silent(state, guard_on):
+        return [_entry("edge_watch", name, WARNING, "The edge guard is on and Edge Watch has not judged the live trades lately")]
+    if judgements is None:
         return []
-    name = "Live against its reference"
-    if warning:
-        return [_entry("live_drift", name, WARNING, warning)]
-    judged = sum(1 for day in days if day["real_outside"] is not None or day["paper_outside"] is not None)
-    return [_entry("live_drift", name, OK, f"Within the range of {reference.get('name') or 'its reference'}: "
-                                           f"{_count(judged, 'day')} set beside it")]
+    live = judgements.get("live")
+    rules = judgements.get("rules") or {}
+    real = ((live or {}).get("tracks") or {}).get(REAL)
+    if real is None:
+        if guard_on:
+            return [_entry("edge_watch", name, WARNING,
+                           "The edge guard is on with no live reference to judge the live trades against: choose one "
+                           "(a replay of the signals WATA received) on its run's page")]
+        if not rules:
+            return []
+        return [_entry("edge_watch", name, OK, f"{_count(len(rules), 'rule')} watched on paper; no live reference")]
+    said = f"The live trades: {LABELS[real['verdict']].lower()} after {_count(real['n'], 'trade')}"
+    if real["verdict"] in (BROKEN, WATCH):
+        return [_entry("edge_watch", name, WARNING, f"{said}: {'; '.join(real['reasons'][:2])}")]
+    if guard_on and real.get("settings_differ"):
+        return [_entry("edge_watch", name, WARNING,
+                       f"The edge guard cannot act: the live settings are not its reference's "
+                       f"({', '.join(real['settings_differ'][:4])}); make the live reference again under them")]
+    return [_entry("edge_watch", name, OK, said)]
 
 
-async def _live_drift(ctx) -> list[dict]:
-    paper = getattr(ctx, "paper", None)
-    if paper is None or not getattr(ctx.settings, "backtests_enabled", False):
+async def _edge_watch(ctx) -> list[dict]:
+    watch = getattr(ctx, "edge_watch", None)
+    if watch is None or not getattr(ctx.settings, "backtests_enabled", False):
         return []
     try:
-        return live_drift_entry(*await paper.drift())
+        guard_on = await run_in_threadpool(watch.guard_on)
+        return edge_watch_entry(watch.state(), guard_on)
     except Exception as e:
-        return [_entry("live_drift", "Live against its reference", UNKNOWN, f"Not read: {e}")]
+        return [_entry("edge_watch", "Edge Watch", UNKNOWN, f"Not read: {e}")]
 
 
 def _overall(services: list[dict]) -> str:
@@ -603,7 +625,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats, live_drift,
+        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats, edge_watch,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -618,11 +640,11 @@ async def collect_health(ctx) -> dict:
         run_in_threadpool(_market_calendar, ctx),
         run_in_threadpool(_backups, ctx),
         _heartbeats(ctx),
-        _live_drift(ctx),
+        _edge_watch(ctx),
     )
     services = with_heartbeats([
         *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
-        *macro_calendar, *market_calendar, *postgres, *backups, *live_drift, rabbitmq[0],
+        *macro_calendar, *market_calendar, *postgres, *backups, *edge_watch, rabbitmq[0],
     ], beats, datetime.now(timezone.utc), ctx.settings.timezone)
     return {
         "version": ctx.version,

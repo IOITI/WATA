@@ -289,11 +289,19 @@ class TradingRule:
 
         paused_since = await self.db_risk_state_manager.get_entries_paused_since()
         if paused_since is not None:
-            by_guard = await self.db_risk_state_manager.get_entries_paused_by_guard()
-            who = "the account guard" if by_guard is not None else "the operator"
+            who = await self._paused_by()
             message = f"Breaking trading rule: New entries are paused by {who} since {paused_since}."
             logging.info(message)
             raise TradingRuleViolation(message)
+
+    async def _paused_by(self) -> str:
+        """Who paused new entries: a guard, or the operator."""
+        if await self.db_risk_state_manager.get_entries_paused_by_guard() is not None:
+            return "the account guard"
+        # The admin's (src/admin/edge_watch.py): the live trades judged broken.
+        if await self.db_risk_state_manager.get_entries_paused_by_edge_guard() is not None:
+            return "the edge guard"
+        return "the operator"
 
     async def _account_peak(self, value: float) -> float:
         """The account's highest value since entries were last resumed: recorded each day, and read since the start."""

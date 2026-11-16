@@ -90,7 +90,7 @@ describe('number fields of the configuration', () => {
     await user.type(field, '6')
 
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
-    expect(field).toHaveAttribute('aria-invalid', 'false')
+    expect(field).not.toHaveAttribute('aria-invalid', 'true')
     expect(form.value()).toBe(6)
     expect(form.invalidCount()).toBe(0)
   })

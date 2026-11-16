@@ -13,6 +13,17 @@ from src.trade.signal_sources import CONFIG_PATH as SIGNAL_SOURCES_PATH, refusal
 logger = logging.getLogger(__name__)
 
 
+def edge_guard_refusal(risk_config: dict | None) -> str | None:
+    """
+    Why the edge guard's switch is not valid (None when it is, or is absent). The admin acts on it
+    (src/admin/edge_watch_service.py); the trader only says it paused entries.
+    """
+    value = (risk_config or {}).get("pause_when_edge_broken")
+    if value is not None and not isinstance(value, bool):
+        return "pause_when_edge_broken must be true or false"
+    return None
+
+
 class ConfigurationManager:
     """
     Manages the loading and access of configuration data.
@@ -272,7 +283,8 @@ class ConfigurationManager:
 
             elif rule_type == "risk_management":
                 # The account guard and the day's breakers (src/trade/account_guard.py, day_breakers.py): off unless set.
-                risk_error = account_guard_refusal(rule_config) or day_breakers_refusal(rule_config)
+                risk_error = (account_guard_refusal(rule_config) or day_breakers_refusal(rule_config)
+                              or edge_guard_refusal(rule_config))
                 if risk_error:
                     error_msg = f"Rule {rule_name}: {risk_error}"
                     logger.error(error_msg)

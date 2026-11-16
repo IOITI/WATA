@@ -2,8 +2,9 @@
 An alert triaged by the AI agent as it fires (``admin.ai_agent.triage_*``, off
 unless triage_enabled, read at the admin's start): a sale Saxo keeps refusing,
 a service of the trading path down in trading hours (the TA engine and the
-Capital.com feed too while a rule is live), the live trading leaving its paper
-reference's range, Saxo's login to authorise again, the account guard's pause.
+Capital.com feed too while a rule is live), Edge Watch saying the live trades
+are not what their reference led to expect (src/admin/edge_watch.py), Saxo's
+login to authorise again, the account guard's pause.
 
 It listens to the admin's live events (src/admin/events.py): while it does,
 the watcher looks at the system whether a page is open or not, as it does while
@@ -66,7 +67,8 @@ class Alert:
     facts: dict = field(default_factory=dict)
     # A service's state: triaged in trading hours only, outside deploys and restarts.
     service: bool = False
-    # A pause of new entries: triaged only when it is the account guard's.
+    # A pause of new entries: triaged only when it is the account guard's (the edge guard's comes as Edge Watch's
+    # health turning to a warning, above).
     guard: bool = False
 
 
@@ -86,8 +88,9 @@ def alert_of(event: dict, at: str, live_rules: bool) -> Alert | None:
     if kind == "service_status":
         service, status, name = event.get("id"), event.get("status"), event.get("name") or event.get("id")
         facts = {"status": status, "before": event.get("previous"), "the health says": event.get("detail"), "at": at}
-        if service == "live_drift" and status in ("warning", "down"):
-            return Alert(key="service:live_drift", what="the live trading left its paper reference's range",
+        if service == "edge_watch" and status in ("warning", "down"):
+            return Alert(key="service:edge_watch",
+                         what="Edge Watch says the live trades are not what their reference led to expect",
                          subject={"kind": "incident", "id": service, "at": at}, facts=facts)
         if status == "down" and (service in TRADING_PATH or (service in LIVE_RULES_NEED and live_rules)):
             return Alert(key=f"service:{service}", what=f"{name} is down",

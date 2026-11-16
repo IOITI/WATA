@@ -25,6 +25,8 @@ import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { DailyPerformance, InstrumentPerformance, Performance } from '@/lib/types'
 
+import { EdgeWatchPanel } from '@/features/edgeWatch/EdgeWatchPanel'
+
 import { LivePaperPanel } from './LivePaperPanel'
 
 const DAILY_COLUMNS: ColumnDef<DailyPerformance>[] = [
@@ -213,6 +215,9 @@ export function PerformancePage() {
           // A new range keeps the previous figures in place, dimmed, until its own arrive.
           <div className={cn('flex flex-col gap-6 transition-opacity', performanceQuery.isPlaceholderData && 'opacity-60')}>
             <Summary performance={performance} />
+
+            {/* Broken, or just unlucky: the live trades against the live reference. */}
+            <EdgeWatchPanel owner="live" enabled={backtestsEnabled} />
 
             <LivePaperPanel enabled={backtestsEnabled} />
 

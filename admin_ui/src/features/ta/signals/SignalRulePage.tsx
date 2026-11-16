@@ -39,6 +39,8 @@ import { AgentSheet } from '@/features/agent/AgentSheet'
 import { AgentVerdict } from '@/features/agent/AgentVerdict'
 import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { useSession } from '@/features/auth/auth-context'
+import { EdgeWatchPanel } from '@/features/edgeWatch/EdgeWatchPanel'
+import { useEdgeWatch } from '@/features/edgeWatch/useEdgeWatch'
 import { PaperDays, PaperReport, Reference } from '@/features/backtests/PaperParts'
 import { paperTradingHref } from '@/features/backtests/paperModel'
 import { usePaper } from '@/features/backtests/usePaper'
@@ -54,7 +56,7 @@ import { chartsPath } from '../chartLinks'
 import { tickerText } from '../engine/tickers'
 import { ComparisonPanel } from './ComparisonPanel'
 import { DeleteRuleDialog } from './DeleteRuleDialog'
-import { liveReadiness } from './readiness'
+import { edgeOf, liveReadiness } from './readiness'
 import { RuleDialog } from './RuleDialog'
 import { RuleModeDialog } from './RuleModeDialog'
 import { barsLabel, conflictText, ENGINE_STATE, MODE_LABEL, MODE_TONE, mappedAlerts, updatesOf } from './ruleModel'
@@ -72,6 +74,7 @@ const SECTIONS = [
   { id: 'going-live', label: 'Going live' },
   { id: 'day', label: 'Its day' },
   { id: 'paper', label: 'On paper' },
+  { id: 'edge-watch', label: 'Edge Watch' },
   { id: 'signals', label: 'Signals' },
   { id: 'tradingview', label: 'Beside TradingView' },
   { id: 'engine', label: 'Engine' },
@@ -173,6 +176,8 @@ export function SignalRulePage() {
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts })
   const engineQuery = useQuery({ queryKey: ['ta-engine'], queryFn: api.taEngine, refetchInterval: 10_000 })
   const paperQuery = usePaper(backtestsEnabled)
+  // Its paper trades against its reference: its readiness, and its own panel.
+  const edgesQuery = useEdgeWatch(backtestsEnabled)
   // Its script as a rule, as going live reads it.
   const ruleChecks = useRuleChecks()
   const rules = rulesQuery.data
@@ -229,12 +234,12 @@ export function SignalRulePage() {
 
   if (rules && !rule) return <NotFoundState {...RULE_NOT_FOUND} />
 
-  const checks = rule ? liveReadiness(rule, state, paper, now, timezone, ruleChecks.data?.rules[rule.id]) : []
+  const checks = rule ? liveReadiness(rule, state, edgeOf(edgesQuery.data, rule.id, backtestsEnabled), now, timezone, ruleChecks.data?.rules[rule.id]) : []
   const readiness = readinessSaid(checks)
   const engineShown = state ? (ENGINE_STATE[state.state] ?? { label: state.state, tone: 'neutral' as const }) : null
   const modeReadiness =
     changing?.mode === 'live'
-      ? liveReadiness(changing.rule, engineQuery.data?.rules[changing.rule.id], paperQuery.data?.rules[changing.rule.id], now, timezone,
+      ? liveReadiness(changing.rule, engineQuery.data?.rules[changing.rule.id], edgeOf(edgesQuery.data, changing.rule.id, backtestsEnabled), now, timezone,
         ruleChecks.data?.rules[changing.rule.id])
       : []
   const updates = rule ? updatesOf(rule) : null
@@ -444,6 +449,8 @@ export function SignalRulePage() {
                 </QueryState>
               )}
             </Panel>
+
+            <EdgeWatchPanel owner={rule.id} enabled={backtestsEnabled} className={ANCHORED} />
 
             <div id="signals" className={ANCHORED}>
               <SignalJournal rules={[rule]} timeZone={timezone} fixed />

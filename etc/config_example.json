@@ -125,7 +125,8 @@
           "max_consecutive_losses": 0,
           "max_drawdown_from_day_best_percent": 0,
           "pause_below_balance_eur": 0,
-          "pause_after_drawdown_percent": 0
+          "pause_after_drawdown_percent": 0,
+          "pause_when_edge_broken": false
         }
       }
     ],

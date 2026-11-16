@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Badge, formatDay, Panel, QueryState, SignedValue } from 'ioiti-ui'
+import { formatDay, Panel, QueryState, SignedValue } from 'ioiti-ui'
 import { Link } from 'react-router'
 
 import { paperReportHref, reportLine } from '@/features/backtests/paperModel'
@@ -9,20 +9,15 @@ import type { LivePaperDay } from '@/lib/types'
 
 import { paperState, referenceText } from './livePaper'
 
-function Result({ value, outside, word }: { value: number | null; outside: boolean | null; word?: string | null }) {
+function Result({ value, word }: { value: number | null; word?: string | null }) {
   if (word) return <span className="text-muted-foreground">{word}</span>
   if (value === null) return <span className="text-muted-foreground">—</span>
-  return (
-    <span className="inline-flex items-center justify-end gap-2">
-      <SignedValue value={value} kind="percent" />
-      {outside && <Badge tone="warning">Outside</Badge>}
-    </span>
-  )
+  return <SignedValue value={value} kind="percent" />
 }
 
 /**
- * The signals WATA received, traded on paper each finished day under the live settings, beside the real day
- * and the live reference's daily range: while entries are paused, the days the trader would have had.
+ * The signals WATA received, traded on paper each finished day under the live settings, beside the real day:
+ * while entries are paused, the days the trader would have had. Edge Watch judges them trade by trade.
  */
 export function LivePaperPanel({ enabled }: { enabled: boolean }) {
   const query = useQuery({ queryKey: ['live-paper'], queryFn: api.livePaper, enabled, staleTime: 60_000 })
@@ -38,12 +33,6 @@ export function LivePaperPanel({ enabled }: { enabled: boolean }) {
       <QueryState isPending={query.isPending} error={query.error} hasData={!!live}>
         {live && (
           <div className="space-y-3">
-            {live.warning && (
-              <Alert tone="warning">
-                <AlertTitle>The live settings left their reference’s range</AlertTitle>
-                <AlertDescription>{live.warning}.</AlertDescription>
-              </Alert>
-            )}
             <p className="text-xs text-muted-foreground">{referenceText(live.reference)}</p>
             {live.report && (
               <p className="text-xs">
@@ -84,10 +73,10 @@ export function LivePaperPanel({ enabled }: { enabled: boolean }) {
                           </span>
                         </td>
                         <td className="py-2.5 pr-4 text-right">
-                          <Result value={day.real_percent} outside={day.real_outside} />
+                          <Result value={day.real_percent} />
                         </td>
                         <td className="py-2.5 pr-4 text-right">
-                          <Result value={day.paper_percent} outside={day.paper_outside} word={paperState(day)} />
+                          <Result value={day.paper_percent} word={paperState(day)} />
                         </td>
                         <td className="py-2.5 text-right tabular-nums">{day.paper_trades ?? '—'}</td>
                       </tr>

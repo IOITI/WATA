@@ -151,6 +151,9 @@ class AdminContext:
     research: Any = None
     # Each shadow rule's finished days traded on paper (src/admin/paper.py).
     paper: Any = None
+    # The live trades and the rules' paper trades judged against their reference, and the edge guard
+    # (src/admin/edge_watch_service.py).
+    edge_watch: Any = None
     # The prices fetched from Dukascopy, read as files for the Data pages (src/admin/data.py).
     history: Any = None
     # The live prices of the Capital.com feed, for the charts that follow them (src/admin/live_prices.py).
@@ -273,6 +276,7 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.mcp_server.pause import McpPause
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.paper import PaperTrading
+    from src.admin.edge_watch_service import EdgeWatch
     from src.admin.research_export import ResearchExport
     from src.admin.errors import ServiceUnavailable
     from src.admin.mcp_token_store import DbTokenStore
@@ -405,6 +409,13 @@ def build_context(config_manager) -> AdminContext:
         version=version,
         closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
                  service_control.close, studies.close],
+    )
+    # The live trades and the rules' paper trades judged against their reference; its guard pauses entries through
+    # the admin's one writable connection, as the operator's pause does.
+    ctx.edge_watch = EdgeWatch(
+        root=settings.backtests_path, backtests=backtests, queries=queries, rules=RuleStore(ta_scripts),
+        risk_state=ctx.risk_state, config_path=settings.config_path,
+        notify=telegram_sender.send, publish=events.publish, audit_log=ctx.audit_log,
     )
     from src.admin.rule_checks import RuleCheckStore, RuleChecks
     from src.research.experiments import ExperimentJournal

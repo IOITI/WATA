@@ -1,6 +1,6 @@
 // Whether a rule is ready to go live, check by check, from what the Signal rules
-// page knows of it: how long it has been in shadow, its signals, its days traded on
-// paper, how the engine runs it, its script as a rule (its rule check), the script
+// page knows of it: how long it has been in shadow, its signals, its paper trades
+// against its reference (Edge Watch), how the engine runs it, its script as a rule (its rule check), the script
 // version it pins. Said in the confirmation. The server holds the same checks but the script's version
 // (src/admin/ta_readiness.py: a change to one is made in the other): a rule short of
 // one goes live only if the operator goes live anyway, which the audit trail
@@ -9,7 +9,8 @@
 import { formatDateTime, formatDay } from 'ioiti-ui'
 import type { Check } from 'ioiti-ui'
 
-import type { BacktestPaper, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
+import { edgeUnmet, mainTrack, verdictLine } from '@/features/edgeWatch/edgeWatch'
+import type { EdgeOwner, EdgeWatchList, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
 
 import { addDays, dayIn } from '../data/wataBars'
 import { updatesOf } from './ruleModel'
@@ -27,10 +28,40 @@ export function weekdaysBetween(from: string, to: string): number {
   return count
 }
 
+/**
+ * A rule's Edge Watch as readiness reads it (``edge_of`` of src/admin/routers/ta.py): its entry, null while it has
+ * no reference run, undefined while Edge Watch is not read or not running (backtests off).
+ */
+export function edgeOf(list: EdgeWatchList | undefined, ruleId: string, enabled: boolean): EdgeOwner | null | undefined {
+  if (!enabled || !list) return undefined
+  return list.rules[ruleId] ?? null
+}
+
+/** Its paper trades against its reference (Edge Watch), as the server holds it (``edge_unmet`` of ta_readiness.py). */
+export function edgeCheck(edge: EdgeOwner | null | undefined): Check {
+  const label = 'Its paper trades, as its reference led to expect'
+  if (edge === undefined) {
+    return { id: 'edge_watch', label, state: 'open', detail: 'Edge Watch is not read: it needs the backtests.' }
+  }
+  const unmet = edgeUnmet(edge)
+  const track = edge ? mainTrack(edge) : undefined
+  if (unmet.length === 0 && track) {
+    return { id: 'edge_watch', label, state: 'pass', detail: `${verdictLine(track)}: consistent with its reference, which is no proof of an edge.` }
+  }
+  const tooFewOnly = track !== undefined && unmet.length === 1 && unmet[0].endsWith('since its reference of 20')
+  return {
+    id: 'edge_watch',
+    label,
+    state: tooFewOnly ? 'open' : 'fail',
+    detail: `${unmet.map((each) => each[0].toUpperCase() + each.slice(1)).join('. ')}.`,
+  }
+}
+
 export function liveReadiness(
   rule: TaRule,
   state: TaRuleState | undefined,
-  paper: BacktestPaper['rules'][string] | undefined,
+  /** Its Edge Watch (``edgeOf``): undefined while not read. */
+  edge: EdgeOwner | null | undefined,
   now: number,
   timeZone: string,
   /** Its script as a rule (the summary of rule_checks.py's summary_of_rule): undefined while read, null while made. */
@@ -64,24 +95,7 @@ export function liveReadiness(
       : 'None yet: what it would send is not known.',
   })
 
-  const results = (paper?.days ?? []).filter((day) => day.day_percent !== null)
-  const outside = results.filter((day) => day.outside).length
-  const reference = paper?.reference ?? null
-  checks.push({
-    id: 'paper',
-    label: 'Its days on paper, as its backtest said',
-    state: results.length === 0 || !reference || reference.low === null ? 'open' : outside > 0 ? 'fail' : 'pass',
-    detail:
-      results.length === 0
-        ? 'No day traded on paper yet: each finished day is, once the market is closed.'
-        : !reference
-          ? `${results.length} day${results.length === 1 ? '' : 's'} on paper, and no reference run to set them against: make one a run of this rule.`
-          : reference.low === null
-            ? 'Its reference run has too few days for a range.'
-            : outside > 0
-              ? `${outside} of ${results.length} day${results.length === 1 ? '' : 's'} on paper fell outside the range of its reference run.`
-              : `${results.length} day${results.length === 1 ? '' : 's'} on paper, all within the range of its reference run.`,
-  })
+  checks.push(edgeCheck(edge))
 
   checks.push({
     id: 'engine',
@@ -157,9 +171,11 @@ export function scriptAsRule(check: RuleCheckSummary | null | undefined): Check 
 }
 
 /**
- * The checks the server holds before a rule goes live (`unmet_readiness`): a week in shadow until it has
- * passed, the others once they failed, the script's version never.
+ * The checks the server holds before a rule goes live (`unmet_readiness`): a week in shadow and its paper trades
+ * as its reference led to expect until they have passed, the others once they failed, the script's version never.
  */
 export function holdingBack(checks: Check[]): Check[] {
-  return checks.filter((check) => (check.id === 'shadow' ? check.state !== 'pass' : check.id !== 'script' && check.state === 'fail'))
+  return checks.filter((check) =>
+    check.id === 'shadow' || check.id === 'edge_watch' ? check.state !== 'pass' : check.id !== 'script' && check.state === 'fail',
+  )
 }

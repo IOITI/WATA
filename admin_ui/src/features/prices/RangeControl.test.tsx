@@ -218,7 +218,7 @@ describe('a range that cannot be', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('A whole number of ticks, 1 at least.')
     expect(ticks()).toHaveAttribute('aria-invalid', 'true')
     // The other field is not the one at fault.
-    expect(size()).toHaveAttribute('aria-invalid', 'false')
+    expect(size()).not.toHaveAttribute('aria-invalid', 'true')
   })
 
   it.each(['0', '0.001', 'abc'])('typed as a price of %j is refused on Enter, in terms of a price', async (typed) => {
@@ -230,7 +230,7 @@ describe('a range that cannot be', () => {
     expect(onChange).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toHaveTextContent('At least 0.01 EUR, which is one tick.')
     expect(size()).toHaveAttribute('aria-invalid', 'true')
-    expect(ticks()).toHaveAttribute('aria-invalid', 'false')
+    expect(ticks()).not.toHaveAttribute('aria-invalid', 'true')
   })
 
   it('is not held against a field that is only being left', async () => {

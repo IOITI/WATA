@@ -10,6 +10,7 @@ goes live, or a live rule changes, as an operator action does: allowed only
 when actions are, recorded in the audit trail and announced on Telegram.
 """
 
+import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
@@ -56,7 +57,7 @@ from src.admin.ta_rules import (
     checked_bars,
     checked_history_days,
 )
-from src.admin.ta_readiness import unmet_readiness
+from src.admin.ta_readiness import EDGE_OFF, unmet_readiness
 from src.admin.rule_checks import DEFAULT_SETTINGS, readiness_check, settings_of
 from src.admin.script_details import (
     LUXALGO, MAX_HOW, MAX_PICTURE_BYTES, OPERATOR, from_luxalgo, with_details,
@@ -68,6 +69,8 @@ from src.capital_feed.settings import CapitalSettings
 from src.ta_engine.replay import AssetRows
 from src.ta_engine.settings import TaEngineSettings
 from src.trade.signal_sources import ENGINE, source_of, sources_from
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ta", dependencies=[Depends(require_session)])
 
@@ -598,14 +601,20 @@ async def _unmet_readiness(request: Request, rule: dict) -> list[str]:
     """What keeps ``rule`` from being ready to go live, read where the Signal rules page reads it."""
     ctx = request.app.state.ctx
     states = await ctx.queries.ta_rule_states()
-    paper = None
-    if getattr(ctx, "backtests", None) is not None:
-        try:
-            paper = (await run_in_threadpool(ctx.backtests.paper))["rules"].get(rule["id"])
-        except Exception:
-            paper = None
-    return unmet_readiness(rule, states.get(rule["id"]), paper, datetime.now(timezone.utc), ctx.settings.timezone,
-                           rule_check=await readiness_check(getattr(ctx, "rule_checks", None), rule))
+    return unmet_readiness(rule, states.get(rule["id"]), await edge_of(ctx, rule["id"]), datetime.now(timezone.utc),
+                           ctx.settings.timezone, rule_check=await readiness_check(getattr(ctx, "rule_checks", None), rule))
+
+
+async def edge_of(ctx, rule_id: str) -> dict | None:
+    """A rule's Edge Watch as readiness reads it: its entry, None without a reference, EDGE_OFF without Edge Watch."""
+    watch = getattr(ctx, "edge_watch", None)
+    if watch is None or not ctx.settings.backtests_enabled:
+        return EDGE_OFF
+    try:
+        return ((await watch.judgements()).get("rules") or {}).get(rule_id)
+    except Exception as e:
+        logger.warning(f"Edge Watch could not judge rule {rule_id}: {e}")
+        return EDGE_OFF
 
 
 def _licence_to_check(ctx, store, rule: dict) -> str | None:

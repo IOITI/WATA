@@ -1,20 +1,15 @@
-// What the Performance page says of the live settings' paper days (src/admin/paper.py, live_drift.py): the
-// signals WATA received replayed each finished day under the live settings, beside the real day and the daily
-// range of the replay chosen as the live reference. Pure.
-
-import { formatPercent } from 'ioiti-ui'
+// What the Performance page says of the live settings' paper days (src/admin/paper.py, live_drift.py live_days): the
+// signals WATA received replayed each finished day under the live settings, beside the real day. Whether they are
+// what the live reference led to expect is Edge Watch's (EdgeWatchPanel), trade by trade. Pure.
 
 import type { BacktestPaperReference, LivePaperDay } from '@/lib/types'
 
 /** What the reference is, or how to choose one. */
 export function referenceText(reference: BacktestPaperReference | null): string {
   if (!reference) {
-    return 'No live reference yet: on the page of a replay of the signals WATA received, “Set as the live reference” makes its daily range the one each day is set against.'
+    return 'No live reference yet: on the page of a replay of the signals WATA received, “Set as the live reference” makes it the backtest Edge Watch judges the live trades against.'
   }
-  if (reference.low === null || reference.high === null) {
-    return `${reference.name ?? 'The live reference'} has ${reference.days} day${reference.days === 1 ? '' : 's'} with a result: 5 are needed for a range.`
-  }
-  return `Set against ${reference.name ?? 'the live reference'}: its days made ${formatPercent(reference.low, true)} to ${formatPercent(reference.high, true)} (5 % to 95 % of ${reference.days} days).`
+  return `The live reference: ${reference.name ?? 'a replay of the signals received'}, ${reference.days} day${reference.days === 1 ? '' : 's'}. Edge Watch, above, judges the live trades against it.`
 }
 
 /** A day's paper run as a word when it has no result: not run yet, running, failed, or no entry signal. */
@@ -35,9 +30,4 @@ export function paperState(day: LivePaperDay): string | null {
     default:
       return null
   }
-}
-
-/** The days outside the reference's range, newest first: what the warning rests on. */
-export function outsideDays(days: LivePaperDay[]): string[] {
-  return days.filter((day) => day.real_outside || day.paper_outside).map((day) => day.day)
 }

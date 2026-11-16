@@ -148,6 +148,8 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/execution"),
     ("GET", "/api/backtests/paper"),
     ("GET", "/api/backtests/paper/live"),
+    ("GET", "/api/edge-watch"),
+    ("GET", "/api/edge-watch/0123456789ab"),
     ("POST", "/api/backtests/paper/0123456789ab/report"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
     ("POST", "/api/backtests/turbo-model"),
@@ -381,6 +383,9 @@ class FakeQueries:
 
     async def entries_paused_by_guard(self):
         return getattr(self, "paused_by_guard", None)
+
+    async def entries_paused_by_edge_guard(self):
+        return None
 
     async def today_closed_results(self):
         return list(getattr(self, "closed_results", []))
@@ -3630,8 +3635,46 @@ class FakePaper:
         if self.failure is not None:
             raise self.failure
 
-    async def drift(self):
-        return [], None, None
+    async def live_days(self):
+        return []
+
+
+class FakeEdgeWatch:
+    """Stands for Edge Watch (src/admin/edge_watch_service.py): one live entry and one rule's."""
+
+    def __init__(self):
+        track = {"verdict": "as_expected", "n": 12, "path": [{"n": 1, "cumulative": 0.5}]}
+        self.found = {
+            "live": {"owner": "live", "cone": {"n": [1]}, "tracks": {"real": track}},
+            "rules": {"0123456789ab": {"owner": "0123456789ab", "cone": {"n": [1]}, "tracks": {"paper": track}}},
+            "guard": {"on": False}, "judged_at": "2026-11-16T12:00:00+00:00",
+        }
+
+    async def judgements(self):
+        return self.found
+
+    @staticmethod
+    def listed(found):
+        return {**found, "live": {"owner": "live", "listed": True}}
+
+
+def test_edge_watch_lists_its_owners_and_gives_one_whole(client, ctx, backtests):
+    assert client.get("/api/edge-watch").status_code == 503
+    ctx.edge_watch = FakeEdgeWatch()
+
+    listed = client.get("/api/edge-watch").json()
+    live = client.get("/api/edge-watch/live").json()
+    rule = client.get("/api/edge-watch/0123456789ab").json()
+
+    assert listed["live"] == {"owner": "live", "listed": True}
+    assert live["cone"] == {"n": [1]} and live["guard"] == {"on": False} and live["tracks"]["real"]["n"] == 12
+    assert rule["owner"] == "0123456789ab"
+    assert client.get("/api/edge-watch/fedcba987654").status_code == 404
+    assert client.get("/api/edge-watch/somebody").status_code == 404
+    ctx.edge_watch.found = {**ctx.edge_watch.found, "live": None}
+    assert "No live reference" in client.get("/api/edge-watch/live").json()["detail"]
+    ctx.settings.backtests_enabled = False
+    assert client.get("/api/edge-watch").status_code == 403
 
 
 def test_a_paper_report_is_made_now_when_asked(client, ctx, backtests):
@@ -3651,7 +3694,7 @@ def test_a_paper_report_is_made_now_when_asked(client, ctx, backtests):
     assert (refused.status_code, refused.json()["detail"]) == (409, "Its report is being made already")
     # The live paper days come with their report.
     assert client.get("/api/backtests/paper/live").json() == {
-        "days": [], "reference": None, "warning": None, "report": None, "next_report": None,
+        "days": [], "reference": None, "report": None, "next_report": None,
     }
 
 

@@ -178,8 +178,9 @@ describe('the overview of the configuration', () => {
     const panel = (await screen.findByRole('heading', { name: 'Accent and material' })).closest('section') as HTMLElement
     expect(panel).toHaveTextContent('Shown now: neutral accent, flat material.')
     await user.click(within(panel).getByRole('button', { name: 'Accent and material: neutral, flat' }))
-    await user.click(within(panel).getByRole('radio', { name: 'Violet' }))
-    await user.click(within(panel).getByRole('radio', { name: 'Glass' }))
+    // Its choices are a layer of the page's own (ioiti-ui 0.17), under its button.
+    await user.click(await screen.findByRole('radio', { name: 'Violet' }))
+    await user.click(screen.getByRole('radio', { name: 'Glass' }))
 
     expect(document.documentElement).toHaveAttribute('data-accent', 'violet')
     expect(document.documentElement).toHaveAttribute('data-material', 'glass')

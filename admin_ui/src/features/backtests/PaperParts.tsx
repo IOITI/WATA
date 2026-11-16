@@ -3,7 +3,6 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Badge,
   Button,
   ButtonLink,
   formatDateTime,
@@ -115,11 +114,10 @@ export function PaperReport({
 
 function referenceText(reference: BacktestPaperReference | null): string | null {
   if (!reference) return null
-  if (reference.low === null) return `has ${reference.days} day${reference.days === 1 ? '' : 's'}: too few for a range.`
-  return `made ${formatPercent(reference.low, true)} to ${formatPercent(reference.high, true)} on 90 % of its days.`
+  return `${reference.days} tested day${reference.days === 1 ? '' : 's'}${reference.last_day ? ` to ${formatDay(reference.last_day)}` : ''}: Edge Watch judges its trades after that against it.`
 }
 
-/** A rule's run of reference, which its days on paper are set against, or the way to make one. */
+/** A rule's run of reference, which Edge Watch judges its paper trades against, or the way to make one. */
 export function Reference({ reference, ruleId }: { reference: BacktestPaperReference | null; ruleId: string }) {
   const text = referenceText(reference)
   if (!reference || !text) {
@@ -162,8 +160,7 @@ export function PaperDays({ days, madeAgain }: { days: BacktestPaperDay[]; madeA
           <tr>
             <th className="py-2 pr-4 font-medium">Day</th>
             <th className="py-2 pr-4 text-right font-medium">On paper</th>
-            <th className="py-2 pr-4 text-right font-medium">Trades</th>
-            <th className="py-2 text-right font-medium">Against its reference</th>
+            <th className="py-2 text-right font-medium">Trades</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/40">
@@ -182,10 +179,7 @@ export function PaperDays({ days, madeAgain }: { days: BacktestPaperDay[]; madeA
                 </span>
               </td>
               <td className="py-2.5 pr-4 text-right">{dayResult(day)}</td>
-              <td className="py-2.5 pr-4 text-right tabular-nums">{day.trades ?? '—'}</td>
-              <td className="py-2.5 text-right">
-                {day.outside === null ? <span className="text-muted-foreground">—</span> : day.outside ? <Badge tone="warning">Outside</Badge> : <Badge tone="neutral">Inside</Badge>}
-              </td>
+              <td className="py-2.5 text-right tabular-nums">{day.trades ?? '—'}</td>
             </tr>
           ))}
         </tbody>

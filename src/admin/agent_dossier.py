@@ -25,7 +25,7 @@ from src.admin.agent_jobs import JobFile, read_config
 from src.admin.agent_telegram import DOSSIER
 from src.admin.downloads import market_is_open
 from src.admin.errors import InvalidRequest, NotPossible
-from src.admin.ta_readiness import unmet_readiness
+from src.admin.ta_readiness import EDGE_OFF, unmet_readiness
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def judged_as(rule: dict) -> str:
 
 
 class RuleDossiers:
-    def __init__(self, *, agent, config_path: str, path: str, rules, states, paper, timezone_name: str, teller=None,
+    def __init__(self, *, agent, config_path: str, path: str, rules, states, edges, timezone_name: str, teller=None,
                  clock=time.time, rule_check=None):
         self._agent = agent
         self._config_path = config_path
@@ -49,7 +49,8 @@ class RuleDossiers:
         # () -> the signal rules; async () -> the engine's state of each, by id; () -> each rule's paper days, by id.
         self._rules = rules
         self._states = states
-        self._paper = paper
+        # Each rule's Edge Watch (src/admin/edge_watch_service.py): None while Edge Watch is not there.
+        self._edges = edges
         self._timezone = timezone_name
         self._teller = teller
         self._clock = clock
@@ -84,14 +85,15 @@ class RuleDossiers:
             return None
         rules = await run_in_threadpool(self._rules)
         states = await self._states()
-        paper = await run_in_threadpool(self._paper)
+        edges = await self._edges()
         asked = await run_in_threadpool(self.asked)
         moment = datetime.fromtimestamp(now, timezone.utc)
         for rule in rules:
             if rule.get("mode") != "shadow" or rule.get("made_by") == "claude" or judged_as(rule) in asked:
                 continue
             script = await self._rule_check(rule) if self._rule_check is not None else None
-            if unmet_readiness(rule, states.get(rule["id"]), paper.get(rule["id"]), moment, self._timezone, rule_check=script):
+            edge = EDGE_OFF if edges is None else edges.get(rule["id"])
+            if unmet_readiness(rule, states.get(rule["id"]), edge, moment, self._timezone, rule_check=script):
                 continue
             try:
                 meta = await self._agent.create(
@@ -114,7 +116,7 @@ class RuleDossiers:
 
 
 def dossiers_of(ctx, teller) -> RuleDossiers:
-    """The dossiers over the admin's context: its rules, the engine's states, the paper days."""
+    """The dossiers over the admin's context: its rules, the engine's states, Edge Watch's judgements of them."""
     from src.admin.ta_rules import RuleStore
 
     def rules() -> list[dict]:
@@ -123,8 +125,11 @@ def dossiers_of(ctx, teller) -> RuleDossiers:
     async def states() -> dict:
         return await ctx.queries.ta_rule_states()
 
-    def paper() -> dict:
-        return (ctx.backtests.paper(with_reports=False).get("rules") or {}) if ctx.backtests is not None else {}
+    async def edges() -> dict | None:
+        watch = getattr(ctx, "edge_watch", None)
+        if watch is None or not ctx.settings.backtests_enabled:
+            return None
+        return (await watch.judgements()).get("rules") or {}
 
     async def rule_check(rule: dict) -> dict | None:
         from src.admin.rule_checks import readiness_check
@@ -132,5 +137,5 @@ def dossiers_of(ctx, teller) -> RuleDossiers:
         return await readiness_check(getattr(ctx, "rule_checks", None), rule)
 
     return RuleDossiers(agent=ctx.agent, config_path=ctx.settings.config_path,
-                        path=os.path.join(ctx.settings.agent_path, FILE), rules=rules, states=states, paper=paper,
+                        path=os.path.join(ctx.settings.agent_path, FILE), rules=rules, states=states, edges=edges,
                         timezone_name=ctx.settings.timezone, teller=teller, rule_check=rule_check)
