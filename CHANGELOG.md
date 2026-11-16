@@ -2,7 +2,7 @@
 
 ## v0.87.0 - PineTS 0.13.1, Vela-pinets 0.3.4 and Vela 0.10.8
 
-**Release date:** not released yet
+**Release date:** 2026-11-16
 
 The three LuxAlgo packages of the Technical Analysis pages and the TA engine, a month after v0.26.3, still pinned exactly (`admin_ui/package.json`). PineTS 0.14.0 is left out: tagged on GitHub on 2026-11-13 but not on npm, it limits each run (100,000 bars, 500,000 calls of the script's functions and 64 MB, counted over the whole run), which a continued run would exhaust and 30 days of 10-second bars (about 259,000) already pass.
 
