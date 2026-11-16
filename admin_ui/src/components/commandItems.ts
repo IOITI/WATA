@@ -96,6 +96,59 @@ export function assetItems(assets: readonly DataAsset[]): SpotlightSearchItem[] 
     }))
 }
 
+/**
+ * What the pages list, each kind as it reaches the palette: entries made from it, undefined while it is read, null
+ * where there is none to list (backtests off, the AI agent off).
+ */
+export interface PaletteLists {
+  runs?: SpotlightSearchItem[] | null
+  rules?: SpotlightSearchItem[] | null
+  scripts?: SpotlightSearchItem[] | null
+  assets?: SpotlightSearchItem[] | null
+  conversations?: SpotlightSearchItem[] | null
+  memory?: SpotlightSearchItem[] | null
+}
+
+/** The lists the palette opens, in this order, each searched alone ("Backtest runs ›"). */
+const LISTS: { key: keyof PaletteLists; title: string; one: string; many: string; placeholder: string }[] = [
+  { key: 'runs', title: 'Backtest runs', one: 'run', many: 'runs', placeholder: 'A run’s name, id or tag…' },
+  { key: 'rules', title: 'Signal rules', one: 'rule', many: 'rules', placeholder: 'A rule’s name, its script or indice…' },
+  { key: 'scripts', title: 'Scripts', one: 'script', many: 'scripts', placeholder: 'A script’s name…' },
+  { key: 'assets', title: 'Assets', one: 'asset', many: 'assets', placeholder: 'An asset, a turbo’s knock-out level…' },
+  { key: 'conversations', title: 'AI agent conversations', one: 'conversation', many: 'conversations', placeholder: 'A conversation’s title or subject…' },
+  { key: 'memory', title: 'Memory entries', one: 'entry', many: 'entries', placeholder: 'An entry’s name or line…' },
+]
+
+/**
+ * A kind of thing as a list of its own. Its entries are always an array, empty while they are read: the palette
+ * finds the list it shows again by its id only while its entries are given (ioiti-ui's `items`).
+ */
+export function listItems(lists: PaletteLists): SpotlightSearchItem[] {
+  return LISTS.flatMap(({ key, title, one, many, placeholder }) => {
+    const entries = lists[key]
+    if (entries === null) return []
+    return [{
+      id: `list-${key}`,
+      title,
+      category: 'Lists',
+      description: entries === undefined ? 'Being read…' : `${entries.length} ${entries.length === 1 ? one : many}`,
+      placeholder,
+      items: entries ?? [],
+    }]
+  })
+}
+
+/**
+ * Everything the palette offers for what is typed at its top. With nothing typed: the lists, then the pages (the
+ * palette puts the entries chosen last before them). Typed: a number as a position or an order, the pages, the lists,
+ * and every thing the lists hold, each found by its own words as before.
+ */
+export function paletteItems({ query, pages, lists }: { query: string; pages: SpotlightSearchItem[]; lists: PaletteLists }): SpotlightSearchItem[] {
+  const listed = listItems(lists)
+  if (query.trim() === '') return [...listed, ...pages]
+  return [...idItems(query), ...pages, ...listed, ...LISTS.flatMap(({ key }) => lists[key] ?? [])]
+}
+
 /** A number typed may be a position's or an order's: their pages find it. */
 export function idItems(query: string): SpotlightSearchItem[] {
   const id = query.trim()

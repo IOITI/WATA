@@ -77,7 +77,8 @@ export function TaskForm({ onStarted }: { onStarted: (id: string) => void }) {
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1">
-          <AttachMenu attached={attachments.keys} room={attachments.room} onAttach={attachments.addItem}
+          <AttachMenu attached={attachments.keys} pending={attachments.pendingKeys} room={attachments.room}
+            onAttach={attachments.addItem} onDetach={attachments.removeItem}
             onFiles={attachments.addFiles} disabled={!!refusal} />
           {choice && <ChoiceMenus state={state.data} choice={choice} onChoose={setChosen} />}
           <TellToggle state={state.data} tell={tell} onChange={setTell} task />

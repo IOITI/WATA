@@ -107,7 +107,8 @@ export function AgentComposer({ conversation, subject, initialFiles, onStarted, 
 
   const controls = choice && model ? (
     <>
-      <AttachMenu attached={attachments.keys} room={attachments.room} onAttach={attachments.addItem}
+      <AttachMenu attached={attachments.keys} pending={attachments.pendingKeys} room={attachments.room}
+        onAttach={attachments.addItem} onDetach={attachments.removeItem}
         onFiles={attachments.addFiles} disabled={!!refusal} />
       <ChoiceMenus state={state.data} choice={choice} onChoose={choose} writers={writers} />
       <TellToggle state={state.data} tell={tell} onChange={setTell} />

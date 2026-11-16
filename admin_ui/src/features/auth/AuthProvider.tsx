@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 
 import { api, ApiError, setUnauthorizedListener } from '@/lib/api'
+import { forgetRemembered } from '@/lib/remembered'
 import type { Session } from '@/lib/types'
 
 import { AuthContext } from './auth-context'
@@ -51,6 +52,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout()
     } finally {
+      // Signed out on purpose: the palettes forget the entries chosen last (a lapsed session keeps them).
+      forgetRemembered()
       signOutLocally()
     }
   }, [signOutLocally])

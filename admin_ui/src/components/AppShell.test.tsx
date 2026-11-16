@@ -135,6 +135,8 @@ function renderShell({
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // The palette keeps the entries chosen last in this browser: each test starts without them.
+  window.localStorage.clear()
 })
 
 describe('trading state in the top bar', () => {
@@ -401,5 +403,40 @@ describe('the palette (⌘K)', () => {
     await user.keyboard('5098')
     expect(palette.getByRole('option', { name: /Position 5098/ })).toHaveAttribute('href', '/positions?find=5098')
     expect(palette.getByRole('option', { name: /Order 5098/ })).toHaveAttribute('href', '/orders?find=5098')
+  })
+
+  it('opens the list of one kind, searched alone, and goes back from it', async () => {
+    const user = userEvent.setup()
+    renderShell({ bodies: BODIES })
+    await screen.findByText('Up')
+
+    await user.click(screen.getByRole('button', { name: /^Go to a page/ }))
+    const palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
+    // With nothing typed: the lists, then the pages; no run of its own at the top.
+    await user.click(await palette.findByRole('option', { name: /Backtest runs/ }))
+    expect(await palette.findByRole('option', { name: /Smoke EMA cross/ })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    expect(palette.queryByRole('option', { name: /^Positions/ })).toBeNull()
+    // Back at the top with Backspace in the empty field: the lists again.
+    await user.keyboard('{Backspace}')
+    expect(await palette.findByRole('option', { name: /Scripts.*0 scripts/ })).toBeInTheDocument()
+  })
+
+  it('offers the entries chosen last first, the next time it is opened', async () => {
+    const user = userEvent.setup()
+    renderShell({ bodies: BODIES })
+    await screen.findByText('Up')
+
+    await user.keyboard('{Control>}k{/Control}')
+    let palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
+    await waitFor(() => expect(palette.getByRole('combobox', { name: 'Search' })).toHaveFocus())
+    await user.keyboard('smoke')
+    await palette.findByRole('option', { name: /Smoke EMA cross/ })
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Go to' })).not.toBeInTheDocument())
+
+    await user.keyboard('{Control>}k{/Control}')
+    palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
+    expect(await palette.findByRole('option', { name: /Smoke EMA cross/ })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    expect(window.localStorage.getItem('ioiti.theme.spotlight.go-to')).toContain(RUN_ID)
   })
 })

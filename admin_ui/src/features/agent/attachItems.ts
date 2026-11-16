@@ -1,7 +1,8 @@
 // What the attach picker offers (AttachMenu.tsx): a file of the operator's computer first, then WATA's things as the
 // pages list them, each attached as its page asks the agent about it (AskAgentLink), and a number or a day typed.
 // Read through the pages' own queries, only while the picker is open, as the palette's (components/commandItems.ts).
-// Pure.
+// The picker stays open to attach several: what this message attaches is ticked, and chosen again it is taken back.
+// LuxAlgo's Library is a list of its own, searched by LuxAlgo for what is typed in it. Pure.
 
 import { formatDateTime, formatDay, formatPercent } from 'ioiti-ui'
 import type { SpotlightSearchItem } from 'ioiti-ui'
@@ -21,7 +22,7 @@ import type {
   TaScriptSummary,
 } from '@/lib/types'
 
-import { attachmentKey } from './attachments'
+import { attachmentKey, fullSaid, MAX_ATTACHED } from './attachments'
 
 export interface AttachLists {
   runs?: readonly BacktestRunListed[]
@@ -31,7 +32,7 @@ export interface AttachLists {
   journal?: readonly JournalEntry[]
   days?: readonly DailyPerformance[]
   health?: Health | null
-  /** LuxAlgo's indicators found for what is typed, while the agent has LuxAlgo's tools. */
+  /** LuxAlgo's indicators found for what is typed in its list, while the agent has LuxAlgo's tools. */
   luxalgo?: readonly LuxAlgoSearchResult[]
 }
 
@@ -52,26 +53,49 @@ function positionLabel(position: Position): string {
   return [position.action, position.instrument_name].filter(Boolean).join(' ') || `position ${position.position_id}`
 }
 
-/** What each list becomes: an entry that attaches its thing, the things attached already left out. */
-export function attachItems({ lists, attached, query, timeZone, onAttach, onFile }: {
+/** The id of LuxAlgo's list among the entries: the picker searches it through LuxAlgo, not by itself. */
+export const LUXALGO_LIST = 'luxalgo'
+/** LuxAlgo's Library is searched from this many characters typed in its list. */
+export const LUXALGO_FROM_CHARS = 3
+
+/**
+ * What each list becomes: an entry that attaches its thing. What the conversation holds already (and the page's
+ * subject) is left out; what this message attaches is offered ticked, to be taken back; once full, only those.
+ */
+export function attachItems({ lists, attached, pending, room, query, timeZone, luxalgo, onAttach, onDetach, onFile }: {
   lists: AttachLists
-  /** The keys of what is attached already (attachmentKey). */
+  /** The keys of everything attached already (attachmentKey): the conversation's, the page's subject, this message's. */
   attached: ReadonlySet<string>
+  /** The keys of what this message attaches, among them: ticked, and taken back when chosen again. */
+  pending: ReadonlySet<string>
+  /** How many more may be attached. */
+  room: number
   query: string
   timeZone: string
+  /** LuxAlgo's Library offered as a list of its own, while the agent has LuxAlgo's tools. */
+  luxalgo?: boolean
   onAttach: (subject: AgentSubject) => void
+  onDetach: (key: string) => void
   onFile: () => void
-}): SpotlightSearchItem[] {
-  const items: SpotlightSearchItem[] = [{
+}): { items: SpotlightSearchItem[]; picked: string[] } {
+  const items: SpotlightSearchItem[] = room > 0 ? [{
     id: 'file',
     title: 'A file from your computer…',
     category: CATEGORY.file,
     description: 'An image, a PDF, a CSV or a Pine script, sent to Anthropic with the request (a text cleaned of what looks like a secret)',
     keywords: ['upload', 'image', 'screenshot', 'png', 'pdf', 'csv', 'pine'],
     action: onFile,
-  }]
-  const offer = (subject: AgentSubject, entry: Omit<SpotlightSearchItem, 'action'>) => {
-    if (!attached.has(attachmentKey(subject))) items.push({ ...entry, action: () => onAttach(subject) })
+  }] : []
+  const picked: string[] = []
+  const found: SpotlightSearchItem[] = []
+  const offer = (subject: AgentSubject, entry: Omit<SpotlightSearchItem, 'action'>, into = items) => {
+    const key = attachmentKey(subject)
+    if (pending.has(key)) {
+      picked.push(entry.id)
+      into.push({ ...entry, action: () => onDetach(key) })
+    } else if (!attached.has(key) && room > 0) {
+      into.push({ ...entry, action: () => onAttach(subject) })
+    }
   }
 
   // A number or a day typed: a position by its number, a trading day, whether listed or not. Each holds what was
@@ -144,15 +168,32 @@ export function attachItems({ lists, attached, query, timeZone, onAttach, onFile
       })
     }
   }
-  // Found by LuxAlgo for the words typed: each holds them among its words, as typed dates do.
-  const words = typed.toLowerCase().split(/\s+/).filter(Boolean)
-  for (const found of lists.luxalgo ?? []) {
-    if (found.kind !== 'indicator') continue
-    offer({ kind: 'luxalgo', id: found.slug, label: `LuxAlgo's ${found.name}` }, {
-      id: `luxalgo-${found.slug}`, title: found.name, category: CATEGORY.luxalgo,
-      description: found.description ? found.description.slice(0, 140) : 'An indicator of LuxAlgo\'s Library',
-      keywords: [...words, found.slug],
+  // LuxAlgo's indicators found by LuxAlgo for what is typed in its list, listed as found (the picker's filter={false}).
+  for (const indicator of lists.luxalgo ?? []) {
+    if (indicator.kind !== 'indicator') continue
+    offer({ kind: 'luxalgo', id: indicator.slug, label: `LuxAlgo's ${indicator.name}` }, {
+      id: `luxalgo-${indicator.slug}`, title: indicator.name, category: CATEGORY.luxalgo,
+      description: indicator.description ? indicator.description.slice(0, 140) : 'An indicator of LuxAlgo\'s Library',
+      keywords: [indicator.slug],
+    }, found)
+  }
+  if (luxalgo) {
+    items.push({
+      id: LUXALGO_LIST,
+      title: 'LuxAlgo’s Library',
+      category: CATEGORY.luxalgo,
+      description: 'Its indicators, searched by LuxAlgo for what is typed',
+      keywords: ['luxalgo', 'indicator', 'library'],
+      placeholder: `An indicator’s name or idea, ${LUXALGO_FROM_CHARS} characters at least…`,
+      items: found,
     })
   }
-  return items
+  return { items, picked }
+}
+
+/** Under the picker's list: what this message attaches, how many more it may, and how to finish. */
+export function attachFooter(count: number, room: number): string {
+  if (room <= 0) return `${fullSaid(MAX_ATTACHED) ?? ''} · Esc when done`
+  const attached = count > 0 ? `${count} attached · ` : ''
+  return `${attached}${room} more possible · Esc when done`
 }

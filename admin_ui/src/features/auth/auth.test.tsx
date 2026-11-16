@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
-import { useSession } from './auth-context'
+import { useAuth, useSession } from './auth-context'
 import { AuthProvider } from './AuthProvider'
 import { LoginPage } from './LoginPage'
 import { RequireAuth } from './RequireAuth'
@@ -44,7 +44,13 @@ function stubApi(overrides: Record<string, Handler>) {
 
 function Private() {
   const session = useSession()
-  return <p>Private page, WATA {session.version}</p>
+  const { logout } = useAuth()
+  return (
+    <>
+      <p>Private page, WATA {session.version}</p>
+      <button type="button" onClick={() => void logout()}>Sign out</button>
+    </>
+  )
 }
 
 function renderApp(initialPath: string) {
@@ -235,5 +241,35 @@ describe('sign-in', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The admin server cannot be reached'))
     expect(screen.queryByLabelText('Password')).not.toBeInTheDocument()
+  })
+})
+
+describe('sign-out', () => {
+  // ioiti-ui's palettes keep the entries chosen last under the theme's key (ioiti.theme in jsdom, wata.theme built).
+  const KEPT = ['ioiti.theme.spotlight.go-to', 'ioiti.theme.spotlight.attach']
+
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('forgets the entries the palettes kept when the operator signs out', async () => {
+    let signedIn = true
+    stubApi({
+      'GET /api/session': () => (signedIn ? json(200, SESSION) : json(401, { detail: 'Not authenticated' })),
+      'DELETE /api/session': () => {
+        signedIn = false
+        return json(204)
+      },
+    })
+    for (const key of KEPT) window.localStorage.setItem(key, '[{"id":"page-backtests","title":"Backtests","category":"Analysis"}]')
+    window.localStorage.setItem('ioiti.theme', 'dark')
+    const user = userEvent.setup()
+    renderApp('/positions')
+
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+    await waitFor(() => expect(KEPT.map((key) => window.localStorage.getItem(key))).toEqual([null, null]))
+    // The theme chosen is the browser's, not the operator's: kept.
+    expect(window.localStorage.getItem('ioiti.theme')).toBe('dark')
   })
 })

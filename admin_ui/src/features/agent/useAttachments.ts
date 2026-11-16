@@ -33,6 +33,11 @@ export function useAttachments({ fixed, held = [] }: {
     ...held.map((entry) => attachmentKey(entry)),
     ...pending.flatMap((entry) => (entry.kind === 'item' ? [attachmentKey(entry.subject)] : [])),
   ]), [fixed, held, pending])
+  // What this message attaches of WATA's things: ticked in the picker, which takes one back when it is chosen again.
+  const pendingKeys = useMemo(
+    () => new Set(pending.flatMap((entry) => (entry.kind === 'item' ? [attachmentKey(entry.subject)] : []))),
+    [pending],
+  )
   const count = (fixed && !held.some((entry) => attachmentKey(entry) === attachmentKey(fixed)) ? 1 : 0) + held.length + pending.length
   const room = Math.max(0, MAX_ATTACHED - count)
 
@@ -93,6 +98,9 @@ export function useAttachments({ fixed, held = [] }: {
     setPending((current) => current.filter((found) => found.key !== key))
   }, [])
 
+  /** A thing of WATA's taken back by its key (attachmentKey), as the picker does when it is chosen again. */
+  const removeItem = useCallback((key: string) => remove(`item-${key}`), [remove])
+
   /** Once sent: the files are the conversation's now, nothing to remove. */
   const clear = useCallback(() => {
     setPending([])
@@ -100,7 +108,7 @@ export function useAttachments({ fixed, held = [] }: {
   }, [])
 
   return {
-    pending, room, keys, leftOut, addItem, addFiles, remove, clear,
+    pending, pendingKeys, room, keys, leftOut, addItem, addFiles, remove, removeItem, clear,
     attach: toAttach(pending),
     subjects: [...(fixed ? [fixed] : []), ...pending.flatMap((entry) => (entry.kind === 'item' ? [entry.subject] : []))],
   }

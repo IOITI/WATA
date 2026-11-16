@@ -732,6 +732,8 @@ describe('what is attached to a request', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    // The picker keeps the entries chosen last in this browser: each test starts without them.
+    window.localStorage.clear()
   })
 
   it('attaches a script from the paperclip and a file of the computer to a new conversation', async () => {
@@ -743,6 +745,9 @@ describe('what is attached to a request', () => {
     const picker = await screen.findByRole('dialog', { name: 'Attach to the conversation' })
     await user.type(within(picker).getByRole('combobox', { name: 'Search' }), 'Kernel')
     await user.click(await within(picker).findByRole('option', { name: /Kernel VWAP/ }))
+    // It stays open to attach more: done with Escape.
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Attach to the conversation' })).toBeNull())
     const chooser = document.querySelector<HTMLInputElement>('input[type="file"]')!
     fireEvent.change(chooser, { target: { files: [new File(['png'], 'chart.png', { type: 'image/png' })] } })
 
@@ -755,6 +760,41 @@ describe('what is attached to a request', () => {
 
     await waitFor(() => expect(sent.find((request) => request.method === 'POST' && request.path === '/api/agent/conversations')?.body)
       .toMatchObject({ prompt: 'What do they show?', attach: [{ kind: 'script', id: '0d4fd1117e2f', version: 10 }, { kind: 'file', id: STAGED.id }] }))
+  })
+
+  it('attaches several things in one opening, each ticked, and takes one back when it is chosen again', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent')
+
+    const [attach] = await screen.findAllByRole('button', { name: 'Attach' })
+    await user.click(attach)
+    const picker = within(await screen.findByRole('dialog', { name: 'Attach to the conversation' }))
+    await user.click(await picker.findByRole('option', { name: /Kernel VWAP/ }))
+    // Ticked where it is listed, and among the entries chosen last (Recent) too.
+    for (const option of picker.getAllByRole('option', { name: /Kernel VWAP/ })) expect(option).toHaveAttribute('aria-checked', 'true')
+    await user.type(picker.getByRole('combobox', { name: 'Search' }), '5999999')
+    await user.click(await picker.findByRole('option', { name: /Position 5999999/ }))
+    expect(picker.getByText('2 attached · 3 more possible · Esc when done')).toBeInTheDocument()
+    await user.clear(picker.getByRole('combobox', { name: 'Search' }))
+    // Chosen again: taken back, the picker still open.
+    await user.click(picker.getAllByRole('option', { name: /Kernel VWAP/ }).at(-1)!)
+    await user.keyboard('{Escape}')
+
+    const attached = screen.getAllByRole('group', { name: 'Attached' })[0]
+    expect(within(attached).getByText('Position position 5999999')).toBeInTheDocument()
+    expect(within(attached).queryByText('Script Kernel VWAP v10')).toBeNull()
+  })
+
+  it('closes the picker before the computer\'s file chooser opens', async () => {
+    const user = userEvent.setup()
+    renderAt('/agent')
+
+    const [attach] = await screen.findAllByRole('button', { name: 'Attach' })
+    await user.click(attach)
+    const picker = within(await screen.findByRole('dialog', { name: 'Attach to the conversation' }))
+    await user.click(picker.getByRole('option', { name: /A file from your computer/ }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Attach to the conversation' })).toBeNull())
   })
 
   it('takes a file dropped on the field, and removes it from the server when it is taken away', async () => {
