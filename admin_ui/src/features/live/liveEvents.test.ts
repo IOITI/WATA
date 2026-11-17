@@ -161,7 +161,16 @@ describe('describeEvent', () => {
   it('reads the release again when watadeploy writes its status, said on Telegram by the server', () => {
     expect(describeEvent({ type: 'release', applying: true, last: null })).toBeNull()
     expect(eventLink({ type: 'release' })).toBe('/system#release')
-    expect(staleQueries({ type: 'release' })).toEqual(['release', 'session', 'services', 'health'])
+    // A cleanup the Disk page asked is said in the same status.
+    expect(staleQueries({ type: 'release' })).toEqual(['release', 'session', 'services', 'health', 'disk-cleanups'])
+  })
+
+  it('leads to the Disk page for the disk, and reads it again when its level changes, which the health says', () => {
+    expect(describeEvent({ type: 'disk_changed', level: 'warning' })).toBeNull()
+    expect(eventLink({ type: 'disk_changed' })).toBe('/system/disk')
+    expect(eventLink({ type: 'service_status', id: 'disk' })).toBe('/system/disk')
+    expect(eventLink({ type: 'service_status', id: 'postgres' })).toBe('/system')
+    expect(staleQueries({ type: 'disk_changed' })).toEqual(['disk', 'health'])
   })
 
   it('stays silent for what the dashboard already shows, and for events it does not know', () => {

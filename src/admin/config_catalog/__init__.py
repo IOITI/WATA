@@ -31,6 +31,7 @@ CONSUMERS = (
     Consumer("paper", "Shadow rules' paper days"),
     Consumer("research_export", "The research export"),
     Consumer("downloads", "Dukascopy's keeper"),
+    Consumer("disk", "The disk's alarms (health, Telegram, the scheduler's morning line) and its projection"),
 )
 
 GROUPS = (
@@ -116,6 +117,9 @@ BLOCKS = (
     Block("report", "milestones", "Milestones", ("reporting.milestones_eur",)),
     Block("report", "telegram", "Telegram commands", ("reporting.telegram_commands",),
           "What WATA's bot answers when asked in its chat: it only reads."),
+    Block("report", "disk", "Disk space", (
+        "reporting.disk_warning_free_percent", "reporting.disk_critical_free_percent",
+        "reporting.disk_warning_days_left"), "When the server's disk is said to be low (Operations › Disk)."),
     Block("backtests", "runs", "Runs", (
         "admin.backtests_enabled", "admin.backtests_max_queued", "admin.backtests_max_period_days",
         "admin.backtests_workers"), "How many runs, how long each may be, how many at once."),
@@ -135,7 +139,7 @@ BLOCKS = (
     Block("capital", "feed", "Feed", (f"{_CAPITAL}.enabled", f"{_CAPITAL}.environment", f"{_CAPITAL}.instruments")),
     Block("capital", "kept", "Kept and watched", (
         f"{_CAPITAL}.minute_volume", f"{_CAPITAL}.day_files", f"{_CAPITAL}.retention_months",
-        f"{_CAPITAL}.alert_after_seconds")),
+        f"{_CAPITAL}.day_files_retention_days", f"{_CAPITAL}.alert_after_seconds")),
     Block("ta", "engine", "Engine", (
         f"{_TA}.enabled", f"{_TA}.history_days", f"{_TA}.restart_time", f"{_TA}.monitoring_days")),
     Block("ta", "signals", "Signals sent", (

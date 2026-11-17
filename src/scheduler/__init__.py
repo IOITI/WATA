@@ -16,6 +16,8 @@ from src.mq_telegram.tools import send_message_to_mq_for_telegram
 from src.trade.macro_calendar import upkeep
 from src.trade.market_calendar import new_york_day, upkeep as market_upkeep
 from src.delivery import deliver
+from src.disk.files import LATEST, read_latest
+from src.disk.levels import morning_line
 from src.trade.rules import TradingRule
 from src.vault import loader as vault
 
@@ -80,6 +82,23 @@ def job_market_calendar_upkeep():
         said = market_upkeep(trading_rule.market_calendar, datetime.now(pytz.timezone(timezone)).date())
     if said:
         send_message_to_telegram(f"⚠️ WATA: {said}.")
+
+
+# The disk's hourly samples (watadisk on the host), read through var/lib.
+DISK_LATEST = os.path.join("/app/var/lib/disk", LATEST)
+
+
+@repeat(every().day.at(time_str="09:00", tz=timezone))
+def job_disk_upkeep():
+    """While the server's disk is low, or no longer sampled, say so once a day (src/disk/levels.py)."""
+    try:
+        with open(config_path, encoding="utf-8") as config_file:
+            config = json.load(config_file)
+    except (OSError, ValueError):
+        config = {}
+    said = morning_line(read_latest(DISK_LATEST), config, datetime.now(pytz.utc))
+    if said:
+        send_message_to_telegram(said)
 
 
 # @repeat(every().day.at(time_str="08:10", tz="Europe/Paris"))

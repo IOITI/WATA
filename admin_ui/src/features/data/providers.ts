@@ -179,6 +179,7 @@ export const CAPITAL_KEYS = [
   'minute_volume',
   'day_files',
   'retention_months',
+  'day_files_retention_days',
   'alert_after_seconds',
 ] as const
 
@@ -257,6 +258,13 @@ export function capitalWarnings(before: JsonObject, after: JsonObject): string[]
       `Only ${kept} month${kept === 1 ? '' : 's'} kept in the database: the bars of the months before, their coverage and Capital.com's minutes are deleted at the feed's next start, for good. The day files stay.`,
     )
   }
+  const files = typeof after.day_files_retention_days === 'number' ? after.day_files_retention_days : 0
+  const filesBefore = typeof before.day_files_retention_days === 'number' ? before.day_files_retention_days : 0
+  if (files > 0 && (filesBefore === 0 || files < filesBefore)) {
+    warnings.push(
+      `Only ${files} day${files === 1 ? '' : 's'} of day files kept: the older files are removed at the feed's next start and not written again. A backtest on files finds no price on those days.`,
+    )
+  }
   const beforeLabels = labelsByEpic(before.instruments)
   const afterLabels = labelsByEpic(after.instruments)
   for (const [epic, label] of beforeLabels) {
@@ -272,6 +280,18 @@ export function capitalWarnings(before: JsonObject, after: JsonObject): string[]
 
 /** How far back the service may be told to keep the history up to date, in days. */
 export const KEEP_DAYS = [30, 60, 120, 250, 500]
+
+/** How many days of every instrument's history may be kept on the disk (0: every day). */
+export const RETAIN_DAYS = [0, 365, 730, 1095, 1825]
+
+/** The choices of the days kept on the disk: never fewer than those kept up to date, which would be fetched again. */
+export function retainChoices(keep: PriceKeepStatus): { value: string; label: string }[] {
+  const days = [...new Set([...RETAIN_DAYS, keep.retain_days])].filter((value) => value === 0 || value >= keep.days)
+  return days.sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b)).map((value) => ({
+    value: String(value),
+    label: value === 0 ? 'Every day' : `${value} days`,
+  }))
+}
 
 export function keepSentence(keep: PriceKeepStatus, formatMoment: (iso: string) => string): string {
   const missing = `${keep.missing} day${keep.missing === 1 ? '' : 's'}`

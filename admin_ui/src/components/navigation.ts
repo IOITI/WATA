@@ -42,6 +42,8 @@ export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'agent-artefacts', path: '/agent/artefacts', label: 'Artefacts', section: 'AI agent' },
   { id: 'agent-routines', path: '/agent/routines', label: 'Routines', section: 'AI agent' },
   { id: 'system', path: '/system', label: 'System', section: 'Operations' },
+  // The server's disk, as watadisk samples it every hour on the host, and where it goes.
+  { id: 'disk', path: '/system/disk', label: 'Disk', section: 'Operations' },
   { id: 'logs', path: '/logs', label: 'Logs', section: 'Operations' },
   { id: 'audit', path: '/audit', label: 'Audit trail', section: 'Operations' },
   { id: 'config', path: '/config', label: 'Configuration', section: 'Operations' },

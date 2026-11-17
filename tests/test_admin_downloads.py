@@ -14,6 +14,8 @@ from src.admin.downloads import (
     KEEP_BACKOFF_SECONDS,
     KEEP_MAX_DAYS,
     KEEP_PAUSE_SECONDS,
+    RETAIN_EVERY_SECONDS,
+    RETAIN_MAX_DAYS,
     STOPPED,
     HistoryDownloads,
     config_hours,
@@ -349,8 +351,8 @@ def test_nothing_is_fetched_by_itself_until_it_is_asked_for(tmp_path):
     assert downloads.keep_once() == "off"
     assert downloads.keep_status() == {
         # Of the last 120 days: the weekdays and the Sunday evenings. The Saturdays are closed.
-        "enabled": False, "days": 120, "state": "off", "missing": 103, "settled": 0, "failures": 0, "next_at": None,
-        "limits": {"days": KEEP_MAX_DAYS},
+        "enabled": False, "days": 120, "retain_days": 0, "state": "off", "missing": 103, "settled": 0,
+        "failures": 0, "next_at": None, "limits": {"days": KEEP_MAX_DAYS, "retain_days": RETAIN_MAX_DAYS},
     }
     for days in (0, KEEP_MAX_DAYS + 1):
         with pytest.raises(InvalidRequest, match=f"Between 1 and {KEEP_MAX_DAYS} days"):
@@ -571,3 +573,68 @@ def test_what_the_former_backtester_learnt_of_the_server_is_taken_over_once(tmp_
     # Changed here afterwards, it is never overwritten by the old files again.
     downloads.set_keep(False, 30)
     assert service(tmp_path, legacy=str(legacy)).keep_status()["enabled"] is False
+
+
+# ── the days kept on the disk ──
+
+
+def test_the_days_kept_on_the_disk_are_never_fewer_than_those_kept_up_to_date(tmp_path):
+    downloads = service(tmp_path)
+
+    assert downloads.set_keep(True, 30, 365)["retain_days"] == 365
+    # Not said: as it was.
+    assert downloads.set_keep(False, 60)["retain_days"] == 365
+    assert downloads.set_keep(True, 60, 0)["retain_days"] == 0
+    # Fewer would be downloaded again as soon as they are removed.
+    for retain_days in (59, RETAIN_MAX_DAYS + 1):
+        with pytest.raises(InvalidRequest, match="downloaded again"):
+            downloads.set_keep(True, 60, retain_days)
+    assert json.loads((state_folder(tmp_path) / "keep.json").read_text())["retain_days"] == 0
+
+
+def test_the_days_older_than_kept_go_with_their_hours_once_the_market_is_closed(tmp_path):
+    prices = tmp_path / "prices"
+    old, kept = date(2026, 9, 1), date(2026, 10, 1)
+    for day in (old, kept):
+        _whole_day(prices, day)
+        _day_file(prices, day, label="us500", symbol="USA500IDXUSD")
+        _keep_hours(prices, day, range(3), symbol="USA500IDXUSD")
+    clock = {"now": NOW}
+    downloads = service(tmp_path, clock=lambda: clock["now"])
+    # Nothing is removed while everything is kept.
+    assert downloads.retain_once() == 0
+    downloads.set_keep(False, 30, 40)
+
+    # Under 40 days before 12 October: 1 September goes, of both instruments, bars and hours.
+    assert downloads.retain_once() == 2
+    for label in ("us100", "us500"):
+        assert not os.path.exists(dukascopy.day_path(str(prices), label, old))
+        assert os.path.exists(dukascopy.day_path(str(prices), label, kept))
+    for symbol in (dukascopy.SYMBOL, "USA500IDXUSD"):
+        assert not (prices / "dukascopy" / "raw" / symbol / "2026" / "09").exists()
+        assert (prices / "dukascopy" / "raw" / symbol / "2026" / "10" / "01").is_dir()
+
+    # Looked for again an hour later at the earliest.
+    _whole_day(prices, old)
+    assert downloads.retain_once() == 0
+    clock["now"] = NOW + RETAIN_EVERY_SECONDS
+    assert downloads.retain_once() == 1
+
+
+def test_no_day_is_removed_while_the_market_is_open_or_a_download_runs(tmp_path):
+    prices = tmp_path / "prices"
+    _whole_day(prices, date(2026, 9, 1))
+    open_market = service(tmp_path, clock=lambda: datetime(2026, 10, 12, 12, tzinfo=timezone.utc).timestamp())
+    open_market.set_keep(False, 30, 30)
+    assert open_market.retain_once() == 0
+
+    fetching = service(tmp_path)
+    loop = asyncio.new_event_loop()
+    # A download under way, as the service sees one.
+    fetching._fetch_task = loop.create_future()
+    try:
+        assert fetching.retain_once() == 0
+    finally:
+        loop.close()
+    assert os.path.exists(dukascopy.day_path(str(prices), "us100", date(2026, 9, 1)))
+

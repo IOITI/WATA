@@ -2,7 +2,8 @@
 The server's side of a deploy: what runs (Docker, the compose files, the
 pins), what holds a container back (the database, the heartbeats, the files),
 recreating one on another image and seeing it at work again, the requests the
-admin leaves, and the status the admin reads.
+admin leaves, cleaning up what older releases and Docker's builds left, and
+the status the admin reads.
 
 /app/wata/release/ is the deploy's own folder, out of every container's
 reach but the status, which the admin mounts read-only:
@@ -64,7 +65,13 @@ STAY_UP_SECONDS = 15
 POLL_SECONDS = 2
 # The admin's requests.
 REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
-REQUEST_FIELDS = frozenset({"id", "version", "containers", "force", "asked_by", "asked_at"})
+REQUEST_FIELDS = frozenset({"id", "action", "version", "containers", "force", "asked_by", "asked_at"})
+# What the admin may ask: an apply of the newest release, or the cleanup of what Docker and older releases left.
+APPLY = "apply"
+CLEANUP = "cleanup"
+# Docker's build cache unused for this long goes at a cleanup: what the releases kept were built with is used again
+# at each build, and stays.
+BUILD_CACHE_UNUSED_HOURS = 14 * 24
 MAX_REQUEST_BYTES = 4096
 REQUEST_MAX_AGE_SECONDS = 600
 KEPT_REQUESTS = 50
@@ -108,6 +115,17 @@ def version_of(image: str | None) -> str | None:
         return None
     tag = image.rsplit(":", 1)[1]
     return tag.split("-", 1)[0] if VERSION_PATTERN.match(tag.split("-", 1)[0]) else None
+
+
+_SIZE_UNITS = {"": 1, "k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12, "ki": 2**10, "mi": 2**20, "gi": 2**30, "ti": 2**40}
+
+
+def reclaimed(output: str) -> int | None:
+    """What Docker says a prune gave back (``Total reclaimed space: 902.6MB``), in bytes; None when it does not say."""
+    match = re.search(r"reclaimed space:\s*([\d.]+)\s*([kKmMgGtT]i?)?B", output or "")
+    if not match:
+        return None
+    return int(float(match.group(1)) * _SIZE_UNITS[(match.group(2) or "").lower()])
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -342,6 +360,15 @@ class Docker:
 
     def remove_image(self, reference: str) -> bool:
         return self.call(["image", "rm", reference], check=False).returncode == 0
+
+    def prune_dangling_images(self) -> int | None:
+        """The images no tag names any more and no container uses (a tag built again); the bytes given back."""
+        return reclaimed(self.call(["image", "prune", "--force"], timeout=600).stdout)
+
+    def prune_build_cache(self, unused_hours: int = BUILD_CACHE_UNUSED_HOURS) -> int | None:
+        """Docker's build cache unused for ``unused_hours``; the bytes given back."""
+        return reclaimed(self.call(["builder", "prune", "--force", "--filter", f"until={unused_hours}h"],
+                                   timeout=600).stdout)
 
     def check_config(self, image: str) -> tuple[bool, str]:
         """
@@ -1008,6 +1035,11 @@ class Host:
     def serve(self, name: str, request: dict) -> None:
         if request.get("id") != name:
             raise DeployError("its id is not its file's name")
+        action = request.get("action", APPLY)
+        if action == CLEANUP:
+            return self._serve_cleanup(name, request)
+        if action != APPLY:
+            raise DeployError("not a request")
         newest = self.layout.newest()
         if request.get("version") != newest:
             raise DeployError(f"asked for {request.get('version')!r}, and the newest release here is {newest}")
@@ -1030,6 +1062,19 @@ class Host:
                             request=name)
         self.write_status(request={"id": name, "state": "done", "at": utc_now(), "apply": record.get("id")})
 
+    def _serve_cleanup(self, name: str, request: dict) -> None:
+        """The cleanup the admin asked: nothing of it is chosen by the request, whatever it says."""
+        asked_at = moment(request.get("asked_at"))
+        if asked_at is None or abs(self._clock() - asked_at.timestamp()) > REQUEST_MAX_AGE_SECONDS:
+            raise DeployError("asked too long ago: ask again")
+        if set(request) - {"id", "action", "asked_by", "asked_at"}:
+            raise DeployError("not a request")
+        by = str(request.get("asked_by") or "the admin")[:80]
+        self.write_status(request={"id": name, "action": CLEANUP, "state": "accepted", "at": utc_now()})
+        record = self.cleanup(by=f"admin ({by})", request=name)
+        self.write_status(request={"id": name, "action": CLEANUP, "state": "done", "at": utc_now(),
+                                   "cleanup": record.get("id")})
+
     def _prune_requests(self) -> None:
         folder = self.layout.requests_kept
         names = sorted(os.listdir(folder), key=lambda name: os.lstat(os.path.join(folder, name)).st_mtime)
@@ -1046,19 +1091,20 @@ class Host:
             return {}
 
     def write_status(self, *, facts: Facts | None = None, steps: list[Step] | None = None, applying=False,
-                     last=None, request=None, config=None) -> dict:
+                     last=None, request=None, config=None, cleanup=None) -> dict:
         """The status file, each part replaced only when given (``applying=None`` ends an apply)."""
         error = None
-        if facts is None and steps is None and applying is False and last is None and request is None and config is None:
+        if (facts is None and steps is None and applying is False and last is None and request is None and config is None
+                and cleanup is None):
             try:
                 facts, steps = self.plan()
             except DeployError as e:
                 error = str(e)
         # Read and written whole by one writer at a time: the config check and an apply may both write it.
         with _Lock(self.layout.status + ".lock", blocking=True):
-            return self._write_status(error, facts, steps, applying, last, request, config)
+            return self._write_status(error, facts, steps, applying, last, request, config, cleanup)
 
-    def _write_status(self, error, facts, steps, applying, last, request, config) -> dict:
+    def _write_status(self, error, facts, steps, applying, last, request, config, cleanup=None) -> dict:
         status = self.read_status()
         if error is not None:
             status["error"] = error
@@ -1083,6 +1129,8 @@ class Host:
             status["requests"] = ([request] + requests)[:20]
         if config is not None:
             status["config"] = config
+        if cleanup is not None:
+            status["cleanup"] = cleanup
         status["at"] = utc_now()
         _write_atomically(self.layout.status, json.dumps(status, sort_keys=True, indent=1))
         return status
@@ -1185,6 +1233,32 @@ class Host:
                 except OSError:
                     pass
         return removed
+
+    def cleanup(self, keep: int = KEEP_RELEASES, *, by: str = "watadeploy", request: str | None = None) -> dict:
+        """
+        What older releases and Docker's builds left: the releases ``prune`` removes, the images no tag names any
+        more, and the build cache unused for two weeks. Never while an apply runs (the same lock); never a running
+        container's image, a pinned one, nor a volume. Recorded in the status, which the admin reads.
+        """
+        record = {"id": os.urandom(8).hex(), "by": by, "request": request, "started_at": utc_now(),
+                  "removed": [], "images_bytes": None, "build_cache_bytes": None}
+        try:
+            with self.locked():
+                record["removed"] = self.prune(keep)
+                # Each said separately: one that fails leaves the other done.
+                for part, prune in (("images_bytes", self.docker.prune_dangling_images),
+                                    ("build_cache_bytes", self.docker.prune_build_cache)):
+                    try:
+                        record[part] = prune()
+                    except DeployError as e:
+                        record.setdefault("errors", []).append(str(e))
+        except DeployError as e:
+            record["error"] = str(e)
+        record["finished_at"] = utc_now()
+        self.write_status(cleanup=record)
+        if record.get("error"):
+            raise DeployError(record["error"])
+        return record
 
 
 class _Lock:

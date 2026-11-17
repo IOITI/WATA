@@ -124,6 +124,14 @@ CAPITAL_PARAMS = (
         readers=("capital_feed",), consumers=("backtests",), risk=SERVICE,
     ),
     Param(
+        path=f"{CAPITAL}.day_files_retention_days", group="capital", label="Day files kept", kind="int",
+        unit="days", minimum=0, maximum=3650, optional=True, default=0,
+        help="The day files older than this are removed once a day, and not written again. 0: every day is kept.",
+        readers=("capital_feed",), consumers=("backtests", "disk"), risk=SERVICE,
+        caveats=("A backtest run on files (files:<folder>) finds no price on the days removed.",),
+        related=(f"{CAPITAL}.day_files", f"{CAPITAL}.retention_months"),
+    ),
+    Param(
         path=f"{CAPITAL}.alert_after_seconds", group="capital", label="Say silence after", kind="int", unit="s",
         minimum=30, optional=True, default=300,
         help="While the market is open, no price for this long is said on Telegram.",

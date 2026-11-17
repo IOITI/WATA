@@ -30,6 +30,7 @@ from src.admin.saxo import called
 from src.admin.services import OPS_QUEUE, TELEGRAM_QUEUE
 from src.admin.ta_monitor import TICK_SECONDS, WINDOW_MINUTES, checks, health_warning, rules_by_id
 from src.capital_feed.settings import CapitalSettings
+from src.disk import levels as disk_levels
 from src.price_recorder.bars import BAR_SECONDS
 from src.price_recorder.settings import RecorderSettings
 from src.ta_engine.settings import TaEngineSettings
@@ -423,6 +424,27 @@ def _backups(ctx) -> list[dict]:
     return backups_entry(last, datetime.now(timezone.utc), ctx.settings.timezone)
 
 
+DISK_STATUS = {
+    disk_levels.OK: OK, disk_levels.WARNING: WARNING, disk_levels.STALE: WARNING,
+    disk_levels.CRITICAL: DOWN, disk_levels.NONE: UNKNOWN,
+}
+
+
+def disk_entry(judged: dict) -> list[dict]:
+    """The server's disk, as its newest hourly sample says it (src/disk/levels.py): critical is down."""
+    return [_entry("disk", "Disk space", DISK_STATUS.get(judged.get("level"), UNKNOWN), judged.get("reason") or "")]
+
+
+async def _disk(ctx) -> list[dict]:
+    disk = getattr(ctx, "disk", None)
+    if disk is None:
+        return []
+    try:
+        return disk_entry(await run_in_threadpool(disk.judged))
+    except Exception as e:
+        return [_entry("disk", "Disk space", UNKNOWN, f"Not read: {e}")]
+
+
 def _consumer_entry(service_id: str, name: str, queue: dict) -> dict:
     if queue["consumers"] > 0:
         return _entry(service_id, name, OK, f"Consuming {queue['name']}")
@@ -625,7 +647,7 @@ def _overall(services: list[dict]) -> str:
 async def collect_health(ctx) -> dict:
     (
         postgres, web_server, (watchlist, watchlist_snapshot), (rabbitmq, queues), log_observed, saxo, price_recorder,
-        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats, edge_watch,
+        capital_feed, ta_engine, macro_calendar, market_calendar, backups, beats, edge_watch, disk,
     ) = await asyncio.gather(
         _postgres(ctx),
         _web_server(ctx),
@@ -641,10 +663,11 @@ async def collect_health(ctx) -> dict:
         run_in_threadpool(_backups, ctx),
         _heartbeats(ctx),
         _edge_watch(ctx),
+        _disk(ctx),
     )
     services = with_heartbeats([
         *saxo, *web_server, *log_observed, *rabbitmq[1:], *watchlist, *price_recorder, *capital_feed, *ta_engine,
-        *macro_calendar, *market_calendar, *postgres, *backups, *edge_watch, rabbitmq[0],
+        *macro_calendar, *market_calendar, *postgres, *backups, *disk, *edge_watch, rabbitmq[0],
     ], beats, datetime.now(timezone.utc), ctx.settings.timezone)
     return {
         "version": ctx.version,

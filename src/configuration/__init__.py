@@ -4,6 +4,7 @@ import logging
 
 import pytz
 
+from src.disk.levels import thresholds_refusal as disk_thresholds_refusal
 from src.trade.account_guard import refusal as account_guard_refusal
 from src.trade.day_breakers import refusal as day_breakers_refusal
 from src.trade.funds_retry import refusal as funds_retry_refusal
@@ -499,6 +500,12 @@ class ConfigurationManager:
                 error_msg = "Config field 'reporting.telegram_commands' must be a boolean"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
+
+            # When the server's disk is said to be low (src/disk/levels.py): each has its default when absent
+            disk_error = disk_thresholds_refusal(self.get_config_value("reporting"))
+            if disk_error:
+                logger.error(disk_error)
+                raise ValueError(disk_error)
 
             watchlist_config = self.get_config_value("trade.config.watchlist_manager")
             if watchlist_config:

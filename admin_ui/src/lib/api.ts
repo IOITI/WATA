@@ -57,6 +57,11 @@ import type {
   ConfigSaved,
   DataAssets,
   DataProviders,
+  DiskCleanupId,
+  DiskCleanups,
+  DiskOverview,
+  DiskProjection,
+  DiskRetentions,
   DukascopyProviderDetails,
   ExecutionLedger,
   ExecutionTimings,
@@ -364,6 +369,12 @@ export const api = {
 
   signals: () => request<{ items: Signal[]; webhook?: WebhookState | null }>('GET', '/api/signals'),
   health: () => request<Health>('GET', '/api/system/health'),
+  disk: () => request<DiskOverview>('GET', '/api/system/disk'),
+  diskProjection: (body: { retentions: Partial<DiskRetentions>; horizons?: number[] }) =>
+    request<DiskProjection>('POST', '/api/system/disk/projection', { body }),
+  diskCleanups: () => request<DiskCleanups>('GET', '/api/system/disk/cleanups'),
+  diskCleanup: (action: DiskCleanupId) =>
+    request<Record<string, unknown>>('POST', `/api/system/disk/cleanups/${encodeURIComponent(action)}`),
   services: () => request<ServicesState>('GET', '/api/system/services'),
   credentials: () => request<Credentials>('GET', '/api/credentials'),
   setCredential: (name: string, parts: Record<string, string>) =>
@@ -496,7 +507,7 @@ export const api = {
   fetchHistory: (period: PricePeriod, label?: string) =>
     request<PriceFetchStatus>('POST', '/api/data/providers/dukascopy/fetch', { body: label ? { ...period, label } : period }),
   stopFetchingHistory: () => request<PriceFetchStatus>('POST', '/api/data/providers/dukascopy/fetch/stop'),
-  keepHistory: (body: { enabled: boolean; days: number }) =>
+  keepHistory: (body: { enabled: boolean; days: number; retain_days?: number }) =>
     request<PriceKeepStatus>('PUT', '/api/data/providers/dukascopy/keep', { body }),
 
   // ── LuxAlgo's Library, through the admin (src/admin/routers/luxalgo.py) ──

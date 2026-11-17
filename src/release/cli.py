@@ -11,7 +11,8 @@ container by container.
     watadeploy check-image VERSION        the checks of src/release/check.py, in that release's image
     watadeploy serve-requests             the admin's requests (started by watadeploy-requests.path)
     watadeploy bootstrap                  pins for a server that has none (the install runs it)
-    watadeploy prune [--keep N]           older releases' folders and images
+    watadeploy prune [--keep N]           older releases' folders and images, the images no tag names, the build
+                                          cache unused for two weeks
 
 Run as root on the server (the wrapper /usr/local/bin/watadeploy sets
 PYTHONPATH to the newest release's folder). Exit codes: 0 done, 1 refused or
@@ -128,8 +129,13 @@ def main(arguments: list[str], host: Host | None = None) -> int:
                 host._out(f"{name}={image}")
             return 0
         if options.command == "prune":
-            removed = host.prune(options.keep)
-            host._out("Removed: " + (", ".join(removed) or "nothing"))
+            record = host.cleanup(options.keep, by="watadeploy prune")
+            host._out("Removed: " + (", ".join(record["removed"]) or "no release"))
+            for part, what in (("images_bytes", "untagged images"), ("build_cache_bytes", "build cache")):
+                if record.get(part) is not None:
+                    host._out(f"Given back, {what}: {record[part] / 1e6:.1f} MB")
+            for error in record.get("errors") or []:
+                host._out(f"Not done: {error}")
             return 0
     except (DeployError, ValueError) as e:
         print(f"watadeploy: {e}", file=sys.stderr)

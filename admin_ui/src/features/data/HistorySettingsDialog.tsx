@@ -16,7 +16,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { useSession } from '@/features/auth/auth-context'
-import { KEEP_DAYS, keepSentence } from '@/features/data/providers'
+import { KEEP_DAYS, keepSentence, retainChoices } from '@/features/data/providers'
 import { api } from '@/lib/api'
 import type { DukascopyProviderDetails, HistoryOffer } from '@/lib/types'
 
@@ -78,7 +78,10 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
   const keepMutation = useMutation({ mutationFn: api.keepHistory, onSuccess: () => refresh() })
   const removeMutation = useMutation({ mutationFn: api.removeHistoryInstrument, onSuccess: () => refresh(REMOVED) })
   const keep = provider.keep
-  const keepDays = keep ? [...new Set([...KEEP_DAYS, keep.days])].sort((a, b) => a - b) : KEEP_DAYS
+  // Never more days kept up to date than kept on the disk: those would be fetched again as soon as removed.
+  const keepDays = (keep ? [...new Set([...KEEP_DAYS, keep.days])].sort((a, b) => a - b) : KEEP_DAYS).filter(
+    (days) => !keep?.retain_days || days <= keep.retain_days,
+  )
   const failure = keepMutation.error ?? removeMutation.error
 
   return (
@@ -114,6 +117,26 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
           <p className="text-xs text-muted-foreground">
             The history backtests read only: the newest missing days first, a few at a time, while the market is closed.
             Another instrument is fetched when asked, from its provider&rsquo;s page.
+          </p>
+        </section>
+      )}
+
+      {keep && (
+        <section className="space-y-3">
+          <h3 className="text-sm font-semibold">Kept on the disk</h3>
+          <div className="max-w-56">
+            <SpringSelect
+              label="Days kept"
+              options={retainChoices(keep)}
+              value={String(keep.retain_days)}
+              disabled={!provider.enabled || keepMutation.isPending}
+              onChange={(days) => keepMutation.mutate({ enabled: keep.enabled, days: keep.days, retain_days: Number(days) })}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Every instrument&rsquo;s days older than this are removed, their bars and the hours fetched for them, once the
+            market is closed. A backtest that needs them (turbos made up from the index go back up to 731 days) cannot be
+            made on them again until they are fetched again. The Disk page projects what each choice keeps.
           </p>
         </section>
       )}

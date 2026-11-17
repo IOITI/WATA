@@ -106,10 +106,12 @@ class DayFiles:
         self.written = 0
         self.last_written: tuple[str, date] | None = None
 
-    async def write_finished_days(self, instruments, written_until: datetime) -> list[tuple[str, date]]:
+    async def write_finished_days(self, instruments, written_until: datetime,
+                                  since: date | None = None) -> list[tuple[str, date]]:
         """
         ``instruments``: (id, epic, label, name). ``written_until``: every bar
-        before it is in the database. Returns the (label, day) written.
+        before it is in the database. ``since``: no day before it is written
+        (those the retention removed). Returns the (label, day) written.
         """
         done = []
         for instrument_id, epic, label, name in instruments:
@@ -118,6 +120,8 @@ class DayFiles:
                 continue
             existing = await asyncio.to_thread(written_days, self._root, label)
             day = first.astimezone(timezone.utc).date()
+            if since is not None:
+                day = max(day, since)
             while True:
                 start, end = _day_bounds(day)
                 if end > written_until:
@@ -135,3 +139,18 @@ class DayFiles:
                         self._empty.add((label, day))
                 day += timedelta(days=1)
         return done
+
+
+def remove_days_before(root: str, cutoff: date) -> int:
+    """The day files of every label older than ``cutoff`` removed; how many went."""
+    bars = os.path.join(root, SOURCE, "bars")
+    removed = 0
+    for label in sorted(os.listdir(bars)) if os.path.isdir(bars) else []:
+        for day in sorted(written_days(root, label)):
+            if day < cutoff:
+                try:
+                    os.remove(day_path(root, label, day))
+                    removed += 1
+                except FileNotFoundError:
+                    pass
+    return removed

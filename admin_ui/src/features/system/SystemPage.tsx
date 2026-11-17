@@ -30,7 +30,7 @@ import { SaxoCallbackOutcome, SaxoPanel } from './SaxoPanel'
 import { MAP_HEIGHT, MAP_LINKS, MAP_WIDTH, serviceMap } from './serviceMap'
 
 // The page that says more of a service, where there is one.
-const SERVICE_PAGES: Record<string, string> = { ta_engine: '/ta/monitor' }
+const SERVICE_PAGES: Record<string, string> = { ta_engine: '/ta/monitor', disk: '/system/disk' }
 
 function ServicesTable({ health }: { health: Health }) {
   return (

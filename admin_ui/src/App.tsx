@@ -19,6 +19,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { legacyPricesTarget } from '@/features/data/assets'
 import { ProviderPage } from '@/features/data/ProviderPage'
 import { ProvidersPage } from '@/features/data/ProvidersPage'
+import { DiskPage } from '@/features/disk/DiskPage'
 import { LogsPage } from '@/features/logs/LogsPage'
 import { NotFoundPage } from '@/features/NotFoundPage'
 import { OrdersPage } from '@/features/positions/OrdersPage'
@@ -344,6 +345,7 @@ const router = createBrowserRouter(
         <Route path="watchlist" element={<WatchlistPage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="system" element={<SystemPage />} />
+        <Route path="system/disk" element={<DiskPage />} />
         <Route path="logs" element={<LogsPage />} />
         <Route path="config" element={<ConfigPage />}>
           <Route index element={<ConfigOverview />} />

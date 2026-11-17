@@ -106,7 +106,8 @@ RECORDER_KEYS = (
 CAPITAL_SECTION = "trade.config.capital_feed"
 # What the Capital.com feed's dialog edits: every setting of its section (src/capital_feed/settings.py).
 CAPITAL_KEYS = (
-    "enabled", "environment", "instruments", "minute_volume", "day_files", "retention_months", "alert_after_seconds",
+    "enabled", "environment", "instruments", "minute_volume", "day_files", "retention_months",
+    "day_files_retention_days", "alert_after_seconds",
 )
 # Signals that name no indice (the scheduler's end-of-day close) concern every chart.
 SIGNALS_WITHOUT_INDICE = (None, "", "n/a")
@@ -679,6 +680,8 @@ class FetchRequest(Period):
 class KeepRequest(BaseModel):
     enabled: bool
     days: int = Field(KEEP_DEFAULT_DAYS, ge=1)
+    # The days kept on the disk, 0 for all; as they were when not given.
+    retain_days: int | None = Field(None, ge=0)
 
 
 @router.get("/providers/dukascopy/coverage")
@@ -712,7 +715,7 @@ async def stop_fetching_history(service=Depends(_download_service)):
 @router.put("/providers/dukascopy/keep")
 async def keep_history(body: KeepRequest, service=Depends(_download_service)):
     """Have the service fetch by itself what is missing of the last days, or stop doing so."""
-    return service.set_keep(body.enabled, body.days)
+    return service.set_keep(body.enabled, body.days, body.retain_days)
 
 
 # ── assets ──

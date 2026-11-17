@@ -62,10 +62,12 @@ def _flag(section: dict, key: str, default: bool) -> bool:
     return value
 
 
-def _whole(section: dict, key: str, default: int, *, minimum: int) -> int:
+def _whole(section: dict, key: str, default: int, *, minimum: int, maximum: int | None = None) -> int:
     value = section.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise ValueError(f"Config field '{SECTION}.{key}' must be a whole number of at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"Config field '{SECTION}.{key}' must be at most {maximum}")
     return value
 
 
@@ -99,6 +101,10 @@ def _instruments(section: dict) -> tuple[CapitalInstrument, ...]:
     return tuple(instruments)
 
 
+# The most days of day files a retention keeps (0 keeps them all).
+DAY_FILES_RETENTION_MAX_DAYS = 3650
+
+
 @dataclass(frozen=True)
 class CapitalSettings:
     enabled: bool = False
@@ -111,6 +117,8 @@ class CapitalSettings:
     day_files: bool = True
     # 0 keeps everything.
     retention_months: int = 0
+    # The day files older than this many days are removed; 0 keeps them all.
+    day_files_retention_days: int = 0
     # Silence while the market is open, before it is said on Telegram.
     alert_after_seconds: int = 300
     timezone: str = "Europe/Paris"
@@ -134,6 +142,8 @@ class CapitalSettings:
             minute_volume=_flag(section, "minute_volume", cls.minute_volume),
             day_files=_flag(section, "day_files", cls.day_files),
             retention_months=_whole(section, "retention_months", cls.retention_months, minimum=0),
+            day_files_retention_days=_whole(section, "day_files_retention_days", cls.day_files_retention_days,
+                                            minimum=0, maximum=DAY_FILES_RETENTION_MAX_DAYS),
             alert_after_seconds=_whole(section, "alert_after_seconds", cls.alert_after_seconds, minimum=30),
             timezone=config_manager.get_config_value("trade.config.general.timezone", cls.timezone),
             prices_root=prices_root if isinstance(prices_root, str) and prices_root else DEFAULT_PRICES_ROOT,

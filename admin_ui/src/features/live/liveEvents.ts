@@ -23,6 +23,7 @@ export const LIVE_EVENT_TYPES = [
   'agent_finished',
   'agent_question',
   'edge_watch_changed',
+  'disk_changed',
 ] as const
 
 export interface EventNotice {
@@ -231,6 +232,9 @@ export function eventLink(event: LiveEvent): string | null {
     case 'entries_resumed':
       return '/'
     case 'service_status':
+      return text(event.id) === 'disk' ? '/system/disk' : '/system'
+    case 'disk_changed':
+      return '/system/disk'
     case 'saxo_authorisation_required':
     case 'saxo_authorised':
       return '/system'
@@ -286,6 +290,9 @@ export function staleQueries(event: LiveEvent): string[] {
       return ['agent-conversations', 'agent-conversation']
     case 'edge_watch_changed':
       return ['edge-watch']
+    case 'disk_changed':
+      // Its level is said by the health's own change (service_status): the page and the top bar read again.
+      return ['disk', 'health']
     case 'prices_fetch_finished':
       // Days fetched are days of an asset. Never a chart's own queries: every open chart would be read again.
       return ['history-coverage', 'data-assets', 'data-asset', 'data-providers', 'data-provider']
@@ -295,7 +302,7 @@ export function staleQueries(event: LiveEvent): string[] {
     case 'release':
       // watadeploy wrote its status: what runs where, what waits, an apply as it goes. Said on Telegram once it
       // ends (src/admin/release.py), so no toast: the System page shows it.
-      return ['release', 'session', 'services', 'health']
+      return ['release', 'session', 'services', 'health', 'disk-cleanups']
     default:
       return []
   }

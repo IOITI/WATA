@@ -63,6 +63,10 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/audit"),
     ("GET", "/api/events"),
     ("GET", "/api/system/health"),
+    ("GET", "/api/system/disk"),
+    ("POST", "/api/system/disk/projection"),
+    ("GET", "/api/system/disk/cleanups"),
+    ("POST", "/api/system/disk/cleanups/{action}"),
     ("GET", "/api/system/saxo"),
     ("GET", "/api/system/services"),
     ("POST", "/api/system/services/restart"),
@@ -3282,8 +3286,8 @@ class FakeDownloads:
     def stop_fetch(self):
         return self._answer("stop_fetch", answer={"state": "running"})
 
-    def set_keep(self, enabled, days):
-        return self._answer("set_keep", enabled, days, answer={"enabled": enabled, "days": days})
+    def set_keep(self, enabled, days, retain_days=None):
+        return self._answer("set_keep", enabled, days, retain_days, answer={"enabled": enabled, "days": days})
 
     def storage(self):
         return {"days": 2, "bars_bytes": 1024, "fetched_bytes": 4096}
@@ -3360,12 +3364,18 @@ def test_a_download_of_prices_is_started_and_stopped(client, downloads):
 def test_the_service_is_told_to_keep_the_prices_up_to_date_or_to_stop(client, downloads):
     kept = client.put("/api/data/providers/dukascopy/keep", json={"enabled": True, "days": 250}, headers=SAME_ORIGIN)
     by_default = client.put("/api/data/providers/dukascopy/keep", json={"enabled": False}, headers=SAME_ORIGIN)
+    retained = client.put("/api/data/providers/dukascopy/keep", json={"enabled": False, "days": 120, "retain_days": 365},
+                          headers=SAME_ORIGIN)
 
     assert (kept.status_code, kept.json()) == (200, {"enabled": True, "days": 250})
     assert by_default.json() == {"enabled": False, "days": 120}
     assert client.put("/api/data/providers/dukascopy/keep", json={"days": 30}, headers=SAME_ORIGIN).status_code == 422
     assert client.put("/api/data/providers/dukascopy/keep", json={"enabled": True, "days": 0}, headers=SAME_ORIGIN).status_code == 422
-    assert downloads.asked == [("set_keep", True, 250), ("set_keep", False, 120)]
+    assert client.put("/api/data/providers/dukascopy/keep", json={"enabled": True, "retain_days": -1},
+                      headers=SAME_ORIGIN).status_code == 422
+    assert retained.status_code == 200
+    # The days kept on the disk are left as they are unless said.
+    assert downloads.asked == [("set_keep", True, 250, None), ("set_keep", False, 120, None), ("set_keep", False, 120, 365)]
 
 
 def test_what_the_download_service_refuses_is_answered_with_its_reason(client, downloads):

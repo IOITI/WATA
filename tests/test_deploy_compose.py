@@ -426,6 +426,30 @@ def test_the_admins_requests_and_config_changes_reach_watadeploy_through_systemd
     assert "systemctl enable --now watadeploy-requests.path watadeploy-config.path" in script
 
 
+def test_the_disk_is_sampled_every_hour_on_the_host_and_only_read_by_the_admin(compose_services):
+    from src.disk.collect import BASE, FOLDER
+    from src.admin.disk import DISK_PATH
+
+    script = open("deploy/install_package.sh").read()
+    wrapper = script.split("/usr/local/bin/watadisk\n")[1].split("\nEOF\n")[0]
+    timer = script.split("/etc/systemd/system/watadisk.timer")[1].split("\nEOF\n")[0]
+    service = script.split("/etc/systemd/system/watadisk.service")[1].split("\nEOF\n")[0]
+
+    # On the server's own python3, from the newest release, as watadeploy.
+    assert 'PYTHONPATH="$VERSION_DIR" exec python3 -m src.disk.collect "$@"' in wrapper
+    assert "OnCalendar=*-*-* *:07:00" in timer and "Persistent=true" in timer
+    # Never in the trading services' way.
+    assert "ExecStart=/usr/local/bin/watadisk now" in service and "Type=oneshot" in service
+    assert "Nice=19" in service and "IOSchedulingClass=idle" in service
+    assert "watadisk.timer" in script.split("systemctl enable --now")[1].splitlines()[0]
+    # What the collector writes is what the admin reads, and only reads.
+    assert f"mkdir -p {BASE}/{FOLDER}" in script
+    assert _mount_modes(compose_services["admin1"])[DISK_PATH] == "ro"
+    assert f"../../{FOLDER}:{DISK_PATH}:ro" in compose_services["admin1"]["volumes"]
+    # The scheduler reads it through the whole of var/lib, which it mounts already.
+    assert "/app/var/lib" in _container_paths(compose_services["scheduler1"])
+
+
 def test_the_install_script_makes_the_keys_once_for_root_alone():
     script = open("deploy/install_package.sh").read()
 

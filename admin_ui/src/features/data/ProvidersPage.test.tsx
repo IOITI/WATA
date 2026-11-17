@@ -45,7 +45,7 @@ const CATALOG = [
 ]
 const CAPITAL_DEFAULTS: CapitalSettings = {
   enabled: false, environment: 'demo', instruments: [{ epic: 'US100', label: 'us100' }], minute_volume: true, day_files: true,
-  retention_months: 0, alert_after_seconds: 300,
+  retention_months: 0, day_files_retention_days: 0, alert_after_seconds: 300,
 }
 
 function saxo(changes: Partial<SaxoProviderDetails> = {}): SaxoProviderDetails {
@@ -64,7 +64,7 @@ function dukascopy(changes: Partial<DukascopyProviderDetails> = {}): DukascopyPr
     first_t: utc('2026-10-05T00:00:00Z'), last_t: utc('2026-10-09T23:59:50Z'), first_day: '2026-10-05', last_day: '2026-10-09',
     configurable: true,
     fetch: { state: 'idle', lines: [] },
-    keep: { enabled: false, days: 120, state: 'off', missing: 0, settled: 0, failures: 0, next_at: null, limits: { days: 730 } },
+    keep: { enabled: false, days: 120, state: 'off', missing: 0, settled: 0, failures: 0, next_at: null, retain_days: 0, limits: { days: 730, retain_days: 3650 } },
     instruments: [
       { symbol: 'USATECHIDXUSD', label: 'us100', name: 'US Tech 100', currency: 'USD', built_in: true, days: 5, first_day: '2026-10-05', last_day: '2026-10-09', bytes: 1500000 },
       { symbol: 'DEUIDXEUR', label: 'de40', name: 'Germany 40', currency: 'EUR', built_in: false, days: 0, first_day: null, last_day: null, bytes: 0 },
@@ -154,7 +154,7 @@ function serve({ providers, saxoDetails = saxo(), capitalDetails = capital(), co
         return json({
           from: '2026-06-15', to: '2026-10-12', label: url.searchParams.get('label') ?? 'us100', symbol: 'USATECHIDXUSD',
           days: [], ready: { count: 0, first: null, last: null }, fetch: { state: 'idle', lines: [] },
-          keep: { enabled: false, days: 120, state: 'off', missing: 0, settled: 0, failures: 0, next_at: null, limits: { days: 730 } },
+          keep: { enabled: false, days: 120, state: 'off', missing: 0, settled: 0, failures: 0, next_at: null, retain_days: 0, limits: { days: 730, retain_days: 3650 } },
         })
       }
       throw new Error(`Unexpected request: ${method} ${path}`)

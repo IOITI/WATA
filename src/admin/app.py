@@ -24,8 +24,8 @@ from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, agent, backtests, config, credentials, data, edge_watch, luxalgo, release, research, saxo, services, session,
-    system, ta, trading,
+    actions, agent, backtests, config, credentials, data, disk, edge_watch, luxalgo, release, research, saxo, services,
+    session, system, ta, trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -233,6 +233,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.release is not None:
             # What the deploy did and what waits, said once each (src/admin/release.py).
             background.append(asyncio.create_task(ctx.release.keep(ctx)))
+        if ctx.disk is not None:
+            # The disk's level from the hourly samples, said on Telegram when it turns low and when it is fine again.
+            background.append(asyncio.create_task(ctx.disk.keep()))
         if ctx.debrief is not None:
             # The agent's daily debrief, once the market is closed (while admin.ai_agent.debrief_enabled).
             background.append(asyncio.create_task(ctx.debrief.keep()))
@@ -333,8 +336,8 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         # Nothing else is said to a visitor who has not signed in, the version included.
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
-    for module in (session, saxo, trading, system, services, release, actions, config, credentials, data, backtests,
-                   edge_watch, ta, research, agent, luxalgo):
+    for module in (session, saxo, trading, system, disk, services, release, actions, config, credentials, data,
+                   backtests, edge_watch, ta, research, agent, luxalgo):
         app.include_router(module.router)
     # LuxAlgo sends the browser back there from its own site: the state admits it (src/admin/routers/luxalgo.py).
     app.include_router(luxalgo.callback_router)

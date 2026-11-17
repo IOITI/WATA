@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from src.capital_feed.client import CapitalError, LoginRefused, MinuteCandle
+from src.capital_feed.day_files import day_path, write_day_file, written_days
 from src.capital_feed.recorder import (
     DAY_FILE_MARGIN_SECONDS,
     PENDING_BUCKETS_LIMIT,
@@ -149,11 +150,13 @@ class Stream:
 class DayFiles:
     def __init__(self):
         self.calls = []
+        self.since = []
         self.written = 0
         self.last_written = None
 
-    async def write_finished_days(self, instruments, written_until):
+    async def write_finished_days(self, instruments, written_until, since=None):
         self.calls.append((list(instruments), written_until))
+        self.since.append(since)
         return []
 
 
@@ -506,6 +509,33 @@ def test_a_retention_drops_old_months_once_a_day():
         await s.recorder.upkeep()
 
     assert _run(scenario, setup).store.dropped == [(date(2026, 10, 15), 6)]
+
+
+def test_the_day_files_older_than_their_retention_go_once_a_day_and_are_not_written_again(tmp_path):
+    root = str(tmp_path)
+    for label, day in (("us100", date(2026, 9, 14)), ("us100", date(2026, 9, 15)), ("us500", date(2026, 9, 1))):
+        write_day_file(day_path(root, label, day), [], epic=label.upper(), label=label, name=None)
+    setup = Setup(settings=replace(SETTINGS, day_files_retention_days=30, prices_root=root))
+
+    async def scenario(s):
+        await s.recorder.refresh_markets()
+        await s.recorder.upkeep()
+        # Written again by hand meanwhile: the next removal is tomorrow's.
+        write_day_file(day_path(root, "us100", date(2026, 9, 1)), [], epic="US100", label="us100", name=None)
+        await s.recorder.upkeep()
+
+    s = _run(scenario, setup)
+
+    # 30 days before 15 October: 15 September is the first kept.
+    assert written_days(root, "us100") == {date(2026, 9, 1), date(2026, 9, 15)}
+    assert written_days(root, "us500") == set()
+    assert s.day_files.since == [date(2026, 9, 15), date(2026, 9, 15)]
+
+
+def test_without_a_retention_every_day_file_is_kept_and_written():
+    s = _run(lambda s: s.recorder.upkeep())
+
+    assert s.day_files.since == [None]
 
 
 # ── running ──

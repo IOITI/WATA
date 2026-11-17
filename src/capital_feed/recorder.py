@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from src.capital_feed.client import CapitalError, LoginRefused, RateLimited, market_status
+from src.capital_feed.day_files import remove_days_before
 from src.capital_feed.hours import OpeningHours, parse_opening_hours
 from src.capital_feed.live import LiveBar
 from src.capital_feed.settings import CapitalSettings
@@ -123,6 +124,7 @@ class CapitalRecorder:
         self._last_db_error: str | None = None
         self._dropped_buckets = 0
         self._retention_done_on: date | None = None
+        self._day_files_pruned_on: date | None = None
 
         self._received: deque[float] = deque()
         self._delays: deque[tuple[float, float]] = deque()
@@ -497,13 +499,21 @@ class CapitalRecorder:
             self._retention_done_on = today
             if dropped:
                 logger.info("Retention of %d month(s): removed %s.", months, ", ".join(dropped))
+        kept_days = self._settings.day_files_retention_days
+        since = today - timedelta(days=kept_days) if kept_days > 0 else None
+        if self._day_files is not None and since is not None and self._day_files_pruned_on != today:
+            # The day files older than their retention, once a day; the days removed are not written again.
+            removed = await asyncio.to_thread(remove_days_before, self._settings.prices_root, since)
+            self._day_files_pruned_on = today
+            if removed:
+                logger.info("Retention of %d day(s) of day files: %d removed.", kept_days, removed)
         if self._day_files is not None and not self._db_failing:
             instruments = [
                 (self._ids[instrument.epic], instrument.epic, instrument.label, self._names.get(instrument.epic))
                 for instrument in self._settings.instruments if instrument.epic in self._ids
             ]
             safe = self.written_until() - timedelta(seconds=DAY_FILE_MARGIN_SECONDS)
-            await self._day_files.write_finished_days(instruments, safe)
+            await self._day_files.write_finished_days(instruments, safe, since)
 
     # ── running ──
 

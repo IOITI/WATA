@@ -176,6 +176,10 @@ class AdminContext:
     release: Any = None
     # The credentials sealed in PostgreSQL (src/admin/vault.py): listed, set, rotated; never read back.
     vault: Any = None
+    # The server's disk as the hourly samples of watadisk say it (src/admin/disk.py): read-only.
+    disk: Any = None
+    # What the Disk page may clean up (src/admin/disk_cleanups.py): the server's through watadeploy.
+    disk_cleanups: Any = None
     # The AI agent of the pages (src/admin/agent/service.py): with admin.ai_agent.enabled only.
     agent: Any = None
     # Its daily debrief (src/admin/agent_debrief.py): with the agent, acting only while debrief_enabled.
@@ -276,6 +280,7 @@ def build_context(config_manager) -> AdminContext:
     from src.admin.mcp_server.pause import McpPause
     from src.admin.queries import AdminQueries, LazyDatabase
     from src.admin.paper import PaperTrading
+    from src.admin.disk import DISK_PATH, DiskWatch
     from src.admin.edge_watch_service import EdgeWatch
     from src.admin.research_export import ResearchExport
     from src.admin.errors import ServiceUnavailable
@@ -410,6 +415,17 @@ def build_context(config_manager) -> AdminContext:
         closers=[backtests.close, downloads.close, database.close, pause_database.close, http_client.aclose, telegram_sender.close,
                  service_control.close, studies.close],
     )
+    # The disk as watadisk samples it on the host, read from its folder (mounted read-only; another for the
+    # development admin and the lab), what was said kept in the admin's own folder.
+    ctx.disk = DiskWatch(
+        config_path=settings.config_path, prices_root=settings.price_history_path,
+        root=os.environ.get("WATA_DISK_PATH", DISK_PATH),
+        state_folder=os.path.join(os.path.dirname(settings.agent_path.rstrip("/")), "disk"),
+        notify=telegram_sender.send, publish=events.publish,
+    )
+    from src.admin.disk_cleanups import DiskCleanups
+
+    ctx.disk_cleanups = DiskCleanups(disk=ctx.disk, release=ctx.release, backtests=backtests, studies=studies)
     # The live trades and the rules' paper trades judged against their reference; its guard pauses entries through
     # the admin's one writable connection, as the operator's pause does.
     ctx.edge_watch = EdgeWatch(

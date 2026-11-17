@@ -139,7 +139,7 @@ describe('what a save says before it is confirmed', () => {
 describe('the Capital.com feed’s settings', () => {
   const CAPITAL: CapitalSettings = {
     enabled: false, environment: 'demo', instruments: [{ epic: 'US100', label: 'us100' }], minute_volume: true,
-    day_files: true, retention_months: 0, alert_after_seconds: 300,
+    day_files: true, retention_months: 0, day_files_retention_days: 0, alert_after_seconds: 300,
   }
 
   it('show what the file leaves out at its default, and save only what was chosen', () => {
@@ -181,7 +181,7 @@ describe('the Capital.com feed’s settings', () => {
 
 describe('prices kept up to date by the service', () => {
   const keep = (changes: Partial<PriceKeepStatus>): PriceKeepStatus => ({
-    enabled: true, days: 120, state: 'due', missing: 12, settled: 0, failures: 0, next_at: null, limits: { days: 730 },
+    enabled: true, days: 120, state: 'due', missing: 12, settled: 0, failures: 0, next_at: null, retain_days: 0, limits: { days: 730, retain_days: 3650 },
     ...changes,
   })
   const moment = (iso: string) => iso.slice(11, 16)

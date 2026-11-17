@@ -11,8 +11,13 @@ the newest release and containers that wait for it, and applies it with the
 guards of any apply (src/release/guards.py), whatever the admin said of them.
 
 Announced once each, on Telegram and to the open pages: an apply's outcome,
-an image in use that would not start on config.json as it is, and, once the
-market closed, what still waits.
+an image in use that would not start on config.json as it is, a cleanup's
+outcome (the Disk page's, or watadeploy prune's), and, once the market
+closed, what still waits.
+
+The Disk page may also ask for a cleanup (``ask_cleanup``): the request names
+nothing but itself, and watadeploy decides what goes (older releases, images no
+tag names, Docker's build cache unused for two weeks).
 """
 
 import asyncio
@@ -56,6 +61,23 @@ def _write_json(path: str, value) -> None:
     with open(temporary, "w", encoding="utf-8") as written:
         json.dump(value, written, sort_keys=True)
     os.replace(temporary, path)
+
+
+def _megabytes(value) -> str:
+    return f"{value / 1e6:,.1f} MB" if isinstance(value, (int, float)) else "an unknown amount"
+
+
+def cleanup_said(record: dict) -> str:
+    """One message for a cleanup that ended."""
+    if record.get("error"):
+        return f"⚠️ WATA: the cleanup asked by {record.get('by') or 'watadeploy'} was not made: {record['error']}"
+    removed = record.get("removed") or []
+    lines = [f"🧹 WATA: cleanup by {record.get('by') or 'watadeploy'}",
+             f"Releases removed: {', '.join(removed) if removed else 'none'}",
+             f"Docker's build cache: {_megabytes(record.get('build_cache_bytes'))} given back",
+             f"Images no tag names: {_megabytes(record.get('images_bytes'))} given back"]
+    lines += [f"Not done: {error}" for error in record.get("errors") or []]
+    return "\n".join(lines)
 
 
 def outcome_said(record: dict) -> str:
@@ -143,6 +165,47 @@ class Release:
         _write_json(os.path.join(self._requests_path, f"{identifier}.json"), request)
         return request
 
+    def ask_cleanup(self, by: str) -> dict:
+        """Write a request for watadeploy's cleanup; refused while an apply or another cleanup waits."""
+        status = self.status()
+        if not status.get("newest"):
+            raise ReleaseRefused("watadeploy has said nothing yet on this server: run watadeploy status there")
+        if self.applying(status):
+            raise ReleaseRefused("An apply is under way: wait for it to end")
+        if self.cleanup_waiting(status):
+            raise ReleaseRefused("A cleanup was asked already: wait for it to end")
+        identifier = os.urandom(16).hex()
+        request = {"id": identifier, "action": "cleanup", "asked_by": by[:80], "asked_at": _now_iso(self._clock)}
+        _write_json(os.path.join(self._requests_path, f"{identifier}.json"), request)
+        return request
+
+    def cleanup_waiting(self, status: dict | None = None) -> dict | None:
+        """A cleanup asked and not answered yet: its request still in the folder, or accepted and not done."""
+        status = self.status() if status is None else status
+        answered = {entry.get("id"): entry.get("state") for entry in status.get("requests") or []
+                    if isinstance(entry, dict)}
+        try:
+            names = os.listdir(self._requests_path)
+        except OSError:
+            names = []
+        for name in names:
+            identifier = name[:-len(".json")] if name.endswith(".json") else None
+            if identifier and answered.get(identifier) is None:
+                try:
+                    with open(os.path.join(self._requests_path, name), encoding="utf-8") as request_file:
+                        request = json.load(request_file)
+                except (OSError, ValueError):
+                    continue
+                if isinstance(request, dict) and request.get("action") == "cleanup":
+                    asked_at = request.get("asked_at") or ""
+                    # A request older than watadeploy takes them is refused there: no longer waited for.
+                    if asked_at >= _now_iso(lambda: self._clock() - 600):
+                        return {"id": identifier, "state": "asked", "at": asked_at}
+        for entry in status.get("requests") or []:
+            if isinstance(entry, dict) and entry.get("action") == "cleanup" and entry.get("state") == "accepted":
+                return entry
+        return None
+
     # ── what is said of it ──
 
     def _announced(self) -> dict:
@@ -158,6 +221,7 @@ class Release:
         announced = self._announced()
         applies = list(announced.get("applies") or [])
         refusals = list(announced.get("config") or [])
+        cleanups = list(announced.get("cleanups") or [])
         messages = []
         last = status.get("last")
         if isinstance(last, dict) and last.get("done") and last.get("id") and last["id"] not in applies:
@@ -165,6 +229,11 @@ class Release:
             if announced or (status.get("last") or {}).get("finished_at", "") >= _now_iso(lambda: now - 3600):
                 messages.append(outcome_said(last))
             applies.append(last["id"])
+        cleanup = status.get("cleanup")
+        if isinstance(cleanup, dict) and cleanup.get("id") and cleanup["id"] not in cleanups:
+            if announced or (cleanup.get("finished_at") or "") >= _now_iso(lambda: now - 3600):
+                messages.append(cleanup_said(cleanup))
+            cleanups.append(cleanup["id"])
         for image in ((status.get("config") or {}).get("images") or []):
             key = f"{image.get('image')}|{image.get('detail')}"
             if image.get("accepted") is False and key not in refusals:
@@ -179,7 +248,8 @@ class Release:
             messages.append(f"🕗 WATA {status.get('newest')} waits for {', '.join(waiting)}: apply it from the "
                             f"System page, or with watadeploy apply on the server")
             reminded = closed_day
-        changed = {"applies": applies[-KEPT_ANNOUNCED:], "config": refusals[-KEPT_ANNOUNCED:], "reminded_on": reminded}
+        changed = {"applies": applies[-KEPT_ANNOUNCED:], "config": refusals[-KEPT_ANNOUNCED:],
+                   "cleanups": cleanups[-KEPT_ANNOUNCED:], "reminded_on": reminded}
         if changed != {key: announced.get(key) for key in changed}:
             _write_json(self._announced_path, changed)
         return messages

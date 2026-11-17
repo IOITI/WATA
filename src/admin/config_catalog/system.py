@@ -45,6 +45,30 @@ REPORTING = (
                  "from being read: the telegram service says so in its log.",),
     ),
     Param(
+        path="reporting.disk_warning_free_percent", group="report", label="Disk low under", kind="int", unit="%",
+        minimum=1, maximum=50, optional=True, default=15,
+        help="Under this share of the disk free, it is a warning: in the health, on Telegram once, and each morning.",
+        consumers=("disk",), risk=NONE,
+        related=("reporting.disk_critical_free_percent", "reporting.disk_warning_days_left"),
+        also_needs=("The hourly sample of the disk (watadisk.timer, made by the install).",),
+    ),
+    Param(
+        path="reporting.disk_critical_free_percent", group="report", label="Disk critical under", kind="int",
+        unit="%", minimum=1, maximum=50, optional=True, default=5,
+        help="Under this share of the disk free, it is critical: the health says down.",
+        caveats=("At or over the warning level, no warning comes before it.",),
+        consumers=("disk",), risk=NONE,
+        related=("reporting.disk_warning_free_percent",),
+    ),
+    Param(
+        path="reporting.disk_warning_days_left", group="report", label="Disk warning ahead", kind="int",
+        unit="days", minimum=0, maximum=365, optional=True, default=14,
+        help="A warning too when, at the pace of the last 14 days, the free space reaches the critical level "
+             "within this many days. 0: none.",
+        consumers=("disk",), risk=NONE,
+        related=("reporting.disk_critical_free_percent",),
+    ),
+    Param(
         path="logging.level", group="logs", label="Log level", kind="enum",
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         help="What every service writes in its log: DEBUG writes the most.",

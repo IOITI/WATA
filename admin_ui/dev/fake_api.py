@@ -115,6 +115,7 @@ from src.configuration import ConfigurationManager
 from src.message_helper import build_daily_trading_report_payload
 
 import fake_capital
+import fake_disk
 import fake_prices
 import fake_recorded
 import fake_ta
@@ -1394,6 +1395,28 @@ class FakeRelease(Release):
         threading.Thread(target=self._carry_out, args=(request,), daemon=True).start()
         return request
 
+    def ask_cleanup(self, by):
+        request = super().ask_cleanup(by)
+        threading.Thread(target=self._clean_up, args=(request,), daemon=True).start()
+        return request
+
+    def _clean_up(self, request: dict) -> None:
+        """watadeploy's cleanup, made up: taken from the folder, a few seconds, then what Docker gave back."""
+        time.sleep(self.STEP_SECONDS)
+        with self._lock:
+            try:
+                os.unlink(os.path.join(self._requests_path, f"{request['id']}.json"))
+            except OSError:
+                pass
+            status = self.status()
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            status["cleanup"] = {"id": uuid.uuid4().hex[:16], "by": f"admin ({request['asked_by']})",
+                                 "request": request["id"], "started_at": now, "finished_at": now, "removed": [],
+                                 "images_bytes": 4_857, "build_cache_bytes": 902_600_000}
+            status["requests"] = [{"id": request["id"], "action": "cleanup", "state": "done", "at": now,
+                                   "cleanup": status["cleanup"]["id"]}] + status.get("requests", [])
+            self._write(status)
+
     def _carry_out(self, request: dict) -> None:
         def now() -> str:
             return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1770,6 +1793,17 @@ def build_dev_context(work_dir: str) -> AdminContext:
         script_details=ScriptDetails(ta_scripts),
     )
     ctx.restarts = RestartPlans(ctx.service_control, FakeReadiness(), lambda: situation_of(ctx), events, poll_seconds=1)
+    # The disk's hourly samples, 14 days of them made up as watadisk writes them (fake_disk.py).
+    from src.admin.disk import DiskWatch
+
+    disk_samples = os.path.join(work_dir, "lib", "disk")
+    fake_disk.write(disk_samples)
+    ctx.disk = DiskWatch(config_path=config_path, prices_root=prices_root, root=disk_samples,
+                         state_folder=os.path.join(work_dir, "lib", "admin", "disk"), notify=notifier,
+                         publish=events.publish)
+    from src.admin.disk_cleanups import DiskCleanups
+
+    ctx.disk_cleanups = DiskCleanups(disk=ctx.disk, release=ctx.release, backtests=backtests, studies=studies)
     # The credentials, sealed with keys made for this run: the admin's own and every public one, as the
     # compose file mounts them. FAKE_NO_KEYS=1 shows the page of an admin without them (the lab).
     keys_root = os.path.join(work_dir, "keys")

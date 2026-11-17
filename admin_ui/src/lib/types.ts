@@ -1619,6 +1619,8 @@ export interface CapitalSettings {
   minute_volume: boolean
   day_files: boolean
   retention_months: number
+  /** Day files older than this many days are removed; 0 keeps them all. */
+  day_files_retention_days: number
   alert_after_seconds: number
 }
 
@@ -2934,7 +2936,9 @@ export interface PriceKeepStatus {
   /** Downloads in a row during which the server stopped answering. */
   failures: number
   next_at: string | null
-  limits: { days: number }
+  /** The days kept on the disk, every instrument's; 0 for all. Never fewer than `days`. */
+  retain_days: number
+  limits: { days: number; retain_days: number }
 }
 
 export interface PriceFetchStatus {
@@ -4589,3 +4593,160 @@ export interface PropFirmAsked {
   account_max?: number | null
 }
 
+
+// ── the server's disk (src/admin/disk.py, src/disk/) ──
+
+export type DiskLevel = 'ok' | 'warning' | 'critical' | 'stale' | 'none'
+
+/** The disk's level now, from its newest hourly sample (src/disk/levels.py). */
+export interface DiskJudged {
+  level: DiskLevel
+  reason: string
+  at?: string
+  age_hours?: number
+  total?: number
+  available?: number
+  free_percent?: number
+  available_per_day?: number | null
+  days_to_critical?: number | null
+  thresholds?: { warning_free_percent: number; critical_free_percent: number; warning_days_left: number }
+}
+
+export type DiskRetentionKey =
+  | 'saxo_retention_months'
+  | 'capital_retention_months'
+  | 'capital_day_files_days'
+  | 'dukascopy_retain_days'
+  | 'signal_cache_mb'
+  | 'research_keep_days'
+  | 'ta_monitoring_days'
+
+export type DiskRetentions = Record<DiskRetentionKey, number>
+
+export interface DiskFilesystem {
+  mount: string
+  paths: string[]
+  total: number
+  used: number
+  free: number
+  available: number
+  inodes_total: number
+  inodes_free: number
+  wata: boolean
+}
+
+export interface DiskKind {
+  id: string
+  label: string
+  family: string
+  /** How it grows: trend, months, days, cap, backups. */
+  model: string
+  knob: DiskRetentionKey | null
+  link: string | null
+  note: string
+  bytes: number | null
+  share: number | null
+  per_day: number | null
+  pace_from: 'samples' | 'partitions' | 'days held' | null
+  /** Its change over the last 7 days; null without a sample then. */
+  week: number | null
+  week_since: string | null
+  retention: number | null
+}
+
+export interface DiskPoint {
+  at: string
+  available: number | null
+  total: number | null
+  families: Record<string, number>
+}
+
+export interface DiskDetails {
+  tables: { name: string; bytes: number }[]
+  partitions: Record<string, { name: string; month: string | null; bytes: number }[]>
+  database_bytes: number | null
+  logs: { service: string; bytes: number }[]
+  log_cap: number
+  releases: { version: string; bytes: number }[]
+  dumps: { file: string; day: string; full: boolean; bytes: number }[]
+  day_files: Record<string, { days: number; first: string; last: string }>
+  docker: { images?: number; build_cache?: number; containers?: number; volumes?: number; reclaimable?: Record<string, number | null> } | null
+  host_folders: Record<string, number>
+}
+
+export interface DiskOverview {
+  judged: DiskJudged
+  retentions: { values: DiskRetentions; bounds: Record<DiskRetentionKey, [number, number]> }
+  horizons: number[]
+  max_horizon_days: number
+  sample: {
+    at: string
+    took_seconds: number | null
+    errors: Record<string, string>
+    filesystems: DiskFilesystem[]
+    trend: { available_per_day: number | null; over_days: number; samples: number } | null
+    samples: number
+    first_at: string
+  } | null
+  kinds: DiskKind[]
+  families: { name: string; bytes: number }[]
+  series: DiskPoint[]
+  details: Partial<DiskDetails>
+}
+
+export interface DiskProjection {
+  at: string
+  today: string
+  total: number
+  available: number
+  retentions: DiskRetentions
+  current: DiskRetentions
+  /** The retentions asked that differ from those set now. */
+  asked: Partial<DiskRetentions>
+  thresholds: { warning_free_percent: number; critical_free_percent: number }
+  kinds: { id: string; now: number | null; per_day: number | null; pace_from: string | null; retention: number | null; steady: [number, number] | null }[]
+  horizons: { days: number; date: string; available: number; free_percent: number | null; kinds: Record<string, number> }[]
+  series: { days: number; date: string; available: number; free_percent: number; families: Record<string, number> }[]
+  days_to_warning: number | null
+  days_to_critical: number | null
+  look_days: number
+}
+
+/** A cleanup the Disk page may ask (src/admin/disk_cleanups.py). */
+export type DiskCleanupId = 'server' | 'signal_cache' | 'former'
+
+/** What watadeploy's last cleanup did (src/release/host.py `cleanup`). */
+export interface DiskCleanupRecord {
+  id: string
+  by: string
+  request?: string | null
+  started_at?: string
+  finished_at?: string
+  removed: string[]
+  images_bytes: number | null
+  build_cache_bytes: number | null
+  errors?: string[]
+  error?: string
+}
+
+export interface DiskCleanupOffer {
+  id: DiskCleanupId
+  /** What it would give back, as far as the admin can tell; null when it cannot. */
+  bytes: number | null
+  /** Docker says what it gave back only once done: the estimate is a most. */
+  up_to?: boolean
+  available: boolean
+  why_not: string | null
+  releases?: { version: string; bytes: number | null }[]
+  build_cache?: number | null
+  waiting?: { id: string; state: string; at: string } | null
+  last?: DiskCleanupRecord | null
+  files?: number
+  limit?: number | null
+  runs?: number
+}
+
+export interface DiskCleanups {
+  items: DiskCleanupOffer[]
+  actions_enabled: boolean
+}

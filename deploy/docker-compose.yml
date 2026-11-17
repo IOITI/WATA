@@ -445,6 +445,8 @@ services:
       # What each container runs and what waits for the newest release, only read: watadeploy writes it
       # (src/release/host.py). A request to apply goes into var/lib/admin/deploy/requests, above.
       - ../../release/status:/app/var/lib/release:ro
+      # The hourly samples of the server's disk, only read: watadisk writes them on the host (src/disk/collect.py).
+      - ../../var/lib/disk:/app/var/lib/disk:ro
       # The directory rather than the file: the config editor replaces config.json atomically.
       # The RabbitMQ configuration kept beside it is not the admin's to change.
       - ../../etc:/app/etc

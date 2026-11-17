@@ -172,6 +172,18 @@ PYTHONPATH="$VERSION_DIR" exec python3 -m src.release.cli "$@"
 EOF
 chmod +x /usr/local/bin/watadeploy
 
+# The disk's hourly sample (src/disk/collect.py), from the newest release, on the server's own python3.
+cat << 'EOF' > /usr/local/bin/watadisk
+#!/bin/bash
+set -euo pipefail
+# watadisk now | show
+APP_BASE="/app/wata"
+VERSION_DIR="$APP_BASE/$(cat "$APP_BASE/VERSION")"
+cd "$VERSION_DIR"
+PYTHONPATH="$VERSION_DIR" exec python3 -m src.disk.collect "$@"
+EOF
+chmod +x /usr/local/bin/watadisk
+
 # One of WATA's commands, run in a container of its own made from a service's (its mounts, its key, its
 # networks) on the newest release's image: a command run with docker exec would run the image its service
 # was last recreated on. Never a part of Traefik's routes: the webhook's and the admin's go to the services.
@@ -466,8 +478,38 @@ Type=oneshot
 ExecStart=/usr/local/bin/watadeploy check-config
 SuccessExitStatus=1
 EOF
+# The disk sampled every hour (watadisk now), at the lowest priority of processor and disk: what WATA takes of it,
+# kept 14 days in /app/wata/var/lib/disk, which the admin reads (its Disk page, health, Telegram) and the scheduler
+# too (its morning line while the disk is low).
+cat << 'EOF' > /etc/systemd/system/watadisk.timer
+[Unit]
+Description=WATA: an hourly sample of the server's disk
+
+[Timer]
+OnCalendar=*-*-* *:07:00
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+cat << 'EOF' > /etc/systemd/system/watadisk.service
+[Unit]
+Description=WATA: sample the server's disk
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/watadisk now
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=600
+EOF
+mkdir -p /app/wata/var/lib/disk
 systemctl daemon-reload
-systemctl enable --now watadeploy-requests.path watadeploy-config.path
+systemctl enable --now watadeploy-requests.path watadeploy-config.path watadisk.timer
+# A first sample now, so that the admin has one before the hour.
+systemctl start --no-block watadisk.service || echo "WARNING: the disk's first sample could not be started." >&2
 
 # Older releases' folders and images, keeping the newest three and every one a container still names.
 watadeploy prune || echo "WARNING: the older releases could not all be removed (watadeploy prune)." >&2
@@ -489,6 +531,7 @@ echo "  - watastop:    Stop the application"
 echo "  - watastatus:  Show each container, its image and its state"
 echo "  - watalogs:    Tail the application logs"
 echo "  - watadeploy:  status, plan, apply, rollback, full restart, check-config, prune"
+echo "  - watadisk:    now (sample the disk), show (its newest sample); sampled every hour by watadisk.timer"
 echo ""
 echo "To authenticate with Saxo (or from the admin's System page):"
 echo "  - watasaxoauth"

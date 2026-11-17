@@ -165,7 +165,7 @@ function serve({
           from, to, label: url.searchParams.get('label') ?? 'us100', symbol: 'USATECHIDXUSD',
           days: [{ day: '2026-10-09', state: 'ready', hours: 24, hours_expected: 24 }],
           ready: { count: 1, first: '2026-10-09', last: '2026-10-09' }, fetch: { state: 'idle', lines: [] },
-          keep: { enabled: false, days: 120, state: 'off', missing: 0, settled: 0, failures: 0, next_at: null, limits: { days: 730 } },
+          keep: { enabled: false, days: 120, state: 'off', missing: 0, settled: 0, failures: 0, next_at: null, retain_days: 0, limits: { days: 730, retain_days: 3650 } },
         })
       }
       const match = url.pathname.match(/^\/api\/data\/assets\/(saxo|dukascopy)\/([^/]+)(?:\/(.+))?$/)

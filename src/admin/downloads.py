@@ -17,6 +17,12 @@ output, the switch (``keep.json``) and what the keeper learnt (``keeper.json``:
 when it may ask again, and the days the server has no more of, which are
 never asked for again).
 
+What is kept is bounded by ``retain_days`` of ``keep.json`` (0, the default, for
+everything): once the market is closed, the days older than it are removed, every
+instrument's, their bars and the hours they were made of, never while a download
+runs. It is never shorter than the days kept up to date, which would otherwise be
+downloaded again.
+
 None of this acts on the trading services, so it is neither in the audit
 trail nor announced on Telegram.
 """
@@ -83,6 +89,10 @@ KEEP_BACKOFF_SECONDS = 1800
 KEEP_BACKOFF_MAX_SECONDS = 12 * 3600
 # A day older than this for which the server has nothing is not asked for again.
 KEEP_GIVE_UP_AFTER_DAYS = 3
+# The days kept on the disk: 0 for every day; never fewer than the days kept up to date.
+RETAIN_MAX_DAYS = 3650
+# The old days are looked for at most this often.
+RETAIN_EVERY_SECONDS = 3600
 
 # What the keeper remembers, copied once from where the former backtester kept it.
 _REMEMBERED = ("keep.json", "keeper.json")
@@ -123,6 +133,7 @@ class HistoryDownloads:
         self._fetch_process: Process | None = None
         self._fetch_task: asyncio.Task | None = None
         self._fetch_stopped = False
+        self._retained_at = 0.0
         self._adopt_legacy_state()
 
     def _state_file(self, name: str) -> str:
@@ -316,7 +327,11 @@ class HistoryDownloads:
 
     def _keep_settings(self) -> dict:
         settings = read_json(self._state_file("keep.json")) or {}
-        return {"enabled": bool(settings.get("enabled", False)), "days": int(settings.get("days", KEEP_DEFAULT_DAYS))}
+        return {
+            "enabled": bool(settings.get("enabled", False)),
+            "days": int(settings.get("days", KEEP_DEFAULT_DAYS)),
+            "retain_days": int(settings.get("retain_days", 0)),
+        }
 
     def _keeper(self) -> dict:
         """What the service remembers of the downloads: when it may ask again, and the days that are settled."""
@@ -326,12 +341,20 @@ class HistoryDownloads:
         os.makedirs(self._state_file(""), exist_ok=True)
         write_json(self._state_file("keeper.json"), {**self._keeper(), **changes})
 
-    def set_keep(self, enabled: bool, days: int = KEEP_DEFAULT_DAYS) -> dict:
-        """Switch on or off the fetching of what is missing of the last ``days`` days."""
+    def set_keep(self, enabled: bool, days: int = KEEP_DEFAULT_DAYS, retain_days: int | None = None) -> dict:
+        """
+        Switch on or off the fetching of what is missing of the last ``days`` days, and say how many days are
+        kept on the disk (``retain_days``, 0 for all; as before when not given).
+        """
         if not 1 <= days <= KEEP_MAX_DAYS:
             raise InvalidRequest(f"Between 1 and {KEEP_MAX_DAYS} days can be kept up to date")
+        if retain_days is None:
+            retain_days = self._keep_settings()["retain_days"]
+        if retain_days and not days <= retain_days <= RETAIN_MAX_DAYS:
+            raise InvalidRequest(f"The days kept on the disk are 0 (all) or between the {days} days kept up to date "
+                                 f"and {RETAIN_MAX_DAYS}: fewer would be downloaded again")
         os.makedirs(self._state_file(""), exist_ok=True)
-        write_json(self._state_file("keep.json"), {"enabled": enabled, "days": days})
+        write_json(self._state_file("keep.json"), {"enabled": enabled, "days": days, "retain_days": retain_days})
         # Asked by the operator: whatever wait was in progress is over.
         self._set_keeper(next_at=0, failures=0)
         return self.keep_status()
@@ -381,7 +404,7 @@ class HistoryDownloads:
             "settled": len(keeper.get("settled") or {}),
             "failures": keeper.get("failures") or 0,
             "next_at": utc(next_at) if now < next_at else None,
-            "limits": {"days": KEEP_MAX_DAYS},
+            "limits": {"days": KEEP_MAX_DAYS, "retain_days": RETAIN_MAX_DAYS},
         }
 
     def keep_once(self) -> str:
@@ -432,8 +455,26 @@ class HistoryDownloads:
             failures, wait = 0, KEEP_PAUSE_SECONDS
         self._set_keeper(next_at=now + wait, failures=failures, settled=settled)
 
+    def retain_once(self) -> int:
+        """
+        Remove the days older than ``retain_days``, of every instrument: their bars and the hours fetched for
+        them. Only while the market is closed and nothing is downloaded, at most once an hour. How many days
+        of bars went.
+        """
+        retain_days = self._keep_settings()["retain_days"]
+        now = self._clock()
+        if retain_days <= 0 or self._fetching() or now - self._retained_at < RETAIN_EVERY_SECONDS \
+                or self._market_is_open(now):
+            return 0
+        self._retained_at = now
+        cutoff = datetime.fromtimestamp(now, timezone.utc).date() - timedelta(days=retain_days)
+        removed = remove_days_before(os.path.join(self._prices_root, dukascopy.SOURCE), cutoff)
+        if removed:
+            logger.info(f"Dukascopy: {removed} days before {cutoff} removed (kept: {retain_days} days)")
+        return removed
+
     async def keep_prices(self, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
-        """Until cancelled: look once a minute whether a download is due."""
+        """Until cancelled: look once a minute whether a download is due, and whether old days are to go."""
         while True:
             await sleep(KEEP_TICK_SECONDS)
             try:
@@ -442,6 +483,12 @@ class HistoryDownloads:
                 raise
             except Exception as e:
                 logger.warning(f"Could not keep the prices up to date: {e}")
+            try:
+                self.retain_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Could not remove the oldest Dukascopy days: {e}")
 
     async def close(self) -> None:
         """The admin is stopping: a download stops with it."""
@@ -452,3 +499,50 @@ class HistoryDownloads:
                 pass
         if self._fetch_task is not None:
             self._fetch_task.cancel()
+
+
+def remove_days_before(root: str, cutoff: date) -> int:
+    """
+    Under a Dukascopy folder (``bars/<label>/<day>.csv.gz``, ``raw/<symbol>/<YYYY>/<MM>/<DD>/``), remove the
+    days before ``cutoff``, then the folders they leave empty. How many day files went.
+    """
+    removed = 0
+    bars = os.path.join(root, "bars")
+    for label in sorted(os.listdir(bars)) if os.path.isdir(bars) else []:
+        folder = os.path.join(bars, label)
+        for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+            try:
+                day = date.fromisoformat(name.split(".", 1)[0])
+            except ValueError:
+                continue
+            if day < cutoff and name.endswith(".csv.gz"):
+                os.remove(os.path.join(folder, name))
+                removed += 1
+    raw = os.path.join(root, "raw")
+    for symbol in sorted(os.listdir(raw)) if os.path.isdir(raw) else []:
+        for year in _numbered(os.path.join(raw, symbol)):
+            for month in _numbered(os.path.join(raw, symbol, year)):
+                for day in _numbered(os.path.join(raw, symbol, year, month)):
+                    try:
+                        held = date(int(year), int(month), int(day))
+                    except ValueError:
+                        continue
+                    if held < cutoff:
+                        shutil.rmtree(os.path.join(raw, symbol, year, month, day), ignore_errors=True)
+                _remove_if_empty(os.path.join(raw, symbol, year, month))
+            _remove_if_empty(os.path.join(raw, symbol, year))
+    return removed
+
+
+def _numbered(folder: str) -> list[str]:
+    try:
+        return sorted(name for name in os.listdir(folder) if name.isdigit())
+    except OSError:
+        return []
+
+
+def _remove_if_empty(folder: str) -> None:
+    try:
+        os.rmdir(folder)
+    except OSError:
+        pass

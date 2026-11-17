@@ -251,6 +251,7 @@
         "minute_volume": true,
         "day_files": true,
         "retention_months": 0,
+        "day_files_retention_days": 0,
         "alert_after_seconds": 300
       },
       "ta_engine": {
@@ -329,7 +330,10 @@
       5000000,
       10000000
     ],
-    "telegram_commands": false
+    "telegram_commands": false,
+    "disk_warning_free_percent": 15,
+    "disk_critical_free_percent": 5,
+    "disk_warning_days_left": 14
   },
   "admin": {
     "api_host": "0.0.0.0",

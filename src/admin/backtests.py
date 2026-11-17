@@ -1314,6 +1314,22 @@ class BacktestService:
             removed += 1
         return removed
 
+    def clear_signal_cache(self) -> dict:
+        """Every answer of the Pine runner kept removed (the Disk page's cleanup); refused while a run is under way."""
+        if self.under_way:
+            raise NotPossible("A backtest is under way: its answers are read as it goes. Empty the cache once it ends")
+        files = self._cache_files()
+        removed = 0
+        freed = 0
+        for _, size, path in files:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                continue
+            removed += 1
+            freed += size
+        return {"removed": removed, "bytes": freed}
+
     def storage(self) -> dict:
         """The disk the runs take, the runner's answers kept, and what the former backtester left."""
         runs = [folder_bytes(os.path.join(self._runs_root, run_id)) for run_id in self._run_ids()]

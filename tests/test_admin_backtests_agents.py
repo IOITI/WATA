@@ -148,6 +148,24 @@ def test_the_runners_answers_kept_are_pruned_oldest_first_and_counted(tmp_path, 
     assert sorted(path.name for path in cache.iterdir()) == ["3.json", "4.json"]
 
 
+def test_the_answers_kept_are_emptied_on_request_but_not_while_a_run_reads_them(tmp_path, scripts, config):
+    from src.admin.errors import NotPossible
+
+    backtests = service(tmp_path, scripts, config)
+    cache = tmp_path / "backtests" / "_signal_cache" / "ab"
+    cache.mkdir(parents=True)
+    for number in range(3):
+        (cache / f"{number}.json").write_text("x" * 100)
+
+    backtests._running["20261117-070000-abcdef"] = object()
+    with pytest.raises(NotPossible, match="backtest is under way"):
+        backtests.clear_signal_cache()
+    assert len(list(cache.iterdir())) == 3
+    backtests._running.clear()
+    assert backtests.clear_signal_cache() == {"removed": 3, "bytes": 300}
+    assert backtests.storage()["signal_cache"]["count"] == 0
+
+
 def test_without_a_size_the_answers_kept_are_never_pruned(tmp_path, scripts, config):
     backtests = service(tmp_path, scripts, config)
     cache = tmp_path / "backtests" / "_signal_cache" / "ab"

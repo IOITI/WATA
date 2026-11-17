@@ -190,7 +190,8 @@ def test_the_provider_says_how_it_is_set_what_it_missed_today_and_its_day_files(
 
     assert body["settings"] == {
         "enabled": True, "environment": "demo", "instruments": [{"epic": "US100", "label": "us100"}],
-        "minute_volume": True, "day_files": True, "retention_months": 0, "alert_after_seconds": 300,
+        "minute_volume": True, "day_files": True, "retention_months": 0, "day_files_retention_days": 0,
+        "alert_after_seconds": 300,
     }
     (files,) = body["day_files"]
     assert (files["label"], files["days"], files["first_day"], files["last_day"], files["location"]) == (

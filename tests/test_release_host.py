@@ -187,6 +187,19 @@ class FakeDocker:
         self.calls.append(("rm", reference))
         return self.images.pop(reference, None) is not None
 
+    pruned = {"images": 4_857, "build_cache": 902_600_000}
+    refuse_prune = False
+
+    def prune_dangling_images(self):
+        self.calls.append(("prune", "images"))
+        return self.pruned["images"]
+
+    def prune_build_cache(self):
+        self.calls.append(("prune", "build_cache"))
+        if self.refuse_prune:
+            raise DeployError("docker builder prune failed: permission denied")
+        return self.pruned["build_cache"]
+
     def check_config(self, image):
         return (False, "ValueError: Missing required configuration sections: x") if image in self.config_refused else (
             True, "accepted")
@@ -414,6 +427,78 @@ def test_prune_keeps_the_newest_and_whatever_is_still_named(server):
     assert not os.path.isdir(os.path.join(host.layout.base, "0.52.1"))
     assert os.path.isdir(os.path.join(host.layout.base, OLD))
     assert ("rm", "wata-base:0.52.1") in docker.calls
+
+
+def test_a_cleanup_prunes_the_old_releases_the_untagged_images_and_the_old_build_cache_and_says_it(server):
+    host, docker, _, _ = server
+    record = host.cleanup(keep=2, by="operator")
+
+    assert "0.52.1" in record["removed"] and OLD not in record["removed"]
+    assert (record["images_bytes"], record["build_cache_bytes"]) == (4_857, 902_600_000)
+    assert ("prune", "images") in docker.calls and ("prune", "build_cache") in docker.calls
+    assert host.read_status()["cleanup"]["id"] == record["id"] and record["by"] == "operator"
+
+
+def test_a_cleanup_waits_for_no_apply_and_one_part_that_fails_leaves_the_others_done(server):
+    host, docker, _, _ = server
+    with host.locked():
+        with pytest.raises(DeployError, match="one at a time"):
+            host.cleanup()
+    assert ("prune", "images") not in docker.calls
+    assert "one at a time" in host.read_status()["cleanup"]["error"]
+
+    docker.refuse_prune = True
+    record = host.cleanup()
+    assert record["images_bytes"] == 4_857 and record["build_cache_bytes"] is None
+    assert record["errors"] == ["docker builder prune failed: permission denied"]
+
+
+def test_docker_is_asked_for_the_untagged_images_and_the_build_cache_unused_for_two_weeks(tmp_path):
+    asked = []
+
+    def runner(arguments, **_):
+        asked.append(arguments)
+        said = "Deleted build cache objects:\nabc\n\nTotal reclaimed space: 902.6MB\n"
+        return subprocess.CompletedProcess(arguments, 0, said if "builder" in arguments else "Total reclaimed space: 0B\n", "")
+
+    docker = Docker(Layout(str(tmp_path)), binary="docker", runner=runner)
+    assert docker.prune_build_cache() == 902_600_000
+    assert docker.prune_dangling_images() == 0
+    assert asked == [["docker", "builder", "prune", "--force", "--filter", "until=336h"],
+                     ["docker", "image", "prune", "--force"]]
+    # Never every image, nor every layer of the cache.
+    assert all("--all" not in arguments and "-a" not in arguments for arguments in asked)
+
+
+def test_the_admin_may_ask_for_a_cleanup_and_nothing_else_of_it(server):
+    host, docker, clock, _ = server
+    _request(host, clock, name="2" * 32, action="cleanup", version=None, containers=None, force=None)
+    host.serve_requests()
+    # Only the fields of a cleanup.
+    assert host.read_status()["requests"][0]["state"] == "refused"
+
+    path = os.path.join(host.layout.requests_in, "3" * 32 + ".json")
+    with open(path, "w") as request_file:
+        json.dump({"id": "3" * 32, "action": "cleanup", "asked_by": "the Disk page",
+                   "asked_at": __import__("datetime").datetime.fromtimestamp(
+                       clock.now, __import__("datetime").timezone.utc).isoformat()}, request_file)
+    host.serve_requests()
+    status = host.read_status()
+    assert status["requests"][0]["state"] == "done" and status["requests"][0]["cleanup"] == status["cleanup"]["id"]
+    assert status["cleanup"]["by"] == "admin (the Disk page)" and ("prune", "build_cache") in docker.calls
+    # An apply is untouched by it.
+    assert docker.running["admin1"]["Image"] == OLD_ID
+
+    _request(host, clock, name="4" * 32, action="reboot")
+    host.serve_requests()
+    assert host.read_status()["requests"][0]["state"] == "refused"
+
+
+def test_watadeploy_prune_says_what_it_gave_back(server):
+    host, docker, _, lines = server
+    assert cli.main(["prune", "--keep", "2"], host=host) == 0
+    assert any(line.startswith("Removed: ") and "0.52.1" in line for line in lines)
+    assert "Given back, build cache: 902.6 MB" in lines
 
 
 def test_config_json_checked_against_every_image_in_use(server):

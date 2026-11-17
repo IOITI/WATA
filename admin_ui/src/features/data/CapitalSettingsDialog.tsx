@@ -239,6 +239,12 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
         <div className="grid gap-4 sm:grid-cols-2">
           <NumberField label="Keep in the database" unit="months" path={['retention_months']} hint="0 keeps everything; the day files stay" />
           <NumberField
+            label="Keep the day files"
+            unit="days"
+            path={['day_files_retention_days']}
+            hint="0 keeps every day; older files are removed once a day"
+          />
+          <NumberField
             label="Say it stopped after"
             unit="s"
             path={['alert_after_seconds']}
