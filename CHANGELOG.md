@@ -2,7 +2,7 @@
 
 ## v0.89.0 - The server's disk: what WATA takes of it, alarms, a projection and cleanups
 
-**Release date:** not released yet
+**Release date:** 2026-11-17
 
 The server has one disk of 96 GB for everything (13 GB used on 2026-11-17: Docker's images and build cache 8.4 GB, PostgreSQL 0.9 GB, the recorder's bars growing by about 35 MB a trading day and never removed). Nothing said how full it was, or would be.
 
