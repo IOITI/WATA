@@ -203,6 +203,54 @@ describe('the Charts page', () => {
     expect(workspaces[0].active.symbols).toEqual([])
   })
 
+  describe('mute alerts', () => {
+    afterEach(() => window.localStorage.removeItem('wata.charts.mute-alerts'))
+
+    type Engine = { execute: (request: unknown, handlers: { onAlert: (alert: unknown) => void }) => unknown }
+    const alert = (time: number) => ({ id: 'a1', title: 'Not In Trade', message: '{"action": "close-position"}', time, barIndex: 1 })
+    /** A script's run on the page's chart: the alerts Vela is told of, and its worker raising one. */
+    function chartRun() {
+      const engine = (workspaces[0].options.engines as { pine: () => Engine }).pine()
+      const alerts: unknown[] = []
+      engine.execute({ bars: [], market: { symbol: 'capital:CAPITAL_US100', timeframe: '1' } }, { onAlert: (one) => alerts.push(one) })
+      const worker = engines[engines.length - 1].runs[0]
+      return { alerts, raise: (time: number) => worker.onAlert?.(alert(time)) }
+    }
+
+    it('keeps the scripts\' alerts from Vela while pressed, and remembers it in this browser', async () => {
+      const user = userEvent.setup()
+      renderAt('/ta/charts')
+      await waitFor(() => expect(workspaces).toHaveLength(1))
+      const run = chartRun()
+
+      run.raise(60_000)
+      expect(run.alerts).toHaveLength(1)
+
+      const mute = screen.getByRole('button', { name: 'Mute alerts' })
+      expect(mute).toHaveAttribute('aria-pressed', 'false')
+      await user.click(mute)
+      expect(mute).toHaveAttribute('aria-pressed', 'true')
+      run.raise(120_000)
+      expect(run.alerts).toHaveLength(1)
+      expect(window.localStorage.getItem('wata.charts.mute-alerts')).toBe('1')
+
+      // Opened again, the page is still muted.
+      cleanup()
+      resetVela()
+      renderAt('/ta/charts')
+      await waitFor(() => expect(workspaces).toHaveLength(1))
+      expect(screen.getByRole('button', { name: 'Mute alerts' })).toHaveAttribute('aria-pressed', 'true')
+      const again = chartRun()
+      again.raise(180_000)
+      expect(again.alerts).toEqual([])
+
+      await user.click(screen.getByRole('button', { name: 'Mute alerts' }))
+      again.raise(240_000)
+      expect(again.alerts).toHaveLength(1)
+      expect(window.localStorage.getItem('wata.charts.mute-alerts')).toBeNull()
+    })
+  })
+
   describe('full screen', () => {
     // jsdom has no full screen: the browser's, as it answers.
     const root = document.documentElement

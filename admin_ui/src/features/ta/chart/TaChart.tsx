@@ -9,6 +9,10 @@
 // Bars of time are of any length WATA makes, from ten seconds to a day: Vela's menu
 // offers the usual ones, the length field above the chart takes any other.
 //
+// Mute alerts: Vela's workspace shows each alert a script raises as a toast, with no
+// option to stop it; muted, the page's Pine engine tells it none (pineEngine.ts).
+// Kept per browser. The signal engine and its journal are the server's, untouched.
+//
 // Full screen: the chart and its controls over the whole window, and the window over
 // the whole screen where the browser allows it. Vela keeps its menus inside its own
 // element, and the admin's dialogs and notices are above it.
@@ -18,8 +22,8 @@
 
 import { PineWorkerEngine } from '@luxalgo/vela-pinets'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { cn, useTheme } from 'ioiti-ui'
-import { Maximize2, Minimize2 } from 'lucide-react'
+import { cn, Hint, useTheme } from 'ioiti-ui'
+import { Bell, BellOff, Maximize2, Minimize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import velaWorkerUrl from 'virtual:vela-pine-worker'
 
@@ -113,6 +117,39 @@ function LengthField({ timeframe, onApply }: { timeframe: string; onApply: (time
   )
 }
 
+/** Where this browser keeps whether the chart's alerts are muted. */
+export const MUTE_ALERTS_KEY = 'wata.charts.mute-alerts'
+
+function readMuted(): boolean {
+  try {
+    return window.localStorage.getItem(MUTE_ALERTS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function keepMuted(muted: boolean): void {
+  try {
+    if (muted) window.localStorage.setItem(MUTE_ALERTS_KEY, '1')
+    else window.localStorage.removeItem(MUTE_ALERTS_KEY)
+  } catch {
+    // A browser that keeps nothing mutes for this page only.
+  }
+}
+
+/** Whether the scripts' alerts are kept from the chart, and the getter its engine reads at each alert. */
+function useMutedAlerts(): [boolean, (muted: boolean) => void, () => boolean] {
+  const [muted, setMuted] = useState(readMuted)
+  const current = useRef(muted)
+  const [read] = useState(() => () => current.current)
+  const change = (next: boolean) => {
+    current.current = next
+    keepMuted(next)
+    setMuted(next)
+  }
+  return [muted, change, read]
+}
+
 /**
  * Whether the chart is shown alone. The page itself is made the browser's full screen, not the chart's
  * element, so that what opens over it (a dialog, a notice) stays in sight; where the browser has no full
@@ -162,6 +199,7 @@ export function TaChart(props: TaChartProps) {
   const callbacks = useRef(props)
   const { theme } = useTheme()
   const [full, setFull] = useFullScreen()
+  const [muted, setMuted, isMuted] = useMutedAlerts()
   const [market, setMarket] = useState({ symbol: symbol ?? fallbackSymbol, timeframe: timeframe ?? DEFAULT_TIMEFRAME.pine })
   // Where the chart last said it is: an address that only follows it asks nothing of it.
   const shown = useRef(market)
@@ -198,7 +236,7 @@ export function TaChart(props: TaChartProps) {
         pine: () => {
           const worker = new PineWorkerEngine({ workerUrl: velaWorkerUrl })
           workers.push(worker)
-          return fullRunEngine(worker, undefined, (ticker) => bars.growingBar(ticker))
+          return fullRunEngine(worker, undefined, (ticker) => bars.growingBar(ticker), isMuted)
         },
       },
       indicators: async () => (await entries).entries.map((script) => script.entry),
@@ -358,15 +396,37 @@ export function TaChart(props: TaChartProps) {
             )}
           </>
         )}
-        <button
-          type="button"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover"
-          title={full ? 'Back to the page (Escape)' : 'The chart alone, over the whole screen'}
-          onClick={() => setFull(!full)}
-        >
-          {full ? <Minimize2 className="size-3.5" aria-hidden /> : <Maximize2 className="size-3.5" aria-hidden />}
-          {full ? 'Exit full screen' : 'Full screen'}
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <Hint
+            content={
+              muted
+                ? 'The scripts\' alerts are not shown on this chart. The signal engine is not affected.'
+                : 'Stop showing the scripts\' alerts on this chart. The signal engine is not affected.'
+            }
+          >
+            <button
+              type="button"
+              aria-pressed={muted}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover',
+                muted && 'bg-surface-raised font-medium',
+              )}
+              onClick={() => setMuted(!muted)}
+            >
+              {muted ? <BellOff className="size-3.5" aria-hidden /> : <Bell className="size-3.5" aria-hidden />}
+              Mute alerts
+            </button>
+          </Hint>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover"
+            title={full ? 'Back to the page (Escape)' : 'The chart alone, over the whole screen'}
+            onClick={() => setFull(!full)}
+          >
+            {full ? <Minimize2 className="size-3.5" aria-hidden /> : <Maximize2 className="size-3.5" aria-hidden />}
+            {full ? 'Exit full screen' : 'Full screen'}
+          </button>
+        </div>
       </div>
       <div ref={host} className="min-h-[480px] flex-1 overflow-hidden rounded-2xl border border-border" data-testid="ta-chart" />
     </div>

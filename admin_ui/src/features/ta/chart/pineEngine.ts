@@ -16,6 +16,10 @@
 // run says again what the run before said of the same bar: an alert of the last bar
 // (PineTS raises those only), an error. An alert is passed on once, an error once
 // until a run succeeds or is asked for by something else than a quote.
+//
+// The page may mute the alerts (TaChart's "Mute alerts"): Vela's workspace shows every
+// alert it is told of as a toast, and has no option to stop it, so a muted alert is not
+// told. It still counts as passed on: muting, then not, never brings an old one back.
 
 import type { ExecutionHandlers, ExecutionRequest, ExecutionSession, OHLCV, ScriptingEngine } from '@luxalgo/vela'
 
@@ -97,13 +101,18 @@ function signature(bars: OHLCV[]): string {
 }
 
 /** `engine`, asked by Vela for whole runs only, on the bars that are over, a second apart at most on a live chart. */
-export function fullRunEngine(engine: ScriptingEngine, clock: RunClock = BROWSER_CLOCK, growing: GrowingBar = NONE_GROWING): ScriptingEngine {
+export function fullRunEngine(
+  engine: ScriptingEngine,
+  clock: RunClock = BROWSER_CLOCK,
+  growing: GrowingBar = NONE_GROWING,
+  muted: () => boolean = () => false,
+): ScriptingEngine {
   return {
     language: engine.language,
     // An engine that cannot stream is run in full by Vela, on a live chart too.
     capabilities: { ...engine.capabilities, streaming: false },
     prepare: (source, instanceId) => engine.prepare(source, instanceId),
-    execute: (request, handlers) => pacedSession(engine, request, handlers, clock, growing),
+    execute: (request, handlers) => pacedSession(engine, request, handlers, clock, growing, muted),
   }
 }
 
@@ -113,6 +122,7 @@ function pacedSession(
   handlers: ExecutionHandlers,
   clock: RunClock,
   growing: GrowingBar,
+  muted: () => boolean,
 ): ExecutionSession {
   const allBars = request.getBars ?? (() => request.bars)
   const over = () => overBars(allBars(), request.market, growing, clock.now())
@@ -129,6 +139,7 @@ function pacedSession(
       if (alerted.has(key)) return
       alerted.add(key)
       if (alerted.size > ALERTS_KEPT) alerted.delete(alerted.values().next().value as string)
+      if (muted()) return
       handlers.onAlert?.(alert)
     },
     onWarning: (warning) => handlers.onWarning?.(warning),

@@ -87,6 +87,8 @@ export class FakePineWorkerEngine {
   readonly language = 'pine'
   readonly capabilities = { streaming: true, visibleRange: true, inputs: true, props: true }
   terminated = false
+  /** What each run was told to say: its handlers, as Vela hands them. */
+  readonly runs: { onAlert?: (alert: unknown) => void }[] = []
 
   constructor(options: { workerUrl?: string } = {}) {
     enginesMade.push(options)
@@ -95,6 +97,15 @@ export class FakePineWorkerEngine {
 
   terminate() {
     this.terminated = true
+  }
+
+  async prepare(source: string) {
+    return { token: { source } }
+  }
+
+  execute(_request: unknown, handlers: { onAlert?: (alert: unknown) => void }) {
+    this.runs.push(handlers)
+    return { stop() {}, update() {}, setVisibleRange() {}, notifyBars() {} }
   }
 }
 

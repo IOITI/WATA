@@ -74,6 +74,7 @@ interface Start {
   timeframe?: string
   growing?: GrowingBar
   now?: number
+  muted?: () => boolean
 }
 
 function started(start: Start = {}) {
@@ -87,7 +88,7 @@ function started(start: Start = {}) {
     market: { symbol: start.symbol ?? 'capital:CAPITAL_US100', timeframe: start.timeframe ?? '1' },
   } as unknown as ExecutionRequest
   const told = { models: 0, alerts: [] as EngineAlert[], errors: [] as string[] }
-  const session = fullRunEngine(fake.engine, time.clock, start.growing).execute(request, {
+  const session = fullRunEngine(fake.engine, time.clock, start.growing, start.muted).execute(request, {
     onModel: () => {
       told.models += 1
     },
@@ -249,6 +250,20 @@ describe('the Charts page\'s Pine engine', () => {
       [60_000, 'Cross down'],
       [120_000, 'Cross up'],
     ])
+  })
+
+  it('passes on no alert while the page mutes them, nor those it muted once it no longer does', () => {
+    let muted = true
+    const { run, told } = started({ muted: () => muted })
+
+    run().onAlert?.(alert(60_000))
+    expect(told.alerts).toEqual([])
+
+    muted = false
+    // The next run of the same bar raises it again: it was passed on already, to no one.
+    run().onAlert?.(alert(60_000))
+    run().onAlert?.(alert(120_000))
+    expect(told.alerts.map((one) => one.time)).toEqual([120_000])
   })
 
   it('passes on an error once while the runs asked for by new bars fail, and again after a success or new inputs', () => {
