@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.89.0 - The server's disk: what WATA takes of it, alarms, a projection and cleanups
+
+**Release date:** not released yet
+
+The server has one disk of 96 GB for everything (13 GB used on 2026-11-17: Docker's images and build cache 8.4 GB, PostgreSQL 0.9 GB, the recorder's bars growing by about 35 MB a trading day and never removed). Nothing said how full it was, or would be.
+
+- **An hourly sample of the disk** (`watadisk`, `src/disk/collect.py`), by a systemd timer the install script makes (`watadisk.timer`, at the lowest priority of processor and disk), on the server's own python3. It measures the filesystems, WATA's folders (by the blocks their files take), each release's folder, the system's logs, Docker's images, build cache and containers (`docker system df`), the dumps, the day files, and PostgreSQL's tables with their monthly partitions (`docker exec postgres psql`, reads alone). A source that fails is said and the rest measured. 14 days are kept in `var/lib/disk`, which the admin mounts read-only. `watadisk now` takes one, `watadisk show` says the newest.
+- **Operations › Disk** (`/system/disk`):
+  - The disk now: free space against the two levels, its pace a day, the days to the critical level.
+  - What takes it, kind by kind under its family (Saxo's, Capital.com's and Dukascopy's prices, backtest runs, the Pine answers kept, the database's tables and own files, dumps, logs, releases, Docker, the admin, System): size, share, pace a day, change over 7 days, and the retention that bounds it, linked to where it is set.
+  - The last 14 days: the free space at each sample, and what each group took each day.
+  - Where it goes: the free space and each kind in 1, 3, 6 and 12 months under the retentions as set and under those tried in the form (only computed with, never saved). Monthly partitions are dropped as the recorder drops them, days kept as files settle at their size per day, a cache or the logs stay under their cap, the Sunday dumps grow with the bars they hold.
+  - In detail: the tables and their partitions, the logs per service, the release folders, the dumps, Docker.
+- **Alarms**, from three settings of `reporting` (Configuration › Report): low under `disk_warning_free_percent` (15 %), critical under `disk_critical_free_percent` (5 %), and a warning when the pace of the samples reaches the critical level within `disk_warning_days_left` days (14; 0 for none). They are the health's "Disk space" entry (critical is down; no sample for 3 h a warning), with its toast, one Telegram message when a level comes and one when it goes, and the scheduler's line at 09:00 each day while the disk is not fine.
+- **Two retentions added**, both 0 (everything) unless set:
+  - Dukascopy's days kept on the disk ("Days kept" in Dukascopy's settings, `retain_days` of `_fetch/keep.json`): every instrument's days older than it go, their bars and the hours fetched for them, once the market is closed and no download runs; never fewer than the days kept up to date, which would be fetched again.
+  - Capital.com's day files (`trade.config.capital_feed.day_files_retention_days`, "Keep the day files" in its settings): the older files go at the feed's daily upkeep and are not written again.
+- **Giving space back**:
+  - `watadeploy prune`, run at each install, also removes the images no tag names any more and Docker's build cache unused for two weeks (`docker builder prune --filter until=336h`: what the releases kept were built with is used again at each build, and stays). Never `--all`, never a volume, never while an apply runs; what Docker gave back is in the deploy's status, and said once on Telegram.
+  - The Disk page's "Give space back" asks for that cleanup (a request watadeploy carries out, which names nothing but itself; audited, one at a time), empties the Pine answers kept (not while a backtest or a study runs), and removes the former backtester's leftovers, each after a slide, with what it would give back.
+- **The Charts page mutes the scripts' alerts**: "Mute alerts", kept per browser, stops the toasts Vela shows for each alert a script raises, and their bell. The signal engine is untouched.
+
+**On the live path:** `ConfigurationManager` checks the three new levels, so every service's code changes: the next deploy recreates every container, the trading path and the recorders at the close. The scheduler gets the morning line, the Capital.com feed the day files' retention, the admin its new mount (`var/lib/disk`, read-only). Nothing a trade, an exit or a signal goes through changes. The timer and `watadisk` exist once the release is installed, which takes a first sample. No backtest's code digest changes.
+
+**Verification status:**
+- Python: the whole suite, 4,195 passed, 29 skipped (Node 24 not on the PATH: the real Pine runner's tests were skipped; nothing of it changed).
+- The interface: lint, types, 1,506 tests, the build.
+- The collector on a made-up tree on the Mac (without Docker or PostgreSQL: those said as not measured).
+- In the fake admin, built, over 14 days of made-up samples: the Disk page, a projection with Saxo's prices kept 2 months, the health's entry linked to the page, and the server's cleanup asked, waited for and said done by a made-up watadeploy.
+- Not seen: the collector, `docker builder prune` and `docker image prune` on the server (Docker 29), the server's figures on the page.
+
 ## v0.88.0 - A run's settings applied to WATA, and the palettes on ioiti-ui's newer search
 
 **Release date:** 2026-11-16
