@@ -2,7 +2,7 @@
 
 ## v0.92.1 - The open Dependabot alerts
 
-**Release date:** not released yet
+**Release date:** 2026-11-18
 
 GitHub reported two alerts on main: one moderate and one high.
 
