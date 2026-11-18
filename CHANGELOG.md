@@ -2,7 +2,7 @@
 
 ## v0.91.0 - What Saxo answers of the turbos, asked without trading
 
-**Release date:** not released yet
+**Release date:** 2026-11-18
 
 Is there a faster way to a real position at Saxo? Saxo's developer portal has no new trading API in 2025–2026 and no field for an order's priority, routing or speed, and WATA's own record (19 Aug–18 Nov 2026) shows Saxo answering an order in 0.26 s at the median and dating its fill within 0.05 s of that answer. What cost was elsewhere: two market sales Saxo kept working for 31 and 58 s, and entries paid 0.59 % above the ask they were sized on (median of 18, 9.0 % at most), because WATA reads only InfoPrices, which Saxo calls "not tradable" and which changed about every 30 s. Two things only Saxo can say decide what to do about either; this release asks them.
 
