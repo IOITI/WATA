@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.91.0 - What Saxo answers of the turbos, asked without trading
+
+**Release date:** not released yet
+
+Is there a faster way to a real position at Saxo? Saxo's developer portal has no new trading API in 2025–2026 and no field for an order's priority, routing or speed, and WATA's own record (19 Aug–18 Nov 2026) shows Saxo answering an order in 0.26 s at the median and dating its fill within 0.05 s of that answer. What cost was elsewhere: two market sales Saxo kept working for 31 and 58 s, and entries paid 0.59 % above the ask they were sized on (median of 18, 9.0 % at most), because WATA reads only InfoPrices, which Saxo calls "not tradable" and which changed about every 30 s. Two things only Saxo can say decide what to do about either; this release asks them.
+
+- **`wataprices tradable`** (`src/price_recorder/tradable_probe.py`), run on the server in a container of the price recorder's, on the newest image:
+  - the session's level (TradeLevel, DataLevel), never changed;
+  - the round trip of ten small requests to Saxo's gateway, and the HTTP version they took;
+  - for each turbo, Saxo's details of it: the order types it takes and the durations of each, so whether a market order may be `ImmediateOrCancel` or `FillOrKill`, a limit `ImmediateOrCancel`, and whether a `Switch` (sell one, buy another, in one order) exists for it;
+  - for `--minutes` (10 by default, 30 at most), its InfoPrice, asked as the watchlist manager asks it, beside its tradable price (`/trade/v1/prices`), on a WebSocket of its own: how often each changes, how far apart the two asks stand, and how many seconds the InfoPrice trails the tradable price.
+  - By default the two turbos of each direction the trader would buy first (the lowest bids of its price band, by its own search); `--uic` names others. Every message goes to `var/lib/price_export/tradable-<moment>.jsonl.gz`.
+- **Nothing is ordered.** Every request to Saxo's gateway goes through a list of what the probe may ask (`ALLOWED`): an order of any kind, its precheck or a change of the session's level is refused before it leaves. The probe shares the services' Saxo session (one more WebSocket, a few subscriptions, removed one by one at the end, a run cut short included, and a dozen requests).
+
+**On the live path:** nothing changes. The probe is in no service's code, and runs in a container of its own: a release installed with `-e apply=none` is enough to run it, and recreates no container.
+
+**Verification status:**
+- Python: 24 new tests (the list of what may be asked, the figures on made-up prices, the turbos the trader would buy first, a whole run against a WebSocket server of the Mac and a fake gateway, a run cut short, Saxo resetting the subscriptions, a note that would name the account's key), and the whole suite: 4,219 passed, 29 skipped (the Pine runner's, Node 24 not on the PATH). The release manifest puts the probe in no container's code.
+- Not run against Saxo: the field groups of the details and the tradable price's refresh rate are Saxo's to accept (the probe asks again without the former, and at 1000 ms for the latter, and says so).
+
 ## v0.90.0 - The admin on ioiti-ui 0.22.0: text read at 14 px
 
 **Release date:** 2026-11-18
