@@ -285,9 +285,14 @@ cat << 'EOF' > /usr/local/bin/wataprices
 set -euo pipefail
 # wataprices --from 2026-10-12 --to 2026-10-16     export to /app/wata/var/lib/price_export/
 # wataprices probe --keywords "US Tech 100"        does Saxo price this instrument for the account?
+# wataprices tradable [--uic N] [--minutes 10]     the orders Saxo takes on the turbos, and its tradable price
+#                                                  beside the InfoPrice WATA reads (nothing is ordered)
 if [ "$#" -gt 0 ] && [ "$1" == "probe" ]; then
     shift
     exec watatool price_recorder1 python -m src.price_recorder.probe "$@"
+elif [ "$#" -gt 0 ] && [ "$1" == "tradable" ]; then
+    shift
+    exec watatool price_recorder1 python -m src.price_recorder.tradable_probe "$@"
 else
     exec watatool price_recorder1 python -m src.price_recorder.export "$@"
 fi

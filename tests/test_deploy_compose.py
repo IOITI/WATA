@@ -395,7 +395,8 @@ def test_the_servers_commands_run_on_the_newest_release_in_a_container_of_their_
                           ("watawebtoken", "exec watatool web_server1 python -m src.web_server.cli $OPTIONS"),
                           ("wataadminpasswd", "exec watatool admin1 python -m src.admin.cli --set-password"),
                           ("watamcptoken", 'exec watatool admin1 python -m src.admin.cli --mcp-token "$@"'),
-                          ("wataprices", 'exec watatool price_recorder1 python -m src.price_recorder.probe "$@"')):
+                          ("wataprices", 'exec watatool price_recorder1 python -m src.price_recorder.probe "$@"'),
+                          ("wataprices", 'exec watatool price_recorder1 python -m src.price_recorder.tradable_probe "$@"')):
         assert line in script.split(f"/usr/local/bin/{wrapper}\n")[1].split("\nEOF\n")[0], wrapper
 
 
