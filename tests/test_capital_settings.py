@@ -32,6 +32,8 @@ def test_the_feed_is_off_on_the_demo_account_and_follows_the_nasdaq_unless_told_
     assert settings.instruments == (CapitalInstrument("US100", "us100"),)
     assert (settings.minute_volume, settings.day_files) == (True, True)
     assert (settings.retention_months, settings.alert_after_seconds) == (0, 300)
+    # Every quote kept as it came, every day of it, unless told otherwise.
+    assert (settings.quote_files, settings.quote_files_retention_days) == (True, 0)
     assert settings.prices_root == DEFAULT_PRICES_ROOT
     assert settings.timezone == "Europe/Paris"
 
@@ -44,6 +46,8 @@ def test_settings_follow_the_section():
         "minute_volume": False,
         "day_files": False,
         "retention_months": 12,
+        "quote_files": False,
+        "quote_files_retention_days": 30,
         "alert_after_seconds": 120,
     }, admin={"persistant": {"price_history_path": "/data/prices"}}))
 
@@ -53,6 +57,7 @@ def test_settings_follow_the_section():
     assert settings.label_of("US500") == "us500" and settings.label_of("DE40") is None
     assert (settings.minute_volume, settings.day_files) == (False, False)
     assert (settings.retention_months, settings.alert_after_seconds) == (12, 120)
+    assert (settings.quote_files, settings.quote_files_retention_days) == (False, 30)
     # Where the admin reads the history of prices: the feed writes its days there too.
     assert settings.prices_root == "/data/prices"
 
@@ -63,6 +68,9 @@ def test_settings_follow_the_section():
     ({"minute_volume": 1}, "minute_volume"),
     ({"day_files": None}, "day_files"),
     ({"retention_months": -1}, "retention_months"),
+    ({"quote_files": "on"}, "quote_files"),
+    ({"quote_files_retention_days": -1}, "quote_files_retention_days"),
+    ({"quote_files_retention_days": 3651}, "quote_files_retention_days"),
     ({"alert_after_seconds": 10}, "alert_after_seconds"),
     ({"instruments": []}, "at least one"),
     ({"instruments": "US100"}, "instruments"),

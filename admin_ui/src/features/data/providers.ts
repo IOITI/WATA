@@ -1,4 +1,7 @@
+import { formatNumber } from 'ioiti-ui'
+
 import type {
+  CapitalQuoteFilesFigures,
   CapitalSettings,
   CatalogEntry,
   DataProvider,
@@ -180,6 +183,8 @@ export const CAPITAL_KEYS = [
   'day_files',
   'retention_months',
   'day_files_retention_days',
+  'quote_files',
+  'quote_files_retention_days',
   'alert_after_seconds',
 ] as const
 
@@ -242,6 +247,19 @@ function labelsByEpic(instruments: JsonValue | undefined): Map<string, string> {
   return found
 }
 
+/** What the feed's writer of quote files did, in one line of "The stream now". */
+export function quoteFilesSaid(figures: CapitalQuoteFilesFigures): string {
+  if (!figures.enabled) return 'Not kept'
+  if (figures.locked_out) return 'Not written: another feed holds the quote files'
+  const parts = [`${formatNumber(figures.written_today ?? 0)} written today`]
+  if (figures.error) parts.push(`the last write failed (${figures.error}): its quotes wait for the next`)
+  const lost = (figures.dropped ?? 0) + (figures.failed ?? 0)
+  if (lost > 0) parts.push(`${formatNumber(lost)} lost`)
+  if ((figures.late ?? 0) > 0) parts.push(`${formatNumber(figures.late ?? 0)} too late for their day`)
+  if (figures.last_finished) parts.push(`last day finished ${figures.last_finished}`)
+  return parts.join(', ')
+}
+
 /** What a save would do that cannot be taken back, or does more than it says: said in the review. */
 export function capitalWarnings(before: JsonObject, after: JsonObject): string[] {
   const warnings: string[] = []
@@ -265,13 +283,25 @@ export function capitalWarnings(before: JsonObject, after: JsonObject): string[]
       `Only ${files} day${files === 1 ? '' : 's'} of day files kept: the older files are removed at the feed's next start and not written again. A backtest on files finds no price on those days.`,
     )
   }
+  if (before.quote_files !== false && after.quote_files === false) {
+    warnings.push('Quotes are no longer kept from the feed’s next start: those of the time it is off can never be had afterwards.')
+  }
+  const quotes = typeof after.quote_files_retention_days === 'number' ? after.quote_files_retention_days : 0
+  const quotesBefore = typeof before.quote_files_retention_days === 'number' ? before.quote_files_retention_days : 0
+  if (quotes > 0 && (quotesBefore === 0 || quotes < quotesBefore)) {
+    warnings.push(
+      `Only ${quotes} day${quotes === 1 ? '' : 's'} of quote files kept: the older files are removed at the feed's next start, for good.`,
+    )
+  }
   const beforeLabels = labelsByEpic(before.instruments)
   const afterLabels = labelsByEpic(after.instruments)
   for (const [epic, label] of beforeLabels) {
     const next = afterLabels.get(epic)
     if (next === undefined) warnings.push(`${epic} is no longer recorded from the feed's next start: what was recorded of it stays.`)
     else if (next !== label)
-      warnings.push(`The day files of ${epic} go under "${next}" from the feed's next start; those written stay under "${label}".`)
+      warnings.push(
+        `The day files and quote files of ${epic} go under "${next}" from the feed's next start; those written stay under "${label}".`,
+      )
   }
   return warnings
 }

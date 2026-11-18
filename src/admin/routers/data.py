@@ -89,6 +89,7 @@ from src.admin.prices import (
 from src.admin.routers.config import changes_said, require_config_edit_enabled
 from src.admin.routers.session import restart_required
 from src.capital_feed import day_files as capital_day_files
+from src.capital_feed import quote_files as capital_quote_files
 from src.capital_feed.hours import parse_opening_hours
 from src.capital_feed.settings import CREDENTIAL_VARIABLES, REST_URLS, CapitalSettings
 from src.price_recorder.export import day_bounds
@@ -107,7 +108,7 @@ CAPITAL_SECTION = "trade.config.capital_feed"
 # What the Capital.com feed's dialog edits: every setting of its section (src/capital_feed/settings.py).
 CAPITAL_KEYS = (
     "enabled", "environment", "instruments", "minute_volume", "day_files", "retention_months",
-    "day_files_retention_days", "alert_after_seconds",
+    "day_files_retention_days", "quote_files", "quote_files_retention_days", "alert_after_seconds",
 )
 # Signals that name no indice (the scheduler's end-of-day close) concern every chart.
 SIGNALS_WITHOUT_INDICE = (None, "", "n/a")
@@ -435,6 +436,42 @@ def _capital_day_files(prices_root: str, labels) -> list[dict]:
     return found
 
 
+def _capital_quote_files(prices_root: str, labels) -> list[dict]:
+    """Every quote kept, by label: the days finished and the one being written, the first and last, their size."""
+    found = []
+    for label in labels:
+        folder = os.path.join(capital_quote_files.quotes_folder(prices_root), label)
+        days: set[str] = set()
+        size = 0
+        writing = None
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            names = []
+        for name in names:
+            day = name[:10]
+            finished = name == f"{day}{capital_quote_files.SUFFIX}"
+            being_written = name == f"{day}{capital_quote_files.SUFFIX}{capital_quote_files.PART}"
+            if not (finished or being_written):
+                continue
+            try:
+                date.fromisoformat(day)
+                size += os.path.getsize(os.path.join(folder, name))
+            except (ValueError, OSError):
+                continue
+            days.add(day)
+            if being_written:
+                writing = max(writing or day, day)
+        ordered = sorted(days)
+        found.append({
+            "label": label, "days": len(ordered),
+            "first_day": ordered[0] if ordered else None, "last_day": ordered[-1] if ordered else None,
+            "writing": writing, "bytes": size,
+            "location": f"{capital_quote_files.SOURCE}/{capital_quote_files.FOLDER}/{label}",
+        })
+    return found
+
+
 async def _capital_details(ctx) -> dict:
     provider = await _capital_provider(ctx)
     section = (await _capital_section(ctx))["section"]
@@ -457,6 +494,7 @@ async def _capital_details(ctx) -> dict:
         "settings": settings,
         "gaps_today": gaps,
         "day_files": await run_in_threadpool(_capital_day_files, ctx.settings.price_history_path, labels),
+        "quote_files": await run_in_threadpool(_capital_quote_files, ctx.settings.price_history_path, labels),
         # Where the login is given: its names, never anything of its values.
         "credential_variables": list(CREDENTIAL_VARIABLES),
         "restart_required": await restart_required(ctx, "capital_feed"),

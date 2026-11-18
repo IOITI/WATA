@@ -11,6 +11,7 @@ import {
   instrumentProblems,
   keepSentence,
   listedProviders,
+  quoteFilesSaid,
   recorderDraft,
   recorderWarnings,
   sectionToSave,
@@ -139,7 +140,8 @@ describe('what a save says before it is confirmed', () => {
 describe('the Capital.com feed’s settings', () => {
   const CAPITAL: CapitalSettings = {
     enabled: false, environment: 'demo', instruments: [{ epic: 'US100', label: 'us100' }], minute_volume: true,
-    day_files: true, retention_months: 0, day_files_retention_days: 0, alert_after_seconds: 300,
+    day_files: true, retention_months: 0, day_files_retention_days: 0, quote_files: true, quote_files_retention_days: 0,
+    alert_after_seconds: 300,
   }
 
   it('show what the file leaves out at its default, and save only what was chosen', () => {
@@ -173,9 +175,38 @@ describe('the Capital.com feed’s settings', () => {
     expect(capitalWarnings(before, { ...before, environment: 'live' })[0]).toMatch(/live account/)
     expect(capitalWarnings(before, { ...before, retention_months: 3 })[0]).toMatch(/Only 3 months kept in the database/)
     expect(capitalWarnings(before, { ...before, instruments: [{ epic: 'US100', label: 'nas100' }] })).toEqual([
-      'The day files of US100 go under "nas100" from the feed\'s next start; those written stay under "us100".',
+      'The day files and quote files of US100 go under "nas100" from the feed\'s next start; those written stay under "us100".',
       "US500 is no longer recorded from the feed's next start: what was recorded of it stays.",
     ])
+  })
+
+  it('warn when quotes stop being kept, or fewer days of them are', () => {
+    const before: JsonObject = { enabled: true, quote_files: true, quote_files_retention_days: 0, instruments: [] }
+
+    expect(capitalWarnings(before, { ...before, quote_files: false })).toEqual([
+      'Quotes are no longer kept from the feed’s next start: those of the time it is off can never be had afterwards.',
+    ])
+    expect(capitalWarnings(before, { ...before, quote_files_retention_days: 30 })).toEqual([
+      "Only 30 days of quote files kept: the older files are removed at the feed's next start, for good.",
+    ])
+    // Kept longer, or switched on: nothing to warn of.
+    expect(capitalWarnings({ ...before, quote_files_retention_days: 30 }, { ...before, quote_files_retention_days: 60 })).toEqual([])
+    expect(capitalWarnings({ ...before, quote_files: false }, before)).toEqual([])
+  })
+
+  it('say in one line what the quote files did', () => {
+    expect(quoteFilesSaid({ enabled: false })).toBe('Not kept')
+    expect(quoteFilesSaid({ enabled: true, locked_out: true })).toBe('Not written: another feed holds the quote files')
+    expect(quoteFilesSaid({ enabled: true, written_today: 1234, dropped: 0, failed: 0, late: 0, last_finished: null })).toBe(
+      '1,234 written today',
+    )
+    expect(
+      quoteFilesSaid({
+        enabled: true, written_today: 10, error: 'OSError: No space left on device', dropped: 2, failed: 1, late: 3, last_finished: '2026-11-18',
+      }),
+    ).toBe(
+      '10 written today, the last write failed (OSError: No space left on device): its quotes wait for the next, 3 lost, 3 too late for their day, last day finished 2026-11-18',
+    )
   })
 })
 

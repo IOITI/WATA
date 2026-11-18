@@ -234,6 +234,11 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
             path={['day_files']}
             hint="Each day of UTC, once over, written as a file of ten-second bars that backtests can run on."
           />
+          <SwitchField
+            label="Every quote, a file a day"
+            path={['quote_files']}
+            hint="Each quote kept as it came (when the feed got it, Capital.com's time, bid and ask), one compressed file per instrument and day of UTC: when inside its ten seconds the price went where. About 3 to 5 MB a day for US100."
+          />
         </div>
         <AccountField environments={config.environments} />
         <div className="grid gap-4 sm:grid-cols-2">
@@ -242,6 +247,15 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
             label="Keep the day files"
             unit="days"
             path={['day_files_retention_days']}
+            hint="0 keeps every day; older files are removed once a day"
+          />
+          <NumberField
+            label="Keep the quote files"
+            unit="days"
+            path={['quote_files_retention_days']}
+            minimum={0}
+            maximum={3650}
+            integer
             hint="0 keeps every day; older files are removed once a day"
           />
           <NumberField

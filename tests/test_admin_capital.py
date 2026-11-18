@@ -5,6 +5,7 @@ tests/test_admin_api.py, whose fixtures these tests use).
 """
 
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -191,17 +192,39 @@ def test_the_provider_says_how_it_is_set_what_it_missed_today_and_its_day_files(
     assert body["settings"] == {
         "enabled": True, "environment": "demo", "instruments": [{"epic": "US100", "label": "us100"}],
         "minute_volume": True, "day_files": True, "retention_months": 0, "day_files_retention_days": 0,
-        "alert_after_seconds": 300,
+        "quote_files": True, "quote_files_retention_days": 0, "alert_after_seconds": 300,
     }
     (files,) = body["day_files"]
     assert (files["label"], files["days"], files["first_day"], files["last_day"], files["location"]) == (
         "us100", 2, "2026-10-13", "2026-10-14", "capital/bars/us100",
     )
     assert files["bytes"] > 0
+    # No quote kept yet.
+    (quotes,) = body["quote_files"]
+    assert (quotes["label"], quotes["days"], quotes["writing"], quotes["bytes"], quotes["location"]) == (
+        "us100", 0, None, 0, "capital/quotes/us100",
+    )
     # The names of the login's variables, never anything of their values.
     assert body["credential_variables"] == ["CAPITAL_API_KEY", "CAPITAL_IDENTIFIER", "CAPITAL_PASSWORD"]
     assert body["gaps_today"] is not None
     assert ("capital_opening_hours", "US100") in ctx.queries.calls
+
+
+def test_the_provider_lists_the_days_of_quotes_kept_and_the_one_being_written(feed, tmp_path):
+    ctx, client = feed
+    root = str(tmp_path / "prices")
+    for name in ("2026-10-13.csv.gz", "2026-10-14.csv.gz.part", "2026-10-14.csv.gz.final.part", "notes.txt"):
+        path = os.path.join(root, "capital", "quotes", "us100", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as file:
+            file.write(b"0123456789")
+
+    (quotes,) = client.get("/api/data/providers/capital").json()["quote_files"]
+
+    # The finished day and the one being written; the temporary file of a day being finished is not counted.
+    assert (quotes["days"], quotes["first_day"], quotes["last_day"], quotes["writing"], quotes["bytes"]) == (
+        2, "2026-10-13", "2026-10-14", "2026-10-14", 20,
+    )
 
 
 def test_the_feed_appears_on_the_system_page_once_switched_on(feed):

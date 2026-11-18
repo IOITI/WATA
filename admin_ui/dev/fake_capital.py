@@ -161,6 +161,11 @@ def feed_state(now: datetime) -> dict:
             "live": {"sent": len(_received), "dropped": 0, "failing": False, "last_error": None},
             "minutes": {"enabled": True, "last": (now - timedelta(seconds=20)).strftime("%Y-%m-%dT%H:%M:%SZ"), "error": None},
             "day_files": {"enabled": True, "written": 0, "last": None},
+            "quote_files": {
+                "enabled": True, "written_today": len(_received), "pending_bytes": 0, "dropped": 0, "late": 0, "failed": 0,
+                "last_finished": None, "last_write_at": (now - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "locked_out": False, "error": None,
+            },
             "pending_buckets": 0, "dropped_buckets": 0,
             "last_bar_at": datetime.fromtimestamp(bucket_start(now.timestamp()), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         },

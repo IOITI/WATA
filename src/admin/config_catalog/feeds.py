@@ -132,6 +132,22 @@ CAPITAL_PARAMS = (
         related=(f"{CAPITAL}.day_files", f"{CAPITAL}.retention_months"),
     ),
     Param(
+        path=f"{CAPITAL}.quote_files", group="capital", label="Every quote, a file a day", kind="bool",
+        optional=True, default=True,
+        help="Each quote received kept as it came (its time, Capital.com's time, bid and ask), one compressed file per "
+             "instrument and UTC day under capital/quotes: when inside its ten seconds the price went where. "
+             "About 3 to 5 MB a day for US100.",
+        readers=("capital_feed",), consumers=("disk",), risk=NONE,
+        related=(f"{CAPITAL}.quote_files_retention_days", f"{CAPITAL}.day_files"),
+    ),
+    Param(
+        path=f"{CAPITAL}.quote_files_retention_days", group="capital", label="Quote files kept", kind="int",
+        unit="days", minimum=0, maximum=3650, optional=True, default=0,
+        help="The quote files older than this are removed once a day. 0: every day is kept.",
+        readers=("capital_feed",), consumers=("disk",), risk=SERVICE,
+        related=(f"{CAPITAL}.quote_files",),
+    ),
+    Param(
         path=f"{CAPITAL}.alert_after_seconds", group="capital", label="Say silence after", kind="int", unit="s",
         minimum=30, optional=True, default=300,
         help="While the market is open, no price for this long is said on Telegram.",

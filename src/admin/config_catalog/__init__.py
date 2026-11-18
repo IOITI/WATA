@@ -139,7 +139,8 @@ BLOCKS = (
     Block("capital", "feed", "Feed", (f"{_CAPITAL}.enabled", f"{_CAPITAL}.environment", f"{_CAPITAL}.instruments")),
     Block("capital", "kept", "Kept and watched", (
         f"{_CAPITAL}.minute_volume", f"{_CAPITAL}.day_files", f"{_CAPITAL}.retention_months",
-        f"{_CAPITAL}.day_files_retention_days", f"{_CAPITAL}.alert_after_seconds")),
+        f"{_CAPITAL}.day_files_retention_days", f"{_CAPITAL}.quote_files", f"{_CAPITAL}.quote_files_retention_days",
+        f"{_CAPITAL}.alert_after_seconds")),
     Block("ta", "engine", "Engine", (
         f"{_TA}.enabled", f"{_TA}.history_days", f"{_TA}.restart_time", f"{_TA}.monitoring_days")),
     Block("ta", "signals", "Signals sent", (

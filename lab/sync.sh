@@ -45,7 +45,7 @@ rsync -az --partial --stats \
   --exclude '*.part/' --exclude '*.part' \
   --include 'research/***' \
   --include 'dukascopy/' --include 'dukascopy/instruments.json' --include 'dukascopy/bars/***' \
-  --include 'capital/' --include 'capital/bars/***' \
+  --include 'capital/' --include 'capital/bars/***' --include 'capital/quotes/***' \
   --exclude '*' \
   "$server:$REMOTE_ROOT/var/lib/price_history/" "$LAB_ROOT/price_history/" | summary
 

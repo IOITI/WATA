@@ -62,6 +62,7 @@ def _rabbitmq_url(config_manager) -> str:
 async def main():
     from src.capital_feed.client import CapitalRest, CapitalStream
     from src.capital_feed.day_files import DayFiles
+    from src.capital_feed.quote_files import QuoteFiles
     from src.capital_feed.live import LivePublisher, RabbitExchange
     from src.capital_feed.recorder import CapitalRecorder
     from src.capital_feed.settings import SECTION, CapitalSettings, Credentials
@@ -125,6 +126,8 @@ async def main():
             publisher=publisher,
             notify=telegram.send,
             day_files=DayFiles(settings.prices_root, store) if settings.day_files else None,
+            quote_files=(QuoteFiles(settings.prices_root, retention_days=settings.quote_files_retention_days)
+                         if settings.quote_files else None),
             version=version,
             secrets=credentials.secrets(),
         )

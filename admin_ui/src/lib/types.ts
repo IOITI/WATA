@@ -1460,6 +1460,26 @@ export interface CapitalDayFiles {
   location: string
 }
 
+/** Every quote the feed received, kept by label: the days finished and the one being written. */
+export interface CapitalQuoteFiles extends CapitalDayFiles {
+  /** The day being written now, none when nothing is. */
+  writing: string | null
+}
+
+/** What the feed's writer of quote files did (the feed's own figures). */
+export interface CapitalQuoteFilesFigures {
+  enabled: boolean
+  written_today?: number
+  pending_bytes?: number
+  dropped?: number
+  late?: number
+  failed?: number
+  last_finished?: string | null
+  last_write_at?: string | null
+  locked_out?: boolean
+  error?: string | null
+}
+
 export interface CapitalRecording {
   epic: string
   label: string
@@ -1600,6 +1620,7 @@ export interface CapitalFeedState {
     live?: { sent: number; dropped: number; failing: boolean; last_error: string | null }
     minutes?: { enabled: boolean; last: string | null; error: string | null }
     day_files?: { enabled: boolean; written: number; last: string | null }
+    quote_files?: CapitalQuoteFilesFigures
     pending_buckets?: number
     dropped_buckets?: number
     last_bar_at?: string | null
@@ -1621,6 +1642,10 @@ export interface CapitalSettings {
   retention_months: number
   /** Day files older than this many days are removed; 0 keeps them all. */
   day_files_retention_days: number
+  /** Every quote received, a file a day (capital/quotes). */
+  quote_files: boolean
+  /** Quote files older than this many days are removed; 0 keeps them all. */
+  quote_files_retention_days: number
   alert_after_seconds: number
 }
 
@@ -1628,6 +1653,8 @@ export interface CapitalProviderDetails extends DataProvider {
   settings: CapitalSettings
   gaps_today: PriceGap[] | null
   day_files: CapitalDayFiles[]
+  /** Absent from an admin of before v0.92.0. */
+  quote_files?: CapitalQuoteFiles[]
   /** The names of the variables of .env the login is given in: never anything of their values. */
   credential_variables: string[]
   restart_required: boolean

@@ -62,6 +62,9 @@ NAMED = (
     "var/lib/price_history/dukascopy/bars",
     "var/lib/price_history/dukascopy/raw",
     "var/lib/price_history/capital",
+    # The day files of ten-second bars, and every quote kept (both counted inside Capital.com's kind for now).
+    "var/lib/price_history/capital/bars",
+    "var/lib/price_history/capital/quotes",
     "var/lib/price_history/research",
     "var/lib/price_export",
     "var/lib/rabbitmq",

@@ -119,6 +119,10 @@ class CapitalSettings:
     retention_months: int = 0
     # The day files older than this many days are removed; 0 keeps them all.
     day_files_retention_days: int = 0
+    # Every quote received, a file a day (capital/quotes), for when inside its ten seconds the price went where.
+    quote_files: bool = True
+    # The quote files older than this many days are removed; 0 keeps them all.
+    quote_files_retention_days: int = 0
     # Silence while the market is open, before it is said on Telegram.
     alert_after_seconds: int = 300
     timezone: str = "Europe/Paris"
@@ -144,6 +148,9 @@ class CapitalSettings:
             retention_months=_whole(section, "retention_months", cls.retention_months, minimum=0),
             day_files_retention_days=_whole(section, "day_files_retention_days", cls.day_files_retention_days,
                                             minimum=0, maximum=DAY_FILES_RETENTION_MAX_DAYS),
+            quote_files=_flag(section, "quote_files", cls.quote_files),
+            quote_files_retention_days=_whole(section, "quote_files_retention_days", cls.quote_files_retention_days,
+                                              minimum=0, maximum=DAY_FILES_RETENTION_MAX_DAYS),
             alert_after_seconds=_whole(section, "alert_after_seconds", cls.alert_after_seconds, minimum=30),
             timezone=config_manager.get_config_value("trade.config.general.timezone", cls.timezone),
             prices_root=prices_root if isinstance(prices_root, str) and prices_root else DEFAULT_PRICES_ROOT,

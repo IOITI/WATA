@@ -29,6 +29,7 @@ from src.capital_feed.client import CapitalError, LoginRefused, RateLimited, mar
 from src.capital_feed.day_files import remove_days_before
 from src.capital_feed.hours import OpeningHours, parse_opening_hours
 from src.capital_feed.live import LiveBar
+from src.capital_feed.quote_files import WRITE_EVERY_SECONDS as QUOTES_EVERY_SECONDS
 from src.capital_feed.settings import CapitalSettings
 from src.price_recorder.bars import BAR_SECONDS, Bar, BarBuilder, ClosedBucket, Quote, bucket_start
 
@@ -89,6 +90,7 @@ class CapitalRecorder:
         publisher,
         notify: Callable[[str], Awaitable[None]] | None = None,
         day_files=None,
+        quote_files=None,
         clock: Callable[[], float] = time.time,
         version: str = "unknown",
         secrets: tuple[str, ...] = (),
@@ -99,6 +101,10 @@ class CapitalRecorder:
         self._publisher = publisher
         self._notify = notify
         self._day_files = day_files
+        # Every quote received, kept as files: written by a task of its own, never by the bars' loop.
+        self._quote_files = quote_files
+        self._labels = {instrument.epic: instrument.label for instrument in settings.instruments}
+        self._quote_take_failures = 0
         self._clock = clock
         self._version = version
         self._secrets = tuple(secret for secret in secrets if secret)
@@ -148,6 +154,12 @@ class CapitalRecorder:
             self._delays.append((received_at, received_at * 1000 - quoted_ms))
         self._last_quote_at[epic] = received_at
         self._publisher.quote(epic, bid=bid, ask=ask, quoted_ms=quoted_ms, received_at=received_at, bar=bar)
+        if self._quote_files is not None:
+            # Last, and in memory only: nothing of it can cost the bars or the chart their quote.
+            try:
+                self._quote_files.take(self._labels[epic], received_at, quoted_ms, bid, ask)
+            except Exception:
+                self._quote_take_failures += 1
 
     # ── markets ──
 
@@ -203,6 +215,12 @@ class CapitalRecorder:
             # Closed: no more bars of it until it quotes again; the bar in progress keeps what it had.
             self._builder.update(epic, None, at)
             self._live[epic].update(None, at)
+            if self._quote_files is not None:
+                # The quote files keep it too: a replay of the bars from them needs the close.
+                try:
+                    self._quote_files.closed(self._labels[epic], at)
+                except Exception:
+                    self._quote_take_failures += 1
         if before is None or before[0] != status:
             logger.info("Capital.com market of %s: %s.", epic, status)
             self._publisher.state(epic, market="open" if status == OPEN else "closed", status=status)
@@ -346,6 +364,18 @@ class CapitalRecorder:
         while self._delays and now - self._delays[0][0] > FIGURES_WINDOW_SECONDS:
             self._delays.popleft()
 
+    def _quote_figures(self) -> dict:
+        """What the quote files did: their writer's figures, and the quotes the callback could not hand them."""
+        if self._quote_files is None:
+            return {"enabled": False}
+        try:
+            figures = dict(self._quote_files.figures())
+            figures["error"] = self._scrub(figures.get("error"))
+            figures["failed"] = self._quote_take_failures + getattr(self._quote_files, "failed_takes", 0)
+        except Exception as e:
+            return {"enabled": True, "error": self._scrub(str(e) or type(e).__name__)}
+        return figures
+
     def state(self) -> dict:
         """What the feed is doing, as the admin and the logs say it."""
         now = self._clock()
@@ -406,6 +436,7 @@ class CapitalRecorder:
                 "written": self._day_files.written if self._day_files else 0,
                 "last": (self._day_files.last_written[1].isoformat() if self._day_files and self._day_files.last_written else None),
             },
+            "quote_files": self._quote_figures(),
             "rest_error": self._scrub(self._rest_error),
             "pending_buckets": len(self._pending),
             "dropped_buckets": self._dropped_buckets,
@@ -583,6 +614,9 @@ class CapitalRecorder:
             # A few seconds into each minute, the one before is over at Capital.com.
             first = 60 - self._clock() % 60 + 5
             tasks.append(asyncio.create_task(self._repeat("minutes", self.fetch_minutes, MINUTES_EVERY_SECONDS, first_delay=first)))
+        if self._quote_files is not None:
+            # A task of its own: a slow disk delays no bar. Its first turn puts right what a stop cut off.
+            tasks.append(asyncio.create_task(self._repeat("quotes", self._quote_files.write, QUOTES_EVERY_SECONDS)))
         try:
             await self._stopping.wait()
         finally:
@@ -595,6 +629,12 @@ class CapitalRecorder:
                 await asyncio.wait_for(self._flush_pending(), DB_TIMEOUT_SECONDS)
             except Exception as e:
                 logger.warning("The last bars could not be written: %s", e)
+            if self._quote_files is not None:
+                # After the bars: a write under way is waited for a moment (never cut), then the rest written.
+                try:
+                    await self._quote_files.stop()
+                except Exception as e:
+                    logger.warning("The last quotes could not be written: %s", e)
 
     def stop(self) -> None:
         self._stopping.set()

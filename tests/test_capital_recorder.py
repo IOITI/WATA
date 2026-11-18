@@ -161,20 +161,21 @@ class DayFiles:
 
 
 class Setup:
-    def __init__(self, settings=SETTINGS, secrets=()):
+    def __init__(self, settings=SETTINGS, secrets=(), quote_files=None):
         self.clock = Clock()
         self.store = Store()
         self.rest = Rest()
         self.publisher = Publisher()
         self.messages = []
         self.day_files = DayFiles()
+        self.quote_files = quote_files
 
         async def notify(message):
             self.messages.append(message)
 
         self.recorder = CapitalRecorder(
             settings=settings, store=self.store, rest=self.rest, publisher=self.publisher, notify=notify,
-            day_files=self.day_files, clock=self.clock, version="0.20.0", secrets=secrets,
+            day_files=self.day_files, quote_files=quote_files, clock=self.clock, version="0.20.0", secrets=secrets,
         )
         self.stream = Stream()
         self.recorder.stream = self.stream
@@ -569,3 +570,121 @@ def test_a_refused_login_or_a_failing_capital_com_does_not_end_any_loop():
         await asyncio.wait_for(running, 3)
 
     _run(scenario)
+
+
+# ── every quote kept as files ──
+
+
+class QuoteFiles:
+    """The quote files as the recorder sees them: what it hands them, and how their writing goes."""
+
+    def __init__(self, store=None, failing_take=False, hanging=False):
+        self.store = store
+        self.taken = []
+        self.closes = []
+        self.writes = 0
+        self.failed_takes = 0
+        self.failing_take = failing_take
+        self.hanging = hanging
+        self.inserts_at_stop = None
+
+    def take(self, label, received_at, quoted_ms, bid, ask):
+        if self.failing_take:
+            raise RuntimeError("no room")
+        self.taken.append((label, received_at, quoted_ms, bid, ask))
+
+    def closed(self, label, at):
+        self.closes.append((label, at))
+
+    async def write(self):
+        self.writes += 1
+        if self.hanging:
+            await asyncio.Event().wait()
+
+    async def stop(self):
+        self.inserts_at_stop = len(self.store.inserts) if self.store is not None else None
+
+    def figures(self):
+        return {"enabled": True, "written_today": len(self.taken), "error": None}
+
+
+def test_each_quote_is_handed_to_the_quote_files_in_memory_after_the_chart_had_it(tmp_path):
+    from src.capital_feed.quote_files import QuoteFiles as RealQuoteFiles
+
+    files = RealQuoteFiles(str(tmp_path))
+    s = Setup(quote_files=files)
+    s.quote(1, "US100", 25000.0, quoted_ms=(T0 + 1) * 1000 - 40)
+    s.quote(2, "US500", 7000.0)
+
+    # Nothing written by the callback: no row, no file, not even the folder.
+    assert s.store.inserts == [] and not (tmp_path / "capital").exists()
+    assert [epic for epic, _ in s.publisher.quotes] == ["US100", "US500"]
+    assert files.figures()["pending_bytes"] > 0
+    asyncio.run(files.stop())
+    assert (tmp_path / "capital" / "quotes" / "us100").is_dir() and (tmp_path / "capital" / "quotes" / "us500").is_dir()
+
+
+def test_a_quote_the_quote_files_refuse_still_reaches_the_chart_and_the_bars_and_is_counted():
+    files = QuoteFiles(failing_take=True)
+    s = Setup(quote_files=files)
+
+    async def scenario(s):
+        await s.recorder.refresh_markets()
+        s.quote(1, "US100", 25000.0)
+        await s.tick(10.05)
+
+    _run(scenario, s)
+
+    assert [epic for epic, _ in s.publisher.quotes] == ["US100"]
+    assert [row[0] for rows in s.store.inserts for row in rows] == [_ts(0)]
+    assert s.recorder.state()["figures"]["quote_files"]["failed"] == 1
+
+
+def test_a_market_closing_is_kept_in_the_quote_files_as_the_bars_take_it():
+    files = QuoteFiles()
+    s = Setup(quote_files=files)
+
+    async def scenario(s):
+        await s.recorder.refresh_markets()
+        s.quote(1, "US100", 25000.0)
+        s.rest.statuses["US100"] = "CLOSED"
+        s.clock.at = T0 + 15
+        await s.recorder.refresh_markets()
+
+    _run(scenario, s)
+
+    assert [quote[:2] for quote in files.taken] == [("us100", T0 + 1)]
+    assert files.closes == [("us100", T0 + 15)]
+
+
+def test_the_bars_are_written_while_a_quote_write_hangs_and_before_the_quotes_at_the_stop():
+    files = QuoteFiles(hanging=True)
+    s = Setup(quote_files=files)
+    files.store = s.store
+
+    async def scenario(s):
+        s.recorder._settings = replace(SETTINGS, minute_volume=False)
+        running = asyncio.create_task(s.recorder.run())
+        await asyncio.sleep(0.05)
+        assert files.writes == 1     # its own task, stuck on a slow disk
+        s.quote(1, "US100", 25000.0)
+        await s.tick(10.05)
+        assert [row[0] for rows in s.store.inserts for row in rows] == [_ts(0)]
+        s.quote(11, "US100", 25001.0)
+        s.recorder.stop()
+        await asyncio.wait_for(running, 3)
+
+    _run(scenario, s)
+
+    # The bars' loop never waited for the quotes, and at the stop the bars went first.
+    assert files.writes == 1
+    assert files.inserts_at_stop == len(s.store.inserts) == 2
+
+
+def test_the_figures_say_what_the_quote_files_do():
+    assert Setup().recorder.state()["figures"]["quote_files"] == {"enabled": False}
+    files = QuoteFiles()
+    s = Setup(quote_files=files)
+    s.quote(1, "US100", 25000.0)
+    figures = s.recorder.state()["figures"]["quote_files"]
+    assert figures == {"enabled": True, "written_today": 1, "error": None, "failed": 0}

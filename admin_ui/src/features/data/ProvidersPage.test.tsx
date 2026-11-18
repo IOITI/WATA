@@ -45,7 +45,7 @@ const CATALOG = [
 ]
 const CAPITAL_DEFAULTS: CapitalSettings = {
   enabled: false, environment: 'demo', instruments: [{ epic: 'US100', label: 'us100' }], minute_volume: true, day_files: true,
-  retention_months: 0, day_files_retention_days: 0, alert_after_seconds: 300,
+  retention_months: 0, day_files_retention_days: 0, quote_files: true, quote_files_retention_days: 0, alert_after_seconds: 300,
 }
 
 function saxo(changes: Partial<SaxoProviderDetails> = {}): SaxoProviderDetails {
@@ -482,6 +482,33 @@ describe('the Capital.com provider’s page', () => {
     // Its login is a credential sealed for the feed: the page leads there.
     const setUp = screen.getByText('Setting it up').closest('section')!
     expect(within(setUp).getByRole('link', { name: 'Configuration, Credentials' })).toHaveAttribute('href', '/config/credentials')
+  })
+
+  it('says what was kept of every quote, and lists the days of quote files', async () => {
+    const details = capital()
+    serve({
+      capitalDetails: {
+        ...details,
+        feed: {
+          ...details.feed!,
+          figures: {
+            ...details.feed!.figures,
+            quote_files: { enabled: true, written_today: 41250, dropped: 0, failed: 0, late: 0, last_finished: '2026-10-11', error: null },
+          },
+        },
+        quote_files: [
+          { label: 'us100', days: 2, first_day: '2026-10-11', last_day: '2026-10-12', writing: '2026-10-12', bytes: 4500000, location: 'capital/quotes/us100' },
+        ],
+      },
+    })
+    renderPage('/data/providers/capital')
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Capital.com' })).toBeInTheDocument()
+    const stream = screen.getByText('The stream now').closest('section') ?? document.body
+    expect(within(stream).getByText('41,250 written today, last day finished 2026-10-11')).toBeInTheDocument()
+    expect(screen.getByText('Every quote, every day kept')).toBeInTheDocument()
+    const files = screen.getByText(/Every quote as the feed received it/).closest('section') ?? document.body
+    expect(within(files).getByText(/2 days, 11 Oct 2026 to 12 Oct 2026, 12 Oct 2026 being written/)).toBeInTheDocument()
   })
 
   it('says where to set the login when the feed has none, and where to restart it', async () => {

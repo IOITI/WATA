@@ -763,6 +763,7 @@ Saxo quotes the Nasdaq 100 index only from 15:30 to 22:15 in Paris. Capital.com 
 - **Recorded**: every ten seconds, bid and ask, into PostgreSQL, in the columns and by the rules of the price recorder. `updates`, the quote changes of each ten seconds, is the volume the feed counts itself.
 - **Capital.com's own volume**: Capital.com's candle of each minute, with the volume it gives it, is fetched each minute and kept beside the bars.
 - **As files**: each day of UTC, once over, is also written as a file in the format of the Dukascopy days, under `var/lib/price_history/capital/bars/us100/`, for tools outside WATA and for a backtest run on files. The admin's backtests read the feed's tables.
+- **Every quote**: each quote as the feed received it (when it got it, Capital.com's time, bid and ask), one compressed CSV per day of UTC under `var/lib/price_history/capital/quotes/us100/`: when inside its ten seconds the price went where. About 3 to 5 MB a day for US100; `trade.config.capital_feed.quote_files` (on unless false) and `quote_files_retention_days` (0 keeps every day).
 
 It is a separate service: no trading service uses it, and it cannot slow one down. It never places an order: it can only ask Capital.com for a session, the state of markets and past prices, which a test holds it to.
 

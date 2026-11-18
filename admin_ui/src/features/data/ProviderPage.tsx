@@ -31,7 +31,7 @@ import { assetHref, assetsLink, PROVIDERS_PATH } from './assets'
 import { CapitalSettingsDialog } from './CapitalSettingsDialog'
 import type { CapitalDialogStart } from './CapitalSettingsDialog'
 import { HistorySettingsDialog } from './HistorySettingsDialog'
-import { KIND_LABELS, PROVIDER_NAMES } from './providers'
+import { KIND_LABELS, PROVIDER_NAMES, quoteFilesSaid } from './providers'
 import { RecorderSettingsDialog } from './RecorderSettingsDialog'
 import type { RecorderDialogStart } from './RecorderSettingsDialog'
 
@@ -309,6 +309,7 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
   const stream = figures.stream
   const live = figures.live
   const minutes = figures.minutes
+  const quoteFiles = figures.quote_files
   const followed = new Map((figures.instruments ?? []).map((instrument) => [instrument.epic, instrument]))
   // Switched on in the file, and not writing: the server has to start it.
   const notRunning = provider.enabled && provider.status === 'down'
@@ -401,6 +402,7 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
                     : `Last fetched ${formatDateTime(minutes.last, timezone)}`
                 : '—'}
             </Row>
+            {quoteFiles && <Row label="Quotes kept">{quoteFilesSaid(quoteFiles)}</Row>}
             <Row label="Last bar written">{formatDateTime(figures.last_bar_at ?? null, timezone)}</Row>
             {(figures.pending_buckets ?? 0) > 0 && (
               <Row label="Waiting for the database">{formatNumber(figures.pending_buckets ?? 0)} ten seconds</Row>
@@ -479,6 +481,13 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
             <Row label="Account">{settings.environment === 'live' ? 'Live' : 'Demo'}</Row>
             <Row label="Capital.com's volume">{settings.minute_volume ? 'Fetched for each minute' : 'Not fetched'}</Row>
             <Row label="Day files">{settings.day_files ? 'Written for each day over' : 'Not written'}</Row>
+            <Row label="Quote files">
+              {settings.quote_files === false
+                ? 'Not kept'
+                : (settings.quote_files_retention_days ?? 0) === 0
+                  ? 'Every quote, every day kept'
+                  : `Every quote, the last ${settings.quote_files_retention_days} day${settings.quote_files_retention_days === 1 ? '' : 's'} kept`}
+            </Row>
             <Row label="Kept in the database">
               {settings.retention_months === 0
                 ? 'For good'
@@ -510,6 +519,30 @@ function CapitalProvider({ provider }: { provider: CapitalProviderDetails }) {
           </ul>
         )}
       </Panel>
+
+      {provider.quote_files && (
+        <Panel
+          title="Quote files"
+          description="Every quote as the feed received it, a compressed file per instrument and day of UTC (capital/quotes): when inside its ten seconds the price went where."
+        >
+          {provider.quote_files.every((files) => files.days === 0) ? (
+            <p className="text-sm text-muted-foreground">None yet: the feed writes them once a minute.</p>
+          ) : (
+            <ul className="divide-y divide-border/60 text-sm">
+              {provider.quote_files.map((files) => (
+                <li key={files.label} className="flex flex-wrap items-center justify-between gap-3 py-2">
+                  <span className="font-medium">{files.label}</span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {files.days === 0
+                      ? 'None yet'
+                      : `${formatNumber(files.days)} day${files.days === 1 ? '' : 's'}, ${formatDay(files.first_day)} to ${formatDay(files.last_day)}${files.writing ? `, ${formatDay(files.writing)} being written` : ''}, ${formatBytes(files.bytes)}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
 
       <SettingUp />
 

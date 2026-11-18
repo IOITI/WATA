@@ -252,6 +252,8 @@
         "day_files": true,
         "retention_months": 0,
         "day_files_retention_days": 0,
+        "quote_files": true,
+        "quote_files_retention_days": 0,
         "alert_after_seconds": 300
       },
       "ta_engine": {
