@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.92.1 - The open Dependabot alerts
+
+**Release date:** not released yet
+
+GitHub reported two alerts on main: one moderate and one high.
+
+- **`opentelemetry-api` 1.45.1 → 1.45.2** (moderate, GHSA-mf5v-w3w3-f6cg): parsing a crafted `traceparent` header took quadratic time, a denial of service. The package comes in through `anthropic` and `mcp`, which only the admin uses. `requirements.txt` installed into an empty environment still gives exactly `requirements.txt` (`tests/requirements_lock.py`), and `pip check` finds nothing broken.
+- **`picomatch` 4.0.7** (high, GHSA-fc5q-39xc-vjpf: a ReDoS on repeated extglobs, for the admin interface's build tools, vite and vitest): GitHub withdrew the advisory on 2026-11-18, and 4.0.7 is picomatch's newest version. There is nothing to update to, and GitHub closes the alert of a withdrawn advisory on its own.
+- Every other pinned dependency was checked against GitHub's advisories and OSV: none is affected.
+
+**On the live path:** only the admin's libraries change: admin1 is recreated. Nothing of the trading services changes.
+
+**Verification status:** the whole Python suite, 4,248 passed and 29 skipped (the Pine runner's, Node 24 not on the PATH), in an environment built from `requirements.txt` alone.
+
 ## v0.92.0 - Every Capital.com quote kept, a file a day
 
 **Release date:** 2026-11-18
