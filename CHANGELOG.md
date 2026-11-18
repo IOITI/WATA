@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.92.0 - Every Capital.com quote kept, a file a day
+
+**Release date:** not released yet
+
+The TA engine is now WATA's only source of signals, and a range-bar rule sees a breakout only once the 10-second row of Capital.com prices it happened in is over: about 6.5 s from the breakout to the signal. On 4–17 Nov 2026 that cost the shadow rule's 110 entries nothing measurable (−0.17 ± 0.27 points each); a rule that only trades breakouts would have paid about 1.7 points an entry, 3.2 at the US open. Every quote was published to the charts, but only the 10-second rows were kept: when inside a row the price really broke could not be known. Now every quote is kept.
+
+- **A file per instrument and day of UTC**, `var/lib/price_history/capital/quotes/<label>/<YYYY-MM-DD>.csv.gz`, gzip CSV.
+  - Lines are `rx_ms,t_ms,bid,ask`:
+    - when the feed received the quote, on its own clock (the time the 10-second rows are bucketed by);
+    - Capital.com's time of it, empty when it gave none;
+    - bid and ask as received.
+  - A market's close is a line without a price: the bars take it as one.
+  - About 356,000 quotes a full day of US100 (8.5 a second at its busiest), 3 to 5 MB a day compressed.
+  - Beside `capital/bars`, so no backtest, replay or day file reads them and no run turns stale.
+- **Nothing of it can delay or risk the bars.**
+  - The stream's callback only keeps the line in memory (8 MB at most, past which the newest are dropped and counted), after the chart has the quote.
+  - A task of its own writes every minute, one file operation at a time on a thread of its own, never cut off.
+  - A write that fails is cut back and its lines wait; a feed stopped while writing finds its file put right at its next start.
+  - A day over by ten minutes becomes one deterministic file.
+  - A second feed finds the files locked and writes none.
+- **Two settings**, in the feed's dialog and on the Configuration page:
+  - `trade.config.capital_feed.quote_files` ("Every quote, a file a day"), on unless false;
+  - `quote_files_retention_days` ("Keep the quote files"), 0 keeps every day.
+- **The feed's page** says how many quotes were written today and what was lost if anything, and lists each label's days of quotes with the day being written.
+- `lab/sync.sh` pulls the quote files too.
+- The Disk page's collector measures `capital/bars` and `capital/quotes` apart. Their bytes stay inside Capital.com's kind, whose projection follows the day files' retention: right while both retentions are 0. A kind of their own waits for a release that recreates every container anyway (`src/disk/kinds.py`).
+
+**On the live path:** capital_feed1 changes (the recorder, its settings, the new module), and so do ta_engine1 and admin1, which read the feed's settings. The deploy holds all three until the market's close, with the containers already waiting. Nothing of the trader, the position monitor, the web server or the scheduler changes. No backtest's code digest changes.
+
+**Verification status:**
+- Python: 29 new tests, among them:
+  - every way a file can be cut off, repaired, finished and pruned;
+  - a write that fails and its lines written once later;
+  - a second feed locked out;
+  - the bars written while a quote write hangs, and before the quotes at a stop;
+  - the settings, the catalog, the admin's listing.
+  The whole suite: 4,248 passed, 29 skipped (the Pine runner's, Node 24 not on the PATH).
+- The interface: lint, types, 1,509 tests, the build.
+- The release manifest, before and after: only capital_feed1, ta_engine1 and admin1 change.
+- Not run against Capital.com, nor on the server yet.
+
 ## v0.91.0 - What Saxo answers of the turbos, asked without trading
 
 **Release date:** 2026-11-18
