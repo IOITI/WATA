@@ -2,7 +2,7 @@
 
 ## v0.90.0 - The admin on ioiti-ui 0.22.0: text read at 14 px
 
-**Release date:** not released yet
+**Release date:** 2026-11-18
 
 The admin's design system goes from ioiti-ui 0.21.0 to 0.22.0, which sets its text by role and makes its components agree with each other.
 
