@@ -2,7 +2,7 @@
 
 ## v0.92.0 - Every Capital.com quote kept, a file a day
 
-**Release date:** not released yet
+**Release date:** 2026-11-18
 
 The TA engine is now WATA's only source of signals, and a range-bar rule sees a breakout only once the 10-second row of Capital.com prices it happened in is over: about 6.5 s from the breakout to the signal. On 4–17 Nov 2026 that cost the shadow rule's 110 entries nothing measurable (−0.17 ± 0.27 points each); a rule that only trades breakouts would have paid about 1.7 points an entry, 3.2 at the US open. Every quote was published to the charts, but only the 10-second rows were kept: when inside a row the price really broke could not be known. Now every quote is kept.
 
