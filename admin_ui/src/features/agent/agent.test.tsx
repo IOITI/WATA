@@ -781,7 +781,8 @@ describe('what is attached to a request', () => {
     await user.keyboard('{Escape}')
 
     const attached = screen.getAllByRole('group', { name: 'Attached' })[0]
-    expect(within(attached).getByText('Position position 5999999')).toBeInTheDocument()
+    // A label this long is cut on screen (ioiti-ui 0.22): the whole of it is said to screen readers, and is its hint.
+    expect(within(attached).getByText('Position position 5999999', { ignore: 'script, style, [hidden]' })).toBeInTheDocument()
     expect(within(attached).queryByText('Script Kernel VWAP v10')).toBeNull()
   })
 

@@ -313,7 +313,9 @@ function ProjectionPanel({ overview }: { overview: DiskOverview }) {
       </form>
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        {/* Held to the panel (a flex item grows to its content): on a phone its tabs scroll, as ioiti-ui's do. */}
         <AnimatedTabs
+          className="min-w-0 max-w-full"
           tabs={overview.horizons.map((days) => ({ id: String(days), label: HORIZON_LABEL[days] ?? `${days} days` }))}
           activeTab={String(horizon)}
           onChange={(id) => setHorizon(Number(id))}

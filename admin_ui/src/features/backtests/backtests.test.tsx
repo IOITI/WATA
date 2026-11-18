@@ -1378,7 +1378,8 @@ describe('a day of a run', () => {
 
     // The day is what it is about, kept first; the chart on screen comes as a file of the operator's.
     const attached = await screen.findByRole('group', { name: 'Attached' })
-    expect(within(attached).getByText('A day of run Smoke EMA cross, 14 Oct 2026')).toBeInTheDocument()
+    // A label this long is cut on screen (ioiti-ui 0.22): the whole of it is said to screen readers, and is its hint.
+    expect(within(attached).getByText('A day of run Smoke EMA cross, 14 Oct 2026', { ignore: 'script, style, [hidden]' })).toBeInTheDocument()
     await waitFor(() => expect(sent.find((request) => request.path === '/api/agent/files')?.body).toEqual({ file: 'chart-2026-10-14.png' }))
     expect(await within(attached).findByText('2 kB')).toBeInTheDocument()
     for (const preset of ['Why did this day lose?', 'A better configuration for this day', 'A LuxAlgo indicator for this day']) {

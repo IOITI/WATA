@@ -57,7 +57,7 @@ describe('a model check', () => {
       '31 trades paired by signal (34 on the recorded turbos, 41 on made-up ones).',
       'Made up minus recorded: +0.42 points of result a trade on average, 0.90 apart in the middle; correlation 0.91.',
       'The same exit 84 % of the time; turbos bought at 5.04 € recorded and 5.11 € made up, in the middle.',
-      'The paired trades sum to -67.42 % recorded and -66.43 % made up.',
+      'The paired trades sum to −67.42 % recorded and −66.43 % made up.',
     ])
   })
 

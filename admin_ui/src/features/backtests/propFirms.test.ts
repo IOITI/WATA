@@ -37,7 +37,7 @@ describe('a run checked against funded challenges', () => {
 
   it('says its trades in R and what leaves for LuxAlgo, which names nothing', () => {
     expect(figuresSaid(FIGURES)).toBe(
-      '42 trades on 12 days, 3.5 a day; 55% won, winners 0.62 R and losers -0.48 R on average (1 R: the stop-loss of 10.0%).',
+      '42 trades on 12 days, 3.5 a day; 55% won, winners 0.62 R and losers −0.48 R on average (1 R: the stop-loss of 10.0%).',
     )
     expect(sentSaid(FIGURES)).toMatch(/^What leaves for LuxAlgo: this run's 42 results as R-multiples/)
     expect(sentSaid(FIGURES)).toMatch(/Nothing that names the run, the account or its value\.$/)
