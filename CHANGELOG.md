@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.90.0 - The admin on ioiti-ui 0.22.0: text read at 14 px
+
+**Release date:** not released yet
+
+The admin's design system goes from ioiti-ui 0.21.0 to 0.22.0, which sets its text by role and makes its components agree with each other.
+
+- **What is read or acted on is 14 px** where it was 12 px or less: the options of a select, a data table's rows, filters and columns, toasts, tabs, the live pill, the AI agent's answer and steps, the sidebar's sub-entries, a radio's or a switch's label. A small button is 14 px; an extra-small one, inline in a row, stays 12 px. Nothing is under 11 px (a count, a chart's tick, a key).
+- **What is typed in a field is 16 px on a phone**, 14 px from 640 px: a phone no longer zooms the page in when a field takes the focus.
+- **One recipe per role**: what floats beside its button (menus, lists of options, popovers, the notifications), tooltips, dialogs and toasts share one radius, border, shadow and scrim. Colours are the design's tokens everywhere (one grey for a caption, danger's red in every component), and a disabled control is at 50 % in every component.
+- **Numbers carry a true minus** (−0.48 R where -0.48 R was written), as amounts and percentages already did. The CSV exports keep their raw values.
+- **What floats is no longer cut by what holds it**: a split button's menu and a data table's list of columns are drawn over the page, following it as it scrolls. The list of columns closes on Escape or a click elsewhere.
+- **A long attachment's name** (over 24 characters) is cut in its middle on the AI agent's chips, its extension kept, the whole name in a hint and read by screen readers.
+- What is selected takes the accent's tint; Firefox draws thin scrollbars in the design's colours.
+- **The Disk page's horizon tabs ("1 month" … "1 year") are held to their panel.** At 14 px the four no longer fit a phone's width: they ran past the card, where they could not be reached; they now scroll sideways inside it. The chosen tab still starts half hidden there, since ioiti-ui's tabs do not scroll to it.
+
+**On the live path:** only the admin's container changes. Nothing of the trader, the position monitor, the web server or the TA engine changes.
+
+**Verification status:**
+- The interface: lint, types, 1,506 tests, the build. Four tests follow the package: two sentences now carry a true minus, and two chips with a long label hold it twice (for screen readers and as its hint).
+- In the fake admin, built: the dashboard, positions and backtests at 800 px. At 375 px, fourteen pages were measured for anything wider than the phone; only the Disk page's tabs were, and they are fixed. The top bar was already wider than a phone before (by 65 px), and the live pill's 14 px text adds a few pixels.
+- Python: no code changed; CI runs the suite.
+
 ## v0.89.0 - The server's disk: what WATA takes of it, alarms, a projection and cleanups
 
 **Release date:** 2026-11-17
