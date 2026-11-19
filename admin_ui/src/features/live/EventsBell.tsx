@@ -17,10 +17,6 @@ const TONE: Record<LoggedEvent['variant'], NotificationTone> = {
   error: 'danger',
 }
 
-// As the top bar's other buttons.
-const TRIGGER =
-  'grid size-9 shrink-0 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-200/70 hover:text-neutral-900 focus-ring dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white'
-
 /**
  * What the live events told this tab, kept once their toasts are gone: each
  * leads to where it is dealt with. The browser notifications are switched here.
@@ -43,7 +39,6 @@ export function EventsBell() {
       onMarkAsRead={log.markRead}
       onMarkAllAsRead={log.markAllRead}
       linkComponent={HoverPeekRouterLink}
-      triggerClassName={TRIGGER}
       footer={
         notificationsSupported() && (
           <div className="flex items-center justify-between gap-3">

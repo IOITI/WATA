@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Hint, Kbd, SpotlightSearch } from 'ioiti-ui'
+import { IconButton, Kbd, SpotlightSearch } from 'ioiti-ui'
 import { Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
@@ -69,16 +69,13 @@ export function CommandPalette() {
 
   return (
     <>
-      <Hint content={<span className="inline-flex items-center gap-2">Go to… <Kbd keys="mod+k" /></span>} side="bottom">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-label="Go to a page, run, rule, script or asset"
-          className="grid size-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-900 focus-ring dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white"
-        >
-          <Search className="size-[18px]" />
-        </button>
-      </Hint>
+      {/* The top bar's icon buttons' look, as the bell's. */}
+      <IconButton
+        label="Go to a page, run, rule, script or asset"
+        icon={<Search />}
+        hint={<span className="inline-flex items-center gap-2">Go to… <Kbd keys="mod+k" /></span>}
+        onClick={() => setOpen(true)}
+      />
       <SpotlightSearch
         open={open}
         onOpenChange={setOpen}

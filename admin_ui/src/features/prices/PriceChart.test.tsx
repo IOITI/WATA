@@ -1,4 +1,6 @@
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
+import { ThemeProvider, useTheme } from 'ioiti-ui'
+import { useEffect } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
@@ -56,6 +58,28 @@ describe('the price chart', () => {
     render(<PriceChart {...props()} />)
 
     expect(theChart().options.layout.attributionLogo).toBe(true)
+  })
+
+  it('is made again in the accent chosen while it is on screen: the library takes its colours once', () => {
+    let choose: (accent: 'violet') => void = () => {}
+    function Chooser() {
+      const { setAccent } = useTheme()
+      useEffect(() => {
+        choose = setAccent
+      }, [setAccent])
+      return null
+    }
+    render(
+      <ThemeProvider>
+        <Chooser />
+        <PriceChart {...props()} />
+      </ThemeProvider>,
+    )
+    const first = theChart()
+    act(() => choose('violet'))
+    expect(first.removed).toBe(true)
+    expect(theChart()).not.toBe(first)
+    expect(charts.filter((chart) => !chart.removed)).toHaveLength(1)
   })
 
   it('leaves vertical swipes to the page, so a phone can scroll past the chart', () => {

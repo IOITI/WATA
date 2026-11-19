@@ -8,12 +8,12 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import { NotFoundPage } from '@/features/NotFoundPage'
-import type { Position, Session } from '@/lib/types'
+import type { AgentState, Position, ReleaseSummary, Session } from '@/lib/types'
 import { run, RUN_ID } from '@/test/backtests'
 import { openPosition, overview } from '@/test/overview'
 
 import { AppShell } from './AppShell'
-import { APP_NAME, MENU } from './navigation'
+import { APP_NAME } from './navigation'
 
 const SESSION: Session = {
   authenticated: true,
@@ -33,6 +33,12 @@ interface ServerState {
   pausedSince?: string | null
   openPositions?: Position[]
   restartRequired?: boolean
+  /** The services the control service names for a restart; null when it cannot say. */
+  restartServices?: Session['restart_services']
+  release?: ReleaseSummary | null
+  agent?: Partial<AgentState>
+  /** Signing out, as the session's provider does it. */
+  logout?: () => Promise<void>
   /** The page shown. */
   path?: string
 }
@@ -68,6 +74,10 @@ function renderShell({
   pausedSince = null,
   openPositions = [],
   restartRequired = false,
+  restartServices = null,
+  release = null,
+  agent = { enabled: false },
+  logout = async () => {},
   path = '/positions',
 }: ServerState = {}) {
   const bodies: Record<string, unknown> = {
@@ -80,6 +90,7 @@ function renderShell({
       ],
     },
     '/api/overview': overview({ entries_paused_since: pausedSince, open_positions: openPositions }),
+    '/api/agent': { model: 'claude-sonnet-5-5', ...agent },
   }
   vi.stubGlobal(
     'fetch',
@@ -93,10 +104,10 @@ function renderShell({
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider
         value={{
-          session: { ...SESSION, restart_required: restartRequired },
+          session: { ...SESSION, restart_required: restartRequired, restart_services: restartServices, release },
           error: null,
           login: async () => {},
-          logout: async () => {},
+          logout,
         }}
       >
         {/* As App.tsx has them: the application's name, then RouterRoot at the root route. */}
@@ -137,38 +148,86 @@ afterEach(() => {
   vi.unstubAllGlobals()
   // The palette keeps the entries chosen last in this browser: each test starts without them.
   window.localStorage.clear()
+  // A test that chose the look leaves the page as the pre-paint script would have it, no more.
+  for (const name of ['data-theme-storage-key', 'data-accent', 'data-material']) document.documentElement.removeAttribute(name)
 })
 
-describe('trading state in the top bar', () => {
-  it('shows nothing while everything is as usual', async () => {
+/** The top bar's summary of the states not to miss, once the page has drawn it. */
+const statusButton = () => screen.findByRole('button', { name: /^Status:/ })
+
+/** Its panel, opened. */
+async function openStatus(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await statusButton())
+  return within(await screen.findByRole('dialog', { name: 'Status' }))
+}
+
+describe('the states not to miss, in the top bar', () => {
+  it('stand out in nothing while everything is as usual, and say so once opened', async () => {
+    const user = userEvent.setup()
     renderShell()
 
-    // The health summary has arrived: the chips had what they need to appear.
-    expect(await screen.findByText('Up')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /Saxo: authorise/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /Entries paused/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /Restart needed/ })).not.toBeInTheDocument()
+    const panel = await openStatus(user)
+    // The health summary has arrived: every service up, Saxo's login with them.
+    expect(await panel.findByRole('link', { name: /All services up/ })).toHaveAttribute('href', '/system')
+    expect(panel.getByRole('link', { name: /Saxo: authorised/ })).toHaveAttribute('href', '/system')
+    // jsdom has no event stream: the page polls, said in grey, asking nothing.
+    expect(panel.getByText('Polling')).toBeInTheDocument()
+    expect(panel.queryByText('Restart needed')).not.toBeInTheDocument()
+    expect(panel.getByRole('link', { name: 'Every service, on the System page' })).toHaveAttribute('href', '/system')
+    expect(screen.getByRole('button', { name: 'Status: Polling' })).toBeInTheDocument()
   })
 
-  it('says on every page that Saxo needs a new authorisation, and where to give it', async () => {
+  it('say on every page that Saxo needs a new authorisation, and where to give it', async () => {
+    const user = userEvent.setup()
     renderShell({ saxo: 'down' })
 
-    const chip = await screen.findByRole('link', { name: /Saxo: authorise/ })
-    expect(chip).toHaveAttribute('href', '/system')
-    // Named by what it is, described by what it means (its hint, on hover, focus and a tap).
-    expect(chip).toHaveAccessibleName('Saxo: authorise')
-    expect(chip).toHaveAccessibleDescription(/nothing can be traded/)
-    // The summary beside it agrees.
-    expect(screen.getByText('Down')).toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: 'Status: Saxo: authorise' })
+    expect(button).toHaveTextContent('Saxo: authorise')
+    const panel = await openStatus(user)
+    const saxo = panel.getByRole('link', { name: /Saxo: authorise/ })
+    expect(saxo).toHaveAttribute('href', '/system')
+    expect(saxo).toHaveTextContent(/nothing can be traded/)
+    // The services apart from it are up: the trouble is said once.
+    expect(panel.getByRole('link', { name: /All services up/ })).toBeInTheDocument()
+
+    // Followed, the page is the System's and the panel is gone.
+    await user.click(saxo)
+    expect(screen.getByRole('status', { name: 'address' })).toHaveTextContent('/system')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Status' })).not.toBeInTheDocument())
   })
 
-  it('does not raise the alarm when the token state could not be read', async () => {
+  it('do not raise the alarm when the token state could not be read', async () => {
+    const user = userEvent.setup()
     renderShell({ saxo: 'unknown' })
 
-    expect(await screen.findByText('Up')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /Saxo: authorise/ })).not.toBeInTheDocument()
+    const panel = await openStatus(user)
+    expect(await panel.findByRole('link', { name: /All services up/ })).toBeInTheDocument()
+    expect(panel.queryByText(/Saxo/)).not.toBeInTheDocument()
   })
 
+  it('say that the services run an older configuration, and link to where it is dealt with', async () => {
+    const user = userEvent.setup()
+    renderShell({ restartRequired: true })
+
+    expect(await screen.findByRole('button', { name: 'Status: Restart needed' })).toBeInTheDocument()
+    const panel = await openStatus(user)
+    expect(panel.getByRole('link', { name: /Restart needed/ })).toHaveAttribute('href', '/config')
+    // The notice itself is on the configuration page, not across the top of every page.
+    expect(screen.queryByText('Configuration changed since the services started')).not.toBeInTheDocument()
+  })
+
+  it('say a release waiting, and how many states stand out', async () => {
+    const user = userEvent.setup()
+    renderShell({ restartRequired: true, restartServices: [{ id: 'trader', name: 'Trader' }], release: { newest: '0.95.0', containers: {}, waiting: ['admin1'], applying: false } })
+
+    expect(await screen.findByRole('button', { name: 'Status: 2 to watch' })).toHaveTextContent('+1')
+    const panel = await openStatus(user)
+    expect(panel.getByRole('link', { name: /Release waiting/ })).toHaveAttribute('href', '/system#release')
+    expect(panel.getByRole('link', { name: /Restart needed/ })).toHaveAttribute('href', '/system')
+  })
+})
+
+describe('live trading in the top bar', () => {
   it('says on every page that new entries are paused, and where to resume them', async () => {
     const user = userEvent.setup()
     renderShell({ pausedSince: '2026-10-12T05:09:22Z' })
@@ -201,21 +260,57 @@ describe('trading state in the top bar', () => {
     // Back on the pill. (The island shrinks into it: jsdom, which measures nothing, never ends that animation.)
     expect(screen.getByRole('button', { name: /^Live trading: 1 open/ })).toHaveFocus()
   })
+})
 
-  it('says that the services run an older configuration, and links to it', async () => {
-    renderShell({ restartRequired: true })
+describe("the operator's menu", () => {
+  const operator = () => screen.findByRole('button', { name: /^Operator/ })
 
-    expect(await screen.findByRole('link', { name: /Restart needed/ })).toHaveAttribute('href', '/config')
-    // The notice itself is on the configuration page, not across the top of every page.
-    expect(screen.queryByText('Configuration changed since the services started')).not.toBeInTheDocument()
+  it('signs out last', async () => {
+    const user = userEvent.setup()
+    const logout = vi.fn(async () => {})
+    renderShell({ logout })
+
+    const button = await operator()
+    // Actions and settings allowed, as usual: nothing said under the name.
+    expect(button).toHaveTextContent(/^O?Operator$/)
+    await user.click(button)
+    const menu = within(await screen.findByRole('menu', { name: 'Account' }))
+    const items = menu.getAllByRole('menuitem')
+    expect(items.at(-1)).toHaveTextContent('Sign out')
+    await user.click(items.at(-1)!)
+    expect(logout).toHaveBeenCalledOnce()
+    // The sidebar no longer carries it.
+    expect(within(screen.getAllByRole('complementary')[0]).queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
   })
 
-  it('carries the button that chooses the theme, on every page', async () => {
+  it("chooses the theme, and this browser's accent and material, which are no part of the configuration", async () => {
+    const user = userEvent.setup()
+    // The key the pre-paint script is given (vite.config.ts), which the theme's provider reads from the page.
+    document.documentElement.setAttribute('data-theme-storage-key', 'wata.theme')
     renderShell()
 
-    expect(await screen.findByRole('button', { name: /^Theme:/ })).toBeInTheDocument()
+    await user.click(await operator())
+    let menu = within(await screen.findByRole('menu', { name: 'Account' }))
+    expect(menu.getByRole('menuitemradio', { name: /Dark/ })).toBeInTheDocument()
+    await user.click(menu.getByRole('menuitem', { name: /Accent and material/ }))
+    menu = within(await screen.findByRole('menu', { name: 'Account' }))
+    await user.click(await menu.findByRole('menuitemradio', { name: /Violet/ }))
+
+    expect(document.documentElement).toHaveAttribute('data-accent', 'violet')
+    // Kept beside the theme, in this browser alone.
+    expect(window.localStorage.getItem('wata.theme.accent')).toBe('violet')
+    // No button of its own in the top bar any more.
+    expect(screen.queryByRole('button', { name: /^Theme:/ })).not.toBeInTheDocument()
   })
 
+  it('opens the list of keyboard shortcuts', async () => {
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(await operator())
+    await user.click(within(await screen.findByRole('menu', { name: 'Account' })).getByRole('menuitem', { name: /Keyboard shortcuts/ }))
+    expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+  })
 })
 
 /** Both forms of the trail are rendered here (no CSS): the whole one, then its last two steps. */
@@ -299,7 +394,13 @@ describe('the menu', () => {
     const menu = within(await screen.findByRole('navigation', { name: 'Main' }))
 
     // An address each: what a right click offers to open in another tab.
-    for (const entry of MENU) expect(menu.getByRole('link', { name: entry.label })).toHaveAttribute('href', entry.path)
+    for (const [label, path] of [['Dashboard', '/'], ['Positions', '/positions'], ['Orders', '/orders'], ['Signals', '/signals'], ['Watchlist', '/watchlist']]) {
+      expect(menu.getByRole('link', { name: label })).toHaveAttribute('href', path)
+    }
+    // The AI agent at the sidebar's foot, apart from the sections.
+    const agent = screen.getByRole('link', { name: 'AI agent' })
+    expect(agent).toHaveAttribute('href', '/agent')
+    expect(screen.getByRole('navigation', { name: 'Main' })).not.toContainElement(agent)
     expect(menu.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
 
     // A click with Ctrl or ⌘ is the browser's, for another tab: this one stays where it is.
@@ -311,6 +412,47 @@ describe('the menu', () => {
     await user.click(menu.getByRole('link', { name: 'Positions' }))
     expect(await screen.findByRole('heading', { name: 'Positions' })).toBeInTheDocument()
     expect(menu.getByRole('link', { name: 'Positions' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('folds its sections but Trading, and opens the one of the page shown, on its entry and its pages', async () => {
+    const user = userEvent.setup()
+    renderShell({ path: '/logs' })
+    const menu = within(await screen.findByRole('navigation', { name: 'Main' }))
+
+    expect(menu.getByRole('button', { name: 'Analysis' })).toHaveAttribute('aria-expanded', 'false')
+    expect(menu.queryByRole('link', { name: 'Backtests' })).not.toBeInTheDocument()
+    // The page shown is under the System, in Operations: both open.
+    expect(menu.getByRole('button', { name: 'Operations' })).toHaveAttribute('aria-expanded', 'true')
+    expect(menu.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page')
+    expect(menu.getByRole('link', { name: 'Disk' })).toHaveAttribute('href', '/system/disk')
+    expect(menu.getByRole('link', { name: 'System' })).toHaveAttribute('href', '/system')
+
+    // Unfolded, a section shows its entries; Paper trading is under the Backtests.
+    await user.click(menu.getByRole('button', { name: 'Analysis' }))
+    await user.click(await menu.findByRole('button', { name: 'The pages under Backtests' }))
+    expect(await menu.findByRole('link', { name: 'Paper trading' })).toHaveAttribute('href', '/backtests/paper')
+  })
+
+  it('says on its entries what their pages have to show, and on a section folded over them', async () => {
+    renderShell({
+      saxo: 'down',
+      openPositions: [openPosition('5002', 'TURBO LONG NASDAQ-100 KO 24150 SG')],
+      agent: { enabled: true, under_way: [], asking: ['20261119-080000-a1b2c3'] },
+    })
+    const menu = within(await screen.findByRole('navigation', { name: 'Main' }))
+
+    expect(await menu.findByRole('link', { name: 'Positions, 1' })).toHaveAttribute('href', '/positions')
+    expect(await screen.findByRole('link', { name: 'AI agent, 1 question' })).toHaveAttribute('href', '/agent')
+    // The System says Saxo's login, folded under Operations: its heading says something is wrong under it.
+    expect(await menu.findByRole('button', { name: 'Operations, with something wrong' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps the sidebar folded to its icons as the operator left it, in this browser', async () => {
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(await screen.findByRole('button', { name: 'Collapse sidebar' }))
+    expect(window.localStorage.getItem('wata.sidebar.collapsed')).toBe('true')
   })
 })
 
@@ -342,7 +484,7 @@ describe('the bell', () => {
     window.sessionStorage.clear()
     const user = userEvent.setup()
     renderShell()
-    await screen.findByText('Up')
+    await statusButton()
 
     act(() =>
       FakeEventSource.opened[0].send('position_closed', {
@@ -377,7 +519,7 @@ describe('the palette (⌘K)', () => {
   it('goes to a page or a run from the keyboard', async () => {
     const user = userEvent.setup()
     renderShell({ bodies: BODIES })
-    await screen.findByText('Up')
+    await statusButton()
 
     // ⌘K on a Mac, Ctrl K elsewhere (ioiti-ui 0.16 reads the platform): jsdom names none.
     await user.keyboard('{Control>}k{/Control}')
@@ -394,7 +536,7 @@ describe('the palette (⌘K)', () => {
   it('finds a position or an order by its number, and lists nothing that trades', async () => {
     const user = userEvent.setup()
     renderShell({ bodies: BODIES })
-    await screen.findByText('Up')
+    await statusButton()
 
     await user.click(screen.getByRole('button', { name: /^Go to a page/ }))
     const palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
@@ -408,7 +550,7 @@ describe('the palette (⌘K)', () => {
   it('opens the list of one kind, searched alone, and goes back from it', async () => {
     const user = userEvent.setup()
     renderShell({ bodies: BODIES })
-    await screen.findByText('Up')
+    await statusButton()
 
     await user.click(screen.getByRole('button', { name: /^Go to a page/ }))
     const palette = within(await screen.findByRole('dialog', { name: 'Go to' }))
@@ -424,7 +566,7 @@ describe('the palette (⌘K)', () => {
   it('offers the entries chosen last first, the next time it is opened', async () => {
     const user = userEvent.setup()
     renderShell({ bodies: BODIES })
-    await screen.findByText('Up')
+    await statusButton()
 
     await user.keyboard('{Control>}k{/Control}')
     let palette = within(await screen.findByRole('dialog', { name: 'Go to' }))

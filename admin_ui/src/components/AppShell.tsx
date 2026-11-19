@@ -1,15 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { Hint, SidebarFooterButton, StateChip, StatusBadge, ThemeToggle } from 'ioiti-ui'
+import { ShortcutsDialog, StateSummary, TextLink, UserMenu } from 'ioiti-ui'
 import type { Menu } from 'ioiti-ui'
 import { RouterAppShell, RouterLink } from 'ioiti-ui/react-router'
-import { KeyRound, LogOut, Rocket, RotateCw } from 'lucide-react'
-import { useEffect } from 'react'
-import { Link } from 'react-router'
+import { Keyboard } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { CommandPalette } from '@/components/CommandPalette'
+import { menuBadges } from '@/components/menuBadges'
 import { MENU_ICONS } from '@/components/menuIcons'
-import { isWidePage, MENU, MENU_SECTIONS } from '@/components/navigation'
+import { ADMIN_MENU, isWidePage } from '@/components/navigation'
 import type { MenuSection } from '@/components/navigation'
+import { stateItems } from '@/components/stateItems'
 import { useAuth, useSession } from '@/features/auth/auth-context'
 import { EventLogProvider } from '@/features/live/EventLogProvider'
 import { PendingRemovalsProvider } from '@/features/backtests/PendingRemovalsProvider'
@@ -18,22 +19,16 @@ import { EventsBell } from '@/features/live/EventsBell'
 import { FollowProvider } from '@/features/live/FollowProvider'
 import { recordLiveValues } from '@/features/positions/liveSamples'
 import { useLiveEvents } from '@/features/live/useLiveEvents'
-import { releaseChipHint } from '@/features/system/release'
-import { restartNeededHint } from '@/features/system/restarts'
 import { api } from '@/lib/api'
-import { SAXO_SERVICE_ID } from '@/lib/types'
+import type { Session } from '@/lib/types'
 
-// The menu itself is in navigation.ts, which the trail of the top bar reads too; its icons in menuIcons.tsx.
-// Each entry a link: it can be opened in another tab as well as followed.
-const SIDEBAR_MENU: Menu<MenuSection> = {
-  sections: MENU_SECTIONS,
-  entries: MENU.map((entry) => ({ ...entry, icon: MENU_ICONS[entry.id] })),
-}
+/** Where the browser keeps the reader's choice of the folded sidebar (⌘B), beside the theme's `wata.theme`. */
+const SIDEBAR_COLLAPSED_KEY = 'wata.sidebar.collapsed'
 
 /**
  * ioiti-ui's shell (the sidebar, the top bar with the trail of where the page is, the page) with what
- * is WATA's in it: the states the operator must not miss, the live pill, the palette, the bell, the
- * services' state, signing out.
+ * is WATA's in it: the states the operator must not miss, summed up in one control, the live pill, the
+ * palette, the bell, the operator's menu (the look, the keys, signing out), and the sidebar's badges.
  */
 export function AppShell() {
   return (
@@ -45,6 +40,15 @@ export function AppShell() {
       </FollowProvider>
     </EventLogProvider>
   )
+}
+
+/**
+ * Who is signed in: the admin has one operator. Under the name, what the configuration keeps them from doing, when
+ * it keeps them from something: the usual (actions and settings) says nothing, and leaves the trail its room.
+ */
+function operatorDetail(session: Session): string | undefined {
+  if (!session.actions_enabled) return 'Read only'
+  return session.config_edit_enabled ? undefined : 'Settings locked'
 }
 
 function Shell() {
@@ -59,78 +63,62 @@ function Shell() {
     queryFn: api.overview,
     refetchInterval: (query) => (query.state.data?.open_positions?.length ? 5_000 : 60_000),
   })
+  // The AI agent's state, for its entry's badge (a question waiting, its pause, what it does); its live events read
+  // it again at once (liveEvents.ts).
+  const agentQuery = useQuery({ queryKey: ['agent'], queryFn: api.agent, staleTime: 10_000, refetchInterval: 60_000 })
   // Every page's reading of the live values, kept for the lines of the open positions.
   useEffect(() => {
     if (overviewQuery.data) recordLiveValues(overviewQuery.data.open_positions ?? [])
   }, [overviewQuery.data])
   const live = useLiveEvents()
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
 
-  const saxoNeedsAuthorisation =
-    healthQuery.data?.services.find((service) => service.id === SAXO_SERVICE_ID)?.status === 'down'
+  // The menu itself is in navigation.ts, which the trail of the top bar reads too; its icons in menuIcons.tsx, its
+  // badges in menuBadges.ts. Each entry a link: it can be opened in another tab as well as followed.
+  const badges = useMemo(
+    () => menuBadges({ health: healthQuery.data, overview: overviewQuery.data, session, agent: agentQuery.data }),
+    [healthQuery.data, overviewQuery.data, session, agentQuery.data],
+  )
+  const menu: Menu<MenuSection> = useMemo(
+    () => ({ ...ADMIN_MENU, entries: ADMIN_MENU.entries.map((entry) => ({ ...entry, icon: MENU_ICONS[entry.id], ...badges[entry.id] })) }),
+    [badges],
+  )
+  const states = useMemo(() => stateItems({ health: healthQuery.data, session, live }), [healthQuery.data, session, live])
 
   return (
-    <RouterAppShell
-      menu={SIDEBAR_MENU}
-      appDetail={`v${session.version}`}
-      linkComponent={RouterLink}
-      isWide={isWidePage}
-      sidebarFooter={<SidebarFooterButton icon={<LogOut />} label="Sign out" onClick={() => void logout()} />}
-      topBarChips={
-        <>
-          {saxoNeedsAuthorisation && (
-            <StateChip
-              to="/system"
-              tone="danger"
-              icon={<KeyRound className="size-3.5" aria-hidden />}
-              label="Saxo: authorise"
-              hint="The Saxo token can no longer be renewed: nothing can be traded until a new authorisation is given, on the System page."
+    <>
+      <RouterAppShell
+        menu={menu}
+        appDetail={`v${session.version}`}
+        linkComponent={RouterLink}
+        isWide={isWidePage}
+        collapsedStorageKey={SIDEBAR_COLLAPSED_KEY}
+        // Drawn below, so that the operator's menu opens it as ? does.
+        shortcutsDialog={false}
+        topBarChips={
+          <StateSummary
+            label="Status"
+            items={states}
+            footer={<TextLink to="/system" variant="quiet">Every service, on the System page</TextLink>}
+          />
+        }
+        topBarEnd={
+          <>
+            <LivePill />
+            <CommandPalette />
+            <EventsBell />
+            <UserMenu
+              name="Operator"
+              detail={operatorDetail(session)}
+              items={[{ label: 'Keyboard shortcuts', icon: <Keyboard />, shortcut: '?', onSelect: () => setShortcutsOpen(true) }]}
+              // The theme, the accent and the material: each browser's own (wata.theme…), nothing of them in config.json.
+              appearance
+              onSignOut={() => void logout()}
             />
-          )}
-          {session.release && (session.release.waiting.length > 0 || session.release.applying) && (
-            <StateChip
-              to="/system#release"
-              tone="warning"
-              icon={<Rocket className="size-3.5" aria-hidden />}
-              label={session.release.applying ? 'Deploying' : 'Release waiting'}
-              hint={releaseChipHint(session.release)}
-            />
-          )}
-          {session.restart_required && (
-            <StateChip
-              to={session.restart_services ? '/system' : '/config'}
-              tone="warning"
-              icon={<RotateCw className="size-3.5" aria-hidden />}
-              label="Restart needed"
-              hint={restartNeededHint(session)}
-            />
-          )}
-        </>
-      }
-      topBarEnd={
-        <>
-          <LivePill />
-          <Hint
-            content={live ? 'Changes are pushed to this page as they happen' : 'Not receiving live updates: the page refreshes on a timer'}
-            side="bottom"
-            wrap
-            className="hidden shrink-0 sm:inline-flex"
-          >
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span aria-hidden className={live ? 'size-1.5 rounded-full bg-positive' : 'size-1.5 rounded-full bg-chart-muted'} />
-              {live ? 'Live' : 'Polling'}
-            </span>
-          </Hint>
-          <CommandPalette />
-          <EventsBell />
-          <ThemeToggle />
-          {healthQuery.data && (
-            <Link to="/system" className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-              <span className="hidden sm:inline">Services</span>
-              <StatusBadge status={healthQuery.data.status} />
-            </Link>
-          )}
-        </>
-      }
-    />
+          </>
+        }
+      />
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+    </>
   )
 }

@@ -711,6 +711,9 @@ class AgentService:
             "limits": {"tool_calls": settings.max_tool_calls, "backtests": settings.max_backtests,
                        "request_usd": settings.max_request_usd, "running": settings.max_running},
             "under_way": [meta["id"] for meta in metas if meta.get("status") in transcript.UNDER_WAY],
+            # The research tasks waiting for the operator's answer (ask_operator): the sidebar's badge of the agent.
+            "asking": [meta["id"] for meta in metas
+                       if (meta.get("task") or {}).get("question") and meta["task"].get("state") == TASK_WORKING],
             "conversations": len(metas), "prices_of": claude.PRICES_OF,
             "models": [self._model_entry(model_id) for model_id in CHOICES], "efforts": list(EFFORTS),
             "tasks": {"usd": settings.max_task_usd, "backtests": settings.max_task_backtests,

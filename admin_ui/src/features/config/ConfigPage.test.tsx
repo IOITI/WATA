@@ -169,28 +169,10 @@ describe('the overview of the configuration', () => {
     expect(found).toHaveAttribute('href', `/config/hours#${anchorOf(START)}`)
   })
 
-  it("offers this browser's accent and material, which are no part of the file", async () => {
-    const user = userEvent.setup()
-    // The key the pre-paint script is given (vite.config.ts), which the theme's provider reads from the page.
-    document.documentElement.setAttribute('data-theme-storage-key', 'wata.theme')
+  it('says where the look of the interface is chosen, which is no part of the file', async () => {
     renderPage('/config')
-
-    const panel = (await screen.findByRole('heading', { name: 'Accent and material' })).closest('section') as HTMLElement
-    expect(panel).toHaveTextContent('Shown now: neutral accent, flat material.')
-    await user.click(within(panel).getByRole('button', { name: 'Accent and material: neutral, flat' }))
-    // Its choices are a layer of the page's own (ioiti-ui 0.17), under its button.
-    await user.click(await screen.findByRole('radio', { name: 'Violet' }))
-    await user.click(screen.getByRole('radio', { name: 'Glass' }))
-
-    expect(document.documentElement).toHaveAttribute('data-accent', 'violet')
-    expect(document.documentElement).toHaveAttribute('data-material', 'glass')
-    expect(panel).toHaveTextContent('Shown now: violet accent, glass material.')
-    // Kept beside the theme, in this browser alone.
-    expect(window.localStorage.getItem('wata.theme.accent')).toBe('violet')
-    expect(window.localStorage.getItem('wata.theme.material')).toBe('glass')
-    // Nothing to save, nothing sent.
-    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument()
-    expect(sent.filter((request) => request.method !== 'GET')).toEqual([])
+    const elsewhere = (await screen.findByRole('heading', { name: 'Settings kept elsewhere' })).closest('section') as HTMLElement
+    expect(elsewhere).toHaveTextContent('Theme, accent and material (The Operator menu, top right)')
   })
 })
 

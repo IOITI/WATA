@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, AnimatedTabs, Badge, cn, formatDateTime, Input, LookPicker, PageHeader, Panel, useTheme } from 'ioiti-ui'
+import { Alert, AlertDescription, AnimatedTabs, Badge, cn, formatDateTime, Input, PageHeader, Panel } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -102,36 +102,15 @@ function SearchResults({ found }: { found: CatalogParam[] }) {
 }
 
 /** The knobs that are not in config.json, so that this page leads to all of them. */
-const ELSEWHERE = [
+const ELSEWHERE: { label: string; where: string; href?: string; what: string }[] = [
   { label: 'Pause of new entries', where: 'The dashboard', href: '/', what: 'Kept in the database: it survives restarts.' },
   { label: "Claude's pause", where: 'System › Claude', href: '/system', what: 'Every MCP call refused until resumed.' },
   { label: 'Research export', where: 'Backtests', href: '/backtests', what: 'Each finished day written for the lab.' },
   { label: "Dukascopy's keeper", where: 'Data › Dukascopy', href: '/data/providers/dukascopy', what: 'Prices kept up to date while the market is closed.' },
   { label: 'Signal rules', where: 'Technical Analysis › Signal rules', href: '/ta/signals', what: 'Live or shadow, their scripts, a rule’s own days of history.' },
+  // Each browser's own, kept beside its light or dark theme (wata.theme.accent, .material).
+  { label: 'Theme, accent and material', where: 'The Operator menu, top right', what: 'How this interface looks in this browser: nothing to save.' },
 ]
-
-/**
- * The look of the interface: ioiti-ui's picker of the accent and the material. Each browser's own, kept
- * beside its light or dark theme (`wata.theme.accent`, `.material`): nothing of it is in config.json.
- */
-function LookPanel() {
-  const { accent, material } = useTheme()
-  return (
-    <Panel
-      title="Accent and material"
-      description="How this interface looks in this browser, as its light or dark theme does: not in config.json, nothing to save."
-    >
-      <div className="flex items-center justify-between gap-4">
-        <p className="min-w-0 text-xs text-text-secondary">
-          Shown now: {accent} accent, {material} material. Neutral and flat are the admin as it always was; an accent colours
-          what is chosen, current or primary, and glass turns the panels, the bars and what floats over the page to glass.
-        </p>
-        {/* At the row's end, a phone's too: its choices open under it, from its right edge. */}
-        <LookPicker />
-      </div>
-    </Panel>
-  )
-}
 
 /** The page's start: a search over every parameter, its groups, and what the file holds that nothing reads. */
 export function ConfigOverview() {
@@ -219,14 +198,17 @@ export function ConfigOverview() {
               </ul>
             </Panel>
           )}
-          <LookPanel />
           <Panel title="Settings kept elsewhere" description="What changes WATA's work without being in config.json.">
             <ul className="grid gap-3 sm:grid-cols-2">
               {ELSEWHERE.map((entry) => (
                 <li key={entry.label} className="text-xs">
-                  <Link to={entry.href} className="font-medium text-foreground underline-offset-2 hover:underline">
-                    {entry.label}
-                  </Link>{' '}
+                  {entry.href ? (
+                    <Link to={entry.href} className="font-medium text-foreground underline-offset-2 hover:underline">
+                      {entry.label}
+                    </Link>
+                  ) : (
+                    <span className="font-medium text-foreground">{entry.label}</span>
+                  )}{' '}
                   <span className="text-muted-foreground">({entry.where})</span>
                   <p className="text-text-secondary">{entry.what}</p>
                 </li>

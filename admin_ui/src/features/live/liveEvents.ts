@@ -287,7 +287,8 @@ export function staleQueries(event: LiveEvent): string[] {
       return ['agent', 'agent-conversations', 'agent-conversation', 'agent-artefacts', 'backtests', 'ta-script', 'ta-scripts',
         'ta-script-how', 'ta-script-how-history']
     case 'agent_question':
-      return ['agent-conversations', 'agent-conversation']
+      // The agent's state says the questions waiting too: the sidebar's badge.
+      return ['agent', 'agent-conversations', 'agent-conversation']
     case 'edge_watch_changed':
       return ['edge-watch']
     case 'disk_changed':

@@ -43,6 +43,7 @@ def test_a_task_waits_for_the_operator_s_answer_and_goes_on_with_it(store):
         await settled(agent, meta["id"])
         waiting = agent.store.meta(meta["id"])
         listed = agent.waiting_questions()
+        asking = agent.state()["asking"]
         clock.now += 3 * 3600
         agent.answer_question(meta["id"], "Slow", "10.8.0.2")
         for _ in range(500):
@@ -50,14 +51,16 @@ def test_a_task_waits_for_the_operator_s_answer_and_goes_on_with_it(store):
                 break
             await asyncio.sleep(0.01)
         worker.cancel()
-        return meta, waiting, listed
+        return meta, waiting, listed, asking
 
-    meta, waiting, listed = asyncio.run(scenario())
+    meta, waiting, listed, asking = asyncio.run(scenario())
 
     task = waiting["task"]
     assert task["state"] == "working" and task["question"]["question"] == QUESTION["question"]
     assert task["question"]["choices"] == ["Fast", "Slow"] and len(provider.asked) == 4
     assert [entry["conversation"] for entry in listed] == [meta["id"]]
+    # The agent's state says it too (the sidebar's badge), and no more once it is answered.
+    assert asking == [meta["id"]] and agent.state()["asking"] == []
     assert ("agent_question", meta["id"]) in [(event["type"], event.get("conversation_id")) for event in published.events]
     # The answer starts the next request, the deadline moved by the three hours it waited.
     assert "The operator answered your question (Fast lines or slow ones first?): Slow" in asked_text(provider.asked[2])

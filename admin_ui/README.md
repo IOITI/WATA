@@ -58,17 +58,18 @@ npm run build       # writes ../src/admin/static (ignored by git; ./package.sh r
 ## Themes
 
 The interface is light or dark. It follows the system setting, and keeps following it when it changes; the
-button in the top bar (and on the login page) goes from there to always light, to always dark, and back. A
-choice is kept in the browser (`localStorage`, key `wata.theme`): it is a matter of screen and room, not of
-operator.
+Operator menu at the end of the top bar (ioiti-ui's `UserMenu`, its Theme), and the button on the login page, choose
+always light or always dark instead. A choice is kept in the browser (`localStorage`, key `wata.theme`): it is a
+matter of screen and room, not of operator.
 
 - **`dark` on `<html>` is the switch.** Every dark style is a `dark:` class or a `.dark` token; `:root` holds
   the light values (ioiti-ui's `tokens.css` from EasyUI and `theme.css`).
 - **ioiti-ui's pre-paint script sets it before the first paint**, so a page does not flash in the other theme
   while the application loads: `ioiti({ themeStorageKey: 'wata.theme' })` in `vite.config.ts` writes it as
   `ioiti-theme.js` and puts it at the top of `<head>`. It is a file, not a few lines in `index.html`, because the
-  admin's Content-Security-Policy allows no inline script. The package's `ThemeProvider` (in `IoitiProvider`) and
-  `ThemeToggle` hold the same rule for the running application, under the key the script was given.
+  admin's Content-Security-Policy allows no inline script. The package's `ThemeProvider` (in `IoitiProvider`), the
+  Operator menu and the login page's `ThemeToggle` hold the same rule for the running application, under the key the
+  script was given.
 - **A colour needs both values.** A class that names a colour is written `light dark:dark`
   (`text-neutral-600 dark:text-neutral-400`), or goes through a token that has both. A literal with one
   value shows in one theme only.
@@ -77,18 +78,18 @@ operator.
   included; the light values of ioiti-ui's `theme.css` say which of EasyUI's own were lowered for that.
 - **The price chart draws on a canvas** with the colours it read when it was made: every page that shows one
   gives it the theme as its `key` (an asset's chart, a backtest's day and its trade, the editor's test, the
-  TradingView comparison), so another theme makes another chart. ioiti-ui's charts are SVG drawn with CSS
-  variables and follow by themselves.
-- **An accent and a material, each browser's own**, chosen with ioiti-ui's `LookPicker` in the panel "Accent and
-  material" of the Configuration page (its overview): kept beside the theme (`wata.theme.accent`,
+  TradingView comparison), so another theme makes another chart; `PriceChart` keys itself by the accent and the
+  material. ioiti-ui's charts are SVG drawn with CSS variables and follow by themselves.
+- **An accent and a material, each browser's own**, chosen in the Operator menu ("Accent and material", ioiti-ui's
+  `UserMenu` with `appearance`; until v0.94.0 a `LookPicker` on the Configuration page's overview): kept beside the theme (`wata.theme.accent`,
   `wata.theme.material`) and set by the same script before the first paint, neutral and flat (the interface as
   it always was) until chosen, never part of `config.json`. The interface's own classes follow them as the
   package's components do: a card drawn here on the page is glass under the glass material as a `Panel` is
   (its utility, `glass-card`), and what is chosen, current or a progress takes the accent (the `accent:`
   variant and the `--brand` tokens). A field drawn here shows its focus by its own border, or by its frame's
   (the Pine editor's): since ioiti-ui 0.5.3 a field that takes text has no focus ring. The price chart reads
-  the accent's line colour (`--chart-series`) as it reads the others, once; no chart is on the page where the
-  accent is chosen.
+  the accent's line colour (`--chart-series`) as it reads the others, once, and is made again when the accent or
+  the material changes: the menu is on every page, a chart's too.
 - Tests stand in for the system setting with `src/test/systemTheme.ts` (jsdom has no `matchMedia`). A
   component rendered without a `ThemeProvider` is shown dark.
 

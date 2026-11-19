@@ -3887,6 +3887,8 @@ export interface AgentState {
   month?: { month: string; spent_usd: number; budget_usd: number }
   limits?: { tool_calls: number; backtests: number; request_usd: number; running: number }
   under_way?: string[]
+  /** The conversations whose research task waits for the operator's answer to its question (since v0.94.0). */
+  asking?: string[]
   conversations?: number
   /** The month of the prices the costs are estimated with. */
   prices_of?: string

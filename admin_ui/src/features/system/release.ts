@@ -179,7 +179,7 @@ export function requestFollowed(
   return null
 }
 
-/** What the top bar's chip says: the newest release and what waits for it. */
+/** What the top bar's state of a release says (stateItems.ts): the newest release and what waits for it. */
 export function releaseChipHint(summary: ReleaseSummary): string {
   if (summary.applying) return `A deploy is applying ${summary.newest}: the System page follows it.`
   return `${summary.newest} waits for ${listed(summary.waiting)}: apply it on the System page, once nothing holds it back.`

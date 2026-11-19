@@ -1,4 +1,4 @@
-import { cn } from 'ioiti-ui'
+import { cn, useTheme } from 'ioiti-ui'
 import {
   CandlestickSeries,
   ColorType,
@@ -156,7 +156,17 @@ export interface PriceChartProps {
   snapshotRef?: RefObject<ChartSnapshot | null>
 }
 
-export function PriceChart({
+/**
+ * The chart, made again when the look's accent or material changes: the library takes its colours once, as it is
+ * made (`--chart-series` is the accent's), and the Operator menu changes the look with a chart on screen. The theme
+ * is its callers' key (`PriceChart` keyed by it).
+ */
+export function PriceChart(props: PriceChartProps) {
+  const { accent, material } = useTheme()
+  return <DrawnPriceChart key={`${accent}-${material}`} {...props} />
+}
+
+function DrawnPriceChart({
   candles,
   markers,
   decimals,

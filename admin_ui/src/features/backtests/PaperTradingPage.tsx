@@ -134,7 +134,8 @@ export function PaperReportPage() {
   const name = owner === LIVE_OWNER ? 'the signals WATA received' : (rule?.name ?? 'this rule')
   return (
     <>
-      <PageHeader title="Paper report" description={`The report of ${name} since it began.`} parents={[{ label: 'Paper trading', href: '/backtests/paper' }]} />
+      {/* Paper trading is its entry of the menu: the trail names it, the page does not again. */}
+      <PageHeader title="Paper report" description={`The report of ${name} since it began.`} />
       {!enabled ? (
         <BacktestsDisabled />
       ) : (

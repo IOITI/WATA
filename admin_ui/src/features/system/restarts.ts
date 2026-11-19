@@ -119,7 +119,7 @@ export function restartUnavailable(state: ServicesState, service?: WataService):
   return null
 }
 
-/** What the top bar's "Restart needed" says: the services named when the control service says which. */
+/** What the top bar's "Restart needed" state says (stateItems.ts): the services named when the control service says which. */
 export function restartNeededHint(session: Pick<Session, 'restart_services'>): string {
   const services = session.restart_services
   if (!services?.length) {
