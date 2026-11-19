@@ -1577,6 +1577,123 @@ class FakeEdgeWatch:
         return None
 
 
+class FakeForwardChecks:
+    """
+    Forward checks over made-up later days (src/admin/forward_checks.py): Edge Watch's real model and verdicts, the
+    candidate's trades and the later days' made up. One kept experiment of the journal is seeded with its check, as
+    if it had run a week; any other started from the page (or a conclusion) begins too early to tell. Started, one
+    line is printed as Telegram would say it. Nothing is asked of the backtests.
+    """
+
+    SEEDED = "Open block on the US open (made up)"
+
+    def __init__(self, journal):
+        import random
+
+        from src.admin import edge_watch as ew
+
+        self._ew = ew
+        self._journal = journal
+        draw = random.Random(11)
+        blocks = [[round(draw.gauss(1.0, 3.5), 3) for _ in range(draw.choice([1, 1, 2, 2, 3]))] for _ in range(22)]
+        baseline = {"totals": [((1 - 0.01) ** 34 - 1) * 100] * 40, "trades": [34] * 40}
+        self._model = ew.build_model(blocks, baseline, run_id="20261114-113341-aa2d8f", paths=600, h1_paths=150)
+        self._later = [round(draw.gauss(-0.4, 3.5), 3) for _ in range(14)]
+        self._checks: dict[str, dict] = {}
+        self._seed()
+
+    def _seed(self) -> None:
+        found = next((entry for entry in self._journal.experiments() if entry["title"] == self.SEEDED), None)
+        if found is None:
+            opened = self._journal.new(
+                self.SEEDED, "Entries in the first 30 minutes after 09:30 New York lose: blocking them keeps the rest",
+                "kernel-avg-vwap", made_by="claude", made_via="agent:fake", motivated_by=["2026-11-11", "2026-11-12"],
+                criteria=[{"figure": "held_out_percent", "bound": "at_least", "value": 0},
+                          {"figure": "edge_t", "bound": "at_least", "value": 2.6}])["experiment"]
+            self._journal.record_run(opened, "20261114-113341-aa2d8f", kind="run", trials=1)
+            self._journal.record_trials(opened, 94, "Sweeps of the open block and the room (made up)")
+            self._journal.conclude(
+                opened, "kept", "On 22 recorded days, 34 trades; the edge stays under the bar (made up).",
+                candidate="20261114-113341-aa2d8f",
+                checks={"bar": "fail", "failed": ["edge", "family"], "open": [],
+                        "criteria": [{"figure": "held_out_percent", "bound": "at_least", "value": 0, "figure_value": 31.8, "met": True},
+                                     {"figure": "edge_t", "bound": "at_least", "value": 2.6, "figure_value": 2.09, "met": False}]})
+            found = self._journal.get(opened)
+        entry = self._entry(found["id"], found["title"], found["family"], "20261114-113341-aa2d8f", "2026-11-17", self._later)
+        self._checks[entry["id"]] = entry
+
+    def _path(self, results):
+        level, path = 1.0, []
+        for number, result in enumerate(results, start=1):
+            level *= 1 + result / 100
+            path.append({"n": number, "at": (datetime.now(timezone.utc) - timedelta(hours=2 * (len(results) - number))).isoformat(),
+                         "result": result, "cumulative": round((level - 1) * 100, 2)})
+        return path
+
+    def _entry(self, experiment, title, family, candidate, start, results, check_id="f0a1b2c3d") -> dict:
+        judged = self._ew.judge(self._model, results) if results else None
+        now = datetime.now(timezone.utc).isoformat()
+        days = [[f"2026-11-{17 + day:02d}", round(sum(results[day * 2:day * 2 + 2]), 2), 2] for day in range(len(results) // 2)]
+        return {
+            "id": check_id, "experiment": experiment, "title": title, "family": family, "made_via": "agent:fake",
+            "candidate": candidate, "first_candidate": candidate, "start": start, "state": "active", "started_at": now,
+            "by": "agent:fake", "ended_at": None, "why": None, "last": None, "judgement": judged,
+            "path": self._path(results), "days": days, "said": None,
+            "history": [{"to": days[-1][0], "run": "20261118-230000-f0f0f0", "n": len(results),
+                         "verdict": judged["verdict"], "cumulative": judged["cumulative"], "rank": judged["rank"],
+                         "cusum": judged["cusum"], "h": judged["h"], "days_tested": len(days), "at": now}] if judged else [],
+        }
+
+    def start(self, experiment_id, candidate, by=None):
+        found = self._journal.get(experiment_id)
+        check_id = f"f{len(self._checks) + 1:08x}"
+        entry = self._entry(experiment_id, found["title"], found["family"], candidate, "2026-11-20", [], check_id=check_id)
+        entry["by"] = by
+        self._checks[check_id] = entry
+        self._journal.record_forward(experiment_id, check_id, "started", candidate=candidate, start=entry["start"])
+        print(f"[fake] Telegram: Forward check of '{found['title']}' started from 20 Nov (made up)", flush=True)
+        return entry
+
+    def stop(self, check_id):
+        from src.admin.errors import NotPossible
+        from src.admin.forward_checks import UnknownCheck
+
+        entry = self._checks.get(check_id)
+        if entry is None:
+            raise UnknownCheck(check_id)
+        if entry["state"] != "active":
+            raise NotPossible("This forward check has ended already")
+        entry.update(state="ended", ended_at=datetime.now(timezone.utc).isoformat(), why="stopped")
+        return dict(entry)
+
+    def checks(self):
+        return [{**{key: value for key, value in entry.items() if key not in ("path", "history", "days")},
+                 "days_tested": len(entry["days"])} for entry in self._checks.values()]
+
+    def check(self, check_id):
+        from src.admin.forward_checks import UnknownCheck
+
+        entry = self._checks.get(check_id)
+        if entry is None:
+            raise UnknownCheck(check_id)
+        return {**entry, "model": {key: self._model.get(key) for key in ("usable", "why_not", "reference", "test", "horizon")},
+                "cone": self._model.get("cone")}
+
+    def of_experiments(self):
+        found = {}
+        for entry in self._checks.values():
+            judged = entry.get("judgement") or {}
+            found[entry["experiment"]] = {
+                "id": entry["id"], "state": entry["state"], "why": entry.get("why"), "candidate": entry["candidate"],
+                "start": entry["start"], "verdict": judged.get("verdict"), "trades": judged.get("n") or 0,
+                "cumulative": judged.get("cumulative"), "days_tested": len(entry["days"]),
+            }
+        return found
+
+    async def keep(self):
+        await asyncio.Event().wait()
+
+
 class FakePaperTrading(PaperTrading):
     """Paper trading at any hour: the fake's made-up market is closed whenever its days are due."""
 
@@ -1804,6 +1921,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
     from src.admin.backtest_nightly import NightlyBacktests
 
     ctx.nightly = NightlyBacktests(backtests=backtests, queries=queries, config_path=config_path, notify=notifier)
+    # Each kept conclusion of the journal judged on later days: made up (FakeForwardChecks), one seeded.
+    ctx.forward = FakeForwardChecks(backtests.journal)
     # The disk's hourly samples, 14 days of them made up as watadisk writes them (fake_disk.py).
     from src.admin.disk import DiskWatch
 

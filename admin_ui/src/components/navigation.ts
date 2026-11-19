@@ -42,6 +42,7 @@ export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'backtests', path: '/backtests', label: 'Backtests', section: 'Analysis' },
   // Each shadow rule's paper days and report, and the signals WATA received, traded on paper.
   { id: 'paper', path: '/backtests/paper', label: 'Paper trading', section: 'Analysis', parent: 'backtests' },
+  { id: 'experiments', path: '/backtests/experiments', label: 'Experiments', section: 'Analysis', parent: 'backtests' },
   { id: 'providers', path: '/data/providers', label: 'Providers', section: 'Data' },
   { id: 'assets', path: '/data/assets', label: 'Assets View', section: 'Data' },
   { id: 'ta-indicators', path: '/ta/indicators', label: 'Indicators', section: 'Technical Analysis' },

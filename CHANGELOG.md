@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.95.0 - Did it hold? Kept conclusions judged on later days
+
+**Release date:** not yet released
+
+The AI agent iterates a lot: by 19 Nov 2026 its journal held 28 experiments and about 490 trials, 225 on the kernel/VWAP rule and 251 on the day's targets, almost all on the same 22 recorded days. Its newest kept candidate made +112 % there; one input a step away made +0.8 %, and the idea came from two losing days inside the period it was tested on. Nothing ever looked at a kept conclusion again, and a single run carried no correction for the hundreds of tries before it.
+
+- **Forward checks** (`src/admin/forward_checks.py`): an experiment concluded kept names its candidate run, and that run is judged each evening on the days after it, which no run of its family had seen. The candidate is asked again over those days (its settings, script and inputs as they were, no random entries), once the market is closed, after the nightly runs, while nothing else waits; its trades are judged by Edge Watch's model of the candidate: as expected, worth watching, broken, better than expected. Ten at once at most; each ends at its model's horizon, after 60 days, once broken, or when stopped. One Telegram line when a check turns worth watching or broken, and one at its end. Its start and its end are written in the journal.
+- **The bar in Python** (`src/admin/run_verdict.py`), held to the pages' (`verdict.ts`) by one fixture both test suites read (`verdictParity.json`), with two checks more:
+  - **Survives its family's trials**: a run of an experiment has its daily Sharpe ratio deflated by every trial its family had been tried with until it (`src/admin/run_research.py`); the best of two hundred tries looks good by chance.
+  - **Holds without the days its idea came from**: an experiment names them (`motivated_by`), and every run of it is also judged without them.
+- **Conclusions that say what they rest on**: `exp_new` takes the days an idea came from, criteria set before any run, and refuses a family spelt like an existing one (a family spelt anew counts its trials from nothing) unless asked for a new one; `exp_conclude` names the candidate it keeps, records how it stood against the bar and its own criteria, and starts its forward check. A conclusion is never refused for failing the bar: later days decide. `backtest_result` gives a run's verdict check by check, and its research figures.
+- **The track record** (`src/admin/track_record.py`): how each family's and each maker's (the AI agent, an MCP token) kept conclusions held on later days, in `exp_new`'s and `exp_get`'s answers and on the page.
+- **Backtests › Experiments** is an entry of the menu, in three tabs: the journal (each conclusion's candidate, how it stood, its forward check), the forward checks (each with its cone, its path and each evening's line, and a form to judge an older conclusion), and the track record. A forward check's run says so on its page and is not judged itself.
+- The AI agent is told to name the days its idea came from and its criteria, and that later days judge what it keeps. The MCP's instructions say the two new checks of the bar (4,050 characters of 4,096).
+
+**Many of the agent's earlier runs now fail the bar** in the Backtests list: about 250 trials on 22 days cannot pass the family's correction. That is what it is for.
+
+**On the live path:** nothing. The admin alone changes (admin1): its forward checks, the journal it keeps, its routes, MCP tools, AI agent prompt and pages. No file of a backtest's `_CODE` changed, so no run turns stale.
+
+**Verification status:**
+- The whole Python suite, 4,488 passed and 24 skipped (as before: the live infrastructure's and the like), in an environment built from `requirements.txt`, Node 24 on the path and the runner built.
+- The interface's 1,592 tests, lint, typecheck and build.
+- The release manifest names admin1 alone (compared with v0.94.0's, the built runner on both sides).
+- On the development admin (`FAKE_AI=1`, a made-up forward check over a seeded kept experiment), in the browser pane at 1,440 and 375 px, light and dark:
+  - the trail Analysis › Backtests › Experiments and the three tabs;
+  - a check's page with its cone and path;
+  - a check stopped, and one started from the form, its Telegram line printed.
+- Not seen:
+  - a forward run asked and settled on a real evening (tested against the real backtest service, with stand-in results);
+  - the AI agent concluding kept through the real Claude API;
+  - the server's own journal.
+
 ## v0.94.0 - The top bar summed up, backtests by configuration
 
 **Release date:** 2026-11-19

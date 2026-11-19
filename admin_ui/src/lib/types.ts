@@ -2455,6 +2455,38 @@ export interface BacktestRunListed {
   configuration?: string | null
   /** A configuration's nightly run, replaced by its next one; ``on``: its configuration is made again each evening still. */
   nightly?: { configuration: string; on: boolean } | null
+  /** A forward check's run (src/admin/forward_checks.py): the candidate it judges on the days after it. Not judged itself. */
+  forward_of?: string | null
+  forward?: { check: string } | null
+  /** What the experiment journal adds to a run of one of its experiments (src/admin/run_research.py), once worked out. */
+  research?: BacktestResearch | null
+}
+
+/** A run's figures corrected for the research that made it (src/admin/run_research.py). */
+export interface BacktestResearch {
+  version: number
+  experiment: string
+  /** When the journal wrote the run down: the trials of its family until then are counted. */
+  at: string
+  /** Its daily Sharpe ratio deflated by every trial of its family of ideas until it (none under 20 days). */
+  family: {
+    name: string
+    trials: number
+    days: number
+    probability: number | null
+    sharpe_daily: number | null
+    expected_max_sharpe_daily: number | null
+    spread: 'family' | 'chance'
+    trial_curves: number
+  }
+  /** Its result with and without the days its experiment's idea came from; none when it named none. */
+  motivated: {
+    days: string[]
+    in_run: number
+    with_percent: number
+    without_percent: number | null
+    days_left: number
+  } | null
 }
 
 // ── configurations: the runs of the same things but their days, each made again each evening once switched on ──
@@ -2485,7 +2517,7 @@ export interface BacktestConfigurationRun {
   nightly: boolean
   kept: BacktestKeptReason[]
   /** A run made from another of the configuration: what it is of it. */
-  derived: 'stress' | 'noise' | 'model_check' | null
+  derived: 'stress' | 'noise' | 'model_check' | 'forward' | null
   remade_by: string | null
   remade_from: string | null
   stale?: boolean | null
@@ -3856,6 +3888,125 @@ export interface Experiment {
   verdict: ExperimentVerdict | null
   notes: string | null
   concluded_at: string | null
+  /** Who asked through what: an MCP token's name, or "agent:<conversation>" for the AI agent. */
+  made_via?: string | null
+  /** The days its idea came from: every run of it says its result without them. */
+  motivated_by?: string[]
+  /** What it set itself to show, before any run. */
+  criteria?: ExperimentCriterion[]
+  /** The run its conclusion keeps, and how that run stood against the bar then. */
+  candidate?: string | null
+  checks?: ExperimentChecks | null
+  /** Its newest forward check, in short: its candidate judged on the days after it. */
+  forward_check?: ForwardCheckShort | null
+}
+
+export interface ExperimentCriterion {
+  figure: string
+  bound: 'at_least' | 'at_most'
+  value: number
+  /** At its conclusion: the candidate's figure, and whether it was met (null: no such figure). */
+  figure_value?: number | null
+  met?: boolean | null
+}
+
+/** How a conclusion's candidate stood against the bar (src/admin/run_verdict.py) and its experiment's criteria. */
+export interface ExperimentChecks {
+  bar: 'pass' | 'open' | 'fail' | null
+  failed: string[]
+  open: string[]
+  criteria?: ExperimentCriterion[]
+  family?: BacktestResearch['family'] | null
+  motivated?: BacktestResearch['motivated']
+}
+
+/** A forward check in short (src/admin/forward_checks.py ``of_experiments``). */
+export interface ForwardCheckShort {
+  id: string
+  state: 'active' | 'ended'
+  why: ForwardEnd | null
+  candidate: string
+  start: string
+  verdict: EdgeVerdict | null
+  trades: number
+  cumulative: number | null
+  days_tested: number
+}
+
+/** Why a forward check ended. */
+export type ForwardEnd = 'horizon' | 'days' | 'broken' | 'gone' | 'stopped'
+
+/** A forward check as the board lists it. */
+export interface ForwardCheck {
+  id: string
+  experiment: string
+  title: string | null
+  family: string | null
+  made_via: string | null
+  /** The run it judges (followed when made again on newer code), and the one it began with. */
+  candidate: string
+  first_candidate: string
+  /** The first day judged: the weekday after the latest day any run of its family had covered. */
+  start: string
+  state: 'active' | 'ended'
+  started_at: string
+  by: string | null
+  ended_at: string | null
+  why: ForwardEnd | null
+  last: { to: string | null; run: string | null; asked_at: string; error: string | null; settled: boolean } | null
+  judgement: EdgeTrack | null
+  days_tested: number
+}
+
+/** What each evening's forward run said. */
+export interface ForwardCheckLine {
+  to: string | null
+  run: string
+  n: number
+  verdict: EdgeVerdict
+  cumulative: number
+  rank: number | null
+  cusum: number | null
+  h: number | null
+  days_tested: number
+  at: string
+}
+
+/** A forward check whole: its path, its candidate's cone, its days and its history. */
+export interface ForwardCheckWhole extends ForwardCheck {
+  path: EdgeTrack['path']
+  /** Each tested day of its newest run: [day, result %, trades]. */
+  days: [string, number, number][]
+  history: ForwardCheckLine[]
+  model: EdgeModel | null
+  cone: EdgeCone | null
+}
+
+export interface ForwardChecks {
+  checks: ForwardCheck[]
+  active: number
+  most: number
+}
+
+/** How the conclusions of a family, or of a maker, held on the days after them (src/admin/track_record.py). */
+export interface TrackRecordGroup {
+  experiments: number
+  trials: number
+  open: number
+  kept: number
+  rejected: number
+  inconclusive: number
+  kept_met_bar: number
+  kept_against_bar: number
+  forward: { active: number; held: number; watch: number; broken: number; too_early: number; nothing_to_judge: number }
+  /** The share of judged forward checks that held, from five; null under. */
+  held_share: number | null
+}
+
+export interface TrackRecord {
+  families: (TrackRecordGroup & { family: string })[]
+  makers: (TrackRecordGroup & { maker: string })[]
+  total: TrackRecordGroup
 }
 
 /** The days kept out of the research until a candidate's final check; ``to`` null: every day after ``from``. */
@@ -3870,6 +4021,11 @@ export interface Experiments {
   /** The last opened first. */
   experiments: Experiment[]
   lockbox: ResearchLockbox | null
+  /** Every family with its trials, the most tried first. */
+  families?: Record<string, number>
+  track_record?: TrackRecord
+  /** The forward checks running and how many may run at once; null while backtests are off. */
+  forward?: { active: number; most: number } | null
 }
 
 // ── The AI agent of the pages (src/admin/agent/, /api/agent) ──

@@ -293,7 +293,9 @@ class FakeClaude:
         if "exp_new" not in done:
             return await self._turn(on_event, "A stress test counts as a trial: I open an experiment for it.", [
                 ("exp_new", {"title": "Does it survive worse fills?", "family": "stress",
-                             "hypothesis": "The run's result holds with each order later and each fill dearer"})])
+                             "hypothesis": "The run's result holds with each order later and each fill dearer",
+                             "motivated_by": ["2026-10-14"],
+                             "criteria": [{"figure": "total_percent", "bound": "at_least", "value": 0}]})])
         if "backtest_derive" not in done:
             experiment = json.loads(done["exp_new"]).get("id", "") if done["exp_new"].startswith("{") else ""
             return await self._turn(on_event, "I stress the run: later orders, dearer fills.", [

@@ -74,7 +74,7 @@ const ANCHORED = 'scroll-mt-14'
 function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
   const summary = run.summary
   if (run.status.state !== 'done' || !summary) return []
-  const judged = !run.stress_of && !run.noise_of && !run.model_check_of
+  const judged = !run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of
   if (run.kind === 'sweep') {
     const choosing = !run.stress_of && !run.noise_of && (choiceTrust(summary).length > 0 || summary.walk_forward !== undefined)
     return [
@@ -420,6 +420,20 @@ export function RunPage() {
                   <RunPeekLink id={run.model_check_of} className="text-sm font-medium underline-offset-4 hover:underline">
                     The run it checks
                   </RunPeekLink>
+                )}
+                {run.forward_of && <Badge tone="neutral">Forward check</Badge>}
+                {run.forward_of && (
+                  <RunPeekLink id={run.forward_of} className="text-sm font-medium underline-offset-4 hover:underline">
+                    The candidate it judges on later days
+                  </RunPeekLink>
+                )}
+                {run.forward && (
+                  <Link
+                    to={`/backtests/experiments/forward/${run.forward.check}`}
+                    className="text-sm font-medium underline-offset-4 hover:underline"
+                  >
+                    Its forward check
+                  </Link>
                 )}
                 {run.made_via?.startsWith('agent:') && (
                   <Link to={`/agent/${encodeURIComponent(run.made_via.slice('agent:'.length))}`}

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import type { BacktestModelCheck, BacktestRun, BacktestRunListed, BacktestSummary, BacktestSweep, BacktestSweepCell } from '@/lib/types'
@@ -297,5 +300,24 @@ describe('the verdict in the list', () => {
     const strong = run({ summary: STRONG })
     const rows = [listedRun({ id: 'stress-1', kind: 'sweep', stress_of: strong.id, status: { state: 'running' }, headline: null }), listedOf(strong)]
     expect(listedChecks(rows[1], rows).find((check) => check.id === 'stress')).toMatchObject({ state: 'open', detail: 'Being stressed.' })
+  })
+})
+
+
+// Held to the same answers as its Python twin (src/admin/run_verdict.py, tests/test_run_verdict.py): each case a run as
+// the list describes it, the runs listed with it, and the checks both give it, in order.
+interface ParityCase {
+  name: string
+  run: BacktestRunListed
+  runs: BacktestRunListed[]
+  expected: [string, string][]
+}
+
+// The tests run from admin_ui.
+const PARITY: ParityCase[] = JSON.parse(readFileSync(join(process.cwd(), 'src/features/backtests/verdictParity.json'), 'utf8')).cases
+
+describe('the bar, as the Python of the MCP and the AI agent says it', () => {
+  it.each(PARITY.map((entry) => [entry.name, entry] as const))('%s', (_name, entry) => {
+    expect(listedChecks(entry.run, entry.runs).map((check) => [check.id, check.state])).toEqual(entry.expected)
   })
 })

@@ -70,6 +70,9 @@ import type {
   ExecutionTimings,
   Exits,
   Experiments,
+  ForwardCheck,
+  ForwardChecks,
+  ForwardCheckWhole,
   Health,
   HistoryInstrument,
   HistoryOffer,
@@ -650,6 +653,11 @@ export const api = {
   /** Paused, every call of Claude's is refused until it is resumed; audited. */
   pauseMcp: (paused: boolean) => request<McpState['paused']>('PUT', '/api/mcp/paused', { body: { paused } }),
   experiments: () => request<Experiments>('GET', '/api/research/experiments'),
+  forwardChecks: () => request<ForwardChecks>('GET', '/api/research/forward'),
+  forwardCheck: (id: string) => request<ForwardCheckWhole>('GET', `/api/research/forward/${encodeURIComponent(id)}`),
+  startForwardCheck: (body: { experiment: string; candidate: string }) =>
+    request<ForwardCheck>('POST', '/api/research/forward', { body }),
+  stopForwardCheck: (id: string) => request<ForwardCheck>('POST', `/api/research/forward/${encodeURIComponent(id)}/stop`),
   /** The operator moves the lock box or clears it (start null), as Claude cannot. */
   setLockbox: (period: { start: string | null; end: string | null }) =>
     request<{ lockbox: ResearchLockbox | null }>('PUT', '/api/research/lockbox', { body: period }),

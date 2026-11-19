@@ -22,11 +22,11 @@ within 50 s: a study not done by 45 s comes back as a job, which job_wait answer
 LOOP = """\
 Start with `status`, then `memory_list`: what WATA's AI agent and the operator kept between conversations (read \
 what bears on the work with `memory_read`; only they change it). The loop:
-1. `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as trials of the family; \
-configurations tried elsewhere (a port on the Mac) too, once written down with `exp_trials`.
+1. `exp_new`: a hypothesis the data can refute, its family, the days it came from. Every run and sweep counts as \
+trials of the family; configurations tried elsewhere too, once written down with `exp_trials`.
 2. The strategy: `pine_check`, `pine_run` (plots and alerts on recorded bars), `pine_signals` (what a rule would \
-raise), `pine_compare` (against TradingView's signals), then `pine_save`. A day is read on `chart_view` (as a \
-backtest ran it, a run's trades on it, with a picture) before a change is made for it.
+raise), then `pine_save`. A day is read on `chart_view` (as a backtest ran it, a run's trades on it, with a \
+picture) before a change is made for it.
 3. `backtest_start` (the Backtests form's body; `backtest_options` lists the settings; a run starts with \
 1,000 € unless changes.capital says another), `backtest_wait`, then `backtest_result`: the edge of the entries \
 first, then random entries, risk, regimes, trades.
@@ -34,19 +34,21 @@ first, then random entries, risk, regimes, trades.
 overfitting and the deflated Sharpe ratio.
 5. Before keeping anything: neighbours and stress (`backtest_derive`); before trusting made-up turbos, a model \
 check of a recorded run (`backtest_derive` kind model_check).
-6. `exp_conclude`: kept, rejected or inconclusive, with what it rests on.
+6. `exp_conclude`: kept (its candidate run, judged on the days after it), rejected or inconclusive, with what \
+it rests on.
 7. What survives may become one of Claude's shadow rules, once the operator switched them on: `rule_shadow_save` \
 (the engine journals its signals, never sends them), a run made from it (`source.from_rule`) set as its \
 reference (`rule_set_reference`), then `edge_watch` on its paper trades, and its report since it was made \
-(`paper.report.run_id`, read as any run: made again after each finished day, no random entries)."""
+(`paper.report.run_id`)."""
 
-# The bar a result must clear, mirrored by admin_ui/src/features/backtests/verdict.ts: a change to one is made in
-# the other. The admin's AI agent (src/admin/agent/prompts.py) says it too.
+# The bar a result must clear, mirrored by admin_ui/src/features/backtests/verdict.ts and src/admin/run_verdict.py
+# (held together by verdictParity.json): a change to one is made in the others. The admin's AI agent
+# (src/admin/agent/prompts.py) says it too.
 DO_NOT_BELIEVE = """\
 Do not believe: fewer than 30 trades or 20 days; random entries beaten less than 95 % of the time; no edge \
 (t under 2.6 at the best horizon); over 10 % of its trades priced off the recorded quotes (rests_on); a best \
-value whose neighbours do badly, or a held-out result far below the chosen-on one; a probability of overfitting above 0.5 or a deflated Sharpe ratio under 95 %; a result that fails \
-one stress step; results on the lock box's days, except for a candidate's final check. Recorded turbos start on \
+value whose neighbours do badly, or a held-out result far below the chosen-on one; a probability of overfitting above 0.5 or a deflated Sharpe ratio under 95 % (a run's: with its family's trials); a result that \
+needs the days its idea came from; a result that fails one stress step; results on the lock box's days, except for a candidate's final check. Recorded turbos start on \
 2026-10-13: say on how few days each conclusion rests."""
 
 # How a Pine script must be written for WATA's engine: the AI agent says it too.

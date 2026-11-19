@@ -179,6 +179,7 @@ export const DERIVED_LABEL: Record<NonNullable<BacktestConfigurationRun['derived
   stress: 'Stress',
   noise: 'Fill noise',
   model_check: 'Model check',
+  forward: 'Forward check',
 }
 
 function valueSaid(value: BacktestValue): string {

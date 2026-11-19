@@ -25,17 +25,16 @@ from src.admin.mcp_server.jobs import Jobs
 from src.admin.mcp_server.limits import McpLimits
 from src.admin.rule_history import RecordedRuleStore
 from src.backtest.clock import TradingClock
-from src.research.experiments import ExperimentJournal
+from src.research.experiments import SERVER_FOLDER, ExperimentJournal, server_journal
 
 # Who Claude's work is written as, whichever of its tokens asked: a token replaced keeps what it made.
 CLAUDE = "claude"
-RESEARCH_FOLDER = "_research"
+RESEARCH_FOLDER = SERVER_FOLDER
 
 
 def journal_of(backtests_path: str) -> ExperimentJournal:
     """The experiment journal and the lock box Claude keeps on the server, beside the backtests."""
-    root = os.path.join(backtests_path, RESEARCH_FOLDER)
-    return ExperimentJournal(os.path.join(root, "experiments.jsonl"), os.path.join(root, "lockbox.json"))
+    return server_journal(backtests_path)
 
 
 class ReadQueries:
@@ -104,6 +103,25 @@ class ConfigFacts:
         return []
 
 
+def _forward_reads(service) -> "ForwardReads | None":
+    if service is None:
+        return None
+    return ForwardReads(start=service.start, of_experiments=service.of_experiments, checks=service.checks,
+                        check=service.check)
+
+
+@dataclass
+class ForwardReads:
+    """
+    What the tools may do of the forward checks (src/admin/forward_checks.py): start one for a kept conclusion, read
+    them. Never the service itself, which speaks on Telegram.
+    """
+    start: Callable[..., dict]
+    of_experiments: Callable[[], dict]
+    checks: Callable[[], list]
+    check: Callable[[str], dict]
+
+
 @dataclass
 class ResearchServices:
     version: str
@@ -143,6 +161,8 @@ class ResearchServices:
     details: Any = None
     # Whether each script can become a signal rule as it is (src/admin/rule_checks.py): read, and run tests kept.
     rule_checks: Any = None
+    # The experiments' kept conclusions judged on the days after them: started by a conclusion, read here.
+    forward: ForwardReads | None = None
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
@@ -175,6 +195,7 @@ class ResearchServices:
             origins=getattr(ctx, "script_origins", None),
             details=getattr(ctx, "script_details", None),
             rule_checks=getattr(ctx, "rule_checks", None),
+            forward=_forward_reads(getattr(ctx, "forward", None)) if ctx.settings.backtests_enabled else None,
         )
 
     def service(self):

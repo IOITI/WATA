@@ -1,0 +1,9166 @@
+{
+ "_comment": "Each case: a run as the list describes it, the runs listed with it (newest first), and the checks both src/admin/run_verdict.py and verdict.ts give it, in order, as [id, state]. Read by tests/test_run_verdict.py and verdict.test.ts.",
+ "cases": [
+  {
+   "name": "a run that passes every check",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "too few trades",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 18,
+     "days": 25,
+     "sample": "too_few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "fail"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "too few days",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 12,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "fail"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "priced off the recorded quotes",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {
+       "frozen": 6
+      },
+      "trades_priced_off_quotes": 6,
+      "share_percent": 15.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "fail"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "made before rests_on",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": null,
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "open"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "no random entries",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "open"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "random entries not beaten",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 80,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "fail"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "no edge measured",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": null,
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "open"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "too few signals to tell",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 6,
+        "t": 4,
+        "beaten": 99
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "open"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "an edge too weak",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 145,
+        "t": 2.09,
+        "beaten": 85
+       },
+       {
+        "minutes": 1,
+        "signals": 145,
+        "t": 0.43,
+        "beaten": 40
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "fail"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "equal beaten, the larger t decides",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 96
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.7,
+        "beaten": 96
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "not stressed",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "open"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "being stressed",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "running"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": null
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "open"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "fails the stress",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": -3.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "fail"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "made with older code",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": true,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "open"
+    ]
+   ]
+  },
+  {
+   "name": "made-up turbos never checked",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "modelled",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "model",
+     "open"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "made-up turbos checked",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "modelled",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "id": "20261101-120000-cccccc",
+     "kind": "run",
+     "turbos": "modelled",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": null,
+     "noise_of": null,
+     "model_check_of": "20261020-100000-dddddd",
+     "forward_of": null,
+     "headline": {
+      "model_check": {
+       "paired": 30,
+       "correlation": 0.4
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "model",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "survives its family's trials",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 40,
+      "days": 25,
+      "probability": 0.97,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": null
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "does not survive its family's trials",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 225,
+      "days": 25,
+      "probability": 0.31,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": null
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "fail"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "family not measured under 20 days",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 12,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 40,
+      "days": 25,
+      "probability": null,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": null
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "fail"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "open"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "motivating days not in the run",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 40,
+      "days": 25,
+      "probability": 0.97,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": {
+      "days": [
+       "2026-09-11"
+      ],
+      "in_run": 0,
+      "with_percent": 12.0,
+      "without_percent": 12.0,
+      "days_left": 25
+     }
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "pass"
+    ],
+    [
+     "motivated",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "holds without the motivating days",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 40,
+      "days": 25,
+      "probability": 0.97,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": {
+      "days": [
+       "2026-11-11",
+       "2026-11-12"
+      ],
+      "in_run": 2,
+      "with_percent": 112.4,
+      "without_percent": 3.2,
+      "days_left": 20
+     }
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "pass"
+    ],
+    [
+     "motivated",
+     "pass"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "needs the motivating days",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 40,
+      "days": 25,
+      "probability": 0.2,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": {
+      "days": [
+       "2026-11-11",
+       "2026-11-12"
+      ],
+      "in_run": 2,
+      "with_percent": 4.0,
+      "without_percent": -1.5,
+      "days_left": 20
+     }
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "fail"
+    ],
+    [
+     "motivated",
+     "fail"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "every day was a motivating day",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 2,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": {
+     "version": 1,
+     "experiment": "a4b020",
+     "at": "2026-11-14T11:33:41Z",
+     "family": {
+      "name": "kernel-avg-vwap",
+      "trials": 40,
+      "days": 25,
+      "probability": null,
+      "sharpe_daily": 0.4,
+      "expected_max_sharpe_daily": 0.3,
+      "spread": "chance",
+      "trial_curves": 3
+     },
+     "motivated": {
+      "days": [
+       "2026-11-11",
+       "2026-11-12"
+      ],
+      "in_run": 2,
+      "with_percent": 4.0,
+      "without_percent": null,
+      "days_left": 0
+     }
+    }
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": [
+    [
+     "sample",
+     "fail"
+    ],
+    [
+     "data",
+     "pass"
+    ],
+    [
+     "random",
+     "pass"
+    ],
+    [
+     "edge",
+     "pass"
+    ],
+    [
+     "family",
+     "open"
+    ],
+    [
+     "motivated",
+     "fail"
+    ],
+    [
+     "stress",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "no days: no checks",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": null,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "not done: not judged",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "running"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "a forward check's run is not judged",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": "20261020-100000-eeeeee",
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "a stress is not judged",
+   "run": {
+    "id": "20261101-100000-aaaaaa",
+    "kind": "run",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": "20261020-100000-eeeeee",
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": 40,
+     "days": 25,
+     "sample": "few",
+     "days_tested": 25,
+     "beaten": 97,
+     "repetitions": 100,
+     "edge": {
+      "horizons": [
+       {
+        "minutes": 5,
+        "signals": 60,
+        "t": 3.1,
+        "beaten": 98
+       },
+       {
+        "minutes": 15,
+        "signals": 60,
+        "t": 2.0,
+        "beaten": 90
+       }
+      ],
+      "unpriced": 0
+     },
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": {
+      "trades": 40,
+      "flags": {},
+      "trades_priced_off_quotes": 0,
+      "share_percent": 0.0,
+      "funds_refused": 0,
+      "funds_retried": 0,
+      "partial_days": []
+     },
+     "grid": null
+    },
+    "research": null
+   },
+   "runs": [
+    {
+     "id": "20261101-110000-bbbbbb",
+     "kind": "sweep",
+     "turbos": "recorded",
+     "stale": false,
+     "remade_by": null,
+     "status": {
+      "state": "done"
+     },
+     "stress_of": "20261101-100000-aaaaaa",
+     "noise_of": null,
+     "model_check_of": null,
+     "forward_of": null,
+     "headline": {
+      "grid": {
+       "axes": [
+        {
+         "kind": "setting",
+         "name": "order_seconds",
+         "values": [
+          0,
+          2,
+          5,
+          15
+         ]
+        },
+        {
+         "kind": "setting",
+         "name": "slippage",
+         "values": [
+          0,
+          0.01,
+          0.02,
+          0.05
+         ]
+        }
+       ],
+       "held_out": null,
+       "held_out_from": null,
+       "cells": [
+        {
+         "values": [
+          0,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 12.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          0,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 11.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 4.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          2,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 10.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          5,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 9.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.01
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 8.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.02
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 7.0,
+          "days": 25
+         }
+        },
+        {
+         "values": [
+          15,
+          0.05
+         ],
+         "tuning": null,
+         "held_out": null,
+         "whole": {
+          "total_percent": 6.0,
+          "days": 25
+         }
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "a sweep that passes",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": {
+      "probability": 0.3
+     },
+     "deflated_sharpe": {
+      "probability": 0.97,
+      "trials": 120
+     },
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "input",
+        "name": "in_23",
+        "values": [
+         15,
+         18,
+         20,
+         22
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": 30,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 10,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 40,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": 20,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 2,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 22,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": 10,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -5,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -1,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -6,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "held-out",
+     "pass"
+    ],
+    [
+     "overfitting",
+     "pass"
+    ],
+    [
+     "deflated",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "a sweep whose best fell on the days held out",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": {
+      "probability": 0.3
+     },
+     "deflated_sharpe": {
+      "probability": 0.97,
+      "trials": 120
+     },
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "input",
+        "name": "in_23",
+        "values": [
+         15,
+         18,
+         20,
+         22
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": 30,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -4,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 26,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": 20,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 6,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 26,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": 10,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -5,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 3,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -2,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "held-out",
+     "fail"
+    ],
+    [
+     "overfitting",
+     "pass"
+    ],
+    [
+     "deflated",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "a sweep likely fitted",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": {
+      "probability": 0.83
+     },
+     "deflated_sharpe": {
+      "probability": 0.4,
+      "trials": 120
+     },
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "input",
+        "name": "in_23",
+        "values": [
+         15,
+         18,
+         20,
+         22
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": 30,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 10,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 40,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": 20,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 2,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 22,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": 10,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -5,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -1,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -6,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "held-out",
+     "pass"
+    ],
+    [
+     "overfitting",
+     "fail"
+    ],
+    [
+     "deflated",
+     "fail"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "a sweep without its figures",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 7,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": null,
+     "deflated_sharpe": null,
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "input",
+        "name": "in_23",
+        "values": [
+         15,
+         18,
+         20,
+         22
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": 30,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 10,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 40,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": 20,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 2,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 22,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": 10,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -5,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -1,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -6,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "fail"
+    ],
+    [
+     "held-out",
+     "pass"
+    ],
+    [
+     "overfitting",
+     "open"
+    ],
+    [
+     "deflated",
+     "open"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  }
+ ]
+}

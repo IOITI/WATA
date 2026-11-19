@@ -229,7 +229,9 @@ def register(server, research) -> None:
     @research_tool(server, calls, name="backtest_result", title="What a backtest found", read_only=True)
     async def backtest_result(run_id: str, part: str = "summary", group: str = "") -> dict:
         """A run or sweep, by part. summary: what was asked, its state, figures (risk on daily results, money),
-        against random entries, the edge's headline, stress, warnings, and the daily curve. edge: how the asset moved
+        against random entries, the edge's headline, stress, warnings, the daily curve, its verdict against the bar
+        check by check, and for a run of an experiment its research: its Sharpe deflated by its family's trials, its
+        result without the days its idea came from. edge: how the asset moved
         1 to 60 minutes after each entry signal against random moments (read it first). breakdowns: the trades by
         hour, weekday, direction, exit, holding time, turbo price, regime (group= one of them). baseline: the random
         entries' totals. sweep: each combination's figures on the tuning and held-out days, with the walk-forward,
@@ -241,7 +243,18 @@ def register(server, research) -> None:
         if part not in PARTS:
             raise Refused(f"part is one of {', '.join(PARTS)}")
         if part == "summary":
-            return compacted(_summary_part(await run_in_threadpool(research.service().get, run_id)))
+            service = research.service()
+            run = await run_in_threadpool(service.get, run_id)
+            answer = _summary_part(run)
+            # Whether it can be believed, check by check, as its page says (src/admin/run_verdict.py), and what the
+            # experiment journal adds to a run of one of its experiments.
+            judged = await run_in_threadpool(service.judged, run_id)
+            if judged:
+                answer["verdict"] = {**judged["verdict"],
+                                     "checks": [{key: check[key] for key in ("id", "state", "detail")} for check in judged["checks"]]}
+            if run.get("experiment") and run.get("kind") == "run":
+                answer["research"] = await run_in_threadpool(service.research, run_id)
+            return compacted(answer)
         if part == "edge":
             found = await run_in_threadpool(research.service().edge, run_id)
             return compacted(found or {"note": "This run has no edge: a sweep, or a run made before it was measured"})

@@ -153,6 +153,8 @@ class AdminContext:
     paper: Any = None
     # The backtest configurations, each made again after each trading day once switched on (src/admin/backtest_nightly.py).
     nightly: Any = None
+    # The experiments' kept conclusions judged on the days after them (src/admin/forward_checks.py).
+    forward: Any = None
     # The live trades and the rules' paper trades judged against their reference, and the edge guard
     # (src/admin/edge_watch_service.py).
     edge_watch: Any = None
@@ -434,6 +436,14 @@ def build_context(config_manager) -> AdminContext:
     ctx.nightly = NightlyBacktests(
         backtests=backtests, queries=queries, config_path=settings.config_path, notify=telegram_sender.send,
         verdict_runs=lambda: {about.split(":", 1)[1] for about in verdicts.all() if about.startswith("run:")},
+    )
+
+    from src.admin.forward_checks import ForwardChecks
+
+    # Each kept conclusion of the experiment journal judged on the days after it, after the nightly runs.
+    ctx.forward = ForwardChecks(
+        root=settings.backtests_path, backtests=backtests, queries=queries, config_path=settings.config_path,
+        nightly=ctx.nightly, notify=telegram_sender.send, publish=events.publish,
     )
 
     ctx.disk_cleanups = DiskCleanups(disk=ctx.disk, release=ctx.release, backtests=backtests, studies=studies)

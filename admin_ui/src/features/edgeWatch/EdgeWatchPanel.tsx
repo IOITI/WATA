@@ -26,7 +26,8 @@ function reasonsText(track: EdgeTrack): string {
   return said ? `${said[0].toUpperCase()}${said.slice(1)}.` : ''
 }
 
-function TrackFigures({ track }: { track: EdgeTrack }) {
+/** How unusual a track's trades are: judged, its result, its deepest fall, its test. Also a forward check's. */
+export function TrackFigures({ track }: { track: EdgeTrack }) {
   const test = testShare(track)
   return (
     <KpiStrip
@@ -79,9 +80,10 @@ function Flags({ owner, track }: { owner: EdgeOwner; track: EdgeTrack }) {
   )
 }
 
-function Cone({ owner, track, label }: { owner: EdgeOwner; track: EdgeTrack; label: string }) {
-  const data = fanPoints(owner.cone, track)
-  if (!owner.cone || data.length < 2) return null
+/** A track's path over the cone of its reference's paths. Also a forward check's, over its candidate's. */
+export function TrackCone({ cone, track, label }: { cone: EdgeOwner['cone']; track: EdgeTrack; label: string }) {
+  const data = fanPoints(cone, track)
+  if (!cone || data.length < 2) return null
   return (
     <FanChart
       ariaLabel={`${label} against where its reference’s paths went`}
@@ -183,7 +185,7 @@ export function EdgeWatchPanel({ owner: ownerId, enabled, className }: { owner: 
               {owner.since ? `; trades since ${formatDay(owner.since)}` : ''}.
             </p>
             {owner.model?.usable && <TrackFigures track={track} />}
-            <Cone owner={owner} track={track} label={label} />
+            <TrackCone cone={owner.cone} track={track} label={label} />
             <Flags owner={owner} track={track} />
             {live && owner.tracks.paper && owner.tracks.paper.n > 0 && (
               <p className="text-xs text-muted-foreground">

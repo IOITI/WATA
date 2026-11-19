@@ -3,6 +3,7 @@ import type { Check, CheckState } from 'ioiti-ui'
 
 import type {
   BacktestModelCheck,
+  BacktestResearch,
   BacktestRestsOn,
   BacktestRun,
   BacktestRunListed,
@@ -22,6 +23,10 @@ import { sweepVerdict } from './sweep'
  * Whether a run can be believed, check by check: the bar Claude's research is
  * held to ("Do not believe" in src/admin/mcp_server/instructions.py), said on
  * the run's own page, so that the pages and Claude judge a run alike. Pure.
+ *
+ * Its Python twin is src/admin/run_verdict.py (the MCP tools, the AI agent, a
+ * conclusion of the experiment journal): verdictParity.json holds the two to the
+ * same checks and states, each wording its own details.
  */
 
 /** Fewer trades or days than these describe those days and nothing else. */
@@ -35,7 +40,19 @@ export const MIN_BEATEN = 95
 export type RunSection = 'trust' | 'edge' | 'stress' | 'model-check' | 'choice' | 'setup'
 
 export interface RunCheck extends Check {
-  id: 'sample' | 'data' | 'random' | 'edge' | 'stress' | 'model' | 'held-out' | 'overfitting' | 'deflated' | 'code'
+  id:
+    | 'sample'
+    | 'data'
+    | 'random'
+    | 'edge'
+    | 'family'
+    | 'motivated'
+    | 'stress'
+    | 'model'
+    | 'held-out'
+    | 'overfitting'
+    | 'deflated'
+    | 'code'
   section: RunSection
 }
 
@@ -69,6 +86,8 @@ interface Evidence {
   deflated: { probability: number; trials: number } | null
   /** What a run's result rests on beyond the recorded quotes; none for a run of before. */
   restsOn: BacktestRestsOn | null
+  /** What the experiment journal adds to a run of one of its experiments, once worked out. */
+  research: BacktestResearch | null
 }
 
 function evidenceOfRun(run: BacktestRun): Evidence | null {
@@ -87,6 +106,7 @@ function evidenceOfRun(run: BacktestRun): Evidence | null {
     pbo: summary.pbo ?? null,
     deflated: summary.deflated_sharpe ?? null,
     restsOn: summary.rests_on ?? null,
+    research: run.research ?? null,
   }
 }
 
@@ -108,6 +128,7 @@ function evidenceOfListed(run: BacktestRunListed): Evidence | null {
     pbo: headline.pbo ?? null,
     deflated: headline.deflated_sharpe ?? null,
     restsOn: headline.rests_on ?? null,
+    research: run.research ?? null,
   }
 }
 
@@ -154,6 +175,50 @@ function codeCheck(evidence: Evidence): RunCheck {
   }
 }
 
+/** Its daily Sharpe ratio, deflated by every trial its family of ideas had been tried with until it. */
+function familyCheck(research: BacktestResearch | null): RunCheck | null {
+  const family = research?.family
+  if (!family) return null
+  const label = 'Survives its family’s trials'
+  const trials = plural(family.trials, 'trial')
+  if (family.probability === null) {
+    return { id: 'family', label, state: 'open', section: 'trust', detail: `Not measured: it takes ${MIN_DAYS} days of results to correct for the ${trials} of ${family.name}.` }
+  }
+  const passes = family.probability >= MIN_DEFLATED_SHARPE
+  return {
+    id: 'family',
+    label,
+    state: passes ? 'pass' : 'fail',
+    section: 'trust',
+    detail:
+      `${formatPercent(family.probability * 100, false, 0)} likely to be real after the ${trials} of ${family.name}` +
+      (passes ? '.' : ` (${formatPercent(MIN_DEFLATED_SHARPE * 100, false, 0)} is the bar): the best of so many tries looks this good by chance.`),
+  }
+}
+
+/** Whether its result needs the days its experiment's idea came from. */
+function motivatedCheck(research: BacktestResearch | null): RunCheck | null {
+  const motivated = research?.motivated
+  if (!motivated) return null
+  const label = 'Holds without the days its idea came from'
+  if (motivated.in_run === 0) {
+    return { id: 'motivated', label, state: 'pass', section: 'trust', detail: `None of the ${plural(motivated.days.length, 'day')} its idea came from is among its days.` }
+  }
+  if (motivated.without_percent === null) {
+    return { id: 'motivated', label, state: 'fail', section: 'trust', detail: 'Every day it traded is one its idea came from: nothing else judges it.' }
+  }
+  const passes = motivated.without_percent > 0
+  return {
+    id: 'motivated',
+    label,
+    state: passes ? 'pass' : 'fail',
+    section: 'trust',
+    detail:
+      `Without the ${plural(motivated.in_run, 'day')} its idea came from: ${formatPercent(motivated.without_percent, true)}` +
+      (passes ? '.' : ': the result needs the days that suggested it.'),
+  }
+}
+
 /** The checks of a run that traded on its own (not a sweep, a stress or a model check). */
 function singleChecks(evidence: Evidence, derived: Derived): RunCheck[] {
   const figures = evidence.figures
@@ -187,6 +252,11 @@ function singleChecks(evidence: Evidence, derived: Derived): RunCheck[] {
           (edge.tone === 'edge' ? '.' : ` (t ${EDGE_T} and ${EDGE_BEATEN} % are the bar).`),
     section: 'edge',
   })
+
+  const family = familyCheck(evidence.research)
+  if (family) checks.push(family)
+  const motivated = motivatedCheck(evidence.research)
+  if (motivated) checks.push(motivated)
 
   const stress = derived.stress
   const held = stress?.sweep ? stressVerdict(stress.sweep)?.holds ?? null : null
@@ -278,9 +348,12 @@ function checksOf(evidence: Evidence | null, derived: Derived): RunCheck[] {
   return evidence.kind === 'sweep' ? sweepChecks(evidence, derived) : singleChecks(evidence, derived)
 }
 
-/** Whether a run is judged at all: a stress sweep (of either kind) or a model check judges another run; a run not done, nothing yet. */
-export function isJudged(run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'noise_of' | 'model_check_of'>): boolean {
-  return run.status.state === 'done' && !run.stress_of && !run.noise_of && !run.model_check_of
+/**
+ * Whether a run is judged at all: a stress sweep (of either kind), a model check or a forward check's run judges
+ * another run; a run not done, nothing yet.
+ */
+export function isJudged(run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'noise_of' | 'model_check_of' | 'forward_of'>): boolean {
+  return run.status.state === 'done' && !run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of
 }
 
 /**

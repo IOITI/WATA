@@ -71,6 +71,9 @@ const BacktestComparePage = lazy(() =>
 const ExperimentsPage = lazy(() =>
   import('@/features/backtests/ExperimentsPage').then((module) => ({ default: module.ExperimentsPage })),
 )
+const ForwardCheckPage = lazy(() =>
+  import('@/features/backtests/ForwardCheckPage').then((module) => ({ default: module.ForwardCheckPage })),
+)
 const PaperTradingPage = lazy(() =>
   import('@/features/backtests/PaperTradingPage').then((module) => ({ default: module.PaperTradingPage })),
 )
@@ -309,6 +312,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <ExperimentsPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="backtests/experiments/forward/:checkId"
+          element={
+            <ChartPage>
+              <ForwardCheckPage />
             </ChartPage>
           }
         />

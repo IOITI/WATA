@@ -56,7 +56,9 @@ WAITS_MARKET, WAITS_LINE, WAITS_UNDER_WAY, WAITS_FAILED = "market", "line", "und
 ROW_RUNS = 8
 # A failure said on Telegram: its first line, at most.
 SAID_ERROR = 200
-DERIVED = (("stress_of", "stress"), ("noise_of", "noise"), ("model_check_of", "model_check"))
+# The runs made from another: never a nightly run's template nor a run covering its days, and their base is kept. A
+# forward check's run (src/admin/forward_checks.py) is one: its candidate stays while it is judged.
+DERIVED = (("stress_of", "stress"), ("noise_of", "noise"), ("model_check_of", "model_check"), ("forward_of", "forward"))
 
 
 def _day(text) -> date | None:
@@ -143,6 +145,27 @@ def why_no_nightly(runs: list[dict]) -> str | None:
     if all(run["kind"] == "sweep" for run in runs):
         return "A sweep is not made again each evening: run one of its combinations as a run of its own"
     return "It has no finished run to make again yet"
+
+
+async def read_sources(queries, source: dict, first: date, last: date, config: dict) -> tuple[date, list | None, list | None, list | None]:
+    """
+    What a run asked again over other days reads for them: the signals WATA received with its positions (a journal
+    replay), or those a rule raised (a run of a rule's signals: its first day moved on when the newest are kept);
+    nothing for a Pine script, which the run plays again itself. Also a forward check's (src/admin/forward_checks.py).
+    """
+    journal = positions = raised = None
+    if source.get("kind") == JOURNAL:
+        journal = await queries.journal_between(first - timedelta(days=1), last + timedelta(days=1))
+        try:
+            positions = await queries.closed_positions(first - timedelta(days=1), last + timedelta(days=1))
+        except DatabaseUnavailable:
+            positions = None
+    elif source.get("kind") == TA_SIGNALS:
+        rule = source.get("rule") or {}
+        zone = TradingClock(trading_timezone(config)).zone
+        first, raised = await newest_raised(queries, rule.get("id"), rule.get("name") or rule.get("id"),
+                                            first, last, zone, MAX_RAISED_SIGNALS)
+    return first, journal, positions, raised
 
 
 class NightlyBacktests:
@@ -484,18 +507,7 @@ class NightlyBacktests:
         source = request.get("source") or {}
         self._asking.add(configuration)
         try:
-            journal = positions = raised = None
-            if source.get("kind") == JOURNAL:
-                journal = await self._queries.journal_between(first - timedelta(days=1), last + timedelta(days=1))
-                try:
-                    positions = await self._queries.closed_positions(first - timedelta(days=1), last + timedelta(days=1))
-                except DatabaseUnavailable:
-                    positions = None
-            elif source.get("kind") == TA_SIGNALS:
-                rule = source.get("rule") or {}
-                zone = TradingClock(trading_timezone(self._config())).zone
-                first, raised = await newest_raised(self._queries, rule.get("id"), rule.get("name") or rule.get("id"),
-                                                    first, last, zone, MAX_RAISED_SIGNALS)
+            first, journal, positions, raised = await read_sources(self._queries, source, first, last, self._config())
             made = self._backtests.extend(template["id"], first, last, name=name, nightly={"configuration": configuration},
                                           journal=journal, positions=positions, raised=raised)
         except LineFull:

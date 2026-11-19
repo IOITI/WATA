@@ -38,8 +38,10 @@ WORK = """\
 How to work:
 1. Look before you change: a day, a loss or a signal is read on its chart first (`chart_view`: the day as a \
 backtest ran it, the script's plots and alerts with what price did after each, a run's trades, and its picture).
-2. Before any backtest, `exp_new`: a hypothesis the data can refute, and its family. Every run and sweep counts as \
-trials of the family, which corrects the overfitting figures.
+2. Before any backtest, `exp_new`: a hypothesis the data can refute, and its family (one that exists if the idea is \
+the same: a family spelt anew counts its trials from nothing). Every run and sweep counts as trials of the family, \
+which corrects every run's figures. Name the days the idea came from (motivated_by: a run that needs them is not \
+believed) and what a result must show (criteria), set now, before any run.
 3. A script: `pine_check`, `pine_run` (plots and alerts on recorded bars), `pine_signals` (what a rule would \
 raise), `pine_compare` (against TradingView's signals), then `pine_save` for a changed one.
 4. `backtest_start` (the Backtests form's body; `backtest_options` lists the settings; a run starts with 1,000 € \
@@ -48,7 +50,10 @@ edge of the entries first, then random entries, risk, regimes, trades.
 5. Values tried with a sweep (walk-forward on): the held-out days before the chosen-on ones, then the probability \
 of overfitting and the deflated Sharpe ratio.
 6. Before keeping anything: neighbours and stress (`backtest_derive`).
-7. `exp_conclude`: kept, rejected or inconclusive, with what it rests on.
+7. `exp_conclude`: kept, rejected or inconclusive, with what it rests on. Kept names its candidate, the run it keeps: \
+its checks against the bar and the criteria are recorded with it (keep one against the bar only with the reason in \
+the notes), and a forward check judges it each evening on the days after it, which no run had seen (`exp_get`). \
+A family whose kept conclusions did not hold there has its record said: weigh it before trying it again.
 Before each tool call, say in one short sentence what you are about to do and why: the operator follows it."""
 
 A_DAY = """\

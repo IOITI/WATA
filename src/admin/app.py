@@ -225,6 +225,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if getattr(ctx, "nightly", None) is not None and ctx.settings.backtests_enabled:
             # Makes the configurations switched on again after each trading day, the market closed.
             background.append(asyncio.create_task(ctx.nightly.keep()))
+        if getattr(ctx, "forward", None) is not None and ctx.settings.backtests_enabled:
+            # Judges the experiments' kept conclusions on the days after them, the market closed.
+            background.append(asyncio.create_task(ctx.forward.keep()))
         if ctx.edge_watch is not None and ctx.settings.backtests_enabled:
             # Judges the live trades and the rules' paper trades against their reference; the edge guard.
             background.append(asyncio.create_task(ctx.edge_watch.keep()))

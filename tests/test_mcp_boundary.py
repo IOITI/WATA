@@ -54,6 +54,9 @@ ALLOWED_IMPORTS = (
     "src.configuration",
     # The AI agent's memory, which the endpoint reads and never changes.
     "src.admin.agent_memory",
+    # Pure: the bar a run is held to (as the pages judge it), the criteria an experiment set itself, and the record of
+    # how the families' kept conclusions held on later days.
+    "src.admin.run_verdict", "src.admin.track_record",
 )
 NEVER = (
     "src.admin.routers", "src.admin.services", "src.admin.config_editor", "src.admin.live_prices", "src.admin.queries",

@@ -169,6 +169,10 @@ AUTHENTICATED_ROUTES = [
     ("PUT", "/api/mcp/paused"),
     ("GET", "/api/research/experiments"),
     ("PUT", "/api/research/lockbox"),
+    ("GET", "/api/research/forward"),
+    ("POST", "/api/research/forward"),
+    ("GET", "/api/research/forward/f0a1b2c3d"),
+    ("POST", "/api/research/forward/f0a1b2c3d/stop"),
     ("GET", "/api/ta/scripts"),
     ("POST", "/api/ta/scripts"),
     ("GET", "/api/ta/scripts/0123456789ab"),
@@ -843,7 +847,8 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{entry}", "range-ticks")
             .replace("{routine_id}", "r0a1b2c3d")
             .replace("{file_id}", "f0123456789")
-            .replace("{slug}", "tri-star"),
+            .replace("{slug}", "tri-star")
+            .replace("{check_id}", "f0a1b2c3d"),
         )
         for route in app.routes
         if route.path.startswith("/api")

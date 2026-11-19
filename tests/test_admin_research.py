@@ -111,3 +111,80 @@ def test_the_operator_moves_or_clears_the_lock_box_as_claude_cannot(ctx, client)
     assert moved.json()["lockbox"]["from"] == "2026-10-16" and moved.json()["lockbox"]["set_by"] == "operator"
     assert wrong.status_code == 422
     assert cleared.json() == {"lockbox": None} and journal.lockbox() is None
+
+
+# ── forward checks and the track record (v0.95.0) ──
+
+
+class FakeForward:
+    def __init__(self):
+        self.started, self.stopped = [], []
+        self.entry = {"id": "f1234abcd", "experiment": "aaaaaa", "state": "active", "candidate": "20261019-200000-abcdef",
+                      "start": "2026-10-20", "judgement": {"verdict": "too_early", "n": 3}, "path": [], "history": []}
+
+    def of_experiments(self):
+        return {"aaaaaa": {"id": "f1234abcd", "state": "active", "verdict": "too_early", "trades": 3}}
+
+    def checks(self):
+        return [self.entry]
+
+    def check(self, check_id):
+        from src.admin.forward_checks import UnknownCheck
+
+        if check_id != self.entry["id"]:
+            raise UnknownCheck(check_id)
+        return {**self.entry, "cone": None, "model": None}
+
+    def start(self, experiment, candidate, by=None):
+        from src.admin.errors import NotPossible
+
+        if candidate == "20261019-200000-ffffff":
+            raise NotPossible("Only a finished run can be judged on the days after it")
+        self.started.append((experiment, candidate, by))
+        return self.entry
+
+    def stop(self, check_id):
+        self.stopped.append(check_id)
+        return {**self.entry, "state": "ended", "why": "stopped"}
+
+
+def test_the_journal_says_each_experiments_forward_check_its_families_and_the_track_record(ctx, client):
+    journal = journal_of(ctx.settings.backtests_path)
+    first = journal.new("EMA cross", "Crosses lead", "ema", made_by=CLAUDE, made_via="agent:abc123")
+    journal.record_run(first["experiment"], "20261019-200000-abcdef", kind="run", trials=4)
+    ctx.forward = FakeForward()
+    ctx.forward.of_experiments = lambda: {first["experiment"]: {"state": "active", "verdict": "watch", "trades": 12}}
+
+    found = client.get("/api/research/experiments").json()
+
+    assert found["experiments"][0]["forward_check"]["verdict"] == "watch"
+    assert found["families"] == {"ema": 4}
+    assert found["track_record"]["makers"][0]["maker"] == "the AI agent"
+    assert found["forward"] == {"active": 1, "most": 10}
+
+
+def test_the_forward_checks_are_listed_read_started_and_stopped_by_the_operator(ctx, client):
+    ctx.forward = FakeForward()
+
+    listed = client.get("/api/research/forward").json()
+    one = client.get("/api/research/forward/f1234abcd")
+    unknown = client.get("/api/research/forward/f00000000")
+    started = client.post("/api/research/forward", json={"experiment": "aaaaaa", "candidate": "20261019-200000-abcdef"},
+                          headers=SAME_ORIGIN)
+    refused = client.post("/api/research/forward", json={"experiment": "aaaaaa", "candidate": "20261019-200000-ffffff"},
+                          headers=SAME_ORIGIN)
+    stopped = client.post("/api/research/forward/f1234abcd/stop", headers=SAME_ORIGIN)
+
+    assert (listed["active"], listed["most"]) == (1, 10)
+    assert one.status_code == 200 and one.json()["candidate"] == "20261019-200000-abcdef"
+    assert unknown.status_code == 404
+    assert started.status_code == 200 and ctx.forward.started == [("aaaaaa", "20261019-200000-abcdef", "operator")]
+    assert refused.status_code == 409 and "finished run" in refused.json()["detail"]
+    assert stopped.json()["why"] == "stopped" and ctx.forward.stopped == ["f1234abcd"]
+
+
+def test_the_forward_checks_are_refused_while_backtests_are_off(ctx, client):
+    ctx.forward = None
+
+    assert client.get("/api/research/forward").status_code == 409
+    assert client.get("/api/research/experiments").json()["forward"] is None

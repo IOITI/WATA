@@ -324,3 +324,99 @@ def test_the_turbo_model_is_measured_again_only_when_it_is_old(tmp_path, researc
                                                         "days": ["2026-10-13"], "indice": "us100"}))
 
     assert "within a week" in refusal(research, "turbo_model_measure", {"start_day": "2026-10-13", "end_day": "2026-10-19"})
+
+
+# ── what an experiment says beyond its words, and what its conclusion starts (v0.95.0) ──
+
+def _judged_summary() -> dict:
+    return {**SUMMARY, "figures": {**SUMMARY["figures"], "days": 2}}
+
+
+def test_an_experiment_names_the_days_its_idea_came_from_and_the_criteria_it_sets_itself(research):
+    opened = answer(research, "exp_new", {
+        "title": "Open block", "hypothesis": "The open's whipsaw loses", "family": "kernel",
+        "motivated_by": ["2026-10-14"], "criteria": [{"figure": "edge_t", "bound": "at_least", "value": 2.6}],
+    })
+    found = answer(research, "exp_get", {"experiment_id": opened["id"]})
+
+    assert found["motivated_by"] == ["2026-10-14"]
+    assert found["criteria"] == [{"figure": "edge_t", "bound": "at_least", "value": 2.6}]
+    assert opened["family_record"]["experiments"] == 1
+    assert "not a figure criteria take" in refusal(research, "exp_new", {
+        "title": "t", "hypothesis": "h", "family": "kernel", "criteria": [{"figure": "luck", "bound": "at_least", "value": 1}]})
+    assert "still to come" in refusal(research, "exp_new", {"title": "t", "hypothesis": "h", "family": "kernel",
+                                                            "motivated_by": ["2030-01-02"]})
+
+
+def test_a_family_spelt_like_another_is_refused_unless_it_is_new(research, experiment):
+    said = refusal(research, "exp_new", {"title": "t", "hypothesis": "h", "family": "EMA cross"})
+
+    assert "looks like the family 'ema-cross'" in said and "ema-cross (0)" in said
+    assert answer(research, "exp_new", {"title": "t", "hypothesis": "h", "family": "EMA cross", "new_family": True})["family"] == "EMA cross"
+
+
+def test_a_kept_conclusion_names_its_candidate_keeps_its_checks_and_starts_its_forward_check(tmp_path, research, scripts, experiment):
+    from src.admin.mcp_server.facade import ForwardReads
+
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": _judged_summary()}, made_by=CLAUDE, experiment=experiment)
+    research.journal.record_run(experiment, run_id, kind="run", trials=1)
+    started = []
+    research.forward = ForwardReads(
+        start=lambda experiment_id, candidate, by=None: started.append((experiment_id, candidate)) or {"id": "f1234abcd", "start": "2026-10-19"},
+        of_experiments=lambda: {experiment: {"state": "active", "verdict": "too_early", "trades": 3}},
+        checks=lambda: [], check=lambda check_id: {},
+    )
+
+    assert "names its candidate" in refusal(research, "exp_conclude", {"experiment_id": experiment, "verdict": "kept", "notes": "n"})
+    concluded = answer(research, "exp_conclude", {"experiment_id": experiment, "verdict": "kept", "notes": "On 2 days",
+                                                  "candidate": run_id})
+
+    assert concluded["candidate"] == run_id and concluded["bar"] == "fail"
+    assert "sample" in concluded["checks"]["failed"] and concluded["checks"]["family"]["trials"] == 1
+    assert concluded["forward"] == {"started": "f1234abcd", "from": "2026-10-19"}
+    assert started == [(experiment, run_id)]
+    kept = answer(research, "exp_get", {"experiment_id": experiment})
+    assert kept["checks"]["bar"] == "fail" and kept["forward"]["verdict"] == "too_early"
+    listed = answer(research, "exp_get")
+    assert listed["experiments"][0]["forward"]["state"] == "active"
+    assert listed["track_record"]["total"]["kept"] == 1 and listed["track_record"]["total"]["kept_against_bar"] == 1
+
+
+def test_a_candidate_is_one_of_the_experiments_runs(tmp_path, research, scripts, experiment):
+    elsewhere = finished_run(tmp_path, research, scripts, {"summary.json": _judged_summary()}, made_by=CLAUDE)
+
+    assert "is not one of experiment" in refusal(research, "exp_conclude", {
+        "experiment_id": experiment, "verdict": "kept", "notes": "n", "candidate": elsewhere})
+
+
+def test_a_forward_check_refused_leaves_the_conclusion_kept(tmp_path, research, scripts, experiment):
+    from src.admin.errors import NotPossible
+    from src.admin.mcp_server.facade import ForwardReads
+
+    def refused(*arguments, **named):
+        raise NotPossible("10 forward checks run already: one must end, or be stopped, first")
+
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": _judged_summary()}, made_by=CLAUDE, experiment=experiment)
+    research.forward = ForwardReads(start=refused, of_experiments=dict, checks=list, check=dict)
+
+    concluded = answer(research, "exp_conclude", {"experiment_id": experiment, "verdict": "kept", "notes": "n", "candidate": run_id})
+
+    assert concluded["verdict"] == "kept" and concluded["forward"]["refused"].startswith("10 forward checks")
+
+
+def test_a_runs_summary_says_its_verdict_check_by_check_and_its_research(tmp_path, research, scripts, experiment):
+    opened = answer(research, "exp_new", {"title": "t", "hypothesis": "h", "family": "ema-cross",
+                                          "motivated_by": ["2026-10-14"]})
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": _judged_summary()}, made_by=CLAUDE,
+                          experiment=opened["id"])
+    research.journal.record_run(opened["id"], run_id, kind="run", trials=1)
+
+    found = answer(research, "backtest_result", {"run_id": run_id})
+
+    assert found["verdict"]["tone"] == "fail"
+    assert [check["id"] for check in found["verdict"]["checks"]][:4] == ["sample", "data", "random", "edge"]
+    checks = {check["id"]: check["state"] for check in found["verdict"]["checks"]}
+    # Under 20 days, not deflated; without its idea's day (-0.8 %), +2 %.
+    assert checks["family"] == "open" and checks["motivated"] == "pass"
+    assert found["research"]["motivated"] == {"days": ["2026-10-14"], "in_run": 1, "with_percent": 1.18,
+                                              "without_percent": 2.0, "days_left": 1}

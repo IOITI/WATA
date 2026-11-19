@@ -207,3 +207,131 @@ def test_a_run_of_the_signals_a_rule_raised_is_asked_again_as_one(tmp_path):
     # Its signals read again for the period, never the journal in their place; never a paper run of its own.
     assert body["source"] == {"kind": "ta_signals", "rule": {"id": "a00000000001", "name": "EMA"}}
     assert body["chart"] == chart and "paper" not in body
+
+
+# ── what an experiment may say beyond its words (v0.95.0) ──
+
+def test_a_journal_written_before_reads_with_every_new_field_empty(tmp_path):
+    path = tmp_path / "experiments.jsonl"
+    path.write_text(
+        '{"event": "opened", "experiment": "aaaaaa", "title": "T", "hypothesis": "H", "family": "f", "at": "2026-10-21T07:00:00Z"}\n'
+        '{"event": "concluded", "experiment": "aaaaaa", "verdict": "kept", "notes": "n", "at": "2026-10-21T08:00:00Z"}\n'
+        '{"event": "something_newer", "experiment": "aaaaaa", "at": "2026-10-21T09:00:00Z"}\n',
+        encoding="utf-8",
+    )
+    found = ExperimentJournal(path, tmp_path / "lockbox.json").get("aaaaaa")
+
+    assert found["verdict"] == "kept"
+    assert (found["made_via"], found["motivated_by"], found["criteria"]) == (None, [], [])
+    assert (found["candidate"], found["checks"], found["forward"]) == (None, None, None)
+
+
+def test_the_days_an_idea_came_from_and_its_criteria_are_kept(journal):
+    opened = journal.new(
+        "Open block", "The open's whipsaw loses", "kernel", made_via="agent:abc123",
+        motivated_by=["2026-09-12", date(2026, 9, 11), "2026-09-12"],
+        criteria=[{"figure": "held_out_percent", "bound": "at_least", "value": 0},
+                  {"figure": "worst_day", "bound": "at_least", "value": -8.5}],
+    )
+
+    found = journal.get(opened["experiment"])
+    assert found["made_via"] == "agent:abc123"
+    assert found["motivated_by"] == ["2026-09-11", "2026-09-12"]
+    assert found["criteria"] == [{"figure": "held_out_percent", "bound": "at_least", "value": 0},
+                                 {"figure": "worst_day", "bound": "at_least", "value": -8.5}]
+
+
+@pytest.mark.parametrize("days, refused", [
+    (["2027-01-05"], "still to come"),
+    (["nope"], "not a day"),
+    ("2026-09-11", "a list"),
+    ([f"2026-08-{day:02d}" for day in range(1, 22)], "20 days at most"),
+])
+def test_the_days_an_idea_came_from_are_days_already_seen(journal, days, refused):
+    with pytest.raises(ValueError, match=refused):
+        journal.new("A", "a", "f", motivated_by=days)
+
+
+@pytest.mark.parametrize("criteria, refused", [
+    ([{"figure": "Total!", "bound": "at_least", "value": 1}], "not a figure"),
+    ([{"figure": "total_percent", "bound": "above", "value": 1}], "bound"),
+    ([{"figure": "total_percent", "bound": "at_least", "value": True}], "is a number"),
+    ([{"figure": "total_percent", "bound": "at_least", "value": float("nan")}], "is a number"),
+    ([{"figure": "total_percent", "bound": "at_least", "value": 1, "on": "x"}], "is {figure, bound, value}"),
+    ([{"figure": "trades", "bound": "at_least", "value": 1}] * 7, "6 criteria at most"),
+    ({"figure": "trades"}, "a list"),
+])
+def test_criteria_are_figures_bounded_one_way(journal, criteria, refused):
+    with pytest.raises(ValueError, match=refused):
+        journal.new("A", "a", "f", criteria=criteria)
+
+
+def test_a_conclusion_keeps_its_candidate_and_how_it_stood(journal):
+    found = journal.new("A", "a", "f")["experiment"]
+    journal.conclude(found, "kept", "Rests on 22 days", candidate="20261114-113341-aa2d8f",
+                     checks={"bar": "fail", "failed": ["edge", "family"]})
+
+    concluded = journal.get(found)
+    assert concluded["candidate"] == "20261114-113341-aa2d8f"
+    assert concluded["checks"] == {"bar": "fail", "failed": ["edge", "family"]}
+    with pytest.raises(ValueError, match="mapping"):
+        journal.conclude(found, "kept", "n", checks=["no"])
+
+
+def test_a_forward_check_is_written_when_it_starts_and_when_it_ends(tmp_path):
+    moments = iter([1_790_000_000.0 + step * 3600 for step in range(10)])
+    journal = ExperimentJournal(tmp_path / "e.jsonl", tmp_path / "l.json", clock=lambda: next(moments))
+    found = journal.new("A", "a", "f")["experiment"]
+    journal.conclude(found, "kept", "n", candidate="20261114-113341-aa2d8f")
+    journal.record_forward(found, "f0a1b2c3d", "started", candidate="20261114-113341-aa2d8f", start="2026-11-17")
+
+    started = journal.get(found)["forward"]
+    assert (started["state"], started["check"], started["start"], started["ended_at"]) == (
+        "started", "f0a1b2c3d", "2026-11-17", None)
+
+    journal.record_forward(found, "f0a1b2c3d", "ended", verdict="broken", trades=14, why="broken")
+    ended = journal.get(found)["forward"]
+    assert (ended["state"], ended["verdict"], ended["trades"], ended["why"]) == ("ended", "broken", 14, "broken")
+    assert ended["started_at"] == started["started_at"] and ended["ended_at"] > ended["started_at"]
+    with pytest.raises(ValueError, match="started or ended"):
+        journal.record_forward(found, "f0a1b2c3d", "paused")
+
+
+def test_families_are_listed_the_most_tried_first(journal):
+    first = journal.new("A", "a", "kernel-avg-vwap")["experiment"]
+    second = journal.new("B", "b", "day-design")["experiment"]
+    journal.record_run(first, "20261020-100000-aaaaaa", kind="sweep", trials=12)
+    journal.record_run(second, "20261020-100100-bbbbbb", kind="run", trials=1)
+
+    assert journal.families() == {"kernel-avg-vwap": 12, "day-design": 1}
+
+
+@pytest.mark.parametrize("family, close", [
+    ("kernel-avg-vwap", None),
+    ("Kernel Avg VWAP", "kernel-avg-vwap"),
+    ("kernel-avg-vwapp", "kernel-avg-vwap"),
+    ("kernal-avg-vwap", "kernel-avg-vwap"),
+    ("breakout-or", None),
+    ("ema-cross", None),
+])
+def test_a_family_spelt_twice_is_recognised(family, close):
+    from src.research.experiments import close_family
+
+    assert close_family(family, ["kernel-avg-vwap", "wata-day-design"]) == close
+
+
+def test_a_runs_figures_count_the_trials_made_until_it(tmp_path):
+    from src.research.experiments import trials_until
+
+    moments = iter([1_790_000_000.0 + step * 60 for step in range(10)])
+    journal = ExperimentJournal(tmp_path / "e.jsonl", tmp_path / "l.json", clock=lambda: next(moments))
+    first = journal.new("A", "a", "f")["experiment"]
+    journal.record_run(first, "20261020-100000-aaaaaa", kind="sweep", trials=12)
+    journal.record_trials(first, 5, "By hand")
+    journal.record_run(first, "20261020-100200-cccccc", kind="run", trials=1)
+    journal.record_run(first, "20261020-100300-dddddd", kind="sweep", trials=9)
+
+    experiments = journal.experiments()
+    middle = journal.get(first)["runs"][1]["at"]
+    assert trials_until(experiments, "f", middle) == 12 + 5 + 1
+    assert trials_until(experiments, "other", middle) == 0

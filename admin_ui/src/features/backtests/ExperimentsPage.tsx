@@ -3,6 +3,7 @@ import {
   AdvancedDataTable,
   Alert,
   AlertDescription,
+  AnimatedTabs,
   Badge,
   Button,
   formatDateTime,
@@ -16,8 +17,9 @@ import {
   QueryState,
 } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
@@ -25,8 +27,22 @@ import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
 import type { Experiment, ResearchLockbox } from '@/lib/types'
 
-import { familyTrials, lockboxText, RUNS_SHOWN, VERDICT } from './experiments'
+import {
+  BAR_SAID,
+  criterionText,
+  EXPERIMENTS_TABS,
+  experimentsTab,
+  familyTrials,
+  forwardCheckPath,
+  forwardSentence,
+  forwardTone,
+  lockboxText,
+  RUNS_SHOWN,
+  VERDICT,
+} from './experiments'
+import { ForwardBoard } from './ForwardBoard'
 import { RunPeekLink } from './RunPeek'
+import { TrackRecordPanel } from './TrackRecordPanel'
 
 function experimentColumns(timezone: string, trials: Map<string, number>): ColumnDef<Experiment>[] {
   return [
@@ -41,6 +57,14 @@ function experimentColumns(timezone: string, trials: Map<string, number>): Colum
           {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
           <p className="text-xs text-muted-foreground">{row.hypothesis}</p>
           {row.plan && <p className="mt-1 text-xs text-muted-foreground">Plan: {row.plan}</p>}
+          {row.motivated_by && row.motivated_by.length > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Its idea came from {row.motivated_by.map((day) => formatDay(day)).join(', ')}: its runs are judged without them too.
+            </p>
+          )}
+          {row.criteria && row.criteria.length > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">Set before any run: {row.criteria.map(criterionText).join('; ')}.</p>
+          )}
         </div>
       ),
     },
@@ -116,6 +140,45 @@ function experimentColumns(timezone: string, trials: Map<string, number>): Colum
         </div>
       ),
     },
+    {
+      id: 'candidate',
+      header: 'Candidate',
+      accessorFn: (row) => row.checks?.bar ?? '',
+      sortable: true,
+      cell: ({ row }) =>
+        row.candidate ? (
+          <div className="min-w-0 max-w-64 whitespace-normal text-xs">
+            <RunPeekLink id={row.candidate} className="font-mono underline-offset-2 hover:underline">
+              {row.candidate}
+            </RunPeekLink>
+            {row.checks?.bar && (
+              <div className="mt-1">
+                <Badge tone={BAR_SAID[row.checks.bar].tone}>{BAR_SAID[row.checks.bar].label}</Badge>
+              </div>
+            )}
+            {row.checks && row.checks.failed.length > 0 && <p className="mt-1 text-muted-foreground">Failed: {row.checks.failed.join(', ')}</p>}
+          </div>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: 'forward',
+      header: 'On later days',
+      accessorFn: (row) => row.forward_check?.verdict ?? '',
+      sortable: true,
+      cell: ({ row }) =>
+        row.forward_check ? (
+          <div className="min-w-0 max-w-64 whitespace-normal text-xs">
+            <Link to={forwardCheckPath(row.forward_check.id)} className="underline-offset-2 hover:underline">
+              <Badge tone={forwardTone(row.forward_check.verdict)}>{row.forward_check.state === 'active' ? 'Judged' : 'Was judged'}</Badge>
+            </Link>
+            <p className="mt-1 text-muted-foreground">{forwardSentence(row.forward_check)}</p>
+          </div>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
   ]
 }
 
@@ -181,24 +244,51 @@ function LockboxPanel({ box }: { box: ResearchLockbox | null }) {
   )
 }
 
-/** The experiment journal Claude keeps on the server, and the lock box. */
+/**
+ * The experiment journal the AI agent and Claude keep on the server, and the lock box (``?tab=journal``); each kept
+ * conclusion judged on the days after it (``?tab=forward``); how each family's and maker's conclusions held
+ * (``?tab=record``).
+ */
 export function ExperimentsPage() {
   const { timezone } = useSession()
+  const [params, setParams] = useSearchParams()
+  const tab = experimentsTab(params.get('tab'))
   const experimentsQuery = useQuery({ queryKey: ['experiments'], queryFn: api.experiments, refetchInterval: 30_000 })
   const found = experimentsQuery.data
   const columns = useMemo(
     () => experimentColumns(timezone, familyTrials(found?.experiments ?? [])),
     [timezone, found],
   )
+  const setTab = (next: string) => {
+    const changed = new URLSearchParams(params)
+    if (next === 'journal') changed.delete('tab')
+    else changed.set('tab', next)
+    setParams(changed, { replace: true })
+  }
 
   return (
     <>
       <PageHeader
         title="Experiments"
-        description="The journal Claude keeps of its research: each idea with its hypothesis, the runs that tried it, how many configurations they tried, and what was concluded. Nothing here trades."
+        description="The journal of the research: each idea with its hypothesis, the runs that tried it, how many configurations they tried, what was concluded, and how what was kept held on the days after it. Nothing here trades."
+      />
+      <AnimatedTabs
+        tabs={EXPERIMENTS_TABS.map((entry) => ({
+          id: entry.id,
+          label: entry.label,
+          href: entry.id === 'journal' ? '/backtests/experiments' : `/backtests/experiments?tab=${entry.id}`,
+          // The checks running, said only when there are some.
+          badge: entry.id === 'forward' && found?.forward?.active ? found.forward.active : undefined,
+        }))}
+        activeTab={tab}
+        onChange={setTab}
+        linkComponent={RouterLink}
+        renderContent={false}
       />
       <QueryState isPending={experimentsQuery.isPending} error={experimentsQuery.error} hasData={!!found}>
-        {found && (
+        {found && tab === 'forward' && <ForwardBoard experiments={found.experiments} />}
+        {found && tab === 'record' && found.track_record && <TrackRecordPanel record={found.track_record} />}
+        {found && tab === 'journal' && (
           <div className="flex flex-col gap-6">
             <LockboxPanel key={`${found.lockbox?.from ?? ''}-${found.lockbox?.to ?? ''}`} box={found.lockbox} />
             <AdvancedDataTable<Experiment>

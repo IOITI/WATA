@@ -20,7 +20,10 @@ from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import require_session
 from src.admin.routers.actions import require_actions_enabled
+from src.admin.errors import NotPossible
+from src.admin.forward_checks import ACTIVE, MAX_ACTIVE, UnknownCheck
 from src.admin.mcp_server.facade import CLAUDE, journal_of
+from src.admin.track_record import record
 from src.admin.mcp_server.tokens import TokenError
 from src.admin.ta_rules import LIVE, RuleStore
 
@@ -136,15 +139,84 @@ def _lockbox(found: dict | None) -> dict | None:
     return {**found, "from": found["from"].isoformat(), "to": found["to"].isoformat() if found["to"] else None}
 
 
+def _forward(request: Request):
+    """The forward checks (src/admin/forward_checks.py); a 409 while backtests are switched off."""
+    ctx = request.app.state.ctx
+    if getattr(ctx, "forward", None) is None or not ctx.settings.backtests_enabled:
+        raise HTTPException(status_code=409, detail="Backtests are switched off in the configuration (admin.backtests_enabled)")
+    return ctx.forward
+
+
 @router.get("/research/experiments")
 async def experiments(request: Request):
+    """
+    The journal, newest first, each experiment with its newest forward check in short; the families with their trials,
+    the track record (how each family's and each maker's kept conclusions held on later days), and the lock box.
+    """
     journal = _journal(request)
+    ctx = request.app.state.ctx
+    forward = getattr(ctx, "forward", None) if ctx.settings.backtests_enabled else None
 
     def read():
-        return journal.experiments(), journal.lockbox()
+        checks = forward.of_experiments() if forward is not None else {}
+        return journal.experiments(), journal.lockbox(), checks
 
-    found, box = await run_in_threadpool(read)
-    return {"experiments": list(reversed(found)), "lockbox": _lockbox(box)}
+    found, box, checks = await run_in_threadpool(read)
+    return {
+        "experiments": [{**experiment, "forward_check": checks.get(experiment["id"])} for experiment in reversed(found)],
+        "families": await run_in_threadpool(journal.families),
+        "track_record": record(found, checks),
+        "forward": {"active": sum(1 for check in checks.values() if check.get("state") == ACTIVE), "most": MAX_ACTIVE}
+        if forward is not None else None,
+        "lockbox": _lockbox(box),
+    }
+
+
+@router.get("/research/forward")
+async def forward_checks(request: Request):
+    """Every forward check, the active first, the newest first."""
+    service = _forward(request)
+    found = await run_in_threadpool(service.checks)
+    return {"checks": found, "active": sum(1 for check in found if check["state"] == ACTIVE), "most": MAX_ACTIVE}
+
+
+@router.get("/research/forward/{check_id}")
+async def forward_check(check_id: str, request: Request):
+    """One forward check whole: its judgement with its path, its candidate's cone, its history."""
+    service = _forward(request)
+    try:
+        return await run_in_threadpool(service.check, check_id)
+    except UnknownCheck:
+        raise HTTPException(status_code=404, detail="No such forward check") from None
+
+
+class ForwardStart(BaseModel):
+    experiment: str = Field(min_length=1, max_length=40)
+    candidate: str = Field(min_length=1, max_length=40)
+
+
+@router.post("/research/forward")
+async def start_forward_check(body: ForwardStart, request: Request):
+    """
+    A concluded experiment's candidate judged on the days after it, at the operator's word (one concluded before
+    forward checks, or stopped). Changes nothing that trades: no audit, as a backtest asked for.
+    """
+    service = _forward(request)
+    try:
+        return await run_in_threadpool(lambda: service.start(body.experiment, body.candidate, by="operator"))
+    except NotPossible as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@router.post("/research/forward/{check_id}/stop")
+async def stop_forward_check(check_id: str, request: Request):
+    service = _forward(request)
+    try:
+        return await run_in_threadpool(service.stop, check_id)
+    except UnknownCheck:
+        raise HTTPException(status_code=404, detail="No such forward check") from None
+    except NotPossible as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
 
 
 class Lockbox(BaseModel):
