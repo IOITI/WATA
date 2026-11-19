@@ -146,6 +146,7 @@ export function subjectSaid(subject: AgentSubject): string {
 /** What the admin asked by itself, said on Activity beside its conversation. */
 export const ASKED_BY: Record<string, string> = {
   debrief: 'Daily debrief', briefing: 'Morning briefing', triage: 'Triage', dossier: 'Go-live dossier',
+  skeptic: "Skeptic's review",
 }
 
 /** Who asked a conversation, said on Activity: the admin by itself (a debrief, a routine...), or nothing. */

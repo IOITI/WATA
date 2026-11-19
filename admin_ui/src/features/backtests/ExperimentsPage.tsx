@@ -25,7 +25,7 @@ import { ClaudeBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
 import { madeByClaude } from '@/features/system/claude'
 import { api } from '@/lib/api'
-import type { Experiment, ResearchLockbox } from '@/lib/types'
+import type { Experiment, ExperimentReview, ResearchLockbox } from '@/lib/types'
 
 import {
   BAR_SAID,
@@ -37,9 +37,11 @@ import {
   forwardSentence,
   forwardTone,
   lockboxText,
+  REVIEW_SAID,
   RUNS_SHOWN,
   VERDICT,
 } from './experiments'
+import { ChallengersBoard } from './ChallengersBoard'
 import { ForwardBoard } from './ForwardBoard'
 import { RunPeekLink } from './RunPeek'
 import { TrackRecordPanel } from './TrackRecordPanel'
@@ -174,12 +176,30 @@ function experimentColumns(timezone: string, trials: Map<string, number>): Colum
               <Badge tone={forwardTone(row.forward_check.verdict)}>{row.forward_check.state === 'active' ? 'Judged' : 'Was judged'}</Badge>
             </Link>
             <p className="mt-1 text-muted-foreground">{forwardSentence(row.forward_check)}</p>
+            {row.review && <ReviewLine review={row.review} />}
+          </div>
+        ) : row.review ? (
+          <div className="min-w-0 max-w-64 whitespace-normal text-xs">
+            <ReviewLine review={row.review} />
           </div>
         ) : (
           <span className="text-muted-foreground">—</span>
         ),
     },
   ]
+}
+
+/** A skeptic's review of a kept conclusion, linked to its conversation. */
+function ReviewLine({ review }: { review: ExperimentReview }) {
+  const said = REVIEW_SAID[review.tone ?? 'none']
+  return (
+    <div className="mt-1.5">
+      <Link to={`/agent/${encodeURIComponent(review.conversation)}`} className="underline-offset-2 hover:underline">
+        <Badge tone={said.tone}>{said.label}</Badge>
+      </Link>
+      {review.line && <p className="mt-1 text-muted-foreground">{review.line}</p>}
+    </div>
+  )
 }
 
 function LockboxPanel({ box }: { box: ResearchLockbox | null }) {
@@ -246,8 +266,8 @@ function LockboxPanel({ box }: { box: ResearchLockbox | null }) {
 
 /**
  * The experiment journal the AI agent and Claude keep on the server, and the lock box (``?tab=journal``); each kept
- * conclusion judged on the days after it (``?tab=forward``); how each family's and maker's conclusions held
- * (``?tab=record``).
+ * conclusion judged on the days after it (``?tab=forward``), and against the live configuration on the same days
+ * (``?tab=challengers``); how each family's and maker's conclusions held (``?tab=record``).
  */
 export function ExperimentsPage() {
   const { timezone } = useSession()
@@ -287,6 +307,7 @@ export function ExperimentsPage() {
       />
       <QueryState isPending={experimentsQuery.isPending} error={experimentsQuery.error} hasData={!!found}>
         {found && tab === 'forward' && <ForwardBoard experiments={found.experiments} />}
+        {found && tab === 'challengers' && <ChallengersBoard />}
         {found && tab === 'record' && found.track_record && <TrackRecordPanel record={found.track_record} />}
         {found && tab === 'journal' && (
           <div className="flex flex-col gap-6">

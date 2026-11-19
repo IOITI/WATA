@@ -569,7 +569,7 @@ export function RunPage() {
                   {!run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of && !run.paper && (
                     <>
                       <div id="autopsy" className={ANCHORED}>
-                        <AutopsyPanel runId={run.id} />
+                        <AutopsyPanel runId={run.id} runName={run.name} family={run.research?.family?.name ?? null} />
                       </div>
                       <div id="caps" className={ANCHORED}>
                         <CapsPanel runId={run.id} />

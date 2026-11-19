@@ -1,4 +1,7 @@
 import type {
+  QueueDraft,
+  QueueItem,
+  ResearchQueue,
   BacktestAutopsy,
   BacktestDecomposition,
   AgentArtefact,
@@ -736,7 +739,7 @@ export const api = {
   answerAgentTask: (id: string, answer: string) =>
     request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/task/answer`, { body: { answer } }),
   agentRoutines: () => request<{ revision: string; max: number; routines: AgentRoutine[] }>('GET', '/api/agent/routines'),
-  /** Routines ready to add: the LuxAlgo scout while the agent has LuxAlgo's tools. */
+  /** Routines ready to add: the research autopilot, and the LuxAlgo scout while the agent has LuxAlgo's tools. */
   agentRoutineTemplates: () => request<{ templates: AgentRoutineTemplate[] }>('GET', '/api/agent/routines/templates'),
   saveAgentRoutine: (routine: AgentRoutineDraft, revision: string, id?: string) =>
     request<{ revision: string; routine: AgentRoutine }>(id ? 'PUT' : 'POST',
@@ -745,6 +748,15 @@ export const api = {
     request<{ revision: string }>('DELETE', `/api/agent/routines/${encodeURIComponent(id)}${query({ revision })}`),
   runAgentRoutine: (id: string) =>
     request<{ conversation: string }>('POST', `/api/agent/routines/${encodeURIComponent(id)}/run`),
+  // The research queue: the hypotheses the autopilot works through, the operator's first.
+  researchQueue: () => request<ResearchQueue>('GET', '/api/agent/queue'),
+  addHypothesis: (draft: QueueDraft, revision?: string) =>
+    request<{ revision: string; item: QueueItem }>('POST', '/api/agent/queue', { body: { ...draft, revision } }),
+  /** A hypothesis changed from the revision the page read: its words, waiting again or dropped, or its place. */
+  changeHypothesis: (id: string, revision: string, change: Partial<QueueDraft> & { state?: 'waiting' | 'dropped'; move?: number }) =>
+    request<{ revision: string; item: QueueItem }>('PATCH', `/api/agent/queue/${encodeURIComponent(id)}`, { body: { ...change, revision } }),
+  removeHypothesis: (id: string, revision: string) =>
+    request<{ revision: string }>('DELETE', `/api/agent/queue/${encodeURIComponent(id)}${query({ revision })}`),
   stopAgentTask: (id: string) =>
     request<AgentConversationListed>('POST', `/api/agent/conversations/${encodeURIComponent(id)}/task/stop`),
   /** A change of settings as a save of the Configuration page is previewed, with the file's revision it was read at. */

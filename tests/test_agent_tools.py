@@ -241,4 +241,42 @@ def test_only_a_research_task_says_it_is_done(research, store):
     done = asyncio.run(in_a_task())
 
     assert outside.is_error and "not a research task" in outside.text and outside.task_done is None
-    assert not done.is_error and done.task_done == {"conclusion": "No edge.", "runs_kept": ["r1"], "next_steps": None}
+    assert not done.is_error and done.task_done == {"conclusion": "No edge.", "runs_kept": ["r1"], "next_steps": None,
+                                                    "next_hypotheses": []}
+
+
+def test_a_task_leaves_hypotheses_to_try_next_checked_as_the_queue_checks_them(research, store):
+    tools = started(research, store)
+    gap = {"title": "Gap fill", "hypothesis": "The open's gap fills before 10:30", "family": "gaps",
+           "criteria": [{"figure": "edge_t", "bound": "at_least", "value": 2.6}], "motivated_by": ["2026-11-11"]}
+
+    async def done(hypotheses):
+        async with tools.session(CONVERSATION, task=True) as session:
+            return await session.call("task_done", {"conclusion": "Nothing held.", "next_hypotheses": hypotheses}, 0)
+
+    noted = asyncio.run(done([gap]))
+    refused = asyncio.run(done([gap, {**gap, "criteria": [{"figure": "luck", "bound": "at_least", "value": 1}]}]))
+    too_many = asyncio.run(done([gap] * 4))
+
+    assert not noted.is_error and noted.task_done["next_hypotheses"][0]["criteria"][0]["figure"] == "edge_t"
+    assert refused.is_error and refused.text.startswith("Next hypothesis 2: No figure 'luck'") and refused.task_done is None
+    assert too_many.is_error and "INVALID_JSON" in too_many.text
+
+
+def test_a_review_that_only_reads_is_refused_every_write_but_its_verdict(research, store):
+    tools = started(research, store)
+    async def calls():
+        async with tools.session(CONVERSATION, read_only=True) as session:
+            return [await session.call(name, arguments, 0) for name, arguments in (
+                ("backtest_start", {"body": {}}), ("exp_conclude", {"experiment_id": "a", "verdict": "kept", "notes": "n"}),
+                ("pine_save", {"name": "x", "source": "//@version=6"}),
+                ("propose_settings_change", {"changes": [], "title": "t", "rationale": "r", "runs": []}),
+                ("backtest_list", {}))]
+
+    run_asked, concluded, saved, proposed, listed = asyncio.run(calls())
+
+    for refused in (run_asked, concluded, saved, proposed):
+        assert refused.is_error and "this review only reads" in refused.text
+    assert "this review only reads" not in listed.text
+    assert tools.reviews_may("set_verdict") and tools.reviews_may("show_chart") and tools.reviews_may("pine_run")
+    assert not tools.reviews_may("pine_save") and not tools.reviews_may("rule_shadow_save")

@@ -71,7 +71,9 @@ import uvicorn
 from src.admin.agent_memory import memory_of
 from src.admin.agent_telegram import AgentTeller
 from src.admin.agent_dossier import dossiers_of
+from src.admin.agent.verdicts import VerdictStore
 from src.admin.agent_routines import routines_of
+from src.admin.research_queue import OPERATOR, ResearchQueue
 from src.admin.agent_triage import triage_of
 from src.admin.analysis import summarise_exits
 from src.admin.live_breakdowns import live_breakdowns
@@ -1577,6 +1579,25 @@ class FakeEdgeWatch:
         return None
 
 
+def seed_queue(queue: ResearchQueue) -> ResearchQueue:
+    """Three hypotheses waiting, two of the operator's and one a research task left, once (made up)."""
+    if queue.load()["items"]:
+        return queue
+    today = datetime.now(timezone.utc).date() + timedelta(days=1)
+    queue.add({"title": "No entry in the open's first ten minutes", "family": "opens",
+               "hypothesis": "Entries in the ten minutes after 09:30 New York lose: blocking them keeps the rest",
+               "criteria": [{"figure": "edge_t", "bound": "at_least", "value": 2.6}],
+               "motivated_by": ["2026-11-11", "2026-11-12"]}, OPERATOR, today=today)
+    queue.add({"title": "A slower kernel line", "family": "kernel-avg-vwap",
+               "hypothesis": "A kernel line two steps slower trades less noise and keeps the trend days"}, OPERATOR,
+              today=today)
+    queue.add({"title": "The gap fills before 10:30", "family": "gaps",
+               "hypothesis": "After a gap of 0.5 % or more, the index comes back half of it before 10:30 New York",
+               "rationale": "The autopsy of a run: the gap held on its later days (made up)."},
+              "agent:20261119-220000-fa4e01", today=today, conversation="20261119-220000-fa4e01")
+    return queue
+
+
 class FakeForwardChecks:
     """
     Forward checks over made-up later days (src/admin/forward_checks.py): Edge Watch's real model and verdicts, the
@@ -1634,11 +1655,13 @@ class FakeForwardChecks:
         judged = self._ew.judge(self._model, results) if results else None
         now = datetime.now(timezone.utc).isoformat()
         days = [[f"2026-11-{17 + day:02d}", round(sum(results[day * 2:day * 2 + 2]), 2), 2] for day in range(len(results) // 2)]
+        # The live configuration's paper days of the same days (made up): what the challenger board sets it against.
+        champion = {day: round(-0.8 + 0.6 * (index % 3), 2) for index, (day, _, _) in enumerate(days)}
         return {
             "id": check_id, "experiment": experiment, "title": title, "family": family, "made_via": "agent:fake",
             "candidate": candidate, "first_candidate": candidate, "start": start, "state": "active", "started_at": now,
             "by": "agent:fake", "ended_at": None, "why": None, "last": None, "judgement": judged,
-            "path": self._path(results), "days": days, "said": None,
+            "path": self._path(results), "days": days, "said": None, "champion": champion,
             "history": [{"to": days[-1][0], "run": "20261118-230000-f0f0f0", "n": len(results),
                          "verdict": judged["verdict"], "cumulative": judged["cumulative"], "rank": judged["rank"],
                          "cusum": judged["cusum"], "h": judged["h"], "days_tested": len(days), "at": now}] if judged else [],
@@ -1667,17 +1690,30 @@ class FakeForwardChecks:
         return dict(entry)
 
     def checks(self):
-        return [{**{key: value for key, value in entry.items() if key not in ("path", "history", "days")},
+        return [{**{key: value for key, value in entry.items() if key not in ("path", "history", "days", "champion")},
                  "days_tested": len(entry["days"])} for entry in self._checks.values()]
 
+    @staticmethod
+    def _champion(entry) -> list:
+        return sorted([day, percent] for day, percent in entry.get("champion", {}).items())
+
     def check(self, check_id):
+        from src.admin import challengers
         from src.admin.forward_checks import UnknownCheck
 
         entry = self._checks.get(check_id)
         if entry is None:
             raise UnknownCheck(check_id)
-        return {**entry, "model": {key: self._model.get(key) for key in ("usable", "why_not", "reference", "test", "horizon")},
-                "cone": self._model.get("cone")}
+        return {**{key: value for key, value in entry.items() if key != "champion"},
+                "model": {key: self._model.get(key) for key in ("usable", "why_not", "reference", "test", "horizon")},
+                "cone": self._model.get("cone"),
+                "against_live": challengers.board_line(entry["days"], self._champion(entry), seed=challengers.seed_of(check_id))
+                if entry["days"] else None}
+
+    def board(self):
+        from src.admin import challengers
+
+        return challengers.board([{**entry, "champion": self._champion(entry)} for entry in self._checks.values()])
 
     def of_experiments(self):
         found = {}
@@ -1815,6 +1851,7 @@ def build_dev_context(work_dir: str) -> AdminContext:
         config["admin"]["ai_agent"]["debrief_enabled"] = True
         config["admin"]["ai_agent"]["briefing_enabled"] = True
         config["admin"]["ai_agent"]["triage_enabled"] = True
+        config["admin"]["ai_agent"]["skeptic_review"] = True
 
     config_path = os.path.join(work_dir, "etc", "config.json")
     os.makedirs(os.path.dirname(config_path))
@@ -1913,6 +1950,8 @@ def build_dev_context(work_dir: str) -> AdminContext:
         version="dev",
         closers=closers,
         agent_memory=memory_of(settings.agent_path),
+        # The hypotheses waiting to be tried, a few seeded (seed_queue).
+        research_queue=seed_queue(ResearchQueue(settings.agent_path)),
         script_origins=ScriptOrigins(ta_scripts.root),
         script_details=ScriptDetails(ta_scripts),
     )
@@ -1981,6 +2020,10 @@ def build_dev_context(work_dir: str) -> AdminContext:
         ctx.triage = triage_of(ctx, ctx.teller)
         ctx.dossiers = dossiers_of(ctx, ctx.teller)
         ctx.routines = routines_of(ctx, ctx.teller)
+        # A skeptic's review of each kept conclusion, whatever the hour (its answers made up).
+        ctx.skeptic = fake_ai.FakeSkeptic(agent=ctx.agent, journal=backtests.journal,
+                                          verdicts=VerdictStore(settings.agent_path), config_path=config_path,
+                                          path=os.path.join(settings.agent_path, "skeptic.json"))
         fake_ai.seed_routines(ctx.routines.store, ctx.agent.settings)
         print("The AI agent is on, with answers made up (fake_ai.py)")
     return ctx

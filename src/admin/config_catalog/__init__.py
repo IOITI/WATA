@@ -178,6 +178,9 @@ BLOCKS = (
           "What it may propose on live trading, applied only by your click."),
     Block("agent", "dossier", "Go-live dossier", (f"{_AGENT}.dossier_when_ready",),
           "The case for and against taking a signal rule live, once it is ready."),
+    Block("agent", "skeptic", "Skeptic's review", (
+        f"{_AGENT}.skeptic_review", f"{_AGENT}.skeptic_model", f"{_AGENT}.skeptic_effort", f"{_AGENT}.skeptic_max_usd"),
+        "Each kept conclusion read again by a reviewer who only reads, and tries to break it."),
     Block("agent", "reads", "What it reads", (f"{_AGENT}.read_logs",),
           "WATA's research data, its positions, orders and signals, and the admin's health, always; the logs if allowed."),
     Block("agent", "memory", "Memory", (f"{_AGENT}.memory",),

@@ -19,20 +19,21 @@ export function routineDefaults(limits: { usd: number; backtests: number; hours:
   return {
     name: '', goal: '', schedule: { every: 'week', weekday: 5, time: '10:00' },
     budget: { usd: Math.min(3, limits?.usd ?? 3), backtests: Math.min(10, limits?.backtests ?? 10), hours: Math.min(2, limits?.hours ?? 2) },
-    model: null, effort: null, telegram: true, enabled: true,
+    model: null, effort: null, telegram: true, enabled: true, kind: null,
   }
 }
 
 /** A template as the form starts from it: the operator changes what they like before saving. */
 export function fromTemplate(template: AgentRoutineTemplate): AgentRoutineDraft {
   const { name, goal, schedule, budget, telegram } = template
-  return { name, goal, schedule, budget, model: null, effort: null, telegram, enabled: true }
+  // The autopilot's kind goes with it: it is what makes it work the research queue.
+  return { name, goal, schedule, budget, model: null, effort: null, telegram, enabled: true, kind: template.kind ?? null }
 }
 
 /** A routine as its form edits it. */
 export function draftOf(routine: AgentRoutine): AgentRoutineDraft {
   const { name, goal, schedule, budget, model, effort, telegram, enabled } = routine
-  return { name, goal, schedule, budget, model, effort, telegram, enabled }
+  return { name, goal, schedule, budget, model, effort, telegram, enabled, kind: routine.kind ?? null }
 }
 
 /** What the routines switched on would spend in a month at most: each turn its whole budget. */

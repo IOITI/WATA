@@ -3988,6 +3988,16 @@ export interface Experiment {
   checks?: ExperimentChecks | null
   /** Its newest forward check, in short: its candidate judged on the days after it. */
   forward_check?: ForwardCheckShort | null
+  /** A skeptic's review of its kept conclusion (src/admin/agent_skeptic.py): its verdict on the candidate, if any. */
+  review?: ExperimentReview | null
+}
+
+/** What a skeptic's review, which only reads, said of a kept conclusion's candidate. */
+export interface ExperimentReview {
+  conversation: string
+  tone: AgentVerdictTone | null
+  line: string | null
+  at: string
 }
 
 export interface ExperimentCriterion {
@@ -4069,12 +4079,41 @@ export interface ForwardCheckWhole extends ForwardCheck {
   history: ForwardCheckLine[]
   model: EdgeModel | null
   cone: EdgeCone | null
+  /** Beside the live configuration's paper days of the same days; null before its first day. */
+  against_live?: ChallengerFigures | null
+}
+
+/** Whether a candidate did better than what WATA trades now, on the days both were traded (src/admin/challengers.py). */
+export interface ChallengerFigures {
+  days: number
+  first: string | null
+  last: string | null
+  better_days: number
+  worse_days: number
+  challenger_percent: number
+  champion_percent: number
+  mean_difference: number | null
+  /** A 90 % interval of the mean daily difference, the days drawn again; null under five days. */
+  interval: [number, number] | null
+  /** The exact two-sided sign test of its better and worse days. */
+  sign_p: number | null
+  verdict: 'ahead' | 'behind' | 'even' | 'too_few'
+}
+
+/** A line of the challenger board: one forward check against the live configuration. */
+export interface ChallengerLine extends ChallengerFigures {
+  check: string
+  experiment: string | null
+  title: string | null
+  family: string | null
+  state: 'active' | 'ended'
 }
 
 export interface ForwardChecks {
   checks: ForwardCheck[]
   active: number
   most: number
+  board?: ChallengerLine[]
 }
 
 /** How the conclusions of a family, or of a maker, held on the days after them (src/admin/track_record.py). */
@@ -4401,19 +4440,62 @@ export interface AgentRoutine {
   effort: AgentEffort | null
   telegram: boolean
   enabled: boolean
+  /** The research autopilot's: it works the research queue. */
+  kind?: 'autopilot' | null
   created_at: string
   created_by: string | null
-  runs: { at: string; conversation: string; turn: string }[]
+  /** Its last tasks; the autopilot's say the hypothesis each took (null: the queue was empty). */
+  runs: { at: string; conversation: string; turn: string; hypothesis?: { id: string; title: string } | null }[]
   /** When it next comes back; the market's close may still hold it back. */
   next: string | null
 }
 
-export type AgentRoutineDraft = Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'model' | 'effort' | 'telegram' | 'enabled'>
+export type AgentRoutineDraft = Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'model' | 'effort' | 'telegram' | 'enabled' | 'kind'>
 
 /** A routine ready to add: the operator changes what they like before saving. */
-export interface AgentRoutineTemplate extends Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'telegram'> {
+export interface AgentRoutineTemplate extends Pick<AgentRoutine, 'name' | 'goal' | 'schedule' | 'budget' | 'telegram' | 'kind'> {
   key: string
 }
+
+export type QueueState = 'waiting' | 'taken' | 'done' | 'dropped'
+
+/** A hypothesis of the research queue (src/admin/research_queue.py), the operator's or a research task's. */
+export interface QueueItem {
+  id: string
+  title: string
+  hypothesis: string
+  family: string
+  rationale: string | null
+  criteria: ExperimentCriterion[]
+  motivated_by: string[]
+  /** "operator", or "agent:<conversation>" for one a research task left. */
+  by: string
+  conversation_from: string | null
+  /** What the operator filed it from: "autopsy:<run>". */
+  source?: string | null
+  state: QueueState
+  order: number
+  created_at: string
+  updated_at: string | null
+  taken_at?: string | null
+  /** The task that took it, the experiment it became, and what it concluded. */
+  conversation: string | null
+  experiment: string | null
+  conclusion: string | null
+}
+
+export interface ResearchQueue {
+  revision: string
+  /** In the order the autopilot takes them, then those taken, done or dropped, the newest first. */
+  items: QueueItem[]
+  /** The families tried long with nothing that held on later days: their hypotheses wait behind the others. */
+  tired: string[]
+  agent: boolean
+  autopilot: { id: string; name: string; enabled: boolean } | null
+  limits: { agent_waiting: number; per_conversation: number }
+}
+
+export type QueueDraft = Pick<QueueItem, 'title' | 'hypothesis' | 'family' | 'rationale' | 'motivated_by'> & { source?: string | null }
 
 export type AgentVerdictTone = 'positive' | 'mixed' | 'negative' | 'neutral'
 

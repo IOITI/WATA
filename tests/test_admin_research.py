@@ -128,6 +128,10 @@ class FakeForward:
     def checks(self):
         return [self.entry]
 
+    def board(self):
+        return [{"check": "f1234abcd", "title": "Open block", "days": 6, "verdict": "ahead", "better_days": 5,
+                 "worse_days": 1}]
+
     def check(self, check_id):
         from src.admin.forward_checks import UnknownCheck
 
@@ -176,6 +180,7 @@ def test_the_forward_checks_are_listed_read_started_and_stopped_by_the_operator(
     stopped = client.post("/api/research/forward/f1234abcd/stop", headers=SAME_ORIGIN)
 
     assert (listed["active"], listed["most"]) == (1, 10)
+    assert listed["board"][0]["check"] == "f1234abcd" and listed["board"][0]["verdict"] == "ahead"
     assert one.status_code == 200 and one.json()["candidate"] == "20261019-200000-abcdef"
     assert unknown.status_code == 404
     assert started.status_code == 200 and ctx.forward.started == [("aaaaaa", "20261019-200000-abcdef", "operator")]

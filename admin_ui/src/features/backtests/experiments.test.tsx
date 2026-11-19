@@ -6,10 +6,20 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { EdgeTrack, Experiment, Experiments, ForwardCheck, ForwardCheckWhole, Session, TrackRecordGroup } from '@/lib/types'
+import type { ChallengerLine, EdgeTrack, Experiment, Experiments, ForwardCheck, ForwardCheckWhole, Session, TrackRecordGroup } from '@/lib/types'
 import { WithTrail } from '@/test/WithTrail'
 
-import { criterionText, experimentsTab, familyTrials, forwardSentence, lockboxText, recordSentence } from './experiments'
+import {
+  CHALLENGER_SAID,
+  challengerSentence,
+  criterionText,
+  experimentsTab,
+  familyTrials,
+  forwardSentence,
+  lockboxText,
+  recordSentence,
+  REVIEW_SAID,
+} from './experiments'
 import { ExperimentsPage } from './ExperimentsPage'
 import { ForwardCheckPage } from './ForwardCheckPage'
 
@@ -63,6 +73,12 @@ const CHECK: ForwardCheck = {
   started_at: '2026-11-14T12:00:00Z', by: 'agent:abc', ended_at: null, why: null, last: null, judgement: TRACK, days_tested: 4,
 }
 
+const BOARD: ChallengerLine = {
+  check: 'f1234abcd', experiment: '1a2b3c', title: 'EMA cross on 5 min', family: 'ema-cross', state: 'active', days: 6,
+  first: '2026-11-12', last: '2026-11-19', better_days: 5, worse_days: 1, challenger_percent: 4.2, champion_percent: -1.1,
+  mean_difference: 0.9, interval: [0.1, 1.6], sign_p: 0.22, verdict: 'ahead',
+}
+
 function group(changes: Partial<TrackRecordGroup> = {}): TrackRecordGroup {
   return {
     experiments: 4, trials: 120, open: 0, kept: 2, rejected: 1, inconclusive: 1, kept_met_bar: 1, kept_against_bar: 1,
@@ -80,7 +96,7 @@ function serve() {
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
       sent.push({ method, path, body })
       if (path === '/api/research/experiments') return json(journal)
-      if (path === '/api/research/forward' && method === 'GET') return json({ checks: [CHECK], active: 1, most: 10 })
+      if (path === '/api/research/forward' && method === 'GET') return json({ checks: [CHECK], active: 1, most: 10, board: [BOARD] })
       if (path === '/api/research/forward' && method === 'POST') return json(CHECK)
       if (path === '/api/research/forward/f1234abcd') {
         const whole: ForwardCheckWhole = {
@@ -192,7 +208,24 @@ describe('what an experiment rests on, and how it held on later days', () => {
     expect(criterionText({ figure: 'edge_t', bound: 'at_least', value: 2.6 })).toBe('edge t at least 2.6')
     expect(recordSentence(group())).toBe('2 kept of 4 experiments; 1 against the bar; later days: 3 held, 1 on watch, 1 broken; 60 % held')
     expect(experimentsTab('record')).toBe('record')
+    expect(experimentsTab('challengers')).toBe('challengers')
     expect(experimentsTab('nothing')).toBe('journal')
+  })
+
+  it('says a candidate against the live configuration on the days both were traded', () => {
+    const line = {
+      days: 6, first: '2026-11-12', last: '2026-11-19', better_days: 5, worse_days: 1, challenger_percent: 4.2,
+      champion_percent: -1.1, mean_difference: 0.9, interval: [0.1, 1.6] as [number, number], sign_p: 0.22, verdict: 'ahead' as const,
+    }
+
+    expect(challengerSentence(line)).toBe(
+      'On 6 days both were traded, it did better on 5 and worse on 1: +4.20% against −1.10% for the live configuration. ' +
+        'Its mean daily difference lies between +0.10% and +1.60% 90 % of the time, its days drawn again (sign test p = 0.22).',
+    )
+    expect(challengerSentence({ ...line, days: 2, interval: null, verdict: 'too_few' })).toMatch(/Five days at least are needed to say more\.$/)
+    expect(challengerSentence({ ...line, days: 0 })).toBe('No day both were traded on yet.')
+    expect(CHALLENGER_SAID.behind.label).toBe('Behind live')
+    expect(REVIEW_SAID.negative.label).toBe('Skeptic: does not hold')
   })
 
   it('shows the candidate a conclusion kept, how it stood, and its forward check', async () => {
@@ -246,6 +279,28 @@ describe('what an experiment rests on, and how it held on later days', () => {
     expect(await screen.findByText('kernel-avg-vwap')).toBeInTheDocument()
     expect(screen.getByText('the AI agent')).toBeInTheDocument()
     expect(screen.getAllByText(/3 held, 1 on watch, 1 broken/).length).toBeGreaterThan(0)
+  })
+
+  it('sets each forward check against the live configuration on its tab', async () => {
+    renderPage('/backtests/experiments?tab=challengers')
+
+    expect(await screen.findByText('Ahead of live')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'EMA cross on 5 min' })).toHaveAttribute('href', '/backtests/experiments/forward/f1234abcd')
+    expect(screen.getByText(/did better on 5 and worse on 1/)).toBeInTheDocument()
+  })
+
+  it('names a skeptic\'s review of a kept conclusion beside it, linked to its conversation', async () => {
+    journal = {
+      ...journal,
+      experiments: journal.experiments.map((entry, index) => (index === 0
+        ? { ...entry, verdict: 'kept' as const, review: { conversation: '20261120-180000-aaaaaa', tone: 'mixed' as const, line: 'Rests on two days.', at: '2026-11-20T18:05:00Z' } }
+        : entry)),
+    }
+    renderPage()
+
+    expect(await screen.findByText('Skeptic: rests on little')).toBeInTheDocument()
+    expect(screen.getByText('Rests on two days.')).toBeInTheDocument()
+    expect(screen.getByText('Skeptic: rests on little').closest('a')).toHaveAttribute('href', '/agent/20261120-180000-aaaaaa')
   })
 
   it('opens a forward check with its verdict, its evenings, and stops it', async () => {

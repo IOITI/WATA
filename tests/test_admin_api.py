@@ -263,6 +263,10 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/luxalgo/compat"),
     ("POST", "/api/luxalgo/compat"),
     ("GET", "/api/agent/routines/templates"),
+    ("GET", "/api/agent/queue"),
+    ("POST", "/api/agent/queue"),
+    ("PATCH", "/api/agent/queue/q0a1b2c3d"),
+    ("DELETE", "/api/agent/queue/q0a1b2c3d"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/propfirms"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/propfirms"),
     ("GET", "/api/luxalgo/families"),
@@ -851,7 +855,8 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{routine_id}", "r0a1b2c3d")
             .replace("{file_id}", "f0123456789")
             .replace("{slug}", "tri-star")
-            .replace("{check_id}", "f0a1b2c3d"),
+            .replace("{check_id}", "f0a1b2c3d")
+            .replace("{item_id}", "q0a1b2c3d"),
         )
         for route in app.routes
         if route.path.startswith("/api")

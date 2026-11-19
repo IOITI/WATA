@@ -99,7 +99,7 @@ def test_a_task_goes_on_request_after_request_until_the_agent_says_it_is_done(st
     task = ended["task"]
     assert task["state"] == "done" and task["requests"] == 2 and ended["request"] == 1
     assert task["conclusion"] == {"conclusion": "No edge on 22 days.", "runs_kept": ["20261028-080000-aaaaaa"],
-                                  "next_steps": None}
+                                  "next_steps": None, "next_hypotheses": None}
     assert task["spent_usd"] == pytest.approx(ended["cost_usd"]) and task["spent_usd"] > 0
     # Each request within what is left of the task: $2 of it, under the agent's $5 a request.
     first, second = asked_text(provider.asked[0]), asked_text(provider.asked[1])
@@ -241,6 +241,87 @@ def test_the_operator_stops_a_task_and_no_request_follows(store):
     with pytest.raises(NotPossible, match="ended already"):
         agent.stop_task(ended["id"], None)
 
+
+
+def test_a_tasks_end_is_told_with_its_next_hypotheses_and_a_stop_too(store):
+    gap = {"title": "Gap fill", "hypothesis": "The open's gap fills before 10:30", "family": "gaps"}
+    provider = FakeProvider(
+        answer(call("task_done", "d", conclusion="Nothing held.", next_hypotheses=[gap]), stop="tool_use"),
+        answer(text("Nothing held: the gap is next.")),
+    )
+    told = []
+    agent, _ = agent_of(store, provider)
+    agent.on_task_ended(lambda conversation_id, task: told.append((conversation_id, task["state"], task["conclusion"])))
+    # A hook that fails is logged, never in the task's way.
+    agent.on_task_ended(lambda conversation_id, task: 1 / 0)
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        meta = await agent.create_task("Try the open", None, "routine:r0a1b2c3d", BUDGET,
+                                       hypothesis={"id": "q0a1b2c3d", "title": "Open block", "family": "kernel", "x": 1})
+        ended = await until_the_task_ends(agent, meta["id"])
+        worker.cancel()
+        return ended
+
+    ended = asyncio.run(scenario())
+
+    assert ended["task"]["state"] == "done" and ended["task"]["hypothesis"] == {
+        "id": "q0a1b2c3d", "title": "Open block", "family": "kernel"}
+    [(conversation_id, state, conclusion)] = told
+    assert (conversation_id, state) == (ended["id"], "done")
+    assert conclusion["next_hypotheses"][0]["title"] == "Gap fill"
+
+
+def test_a_task_stopped_by_the_operator_is_told_ended(store):
+    provider = FakeProvider(answer(text("Never asked.")))
+    agent, _ = agent_of(store, provider)
+    told = []
+    agent.on_task_ended(lambda conversation_id, task: told.append((conversation_id, task["state"])))
+    conversation_id = store.new_id(NOW)
+    task = {"goal": "Tune", "budget": BUDGET, "state": "working", "started_at": stamp(NOW),
+            "deadline": stamp(NOW + 4 * 3600), "spent_usd": 0.1, "backtests": 0, "requests": 1, "by": None,
+            "ended_at": None, "ended_because": None, "conclusion": None}
+    store.create({"id": conversation_id, "title": "Tune", "status": "idle", "request": 0, "requests": 1,
+                  "cost_usd": 0.1, "updated_at": stamp(NOW), "task": task})
+
+    agent.stop_task(conversation_id, "10.8.0.2")
+
+    assert told == [(conversation_id, "ended")]
+
+
+def test_a_task_is_told_the_research_so_far_at_its_first_request_alone(store):
+    provider = FakeProvider(answer(text("A first look.")), answer(call("task_done", "d", conclusion="Done."),
+                                                                  stop="tool_use"), answer(text("Done.")),
+                            answer(text("A knock-out warrant.")))
+    asked = []
+
+    def brief(meta):
+        asked.append(meta["id"])
+        return "What the research has done so far (the experiment journal on the server): BRIEF"
+
+    agent, _ = agent_of(store, provider)
+    agent._brief = brief
+
+    async def scenario():
+        worker = asyncio.create_task(agent.run())
+        meta = await agent.create_task("Try the open", None, None, BUDGET)
+        ended = await until_the_task_ends(agent, meta["id"])
+        # A conversation that is no task is told nothing of it.
+        plain = await agent.create(None, "What is a turbo?", None)
+        for _ in range(500):
+            if agent.store.meta(plain["id"])["status"] not in ("queued", "running"):
+                break
+            await asyncio.sleep(0.01)
+        worker.cancel()
+        return ended
+
+    ended = asyncio.run(scenario())
+
+    # Read once, at the task's first request: its later requests carry it as the conversation's first message alone.
+    assert asked == [ended["id"]]
+    first = asked_text(provider.asked[0])
+    assert "BRIEF" in first and first.index("BRIEF") < first.index("Try the open")
+    assert asked_text(provider.asked[2]).count("BRIEF") == 1 and "BRIEF" not in asked_text(provider.asked[-1])
 
 def test_a_stop_that_comes_as_a_request_ends_is_kept(store):
     """

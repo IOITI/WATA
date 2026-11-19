@@ -339,7 +339,7 @@ def test_a_save_is_a_step_of_the_request_and_an_artefact_of_the_conversation(tmp
             return await super().call(name, arguments, request, progress, stopping)
 
     class Tools(FakeTools):
-        def session(self, conversation_id, task=False):
+        def session(self, conversation_id, task=False, read_only=False):
             from contextlib import asynccontextmanager
 
             @asynccontextmanager

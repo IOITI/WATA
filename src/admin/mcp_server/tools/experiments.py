@@ -29,6 +29,8 @@ def _experiment_line(experiment: dict, forward: dict | None = None) -> dict:
         line["bar"] = (experiment.get("checks") or {}).get("bar")
     if forward:
         line["forward"] = {key: forward.get(key) for key in ("state", "verdict", "trades", "cumulative", "days_tested", "why")}
+    if experiment.get("review"):
+        line["review"] = {key: experiment["review"].get(key) for key in ("tone", "line")}
     return line
 
 
@@ -94,8 +96,9 @@ def register(server, research) -> None:
     @research_tool(server, calls, name="exp_get", title="The experiment journal", read_only=True)
     async def exp_get(experiment_id: str = "") -> dict:
         """With no id: every experiment, open ones first, each with its family, verdict, trials and runs count, its
-        candidate and how its forward check stands (the days after it, which no run had seen); the trials by family,
-        the track record (how each family's and each maker's kept conclusions held on later days) and the lock box.
+        candidate, how its forward check stands (the days after it, which no run had seen) and a skeptic's review;
+        the trials by family, the track record (how each family's and each maker's kept conclusions held on later
+        days), the challengers (each forward check against the live configuration on the same days) and the lock box.
         With an id: that experiment whole, its hypothesis, plan, motivating days and criteria, each run (kind,
         trials, whether it used the lock box), its conclusion with its candidate's checks, and its forward check."""
         checks = forward_of_experiments()
@@ -111,10 +114,14 @@ def register(server, research) -> None:
             families[experiment["family"]] = families.get(experiment["family"], 0) + experiment["trials"]
         box = await run_in_threadpool(journal.lockbox)
         ordered = sorted(experiments, key=lambda experiment: (experiment["verdict"] is not None, experiment["opened_at"]))
+        board = await run_in_threadpool(research.forward.board) if research.forward is not None else []
         return compacted({
             "experiments": [_experiment_line(experiment, checks.get(experiment["id"])) for experiment in ordered],
             "trials_by_family": families,
             "track_record": record(experiments, checks),
+            "challengers": [{key: line.get(key) for key in (
+                "check", "experiment", "title", "state", "days", "better_days", "worse_days", "sign_p", "interval",
+                "challenger_percent", "champion_percent", "verdict")} for line in board],
             "lockbox": box,
         })
 

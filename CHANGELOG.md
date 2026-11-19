@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.97.0 - Keep the loop going: the research queue, the autopilot, the brief
+
+**Release date:** not yet released
+
+Each research task started blank: the journal was never put before it, its next steps were never read again, and a routine repeated the same goal. Now the research works through a queue of its own hypotheses, each task told what was tried before it:
+
+- **The research queue** (`src/admin/research_queue.py`, AI agent › Research queue): the operator's hypotheses first, in their order, then those research tasks left (`task_done`'s new `next_hypotheses`, three a task, twenty waiting at most), a family tried long with nothing that held on later days last. File, move, take a task's as yours, drop with an Undo, put back; "Add to the research queue" on what a run's autopsy found held.
+- **The research autopilot**, a routine made from its template: each trading day once the market is closed, it takes the next hypothesis and works it as an experiment; with the queue empty, a look that runs nothing fills it. A task refused puts its hypothesis back; each task's end settles the hypothesis with the experiment it made and files what it left; what a restart left is settled at the next look.
+- **The research brief** (`src/admin/research_brief.py`): a research task's first request is told its family's record, its latest experiments and how they held, the forward checks and the challenger board, what its routine's task before it concluded, the queue's next and the lock box. Never in the system prompt.
+- **A skeptic's review** (`src/admin/agent_skeptic.py`, `admin.ai_agent.skeptic_review`, off unless switched on, with `skeptic_model`, `skeptic_effort`, `skeptic_max_usd`): each kept conclusion read again by a conversation that only reads (every write refused but its verdict and a chart) and starts no backtest; its verdict on the candidate is written beside the experiment (a `reviewed` event of the journal), on Experiments, in `exp_get` and in the brief.
+- **Against live** (`src/admin/challengers.py`, Experiments › Against live, a forward check's page, MCP `exp_get`'s `challengers`): each kept conclusion's later days against the live configuration traded on paper on the same days, a sign test and a bootstrap interval of the daily difference, the live days kept with the check beyond the sixty days paper trading keeps them.
+- The AI agent writes down the configurations it screens by eye (`exp_trials` among its tools, 40 of them).
+
+**On the live path:** nothing. The admin alone changes (admin1). No file of a backtest's `_CODE` changed, so no run turns stale.
+
+**Before going back to v0.96.0 or earlier:** remove the four `admin.ai_agent.skeptic_*` keys from config.json, if they were added: an older admin refuses keys it does not know.
+
+**Verification status:** the Python suite (4,569 passed, 24 skipped), the interface's 1,611 tests, its lint, types and build; the release manifest names admin1 alone. On the development admin (FAKE_AI=1), at 1,440 and 375 px, light and dark: the queue seeded, the autopilot made from its template and run, its task taking the first hypothesis with the brief in its first request, keeping a run, its forward check started, the hypothesis settled with its experiment and the task's two next hypotheses filed; the skeptic's review of that conclusion set and shown on Experiments; the Against live tab. Found and fixed there: a kept conclusion whose candidate run was gone stopped every later review; an autopilot task was titled by its goal, not its hypothesis.
+
 ## v0.96.0 - Why it wins or loses: the trade autopsy, plateaus, and the day's caps
 
 **Release date:** not yet released

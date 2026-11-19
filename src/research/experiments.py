@@ -53,6 +53,10 @@ BOUNDS = ("at_least", "at_most")
 CRITERION_FIGURE = re.compile(r"[a-z][a-z_]{0,39}")
 # A forward check of a kept candidate is written when it starts and when it ends.
 FORWARD_STATES = ("started", "ended")
+# A skeptic's review of a kept conclusion (src/admin/agent_skeptic.py): the tone of its verdict on the candidate, as the
+# AI agent's verdicts have them, or None when it set none.
+REVIEW_TONES = ("positive", "mixed", "negative", "neutral")
+MAX_REVIEW_LINE = 200
 # Two family names this alike are taken for one spelt twice (a family's trials correct its sweeps).
 SIMILAR_FAMILY = 0.8
 
@@ -269,6 +273,18 @@ class ExperimentJournal:
         self.get(experiment_id)
         return self._append({**facts, "event": "forward", "experiment": experiment_id, "check": check, "state": state})
 
+    def record_review(self, experiment_id: str, *, conversation: str, tone: str | None, line: str | None) -> dict:
+        """
+        A skeptic's review of the experiment's kept conclusion (src/admin/agent_skeptic.py): the conversation it was
+        made in, and its verdict on the candidate (None: it set none). It changes neither the conclusion nor its
+        forward check; the newest review is the one folded in.
+        """
+        if tone is not None and tone not in REVIEW_TONES:
+            raise JournalError(f"A review's tone is one of {', '.join(REVIEW_TONES)}")
+        self.get(experiment_id)
+        return self._append({"event": "reviewed", "experiment": experiment_id, "conversation": conversation,
+                             "tone": tone, "line": " ".join(str(line or "").split())[:MAX_REVIEW_LINE] or None})
+
     def experiments(self) -> list[dict]:
         """Every experiment, its runs and its conclusion, oldest first."""
         found: dict[str, dict] = {}
@@ -280,7 +296,7 @@ class ExperimentJournal:
                     "plan": event.get("plan"), "made_by": event.get("made_by"), "made_via": event.get("made_via"),
                     "motivated_by": list(event.get("motivated_by") or []), "criteria": list(event.get("criteria") or []),
                     "opened_at": event["at"], "runs": [], "elsewhere": [], "trials": 0, "verdict": None, "notes": None,
-                    "concluded_at": None, "candidate": None, "checks": None, "forward": None,
+                    "concluded_at": None, "candidate": None, "checks": None, "forward": None, "review": None,
                 }
             elif key in found and event["event"] == "run":
                 found[key]["runs"].append({
@@ -301,6 +317,9 @@ class ExperimentJournal:
                 started = event["at"] if event.get("state") == "started" else before.get("started_at")
                 found[key]["forward"] = {**facts, "started_at": started,
                                          "ended_at": event["at"] if event.get("state") == "ended" else None}
+            elif key in found and event["event"] == "reviewed":
+                found[key]["review"] = {"conversation": event.get("conversation"), "tone": event.get("tone"),
+                                        "line": event.get("line"), "at": event["at"]}
             # Any other event (written by a newer admin) is left aside: an older one still reads the journal.
         return list(found.values())
 

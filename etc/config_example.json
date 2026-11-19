@@ -397,7 +397,11 @@
       "triage_telegram": true,
       "action_proposals": true,
       "dossier_when_ready": false,
-      "max_routines": 10
+      "max_routines": 10,
+      "skeptic_review": false,
+      "skeptic_model": "claude-sonnet-5-5",
+      "skeptic_effort": "medium",
+      "skeptic_max_usd": 0.5
     },
     "persistant": {
       "credentials_path": "/app/var/lib/admin/credentials.json",

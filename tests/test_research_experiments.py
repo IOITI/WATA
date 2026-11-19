@@ -297,6 +297,21 @@ def test_a_forward_check_is_written_when_it_starts_and_when_it_ends(tmp_path):
         journal.record_forward(found, "f0a1b2c3d", "paused")
 
 
+
+def test_a_skeptics_review_is_kept_and_the_newest_folded_in(journal):
+    found = journal.new("A", "a", "f")["experiment"]
+    journal.conclude(found, "kept", "n", candidate="20261114-113341-aa2d8f")
+    assert journal.get(found)["review"] is None
+
+    journal.record_review(found, conversation="20261120-180000-aaaaaa", tone=None, line=None)
+    journal.record_review(found, conversation="20261120-180000-aaaaaa", tone="negative", line="Rests on   two days.")
+
+    review = journal.get(found)["review"]
+    assert (review["conversation"], review["tone"], review["line"]) == ("20261120-180000-aaaaaa", "negative", "Rests on two days.")
+    assert journal.get(found)["verdict"] == "kept"
+    with pytest.raises(ValueError, match="tone"):
+        journal.record_review(found, conversation="c", tone="furious", line="x")
+
 def test_families_are_listed_the_most_tried_first(journal):
     first = journal.new("A", "a", "kernel-avg-vwap")["experiment"]
     second = journal.new("B", "b", "day-design")["experiment"]

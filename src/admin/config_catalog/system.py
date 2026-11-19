@@ -456,6 +456,35 @@ ADMIN_PARAMS = (
         also_needs=(f"{AGENT}.enabled",),
     ),
     Param(
+        path=f"{AGENT}.skeptic_review", group="agent", label="Skeptic's review of kept conclusions", kind="bool",
+        optional=True, default=False,
+        help="Each experiment the research concluded kept, with its candidate run, is read again by a skeptic, the "
+             "market closed: a conversation of the agent that only reads (no backtest, nothing saved, proposed or "
+             "concluded) and tries to break the conclusion with what the run holds; its verdict is set on the run and "
+             "written beside the experiment in its journal.",
+        readers=(ADMIN,), risk=NONE,
+        caveats=("It changes neither the conclusion nor its forward check, which judge it on later days.",
+                 "Once for each kept conclusion, within skeptic_max_usd."),
+        also_needs=(f"{AGENT}.enabled",),
+    ),
+    Param(
+        path=f"{AGENT}.skeptic_model", group="agent", label="Skeptic's model", kind="enum", choices=MODELS,
+        optional=True, default="claude-sonnet-5-5",
+        help="The model that reviews a kept conclusion: a reading that looks for what breaks it.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.skeptic_effort", group="agent", label="Skeptic's effort", kind="enum", choices=EFFORTS,
+        optional=True, default="medium", help="How much the skeptic's model thinks before it answers.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
+        path=f"{AGENT}.skeptic_max_usd", group="agent", label="Cost of a skeptic's review at most", kind="number",
+        unit="$", minimum=0.1, maximum=5, optional=True, default=0.5,
+        help="What one review may cost: it is asked to conclude near it, and stopped there.",
+        readers=(ADMIN,), risk=NONE,
+    ),
+    Param(
         path=f"{AGENT}.max_routines", group="agent", label="Routines at most", kind="int", minimum=1, maximum=50,
         optional=True, default=10,
         help="Research tasks that come back by themselves (AI agent › Routines), each trading day or each week, kept "

@@ -34,6 +34,7 @@ from src.admin.agent import provider as claude
 from src.admin.agent_briefing import MorningBriefing
 from src.admin.agent_debrief import DailyDebrief
 from src.admin.agent_memory import Author
+from src.admin.agent_skeptic import SkepticReviews
 from src.admin.agent.settings import EFFORTS
 from src.admin.ta_rules import LIVE, RuleStore
 
@@ -64,6 +65,20 @@ _TASK_GOES_ON = "The research task goes on"
 _DEBRIEF = "Write the debrief of this trading day"
 _BRIEFING = "Write the morning briefing"
 _TRIAGE = "An alert fired"
+# The research autopilot's goals (src/admin/agent_routines.py), and a skeptic's review (src/admin/agent/prompts.py).
+_AUTOPILOT = "Work the research queue's next hypothesis"
+_EMPTY_QUEUE = "The research queue is empty"
+_SKEPTIC = "Review it as a skeptic"
+_HYPOTHESIS_OF = re.compile(r"^The hypothesis \([^)]*\): (.+)$", re.M)
+_FAMILY_OF = re.compile(r"^Its family: (.+)$", re.M)
+# What a task leaves to try next (made up).
+NEXT_HYPOTHESES = [
+    {"title": "Exits on the index between quotes", "family": "exits",
+     "hypothesis": "Judging the stop on the index between Saxo's quotes cuts the losses that ran past it",
+     "criteria": [{"figure": "total_percent", "bound": "at_least", "value": 0}]},
+    {"title": "No entry after two losses in a row", "family": "day-design",
+     "hypothesis": "After two losing trades in a row, the day's next entries lose more than the others"},
+]
 # A PNG says its width and height in its first 24 bytes (its IHDR chunk).
 _PNG = b"\x89PNG\r\n\x1a\n"
 # An entry of the memory's list, as a conversation's first words give it (src/admin/agent/prompts.py memory_index).
@@ -150,6 +165,8 @@ class FakeClaude:
             blocks = await self._briefing(on_event)
         elif asked.startswith(_TRIAGE):
             blocks = await self._triage(done, on_event)
+        elif _SKEPTIC in asked:
+            blocks = await self._skeptic(subject, done, on_event)
         elif asked.startswith(_TASK_GOES_ON):
             blocks = await self._task_going_on(done, on_event)
         elif asked.startswith(_TASK):
@@ -531,6 +548,10 @@ class FakeClaude:
             "Nothing to act on; if it comes back, restart the service from System when the market is closed."))
 
     async def _task(self, done: dict, on_event) -> list:
+        if _AUTOPILOT in self._prompt:
+            return await self._autopilot(done, on_event)
+        if _EMPTY_QUEUE in self._prompt:
+            return await self._empty_queue(done, on_event)
         if "backtest_list" not in done:
             return await self._turn(on_event, "A research task: I start by looking at the runs there are.", [
                 ("backtest_list", {"limit": 10})])
@@ -540,6 +561,78 @@ class FakeClaude:
                                   "why": "Each takes half the budget (made up by the development admin)."})])
         return await self._turn(on_event, "A first look is done: the task waits for the operator's answer.", text=(
             "I looked at the runs there are, and asked which direction first: the task goes on with your answer."))
+
+    def _answer_of(self, done: dict, name: str) -> dict:
+        found = done.get(name)
+        text = found if isinstance(found, str) else next(
+            (block.get("text", "") for block in found or [] if block.get("type") == "text"), "")
+        return json.loads(text) if text.startswith("{") else {}
+
+    def _finished_run(self) -> str | None:
+        """A finished run of one combination, made by hand: what the autopilot's made-up experiment derives from."""
+        derived = ("stress_of", "noise_of", "model_check_of", "forward_of", "decomposes", "paper")
+        for run in self._backtests.list_runs(limit=40) if self._backtests is not None else []:
+            if ((run.get("status") or {}).get("state") == "done" and run.get("kind") != "sweep"
+                    and not any(run.get(key) for key in derived)):
+                return run["id"]
+        return None
+
+    async def _autopilot(self, done: dict, on_event) -> list:
+        """The queue's next hypothesis worked (made up): its experiment, a run of it, kept, and what to try next."""
+        title = (_HYPOTHESIS_OF.search(self._prompt) or [None, "The queue's hypothesis"])[1]
+        family = (_FAMILY_OF.search(self._prompt) or [None, "autopilot"])[1]
+        if "exp_new" not in done:
+            return await self._turn(on_event, "The queue's next hypothesis: its experiment first, before any run.", [
+                ("exp_new", {"title": title, "family": family, "new_family": True,
+                             "hypothesis": f"{title}, as the research queue gives it (made up by the development admin)",
+                             "criteria": [{"figure": "total_percent", "bound": "at_least", "value": 0}]})])
+        experiment = self._answer_of(done, "exp_new").get("id")
+        base = self._finished_run()
+        if experiment and base and "backtest_derive" not in done:
+            return await self._turn(on_event, "A run of it: the strongest one again, without its day's caps.", [
+                ("backtest_derive", {"run_id": base, "kind": "caps_off", "experiment_id": experiment})])
+        candidate = self._answer_of(done, "backtest_derive").get("id") if "backtest_derive" in done else None
+        if candidate and "backtest_wait" not in done:
+            return await self._turn(on_event, "I wait for its run to end.", [("backtest_wait", {"run_ids": [candidate]})])
+        if experiment and "exp_conclude" not in done:
+            if candidate:
+                return await self._turn(on_event, "It cleared what it set itself: I keep it, its run as the candidate.", [
+                    ("exp_conclude", {"experiment_id": experiment, "verdict": "kept", "candidate": candidate,
+                                      "notes": "Kept on few recorded days (made up by the development admin): later "
+                                               "days will judge it."})])
+            return await self._turn(on_event, "No run to rest on: inconclusive.", [
+                ("exp_conclude", {"experiment_id": experiment, "verdict": "inconclusive",
+                                  "notes": "No finished run to derive from (made up by the development admin)."})])
+        if "task_done" not in done:
+            return await self._turn(on_event, "Done: what it found, and what to try next.", [
+                ("task_done", {"conclusion": f"{title}: kept on few days (made up); its forward check judges it.",
+                               "runs_kept": [candidate] if candidate else [], "next_hypotheses": NEXT_HYPOTHESES})])
+        return await self._turn(on_event, "The task is done.", text=(
+            f"## {title}\n\nKept on few recorded days (made up by the development admin): its forward check judges "
+            "it on the days after it. Two hypotheses are filed for next time in the research queue."))
+
+    async def _empty_queue(self, done: dict, on_event) -> list:
+        if "exp_get" not in done:
+            return await self._turn(on_event, "The queue is empty: what held on later days first.", [("exp_get", {})])
+        if "task_done" not in done:
+            return await self._turn(on_event, "Two ideas are worth an experiment.", [
+                ("task_done", {"conclusion": "Nothing held long enough to build on (made up); two ideas to try.",
+                               "next_hypotheses": NEXT_HYPOTHESES})])
+        return await self._turn(on_event, "Filed.", text="Two hypotheses are filed in the research queue (made up).")
+
+    async def _skeptic(self, subject, done: dict, on_event) -> list:
+        """A kept conclusion read again by a skeptic, who only reads (made up)."""
+        run_id = subject[1] if subject and subject[0] == "run" else None
+        if run_id and "backtest_result" not in done:
+            return await self._turn(on_event, "Its summary first: what it rests on.", [
+                ("backtest_result", {"run_id": run_id, "part": "summary"})])
+        if run_id and "set_verdict" not in done:
+            return await self._turn(on_event, "It rests on few days: I say so where the run is shown.", [
+                ("set_verdict", {"about": f"run:{run_id}", "tone": "mixed",
+                                 "line": "Rests on a few recorded days: later days must hold it (made up)."})])
+        return await self._turn(on_event, "Reviewed.", text=(
+            "**Rests on little** (made up by the development admin): a few recorded days, no stress yet. Nothing says "
+            "it is wrong; its forward check will tell."))
 
     async def _task_going_on(self, done: dict, on_event) -> list:
         if "task_done" not in done:
@@ -629,3 +722,19 @@ class FakeDailyDebrief(DailyDebrief):
 
     def _market_is_open(self, config: dict, now: float) -> bool:
         return False
+
+
+class FakeSkeptic(SkepticReviews):
+    """A skeptic's review of each kept conclusion, at any hour, a look every 20 s: its answers made up."""
+
+    def _market_is_open(self, config: dict, now: float) -> bool:
+        return False
+
+    async def keep(self) -> None:
+        while True:
+            if self._agent.ready:
+                try:
+                    await self.catch_up()
+                except Exception as e:
+                    print(f"[fake] The skeptic could not look: {e}", flush=True)
+            await asyncio.sleep(20)

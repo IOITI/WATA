@@ -174,10 +174,13 @@ async def experiments(request: Request):
 
 @router.get("/research/forward")
 async def forward_checks(request: Request):
-    """Every forward check, the active first, the newest first."""
+    """Every forward check, the active first, the newest first, and the challenger board."""
     service = _forward(request)
     found = await run_in_threadpool(service.checks)
-    return {"checks": found, "active": sum(1 for check in found if check["state"] == ACTIVE), "most": MAX_ACTIVE}
+    # Each beside the live configuration's paper days of the same days (src/admin/challengers.py).
+    board = await run_in_threadpool(service.board)
+    return {"checks": found, "active": sum(1 for check in found if check["state"] == ACTIVE), "most": MAX_ACTIVE,
+            "board": board}
 
 
 @router.get("/research/forward/{check_id}")

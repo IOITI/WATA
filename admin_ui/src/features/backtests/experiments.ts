@@ -5,6 +5,8 @@ import type { BadgeTone } from 'ioiti-ui'
 
 import { VERDICT_LABEL, VERDICT_TONE } from '@/features/edgeWatch/edgeWatch'
 import type {
+  AgentVerdictTone,
+  ChallengerFigures,
   EdgeVerdict,
   Experiment,
   ExperimentCriterion,
@@ -54,12 +56,47 @@ export const ENDED_SAID: Record<ForwardEnd, string> = {
 }
 
 /** The tabs of the Experiments page, each with its address. */
-export type ExperimentsTab = 'journal' | 'forward' | 'record'
+export type ExperimentsTab = 'journal' | 'forward' | 'challengers' | 'record'
 export const EXPERIMENTS_TABS: { id: ExperimentsTab; label: string }[] = [
   { id: 'journal', label: 'Journal' },
   { id: 'forward', label: 'Forward checks' },
+  { id: 'challengers', label: 'Against live' },
   { id: 'record', label: 'Track record' },
 ]
+
+// ── each kept conclusion against what WATA trades now, and a skeptic's review of it (v0.97.0) ──
+
+/** A forward check's candidate beside the live configuration on the same days (src/admin/challengers.py). */
+export const CHALLENGER_SAID: Record<ChallengerFigures['verdict'], { tone: BadgeTone; label: string }> = {
+  ahead: { tone: 'success', label: 'Ahead of live' },
+  behind: { tone: 'danger', label: 'Behind live' },
+  even: { tone: 'neutral', label: 'Even with live' },
+  too_few: { tone: 'neutral', label: 'Too few days' },
+}
+
+const percent = (value: number) => formatPercent(value, true)
+
+/** What a candidate did against the live configuration, on the days both were traded on paper. */
+export function challengerSentence(line: ChallengerFigures): string {
+  if (line.days === 0) return 'No day both were traded on yet.'
+  const said =
+    `On ${line.days} day${line.days === 1 ? '' : 's'} both were traded, it did better on ${line.better_days} and worse on ` +
+    `${line.worse_days}: ${percent(line.challenger_percent)} against ${percent(line.champion_percent)} for the live configuration.`
+  if (!line.interval) return `${said} Five days at least are needed to say more.`
+  return (
+    `${said} Its mean daily difference lies between ${percent(line.interval[0])} and ${percent(line.interval[1])} 90 % ` +
+    `of the time, its days drawn again` + (line.sign_p !== null ? ` (sign test p = ${formatNumber(line.sign_p, 2)}).` : '.')
+  )
+}
+
+/** A skeptic's review of a kept conclusion, by the tone of its verdict on the candidate. */
+export const REVIEW_SAID: Record<AgentVerdictTone | 'none', { tone: BadgeTone; label: string }> = {
+  negative: { tone: 'danger', label: 'Skeptic: does not hold' },
+  mixed: { tone: 'warning', label: 'Skeptic: rests on little' },
+  positive: { tone: 'success', label: 'Skeptic: nothing undermines it' },
+  neutral: { tone: 'neutral', label: 'Skeptic: no judgement' },
+  none: { tone: 'neutral', label: 'Skeptic: no verdict' },
+}
 
 export function experimentsTab(value: string | null): ExperimentsTab {
   return EXPERIMENTS_TABS.some((tab) => tab.id === value) ? (value as ExperimentsTab) : 'journal'

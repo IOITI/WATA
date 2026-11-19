@@ -198,6 +198,12 @@ class AdminContext:
     dossiers: Any = None
     # Its routines, research tasks that come back by themselves (src/admin/agent_routines.py): with the agent.
     routines: Any = None
+    # Its skeptic's reviews of the kept conclusions (src/admin/agent_skeptic.py): with the agent, acting while
+    # skeptic_review.
+    skeptic: Any = None
+    # The hypotheses waiting to be tried, the operator's and the agent's (src/admin/research_queue.py), beside the
+    # conversations: there whether the agent is on or not, worked by the autopilot routine.
+    research_queue: Any = None
     # LuxAlgo's MCP tools (src/admin/luxalgo.py) and the admin's sign-in to a LuxAlgo account
     # (src/admin/luxalgo_auth.py), while admin.luxalgo_enabled.
     luxalgo: Any = None
@@ -265,7 +271,55 @@ def agent_of(ctx):
     from src.admin.agent.service import build_agent
     from src.admin.agent_ops import luxalgo_reads, ops_reads
 
-    return build_agent(ctx, ops=ops_reads(ctx), luxalgo=luxalgo_reads(ctx))
+    return build_agent(ctx, ops=ops_reads(ctx), luxalgo=luxalgo_reads(ctx), brief=research_brief_of(ctx))
+
+
+def research_brief_of(ctx):
+    """
+    What a research task is told of the research so far at its first request (src/admin/research_brief.py): read from
+    the experiment journal, the forward checks with their challenger board, the research queue and, for a routine's
+    task, what its routine's task before it concluded. Never a service: the agent is handed the text alone.
+    """
+    from src.admin.research_brief import brief
+    from src.admin.research_queue import tired_families
+    from src.admin.track_record import record
+    from src.research.experiments import server_journal
+
+    def last_task_of(by: str | None, conversation_id: str) -> dict | None:
+        routines, agent = getattr(ctx, "routines", None), getattr(ctx, "agent", None)
+        if not (by or "").startswith("routine:") or routines is None or agent is None:
+            return None
+        routine = next((found for found in routines.store.load()["routines"] if f"routine:{found['id']}" == by), None)
+        for run in (routine or {}).get("runs") or []:
+            if run.get("conversation") in (None, conversation_id):
+                continue
+            try:
+                task = agent.conversation(run["conversation"]).get("task") or {}
+            except Exception:
+                continue
+            if task.get("state") in ("done", "ended"):
+                said = task.get("conclusion") or {}
+                return {"conclusion": said.get("conclusion") or f"ended: {task.get('ended_because')}",
+                        "next_steps": said.get("next_steps")}
+        return None
+
+    def said(meta: dict) -> str | None:
+        task = meta.get("task") or {}
+        journal = server_journal(ctx.settings.backtests_path)
+        experiments = journal.experiments()
+        forward = getattr(ctx, "forward", None)
+        checks = forward.of_experiments() if forward is not None else {}
+        board = forward.board() if forward is not None else []
+        found = record(experiments, checks)
+        queue = ctx.research_queue.load(tired_families(found))["items"] if ctx.research_queue is not None else []
+        lockbox = journal.lockbox()
+        return brief(experiments=experiments, checks=checks, record=found, queue=queue, board=board,
+                     family=(task.get("hypothesis") or {}).get("family"),
+                     last_task=last_task_of(task.get("by"), meta["id"]),
+                     lockbox={"from": lockbox["from"].isoformat(),
+                              "to": lockbox["to"].isoformat() if lockbox.get("to") else None} if lockbox else None)
+
+    return said
 
 
 def build_context(config_manager) -> AdminContext:
@@ -273,6 +327,7 @@ def build_context(config_manager) -> AdminContext:
     import httpx
 
     from src.admin.agent_memory import memory_of
+    from src.admin.research_queue import ResearchQueue
     from src.admin.release import Release
     from src.admin.audit import AuditLog
     from src.admin.backtests import BacktestService
@@ -412,6 +467,7 @@ def build_context(config_manager) -> AdminContext:
         script_origins=ScriptOrigins(settings.ta_path),
         script_details=ScriptDetails(ta_scripts),
         agent_memory=memory_of(settings.agent_path),
+        research_queue=ResearchQueue(settings.agent_path),
         trusted_proxies=TrustedProxies(settings.trusted_proxy_hosts),
         events=events,
         notifier=telegram_sender.send,
@@ -473,7 +529,8 @@ def build_context(config_manager) -> AdminContext:
         ctx.luxalgo_compat = CompatStore(settings.ta_path)
         ctx.luxalgo_checks = CompatChecker(ctx.luxalgo_compat, ctx.luxalgo, studies, rule_checks=ctx.rule_checks)
     if settings.ai_agent.enabled:
-        from src.admin import agent_briefing, agent_debrief, agent_dossier, agent_routines, agent_telegram, agent_triage
+        from src.admin import (agent_briefing, agent_debrief, agent_dossier, agent_routines, agent_skeptic, agent_telegram,
+                               agent_triage)
 
         ctx.agent = agent_of(ctx)
         ctx.closers.insert(0, ctx.agent.close)
@@ -489,4 +546,5 @@ def build_context(config_manager) -> AdminContext:
             ctx.triage = agent_triage.triage_of(ctx, ctx.teller)
         ctx.dossiers = agent_dossier.dossiers_of(ctx, ctx.teller)
         ctx.routines = agent_routines.routines_of(ctx, ctx.teller)
+        ctx.skeptic = agent_skeptic.skeptic_of(ctx)
     return ctx

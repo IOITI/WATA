@@ -74,6 +74,11 @@ export function RoutinesPage() {
       cell: ({ row }) => (
         <div className="min-w-0 max-w-[26rem] whitespace-normal">
           <span className="font-medium">{row.name}</span>
+          {row.kind === 'autopilot' && (
+            <Link to="/agent/queue" className="ml-2">
+              <Badge variant="outline">Works the research queue</Badge>
+            </Link>
+          )}
           {!row.enabled && <Badge variant="outline" className="ml-2">Off</Badge>}
           <p className="line-clamp-2 text-xs text-muted-foreground">{row.goal}</p>
         </div>
@@ -92,9 +97,18 @@ export function RoutinesPage() {
       accessorFn: (row) => row.runs[0]?.at ?? '',
       sortable: true,
       cell: ({ row }) => (row.runs[0]
-        ? <Link className="underline underline-offset-2" to={`/agent/${encodeURIComponent(row.runs[0].conversation)}`}>
-            {formatDateTime(row.runs[0].at, timezone, false)}
-          </Link>
+        ? (
+          <div className="min-w-0 max-w-56 whitespace-normal">
+            <Link className="underline underline-offset-2" to={`/agent/${encodeURIComponent(row.runs[0].conversation)}`}>
+              {formatDateTime(row.runs[0].at, timezone, false)}
+            </Link>
+            {row.kind === 'autopilot' && 'hypothesis' in row.runs[0] && (
+              <p className="text-xs text-muted-foreground">
+                {row.runs[0].hypothesis ? row.runs[0].hypothesis.title : 'The queue was empty: it looked for what to try'}
+              </p>
+            )}
+          </div>
+        )
         : <span className="text-muted-foreground">Not yet</span>),
     },
     {

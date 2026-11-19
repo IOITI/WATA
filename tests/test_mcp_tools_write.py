@@ -365,6 +365,8 @@ def test_a_kept_conclusion_names_its_candidate_keeps_its_checks_and_starts_its_f
         start=lambda experiment_id, candidate, by=None: started.append((experiment_id, candidate)) or {"id": "f1234abcd", "start": "2026-10-19"},
         of_experiments=lambda: {experiment: {"state": "active", "verdict": "too_early", "trades": 3}},
         checks=lambda: [], check=lambda check_id: {},
+        board=lambda: [{"check": "f1234abcd", "experiment": experiment, "title": "t", "days": 6, "better_days": 5,
+                        "worse_days": 1, "sign_p": 0.22, "interval": [0.1, 1.2], "verdict": "ahead", "family": "x"}],
     )
 
     assert "names its candidate" in refusal(research, "exp_conclude", {"experiment_id": experiment, "verdict": "kept", "notes": "n"})
@@ -380,6 +382,12 @@ def test_a_kept_conclusion_names_its_candidate_keeps_its_checks_and_starts_its_f
     listed = answer(research, "exp_get")
     assert listed["experiments"][0]["forward"]["state"] == "active"
     assert listed["track_record"]["total"]["kept"] == 1 and listed["track_record"]["total"]["kept_against_bar"] == 1
+    # Each forward check against the live configuration on the same days, in short.
+    [challenger] = listed["challengers"]
+    assert (challenger["check"], challenger["days"], challenger["verdict"]) == ("f1234abcd", 6, "ahead")
+    assert "family" not in challenger
+    research.journal.record_review(experiment, conversation="20261120-180000-aaaaaa", tone="negative", line="Two days.")
+    assert answer(research, "exp_get")["experiments"][0]["review"] == {"tone": "negative", "line": "Two days."}
 
 
 def test_a_candidate_is_one_of_the_experiments_runs(tmp_path, research, scripts, experiment):

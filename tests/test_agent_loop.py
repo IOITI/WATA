@@ -88,7 +88,8 @@ class FakeSession:
             if name == "task_done":
                 return ToolAnswer('{"noted":true}', task_done={"conclusion": arguments.get("conclusion"),
                                                                "runs_kept": arguments.get("runs_kept") or [],
-                                                               "next_steps": arguments.get("next_steps")})
+                                                               "next_steps": arguments.get("next_steps"),
+                                                               "next_hypotheses": arguments.get("next_hypotheses")})
             if name == "ask_operator":
                 return ToolAnswer('{"asked":true}', question={"question": arguments.get("question"),
                                                               "why": arguments.get("why"),
@@ -116,7 +117,7 @@ class FakeTools:
         return name in READS
 
     @asynccontextmanager
-    async def session(self, conversation_id, task=False):
+    async def session(self, conversation_id, task=False, read_only=False):
         self.sessions += 1
         yield FakeSession(self, conversation_id)
 

@@ -309,6 +309,26 @@ def test_a_candidate_whose_later_trades_lose_is_broken_said_and_ended(setup):
     assert caught_up(setup, FRIDAY_EVENING) == 0
 
 
+
+def test_each_check_keeps_the_live_paper_days_of_its_days_for_the_challenger_board(setup, monkeypatch):
+    live = {"rules": {}, "live": {"days": [
+        {"day": "2026-10-20", "day_percent": 1.0}, {"day": "2026-10-19", "day_percent": -0.5},
+        {"day": "2026-10-02", "day_percent": 9.0}, {"day": "2026-10-21", "day_percent": None}]}}
+    monkeypatch.setattr(setup.backtests, "paper", lambda **_: live)
+    started = setup.checks.start(setup.experiment, setup.candidate)
+    caught_up(setup)
+
+    found = settled(setup, None, ["2026-10-19", "2026-10-20", "2026-10-21"])
+
+    # Its own days alone, a day not done on paper left out.
+    assert setup.checks._read()["checks"][started["id"]]["champion"] == {"2026-10-19": -0.5, "2026-10-20": 1.0}
+    assert found["against_live"]["days"] == 2 and "champion" not in found
+    # Paper trading's sixty days gone by, the days kept stay.
+    monkeypatch.setattr(setup.backtests, "paper", lambda **_: {"rules": {}, "live": None})
+    [line] = setup.checks.board()
+    assert (line["check"], line["title"], line["days"], line["verdict"]) == (started["id"], "Open block", 2, "too_few")
+    assert "champion" not in setup.checks.checks()[0]
+
 def test_the_run_before_is_let_go_once_the_next_is_settled(setup):
     setup.checks.start(setup.experiment, setup.candidate)
     caught_up(setup)

@@ -122,8 +122,13 @@ class AgentUnavailable(Exception):
 
 class AgentService:
     def __init__(self, *, settings, store, provider, tools, proposals, backtests, scripts, key, publish,
-                 clock=time.time, queries=None, memory=None, verdicts=None, uploads=None):
+                 clock=time.time, queries=None, memory=None, verdicts=None, uploads=None, brief=None):
         self.settings = settings
+        # What a research task is told of the research so far at its first request (src/admin/research_brief.py):
+        # (meta) -> text, given from outside (src/admin/context.py agent_of); None: nothing.
+        self._brief = brief
+        # Told once a research task ends (on_task_ended): the research queue's (src/admin/agent_routines.py).
+        self._task_hooks: list = []
         self.store = store
         # The files chosen and not yet sent, staged beside the conversations.
         self.uploads = uploads if uploads is not None else Uploads(os.path.join(store.root, "uploads"), clock=clock)
@@ -214,7 +219,7 @@ class AgentService:
                 # Between two of its requests only: one queued or under way goes on from its own end. A task created
                 # while this reads was taken for one stopped between two, and its next request asked before its first.
                 model, effort = self._kept_choice(meta)
-                self._task_went_on(meta["id"], meta["request"], DONE, model, effort)
+                self._tell_ended(meta["id"], self._task_went_on(meta["id"], meta["request"], DONE, model, effort))
 
     def _enqueue(self, conversation_id: str, resumed: bool) -> None:
         self._queued.add(conversation_id)
@@ -291,6 +296,8 @@ class AgentService:
         in_task = task.get("state") == TASK_WORKING
         settings = self._task_settings(task) if in_task else self.settings
         capped = meta.get("debrief") or meta.get("job")
+        # A review the admin asks to only read (a skeptic's): its first request changes nothing but its verdict.
+        read_only = bool((meta.get("job") or {}).get("read_only")) and request == 0
         if capped and request == 0:
             # A daily debrief, a briefing, a triage: its own cost, and its backtests (none unless said). A question
             # asked after it has the agent's limits.
@@ -304,7 +311,7 @@ class AgentService:
             tools=self._tools, settings=settings, publish=lambda event: self._send(conversation_id, event),
             stopping=lambda: conversation_id in self._stopping, clock=self._clock, used=Used(), pending=pending,
             opening=None if self._asked(conversation_id, request) else self._opening(meta, request, settings),
-            model_id=model, effort=effort, task=in_task,
+            model_id=model, effort=effort, task=in_task, read_only=read_only,
         )
         if resumed:
             run.resume_counts()
@@ -322,11 +329,29 @@ class AgentService:
         )
         # A task's next request is asked here, with nothing awaited before the worker lets the conversation go.
         task = self._task_went_on(conversation_id, request, outcome.status, model, effort) if in_task else None
+        self._tell_ended(conversation_id, task)
         said = {"task": task["state"], "task_detail": task.get("ended_because")} if task else {}
         self._publish("agent_finished", conversation_id=conversation_id, title=meta.get("title"), outcome=outcome.status,
                       detail=outcome.detail, cost_usd=round(outcome.usd, 4), **said)
 
     # ── a research task ──
+
+    def on_task_ended(self, hook) -> None:
+        """
+        ``hook(conversation_id, task)`` told each time a research task is seen ended (done, ended, stopped, its
+        question unanswered): outside the task's lock, an error of it logged, never in the task's way. It may be told
+        twice of one task (a stop, then its request's end): it must be idempotent.
+        """
+        self._task_hooks.append(hook)
+
+    def _tell_ended(self, conversation_id: str, task: dict | None) -> None:
+        if not task or task.get("state") not in (TASK_DONE, TASK_ENDED):
+            return
+        for hook in self._task_hooks:
+            try:
+                hook(conversation_id, task)
+            except Exception:
+                logger.exception(f"AI agent {conversation_id}: what follows a task's end failed")
 
     def _task_settings(self, task: dict):
         """A request of a task: the agent's own limits, within what is left of the task's."""
@@ -358,7 +383,7 @@ class AgentService:
                          if event.get("event") == "task_done" and event.get("request") == request), None)
             if done is not None:
                 task.update(state=TASK_DONE, ended_at=stamp(now), conclusion={
-                    key: done.get(key) for key in ("conclusion", "runs_kept", "next_steps")})
+                    key: done.get(key) for key in ("conclusion", "runs_kept", "next_steps", "next_hypotheses")})
                 return self.store.update_meta(conversation_id, task=task)["task"]
             why = self._task_ends(task, status, now)
             if why is not None:
@@ -463,6 +488,7 @@ class AgentService:
                 task = {**task, "state": TASK_ENDED, "ended_at": stamp(self._clock()), "ended_because": why}
                 self.store.update_meta(waiting["conversation"], task=task)
                 self._questions.discard(waiting["conversation"])
+            self._tell_ended(waiting["conversation"], task)
             self._publish("agent_finished", conversation_id=waiting["conversation"], title=meta.get("title"),
                           outcome="done", detail=None, cost_usd=0.0, task=TASK_ENDED, task_detail=why)
             ended.append(waiting["conversation"])
@@ -502,6 +528,8 @@ class AgentService:
             "prompt": prompt,
             "attached": [{key: value for key, value in entry.items() if key != "request"} for entry in attached],
             "limits": limits_note(settings.max_tool_calls, settings.max_backtests, settings.max_request_usd),
+            # A research task's first request: what the research did so far.
+            "brief": (lambda: self._brief(meta)) if self._brief is not None and request == 0 and meta.get("task") else None,
             "shared": self._shared,
             "memory": (lambda: self._memory_said(meta["id"], request)) if self.memory is not None else None,
         }
@@ -1009,11 +1037,13 @@ class AgentService:
         return meta
 
     async def create_task(self, goal: str, subject: dict | None, by: str | None, budget: dict,
-                          model: str | None = None, effort: str | None = None, attach: list | None = None) -> dict:
+                          model: str | None = None, effort: str | None = None, attach: list | None = None,
+                          hypothesis: dict | None = None) -> dict:
         """
         A research task: a conversation the agent works on alone, request after
         request, within its budget (dollars, backtests, hours: each at most the
-        settings' ``max_task_*``) and the month's.
+        settings' ``max_task_*``) and the month's. ``hypothesis``: the research
+        queue's it works on (its id, title and family), kept with it.
         """
         goal = _prompt(goal)
         usd, backtests, hours = self._task_budget(budget)
@@ -1023,6 +1053,8 @@ class AgentService:
             "started_at": stamp(now), "deadline": stamp(now + hours * 3600), "spent_usd": 0.0, "backtests": 0,
             "requests": 1, "by": by, "ended_at": None, "ended_because": None, "conclusion": None,
         }
+        if hypothesis is not None:
+            task["hypothesis"] = {key: hypothesis.get(key) for key in ("id", "title", "family")}
         return await self.create(subject, task_opening(goal, usd, backtests, task["deadline"]), by, model, effort,
                                  task=task, attach=attach)
 
@@ -1054,6 +1086,7 @@ class AgentService:
             self._questions.discard(conversation_id)
             if meta.get("status") in transcript.UNDER_WAY:
                 self.stop(conversation_id)
+        self._tell_ended(conversation_id, meta.get("task"))
         self._changed(conversation_id)
         return meta
 
@@ -1462,12 +1495,13 @@ def _title(prompt: str) -> str:
     return first if len(first) <= MAX_TITLE else f"{first[:MAX_TITLE - 1]}…"
 
 
-def build_agent(ctx, ops=None, luxalgo=None) -> AgentService:
+def build_agent(ctx, ops=None, luxalgo=None, brief=None) -> AgentService:
     """
     The agent over the admin's own services: their research side (as the MCP
     endpoint has it), the key opened on demand, what the admin lets it read
-    of itself (``ops``: its health, its logs; src/admin/context.py agent_of)
-    and LuxAlgo's tools when they are on (``luxalgo``).
+    of itself (``ops``: its health, its logs; src/admin/context.py agent_of),
+    LuxAlgo's tools when they are on (``luxalgo``) and what a research task is
+    told of the research so far (``brief``).
     """
     from src.admin.agent.verdicts import VerdictStore
     from src.admin.mcp_server.calls import CallLog
@@ -1492,5 +1526,5 @@ def build_agent(ctx, ops=None, luxalgo=None) -> AgentService:
         tools=AgentTools(research, proposals, ops=ops, memory=memory, verdicts=verdicts,
                          actions=settings.ai_agent.action_proposals, luxalgo=luxalgo), proposals=proposals,
         backtests=backtests, scripts=ctx.ta_scripts, key=key,
-        publish=ctx.events.publish, queries=research.queries, memory=memory, verdicts=verdicts,
+        publish=ctx.events.publish, queries=research.queries, memory=memory, verdicts=verdicts, brief=brief,
     )

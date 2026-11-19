@@ -261,6 +261,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.routines is not None:
             # The agent's routines, each at its turn, the market closed.
             background.append(asyncio.create_task(ctx.routines.keep()))
+        if getattr(ctx, "skeptic", None) is not None:
+            # A skeptic's review of each kept conclusion, the market closed (while skeptic_review).
+            background.append(asyncio.create_task(ctx.skeptic.keep()))
         if ctx.luxalgo_checks is not None and ctx.luxalgo_checks.available:
             # LuxAlgo's indicators checked for running on WATA, one at a time while no study runs.
             background.append(asyncio.create_task(ctx.luxalgo_checks.run()))

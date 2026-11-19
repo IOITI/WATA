@@ -104,6 +104,8 @@ class RequestRun:
     effort: str | None = None
     # A request of a research task: it may say the task is done (task_done).
     task: bool = False
+    # A review that only reads (a job asked ``read_only``: a skeptic's): every write refused but its verdict.
+    read_only: bool = False
     # The files attached to the conversation, read once a request: each answer of the API is sent them again.
     files: dict = field(default_factory=dict)
 
@@ -148,7 +150,7 @@ class RequestRun:
         if self.stopping():
             return self._ended(STOPPED, "Stopped by the operator before it started")
         self._activity("started", model=model.id, effort=effort)
-        async with self.tools.session(self.conversation_id, task=self.task) as session:
+        async with self.tools.session(self.conversation_id, task=self.task, read_only=self.read_only) as session:
             if self.opening is not None:
                 await self._open(session)
             # A request cut by a restart after an answer: its tools' results are given first, or, answered, it ends
@@ -206,15 +208,26 @@ class RequestRun:
     async def _open(self, session) -> None:
         """
         The request as the API is sent it: the memory's list (a conversation's
-        first) or what changed in it since, what was attached to it (each thing
-        as one subject is shared, then the files, named first, as the
-        transcript keeps them), the prompt, its limits.
+        first) or what changed in it since, a research task's brief at its
+        first request (what the research did so far: src/admin/research_brief.py),
+        what was attached to it (each thing as one subject is shared, then the
+        files, named first, as the transcript keeps them), the prompt, its
+        limits.
         """
         opening, content, seen = self.opening, [], None
         if opening.get("memory") is not None:
             said, seen = opening["memory"]()
             if said:
                 content.append({"type": "text", "text": said})
+        if opening.get("brief") is not None:
+            try:
+                brief = await asyncio.to_thread(opening["brief"])
+            except Exception as e:
+                # A task starts without it rather than not at all.
+                logger.warning(f"AI agent {self.conversation_id}: the research brief could not be read: {e}")
+                brief = None
+            if brief:
+                content.append({"type": "text", "text": brief})
         attached = opening.get("attached")
         if attached is None:
             attached = [opening["subject"]] if opening.get("subject") else []

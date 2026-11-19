@@ -26,7 +26,7 @@ import { TrackCone, TrackFigures } from '@/features/edgeWatch/EdgeWatchPanel'
 import { api, isNotFound } from '@/lib/api'
 import type { ForwardCheckLine } from '@/lib/types'
 
-import { ENDED_SAID, FORWARD_CHECK_NOT_FOUND, forwardTone, reasonsSaid } from './experiments'
+import { CHALLENGER_SAID, challengerSentence, ENDED_SAID, FORWARD_CHECK_NOT_FOUND, forwardTone, reasonsSaid } from './experiments'
 import { RunPeekLink } from './RunPeek'
 
 function historyColumns(timezone: string): ColumnDef<ForwardCheckLine>[] {
@@ -124,6 +124,19 @@ export function ForwardCheckPage() {
                 {track && <TrackCone cone={check.cone} track={track} label="Its trades on later days" />}
               </div>
             </Panel>
+            {check.against_live && (
+              <Panel
+                title="Against the live configuration"
+                description="Its days set against the live configuration traded on paper on the same days: whether it would do better than what WATA trades now."
+              >
+                <div className="flex flex-col gap-2 text-sm">
+                  <div>
+                    <Badge tone={CHALLENGER_SAID[check.against_live.verdict].tone}>{CHALLENGER_SAID[check.against_live.verdict].label}</Badge>
+                  </div>
+                  <p>{challengerSentence(check.against_live)}</p>
+                </div>
+              </Panel>
+            )}
             <Panel title="What it judges">
               <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
                 <div>

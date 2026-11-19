@@ -20,6 +20,7 @@ import asyncio
 import json
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from urllib.parse import quote
 
@@ -35,10 +36,11 @@ from src.admin.agent.service import MAX_ATTACHED
 from src.admin.agent.uploads import LARGEST, UnknownFile
 from src.admin.agent.verdicts import MAX_ASKED
 from src.admin.agent_jobs import read_config
-from src.admin.agent_routines import RoutineConflict, checked_fields, next_turn, templates_for
+from src.admin.agent_routines import AUTOPILOT, RoutineConflict, checked_fields, next_turn, templates_for
 from src.admin.agent_telegram import ANSWER, TASK
 from src.admin.auth import client_ip, require_session, session_cookie_name
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
+from src.admin.research_queue import AGENT_WAITING, OPERATOR, PER_CONVERSATION, QueueConflict, tired_families
 from src.admin.routers.config import changes_said, require_config_edit_enabled
 from src.admin.routers.ta import RuleFields
 from src.admin.ta_monitor import rules_by_id
@@ -135,6 +137,34 @@ class RoutineFields(BaseModel):
     effort: str | None = Field(None, max_length=10)
     telegram: bool = True
     enabled: bool = True
+    # The research autopilot's, made from its template: it works the research queue.
+    kind: Literal["autopilot"] | None = None
+
+
+class QueueFields(BaseModel):
+    """A hypothesis the operator files: from the Research queue page, or from a run's autopsy (``source``)."""
+    revision: str | None = Field(None, max_length=64)
+    title: str = Field(max_length=200)
+    hypothesis: str = Field(max_length=4000)
+    family: str = Field(max_length=200)
+    rationale: str | None = Field(None, max_length=4000)
+    criteria: list[dict] = Field(default_factory=list, max_length=10)
+    motivated_by: list[str] = Field(default_factory=list, max_length=40)
+    source: str | None = Field(None, max_length=120)
+
+
+class QueueChange(BaseModel):
+    """The operator's change of a hypothesis, from the revision the page read: its words, waiting again or dropped,
+    its place among theirs."""
+    revision: str = Field(max_length=64)
+    title: str | None = Field(None, max_length=200)
+    hypothesis: str | None = Field(None, max_length=4000)
+    family: str | None = Field(None, max_length=200)
+    rationale: str | None = Field(None, max_length=4000)
+    criteria: list[dict] | None = Field(None, max_length=10)
+    motivated_by: list[str] | None = Field(None, max_length=40)
+    state: Literal["waiting", "dropped"] | None = None
+    move: int | None = Field(None, ge=0, le=10_000)
 
 
 class Title(BaseModel):
@@ -424,7 +454,7 @@ async def routines_list(request: Request):
 
 @router.get("/routines/templates")
 async def routine_templates(request: Request):
-    """Routines ready to add: the LuxAlgo scout while the agent has LuxAlgo's tools."""
+    """Routines ready to add: the research autopilot, and the LuxAlgo scout while the agent has LuxAlgo's tools."""
     ctx = request.app.state.ctx
     _routines(request)
     return {"templates": templates_for(ctx.agent.settings, luxalgo=ctx.luxalgo is not None)}
@@ -717,3 +747,78 @@ async def memory_pause(request: Request):
 async def memory_resume(request: Request):
     memory, author = _memory(request), _operator(request)
     return {"pause": await run_in_threadpool(memory.set_pause, author, False)}
+
+
+# ── the research queue ──
+
+def _queue(request: Request):
+    queue = request.app.state.ctx.research_queue
+    if queue is None:
+        raise HTTPException(status_code=404, detail="The research queue is not kept here")
+    return queue
+
+
+def _tired(ctx) -> set[str]:
+    """The families tried long with nothing that held on later days: their hypotheses wait behind the others."""
+    from src.admin.track_record import record
+    from src.research.experiments import server_journal
+
+    forward = getattr(ctx, "forward", None) if ctx.settings.backtests_enabled else None
+    experiments = server_journal(ctx.settings.backtests_path).experiments()
+    return tired_families(record(experiments, forward.of_experiments() if forward is not None else {}))
+
+
+def _queue_today():
+    """The last day a hypothesis may come from: today in UTC and a day more, as the journal takes it."""
+    return datetime.now(timezone.utc).date() + timedelta(days=1)
+
+
+@router.get("/queue")
+async def queue_list(request: Request):
+    """
+    The hypotheses in the order the autopilot takes them (the operator's first, then the agent's oldest first, a tired
+    family's last), then those taken, done or dropped; the families held back, and the autopilot routine, if one.
+    """
+    ctx = request.app.state.ctx
+    queue = _queue(request)
+    tired = await run_in_threadpool(_tired, ctx)
+    loaded = await run_in_threadpool(queue.load, tired)
+    autopilot = None
+    if getattr(ctx, "routines", None) is not None:
+        routines = (await run_in_threadpool(ctx.routines.store.load))["routines"]
+        found = next((routine for routine in routines if routine.get("kind") == AUTOPILOT), None)
+        if found is not None:
+            autopilot = {"id": found["id"], "name": found["name"], "enabled": found.get("enabled", True)}
+    return {**loaded, "tired": sorted(tired), "agent": ctx.agent is not None, "autopilot": autopilot,
+            "limits": {"agent_waiting": AGENT_WAITING, "per_conversation": PER_CONVERSATION}}
+
+
+@router.post("/queue", status_code=201)
+async def queue_add(body: QueueFields, request: Request):
+    """A hypothesis of the operator's, last of theirs, from the revision the page read when it gives one."""
+    queue = _queue(request)
+    fields = body.model_dump(exclude={"revision", "source"})
+    try:
+        return await run_in_threadpool(lambda: queue.add(fields, OPERATOR, today=_queue_today(), revision=body.revision,
+                                                         source=body.source))
+    except QueueConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@router.patch("/queue/{item_id}")
+async def queue_change(item_id: str, body: QueueChange, request: Request):
+    queue = _queue(request)
+    fields = body.model_dump(exclude={"revision", "state", "move"}, exclude_none=True)
+    try:
+        return await run_in_threadpool(lambda: queue.edit(item_id, body.revision, fields=fields or None,
+                                                          state=body.state, move=body.move, today=_queue_today()))
+    except QueueConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@router.delete("/queue/{item_id}")
+async def queue_remove(item_id: str, request: Request, revision: str = Query(..., max_length=64)):
+    try:
+        return await run_in_threadpool(_queue(request).remove, item_id, revision)
+    except QueueConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None

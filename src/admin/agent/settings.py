@@ -28,6 +28,9 @@ _CHOICES = {
     # An alert's triage: a diagnosis, worth a model that reasons.
     "triage_model": ("claude-sonnet-5-5", MODELS),
     "triage_effort": ("medium", EFFORTS),
+    # A skeptic's review of a kept conclusion: a reading that looks for what breaks it, worth a model that reasons.
+    "skeptic_model": ("claude-sonnet-5-5", MODELS),
+    "skeptic_effort": ("medium", EFFORTS),
 }
 # name: (default, lowest, highest)
 _WHOLE = {
@@ -68,6 +71,8 @@ _SWITCHES = {
     "action_proposals": True,
     # A go-live dossier written by itself once an operator's rule in shadow meets its readiness.
     "dossier_when_ready": False,
+    # Each kept conclusion of the experiment journal read again by a skeptic, who only reads (src/admin/agent_skeptic.py).
+    "skeptic_review": False,
 }
 # name: (default, lowest, highest), in US dollars as the Claude API bills them.
 _AMOUNTS = {
@@ -81,6 +86,8 @@ _AMOUNTS = {
     # What one morning briefing, and one triage, may cost.
     "briefing_max_usd": (0.3, 0.05, 2.0),
     "triage_max_usd": (0.5, 0.1, 5.0),
+    # What one skeptic's review may cost.
+    "skeptic_max_usd": (0.5, 0.1, 5.0),
 }
 
 
@@ -122,6 +129,10 @@ class AgentSettings:
     action_proposals: bool = True
     dossier_when_ready: bool = False
     max_routines: int = 10
+    skeptic_review: bool = False
+    skeptic_model: str = "claude-sonnet-5-5"
+    skeptic_effort: str = "medium"
+    skeptic_max_usd: float = 0.5
 
     @classmethod
     def from_config(cls, section) -> "AgentSettings":

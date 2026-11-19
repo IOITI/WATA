@@ -69,7 +69,8 @@ gap, its US open) and where the script's alerts came against price's swings, in 
 2. Explain each losing trade: zoom on its hours with chart_view (start and end around it: a row is then a bar) and \
 say where it entered against the swing, what the indicator did then, and why it exited.
 3. Say what would have changed it, and try that on the day first, cheaply: chart_view or pine_signals with other \
-inputs, other bars, another script. What does not help the day there goes no further.
+inputs, other bars, another script. What does not help the day there goes no further. Each configuration tried so \
+is a trial of its family: once its experiment is open, write them down (exp_trials).
 4. Only then run what helped on every day of the run (backtest_start, the same days, against random entries) and \
 judge it by the bar below: a change that helps one day and no other is overfitting, kept nowhere.
 5. Answer with the day explained trade by trade, what was tried on it, and what held on every day. A run's day is \
@@ -212,6 +213,35 @@ it should not go live. When it is ready and the operator lets you, propose takin
 rule_live): they decide, through the page's own confirmation."""
 
 
+# A skeptic's review of a kept conclusion (src/admin/agent_skeptic.py): its candidate run is shared with it.
+SKEPTIC_STEPS = """\
+Review it as a skeptic: try to break the conclusion with what its run already holds. You only read: no backtest, no \
+script saved, nothing proposed, concluded or remembered (those tools are refused here).
+1. Its summary (backtest_result part summary): the checks of the bar it fails or leaves open, on how many trades and \
+days it rests, its result without the days its idea came from (research).
+2. Where its result comes from: its days (backtest_days), its best and its worst; its autopsy (part autopsy); its \
+day's caps (part decomposition) when its twin was made.
+3. Whether its values were chosen: the sweep it came from, if any (part sweep: a knife edge, its plateau), and how \
+many trials its family had.
+4. Its two best days on chart_view: did its entries make them, or one move of the index?
+End with set_verdict on the run: negative when the conclusion does not hold, mixed when it rests on little, positive \
+only when nothing you read undermines it, its line saying why in one sentence. Then answer in five lines at most."""
+
+
+def skeptic_prompt(experiment: dict) -> str:
+    """The request of a skeptic's review: the kept conclusion, what it was kept against, then the steps."""
+    checks = experiment.get("checks") or {}
+    said = [f"Experiment {experiment.get('id')} ({experiment.get('family')}) kept run {experiment.get('candidate')} "
+            f"as its candidate.", f"Its hypothesis: {experiment.get('hypothesis')}",
+            f"Its conclusion: {experiment.get('notes') or '(no notes)'}"]
+    if checks.get("failed") or checks.get("open"):
+        said.append(f"It was kept with checks of the bar failed ({', '.join(checks.get('failed') or []) or 'none'}) and "
+                    f"left open ({', '.join(checks.get('open') or []) or 'none'}).")
+    if experiment.get("motivated_by"):
+        said.append(f"Its idea came from {', '.join(experiment['motivated_by'])}.")
+    return "\n".join(said) + "\n\n" + SKEPTIC_STEPS
+
+
 def subject_text(kind: str, label: str, shared: str) -> str:
     """What the operator shared at a conversation's start, before their question."""
     return f"The operator shares {kind} {label}, as your tools read it:\n\n{shared}"
@@ -240,7 +270,9 @@ def task_opening(goal: str, usd: float, backtests: int, deadline: str) -> str:
         "request has its own limits, said before it; when one ends, the next one starts from your notes and what "
         "is left, until you call task_done. Work as in a conversation (an experiment first, the bar a result must "
         "clear, stress before keeping anything) and propose what survives: the operator applies it, or not. Once "
-        "the goal is reached, or cannot be with what is left, call task_done with your conclusion, then answer "
+        "the goal is reached, or cannot be with what is left, call task_done with your conclusion and, when "
+        "something deserves an experiment of its own, up to three next hypotheses (refutable, with their family, "
+        "criteria and the days they came from: the research queue keeps them for the autopilot), then answer "
         "with it.")
 
 

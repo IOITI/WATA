@@ -107,19 +107,20 @@ def _forward_reads(service) -> "ForwardReads | None":
     if service is None:
         return None
     return ForwardReads(start=service.start, of_experiments=service.of_experiments, checks=service.checks,
-                        check=service.check)
+                        check=service.check, board=service.board)
 
 
 @dataclass
 class ForwardReads:
     """
     What the tools may do of the forward checks (src/admin/forward_checks.py): start one for a kept conclusion, read
-    them. Never the service itself, which speaks on Telegram.
+    them, and their board against the live configuration. Never the service itself, which speaks on Telegram.
     """
     start: Callable[..., dict]
     of_experiments: Callable[[], dict]
     checks: Callable[[], list]
     check: Callable[[str], dict]
+    board: Callable[[], list] = lambda: []
 
 
 @dataclass

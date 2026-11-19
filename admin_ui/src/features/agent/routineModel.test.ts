@@ -23,9 +23,12 @@ describe('a routine', () => {
     }
     expect(fromTemplate(template)).toEqual({
       name: 'LuxAlgo scout', goal: 'Read the newest.', schedule: template.schedule, budget: template.budget,
-      model: null, effort: null, telegram: true, enabled: true,
+      model: null, effort: null, telegram: true, enabled: true, kind: null,
     })
     expect(routineProblem(fromTemplate(template))).toBeNull()
+    // The autopilot's kind goes with it: it is what makes it work the research queue.
+    const autopilot = { ...template, key: 'autopilot', kind: 'autopilot' as const, schedule: { every: 'trading_day' as const } }
+    expect(fromTemplate(autopilot).kind).toBe('autopilot')
   })
 
   it('counts what the routines switched on would spend in a month at most', () => {

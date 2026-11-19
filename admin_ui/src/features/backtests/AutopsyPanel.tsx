@@ -1,9 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
-import { AdvancedDataTable, Alert, AlertDescription, Badge, formatNumber, Panel, QueryState } from 'ioiti-ui'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AdvancedDataTable, Alert, AlertDescription, Badge, Button, formatNumber, Hint, Panel, QueryState } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
+import { Check, ListPlus } from 'lucide-react'
+import { useState } from 'react'
+import { Link } from 'react-router'
 
+import { hypothesisFromAutopsy } from '@/features/agent/queueModel'
 import { api } from '@/lib/api'
-import type { BacktestAutopsyFeature } from '@/lib/types'
+import type { BacktestAutopsy, BacktestAutopsyFeature } from '@/lib/types'
 
 import { exitSentences, featureSaid } from './why'
 
@@ -46,7 +50,39 @@ const COLUMNS: ColumnDef<BacktestAutopsyFeature>[] = [
  * What separated a run's winners from its losers, using only what was known at entry: each feature's cut chosen on
  * its first days and tested on the later ones (src/admin/trade_autopsy.py). What held is a hypothesis to test.
  */
-export function AutopsyPanel({ runId }: { runId: string }) {
+/** What held, filed as a hypothesis of the research queue at the operator's click: the autopilot tries it later. */
+function FileHypothesis({ held, autopsy, run }: {
+  held: BacktestAutopsy['held'][number]
+  autopsy: BacktestAutopsy
+  run: { id: string; name: string | null; family: string | null }
+}) {
+  const queryClient = useQueryClient()
+  const [filed, setFiled] = useState(false)
+  const file = useMutation({
+    mutationFn: () => api.addHypothesis(hypothesisFromAutopsy(held, autopsy, run)),
+    onSuccess: () => {
+      setFiled(true)
+      void queryClient.invalidateQueries({ queryKey: ['research-queue'] })
+    },
+  })
+  if (filed) {
+    return (
+      <Link to="/agent/queue" className="inline-flex items-center gap-1 text-xs underline underline-offset-2">
+        <Check aria-hidden className="size-3.5" /> In the research queue
+      </Link>
+    )
+  }
+  return (
+    <Hint content={file.error ? file.error.message : 'A hypothesis to test on other days, in an experiment of its own: the research autopilot takes it in its turn'}>
+      <Button variant="ghost" size="sm" isLoading={file.isPending} leftIcon={<ListPlus className="size-3.5" />}
+        aria-label={`Add “${held.said}” to the research queue`} onClick={() => file.mutate()}>
+        Add to the research queue
+      </Button>
+    </Hint>
+  )
+}
+
+export function AutopsyPanel({ runId, runName = null, family = null }: { runId: string; runName?: string | null; family?: string | null }) {
   const autopsyQuery = useQuery({ queryKey: ['backtest-autopsy', runId], queryFn: () => api.backtestAutopsy(runId), staleTime: Infinity })
   const found = autopsyQuery.data
   return (
@@ -66,9 +102,12 @@ export function AutopsyPanel({ runId }: { runId: string }) {
             ) : (
               <Alert tone="neutral">
                 <AlertDescription>
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-2">
                     {found.held.map((entry) => (
-                      <li key={entry.name}>{entry.sentence}</li>
+                      <li key={entry.name} className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                        <span>{entry.sentence}</span>
+                        <FileHypothesis held={entry} autopsy={found} run={{ id: runId, name: runName, family }} />
+                      </li>
                     ))}
                   </ul>
                 </AlertDescription>

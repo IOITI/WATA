@@ -54,6 +54,7 @@ from src.admin.agent.proposals import ProposalRefused
 from src.admin.agent.store import stamp
 from src.admin.agent_memory import FORGOTTEN, KINDS, MAX_BODY, MAX_DESCRIPTION, NAME, Author, UnknownEntry
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
+from src.admin.research_queue import checked_item
 from src.admin.script_details import MAX_FAMILY, MAX_HOW
 from src.admin.ta_rules import RuleNotFound
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
@@ -63,10 +64,11 @@ from src.admin.mcp_server.tokens import Caller
 from src.logging_helper.redaction import redact
 
 # The research tools the agent may call, in the order it is shown them. Never the tools that remove scripts or runs
-# (pine_delete, backtest_remove), set the lock box, measure the turbo model again, write down trials made elsewhere
-# or export a week of bars; job_wait is waited for here. Claude's own shadow rules are kept as the MCP endpoint keeps
-# them (rule_shadow_*): gated by admin.mcp.shadow_rules, never live, the endpoint's only change of a mode. Its memory
-# is read as Claude Code reads it (memory_*), when it has its memory.
+# (pine_delete, backtest_remove), set the lock box, measure the turbo model again or export a week of bars; job_wait
+# is waited for here. The configurations it screens by eye (pine_signals, chart_view, luxalgo_view) are written down
+# as trials of their family (exp_trials). Claude's own shadow rules are kept as the MCP endpoint keeps them
+# (rule_shadow_*): gated by admin.mcp.shadow_rules, never live, the endpoint's only change of a mode. Its memory is read
+# as Claude Code reads it (memory_*), when it has its memory.
 MEMORY_READS = ("memory_list", "memory_read")
 AGENT_TOOLS = (
     "status", "data_assets", "data_coverage", "data_signals", "data_trades", "data_execution", "data_position",
@@ -76,7 +78,7 @@ AGENT_TOOLS = (
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "backtest_start", "backtest_derive", "backtest_wait",
     "turbo_model", "rule_list", "edge_watch", "rule_compare", "rule_shadow_save", "rule_shadow_remove",
-    "rule_set_reference", "exp_new", "exp_get", "exp_conclude", *MEMORY_READS,
+    "rule_set_reference", "exp_new", "exp_get", "exp_trials", "exp_conclude", *MEMORY_READS,
 )
 PROPOSE_SCRIPT = "propose_script_change"
 PROPOSE_RULE = "propose_rule_change"
@@ -99,6 +101,11 @@ SHOW_CHART = "show_chart"
 SET_VERDICT = "set_verdict"
 # What the Indicators pages say of a script beside its code (src/admin/script_details.py): written at once, its own.
 DESCRIBE_SCRIPT = "describe_script"
+# What a research task leaves to try next (task_done): the research queue's (src/admin/research_queue.py).
+MAX_NEXT_HYPOTHESES = 3
+# What a review that only reads (a job the admin asks with ``read_only``: a skeptic's review, src/admin/agent_skeptic.py)
+# may call besides the tools that only read: a chart under its answer, and its verdict.
+REVIEW_OWN = frozenset({SHOW_CHART, SET_VERDICT})
 # Its memory's changes, its own: the MCP endpoint only reads the memory.
 MEMORY_SAVE = "memory_save"
 MEMORY_FORGET = "memory_forget"
@@ -151,6 +158,34 @@ DESCRIPTIONS = {
                    "be older.",
     "memory_read": "Entries of your memory whole, ten at most: their text, who wrote and changed them, from which "
                    "conversation, and their revision, which memory_save and memory_forget need to change one.",
+    "exp_trials": "Write down configurations of an open experiment you tried without a run of their own (inputs or "
+                  "settings screened by eye with pine_signals, chart_view or luxalgo_view): ``trials`` of them, "
+                  "counted in its family's trials as a run's are, so that later sweeps and runs of the family are "
+                  "judged against every try. note: what was tried, and on which days.",
+}
+
+# A hypothesis a research task leaves to try next, filed in the research queue (src/admin/research_queue.py): what an
+# experiment needs before its first run.
+HYPOTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "maxLength": 120, "description": "The hypothesis in a few words."},
+        "hypothesis": {"type": "string", "maxLength": 2000, "description": (
+            "What the data could refute, said so that a run can refute it.")},
+        "family": {"type": "string", "maxLength": 80, "description": (
+            "Its family of ideas, as the journal names it (exp_get lists the families): a new name only for a new idea.")},
+        "rationale": {"type": "string", "maxLength": 2000, "description": "What it comes from: the runs, days or autopsy."},
+        "criteria": {"type": "array", "maxItems": 6, "items": {
+            "type": "object",
+            "properties": {"figure": {"type": "string"}, "bound": {"type": "string", "enum": ["at_least", "at_most"]},
+                           "value": {"type": "number"}},
+            "required": ["figure", "bound", "value"], "additionalProperties": False,
+        }, "description": "What a run must show for it to hold, as exp_new takes them."},
+        "motivated_by": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": (
+            "The days it came from (YYYY-MM-DD), as exp_new takes them: a run of it is judged without them too.")},
+    },
+    "required": ["title", "hypothesis", "family"],
+    "additionalProperties": False,
 }
 
 OWN_DEFINITIONS = (
@@ -313,6 +348,11 @@ OWN_DEFINITIONS = (
                 "runs_kept": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": (
                     "The runs that show it (their ids).")},
                 "next_steps": {"type": "string", "maxLength": 2000, "description": "What to try next, if anything."},
+                "next_hypotheses": {"type": "array", "maxItems": MAX_NEXT_HYPOTHESES, "items": HYPOTHESIS_SCHEMA,
+                                    "description": (
+                    "Up to three hypotheses worth an experiment of their own, filed in the research queue, which the "
+                    "autopilot works through: each refutable, with its family, its criteria and the days it came from. "
+                    "None when nothing is worth it.")},
             },
             "required": ["conclusion"],
             "additionalProperties": False,
@@ -872,17 +912,24 @@ class AgentTools:
         """LuxAlgo's tools as the admin gives them, None while admin.luxalgo_enabled is off."""
         return self._luxalgo
 
+    def reviews_may(self, name: str) -> bool:
+        """Whether a review that only reads may call it: what reads (a study that saves nothing included), a chart, its
+        verdict; never a run started, a script saved, a proposal, its memory changed or a conclusion written."""
+        return (name in REVIEW_OWN or name in OPS_TOOLS or name in (LUXALGO_TOOLS, LUXALGO_CALL, LUXALGO_KNOWN, LUXALGO_VIEW)
+                or self._read_only.get(name, False))
+
     def is_read(self, name: str) -> bool:
         """A tool that only reads, and may run beside others: never a study, whose server runs one at a time."""
         return (name in OPS_TOOLS or name in (LUXALGO_TOOLS, LUXALGO_CALL, LUXALGO_KNOWN)
                 or (self._read_only.get(name, False) and name not in STUDIES))
 
     @asynccontextmanager
-    async def session(self, conversation_id: str, task: bool = False):
+    async def session(self, conversation_id: str, task: bool = False, read_only: bool = False):
         """
         The calls of one request, as ``agent:<conversation>``, through a client
         opened and closed in its task; ``task``: a request of a research task,
-        which may say it is done.
+        which may say it is done; ``read_only``: a review, which changes nothing
+        but its verdict (``reviews_may``).
         """
         from mcp import Client
 
@@ -890,18 +937,20 @@ class AgentTools:
         token = CALLER.set(caller)
         try:
             async with Client(self._server) as client:
-                yield ToolSession(self, client, conversation_id, caller.name, task)
+                yield ToolSession(self, client, conversation_id, caller.name, task, read_only)
         finally:
             CALLER.reset(token)
 
 
 class ToolSession:
-    def __init__(self, tools: AgentTools, client, conversation_id: str, caller: str, task: bool = False):
+    def __init__(self, tools: AgentTools, client, conversation_id: str, caller: str, task: bool = False,
+                 read_only: bool = False):
         self._tools = tools
         self._client = client
         self._conversation_id = conversation_id
         self._caller = caller
         self._task = task
+        self._read_only = read_only
         # The charts this request drew, and the pictures its tools gave.
         self._charts = 0
         self._pictures = 0
@@ -919,6 +968,9 @@ class ToolSession:
         definition = next((entry for entry in self._tools.definitions() if entry["name"] == name), None)
         if definition is None:
             return ToolAnswer(f"No tool {name!r}: use the tools you were given", is_error=True)
+        if self._read_only and not self._tools.reviews_may(name):
+            return ToolAnswer(f"{name} changes something, and this review only reads: read what is there, and end with "
+                              "set_verdict", is_error=True)
         if not isinstance(arguments, dict):
             return ToolAnswer(json.dumps({"INVALID_JSON": json.dumps(arguments)}), is_error=True)
         try:
@@ -1299,8 +1351,15 @@ class ToolSession:
     def _task_done(self, arguments: dict) -> ToolAnswer:
         if not self._task:
             return ToolAnswer("This conversation is not a research task: answer the operator", is_error=True)
+        hypotheses = []
+        today = datetime.fromtimestamp(self._tools._clock(), timezone.utc).date() + timedelta(days=1)
+        for number, given in enumerate(arguments.get("next_hypotheses") or [], start=1):
+            try:
+                hypotheses.append(checked_item(given, today))
+            except InvalidRequest as e:
+                return ToolAnswer(f"Next hypothesis {number}: {e}. Nothing was noted: call task_done again.", is_error=True)
         done = {"conclusion": arguments["conclusion"].strip(), "runs_kept": list(dict.fromkeys(arguments.get("runs_kept") or [])),
-                "next_steps": (arguments.get("next_steps") or "").strip() or None}
+                "next_steps": (arguments.get("next_steps") or "").strip() or None, "next_hypotheses": hypotheses}
         said = {"noted": True, "next": "Answer now with your conclusion: the task ends with this request."}
         return ToolAnswer(json.dumps(said), task_done=done)
 

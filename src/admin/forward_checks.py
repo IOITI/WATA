@@ -37,6 +37,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
+from src.admin import challengers
 from src.admin import edge_watch as ew
 from src.admin.backtest_nightly import read_sources
 from src.admin.backtests import FORWARD, MAX_NAME_LENGTH
@@ -476,6 +477,7 @@ class ForwardChecks:
         results, path = results_of(self._backtests.trades(run_id))
         days = [[row.get("day"), row.get("day_percent"), row.get("trades")]
                 for row in self._backtests.days(run_id) if row.get("status") == "tested"]
+        champion = self._champion_days(days)
         model = self.model(entry["candidate"])
         judgement = ew.judge(model, results)
         line = {
@@ -487,6 +489,8 @@ class ForwardChecks:
 
         def change(found: dict) -> None:
             found.update(judgement=judgement, path=path, days=days, last_run_settled=run_id)
+            # The live configuration's paper days of its days, kept beyond the sixty days paper trading keeps them.
+            found["champion"] = {**(found.get("champion") or {}), **champion}
             found["history"] = [line, *(found.get("history") or [])][:HISTORY_LINES]
             (found.get("last") or {}).update(settled=True)
 
@@ -507,6 +511,21 @@ class ForwardChecks:
         elif len(days) >= MOST_TESTED_DAYS:
             self._end(entry["id"], ENDED_DAYS)
 
+    def _champion_days(self, days: list[list]) -> dict[str, float]:
+        """
+        The live configuration's paper days among a check's days (the signals WATA received, traded each evening under
+        the live settings: ``BacktestService.paper()``'s ``live``), by day: what the challenger board sets it against.
+        """
+        wanted = {str(row[0]) for row in days if row}
+        try:
+            live = (self._backtests.paper(with_reports=False) or {}).get("live") or {}
+        except Exception as e:
+            logger.info(f"The live paper days could not be read for the forward checks: {e}")
+            return {}
+        return {row["day"]: round(float(row["day_percent"]), 4) for row in live.get("days") or []
+                if row.get("day") in wanted and isinstance(row.get("day_percent"), (int, float))
+                and not isinstance(row.get("day_percent"), bool)}
+
     def _remove(self, run_id: str) -> None:
         """A check's run before the newest let go, unless something rests on it (a favourite, a reference)."""
         try:
@@ -522,7 +541,7 @@ class ForwardChecks:
     def checks(self) -> list[dict]:
         """Every check, the active first, the newest first, without its path and history."""
         found = [
-            {key: value for key, value in entry.items() if key not in ("path", "history", "days")}
+            {key: value for key, value in entry.items() if key not in ("path", "history", "days", "champion")}
             | {"days_tested": len(entry.get("days") or [])}
             for entry in self._read()["checks"].values()
         ]
@@ -537,12 +556,28 @@ class ForwardChecks:
             raise UnknownCheck(check_id)
         model = self._models.get(entry["candidate"]) or read_json(
             os.path.join(self._folder, "models", f"{entry['candidate']}-v{ew.VERSION}.json"))
+        champion = sorted([day, percent] for day, percent in (entry.get("champion") or {}).items())
         return {
-            **entry,
+            **{key: value for key, value in entry.items() if key != "champion"},
             "model": {key: (model or {}).get(key) for key in ("usable", "why_not", "reference", "test", "horizon")}
             if model else None,
             "cone": (model or {}).get("cone"),
+            # Beside the live configuration's paper days of the same days (src/admin/challengers.py).
+            "against_live": challengers.board_line(entry.get("days") or [], champion, seed=challengers.seed_of(check_id))
+            if entry.get("days") else None,
         }
+
+    def board(self) -> list[dict]:
+        """
+        Each check with days judged beside the live configuration's paper days of the same days, the active first, the
+        newest first (src/admin/challengers.py): whether its candidate does better than what WATA trades now.
+        """
+        entries = sorted(self._read()["checks"].values(), key=lambda entry: entry.get("started_at") or "", reverse=True)
+        entries.sort(key=lambda entry: entry["state"] != ACTIVE)
+        return challengers.board([
+            {**entry, "champion": sorted([day, percent] for day, percent in (entry.get("champion") or {}).items())}
+            for entry in entries
+        ])
 
     def of_experiments(self) -> dict[str, dict]:
         """The newest check of each experiment, in short: what the journal's pages and tools show beside it."""

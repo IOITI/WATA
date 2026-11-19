@@ -75,7 +75,7 @@ describe('the menu', () => {
     const children = (id: string) =>
       sections.flatMap((section) => section.items).find((item) => item.id === id)?.children?.map((child) => child.id)
     expect(children('system')).toEqual(['disk', 'logs', 'audit'])
-    expect(children('agent')).toEqual(['agent-memory', 'agent-artefacts', 'agent-routines'])
+    expect(children('agent')).toEqual(['agent-memory', 'agent-artefacts', 'agent-routines', 'agent-queue'])
     expect(children('backtests')).toEqual(['paper', 'experiments'])
     expect(children('ta-signals')).toEqual(['ta-monitor'])
     expect(children('ta-indicators')).toEqual(['ta-luxalgo'])

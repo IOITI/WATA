@@ -57,7 +57,7 @@ class PicturedTools(FakeTools):
     def definitions(self):
         return [*TOOLS, {"name": "chart_view", "description": "chart_view", "input_schema": {"type": "object"}}]
 
-    def session(self, conversation_id, task=False):
+    def session(self, conversation_id, task=False, read_only=False):
         from contextlib import asynccontextmanager
 
         @asynccontextmanager
