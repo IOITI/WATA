@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.94.0 - The top bar summed up, backtests by configuration
+
+**Release date:** not released yet
+
+Two reworks of the admin, released together: its shell (the top bar and the sidebar), and the Backtests page, which now lists configurations, each made again each evening once asked.
+
+The top bar held up to nine things (three state chips, the live pill, a Live/Polling dot, ⌘K, the bell, the theme's button, the services' badge) and ran about 65 px past a phone's screen; the sidebar was 26 entries in a row, the look of the interface on the Configuration page alone. On ioiti-ui 0.23.0:
+
+- **One control for the states not to miss** (ioiti-ui's `StateSummary`, its rows `components/stateItems.ts`): Saxo's login, the services, a release waiting or applying, a restart needed, and whether the page is told of changes live or polls. The gravest shows in its words and tone ("Saxo: authorise", "+1"), a dot while all is well; opened, each state leads where it is dealt with, the quiet ones after. The chips, the Live/Polling dot and the Services badge are gone into it.
+- **The Operator menu** (ioiti-ui's `UserMenu`) at the end of the top bar: "Read only" or "Settings locked" under its name when the configuration says so, the theme, the accent and the material (the Configuration page's Look panel and the top bar's theme button are gone), the keyboard shortcuts, and signing out (no longer at the sidebar's foot). The price chart is made again in an accent chosen while it is on screen.
+- **The sidebar in sections that fold** (Analysis, Data, Technical Analysis, Operations; Trading stays open), each reader's choice kept, the section of the page shown always open; folded to its icons, it stays so (`wata.sidebar.collapsed`).
+- **Pages under their entry**: System › Disk, Logs, Audit trail; Backtests › Paper trading (an entry of its own now); Indicators › LuxAlgo Library; Signal rules › Engine monitor; the AI agent one entry at the sidebar's foot, its Memory, Artefacts and Routines under it. The trail goes through the entry ("Operations › System › Logs", "AI agent › Memory").
+- **Badges on the entries** (`components/menuBadges.ts`): the positions open, entries paused, sales Saxo refuses, a service of the page not well (Providers, Watchlist, Engine monitor, Disk, Edge Watch on Performance), Saxo's login, a release or a restart on the System, a restart the Configuration names, the AI agent's questions waiting, its pause or its requests under way. A section folded, an entry closed or the rail say them by a dot in the gravest tone. The agent's state lists the research tasks waiting for an answer (`asking`).
+- The ⌘K and bell buttons take the top bar's own button look (they had colours of their own).
+
+And the backtests:
+
+- **Backtests by configuration**:
+  - /backtests opens on its configurations: every run of the same strategy and settings, whatever its days (`src/admin/backtest_configurations.py`). Each row shows its latest result and verdict and opens on its runs. "Every run" (`?view=runs`) is the table as it was.
+  - A configuration's page shows its latest result, verdict and curve; what each evening's run found; what it runs and what differs from WATA's settings now; every run of it; and the configurations of its strategy with other settings.
+  - The starting capital counts: the four "(again)" runs of 16-19 Nov are two configurations, 1,000 € and 100 €.
+  - "Run again with changes" names a run "(again)" once, and ⌘K lists the configurations.
+- **Made again each evening**, once switched on from a configuration's page (`src/admin/backtest_nightly.py`):
+  - After the close, its latest run is asked again with the same settings, script and inputs, its days stretched to the day just over: 365 at most, then its first day moves on.
+  - The signals WATA received, or a rule's, are read again for the new days.
+  - The nightly run before is let go once the new one is done, unless it is a favourite, a reference, stressed or checked, or carries the AI agent's verdict. Runs asked by hand are never let go.
+  - A line on Telegram when asked. "Bring it up to date" asks it at once.
+  - A replaced run's old address leads to its configuration.
+- **A run may cover 365 days**: `admin.backtests_max_period_days` defaults to 365 (92 before), paper reports included. A config.json that says 92 keeps 92 until it is changed on the Configuration page.
+- **A run made from a run made again is no remake of its own** (`_derived`): a stress, a model check or a combination of a remade run, once done, said the original was made again by it and took its references.
+
+**On the live path:** nothing. The admin alone changes (admin1): its interface, one field of the AI agent's state, and the backtests' configurations and nightly runs (`src/admin`, `admin_ui`). No file of a backtest's `_CODE` changed, so no run turns stale.
+
+**Verification status:** on the two together (the shell rebased on the backtests' commits): the admin interface's 1,554 tests, lint, typecheck and build, on ioiti-ui 0.23.0 (its own 948 tests and release checks, CI and "Verify a release" green on GitHub); the whole Python suite, 4,349 passed and 29 skipped (the Pine runner's, Node 24 not on the PATH), in an environment built from `requirements.txt`. The backtests' commits alone, with the runner: 4,376 passed, 2 skipped.
+- The shell, looked at on the fake admin in the browser pane: at 1,024 px (the trail has 288 px, 105 before the summary's words moved to 1,280 px), at 375 px (the top bar fits, its last button 16 px from the edge), the phone's drawer, the rail kept across a reload with its badges as dots, both themes, and an accent chosen with a price chart on screen (its canvases made again).
+- The backtests, at 1,024 and 375 px: a run grouped into its configuration; "Bring it up to date" asking 13 to 18 Nov and adding its line to the history; the nightly switched on. Not seen: the after-close tick on a real evening (tests only), and the grouping of the server's real runs.
+
 ## v0.93.1 - The research journal, read whole
 
 **Release date:** 2026-11-19
