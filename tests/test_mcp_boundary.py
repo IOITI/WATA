@@ -57,6 +57,9 @@ ALLOWED_IMPORTS = (
     # Pure: the bar a run is held to (as the pages judge it), the criteria an experiment set itself, and the record of
     # how the families' kept conclusions held on later days.
     "src.admin.run_verdict", "src.admin.track_record",
+    # A run's trade autopsy (pure method, its glue reading the index's bars as data_bars does), and its sweep's
+    # plateaus (pure).
+    "src.admin.autopsy", "src.admin.sweep_plateau",
 )
 NEVER = (
     "src.admin.routers", "src.admin.services", "src.admin.config_editor", "src.admin.live_prices", "src.admin.queries",

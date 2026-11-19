@@ -60,6 +60,8 @@ import { paperRunLine, runParents } from './paperModel'
 import { choiceTrust } from './robustness'
 import { PropFirmPanel } from './PropFirmPanel'
 import { StressPanel } from './StressPanel'
+import { AutopsyPanel } from './AutopsyPanel'
+import { CapsPanel } from './CapsPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { TagsField } from './TagsField'
 import { RunFacts } from './RunFacts'
@@ -95,6 +97,8 @@ function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
     { id: 'curves', label: 'Day after day' },
     { id: 'why', label: 'Why' },
     { id: 'breakdowns', label: 'Where it comes from' },
+    // A day on paper has neither: too few trades to test a cut, and no twin of its own.
+    ...(judged && !run.paper ? [{ id: 'autopsy', label: 'Winners and losers' }, { id: 'caps', label: 'The day’s caps' }] : []),
     ...(luxalgo && judged ? [{ id: 'propfirms', label: 'Funded challenges' }] : []),
     { id: 'tables', label: 'Trades, signals, days' },
     { id: 'setup', label: 'What it ran' },
@@ -562,6 +566,16 @@ export function RunPage() {
                   <div id="breakdowns" className={ANCHORED}>
                     <BreakdownsPanel runId={run.id} />
                   </div>
+                  {!run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of && !run.paper && (
+                    <>
+                      <div id="autopsy" className={ANCHORED}>
+                        <AutopsyPanel runId={run.id} />
+                      </div>
+                      <div id="caps" className={ANCHORED}>
+                        <CapsPanel runId={run.id} />
+                      </div>
+                    </>
+                  )}
                   {luxalgo && !run.stress_of && !run.model_check_of && (
                     <div id="propfirms" className={ANCHORED}>
                       <PropFirmPanel run={run} />

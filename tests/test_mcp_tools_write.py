@@ -420,3 +420,48 @@ def test_a_runs_summary_says_its_verdict_check_by_check_and_its_research(tmp_pat
     assert checks["family"] == "open" and checks["motivated"] == "pass"
     assert found["research"]["motivated"] == {"days": ["2026-10-14"], "in_run": 1, "with_percent": 1.18,
                                               "without_percent": 2.0, "days_left": 1}
+
+
+# ── why a run wins or loses (v0.96.0) ──
+
+def test_a_twin_without_the_days_caps_is_one_trial_and_its_decomposition_a_part(tmp_path, research, scripts, experiment):
+    run_id = finished_run(tmp_path, research, scripts, {"summary.json": _judged_summary(), "trades.json": TRADES,
+                                                        "days.json": [{"day": "2026-10-13", "status": "tested", "day_percent": 2.0}]},
+                          made_by=CLAUDE, experiment=experiment)
+
+    assert "No twin" in answer(research, "backtest_result", {"run_id": run_id, "part": "decomposition"})["note"]
+    twin = answer(research, "backtest_derive", {"run_id": run_id, "kind": "caps_off", "experiment_id": experiment})
+
+    assert twin["trials_recorded"] == 1
+    request = json.loads((folder_of(tmp_path, twin["id"]) / "request.json").read_text())
+    assert request["decomposes"] == run_id and request["made_by"] == CLAUDE
+
+
+def test_an_autopsy_is_a_part_of_a_runs_result(tmp_path, research, scripts, experiment, monkeypatch):
+    from src.admin import autopsy as glue
+
+    async def bars(*arguments, **named):
+        return {"bars": []}
+
+    monkeypatch.setattr(glue.asset_bars, "bars", bars)
+    run_id = finished_run(tmp_path, research, scripts, {
+        "summary.json": _judged_summary(), "trades.json": TRADES, "signals.json": [],
+        "days.json": [{"day": "2026-10-13", "status": "tested"}, {"day": "2026-10-14", "status": "tested"}],
+    }, made_by=CLAUDE, experiment=experiment)
+
+    found = answer(research, "backtest_result", {"run_id": run_id, "part": "autopsy"})
+
+    assert found["trades"] == 2 and found["too_few"].startswith("2 trades over 2 days:")
+    assert found["exits"]["losers"] == 1
+
+
+def test_a_sweeps_part_says_its_plateaus(tmp_path, research, scripts, experiment):
+    cells = [{"values": [value], "tuning": {"total_percent": total, "days": 15}, "held_out": {"total_percent": 1.0, "days": 7},
+              "whole": {"total_percent": total, "days": 22}} for value, total in ((15, 5.0), (18, 4.0), (20, 112.4), (22, -20.0))]
+    run_id = finished_run(tmp_path, research, scripts, {
+        "summary.json": SUMMARY, "sweep.json": {"axes": [{"kind": "input", "name": "in_23", "values": [15, 18, 20, 22]}], "cells": cells},
+    }, made_by=CLAUDE, experiment=experiment)
+
+    found = answer(research, "backtest_result", {"run_id": run_id, "part": "sweep"})
+
+    assert found["plateau"]["best"] == 2 and found["plateau"]["knife_edge"] is True

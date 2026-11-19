@@ -17,7 +17,7 @@ import { EDGE_BEATEN, EDGE_T, headlineEdge, horizonLabel, LEAST_SIGNALS } from '
 import { isActive, sampleWarning } from './model'
 import { restsOnCheck } from './restsOn'
 import { MAX_OVERFITTING, MIN_DEFLATED_SHARPE, stressVerdict } from './robustness'
-import { sweepVerdict } from './sweep'
+import { plateauOf, sweepVerdict } from './sweep'
 
 /**
  * Whether a run can be believed, check by check: the bar Claude's research is
@@ -50,6 +50,7 @@ export interface RunCheck extends Check {
     | 'stress'
     | 'model'
     | 'held-out'
+    | 'plateau'
     | 'overfitting'
     | 'deflated'
     | 'code'
@@ -315,6 +316,25 @@ function sweepChecks(evidence: Evidence, derived: Derived): RunCheck[] {
           : 'No days were held out to tell.',
     section: 'choice',
   })
+
+  const plateau = plateauOf(derived.sweep)
+  if (plateau) {
+    const best = derived.sweep?.cells[plateau.best]?.tuning?.total_percent ?? 0
+    // A best that lost leaves nothing for its neighbours to keep: told by the figures, not by this check.
+    checks.push({
+      id: 'plateau',
+      label: 'Its best stands on a plateau',
+      state: best <= 0 ? 'open' : plateau.knifeEdge ? 'fail' : 'pass',
+      detail:
+        best <= 0
+          ? `Its best made ${formatPercent(best, true)}: no gain for its neighbours to keep.`
+          : plateau.bestNeighboursMedian === null
+            ? 'Its best has no neighbour to judge it by.'
+            : `Its best (${formatPercent(best, true)}) has neighbours at ${formatPercent(plateau.bestNeighboursMedian, true)} at the median` +
+              (plateau.knifeEdge ? ': a knife edge, one step away most of it is gone.' : '.'),
+      section: 'choice',
+    })
+  }
 
   const pbo = evidence.pbo
   checks.push({

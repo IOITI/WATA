@@ -20,13 +20,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from src.admin import backtest_requests, propfirm_check, run_to_live
+from src.admin import backtest_requests, propfirm_check, run_to_live, sweep_plateau
+from src.admin.autopsy import run_autopsy
 from src.admin.auth import client_ip, require_session
 from src.admin.backtests import RUN_ID
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
 from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
 from src.admin.routers.config import changes_said, require_config_edit_enabled
+from src.admin.mcp_server.facade import journal_of
 from src.admin.vault import telegram_bot_set
+from src.backtest.clock import TradingClock
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
 
@@ -437,7 +440,34 @@ async def baseline(run_id: str, service=Depends(backtests)):
 
 @router.get("/{run_id}/sweep")
 async def sweep(run_id: str, service=Depends(backtests)):
-    return await run_in_threadpool(service.sweep, run_id)
+    """A sweep's combinations, with each one's plateau and the robust pick (src/admin/sweep_plateau.py)."""
+    found = await run_in_threadpool(service.sweep, run_id)
+    summary = (await run_in_threadpool(service.get, run_id)).get("summary") or {}
+    return {**found, "plateau": sweep_plateau.plateau_of(found, summary.get("walk_forward"))}
+
+
+@router.get("/{run_id}/autopsy")
+async def autopsy(run_id: str, request: Request, service=Depends(backtests)):
+    """What separated the run's winners from its losers, known at entry, held on its later days (src/admin/autopsy.py)."""
+    ctx = request.app.state.ctx
+    zone = ctx.settings.timezone
+    return await run_autopsy(service, ctx.queries, ctx.history, journal_of(ctx.settings.backtests_path), run_id, zone,
+                             TradingClock(zone).day_of(time.time()))
+
+
+@router.post("/{run_id}/caps-off", status_code=202)
+async def caps_off(run_id: str, service=Depends(backtests)):
+    """The run made again without the day's caps: its twin, which says what the caps made of its entries."""
+    return service.without_caps(run_id)
+
+
+@router.get("/{run_id}/decomposition")
+async def decomposition(run_id: str, service=Depends(backtests)):
+    """Where the run's result comes from beside its twin without the day's caps, and the tail they hide."""
+    return {
+        "decomposition": await run_in_threadpool(service.decomposition, run_id),
+        "making": await run_in_threadpool(service.twin_under_way, run_id),
+    }
 
 
 @router.post("/{run_id}/reference")

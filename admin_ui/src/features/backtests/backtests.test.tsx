@@ -1255,8 +1255,8 @@ describe('a run', () => {
     const parts = nav.getAllByRole('link').map((link) => [link.textContent, link.getAttribute('href')])
     expect(parts).toEqual([
       ['01Verdict', '#verdict'], ['02Trust', '#trust'], ['03Edge', '#edge'], ['04Stress', '#stress'], ['05Made-up turbos', '#model-check'],
-      ['06Day after day', '#curves'], ['07Why', '#why'], ['08Where it comes from', '#breakdowns'], ['09Trades, signals, days', '#tables'],
-      ['10What it ran', '#setup'],
+      ['06Day after day', '#curves'], ['07Why', '#why'], ['08Where it comes from', '#breakdowns'], ['09Winners and losers', '#autopsy'],
+      ['10The day’s caps', '#caps'], ['11Trades, signals, days', '#tables'], ['12What it ran', '#setup'],
     ])
     for (const [, href] of parts) expect(document.getElementById((href as string).slice(1))).not.toBeNull()
     // Named by the part alone; the first is the current one until the page scrolls.

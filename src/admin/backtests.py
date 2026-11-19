@@ -23,6 +23,7 @@ runs first, whenever they were asked for.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ from typing import Callable
 
 import pytz
 
-from src.admin import backtest_indicator, run_research, run_verdict
+from src.admin import backtest_indicator, day_tail, run_research, run_verdict
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
 from src.admin.backtest_configurations import ConfigurationStore, base_of, configuration_id, strategy_id
 from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
@@ -105,8 +106,17 @@ logger = logging.getLogger(__name__)
 # 20261019-213045-a1b2c3: made here, and the only shape a folder is ever looked for with.
 RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
 # What an admin feature keeps beside a run's results: its check against funded challenges (src/admin/propfirm_check.py),
-# and what the experiment journal adds to a run of one of its experiments (src/admin/run_research.py).
-KEPT_FILES = ("propfirms.json", run_research.RESEARCH_FILE)
+# what the experiment journal adds to a run of one of its experiments (src/admin/run_research.py), its trade autopsy
+# (src/admin/autopsy.py) and where its result comes from beside its twin without the day's caps (src/admin/day_tail.py).
+AUTOPSY_FILE, DECOMPOSITION_FILE = "autopsy.json", "decomposition.json"
+KEPT_FILES = ("propfirms.json", run_research.RESEARCH_FILE, AUTOPSY_FILE, DECOMPOSITION_FILE)
+# A run's twin without the day's caps names it (``without_caps``): every cap at its "off" value, within FIELDS' bounds.
+CAPS_OFF = {
+    "no_entry_above_day_profit": 10_000.0, "max_day_loss": -100.0, "day_profit_target": 10_000.0,
+    "max_trades_per_day": 0, "max_consecutive_losses": 0, "max_drawdown_from_day_best_percent": 0.0,
+    "cooldown_after_loss_minutes": 0,
+}
+DECOMPOSITION_VERSION = 1
 # The runs to be made again on today's code (``remake``), beside the runs; in an old run's folder, the run that did.
 REMAKES_FILE = "remakes.json"
 REMADE_FILE = "remade.json"
@@ -149,7 +159,7 @@ NIGHTLY = "nightly"
 # A forward check's run says so (src/admin/forward_checks.py): {"check": <id>}, beside ``forward_of``, its candidate.
 FORWARD = "forward"
 # What a run made from another never takes of it (``_derived``).
-DERIVED_DROPS = ("paper", "favourite", "remade_from", NIGHTLY, FORWARD, "forward_of")
+DERIVED_DROPS = ("paper", "favourite", "remade_from", NIGHTLY, FORWARD, "forward_of", "decomposes")
 # The runner's answers kept are pruned at most this often, oldest first.
 CACHE_PRUNE_SECONDS = 600
 # Days of a year of recorded turbos, at the lowest priority on a small machine, with the random repetitions.
@@ -1114,6 +1124,77 @@ class BacktestService:
         journal = read_json(os.path.join(folder, "journal.json"))
         return self._queue_run(new_request, settings_doc, [], journal, copy_from=folder)
 
+    def without_caps(self, run_id: str, *, made_by: str | None = None, made_via: str | None = None,
+                     experiment: str | None = None, lockbox: dict | None = None) -> dict:
+        """
+        A finished run made again on the same days and signals with every cap of the day off (``CAPS_OFF``: no target,
+        no level above or under which entries stop, no breaker, no cooldown, no number of entries), its random entries
+        as they were: its twin, which says what the caps made of its entries (src/admin/day_tail.py). Its own
+        configuration (its settings differ), ``decomposes`` naming the run.
+        """
+        self._check_room()
+        folder = self._directory(run_id)
+        request = read_json(os.path.join(folder, "request.json")) or {}
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        if (request.get("kind") != "run" or request.get("paper") or request.get("decomposes")
+                or self._status(run_id).get("state") != DONE or not isinstance(settings_doc, dict)):
+            raise NotPossible("Only a finished run of one combination, not a twin itself, is made again without its caps")
+        settings = BacktestSettings.from_dict(settings_doc["settings"])
+        try:
+            with_changes(settings, CAPS_OFF)
+        except InvalidSettings as e:
+            raise NotPossible(f"This run cannot be made without its caps: {e}") from None
+        doc = {**settings_doc, "settings": {**settings_doc["settings"], **CAPS_OFF},
+               "changed": {**(settings_doc.get("changed") or {}), **CAPS_OFF}}
+        new_request = {
+            **_derived(request),
+            "name": f"Without the day's caps: {request.get('name') or run_id}"[:MAX_NAME_LENGTH],
+            "asked_at": utc(self._clock()), "decomposes": run_id,
+            **_research_fields(made_by, made_via, experiment, lockbox),
+        }
+        journal = read_json(os.path.join(folder, "journal.json"))
+        return self._queue_run(new_request, doc, [], journal, copy_from=folder)
+
+    def twin_under_way(self, run_id: str) -> str | None:
+        """A twin of the run without the day's caps that waits or runs; None when none does."""
+        for other in self._run_ids():
+            if (read_json(self._file(other, "request.json")) or {}).get("decomposes") == run_id and self.is_active(other):
+                return other
+        return None
+
+    def twin_of(self, run_id: str) -> str | None:
+        """The newest finished twin of a run without the day's caps; None while there is none."""
+        for other in self._run_ids():
+            request = read_json(self._file(other, "request.json")) or {}
+            if request.get("decomposes") == run_id and self._status(other).get("state") == DONE:
+                return other
+        return None
+
+    def decomposition(self, run_id: str) -> dict | None:
+        """
+        Where a run's result comes from, beside its newest finished twin without the day's caps, and the tail those caps
+        hide (src/admin/day_tail.py): kept beside the run once worked out, made again for a newer twin. None without a
+        twin.
+        """
+        self._directory(run_id)
+        twin = self.twin_of(run_id)
+        if twin is None:
+            return None
+        kept = read_json(self._file(run_id, DECOMPOSITION_FILE))
+        if isinstance(kept, dict) and kept.get("twin") == twin and kept.get("version") == DECOMPOSITION_VERSION:
+            return kept
+        settings = BacktestSettings.from_dict(self.settings_of(run_id))
+        seed = int(hashlib.sha256(run_id.encode()).hexdigest()[:8], 16)
+        found = {
+            "version": DECOMPOSITION_VERSION, "twin": twin,
+            **day_tail.decomposition(read_json(self._file(run_id, "summary.json")), self.baseline(run_id),
+                                     read_json(self._file(twin, "summary.json")), self.baseline(twin)),
+            "tail": day_tail.tail(self.days(run_id), self.days(twin), self.trades(twin), settings, seed=seed,
+                                  run_trades=self.trades(run_id)),
+        }
+        write_json(self._file(run_id, DECOMPOSITION_FILE), found)
+        return found
+
     # ── folders ──
 
     def _directory(self, run_id: str) -> str:
@@ -1611,6 +1692,8 @@ class BacktestService:
             # its check. Not judged itself.
             "forward_of": request.get("forward_of"),
             "forward": request.get(FORWARD) if isinstance(request.get(FORWARD), dict) else None,
+            # A run's twin without the day's caps (``without_caps``): the run it decomposes.
+            "decomposes": request.get("decomposes"),
             # The run it makes again on today's code, and the run that made it again once that one was done.
             "remade_from": request.get("remade_from"),
             "remade_by": (read_json(self._file(run_id, REMADE_FILE)) or {}).get("by"),

@@ -1,4 +1,6 @@
 import type {
+  BacktestAutopsy,
+  BacktestDecomposition,
   AgentArtefact,
   AgentAttach,
   AgentFile,
@@ -484,6 +486,13 @@ export const api = {
   backtestBaseline: (runId: string) =>
     request<BacktestBaseline | Record<string, never>>('GET', `/api/backtests/${encodeURIComponent(runId)}/baseline`),
   backtestSweep: (runId: string) => request<BacktestSweep>('GET', `/api/backtests/${encodeURIComponent(runId)}/sweep`),
+  backtestAutopsy: (runId: string) => request<BacktestAutopsy>('GET', `/api/backtests/${encodeURIComponent(runId)}/autopsy`),
+  backtestDecomposition: (runId: string) =>
+    request<{ decomposition: BacktestDecomposition | null; making: string | null }>(
+      'GET',
+      `/api/backtests/${encodeURIComponent(runId)}/decomposition`,
+    ),
+  makeWithoutCaps: (runId: string) => request<BacktestRunListed>('POST', `/api/backtests/${encodeURIComponent(runId)}/caps-off`),
   runSweepCell: (runId: string, cell: number) =>
     request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/cells/${cell}/run`),
   /** How the asset moved after the run's entry signals; empty for a run made before it was measured. */

@@ -117,3 +117,83 @@ export function sweepVerdict(sweep: BacktestSweepGrid, labels: Record<string, st
       (held ? 'It held up on days that had no say in the choice.' : 'It did not hold up on days that had no say in the choice: it was fitted to the first ones.'),
   }
 }
+
+// ── plateaus instead of peaks (src/admin/sweep_plateau.py, which the MCP and the AI agent read) ──
+
+export interface Plateau {
+  /** Each cell's plateau: the median tuning total of the cell and its neighbours. */
+  scores: (number | null)[]
+  best: number
+  robust: number
+  bestNeighboursMedian: number | null
+  gridMedian: number
+  /** A best above zero whose neighbours are at or under zero, or under half of it: one step away, most of it is gone. */
+  knifeEdge: boolean
+}
+
+function numericValues(values: readonly BacktestValue[]): boolean {
+  return values.length > 0 && values.every((value) => typeof value === 'number')
+}
+
+function median(values: number[]): number {
+  const ordered = [...values].sort((first, second) => first - second)
+  const middle = Math.floor(ordered.length / 2)
+  return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2
+}
+
+const round2 = (value: number) => Math.round(value * 100) / 100
+
+/** The cells one step away on each numeric axis, in the order of the axis's values (cells row by row, last axis fastest). */
+export function plateauNeighbours(axes: readonly Pick<BacktestSweepAxis, 'values'>[], index: number): number[] {
+  const shape = axes.map((axis) => axis.values.length)
+  const place: number[] = []
+  let rest = index
+  for (let number = shape.length - 1; number >= 0; number -= 1) {
+    place.unshift(rest % shape[number])
+    rest = Math.floor(rest / shape[number])
+  }
+  const found: number[] = []
+  axes.forEach((axis, number) => {
+    if (!numericValues(axis.values)) return
+    const order = axis.values.map((_, position) => position).sort((first, second) => (axis.values[first] as number) - (axis.values[second] as number))
+    const rank = order.indexOf(place[number])
+    for (const step of [-1, 1]) {
+      if (rank + step < 0 || rank + step >= order.length) continue
+      const moved = [...place]
+      moved[number] = order[rank + step]
+      found.push(moved.reduce((total, position, at) => total * shape[at] + position, 0))
+    }
+  })
+  return found
+}
+
+/** A sweep's plateaus, its best and its robust pick, and whether the best stands on a knife edge; null without a numeric axis. */
+export function plateauOf(grid: Pick<BacktestSweepGrid, 'axes' | 'cells'> | null): Plateau | null {
+  if (!grid || !grid.axes.some((axis) => numericValues(axis.values))) return null
+  const totals = grid.cells.map((cell) => cell.tuning?.total_percent ?? null)
+  const known = totals.flatMap((total, index) => (total === null ? [] : [{ index, total }]))
+  if (known.length === 0) return null
+  const scores = totals.map((total, index) => {
+    if (total === null) return null
+    const around = plateauNeighbours(grid.axes, index).flatMap((other) => (totals[other] === null ? [] : [totals[other] as number]))
+    return round2(median([total, ...around]))
+  })
+  const pick = (entries: { index: number; value: number }[]) =>
+    entries.reduce((kept, entry) => (entry.value > kept.value ? entry : kept)).index
+  const best = pick(known.map(({ index, total }) => ({ index, value: total })))
+  const robust = pick(scores.flatMap((score, index) => (score === null ? [] : [{ index, value: score }])))
+  const aroundBest = plateauNeighbours(grid.axes, best).flatMap((other) => (totals[other] === null ? [] : [totals[other] as number]))
+  const gridMedian = median(known.map(({ total }) => total))
+  const bestNeighboursMedian = aroundBest.length > 0 ? median(aroundBest) : null
+  return {
+    scores,
+    best,
+    robust,
+    bestNeighboursMedian: bestNeighboursMedian === null ? null : round2(bestNeighboursMedian),
+    gridMedian: round2(gridMedian),
+    knifeEdge:
+      (totals[best] as number) > 0 &&
+      bestNeighboursMedian !== null &&
+      (bestNeighboursMedian <= 0 || bestNeighboursMedian < (totals[best] as number) / 2),
+  }
+}

@@ -13,11 +13,14 @@ from src.admin import backtest_requests, propfirm_check
 from src.admin.mcp_server import guards
 from src.admin.mcp_server.budget import Refused, research_tool
 from src.admin.mcp_server.facade import CLAUDE
+from src.admin.autopsy import run_autopsy
 from src.admin.mcp_server.gate import current_caller
+from src.admin.sweep_plateau import plateau_of
 from src.admin.mcp_server.shape import DEFAULT_PAGE, compacted, csv_text, page
 from src.research.requests import body_of, neighbour_values, trials_of, value_of
 
-PARTS = ("summary", "edge", "breakdowns", "baseline", "sweep", "reconciliation", "model_check", "settings", "r_series")
+PARTS = ("summary", "edge", "breakdowns", "baseline", "sweep", "reconciliation", "model_check", "settings", "r_series",
+         "autopsy", "decomposition")
 TRADE_ORDERS = ("time", "worst", "best")
 FATES = ("executed", "refused", "failed", "unpriced", "closed", "ignored", "not_a_signal")
 FORMATS = ("json", "csv")
@@ -239,7 +242,8 @@ def register(server, research) -> None:
         beside WATA's real trades. model_check: a model check's trades paired by signal with the recorded run's
         (backtest_derive kind model_check). settings: every setting the run used. r_series: its trades as
         R-multiples (each result over its stop-loss), in the order they closed, with its trades a day: what LuxAlgo's
-        prop-firm simulator takes."""
+        prop-firm simulator takes. autopsy: what separated winners from losers, known at entry, chosen on its first
+        days and tested on the later ones. decomposition: with and without the day's caps (backtest_derive caps_off)."""
         if part not in PARTS:
             raise Refused(f"part is one of {', '.join(PARTS)}")
         if part == "summary":
@@ -286,7 +290,15 @@ def register(server, research) -> None:
                 ],
                 "walk_forward": _without_curves(summary.get("walk_forward")),
                 "pbo": summary.get("pbo"), "deflated_sharpe": summary.get("deflated_sharpe"),
+                # Plateaus instead of peaks: each cell's neighbourhood, the robust pick, a knife edge.
+                "plateau": plateau_of(found, summary.get("walk_forward")),
             })
+        if part == "autopsy":
+            return compacted(await run_autopsy(research.service(), research.queries, research.history, research.journal,
+                                               run_id, research.timezone, research.today()))
+        if part == "decomposition":
+            found = await run_in_threadpool(research.service().decomposition, run_id)
+            return compacted(found or {"note": "No twin without the day's caps yet: backtest_derive kind caps_off makes one"})
         if part == "reconciliation":
             found = await run_in_threadpool(research.service().reconciliation, run_id)
             if not found:
@@ -411,7 +423,7 @@ START_DESCRIPTION = (
     "unless changes sets it. Days of the lock box only with lockbox_final. Claude's runs wait behind the "
     "operator's, a few at most at once. Then backtest_wait."
 )
-DERIVED = ("stress", "noise_stress", "cell", "neighbours", "model_check")
+DERIVED = ("stress", "noise_stress", "cell", "neighbours", "model_check", "caps_off")
 # Under the 60 s after which Claude Code ends a call: wait again for longer.
 WAIT_MOST_SECONDS = 45
 WAIT_MOST_RUNS = 10
@@ -473,7 +485,9 @@ def register_writing(server, research) -> None:
         side (a tenth of the value by default) or the given ``values``: a plateau, or a peak among worse values?
         kind="model_check": a finished run on the recorded turbos made again on turbos made up from the index (no
         trial counted, no random entries), its trades paired by signal with the recorded ones (backtest_result part
-        model_check): how far made-up turbos are from what was recorded, before trusting a run on them."""
+        model_check): how far made-up turbos are from what was recorded, before trusting a run on them.
+        kind="caps_off": the run again without any cap of the day (target, levels, breakers, cooldown), its random
+        entries kept (one trial): part decomposition says what the caps add and the tail they hide."""
         if kind not in DERIVED:
             raise Refused(f"kind is one of {', '.join(DERIVED)}")
         experiment = guards.open_experiment(journal, experiment_id)
@@ -494,6 +508,11 @@ def register_writing(server, research) -> None:
             guards.check_room(research, days)
             return await started(service.model_check(run_id, **research_fields), experiment_id, 0, lockbox,
                                  note=f"model check of {run_id}")
+        if kind == "caps_off":
+            repetitions = int(((run.get("request") or {}).get("baseline") or {}).get("repetitions") or 0)
+            guards.check_room(research, days * (1 + repetitions))
+            return await started(service.without_caps(run_id, **research_fields), experiment_id, 1, lockbox,
+                                 note=f"without the day's caps: {run_id}")
         if kind == "cell":
             guards.check_room(research, days * 101)
             return await started(service.run_cell(run_id, cell, **research_fields), experiment_id, 0, lockbox,

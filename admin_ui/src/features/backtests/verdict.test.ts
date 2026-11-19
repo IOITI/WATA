@@ -184,7 +184,8 @@ describe('the verdict of a sweep', () => {
 
   it('says whether the choice held on the days held out, and whether it was fitted', () => {
     const checks = runChecks(run({ kind: 'sweep', summary }), { ...NO_DERIVED, sweep })
-    expect(states(checks)).toEqual({ sample: 'pass', 'held-out': 'pass', overfitting: 'fail', deflated: 'pass', code: 'pass' })
+    // Its best (3 %) has a neighbour at 2 %: more than half of it, no knife edge.
+    expect(states(checks)).toEqual({ sample: 'pass', 'held-out': 'pass', plateau: 'pass', overfitting: 'fail', deflated: 'pass', code: 'pass' })
     expect(checks.find((check) => check.id === 'overfitting')?.detail).toBe('A probability of 0.62 that the best was fitted (0.5 at most).')
     expect(checks.find((check) => check.id === 'deflated')?.detail).toBe('97% likely to be real after 12 trials.')
     expect(verdictOf(checks).sentence).toBe('Not to be believed yet: little chance of overfitting.')

@@ -8719,6 +8719,10 @@
      "pass"
     ],
     [
+     "plateau",
+     "pass"
+    ],
+    [
      "overfitting",
      "pass"
     ],
@@ -8862,6 +8866,10 @@
     [
      "held-out",
      "fail"
+    ],
+    [
+     "plateau",
+     "pass"
     ],
     [
      "overfitting",
@@ -9009,6 +9017,10 @@
      "pass"
     ],
     [
+     "plateau",
+     "pass"
+    ],
+    [
      "overfitting",
      "fail"
     ],
@@ -9149,12 +9161,459 @@
      "pass"
     ],
     [
+     "plateau",
+     "pass"
+    ],
+    [
      "overfitting",
      "open"
     ],
     [
      "deflated",
      "open"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "a sweep whose best stands on a knife edge",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": {
+      "probability": 0.3
+     },
+     "deflated_sharpe": {
+      "probability": 0.97,
+      "trials": 120
+     },
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "input",
+        "name": "in_23",
+        "values": [
+         15,
+         18,
+         20,
+         22
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": 5.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 1.0,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 40,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": 4.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 0.5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 22,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": 112.4,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 9.0,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -20.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -3.0,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -6,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "held-out",
+     "pass"
+    ],
+    [
+     "plateau",
+     "fail"
+    ],
+    [
+     "overfitting",
+     "pass"
+    ],
+    [
+     "deflated",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "a sweep whose best lost has no plateau to judge",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": {
+      "probability": 0.3
+     },
+     "deflated_sharpe": {
+      "probability": 0.97,
+      "trials": 120
+     },
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "input",
+        "name": "in_23",
+        "values": [
+         15,
+         18,
+         20,
+         22
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": -5.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 1.0,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 40,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": -4.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 0.5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 22,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": -2.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 9.0,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -20.0,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -3.0,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -6,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "held-out",
+     "pass"
+    ],
+    [
+     "plateau",
+     "open"
+    ],
+    [
+     "overfitting",
+     "pass"
+    ],
+    [
+     "deflated",
+     "pass"
+    ],
+    [
+     "code",
+     "pass"
+    ]
+   ]
+  },
+  {
+   "name": "a sweep of switches has no plateau to judge",
+   "run": {
+    "id": "20261101-130000-ffffff",
+    "kind": "sweep",
+    "turbos": "recorded",
+    "stale": false,
+    "remade_by": null,
+    "status": {
+     "state": "done"
+    },
+    "stress_of": null,
+    "noise_of": null,
+    "model_check_of": null,
+    "forward_of": null,
+    "headline": {
+     "trades": null,
+     "days": null,
+     "sample": null,
+     "days_tested": 25,
+     "beaten": null,
+     "repetitions": null,
+     "edge": null,
+     "pbo": {
+      "probability": 0.3
+     },
+     "deflated_sharpe": {
+      "probability": 0.97,
+      "trials": 120
+     },
+     "model_check": null,
+     "rests_on": null,
+     "grid": {
+      "axes": [
+       {
+        "kind": "setting",
+        "name": "news_window",
+        "values": [
+         false,
+         true,
+         false,
+         true
+        ]
+       }
+      ],
+      "held_out": 0.3,
+      "held_out_from": "2026-11-05",
+      "cells": [
+       {
+        "values": [
+         0
+        ],
+        "tuning": {
+         "total_percent": 30,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 10,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 40,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         1
+        ],
+        "tuning": {
+         "total_percent": 20,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 2,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 22,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         2
+        ],
+        "tuning": {
+         "total_percent": 10,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": 5,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": 15,
+         "days": 25
+        }
+       },
+       {
+        "values": [
+         3
+        ],
+        "tuning": {
+         "total_percent": -5,
+         "days": 17
+        },
+        "held_out": {
+         "total_percent": -1,
+         "days": 8
+        },
+        "whole": {
+         "total_percent": -6,
+         "days": 25
+        }
+       }
+      ]
+     }
+    },
+    "research": null
+   },
+   "runs": [],
+   "expected": [
+    [
+     "sample",
+     "pass"
+    ],
+    [
+     "held-out",
+     "pass"
+    ],
+    [
+     "overfitting",
+     "pass"
+    ],
+    [
+     "deflated",
+     "pass"
     ],
     [
      "code",

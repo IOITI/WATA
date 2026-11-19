@@ -2457,6 +2457,8 @@ export interface BacktestRunListed {
   nightly?: { configuration: string; on: boolean } | null
   /** A forward check's run (src/admin/forward_checks.py): the candidate it judges on the days after it. Not judged itself. */
   forward_of?: string | null
+  /** A run's twin without the day's caps: the run it decomposes. */
+  decomposes?: string | null
   forward?: { check: string } | null
   /** What the experiment journal adds to a run of one of its experiments (src/admin/run_research.py), once worked out. */
   research?: BacktestResearch | null
@@ -3091,6 +3093,93 @@ export interface BacktestSweep {
   held_out: number
   held_out_from: string | null
   cells: BacktestSweepCell[]
+  /** Plateaus instead of peaks (src/admin/sweep_plateau.py); null without a numeric axis. */
+  plateau?: BacktestSweepPlateau | null
+}
+
+export interface BacktestSweepPlateau {
+  scores: (number | null)[]
+  best: number
+  robust: number
+  best_values: BacktestValue[]
+  robust_values: BacktestValue[]
+  best_total: number | null
+  robust_total: number | null
+  best_neighbours_median: number | null
+  grid_median: number
+  knife_edge: boolean
+  best_held_out: number | null
+  robust_held_out: number | null
+  /** Chosen on plateaus window after window, its own days kept; beside the sweep's own walk-forward. */
+  robust_walk_forward?: { total_percent: number; days: number } | null
+  walk_forward_percent?: number | null
+}
+
+/** What separated a run's winners from its losers, known at entry, held on its later days (src/admin/trade_autopsy.py). */
+export interface BacktestAutopsy {
+  version: number
+  trades: number
+  days: number
+  too_few: string | null
+  choose_days?: [string, string]
+  test_days?: [string, string]
+  fdr_q: number
+  left_out: string[]
+  features: BacktestAutopsyFeature[]
+  held: { name: string; said: string; q: number; sentence: string }[]
+  exits: {
+    losers: number
+    losers_up_first: Record<string, number | null>
+    winners: number
+    winners_down_first: Record<string, number | null>
+  }
+  asset?: { provider: string; key: string }
+}
+
+export interface BacktestAutopsyFeature {
+  name: string
+  label: string
+  kind: 'number' | 'category'
+  known: number
+  cut: number | string | null
+  said?: string
+  why?: string
+  chosen?: { in: number; difference: number }
+  tested?: { in: number; out: number; mean_in: number; mean_out: number; difference: number }
+  p: number | null
+  q: number | null
+  same_sign?: boolean
+  held: boolean
+}
+
+/** A day's results as a tail's figures say them. */
+export interface BacktestTailFigures {
+  days: number
+  losing_share: number | null
+  at_or_under: Record<string, number | null>
+  p1: number | null
+  p5: number | null
+  median: number | null
+  worst: number | null
+  at_target_share: number | null
+}
+
+/** Where a run's result comes from beside its twin without the day's caps, and the tail they hide (src/admin/day_tail.py). */
+export interface BacktestDecomposition {
+  version: number
+  twin: string
+  with_caps: { entries: number | null; random: number | null; trades: number | null }
+  without_caps: { entries: number | null; random: number | null; trades: number | null }
+  caps_add: number | null
+  entries_add_with_caps: number | null
+  entries_add_without_caps: number | null
+  tail: {
+    draws: number
+    days_drawn_from: number
+    levels: number[]
+    observed: BacktestTailFigures
+    bounds: Partial<Record<'best_first' | 'results', BacktestTailFigures>>
+  }
 }
 
 /** Each finished day written as files for a research machine (src/admin/research_export.py). */

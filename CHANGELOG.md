@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.96.0 - Why it wins or loses: the trade autopsy, plateaus, and the day's caps
+
+**Release date:** not yet released
+
+The agent's research changed scripts and settings for the losses of a day or two, and kept values whose neighbours lost (in_23 20: +112 %; 22: +0.8 %). Three readings of a run, for the AI agent and the operator alike:
+
+- **The trade autopsy** (`src/admin/trade_autopsy.py`): what separated a run's winners from its losers, using only what was known at entry (minutes after the US open, weekday, direction, its number in the day, the day's result before it, the previous trade's result once closed, the turbo's spread, price and distance to its barrier, the index's moves over 5, 15 and 60 minutes and its volatility, its place in the session's range, the gap, the US open's first half hour, a release day), the index read up to the moment the signal was raised. Each cut is chosen on the first 60 % of the tested days and tested on the later ones, with a bootstrap of whole days and a false discovery rate of 10 %: what holds is said as a hypothesis. The exits are read beside it, in-sample. The run page's "Winners and losers", MCP part `autopsy`.
+- **Plateaus instead of peaks** (`src/admin/sweep_plateau.py`): a sweep's best stands on a knife edge when its neighbours keep less than half of it; the robust pick is the best among its neighbours; a walk-forward chosen on plateaus is set beside the sweep's own. A new check of the bar, `plateau`, for sweeps (Python and the pages, held together by the shared fixture); a best that lost leaves it open, with nothing gained to keep.
+- **The day's caps** (`src/admin/day_tail.py`): "Make it again without the day's caps" (MCP `backtest_derive` kind `caps_off`) makes the run's twin with no target, no levels, no breakers, no cooldown; beside it, each against its random entries, what the caps add. The twin's days are drawn whole and replayed under the run's caps, 10,000 times: how often a day ends at -5, -10 or -25 % or worse, with each trade's best point first and on its results alone. The run page's "The day's caps", MCP part `decomposition`.
+- The AI agent is told when to read them: the autopsy before changing a script for its losses, the plateau and the twin before keeping anything.
+
+**On the live path:** nothing. The admin alone changes (admin1). No file of a backtest's `_CODE` changed, so no run turns stale.
+
+**Verification status:** the Python suite (4,518 passed, 24 skipped), the interface's 1,601 tests, its lint, types and build; the release manifest names admin1 alone. On the development admin, at 1,440 and 375 px, light and dark: a run's "Winners and losers" (too few to test on its 14 trades, the exits read beside), "The day's caps" (its twin made from the button, the 2×2, the tail beside its own days), a sweep of nine combinations with its plateau check and sentences. Not seen on the server's runs yet: a held split needs 30 trades over 10 days.
+
 ## v0.95.0 - Did it hold? Kept conclusions judged on later days
 
 **Release date:** not yet released

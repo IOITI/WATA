@@ -17,6 +17,8 @@ Pure: nothing here reads a file or changes a run.
 
 import math
 
+from src.admin.sweep_plateau import plateau
+
 # Fewer trades or days than these describe those days and nothing else.
 MIN_TRADES = 30
 MIN_DAYS = 20
@@ -323,6 +325,19 @@ def _sweep_checks(evidence: dict, derived: dict) -> list[dict]:
         "The best combination stayed in the better half on days that had no say in the choice." if held is True else
         "The best combination fell to the worse half on days that had no say in the choice." if held is False else
         "No days were held out to tell."))
+    found = plateau(derived.get("sweep"))
+    if found is not None:
+        knife, best = found["knife_edge"], found["best_total"]
+        if best <= 0:
+            # Nothing gained for its neighbours to keep: told by the figures, not by this check.
+            checks.append(_check("plateau", "Its best stands on a plateau", OPEN,
+                                 f"Its best made {best:+.2f} %: no gain for its neighbours to keep."))
+        else:
+            checks.append(_check(
+                "plateau", "Its best stands on a plateau", FAIL if knife else PASS,
+                f"Its best ({best:+.2f} %) has neighbours at {found['best_neighbours_median']:+.2f} % at the "
+                "median" + (": a knife edge, one step away most of it is gone." if knife else ".")
+                if found["best_neighbours_median"] is not None else "Its best has no neighbour to judge it by."))
     pbo = evidence["pbo"]
     probability = _number((pbo or {}).get("probability"))
     if probability is None:

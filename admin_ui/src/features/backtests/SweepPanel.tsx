@@ -10,6 +10,7 @@ import type { BacktestField, BacktestNoiseLevel, BacktestSummary, BacktestSweep 
 import { choiceTrust, daysRange, NOISE_AXES, noiseSentences, STRESS_AXES, stressVerdict, walkForwardCurves, walkForwardSentence } from './robustness'
 import { axisName, heat, METRICS, sweepGrid, sweepVerdict } from './sweep'
 import type { Metric, Part } from './sweep'
+import { plateauSentences } from './why'
 
 const PARTS: { id: Part; label: string }[] = [
   { id: 'tuning', label: 'Days to choose on' },
@@ -162,6 +163,17 @@ export function SweepPanel({
                 {verdict && (
                   <Alert tone={verdict.held === false ? 'warning' : 'neutral'}>
                     <AlertDescription>{verdict.sentence}</AlertDescription>
+                  </Alert>
+                )}
+                {choosing && sweep.plateau && (
+                  <Alert tone={sweep.plateau.knife_edge ? 'warning' : 'neutral'}>
+                    <AlertDescription>
+                      <ul className="flex flex-col gap-1">
+                        {plateauSentences(sweep.plateau, sweep.axes, labels).map((sentence) => (
+                          <li key={sentence}>{sentence}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
                   </Alert>
                 )}
                 {stressed && (

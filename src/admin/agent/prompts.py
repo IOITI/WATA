@@ -49,7 +49,11 @@ unless changes.capital says another), `backtest_wait` (it waits until the runs e
 edge of the entries first, then random entries, risk, regimes, trades.
 5. Values tried with a sweep (walk-forward on): the held-out days before the chosen-on ones, then the probability \
 of overfitting and the deflated Sharpe ratio.
-6. Before keeping anything: neighbours and stress (`backtest_derive`).
+6. Before keeping anything: neighbours and stress (`backtest_derive`); a sweep's plateau (`backtest_result` part \
+sweep: a best on a knife edge is not kept); for a run whose day's caps may make its result, its twin without them \
+(`backtest_derive` kind caps_off, then part decomposition: what the caps add, and the tail they hide). Before changing \
+a script for its losses, its autopsy (part autopsy): what separated winners from losers, known at entry, chosen on its \
+first days and tested on the later ones; what held is a hypothesis for an experiment, never a result.
 7. `exp_conclude`: kept, rejected or inconclusive, with what it rests on. Kept names its candidate, the run it keeps: \
 its checks against the bar and the criteria are recorded with it (keep one against the bar only with the reason in \
 the notes), and a forward check judges it each evening on the days after it, which no run had seen (`exp_get`). \

@@ -169,6 +169,9 @@ AUTHENTICATED_ROUTES = [
     ("PUT", "/api/mcp/paused"),
     ("GET", "/api/research/experiments"),
     ("PUT", "/api/research/lockbox"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/autopsy"),
+    ("POST", "/api/backtests/20261012-213045-a1b2c3/caps-off"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/decomposition"),
     ("GET", "/api/research/forward"),
     ("POST", "/api/research/forward"),
     ("GET", "/api/research/forward/f0a1b2c3d"),
@@ -3890,7 +3893,8 @@ def test_what_a_run_found_is_read_by_day_and_fate(client, backtests):
     assert client.get(f"/api/backtests/{RUN}/trades?day=2026-10-13").json() == {"items": [{"id": 1}]}
     assert client.get(f"/api/backtests/{RUN}/breakdowns").json() == {"groups": {}}
     assert client.get(f"/api/backtests/{RUN}/baseline").json() == {}
-    assert client.get(f"/api/backtests/{RUN}/sweep").json() == {"cells": []}
+    # A sweep is given its plateau, none without cells (src/admin/sweep_plateau.py).
+    assert client.get(f"/api/backtests/{RUN}/sweep").json() == {"cells": [], "plateau": None}
     assert client.get(f"/api/backtests/{RUN}/edge").json() == {"horizons": []}
     assert client.get(f"/api/backtests/{RUN}/reconciliation").json() == {"summary": {"paired": 0}}
     assert client.get("/api/backtests/paper").json() == {"rules": {}}
