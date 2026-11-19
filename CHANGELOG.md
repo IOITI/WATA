@@ -2,7 +2,7 @@
 
 ## v0.94.0 - The top bar summed up, backtests by configuration
 
-**Release date:** not released yet
+**Release date:** 2026-11-19
 
 Two reworks of the admin, released together: its shell (the top bar and the sidebar), and the Backtests page, which now lists configurations, each made again each evening once asked.
 
