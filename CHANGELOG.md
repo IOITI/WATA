@@ -2,7 +2,7 @@
 
 ## v0.93.1 - The research journal, read whole
 
-**Release date:** not released yet
+**Release date:** 2026-11-19
 
 CI failed on v0.93.0 once, on Python 3.12 alone: `test_writes_from_several_threads_are_whole_lines` counted 159 trials of 160.
 
