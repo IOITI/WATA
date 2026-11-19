@@ -69,11 +69,16 @@ class ExperimentJournal:
         return event
 
     def _events(self) -> list[dict]:
+        # Read under the lock the writes take: a line being appended by another thread could otherwise be read in
+        # part, and the read fail (CI, 2026-11-19: one thread of eight stopped, 159 trials counted of 160). A last
+        # line without its end is another process's still being written: left for the next read.
         try:
-            with open(self.journal_path, encoding="utf-8") as in_file:
+            with self._lock, open(self.journal_path, encoding="utf-8") as in_file:
                 lines = in_file.readlines()
         except FileNotFoundError:
             return []
+        if lines and not lines[-1].endswith("\n"):
+            lines = lines[:-1]
         return [json.loads(line) for line in lines if line.strip()]
 
     def new(self, title: str, hypothesis: str, family: str, *, plan: str = "", made_by: str | None = None) -> dict:

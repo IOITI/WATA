@@ -112,6 +112,16 @@ def test_writes_from_several_threads_are_whole_lines(journal):
     assert all(json.loads(line) for line in lines)
 
 
+def test_a_line_another_process_is_still_writing_is_left_for_the_next_read(journal):
+    found = journal.new("A", "a", "ema")["experiment"]
+    journal.record_run(found, "20261020-100000-aaaaaa", kind="run", trials=1)
+    # The lab and the admin write the same journal: one of them caught halfway through its line.
+    with open(journal.journal_path, "a", encoding="utf-8") as other:
+        other.write('{"event": "run", "experiment": "' + found + '", "run": "20261020-1')
+
+    assert journal.get(found)["trials"] == 1
+
+
 # ── the lock box ──
 
 
