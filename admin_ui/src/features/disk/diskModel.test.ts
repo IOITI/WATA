@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import type { DiskKind, DiskPoint, DiskProjection, DiskRetentions } from '@/lib/types'
+import type { DiskKeptRelease, DiskKind, DiskPoint, DiskProjection, DiskRetentions } from '@/lib/types'
 
 import {
   changedRetentions,
   changeText,
   cleanupGain,
   cleanupSentence,
+  keptSentence,
   lastCleanupSentence,
   dailyStacks,
   daysText,
@@ -132,7 +133,30 @@ describe('the cleanups', () => {
     expect(cleanupGain(server)).toBe('Up to 929 MB')
     expect(cleanupGain({ ...server, id: 'signal_cache', up_to: false, bytes: 1_100 * MB })).toBe('About 1.1 GB')
     expect(cleanupGain({ ...server, bytes: null })).toBe('Not known')
-    expect(cleanupSentence(server)).toMatch(/^watadeploy removes on the server no release folder \(the newest three and those in use stay\), Docker’s build cache unused for two weeks \(up to 900 MB of it may go\)/)
+    expect(cleanupSentence(server)).toMatch(/^watadeploy removes on the server no release folder \(the newest three and those in use stay\), Docker’s build cache no image holds, unused for a day \(up to 900 MB of it may go\)/)
+  })
+
+  it('say which releases stay and why, grouped by the strongest reason', () => {
+    // The server's status on 2026-11-19, as watadeploy now says it.
+    const kept = [
+      { version: '0.92.1', why: ['newest', 'pinned', 'created'], containers: ['admin1', 'tools'] },
+      { version: '0.92.0', why: ['newest', 'pinned', 'created', 'rollback'], containers: ['trader1'] },
+      { version: '0.91.0', why: ['newest'], containers: [] },
+      { version: '0.90.0', why: ['rollback'], containers: ['admin1'] },
+      { version: '0.85.0', why: ['pinned', 'created'], containers: ['service_control1'] },
+      { version: '0.61.1', why: ['pinned', 'created'], containers: ['pg_backup1'] },
+      { version: '0.59.1', why: ['created'], containers: ['rabbitmq', 'postgres', 'traefik'] },
+    ] as DiskKeptRelease[]
+    expect(keptSentence({ ...server, kept })).toBe(
+      'Kept: 0.92.1, 0.92.0, 0.85.0, 0.61.1 (in use); 0.59.1 (holds the compose files rabbitmq, postgres and traefik were made from); ' +
+        '0.91.0 (among the newest three); 0.90.0 (a rollback may go back to it).',
+    )
+    expect(keptSentence({ ...server, kept: [kept[3], { ...kept[3], version: '0.88.0' }] })).toBe(
+      'Kept: 0.90.0, 0.88.0 (a rollback may go back to them).',
+    )
+    // A watadeploy that does not say it: nothing is made up.
+    expect(keptSentence(server)).toBeNull()
+    expect(keptSentence({ ...server, kept: null })).toBeNull()
   })
 
   it('say the last one, or why it was not made', () => {
@@ -143,5 +167,18 @@ describe('the cleanups', () => {
     expect(lastCleanupSentence({ id: 'c', by: 'x', removed: [], images_bytes: null, build_cache_bytes: null,
       finished_at: '2026-11-17T07:00:00Z', error: 'Another apply is under way: one at a time' }, at))
       .toBe('The last cleanup, 2026-11-17, was not made: Another apply is under way: one at a time.')
+  })
+
+  it('never say nothing was given back when Docker did not say', () => {
+    const at = (iso: string) => iso.slice(0, 10)
+    // The cleanup of 2026-11-19: buildx's words were not read, and the page said "0 B given back by Docker".
+    const record = { id: 'c', by: 'admin (the Disk page)', removed: ['0.82.0'], images_bytes: 0, build_cache_bytes: null,
+      finished_at: '2026-11-19T05:06:40Z' }
+    expect(lastCleanupSentence(record, at)).toBe('Last cleanup 2026-11-19, by admin (the Disk page): releases 0.82.0 removed, ' +
+      '0 B given back by the images no tag names; what the build cache gave back was not said.')
+    expect(lastCleanupSentence({ ...record, images_bytes: null, build_cache_bytes: 1_527 * MB }, at)).toBe('Last cleanup ' +
+      '2026-11-19, by admin (the Disk page): releases 0.82.0 removed, 1.5 GB given back by the build cache; what the images gave back was not said.')
+    expect(lastCleanupSentence({ ...record, images_bytes: null }, at)).toBe('Last cleanup 2026-11-19, by admin (the Disk page): ' +
+      'releases 0.82.0 removed, what Docker gave back was not said.')
   })
 })

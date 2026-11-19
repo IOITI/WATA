@@ -105,6 +105,22 @@ def docker_bytes(text: str) -> int | None:
     return int(float(match.group(1)) * factor)
 
 
+def build_cache_shared(text: str) -> tuple[int | None, int | None]:
+    """
+    What ``docker buildx du`` says the build cache shares with the images, and its total, in bytes. Its summary
+    ends ``Shared:``, ``Private:``, ``Reclaimable:``, ``Total:``; with nothing shared it has no ``Shared:`` line.
+    """
+    said = {}
+    for line in str(text).splitlines():
+        match = re.match(r"^(Shared|Total):\s*(\S+)\s*$", line.strip())
+        if match:
+            said[match.group(1)] = docker_bytes(match.group(2))
+    total = said.get("Total")
+    if total is None:
+        return None, None
+    return said.get("Shared", 0), total
+
+
 def run(arguments: list[str], timeout: float = COMMAND_SECONDS) -> str:
     """A command's output; raises with its last words when it fails."""
     try:
@@ -257,6 +273,17 @@ class Collector:
             if name:
                 found[name] = docker_bytes(row.get("Size", ""))
                 found["reclaimable"][name] = docker_bytes(row.get("Reclaimable", ""))
+        # Docker's build cache counts the layers it shares with the images, which the images count already (4.0 of
+        # its 5.5 GB on 2026-11-19, the containerd image store): the cache is what no image holds. Its total stays
+        # beside it; buildx not answering, the total as before.
+        try:
+            shared, total = build_cache_shared(self._run([self.docker, "buildx", "du"]))
+        except Exception:  # noqa: BLE001 - the total stands for it
+            shared = total = None
+        if shared is not None and total is not None and found.get("build_cache") is not None:
+            found["build_cache_total"] = found["build_cache"]
+            found["build_cache_shared"] = shared
+            found["build_cache"] = max(0, total - shared)
         return found
 
     def _psql(self, sql: str) -> str:

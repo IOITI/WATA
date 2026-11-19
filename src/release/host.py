@@ -69,14 +69,22 @@ REQUEST_FIELDS = frozenset({"id", "action", "version", "containers", "force", "a
 # What the admin may ask: an apply of the newest release, or the cleanup of what Docker and older releases left.
 APPLY = "apply"
 CLEANUP = "cleanup"
-# Docker's build cache unused for this long goes at a cleanup: what the releases kept were built with is used again
-# at each build, and stays.
-BUILD_CACHE_UNUSED_HOURS = 14 * 24
+# Docker's build cache unused for this long goes at a cleanup. Without --all, Docker never prunes what an image shares
+# (buildkit skips the records its image store holds), so only what no image holds goes: the layers of images removed,
+# the build contexts, a stage's source (node's image, fetched again at the next build). What the releases kept were
+# built with (Python, the libraries) is in their images, and stays. Fourteen days (v0.89.0 to v0.92.1) kept the layers
+# of every image removed for two weeks (1.5 GB on 2026-11-19).
+BUILD_CACHE_UNUSED_HOURS = 24
 MAX_REQUEST_BYTES = 4096
 REQUEST_MAX_AGE_SECONDS = 600
 KEPT_REQUESTS = 50
 # Releases kept by prune, the newest first, beside every one still named.
 KEEP_RELEASES = 3
+# Why prune keeps a release (Host.kept_releases), as the Disk page says it (admin_ui/src/features/disk/diskModel.ts).
+KEPT_NEWEST = "newest"
+KEPT_PINNED = "pinned"
+KEPT_CREATED = "created"
+KEPT_ROLLBACK = "rollback"
 # Run in an image on config.json, read-only: its own validator, its refusal cleaned as a log line is.
 CONFIG_PROBE = """
 import logging, sys
@@ -121,8 +129,13 @@ _SIZE_UNITS = {"": 1, "k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12, "ki": 2**10, "mi"
 
 
 def reclaimed(output: str) -> int | None:
-    """What Docker says a prune gave back (``Total reclaimed space: 902.6MB``), in bytes; None when it does not say."""
-    match = re.search(r"reclaimed space:\s*([\d.]+)\s*([kKmMgGtT]i?)?B", output or "")
+    """
+    What Docker says a prune gave back, in bytes; None when it does not say. ``docker image prune`` ends with
+    ``Total reclaimed space: 902.6MB``; ``docker builder prune`` is buildx's own once buildx is installed (the
+    docker CLI hands ``builder`` over to it), whose table ends with ``Total:\t1.527GB``.
+    """
+    match = (re.search(r"reclaimed space:\s*([\d.]+)\s*([kKmMgGtT]i?)?B", output or "")
+             or re.search(r"^Total:\s*([\d.]+)\s*([kKmMgGtT]i?)?B\s*$", output or "", re.MULTILINE))
     if not match:
         return None
     return int(float(match.group(1)) * _SIZE_UNITS[(match.group(2) or "").lower()])
@@ -366,7 +379,7 @@ class Docker:
         return reclaimed(self.call(["image", "prune", "--force"], timeout=600).stdout)
 
     def prune_build_cache(self, unused_hours: int = BUILD_CACHE_UNUSED_HOURS) -> int | None:
-        """Docker's build cache unused for ``unused_hours``; the bytes given back."""
+        """Docker's build cache no image holds, unused for ``unused_hours``; the bytes given back."""
         return reclaimed(self.call(["builder", "prune", "--force", "--filter", f"until={unused_hours}h"],
                                    timeout=600).stdout)
 
@@ -1113,7 +1126,7 @@ class Host:
             versions = {container.name: container.version for container in facts.containers}
             status.update({
                 "newest": facts.newest,
-                "installed": self.layout.installed(),
+                **self.releases_said(),
                 "containers": [{**step.as_dict(), "image": pins.get(pin_variable(step.container)),
                                 "version": versions.get(step.container), "said": said(step)} for step in steps],
                 "plan": summary(steps),
@@ -1131,6 +1144,8 @@ class Host:
             status["config"] = config
         if cleanup is not None:
             status["cleanup"] = cleanup
+            # What is left, so that the page offers no folder that is gone.
+            status.update(self.releases_said())
         status["at"] = utc_now()
         _write_atomically(self.layout.status, json.dumps(status, sort_keys=True, indent=1))
         return status
@@ -1201,25 +1216,74 @@ class Host:
         write_pins(self.layout.pins, pins)
         return pins
 
-    def prune(self, keep: int = KEEP_RELEASES) -> list[str]:
-        """Older releases' folders and images, keeping the newest ``keep`` and every one still named."""
+    def kept_releases(self, keep: int = KEEP_RELEASES) -> dict[str, dict]:
+        """
+        The releases prune keeps, and why (``why``: KEPT_*; ``containers``: those that name it): the newest ``keep``;
+        one a container is pinned to; one whose compose files created a running container (Traefik, PostgreSQL and
+        RabbitMQ keep the release they were last made from); one the last five applies moved a container from or to,
+        while that image is there: a rollback recreates a container on it with the newest release's files, so the
+        folder of a release whose image is gone serves nothing.
+        """
         installed = self.layout.installed()
-        named = set(installed[:keep])
-        pins = read_pins(self.layout.pins)
-        named.update(version for version in map(version_of, pins.values()) if version)
-        for inspected in self.docker.containers().values():
-            files = ((inspected.get("Config") or {}).get("Labels") or {}).get("com.docker.compose.project.config_files", "")
-            for path in files.split(","):
+        kept: dict[str, dict] = {}
+
+        def keep_it(version: str, why: str, container: str | None = None) -> None:
+            entry = kept.setdefault(version, {"why": [], "containers": []})
+            if why not in entry["why"]:
+                entry["why"].append(why)
+            if container and container not in entry["containers"]:
+                entry["containers"].append(container)
+
+        for version in installed[:keep]:
+            keep_it(version, KEPT_NEWEST)
+        names = {pin_variable(name): name for name in [*manifests.CONTAINERS, BACKUP_CONTAINER]}
+        names[TOOLS_VARIABLE] = "tools"
+        for variable, image in read_pins(self.layout.pins).items():
+            version = version_of(image)
+            if version:
+                keep_it(version, KEPT_PINNED, names.get(variable))
+        for service, inspected in self.docker.containers().items():
+            labels = (inspected.get("Config") or {}).get("Labels") or {}
+            name = (inspected.get("Name") or service).lstrip("/")
+            for path in labels.get("com.docker.compose.project.config_files", "").split(","):
                 match = re.match(rf"^{re.escape(self.layout.base)}/(\d+\.\d+\.\d+)/deploy/", path)
                 if match:
-                    named.add(match.group(1))
+                    keep_it(match.group(1), KEPT_CREATED, name)
+        there: dict[str, bool] = {}
         for record in self.history(5):
             for step in record.get("steps") or []:
-                named.update(version for version in (version_of(step.get("before")), version_of(step.get("after")))
-                             if version)
+                for image in (step.get("before"), step.get("after")):
+                    version = version_of(image)
+                    if not version:
+                        continue
+                    if image not in there:
+                        there[image] = self.docker.image(image) is not None
+                    if there[image]:
+                        keep_it(version, KEPT_ROLLBACK, step.get("container"))
+        return kept
+
+    def releases_said(self) -> dict:
+        """
+        The release folders as the status says them: those installed, those prune keeps and why, and those it would
+        remove, which the Disk page offers as they are (src/admin/disk_cleanups.py). Docker not answering, only the
+        folders: the page then works it out as it did before.
+        """
+        installed = self.layout.installed()
+        try:
+            kept = self.kept_releases()
+        except DeployError:
+            return {"installed": installed, "kept": None, "prunable": None}
+        return {"installed": installed,
+                "kept": [{"version": version, **kept[version]} for version in installed if version in kept],
+                "prunable": [version for version in installed if version not in kept]}
+
+    def prune(self, keep: int = KEEP_RELEASES) -> list[str]:
+        """Older releases' folders and images, keeping those ``kept_releases`` keeps."""
+        installed = self.layout.installed()
+        kept = self.kept_releases(keep)
         removed = []
         for version in installed:
-            if version in named:
+            if version in kept:
                 continue
             for image in (f"{WATA_IMAGE}:{version}", f"{BACKUP_IMAGE}:{version}"):
                 if self.docker.image(image) is not None:
@@ -1237,8 +1301,9 @@ class Host:
     def cleanup(self, keep: int = KEEP_RELEASES, *, by: str = "watadeploy", request: str | None = None) -> dict:
         """
         What older releases and Docker's builds left: the releases ``prune`` removes, the images no tag names any
-        more, and the build cache unused for two weeks. Never while an apply runs (the same lock); never a running
-        container's image, a pinned one, nor a volume. Recorded in the status, which the admin reads.
+        more, and the build cache no image holds, unused for a day. Never while an apply runs (the same lock); never a
+        running container's image, a pinned one, nor a volume. Recorded in the status, which the admin reads, with the
+        releases that are left (``releases_said``).
         """
         record = {"id": os.urandom(8).hex(), "by": by, "request": request, "started_at": utc_now(),
                   "removed": [], "images_bytes": None, "build_cache_bytes": None}

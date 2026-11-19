@@ -12,7 +12,7 @@ container by container.
     watadeploy serve-requests             the admin's requests (started by watadeploy-requests.path)
     watadeploy bootstrap                  pins for a server that has none (the install runs it)
     watadeploy prune [--keep N]           older releases' folders and images, the images no tag names, the build
-                                          cache unused for two weeks
+                                          cache no image holds, unused for a day
 
 Run as root on the server (the wrapper /usr/local/bin/watadeploy sets
 PYTHONPATH to the newest release's folder). Exit codes: 0 done, 1 refused or

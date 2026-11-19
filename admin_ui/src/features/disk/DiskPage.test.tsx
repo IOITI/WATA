@@ -92,6 +92,8 @@ const offers = (waiting = false): DiskCleanups => ({
   items: [
     { id: 'server', bytes: 929 * MB, up_to: true, available: !waiting, why_not: null, build_cache: 900 * MB,
       releases: [{ version: '0.85.0', bytes: 15 * MB }, { version: '0.61.1', bytes: 14 * MB }],
+      kept: [{ version: '0.89.0', why: ['newest', 'pinned'], containers: ['admin1'] },
+        { version: '0.59.1', why: ['created'], containers: ['traefik', 'postgres'] }],
       waiting: waiting ? { id: 'a'.repeat(32), state: 'asked', at: '2026-11-17T07:20:00Z' } : null,
       last: { id: 'c1', by: 'watadeploy prune', removed: ['0.82.0'], build_cache_bytes: 300 * MB, images_bytes: 0,
         finished_at: '2026-11-16T22:00:00Z' } },
@@ -194,6 +196,8 @@ describe('the Disk page', () => {
     expect(await within(panel as HTMLElement).findByText(/Up to 929 MB/)).toBeInTheDocument()
     expect(within(panel as HTMLElement).getByText(/release folders 0.85.0, 0.61.1 and their images/)).toBeInTheDocument()
     expect(within(panel as HTMLElement).getByText(/Last cleanup .*by watadeploy prune: releases 0.82.0 removed, 300 MB given back/)).toBeInTheDocument()
+    expect(within(panel as HTMLElement).getByText(
+      'Kept: 0.89.0 (in use); 0.59.1 (holds the compose files traefik and postgres were made from).')).toBeInTheDocument()
     // Not while a backtest reads it.
     expect(within(panel as HTMLElement).getByRole('button', { name: 'Empty it' })).toBeDisabled()
 

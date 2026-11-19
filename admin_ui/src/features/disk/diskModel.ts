@@ -10,6 +10,8 @@ import type {
   DiskCleanupOffer,
   DiskCleanupRecord,
   DiskJudged,
+  DiskKeptRelease,
+  DiskKeptWhy,
   DiskKind,
   DiskLevel,
   DiskPoint,
@@ -245,7 +247,7 @@ export function cleanupSentence(offer: DiskCleanupOffer): string {
         releases.length
           ? `release folder${releases.length === 1 ? '' : 's'} ${releases.map((one) => one.version).join(', ')} and their images`
           : 'no release folder (the newest three and those in use stay)',
-        `Docker’s build cache unused for two weeks${offer.build_cache ? ` (up to ${formatBytes(offer.build_cache)} of it may go)` : ''}`,
+        `Docker’s build cache no image holds, unused for a day${offer.build_cache ? ` (up to ${formatBytes(offer.build_cache)} of it may go)` : ''}`,
         'the images no tag names any more',
       ]
       return `watadeploy removes on the server ${parts.join(', ')}. Nothing a container runs or is pinned to; never a volume.`
@@ -255,6 +257,41 @@ export function cleanupSentence(offer: DiskCleanupOffer): string {
     case 'former':
       return `${formatNumber(offer.runs ?? 0)} runs and the measures of the turbos the former backtester left. Today's backtests never read them.`
   }
+}
+
+// Why a release stays, the strongest first: what runs, what the infrastructure was made from, the newest, a rollback.
+const KEPT_ORDER: DiskKeptWhy[] = ['pinned', 'created', 'newest', 'rollback']
+
+function andJoined(items: string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** The releases watadeploy keeps, grouped by why, in a sentence; null when it does not say. */
+export function keptSentence(offer: DiskCleanupOffer): string | null {
+  if (!offer.kept?.length) return null
+  const groups = new Map<DiskKeptWhy, DiskKeptRelease[]>()
+  for (const release of offer.kept) {
+    const why = KEPT_ORDER.find((one) => release.why.includes(one))
+    if (why) groups.set(why, [...(groups.get(why) ?? []), release])
+  }
+  const parts = KEPT_ORDER.filter((why) => groups.has(why)).map((why) => {
+    const releases = groups.get(why) ?? []
+    const versions = releases.map((one) => one.version).join(', ')
+    const one = releases.length === 1
+    switch (why) {
+      case 'pinned':
+        return `${versions} (in use)`
+      case 'created': {
+        const made = [...new Set(releases.flatMap((release) => release.containers))]
+        return `${versions} (${one ? 'holds' : 'hold'} the compose files ${made.length ? andJoined(made) : 'containers'} ${made.length === 1 ? 'was' : 'were'} made from)`
+      }
+      case 'newest':
+        return `${versions} (among the newest three)`
+      case 'rollback':
+        return `${versions} (a rollback may go back to ${one ? 'it' : 'them'})`
+    }
+  })
+  return parts.length ? `Kept: ${parts.join('; ')}.` : null
 }
 
 /** What it would give back: "About 929 MB", "Up to 929 MB". */
@@ -267,8 +304,19 @@ export function cleanupGain(offer: DiskCleanupOffer): string {
 export function lastCleanupSentence(record: DiskCleanupRecord, formatMoment: (iso: string) => string): string {
   const when = record.finished_at ? formatMoment(record.finished_at) : 'at an unknown time'
   if (record.error) return `The last cleanup, ${when}, was not made: ${record.error}.`
-  const given = (record.build_cache_bytes ?? 0) + (record.images_bytes ?? 0)
   const removed = record.removed.length ? `releases ${record.removed.join(', ')} removed` : 'no release removed'
   const failed = record.errors?.length ? ` Not done: ${record.errors.join('; ')}.` : ''
-  return `Last cleanup ${when}, by ${record.by}: ${removed}, ${formatBytes(given)} given back by Docker.${failed}`
+  // Docker says what a prune gave back, or nothing (until 2026-11-19 watadeploy could not read buildx's words): an
+  // amount not said is never shown as nothing given back.
+  const images = record.images_bytes ?? null
+  const cache = record.build_cache_bytes ?? null
+  const given =
+    images !== null && cache !== null
+      ? `${formatBytes(images + cache)} given back by Docker`
+      : images !== null
+        ? `${formatBytes(images)} given back by the images no tag names; what the build cache gave back was not said`
+        : cache !== null
+          ? `${formatBytes(cache)} given back by the build cache; what the images gave back was not said`
+          : 'what Docker gave back was not said'
+  return `Last cleanup ${when}, by ${record.by}: ${removed}, ${given}.${failed}`
 }

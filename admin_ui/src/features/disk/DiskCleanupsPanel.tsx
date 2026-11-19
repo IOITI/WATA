@@ -11,7 +11,7 @@ import { useSession } from '@/features/auth/auth-context'
 import { api, ApiError } from '@/lib/api'
 import type { DiskCleanupId, DiskCleanupOffer } from '@/lib/types'
 
-import { CLEANUP_BUTTON, CLEANUP_TITLE, cleanupGain, cleanupSentence, lastCleanupSentence } from './diskModel'
+import { CLEANUP_BUTTON, CLEANUP_TITLE, cleanupGain, cleanupSentence, keptSentence, lastCleanupSentence } from './diskModel'
 
 const WARNING: Record<DiskCleanupId, string> = {
   server: 'This acts on the server: Docker and the release folders. Running containers are never touched.',
@@ -28,6 +28,7 @@ function errorOf(error: unknown): string | null {
 function Offer({ offer, onAsk, actionsEnabled }: { offer: DiskCleanupOffer; onAsk: () => void; actionsEnabled: boolean }) {
   const { timezone } = useSession()
   const moment = (iso: string) => formatDateTime(iso, timezone, false)
+  const kept = keptSentence(offer)
   const why = !actionsEnabled ? 'Operator actions are disabled in the configuration (admin.actions_enabled)' : offer.waiting
     ? 'Asked: watadeploy takes it within a minute'
     : offer.why_not
@@ -43,6 +44,7 @@ function Offer({ offer, onAsk, actionsEnabled }: { offer: DiskCleanupOffer; onAs
           {CLEANUP_TITLE[offer.id]} <span className="font-normal text-muted-foreground">· {cleanupGain(offer)}</span>
         </p>
         <p className="text-sm text-muted-foreground">{cleanupSentence(offer)}</p>
+        {kept && <p className="text-xs text-muted-foreground">{kept}</p>}
         {offer.waiting && <p className="text-xs">Asked {moment(offer.waiting.at)}: waiting for watadeploy.</p>}
         {offer.last && <p className="text-xs text-muted-foreground">{lastCleanupSentence(offer.last, moment)}</p>}
       </div>

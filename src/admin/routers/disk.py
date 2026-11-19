@@ -65,5 +65,5 @@ async def disk_cleanup(action: str, request: Request, cleanups=Depends(_cleanups
     if action == SERVER:
         # The server's own folders and Docker: an operator action, in the audit trail and on Telegram.
         ctx.audit(request, "disk cleanup on the server", "Older releases, untagged images, Docker's build cache "
-                                                         "unused for two weeks")
+                                                         "no image holds, unused for a day")
     return done

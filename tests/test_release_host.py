@@ -25,6 +25,7 @@ from src.release.host import (
     Layout,
     pin_variable,
     read_pins,
+    reclaimed,
     version_of,
     write_pins,
 )
@@ -453,7 +454,7 @@ def test_a_cleanup_waits_for_no_apply_and_one_part_that_fails_leaves_the_others_
     assert record["errors"] == ["docker builder prune failed: permission denied"]
 
 
-def test_docker_is_asked_for_the_untagged_images_and_the_build_cache_unused_for_two_weeks(tmp_path):
+def test_docker_is_asked_for_the_untagged_images_and_the_build_cache_unused_for_a_day(tmp_path):
     asked = []
 
     def runner(arguments, **_):
@@ -464,10 +465,67 @@ def test_docker_is_asked_for_the_untagged_images_and_the_build_cache_unused_for_
     docker = Docker(Layout(str(tmp_path)), binary="docker", runner=runner)
     assert docker.prune_build_cache() == 902_600_000
     assert docker.prune_dangling_images() == 0
-    assert asked == [["docker", "builder", "prune", "--force", "--filter", "until=336h"],
+    assert asked == [["docker", "builder", "prune", "--force", "--filter", "until=24h"],
                      ["docker", "image", "prune", "--force"]]
-    # Never every image, nor every layer of the cache.
+    # Never every image, nor every layer of the cache: without --all, Docker keeps what an image shares.
     assert all("--all" not in arguments and "-a" not in arguments for arguments in asked)
+
+
+def test_what_docker_gave_back_is_read_from_the_words_of_either_prune():
+    assert reclaimed("Deleted Images:\nuntagged: x\n\nTotal reclaimed space: 902.6MB\n") == 902_600_000
+    # ``docker builder prune`` is buildx's once buildx is installed (Docker 29 on the server, 2026-11-19): a table,
+    # then its total.
+    buildx = ("ID\t\t\t\t\tRECLAIMABLE\tSIZE\t\tLAST ACCESSED\n"
+              "oppbzsba4754y9p10okj7x0og\ttrue\t\t933.2MB\t\t2 days ago\n"
+              "Total:\t1.527GB\n")
+    assert reclaimed(buildx) == 1_527_000_000
+    assert reclaimed("Total:\t0B\n") == 0
+    # Nothing said is not nothing given back.
+    assert reclaimed("") is None and reclaimed("ID RECLAIMABLE SIZE LAST ACCESSED\n") is None
+
+
+def _history(host, *records):
+    os.makedirs(host.layout.release, exist_ok=True)
+    with open(host.layout.history, "a", encoding="utf-8") as history:
+        for record in records:
+            history.write(json.dumps(record) + "\n")
+
+
+def test_a_release_is_kept_for_a_rollback_only_while_its_image_is_there_and_each_kept_one_says_why(server):
+    host, docker, _, _ = server
+    # The last apply moved the trader from 0.58.0, whose image is there, and the TA engine from 0.52.1, whose image
+    # something else removed (the server's own nightly prune did so to 0.84.0-0.88.0, 2026-11-19).
+    docker.images["wata-base:0.58.0"] = {"Id": "sha256:" + "f" * 64}
+    _history(host, {"kind": "apply", "version": NEW, "steps": [
+        {"container": "trader1", "before": "wata-base:0.58.0", "after": f"wata-base:{NEW}"},
+        {"container": "ta_engine1", "before": "wata-base:0.52.1", "after": f"wata-base:{NEW}"}]})
+
+    kept = host.kept_releases(keep=1)
+
+    assert kept[NEW]["why"][0] == "newest" and "tools" in kept[NEW]["containers"]
+    # The containers are pinned to OLD and were made from its compose files.
+    assert kept[OLD]["why"] == ["pinned", "created"] and {"admin1", BACKUP_CONTAINER} <= set(kept[OLD]["containers"])
+    assert kept["0.58.0"] == {"why": ["rollback"], "containers": ["trader1"]}
+    assert "0.52.1" not in kept
+    assert host.prune(keep=1) == ["0.52.1"]
+    assert os.path.isdir(os.path.join(host.layout.base, "0.58.0"))
+
+
+def test_a_cleanup_says_which_releases_are_left_so_that_the_page_offers_none_that_is_gone(server):
+    host, docker, _, _ = server
+    record = host.cleanup(by="operator")
+    status = host.read_status()
+
+    assert record["removed"] == ["0.52.1"]
+    assert status["installed"] == [NEW, OLD, "0.58.0"] and status["prunable"] == []
+    assert [(entry["version"], entry["why"]) for entry in status["kept"]] == [
+        (NEW, ["newest", "pinned"]), (OLD, ["newest", "pinned", "created"]), ("0.58.0", ["newest"])]
+
+    def silent():
+        raise DeployError("docker ps failed: Cannot connect to the Docker daemon")
+
+    docker.containers = silent
+    assert host.releases_said() == {"installed": [NEW, OLD, "0.58.0"], "kept": None, "prunable": None}
 
 
 def test_the_admin_may_ask_for_a_cleanup_and_nothing_else_of_it(server):

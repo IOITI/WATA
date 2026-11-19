@@ -4756,6 +4756,16 @@ export interface DiskCleanupRecord {
   error?: string
 }
 
+/** Why watadeploy keeps a release: the newest three, a container pinned to it, a container made from its compose
+ * files, or a rollback that may go back to its image. */
+export type DiskKeptWhy = 'newest' | 'pinned' | 'created' | 'rollback'
+
+export interface DiskKeptRelease {
+  version: string
+  why: DiskKeptWhy[]
+  containers: string[]
+}
+
 export interface DiskCleanupOffer {
   id: DiskCleanupId
   /** What it would give back, as far as the admin can tell; null when it cannot. */
@@ -4765,6 +4775,8 @@ export interface DiskCleanupOffer {
   available: boolean
   why_not: string | null
   releases?: { version: string; bytes: number | null }[]
+  /** The releases watadeploy keeps, and why (src/release/host.py kept_releases); null from a watadeploy that does not say. */
+  kept?: DiskKeptRelease[] | null
   build_cache?: number | null
   waiting?: { id: string; state: string; at: string } | null
   last?: DiskCleanupRecord | null

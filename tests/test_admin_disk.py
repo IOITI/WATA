@@ -205,7 +205,7 @@ def test_the_morning_line_is_said_only_while_the_disk_is_not_fine():
 # ── the cleanups ──
 
 
-from src.admin.disk_cleanups import DiskCleanups, releases_to_go  # noqa: E402
+from src.admin.disk_cleanups import DiskCleanups, releases_kept, releases_to_go  # noqa: E402
 from src.admin.errors import NotPossible  # noqa: E402
 from src.admin.release import Release, ReleaseRefused, cleanup_said  # noqa: E402
 
@@ -269,6 +269,24 @@ def test_the_releases_to_go_are_beyond_the_newest_three_and_none_in_use():
 
     # 0.84.0 is what the recorder runs.
     assert found == [{"version": "0.85.0", "bytes": 15 * MB}, {"version": "0.61.1", "bytes": 14 * MB}]
+
+
+def test_the_releases_to_go_are_watadeploy_s_own_list_once_it_says_it():
+    # watadeploy keeps more than the admin can tell (the last five applies, the infrastructure's compose files):
+    # the page offered 0.59.1 to 0.90.0 on 2026-11-19 and the cleanup removed 0.82.0 alone.
+    said = {**RELEASE_STATUS, "prunable": ["0.84.0"], "kept": [
+        {"version": "0.61.1", "why": ["created", "unknown"], "containers": ["traefik", "postgres"]},
+        {"version": "0.89.0", "why": ["newest", "pinned"], "containers": ["admin1"]},
+        {"version": "../etc", "why": ["newest"], "containers": []}]}
+
+    assert releases_to_go(said, {"0.84.0": 15 * MB}) == [{"version": "0.84.0", "bytes": 15 * MB}]
+    assert releases_to_go({**said, "prunable": []}, {}) == []
+    assert releases_kept(said) == [
+        {"version": "0.89.0", "why": ["newest", "pinned"], "containers": ["admin1"]},
+        {"version": "0.61.1", "why": ["created"], "containers": ["traefik", "postgres"]}]
+    # From a watadeploy that does not say it: worked out as before, and nothing said of what is kept.
+    assert releases_to_go({**said, "prunable": None}, {}) == releases_to_go(RELEASE_STATUS, {})
+    assert releases_kept(RELEASE_STATUS) is None
 
 
 def test_each_cleanup_says_what_it_would_give_back(cleanups):
@@ -375,4 +393,5 @@ def test_the_releases_the_page_says_go_are_counted_as_watadeploy_counts_them():
     from src.release import host
 
     assert disk_cleanups.KEEP_RELEASES == host.KEEP_RELEASES
+    assert set(disk_cleanups.KEPT_WHY) == {host.KEPT_NEWEST, host.KEPT_PINNED, host.KEPT_CREATED, host.KEPT_ROLLBACK}
 

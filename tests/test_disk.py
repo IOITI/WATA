@@ -123,6 +123,23 @@ def test_a_sample_measures_the_disk_the_folders_docker_and_the_database(tmp_path
     assert sample["database_bytes"] == 990_000_000
 
 
+def test_the_build_cache_is_what_no_image_holds_the_layers_it_shares_being_counted_with_the_images(tmp_path):
+    # docker buildx du on the server, 2026-11-19 (containerd's image store): 4.0 of its 5.5 GB were the images' own.
+    buildx = ("ID\t\t\t\t\tRECLAIMABLE\tSIZE\t\tLAST ACCESSED\n"
+              "oppbzsba4754y9p10okj7x0og*\ttrue\t\t933.2MB\t\t23 hours ago\n"
+              "Shared:\t\t4.017GB\nPrivate:\t1.527GB\nReclaimable:\t5.544GB\nTotal:\t\t5.544GB\n")
+    df = DOCKER_DF.replace("4.396GB", "5.544GB")
+    sample = _collector(_base(tmp_path), {"info": "/var/lib/docker\n", "system df": df, "buildx du": buildx,
+                                          "pg_total_relation_size": TABLES, "pg_database_size": "990000000\n"}).sample()
+
+    docker = sample["docker"]
+    assert (docker["build_cache"], docker["build_cache_shared"], docker["build_cache_total"]) == (
+        1_527_000_000, 4_017_000_000, 5_544_000_000)
+    assert docker["reclaimable"]["build_cache"] == 902_600_000
+    assert collect.build_cache_shared("Reclaimable:\t12MB\nTotal:\t12MB\n") == (0, 12_000_000)
+    assert collect.build_cache_shared("buildx: unknown command") == (None, None)
+
+
 def test_a_source_that_fails_is_said_and_the_rest_measured(tmp_path):
     base = _base(tmp_path)
     sample = _collector(base, {"info": "/var/lib/docker\n", "system df": RuntimeError("docker system df failed: x"),

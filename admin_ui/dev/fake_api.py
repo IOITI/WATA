@@ -1384,7 +1384,14 @@ class FakeRelease(Release):
                        "started_at": earlier} for name, role in (("service_control1", "service_control"),
                                                                  ("admin1", "admin"))],
         }
-        return {"newest": self.NEWEST, "installed": [self.NEWEST, "0.60.0", "0.59.1"], "containers": containers,
+        # What watadeploy keeps and why (src/release/host.py releases_said): nothing to remove beyond these three.
+        kept = [{"version": self.NEWEST, "why": ["newest", "pinned", "created"],
+                 "containers": ["admin1", "service_control1", "tools"]},
+                {"version": "0.60.0", "why": ["newest", "pinned"], "containers": ["ta_engine1"]},
+                {"version": "0.59.1", "why": ["newest", "pinned", "created", "rollback"],
+                 "containers": ["web_server1", "trader1", "traefik", "postgres", "rabbitmq"]}]
+        return {"newest": self.NEWEST, "installed": [self.NEWEST, "0.60.0", "0.59.1"], "kept": kept, "prunable": [],
+                "containers": containers,
                 "planned_at": now.isoformat(timespec="seconds"), "applying": None, "last": last, "requests": [],
                 "config": {"at": earlier, "images": [
                     {"image": f"wata-base:{version}", "version": version, "containers": [], "accepted": True,

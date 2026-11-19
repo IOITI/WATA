@@ -17,7 +17,7 @@ closed, what still waits.
 
 The Disk page may also ask for a cleanup (``ask_cleanup``): the request names
 nothing but itself, and watadeploy decides what goes (older releases, images no
-tag names, Docker's build cache unused for two weeks).
+tag names, Docker's build cache no image holds, unused for a day).
 """
 
 import asyncio

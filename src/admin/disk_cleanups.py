@@ -2,9 +2,10 @@
 What the Disk page offers to give space back, and doing it (src/admin/routers/disk.py).
 
 - ``server``: watadeploy's cleanup on the host (src/release/host.py ``cleanup``): the older releases' folders and
-  images, the images no tag names any more, Docker's build cache unused for two weeks. The admin holds no Docker:
-  it writes a request that names nothing but itself (src/admin/release.py ``ask_cleanup``), and watadeploy decides
-  what goes, as ``watadeploy prune`` does at each install.
+  images, the images no tag names any more, Docker's build cache no image holds, unused for a day. The admin holds no
+  Docker: it writes a request that names nothing but itself (src/admin/release.py ``ask_cleanup``), and watadeploy
+  decides what goes, as ``watadeploy prune`` does at each install, and says in its status which releases it would
+  remove and why it keeps the others (``Host.releases_said``).
 - ``signal_cache``: the Pine runner's answers kept for the runs asked again (the admin's own folder), all of them;
   a run asked again on the same days computes them anew. Not while a backtest or a study runs.
 - ``former``: what the former backtester left (its runs, its measures of the turbos), as the Backtests page removes it.
@@ -36,9 +37,14 @@ def _key(version: str) -> tuple[int, ...]:
 
 def releases_to_go(status: dict, kept_bytes: dict[str, int]) -> list[dict]:
     """
-    The release folders watadeploy's prune would remove, as far as the admin can tell: beyond the newest
+    The release folders watadeploy's prune would remove: as its status says (``prunable``, src/release/host.py
+    ``releases_said``), or, from a watadeploy that does not say it, as far as the admin can tell: beyond the newest
     ``KEEP_RELEASES`` installed, and none a container runs, is pinned to, or the last apply went from.
     """
+    prunable = status.get("prunable")
+    if isinstance(prunable, list):
+        return [{"version": version, "bytes": kept_bytes.get(version)} for version in prunable
+                if isinstance(version, str) and _VERSION.match(version)]
     installed = [version for version in status.get("installed") or [] if isinstance(version, str)
                  and _VERSION.match(version)] or [version for version in kept_bytes if VERSION_FOLDER.match(version)]
     installed = sorted(set(installed), key=_key, reverse=True)
@@ -53,6 +59,26 @@ def releases_to_go(status: dict, kept_bytes: dict[str, int]) -> list[dict]:
             if isinstance(image, str) and ":" in image:
                 named.add(image.rsplit(":", 1)[-1].split("-", 1)[0])
     return [{"version": version, "bytes": kept_bytes.get(version)} for version in installed if version not in named]
+
+
+# Why watadeploy keeps a release (src/release/host.py KEPT_*, not imported for the reason above).
+KEPT_WHY = ("newest", "pinned", "created", "rollback")
+
+
+def releases_kept(status: dict) -> list[dict] | None:
+    """The releases watadeploy keeps and why, the newest first, as its status says; None when it does not say."""
+    kept = status.get("kept")
+    if not isinstance(kept, list):
+        return None
+    found = []
+    for entry in kept:
+        if not isinstance(entry, dict) or not isinstance(entry.get("version"), str) \
+                or not _VERSION.match(entry["version"]):
+            continue
+        found.append({"version": entry["version"],
+                      "why": [why for why in entry.get("why") or [] if why in KEPT_WHY],
+                      "containers": [name for name in entry.get("containers") or [] if isinstance(name, str)]})
+    return sorted(found, key=lambda entry: _key(entry["version"]), reverse=True)
 
 
 class DiskCleanups:
@@ -89,6 +115,7 @@ class DiskCleanups:
                 "bytes": (build_cache or 0) + folders if (build_cache is not None or releases) else None,
                 "up_to": True,
                 "releases": releases,
+                "kept": releases_kept(status) if status else None,
                 "build_cache": build_cache,
                 "available": why_not is None and self._release.cleanup_waiting(status) is None,
                 "why_not": why_not,
