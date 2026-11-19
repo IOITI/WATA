@@ -2,7 +2,7 @@
 
 ## v0.93.0 - The Disk page's cleanup, as it really is
 
-**Release date:** not released yet
+**Release date:** 2026-11-19
 
 On 2026-11-19 the Disk page's "Clean up" removed one release folder and said "0 B given back by Docker", while it had offered six releases and up to 1.6 GB. Read on the server, four causes:
 
