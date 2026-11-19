@@ -77,6 +77,9 @@ def _run_line(run: dict) -> dict:
         "position": run.get("position"), "headline": run.get("headline"), "stale": run.get("stale"),
         "made_by": run.get("made_by"), "experiment": run.get("experiment"), "stress_of": run.get("stress_of"),
         "noise_of": run.get("noise_of"), "model_check_of": run.get("model_check_of"), "tags": run.get("tags") or [],
+        # The runs of the same things but their days (src/admin/backtest_configurations.py), and a configuration's
+        # nightly run, replaced by the next one each evening.
+        "configuration": run.get("configuration"), "nightly": run.get("nightly"),
     }
 
 
@@ -213,7 +216,9 @@ def register(server, research) -> None:
     async def backtest_list(made_by: str = "", experiment: str = "", offset: int = 0, limit: int = 20) -> dict:
         """The runs and sweeps, newest first: what each was asked, its state (queued, running, done, failed,
         cancelled, interrupted), place in line, headline figures, and whether it is stale (made with other code than
-        the server's now). made_by="claude" for Claude's, experiment=<id> for one experiment's."""
+        the server's now). made_by="claude" for Claude's, experiment=<id> for one experiment's. Each names its
+        configuration (the runs that differ only by their days); a nightly run (``nightly``) is replaced by its
+        configuration's next one each evening: cite its configuration, not its id."""
         ids = await run_in_threadpool(research.service().run_ids, made_by=made_by or None, experiment=experiment or None)
         listed = page(ids, offset, limit)
         runs = await run_in_threadpool(

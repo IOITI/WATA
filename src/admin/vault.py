@@ -11,6 +11,7 @@ shown on an explicit and audited request).
 
 import logging
 import os
+import time
 
 from src.admin.errors import InvalidRequest, NotPossible
 from src.vault import credentials as catalog
@@ -28,6 +29,29 @@ OPENED_ON_DEMAND = ("webhook.token", "internal.token", "anthropic.api", "luxalgo
 # which the admin never has.
 OLD_PLACE_SEEN = ("telegram.bot", "webhook.token", "internal.token", "saxo.live.app", "saxo.simulation.app",
                   "anthropic.api", "luxalgo.oauth")
+
+# Whether a Telegram bot is set, read from the credentials at most this often (pages read it often).
+TELEGRAM_SEEN_SECONDS = 60.0
+_telegram_seen: dict = {}
+
+
+async def telegram_bot_set(vault) -> bool | None:
+    """
+    Whether the Telegram bot is set, as the Credentials page lists it; None when it cannot be told. What may be said
+    there: the AI agent's "Tell me on Telegram", a configuration's nightly backtest.
+    """
+    if vault is None:
+        return None
+    if _telegram_seen.get("vault") is vault and time.monotonic() - _telegram_seen["at"] < TELEGRAM_SEEN_SECONDS:
+        return _telegram_seen["set"]
+    try:
+        listed = await vault.listed()
+    except Exception:
+        return None
+    entry = next((item for item in listed.get("items") or [] if item.get("name") == "telegram.bot"), {})
+    found = entry.get("where") in ("database", "old place")
+    _telegram_seen.update(vault=vault, at=time.monotonic(), set=found)
+    return found
 
 
 class AdminVault:

@@ -124,8 +124,8 @@ ADMIN_PARAMS = (
     ),
     Param(
         path="admin.backtests_max_period_days", group="backtests", label="Days of a backtest at most", kind="int",
-        unit="days", minimum=1, maximum=731, optional=True, default=92,
-        help="The longest period a run may cover (731 on made-up turbos).",
+        unit="days", minimum=1, maximum=731, optional=True, default=365,
+        help="The longest period a run may cover (731 on made-up turbos), a configuration's nightly run's included.",
         readers=(ADMIN,), risk=NONE,
     ),
     Param(

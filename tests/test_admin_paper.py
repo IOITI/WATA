@@ -374,7 +374,7 @@ def test_a_report_that_did_not_finish_is_said_beside_the_last_good_one_and_not_a
     assert backtests.settle_paper_reports() == 0 and backtests.paper_reports()[SHADOW]["runs"] == [failed, good]
 
 
-@pytest.mark.parametrize("created", ["2026-01-05T09:00:00+00:00", None])
+@pytest.mark.parametrize("created", ["2025-01-06T09:00:00+00:00", None])
 def test_a_report_is_held_to_the_longest_period_a_run_takes(tmp_path, paper, scripts, created):  # noqa: F811
     backtests, _, trading = paper
     rule = {**RULE, "created_at": created} if created else {key: value for key, value in RULE.items() if key != "created_at"}
@@ -383,9 +383,9 @@ def test_a_report_is_held_to_the_longest_period_a_run_takes(tmp_path, paper, scr
 
     asyncio.run(trading.catch_up())
 
-    # 92 days to Monday 19 October.
+    # 365 days to Monday 19 October.
     request = _request(tmp_path, _report_of(backtests))
-    assert (request["from"], request["to"]) == ("2026-07-20", "2026-10-19")
+    assert (request["from"], request["to"]) == ("2025-10-20", "2026-10-19")
 
 
 def test_a_report_of_more_signals_than_a_run_takes_starts_at_the_first_whole_day_it_holds(tmp_path, paper, monkeypatch):

@@ -18,18 +18,18 @@ beside the conversations (``debriefs.json``).
 import asyncio
 import logging
 import time
-from datetime import date, datetime
+from datetime import date
 
-import pytz
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.agent.prompts import DEBRIEF_PROMPT
 from src.admin.agent.store import stamp
 from src.admin.agent_jobs import JobFile, read_config
 from src.admin.agent_telegram import DEBRIEF
-from src.admin.downloads import market_is_open, trading_hours
+from src.admin.downloads import market_is_open
 from src.admin.errors import NotPossible
-from src.admin.paper import last_finished_day
+# The newest weekday whose trading hours are over: shared with a configuration's nightly backtests.
+from src.admin.paper import debriefed_day, last_finished_day  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +39,6 @@ READY_SECONDS = 10
 FILE = "debriefs.json"
 # The days its file keeps, the newest.
 KEPT_DAYS = 120
-
-
-def debriefed_day(config: dict, now: float) -> date:
-    """The newest weekday whose trading hours are over at ``now``: today once its end hour passed, else the one before."""
-    zone, _, end_hour = trading_hours(config)
-    local = datetime.fromtimestamp(now, pytz.timezone(zone))
-    if local.weekday() < 5 and local.hour >= end_hour:
-        return local.date()
-    return last_finished_day(local.date())
 
 
 class DailyDebrief:

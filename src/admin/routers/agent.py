@@ -44,6 +44,7 @@ from src.admin.routers.ta import RuleFields
 from src.admin.ta_monitor import rules_by_id
 from src.admin.ta_rules import RuleStore
 from src.admin.ta_scripts import MAX_SOURCE_BYTES
+from src.admin.vault import telegram_bot_set
 
 router = APIRouter(prefix="/api/agent", dependencies=[Depends(require_session)])
 
@@ -187,25 +188,9 @@ def _by(request: Request) -> str:
     return client_ip(request, request.app.state.ctx.trusted_proxies)
 
 
-# Whether a Telegram bot is set, read from the credentials at most this often (the pages read the state often).
-TELEGRAM_SEEN_SECONDS = 60.0
-_telegram_seen: dict = {}
-
-
 async def _telegram(ctx) -> bool | None:
     """Whether the Telegram bot is set, as the Credentials page lists it; None when it cannot be told."""
-    if ctx.vault is None:
-        return None
-    if _telegram_seen.get("vault") is ctx.vault and time.monotonic() - _telegram_seen["at"] < TELEGRAM_SEEN_SECONDS:
-        return _telegram_seen["set"]
-    try:
-        listed = await ctx.vault.listed()
-    except Exception:
-        return None
-    entry = next((item for item in listed.get("items") or [] if item.get("name") == "telegram.bot"), {})
-    found = entry.get("where") in ("database", "old place")
-    _telegram_seen.update(vault=ctx.vault, at=time.monotonic(), set=found)
-    return found
+    return await telegram_bot_set(ctx.vault)
 
 
 @router.get("")

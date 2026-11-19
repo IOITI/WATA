@@ -148,6 +148,23 @@ def test_the_runners_answers_kept_are_pruned_oldest_first_and_counted(tmp_path, 
     assert sorted(path.name for path in cache.iterdir()) == ["3.json", "4.json"]
 
 
+def test_an_answer_read_lately_is_kept_however_old_it_was_written(tmp_path, scripts, config):
+    """A configuration's nightly run reads its oldest days' answers again each evening: those stay."""
+    backtests = service(tmp_path, scripts, config)
+    backtests._signal_cache_bytes = 250
+    cache = tmp_path / "backtests" / "_signal_cache" / "ab"
+    cache.mkdir(parents=True)
+    for number in range(5):
+        path = cache / f"{number}.json"
+        path.write_text("x" * 100)
+        os.utime(path, (1_000 + number, 1_000 + number))
+    # Written first, read last.
+    os.utime(cache / "0.json", (5_000, 1_000))
+
+    assert backtests.prune_signal_cache() == 3
+    assert sorted(path.name for path in cache.iterdir()) == ["0.json", "4.json"]
+
+
 def test_the_answers_kept_are_emptied_on_request_but_not_while_a_run_reads_them(tmp_path, scripts, config):
     from src.admin.errors import NotPossible
 

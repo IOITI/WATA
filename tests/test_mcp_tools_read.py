@@ -397,6 +397,9 @@ def test_runs_are_listed_with_their_headline_and_who_asked(tmp_path, research, s
     assert everything["total"] == 2
     assert [run["id"] for run in claudes["items"]] == [mine]
     assert claudes["items"][0]["experiment"] == "a1b2c3" and claudes["items"][0]["headline"]["total_percent"] == 1.23457
+    # Asked alike but by whom and why: one configuration, no nightly run.
+    configurations = {run["configuration"] for run in everything["items"]}
+    assert len(configurations) == 1 and all(run["nightly"] is None for run in everything["items"])
 
 
 def test_a_runs_summary_has_its_figures_and_its_curve_in_a_few_numbers(tmp_path, research, scripts):

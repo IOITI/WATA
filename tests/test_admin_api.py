@@ -127,6 +127,10 @@ AUTHENTICATED_ROUTES = [
     ("POST", "/api/backtests/remove"),
     ("POST", "/api/backtests/favourites"),
     ("DELETE", "/api/backtests/former"),
+    ("GET", "/api/backtests/configurations"),
+    ("GET", "/api/backtests/configurations/0123456789ab"),
+    ("PATCH", "/api/backtests/configurations/0123456789ab"),
+    ("POST", "/api/backtests/configurations/0123456789ab/extend"),
     ("GET", "/api/backtests/research"),
     ("PUT", "/api/backtests/research"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3"),
@@ -831,6 +835,7 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{script_id}", "0123456789ab")
             .replace("{rule_id}", "0123456789ab")
             .replace("{owner}", "0123456789ab")
+            .replace("{config_id}", "0123456789ab")
             .replace("{token_id}", "0123abcd")
             .replace("{number}", "1")
             .replace("{conversation_id}", "20261028-101500-a1b2c3")
@@ -3402,6 +3407,16 @@ def test_the_dukascopy_provider_says_how_much_disk_its_prices_take(client, ctx, 
 RUN = "20261012-213045-a1b2c3"
 
 
+class FakeConfigurationStore:
+    """Stands for what is kept of the configurations: the nightly runs replaced, by run."""
+
+    def __init__(self):
+        self.replaced_runs = {}
+
+    def replaced(self, run_id):
+        return self.replaced_runs.get(run_id)
+
+
 class FakeBacktests:
     """Stands for the backtest service: remembers what it was asked, and fails when told to."""
 
@@ -3410,6 +3425,7 @@ class FakeBacktests:
     def __init__(self):
         self.asked = []
         self.failure = None
+        self.configurations = FakeConfigurationStore()
 
     def _answer(self, what, *arguments, answer=None):
         self.asked.append((what, *arguments))
@@ -3535,6 +3551,83 @@ def test_backtests_switched_off_or_not_wired_answer_as_such(client, ctx):
 
     assert (response.status_code, response.json()["detail"]) == (403, "Backtests are disabled in the configuration")
     assert ctx.backtests.asked == []
+
+
+CONFIGURATION = "0123456789ab"
+
+
+class FakeNightly:
+    """Stands for the configurations and their nightly runs (src/admin/backtest_nightly.py)."""
+
+    def __init__(self):
+        self.asked = []
+        self.woken = 0
+
+    def configurations(self):
+        self.asked.append(("configurations",))
+        return {"items": [{"id": CONFIGURATION}], "day": "2026-10-12", "market_open": False, "most_days": 365}
+
+    def page(self, config_id):
+        from src.admin.backtest_configurations import UnknownConfiguration
+
+        self.asked.append(("page", config_id))
+        if config_id != CONFIGURATION:
+            raise UnknownConfiguration(config_id)
+        return {"configuration": {"id": config_id}, "history": [], "related": []}
+
+    def update(self, config_id, *, name=..., nightly=None):
+        self.asked.append(("update", config_id, name, nightly))
+        return {"configuration": {"id": config_id}}
+
+    async def bring_up_to_date(self, config_id):
+        self.asked.append(("extend", config_id))
+        return {"configuration": {"id": config_id}}
+
+    def wake(self):
+        self.woken += 1
+
+
+def test_configurations_are_listed_read_named_switched_and_brought_up_to_date(client, ctx, backtests):
+    ctx.nightly = nightly = FakeNightly()
+
+    listed = client.get("/api/backtests/configurations").json()
+    assert listed["items"] == [{"id": CONFIGURATION}] and "telegram" in listed
+    assert client.get(f"/api/backtests/configurations/{CONFIGURATION}").json()["configuration"] == {"id": CONFIGURATION}
+    missing = client.get("/api/backtests/configurations/ba9876543210")
+    assert (missing.status_code, missing.json()["detail"]) == (404, "No such configuration")
+    assert client.get("/api/backtests/configurations/..%2F..%2Fetc").status_code in (404, 422)
+
+    client.patch(f"/api/backtests/configurations/{CONFIGURATION}", headers=SAME_ORIGIN,
+                 json={"name": "Kernel", "nightly": {"on": True, "from": "2026-10-15", "telegram": True}})
+    client.patch(f"/api/backtests/configurations/{CONFIGURATION}", headers=SAME_ORIGIN, json={"nightly": {"on": False}})
+    client.patch(f"/api/backtests/configurations/{CONFIGURATION}", headers=SAME_ORIGIN, json={"name": None})
+    assert client.post(f"/api/backtests/configurations/{CONFIGURATION}/extend", headers=SAME_ORIGIN).status_code == 202
+
+    assert nightly.asked[-4:] == [
+        ("update", CONFIGURATION, "Kernel", {"on": True, "from": "2026-10-15", "telegram": True}),
+        ("update", CONFIGURATION, ..., {"on": False}),
+        ("update", CONFIGURATION, None, None),
+        ("extend", CONFIGURATION),
+    ]
+    # Switched on or off: the task looks again at once.
+    assert nightly.woken == 3
+
+
+def test_configurations_not_wired_answer_as_such(client, backtests):
+    assert client.get("/api/backtests/configurations").status_code == 503
+
+
+def test_a_nightly_run_replaced_by_the_next_says_which_configuration_it_was(client, backtests):
+    from src.admin.errors import UnknownRun
+
+    backtests.failure = UnknownRun(RUN)
+    backtests.configurations.replaced_runs[RUN] = {"configuration": CONFIGURATION, "name": "Kernel", "to": "2026-10-12"}
+
+    response = client.get(f"/api/backtests/{RUN}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "No such backtest",
+                               "replaced": {"configuration": CONFIGURATION, "name": "Kernel", "to": "2026-10-12"}}
 
 
 class FakeResearch:

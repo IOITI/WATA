@@ -16,3 +16,7 @@ class UnknownRun(LookupError):
 
 class NotPossible(RuntimeError):
     """Not in the state the request needs."""
+
+
+class LineFull(NotPossible):
+    """The backtests' line holds as many runs as it takes: one asked by itself (a nightly run) is asked later."""

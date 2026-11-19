@@ -270,7 +270,7 @@ def test_a_folder_left_without_its_request_is_no_run_and_goes_at_the_next_start(
 
 @pytest.mark.parametrize("change, message", [
     ({"from": "2026-10-16", "to": "2026-10-13"}, "ends before it starts"),
-    ({"from": "2026-06-01", "to": "2026-10-16"}, "92 days at most"),
+    ({"from": "2025-10-01", "to": "2026-10-16"}, "365 days at most"),
     ({"from": "2026-10-21", "to": "2026-10-22"}, "in the future"),
     ({"indice": "de40"}, "one the trader takes: us100"),
     ({"changes": {"stoploss_percent": 3}}, "between -100 and -0.1"),
@@ -918,6 +918,37 @@ def test_a_stress_of_a_run_made_again_waits_for_it_and_then_stresses_the_new_one
     # The stress, newer, waited for its run, then judged the run made again.
     assert base_request["remade_from"] == base
     assert (stress_request["remade_from"], stress_request["stress_of"]) == (stressed, new_base)
+
+
+def test_a_run_made_from_a_run_made_again_is_no_remake_of_its_own(tmp_path, scripts, config):
+    """
+    Until v0.94.0 a stress, a model check or a combination made from a run made again kept its ``remade_from``: once
+    done, it was settled as a remake, said the original was made again by it, and took the original's references.
+    """
+    launcher = FakeLauncher(ends_with=None)
+    backtests = service(tmp_path, scripts, config, launcher, clock=Ticking())
+    old = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}}})
+    new = finished(tmp_path, backtests, scripts, {"summary.json": {"made_with": {"code": "x"}}})
+    request_path = folder_of(tmp_path, new) / "request.json"
+    request_path.write_text(json.dumps({**json.loads(request_path.read_text()), "remade_from": old,
+                                        "nightly": {"configuration": "0123456789ab"}}))
+    (folder_of(tmp_path, old) / "remade.json").write_text(json.dumps({"by": new, "at": "2026-10-19T20:00:00Z"}))
+    backtests._write_paper("references.json", {"abcdef123456": new})
+
+    @worked
+    async def scenario(backtests):
+        stressed = backtests.stress(new)["id"]
+        await until(lambda: len(launcher.commands) == 1)
+        launcher.finish(0)
+        await until(lambda: backtests.get(stressed)["status"]["state"] == DONE)
+        return stressed
+
+    stressed = scenario(backtests)
+
+    stress_request = json.loads((folder_of(tmp_path, stressed) / "request.json").read_text())
+    assert "remade_from" not in stress_request and "nightly" not in stress_request and stress_request["stress_of"] == new
+    assert json.loads((folder_of(tmp_path, old) / "remade.json").read_text())["by"] == new
+    assert backtests.references() == {"abcdef123456": new}
 
 
 def test_only_a_finished_run_made_with_older_code_and_not_on_paper_is_made_again(tmp_path, scripts, config):

@@ -16,14 +16,17 @@ import time
 from datetime import date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from src.admin import backtest_requests, propfirm_check, run_to_live
 from src.admin.auth import client_ip, require_session
+from src.admin.backtests import RUN_ID
 from src.admin.config_editor import ConfigConflict, ConfigInvalid
-from src.admin.errors import InvalidRequest, NotPossible
+from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
 from src.admin.routers.config import changes_said, require_config_edit_enabled
+from src.admin.vault import telegram_bot_set
 
 router = APIRouter(prefix="/api/backtests", dependencies=[Depends(require_session)])
 
@@ -273,9 +276,93 @@ async def stop_remaking(service=Depends(backtests)):
     return {"remaking": service.stop_remaking()}
 
 
+# ── configurations: the runs of the same things but their days, each made again each evening once switched on ──
+
+CONFIGURATION_ID = r"^[0-9a-f]{12}$"
+
+
+def nightly_task(request: Request):
+    """What groups the runs into configurations and makes them again after each trading day (src/admin/backtest_nightly.py)."""
+    nightly = getattr(request.app.state.ctx, "nightly", None)
+    if nightly is None:
+        raise HTTPException(status_code=503, detail="The configurations are not available")
+    return nightly
+
+
+class NightlyChange(BaseModel):
+    on: bool | None = None
+    first: date | None = Field(default=None, alias="from")
+    # A line on Telegram once each nightly run ends.
+    telegram: bool | None = None
+
+
+class ConfigurationChange(BaseModel):
+    # None: named after its runs again.
+    name: str | None = Field(default=None, max_length=200)
+    nightly: NightlyChange | None = None
+
+
+@router.get("/configurations")
+async def configurations(request: Request, service=Depends(backtests), nightly=Depends(nightly_task)):
+    """
+    Every configuration, the one run most lately first: its newest runs, its latest result and where its nightly
+    re-run stands, and whether a Telegram bot is set (a nightly run may say its result there).
+    """
+    found = await run_in_threadpool(nightly.configurations)
+    found["telegram"] = await telegram_bot_set(request.app.state.ctx.vault)
+    return found
+
+
+@router.get("/configurations/{config_id}")
+async def configuration(request: Request, config_id: str = Path(pattern=CONFIGURATION_ID), service=Depends(backtests),
+                        nightly=Depends(nightly_task)):
+    """One configuration with every run of it, what its nightly runs said, and the configurations of its strategy."""
+    found = await run_in_threadpool(nightly.page, config_id)
+    found["telegram"] = await telegram_bot_set(request.app.state.ctx.vault)
+    return found
+
+
+@router.patch("/configurations/{config_id}")
+async def change_configuration(body: ConfigurationChange, config_id: str = Path(pattern=CONFIGURATION_ID),
+                               service=Depends(backtests), nightly=Depends(nightly_task)):
+    """A configuration named, or its nightly re-run switched on or off: not audited, nothing here trades."""
+    name = body.name if "name" in body.model_fields_set else ...
+    asked = None
+    if body.nightly is not None:
+        fields = body.nightly.model_fields_set
+        asked = {}
+        if "on" in fields and body.nightly.on is not None:
+            asked["on"] = body.nightly.on
+        if "first" in fields and body.nightly.first is not None:
+            asked["from"] = body.nightly.first.isoformat()
+        if "telegram" in fields and body.nightly.telegram is not None:
+            asked["telegram"] = body.nightly.telegram
+    found = await run_in_threadpool(lambda: nightly.update(config_id, name=name, nightly=asked))
+    # Switched on: looked at again at once (on the event loop, which the task waits on).
+    nightly.wake()
+    return found
+
+
+@router.post("/configurations/{config_id}/extend", status_code=202)
+async def extend_configuration(config_id: str = Path(pattern=CONFIGURATION_ID), service=Depends(backtests),
+                               nightly=Depends(nightly_task)):
+    """
+    A configuration's nightly run asked now, to the last day whose trading hours are over: on the event loop, the run
+    joins the service's line.
+    """
+    return await nightly.bring_up_to_date(config_id)
+
+
 @router.get("/{run_id}")
 async def run(run_id: str, service=Depends(backtests)):
-    return await run_in_threadpool(service.get, run_id)
+    try:
+        return await run_in_threadpool(service.get, run_id)
+    except UnknownRun:
+        # A configuration's nightly run replaced by the next: its old address says which configuration it was.
+        replaced = await run_in_threadpool(service.configurations.replaced, run_id) if RUN_ID.fullmatch(run_id) else None
+        if replaced is None:
+            raise
+        return JSONResponse(content={"detail": "No such backtest", "replaced": replaced}, status_code=404)
 
 
 @router.patch("/{run_id}")

@@ -58,7 +58,7 @@ class AdminSettings:
     # One run at a time beside the trading services; a research machine (lab/) runs several, over longer periods.
     backtests_workers: int = 1
     backtests_max_queued: int = 10
-    backtests_max_period_days: int = 92
+    backtests_max_period_days: int = 365
     # The Pine runner's answers kept for the runs asked again (_signal_cache): pruned, oldest first, past this.
     backtests_signal_cache_mb: int = 1024
     price_history_path: str = "/app/var/lib/price_history"
@@ -151,6 +151,8 @@ class AdminContext:
     research: Any = None
     # Each shadow rule's finished days traded on paper (src/admin/paper.py).
     paper: Any = None
+    # The backtest configurations, each made again after each trading day once switched on (src/admin/backtest_nightly.py).
+    nightly: Any = None
     # The live trades and the rules' paper trades judged against their reference, and the edge guard
     # (src/admin/edge_watch_service.py).
     edge_watch: Any = None
@@ -423,7 +425,16 @@ def build_context(config_manager) -> AdminContext:
         state_folder=os.path.join(os.path.dirname(settings.agent_path.rstrip("/")), "disk"),
         notify=telegram_sender.send, publish=events.publish,
     )
+    from src.admin.agent.verdicts import VerdictStore
+    from src.admin.backtest_nightly import NightlyBacktests
     from src.admin.disk_cleanups import DiskCleanups
+
+    # A configuration's nightly run keeps the runs the AI agent gave a verdict on: their verdicts stay on something.
+    verdicts = VerdictStore(settings.agent_path)
+    ctx.nightly = NightlyBacktests(
+        backtests=backtests, queries=queries, config_path=settings.config_path, notify=telegram_sender.send,
+        verdict_runs=lambda: {about.split(":", 1)[1] for about in verdicts.all() if about.startswith("run:")},
+    )
 
     ctx.disk_cleanups = DiskCleanups(disk=ctx.disk, release=ctx.release, backtests=backtests, studies=studies)
     # The live trades and the rules' paper trades judged against their reference; its guard pauses entries through

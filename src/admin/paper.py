@@ -41,9 +41,11 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from src.admin.backtest_requests import ask_backtest, local_day, measured_orders
+import pytz
+
+from src.admin.backtest_requests import ask_backtest, measured_orders, newest_raised
 from src.admin.backtests import LIVE_PAPER, MAX_RAISED_SIGNALS, NO_ENTRY_SIGNAL
-from src.admin.downloads import market_is_open, trading_timezone
+from src.admin.downloads import market_is_open, trading_hours, trading_timezone
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, UnknownRun
 from src.admin.live_drift import live_days
 from src.admin.processes import QUEUED, RUNNING
@@ -82,6 +84,19 @@ def last_finished_day(today: date) -> date:
     while day.weekday() >= 5:
         day -= timedelta(days=1)
     return day
+
+
+def debriefed_day(config: dict, now: float) -> date:
+    """
+    The newest weekday whose trading hours are over at ``now``: today once its end hour passed, else the one before.
+    The day the AI agent's debrief is of (src/admin/agent_debrief.py), and a configuration's nightly backtest's last
+    (src/admin/backtest_nightly.py).
+    """
+    zone, _, end_hour = trading_hours(config)
+    local = datetime.fromtimestamp(now, pytz.timezone(zone))
+    if local.weekday() < 5 and local.hour >= end_hour:
+        return local.date()
+    return last_finished_day(local.date())
 
 
 def rule_body(rule: dict, first: date, last: date, *, report: bool) -> dict:
@@ -254,14 +269,9 @@ class PaperTrading:
                     self._backtests.mark_nothing_to_report(LIVE_PAPER, last.isoformat())
                     return False
                 return True
-            rows = await self._queries.rule_signals(rule["id"], first, last, limit=MAX_RAISED_SIGNALS)
-            if len(rows) >= MAX_RAISED_SIGNALS:
-                # More than a run replays: the report starts at the first whole day of the newest, and stays current.
-                zone = self._zone()
-                first = date.fromisoformat(local_day(rows[0]["raised_at"], zone)) + timedelta(days=1)
-                if first > last:
-                    raise InvalidRequest(f"{rule['name']!r} raised more than {MAX_RAISED_SIGNALS:,} signals in a day")
-                rows = [row for row in rows if local_day(row["raised_at"], zone) >= first.isoformat()]
+            # More than a run replays: the report starts at the first whole day of the newest, and stays current.
+            first, rows = await newest_raised(self._queries, rule["id"], rule["name"], first, last, self._zone(),
+                                              MAX_RAISED_SIGNALS)
             self._backtests.create(rule_body(rule, first, last, report=True), journal=rows)
             return True
         finally:

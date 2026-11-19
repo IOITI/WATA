@@ -19,6 +19,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from src.admin.agent.store import UnknownConversation
 from src.admin.agent_memory import UnknownEntry
+from src.admin.backtest_configurations import UnknownConfiguration
 from src.admin.context import AdminContext
 from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
@@ -221,6 +222,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if ctx.paper is not None and ctx.settings.backtests_enabled:
             # Trades each shadow rule's finished days on paper, the market closed.
             background.append(asyncio.create_task(ctx.paper.keep()))
+        if getattr(ctx, "nightly", None) is not None and ctx.settings.backtests_enabled:
+            # Makes the configurations switched on again after each trading day, the market closed.
+            background.append(asyncio.create_task(ctx.nightly.keep()))
         if ctx.edge_watch is not None and ctx.settings.backtests_enabled:
             # Judges the live trades and the rules' paper trades against their reference; the edge guard.
             background.append(asyncio.create_task(ctx.edge_watch.keep()))
@@ -301,6 +305,10 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
     @app.exception_handler(UnknownRun)
     async def unknown_run(_: Request, __: UnknownRun):
         return JSONResponse(content={"detail": "No such backtest"}, status_code=404)
+
+    @app.exception_handler(UnknownConfiguration)
+    async def unknown_configuration(_: Request, __: UnknownConfiguration):
+        return JSONResponse(content={"detail": "No such configuration"}, status_code=404)
 
     @app.exception_handler(InvalidRequest)
     async def invalid_request(_: Request, exc: InvalidRequest):

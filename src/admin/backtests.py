@@ -39,8 +39,9 @@ import pytz
 
 from src.admin import backtest_indicator
 from src.admin.analysis import HOLDING_LABELS, exit_group, given_back, holding_bucket, stats_by
+from src.admin.backtest_configurations import ConfigurationStore, base_of, configuration_id, strategy_id
 from src.admin.data import AssetNotFound, capital_epic, history_label, saxo_instrument_id
-from src.admin.errors import InvalidRequest, NotPossible, UnknownRun
+from src.admin.errors import InvalidRequest, LineFull, NotPossible, UnknownRun
 from src.admin.processes import (
     CANCELLED,
     DONE,
@@ -130,7 +131,8 @@ PAPER_REPORTS = "reports.json"
 MAX_RAISED_SIGNALS = 20_000
 SIDES = ("bid", "ask")
 CHART_PROVIDERS = ("capital", "dukascopy", "saxo")
-MAX_PERIOD_DAYS = 92
+# A year of days: a configuration's nightly run grows to it (src/admin/backtest_nightly.py).
+MAX_PERIOD_DAYS = 365
 SIGNAL_CACHE_FOLDER = "_signal_cache"
 MAX_WINDOW_DAYS = 365
 MAX_QUEUED = 10
@@ -140,6 +142,10 @@ MAX_TAGS = 6
 MAX_TAG_LENGTH = 24
 # Who asked for a run through an agent, and for what: set by the caller, never read from the body.
 RESEARCH_KEYS = ("made_by", "made_via", "experiment", "lockbox")
+# A configuration's nightly run says so (src/admin/backtest_nightly.py): {"configuration": <id>}.
+NIGHTLY = "nightly"
+# What a run made from another never takes of it (``_derived``).
+DERIVED_DROPS = ("paper", "favourite", "remade_from", NIGHTLY)
 # The runner's answers kept are pruned at most this often, oldest first.
 CACHE_PRUNE_SECONDS = 600
 # Days of a year of recorded turbos, at the lowest priority on a small machine, with the random repetitions.
@@ -333,9 +339,11 @@ def _derived(request: dict) -> dict:
     """
     What a run made from another (a stress sweep, a sweep's combination, a model check) keeps of its request: it
     says by itself who asked for it, and it is an ordinary run, never a paper day or report of its own, nor one of
-    the favourites (the operator's choice of the run it comes from).
+    the favourites (the operator's choice of the run it comes from). Nor is it the run that made its own run again
+    (``remade_from``: settled as a remake once done, it would say the original was made again by it, and move the
+    original's references to it), nor a configuration's nightly run (``nightly``: replaced by the next one).
     """
-    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS and key not in ("paper", "favourite")}
+    return {key: value for key, value in request.items() if key not in RESEARCH_KEYS and key not in DERIVED_DROPS}
 
 
 def compact_grid(sweep: dict | None) -> dict | None:
@@ -359,6 +367,30 @@ def compact_grid(sweep: dict | None) -> dict | None:
             for cell in sweep["cells"] if isinstance(cell, dict)
         ],
     }
+
+
+def _kept_rows(rows) -> list[dict]:
+    """Rows of the database as a run's file keeps them (``_plain``)."""
+    return [{key: _plain(value) for key, value in row.items()} for row in rows or []]
+
+
+def _journal_source(journal) -> dict:
+    """What a replay of the signals WATA received says of them; NotPossible without a signal of entry among them."""
+    entries = [row for row in journal or [] if row.get("action") in ("long", "short")]
+    if not entries:
+        raise NotPossible(NO_ENTRY_SIGNAL)
+    return {"kind": JOURNAL, "signals": len(journal or []), "entries": len(entries)}
+
+
+def _raised_source(rule: dict, kept: list[dict]) -> dict:
+    """What a run of the signals a rule raised says of them, with the versions of its script that raised them."""
+    source = {"kind": TA_SIGNALS, "signals": len(kept), "rule": rule}
+    # A rule changed during the period raised them by several.
+    versions = sorted({row["script_version"] for row in kept
+                       if isinstance(row.get("script_version"), int) and not isinstance(row["script_version"], bool)})
+    if versions:
+        source["versions"] = versions
+    return source
 
 
 def _seconds_between(started: str | None, finished: str | None) -> float | None:
@@ -428,6 +460,12 @@ class BacktestService:
         self._grids: dict[str, tuple[float, dict | None]] = {}
         # A run's request changed by one at a time (its name, tags, favourite), from the routes' threads.
         self._lock = threading.Lock()
+        # What the operator gave each configuration, and what its nightly runs said (src/admin/backtest_configurations.py).
+        self.configurations = ConfigurationStore(root)
+        # Each run's own configuration, its strategy and the run it was made from: what decides them never changes.
+        self._identities: dict[str, tuple[str | None, str, str | None]] = {}
+        # Told of each run that ends, once it is settled: (run id, state, request). A configuration's nightly runs.
+        self._finish_hooks: list[Callable[[str, str, dict], None]] = []
 
     # ── the live settings ──
 
@@ -644,24 +682,15 @@ class BacktestService:
             rule_ref = source.get("rule") if isinstance(source.get("rule"), dict) else {}
             if not rule_ref.get("id"):
                 raise InvalidRequest("The signals a rule raised are named by the rule")
-            kept_journal = [{key: _plain(value) for key, value in row.items()} for row in journal or []]
-            kept_source = {
-                "kind": TA_SIGNALS, "signals": len(kept_journal),
-                "rule": {"id": str(rule_ref["id"])[:12], "name": _text(rule_ref.get("name"), "The rule's name", 80)},
-            }
-            # The versions of the rule's script that raised them: a rule changed during the period raised them by several.
-            versions = sorted({row["script_version"] for row in kept_journal
-                               if isinstance(row.get("script_version"), int) and not isinstance(row["script_version"], bool)})
-            if versions:
-                kept_source["versions"] = versions
+            kept_journal = _kept_rows(journal)
+            kept_source = _raised_source(
+                {"id": str(rule_ref["id"])[:12], "name": _text(rule_ref.get("name"), "The rule's name", 80)}, kept_journal,
+            )
             chart = checked_chart(body.get("chart"))
             default_name = f"Paper: {kept_source['rule']['name'] or kept_source['rule']['id']}"
         else:
-            entries = [row for row in journal or [] if row.get("action") in ("long", "short")]
-            if not entries:
-                raise NotPossible(NO_ENTRY_SIGNAL)
-            kept_journal = [{key: _plain(value) for key, value in row.items()} for row in journal or []]
-            kept_source = {"kind": JOURNAL, "signals": len(journal or []), "entries": len(entries)}
+            kept_source = _journal_source(journal)
+            kept_journal = _kept_rows(journal)
             chart = checked_chart(body.get("chart"))
             default_name = "Signals WATA received"
 
@@ -764,7 +793,7 @@ class BacktestService:
 
     def _check_room(self) -> None:
         if len(self._waiting) + len(self._running) >= self.max_queued:
-            raise NotPossible(f"{self.max_queued} backtests are waiting already: let some finish")
+            raise LineFull(f"{self.max_queued} backtests are waiting already: let some finish")
 
     @property
     def code(self) -> str:
@@ -819,23 +848,92 @@ class BacktestService:
         """A day on which WATA received no entry signal: a paper day with nothing to trade, not asked again."""
         self._index_paper(LIVE_PAPER, day, NO_ENTRY)
 
+    def extend(self, template: str, first_day: date, last_day: date, *, name: str, nightly: dict,
+               journal: list | None = None, positions: list | None = None, raised: list | None = None) -> dict:
+        """
+        A finished run asked again over other days: a configuration's nightly run (src/admin/backtest_nightly.py).
+        Its request, settings, sources, turbo model and measured fills as they were, its period and name changed,
+        ``nightly`` naming its configuration. Its settings stay as the template resolved them, whatever config.json
+        says now: that is its configuration. The signals WATA received with WATA's positions of those days
+        (``journal``, ``positions``), or those a rule raised (``raised``), are read again by the caller for the new
+        days; the template's are of its own and never copied. Not a trial of the experiment journal (``_derived``).
+        """
+        folder = self._directory(template)
+        request = read_json(os.path.join(folder, "request.json"))
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        if request is None or not isinstance(settings_doc, dict):
+            raise NotPossible("What was asked of this backtest cannot be read")
+        if request.get("kind") != "run" or request.get("paper") or base_of(request) or self._status(template).get("state") != DONE:
+            raise NotPossible("Only a finished run of one combination, made by itself, is asked again over other days")
+        if last_day < first_day:
+            raise InvalidRequest("The period ends before it starts")
+        turbos = request.get("turbos") or RECORDED
+        limit = self.modelled_period_days if turbos == MODELLED else self.max_period_days
+        if (last_day - first_day).days >= limit:
+            raise InvalidRequest(f"A period of {limit} days at most")
+        source = dict(request.get("source") or {})
+        kept_journal = kept_positions = kept_raised = None
+        if source.get("kind") == JOURNAL:
+            source = _journal_source(journal)
+            kept_journal = _kept_rows(journal)
+            kept_positions = _kept_rows(positions) if positions is not None else None
+        elif source.get("kind") == TA_SIGNALS:
+            kept_raised = _kept_rows(raised)
+            source = _raised_source(source.get("rule") or {}, kept_raised)
+        # The template's measures, read before the new folder is made: one removed meanwhile makes nothing.
+        doc = dict(settings_doc)
+        model = read_json(os.path.join(folder, MODEL_FILE))
+        if turbos == MODELLED and model is None:
+            raise NotPossible("The turbo model this run was made with cannot be read")
+        if model is not None:
+            doc["turbo_model"] = model
+        execution = read_json(os.path.join(folder, EXECUTION_FILE))
+        if execution is not None:
+            doc["execution"] = execution
+        self._check_room()
+        new_request = {
+            **{key: value for key, value in _derived(request).items() if key != "from_sweep"},
+            "name": _text((name or request.get("name") or template)[:MAX_NAME_LENGTH], "The name", MAX_NAME_LENGTH, required=True),
+            "from": first_day.isoformat(), "to": last_day.isoformat(), "source": source,
+            "asked_at": utc(self._clock()), NIGHTLY: nightly,
+        }
+        return self._queue_run(new_request, doc, [], kept_journal, copy_from=folder, copy_data=False,
+                               positions=kept_positions, raised=kept_raised)
+
+    def operator_waiting(self) -> int:
+        """How many runs wait that no agent asked for: the operator's, paper days and reports, runs made again."""
+        return sum(1 for run_id in self._waiting if run_id not in self._owners)
+
+    def is_active(self, run_id: str) -> bool:
+        """Whether a run waits its turn or runs now."""
+        return run_id in self._waiting or run_id in self._running
+
+    def on_finished(self, hook: Callable[[str, str, dict], None]) -> None:
+        """``hook(run_id, state, request)`` called on the event loop once each run ends, after a remake is settled."""
+        self._finish_hooks.append(hook)
+
     def _queue_run(self, request: dict, settings_doc: dict, sources: list, journal: list | None, copy_from: str | None = None,
                    *, positions: list | None = None, raised: list | None = None,
-                   recorded_trades: list | None = None) -> dict:
+                   recorded_trades: list | None = None, copy_data: bool = True) -> dict:
+        """
+        A run's folder written and the run queued. ``copy_from``: a run whose sources are copied, and (``copy_data``)
+        its turbo model, measured fills, positions and raised signals where none are given.
+        """
         run_id = self._new_run_id()
         folder = os.path.join(self._runs_root, run_id)
         os.makedirs(os.path.join(folder, "sources"))
         settings_doc = dict(settings_doc)
+        copies = copy_from if copy_data else None
         model = settings_doc.pop("turbo_model", None)
-        if model is None and copy_from is not None:
-            model = read_json(os.path.join(copy_from, MODEL_FILE))
+        if model is None and copies is not None:
+            model = read_json(os.path.join(copies, MODEL_FILE))
         execution = settings_doc.pop("execution", None)
-        if execution is None and copy_from is not None:
-            execution = read_json(os.path.join(copy_from, EXECUTION_FILE))
-        if positions is None and copy_from is not None:
-            positions = read_json(os.path.join(copy_from, POSITIONS_FILE))
-        if raised is None and copy_from is not None:
-            raised = read_json(os.path.join(copy_from, RAISED_FILE))
+        if execution is None and copies is not None:
+            execution = read_json(os.path.join(copies, EXECUTION_FILE))
+        if positions is None and copies is not None:
+            positions = read_json(os.path.join(copies, POSITIONS_FILE))
+        if raised is None and copies is not None:
+            raised = read_json(os.path.join(copies, RAISED_FILE))
         try:
             if model is not None:
                 write_json(os.path.join(folder, MODEL_FILE), model)
@@ -1180,6 +1278,12 @@ class BacktestService:
                          **({"failure": failure} if failure is not None else {}))
         if request.get("remade_from"):
             self._settle_remake(run_id, request["remade_from"], state, error)
+        for hook in self._finish_hooks:
+            # Never in the way of the run's own state: an error here would read as the run's failure.
+            try:
+                hook(run_id, state, request)
+            except Exception as e:
+                logger.warning(f"Could not settle what backtest {run_id} ended: {e}", exc_info=True)
         self._announce("backtest_finished", run_id=run_id, state=state, name=request.get("name") or "")
         if self._signal_cache_bytes is not None and self._clock() - self._cache_pruned_at >= CACHE_PRUNE_SECONDS:
             self._cache_pruned_at = self._clock()
@@ -1284,7 +1388,11 @@ class BacktestService:
         return [name for name in names if RUN_ID.fullmatch(name) or name in FORMER_FOLDERS]
 
     def _cache_files(self) -> list[tuple[float, int, str]]:
-        """The runner's answers kept: (written at, size, path)."""
+        """
+        The runner's answers kept: (last read or written, size, path). A run that reads an answer leaves its file as it
+        was (src/ta_engine/replay.py): its time of access says it was read, so that the days a configuration's nightly
+        run reads again every evening are not the first pruned, being the oldest written.
+        """
         found = []
         for folder, _, names in os.walk(os.path.join(self._root, SIGNAL_CACHE_FOLDER)):
             for name in names:
@@ -1293,7 +1401,7 @@ class BacktestService:
                     stat = os.stat(path)
                 except OSError:
                     continue
-                found.append((stat.st_mtime, stat.st_size, path))
+                found.append((max(stat.st_mtime, stat.st_atime), stat.st_size, path))
         return found
 
     def prune_signal_cache(self) -> int:
@@ -1401,8 +1509,39 @@ class BacktestService:
         self._grids[run_id] = (written, grid)
         return grid
 
+    def identity(self, run_id: str) -> tuple[str | None, str, str | None]:
+        """
+        A run's own configuration (None: a paper run, or settings that cannot be read), its strategy, and the run it
+        was made from (src/admin/backtest_configurations.py): read once, what decides them never changes after it was
+        asked.
+        """
+        known = self._identities.get(run_id)
+        if known is not None:
+            return known
+        request = read_json(self._file(run_id, "request.json")) or {}
+        own = None if request.get("paper") else configuration_id(request, read_json(self._file(run_id, "settings.json")))
+        found = (own, strategy_id(request), base_of(request))
+        if request and (own is not None or request.get("paper")):
+            # Kept only once known: a file that could not be read this time is read again the next.
+            self._identities[run_id] = found
+        return found
+
+    def configuration_of(self, run_id: str) -> str | None:
+        """
+        A run's configuration: a stress, a fill-noise one or a model check is that of the run it was made from, while
+        that run is there; None for a paper run, or one whose settings cannot be read.
+        """
+        try:
+            own, _, base = self.identity(run_id)
+            if base and base != run_id and RUN_ID.fullmatch(base) and os.path.isfile(os.path.join(self._runs_root, base, "request.json")):
+                return self.identity(base)[0] or own
+        except UnknownRun:
+            return None
+        return own
+
     def _described(self, run_id: str, *, whole: bool) -> dict:
         request = read_json(self._file(run_id, "request.json")) or {}
+        nightly = request.get(NIGHTLY) if isinstance(request.get(NIGHTLY), dict) else None
         status = self._status(run_id)
         if status.get("state") == RUNNING and run_id not in self._running:
             status = {**status, "state": INTERRUPTED}
@@ -1445,6 +1584,11 @@ class BacktestService:
             # The run it makes again on today's code, and the run that made it again once that one was done.
             "remade_from": request.get("remade_from"),
             "remade_by": (read_json(self._file(run_id, REMADE_FILE)) or {}).get("by"),
+            # The runs whose result is decided by the same things, but their days (src/admin/backtest_configurations.py),
+            # and for a configuration's nightly run, whether its configuration is made again each evening still.
+            "configuration": self.configuration_of(run_id),
+            "nightly": {"configuration": nightly.get("configuration"),
+                        "on": self.configurations.nightly_on(nightly.get("configuration"))} if nightly else None,
             "status": status,
             "headline": self._headline(summary, grid),
             "position": self._in_turn().index(run_id) + 1 if run_id in self._waiting else None,
@@ -1464,6 +1608,26 @@ class BacktestService:
 
     def get(self, run_id: str) -> dict:
         return self._described(run_id, whole=True)
+
+    def exists(self, run_id) -> bool:
+        """Whether a run is there (its folder with its request)."""
+        try:
+            self._directory(run_id)
+        except UnknownRun:
+            return False
+        return True
+
+    def listed(self, run_id: str) -> dict:
+        """A run as the list describes it: what it was asked, its state and its headline figures."""
+        return self._described(run_id, whole=False)
+
+    def request_of(self, run_id: str) -> dict:
+        """What was asked of a run (its request.json)."""
+        return read_json(self._file(run_id, "request.json")) or {}
+
+    def made_with_version(self, run_id: str) -> str | None:
+        """The version of WATA a finished run was made with."""
+        return self._made_with(run_id).get("version")
 
     def state(self, run_id: str) -> dict:
         """Where a run stands, without its results: its state, place in line, and progress while it runs."""
@@ -1530,6 +1694,9 @@ class BacktestService:
             return "A day on paper, or a report, is made again by paper trading"
         if self._status(run_id).get("state") != DONE:
             return "Only a finished backtest is made again"
+        nightly = (read_json(self._file(run_id, "request.json")) or {}).get(NIGHTLY)
+        if isinstance(nightly, dict) and self.configurations.nightly_on(nightly.get("configuration")):
+            return "Its configuration makes it again each evening, on the server's code"
         made_by = (read_json(self._file(run_id, REMADE_FILE)) or {}).get("by")
         if made_by:
             return f"Made again already, as {made_by}"
@@ -1699,7 +1866,9 @@ class BacktestService:
         settings_doc = read_json(os.path.join(folder, "settings.json"))
         if request is None or settings_doc is None:
             raise NotPossible("What was asked of this backtest cannot be read")
-        new_request = {**request, "asked_at": utc(self._clock()), "remade_from": old}
+        # A nightly run made again is an ordinary run: the next nightly run of its configuration replaces only its own.
+        new_request = {**{key: value for key, value in request.items() if key != NIGHTLY},
+                       "asked_at": utc(self._clock()), "remade_from": old}
         recorded_trades = None
         for key in ("stress_of", "noise_of", "model_check_of"):
             base = request.get(key)

@@ -50,6 +50,21 @@ async def raised_signals(queries, rule_id: str, first: date, last: date) -> list
     return rows
 
 
+async def newest_raised(queries, rule_id: str, name: str, first: date, last: date, zone, most: int) -> tuple[date, list[dict]]:
+    """
+    The signals a rule raised in a period, as a run that keeps current replays them (a paper report, a configuration's
+    nightly run): with more than a run takes (``most``), the period starts at the first whole day of the newest. The
+    period's first day and the rows; InvalidRequest when a single day holds more.
+    """
+    rows = await queries.rule_signals(rule_id, first, last, limit=most)
+    if len(rows) >= most:
+        first = date.fromisoformat(local_day(rows[0]["raised_at"], zone)) + timedelta(days=1)
+        if first > last:
+            raise InvalidRequest(f"{name!r} raised more than {most:,} signals in a day")
+        rows = [row for row in rows if local_day(row["raised_at"], zone) >= first.isoformat()]
+    return first, rows
+
+
 async def ask_backtest(queries, service, body: dict, *, made_by: str | None = None, made_via: str | None = None,
                        experiment: str | None = None, lockbox: dict | None = None) -> dict:
     """
