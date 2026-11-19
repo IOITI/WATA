@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Button, formatNumber, formatPercent, FunnelChart, Panel, QueryState, SignedValue } from 'ioiti-ui'
+import { Button, formatMoney, formatNumber, formatPercent, FunnelChart, KpiTile, Panel, QueryState, SignedValue } from 'ioiti-ui'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -12,6 +12,39 @@ import { curveDays, distribution, FATE_LABEL, RANDOM_VERDICT, randomSentence, ra
 import { Measure } from './parts'
 import { restsOnSentences } from './restsOn'
 import { riskNote, riskRows, stressSentences } from './robustness'
+
+/** A finished run's figures at a glance: its result, in money, its trades, per trade, its worst fall, against random. */
+export function RunKpis({ summary }: { summary: BacktestSummary }) {
+  const figures = summary.figures
+  const money = summary.money
+  if (!figures || !money) return null
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+      <KpiTile
+        label="All days"
+        value={<SignedValue value={figures.total_percent} kind="percent" />}
+        hint={figures.total_range ? `${formatPercent(figures.total_range.low, true)} to ${formatPercent(figures.total_range.high, true)} with other days` : 'each trade as the whole stake'}
+      />
+      <KpiTile
+        label="In money"
+        value={<SignedValue value={money.profit_loss} kind="money" />}
+        hint={`${formatMoney(money.capital, 'EUR')} to ${formatMoney(money.final, 'EUR')} (${formatPercent(money.return_percent, true)})`}
+      />
+      <KpiTile
+        label="Trades"
+        value={formatNumber(figures.trades)}
+        hint={`${formatPercent(figures.win_rate, false, 0)} won, on ${figures.days_with_an_entry} of ${figures.days} days`}
+      />
+      <KpiTile label="Per trade" value={<SignedValue value={figures.expectancy} kind="percent" />} hint={`won ${formatPercent(figures.average_win, true)}, lost ${formatPercent(figures.average_loss, true)}`} />
+      <KpiTile label="Worst drawdown" value={<SignedValue value={figures.worst_drawdown} kind="percent" />} hint={`${formatMoney(money.worst_drawdown, 'EUR')} of the account`} />
+      <KpiTile
+        label="Beats random"
+        value={summary.against_random ? formatPercent(summary.against_random.beaten, false, 0) : '-'}
+        hint={summary.against_random ? `of ${summary.against_random.repetitions} runs at random` : 'not asked'}
+      />
+    </div>
+  )
+}
 
 function Heading({ children }: { children: ReactNode }) {
   return <h3 className="text-xs font-medium text-muted-foreground">{children}</h3>

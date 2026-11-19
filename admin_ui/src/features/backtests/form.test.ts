@@ -24,6 +24,7 @@ import {
   tagsOf,
   walkForwardChoices,
   windowsOf,
+  withoutAgain,
   withRule,
 } from './form'
 import type { BacktestDraft } from './form'
@@ -143,6 +144,15 @@ describe('a new draft', () => {
     })
     expect(draft.rule).toMatchObject({ scriptId: '8c2df05570d5', version: 1, inputs: { in_0: 12 }, timeframe: '1', barsType: 'time' })
     expect(draft.rule.alerts).toEqual({ 'Cross up': 'long', 'Cross down': 'short' })
+  })
+
+  it('asks a run again under its name with one "(again)", however often it was asked again', () => {
+    const named = (name: string) => draftOfRun(run({ request: { ...run().request, name } }), OPTIONS).name
+    expect(named('Smoke EMA cross (again) (again) (again)')).toBe('Smoke EMA cross (again)')
+    // Cut inside its last "(again)" at the longest name (80 here).
+    expect(named(`${'x'.repeat(76)} (ag`)).toBe(`${'x'.repeat(76)} (again)`.slice(0, 80))
+    expect(withoutAgain('Plan (a', 80)).toBe('Plan (a')
+    expect(withoutAgain('(again)', 80)).toBe('(again)')
   })
 
   it('takes back a replay of the journal with the asset its days were drawn on', () => {

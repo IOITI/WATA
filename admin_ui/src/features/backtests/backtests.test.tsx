@@ -8,6 +8,9 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
   BacktestBreakdowns,
+  BacktestConfiguration,
+  BacktestConfigurationChange,
+  BacktestConfigurationPage,
   BacktestDayIndicator,
   BacktestEdge,
   BacktestOptions,
@@ -23,13 +26,28 @@ import type {
   TaRule,
   TaScriptSummary,
 } from '@/lib/types'
-import { day, listedRun, OPTIONS, run, RUN_ID, SETTINGS, signal, SUMMARY, trade } from '@/test/backtests'
+import {
+  configuration,
+  CONFIGURATION_ID,
+  configurationPage,
+  configurationRun,
+  day,
+  listedRun,
+  OPTIONS,
+  run,
+  RUN_ID,
+  SETTINGS,
+  signal,
+  SUMMARY,
+  trade,
+} from '@/test/backtests'
 import { charts, resetCharts, seriesOf } from '@/test/fakeCharts'
 import { engines, resetVela, velas } from '@/test/fakeVela'
 import { stubSystemTheme } from '@/test/systemTheme'
 import { WithTrail } from '@/test/WithTrail'
 
 import { BacktestsPage } from './BacktestsPage'
+import { ConfigurationPage } from './ConfigurationPage'
 import { ComparePage } from './ComparePage'
 import { ExperimentsPage } from './ExperimentsPage'
 import { DayPage } from './DayPage'
@@ -198,6 +216,11 @@ let reconciliations: Record<string, BacktestReconciliation> = {}
 let options: BacktestOptions = OPTIONS
 /** Where the runs made again on today's code stand, as the list says it. */
 let remaking: BacktestRemaking | null = null
+// A nightly run the next one replaced: its old address names its configuration.
+const REPLACED_ID = '20261019-213000-eeeeee'
+// The configurations the server groups the runs into, and each one's page.
+let configurations: BacktestConfiguration[] = []
+let configurationPages: Record<string, BacktestConfigurationPage> = {}
 const MEASURE: BacktestTurboMeasure = {
   made_at: '2026-10-20T01:00:00Z',
   underlying: { provider: 'dukascopy', key: 'us100', side: 'bid' },
@@ -252,6 +275,41 @@ function serve() {
       if (route === '/api/backtests' && method === 'GET') {
         return json({ items: Object.values(runs).map(({ request: _r, settings: _s, summary: _m, progress: _p, lines: _l, ...listed }) => listed), storage: { runs: { count: 2, bytes: 52_000 }, former: { count: 7, bytes: 3_400_000 } }, remaking })
       }
+      if (route === '/api/backtests/configurations' && method === 'GET') {
+        return json({ items: configurations, day: '2026-10-20', market_open: false, most_days: 365, telegram: true })
+      }
+      const configurationRoute = /^\/api\/backtests\/configurations\/([0-9a-f]{12})(\/extend)?$/.exec(route)
+      if (configurationRoute) {
+        const page = configurationPages[configurationRoute[1]]
+        if (!page) return json({ detail: 'No such configuration' }, 404)
+        if (method === 'PATCH') {
+          const change = body as BacktestConfigurationChange
+          const shown = page.configuration
+          const nightly = change.nightly && shown.nightly
+            ? { ...shown.nightly, ...change.nightly, since: change.nightly.on ? '2026-10-20T08:00:00Z' : shown.nightly.since }
+            : shown.nightly
+          const name = change.name === undefined ? shown.name : (change.name ?? 'Smoke EMA cross')
+          configurationPages[configurationRoute[1]] = { ...page, configuration: { ...shown, name, named: Boolean(change.name), nightly } }
+        }
+        if (method === 'POST' && configurationRoute[2]) {
+          const shown = page.configuration
+          configurationPages[configurationRoute[1]] = {
+            ...page,
+            configuration: {
+              ...shown,
+              runs: [configurationRun({ id: '20261020-080000-dddddd', to: '2026-10-20', state: 'queued', nightly: true }), ...shown.runs],
+              nightly: shown.nightly && {
+                ...shown.nightly,
+                last: { day: '2026-10-20', run: '20261020-080000-dddddd', asked_at: '2026-10-20T08:00:00Z', state: 'queued', error: null,
+                  seconds: null, by_hand: true },
+                next: { ...shown.nightly.next, waits: 'under_way' },
+              },
+            },
+          }
+          return json(configurationPages[configurationRoute[1]], 202)
+        }
+        return json(configurationPages[configurationRoute[1]])
+      }
       if (route === '/api/backtests/remake') {
         if (method === 'GET') return json({ runs: 1, claude: 0, seconds: 300 })
         if (method === 'POST') {
@@ -300,6 +358,9 @@ function serve() {
       const match = /^\/api\/backtests\/([^/]+)(?:\/(.+))?$/.exec(route)
       if (match) {
         const found = runs[match[1]]
+        if (!found && match[1] === REPLACED_ID) {
+          return json({ detail: 'No such backtest', replaced: { configuration: CONFIGURATION_ID, name: 'Kernel room', to: '2026-10-19' } }, 404)
+        }
         if (!found) return json({ detail: 'No such backtest' }, 404)
         const day14 = url.searchParams.get('day')
         switch (match[2]) {
@@ -381,6 +442,7 @@ function renderAt(address: string) {
       { path: '/backtests/new', element: page(<NewBacktestPage />) },
       { path: '/backtests/compare', element: page(<ComparePage />) },
       { path: '/backtests/experiments', element: page(<ExperimentsPage />) },
+      { path: '/backtests/configurations/:configId', element: page(<ConfigurationPage />) },
       { path: '/backtests/:runId', element: page(<RunPage />) },
       { path: '/backtests/:runId/days/:day', element: page(<DayPage />) },
     ],
@@ -421,6 +483,23 @@ beforeEach(() => {
   reconciliations = {}
   options = OPTIONS
   remaking = null
+  configurations = [
+    configuration({
+      id: CONFIGURATION_ID, name: 'Kernel room', named: true, count: 2,
+      runs: [
+        configurationRun({ id: '20261020-213000-cccccc', from: '2026-10-14', to: '2026-10-20', nightly: true, seconds: 410 }),
+        configurationRun(),
+      ],
+      nightly: {
+        on: true, from: '2026-10-14', since: '2026-10-19T08:00:00Z', telegram: false, most_days: 365, last: null, up_to_date: true,
+        next: { day: '2026-10-21', from: '2026-10-14', to: '2026-10-21', waits: 'market' },
+      },
+    }),
+    configuration({ id: 'ba9876543210', name: 'Stop at 10', distinct: [{ name: 'stoploss_percent', value: -10 }],
+      latest: listedRun({ id: '20261019-210000-bbbbbb', name: 'Stop at 10', configuration: 'ba9876543210' }),
+      runs: [configurationRun({ id: '20261019-210000-bbbbbb', name: 'Stop at 10' })], removable: ['20261019-210000-bbbbbb'] }),
+  ]
+  configurationPages = { [CONFIGURATION_ID]: configurationPage({ configuration: configurations[0] }) }
   turboModel = { ...turboModel, state: 'idle', asked: null, measure: null }
   research = { ...research, enabled: false, keep_days: 30, state: 'off' }
   runs = {
@@ -438,10 +517,149 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('the configurations of the backtests', () => {
+  it('lists each configuration with its latest result, opening on its runs and leading to its page', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    const table = await screen.findByRole('table')
+    const row = within(table).getByRole('link', { name: 'Kernel room' }).closest('tr')!
+    expect(row).toHaveTextContent('Each evening')
+    expect(within(table).getByRole('link', { name: 'Kernel room' })).toHaveAttribute('href', `/backtests/configurations/${CONFIGURATION_ID}`)
+    // Set apart from the configurations of its strategy by what differs.
+    expect(within(table).getByText(/stoploss percent -10/)).toBeInTheDocument()
+
+    await user.click(within(row).getByText('2'))
+    const opened = await screen.findByRole('link', { name: 'Open the configuration' })
+    expect(opened).toHaveAttribute('href', `/backtests/configurations/${CONFIGURATION_ID}`)
+    expect(screen.getByText('Nightly')).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /^19 Oct|^20 Oct/ }).map((link) => link.getAttribute('href'))).toContain('/backtests/20261020-213000-cccccc')
+  })
+
+  it('narrows them to those made again each evening, and leads to every run with the same narrowing', async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    await screen.findByRole('link', { name: 'Stop at 10' })
+    const narrow = screen.getByRole('group', { name: 'Narrow the list' })
+    await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Each evening' }), 'on')
+
+    expect(address()).toBe('/backtests?nightly=on')
+    expect(screen.queryByRole('link', { name: 'Stop at 10' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Kernel room' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Every run' })).toHaveAttribute('href', '/backtests?nightly=on&view=runs')
+    expect(within(narrow).getByRole('link', { name: 'Clear filters' })).toHaveAttribute('href', '/backtests')
+  })
+
+  it("removes the chosen configurations' runs with an Undo", async () => {
+    const user = userEvent.setup()
+    renderAt('/backtests')
+
+    const table = await screen.findByRole('table')
+    const row = within(table).getByRole('link', { name: 'Stop at 10' }).closest('tr')!
+    await user.click(within(row).getByRole('checkbox'))
+    await user.click(await screen.findByRole('button', { name: 'Remove 1 run' }))
+
+    await waitFor(() => expect(removals().map((request) => request.body)).toEqual([{ ids: ['20261019-210000-bbbbbb'] }]))
+  })
+})
+
+describe('a configuration’s page', () => {
+  const here = `/backtests/configurations/${CONFIGURATION_ID}`
+
+  it('shows its latest result, its nightly re-run and every run, and brings it up to date', async () => {
+    const user = userEvent.setup()
+    const shown = configurations[0]
+    configurationPages[CONFIGURATION_ID] = configurationPage({
+      configuration: { ...shown, nightly: { ...shown.nightly!, up_to_date: false, next: { ...shown.nightly!.next, waits: null } } },
+      history: [{ run: '20261019-213000-eeeeee', name: 'Kernel room', made_at: '2026-10-19T21:30:00Z', from: '2026-10-14', to: '2026-10-19',
+        days: 4, trades: 6, total_percent: 3.2, profit_loss: 32, beaten: 91, worst_drawdown: -1.1, win_rate: 66, seconds: 400, version: '0.94.0',
+        by_hand: false }],
+    })
+    renderAt(here)
+
+    expect(await screen.findByRole('heading', { name: 'Kernel room', level: 1 })).toBeInTheDocument()
+    expect(screen.getByText(/^Made again after each trading day, from 14 Oct 2026/)).toBeInTheDocument()
+    expect(screen.getByText('Next: 14 Oct to 21 Oct, in a few minutes.')).toBeInTheDocument()
+    expect(await screen.findByText('All days')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'What each evening found' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open the run' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
+    expect(screen.getAllByRole('link', { name: /19 Oct/ }).map((link) => link.getAttribute('href'))).toContain('/backtests/20261020-213000-cccccc')
+
+    await user.click(screen.getByRole('button', { name: 'Bring it up to date' }))
+
+    await waitFor(() => expect(sent.some((request) => request.method === 'POST' && request.path === `${here.replace('/backtests', '/api/backtests')}/extend`)).toBe(true))
+    expect(await screen.findByText('Its run to 20 Oct is being made.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Bring it up to date' })).toBeDisabled()
+  })
+
+  it('switches its nightly re-run on from its dialog, from a day and said on Telegram', async () => {
+    const user = userEvent.setup()
+    const shown = configuration({ id: CONFIGURATION_ID, name: 'Kernel room' })
+    configurationPages[CONFIGURATION_ID] = configurationPage({ configuration: shown })
+    renderAt(here)
+
+    await user.click(await screen.findByRole('button', { name: 'Switch on' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Make it again after each trading day' }))
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Tell me on Telegram once each nightly run ends' }))
+    expect(within(dialog).getByText(/^Its next run: 14 Oct 2026 to 20 Oct 2026, 7 days/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(sent.find((request) => request.method === 'PATCH')?.body).toEqual({ nightly: { on: true, from: '2026-10-14', telegram: true } }),
+    )
+    expect(await screen.findByText(/^Made again after each trading day, from 14 Oct 2026/)).toBeInTheDocument()
+  })
+
+  it('cannot say on Telegram without a bot', async () => {
+    const user = userEvent.setup()
+    configurationPages[CONFIGURATION_ID] = configurationPage({ configuration: configuration({ id: CONFIGURATION_ID }), telegram: false })
+    renderAt(here)
+
+    await user.click(await screen.findByRole('button', { name: 'Switch on' }))
+    expect(within(await screen.findByRole('dialog')).getByRole('checkbox', { name: 'Tell me on Telegram once each nightly run ends' })).toBeDisabled()
+  })
+
+  it('is renamed in place', async () => {
+    const user = userEvent.setup()
+    renderAt(here)
+
+    await user.click(await screen.findByRole('button', { name: /edit the name of the configuration/ }))
+    const field = screen.getByRole('textbox', { name: 'Name of the configuration' })
+    await user.clear(field)
+    await user.type(field, 'Kernel with room{Enter}')
+
+    await waitFor(() => expect(sent.find((request) => request.method === 'PATCH')?.body).toEqual({ name: 'Kernel with room' }))
+  })
+
+  it('says none is there once its runs are gone', async () => {
+    renderAt('/backtests/configurations/ffffffffffff')
+
+    expect(await screen.findByRole('heading', { name: 'No such configuration' })).toBeInTheDocument()
+  })
+
+  it('is named on the page of each of its runs, which leads to it', async () => {
+    runs = { ...runs, [RUN_ID]: run({ configuration: CONFIGURATION_ID }) }
+    renderAt(`/backtests/${RUN_ID}`)
+
+    const line = await screen.findByText(/^Of the configuration/)
+    expect(within(line).getByRole('link', { name: 'Kernel room' })).toHaveAttribute('href', here)
+    expect(line).toHaveTextContent('(2 runs), made again each evening.')
+  })
+
+  it('is where the old address of a nightly run replaced since leads', async () => {
+    renderAt(`/backtests/${REPLACED_ID}`)
+
+    expect(await screen.findByRole('heading', { name: 'Replaced by a newer nightly run' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Kernel room/ })).toHaveAttribute('href', here)
+  })
+})
+
 describe('the list of backtests', () => {
   it('lists each run with what it ran and what it made, and compares two of them', async () => {
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     expect(await screen.findByRole('link', { name: 'Smoke EMA cross' })).toHaveAttribute('href', `/backtests/${RUN_ID}`)
     expect(screen.getAllByText('EMA cross v1 · Capital.com US100 · 1 min')).toHaveLength(2)
@@ -465,7 +683,7 @@ describe('the list of backtests', () => {
   it('selects every run that can be, empties the selection, and removes what is selected once asked', async () => {
     const user = userEvent.setup()
     runs = { ...runs, '20261019-220000-dddddd': run({ id: '20261019-220000-dddddd', name: 'Still running', status: { state: 'running' } }) }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     // A run that waits or runs can neither be compared nor removed: no box.
     expect(await screen.findByRole('link', { name: 'Still running' })).toBeInTheDocument()
@@ -491,7 +709,7 @@ describe('the list of backtests', () => {
   it('keeps what is removed when its Undo is pressed in time, and deletes nothing', async () => {
     undoMs = 10_000
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     await user.click(await screen.findByRole('checkbox', { name: 'Select Stop at 10' }))
     await user.click(within(await screen.findByRole('toolbar', { name: 'Bulk actions toolbar' })).getByRole('button', { name: 'Remove 1' }))
@@ -505,7 +723,7 @@ describe('the list of backtests', () => {
 
   it('puts a run among the favourites from its star, several from the selection, and narrows the list to them', async () => {
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     // One from its row: its star is pressed at once.
     await user.click(await screen.findByRole('button', { name: 'Add “Stop at 10” to favourites' }))
@@ -524,7 +742,7 @@ describe('the list of backtests', () => {
     await user.click(screen.getByRole('button', { name: 'Remove “Smoke EMA cross” from favourites' }))
     const narrow = screen.getByRole('group', { name: 'Narrow the list' })
     await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Favourites' }), 'yes')
-    expect(address()).toBe('/backtests?favourite=yes')
+    expect(address()).toBe('/backtests?view=runs&favourite=yes')
     expect(await screen.findByRole('link', { name: 'Stop at 10' })).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Smoke EMA cross' })).not.toBeInTheDocument())
   })
@@ -532,7 +750,7 @@ describe('the list of backtests', () => {
   it('narrows the list as its address says, and keeps what is chosen in the address', async () => {
     const user = userEvent.setup()
     runs = { ...runs, [RUN_ID]: run({ made_by: 'claude', experiment: '1a2b3c' }) }
-    renderAt('/backtests?by=claude')
+    renderAt('/backtests?view=runs&by=claude')
 
     expect(await screen.findByRole('link', { name: 'Smoke EMA cross' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Stop at 10' })).not.toBeInTheDocument()
@@ -540,11 +758,11 @@ describe('the list of backtests', () => {
     expect(within(narrow).getByRole('combobox', { name: 'Made by' })).toHaveValue('claude')
 
     await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Made by' }), 'me')
-    expect(address()).toBe('/backtests?by=me')
+    expect(address()).toBe('/backtests?view=runs&by=me')
     expect(await screen.findByRole('link', { name: 'Stop at 10' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Smoke EMA cross' })).not.toBeInTheDocument()
     // Every run again: a link to the list whole.
-    expect(within(narrow).getByRole('link', { name: 'Every run' })).toHaveAttribute('href', '/backtests')
+    expect(within(narrow).getByRole('link', { name: 'Clear filters' })).toHaveAttribute('href', '/backtests?view=runs')
   })
 
   it('folds the failed attempts of a run under it, and removes them when asked', async () => {
@@ -552,7 +770,7 @@ describe('the list of backtests', () => {
     const attempt = (id: string) =>
       run({ id, status: { state: 'failed', created_at: '2026-10-19T20:30:00Z', error: 'Traceback\nThe backtest failed: stopped by the kernel' }, summary: null, headline: null })
     runs = { ...runs, '20261019-203000-cccc01': attempt('20261019-203000-cccc01'), '20261019-202000-cccc02': attempt('20261019-202000-cccc02') }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
     expect(within(row).getByText('2 earlier failed attempts')).toBeInTheDocument()
@@ -574,7 +792,7 @@ describe('the list of backtests', () => {
       ...runs,
       [RUN_ID]: run({ headline: { ...listedRun().headline!, days: 3, repetitions: 20, edge: null, rests_on: SUMMARY.rests_on } }),
     }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
     expect(within(row).getByRole('link', { name: /Fails/ })).toHaveAttribute('href', `/backtests/${RUN_ID}#trust`)
@@ -585,7 +803,7 @@ describe('the list of backtests', () => {
 
     const narrow = screen.getByRole('group', { name: 'Narrow the list' })
     await user.selectOptions(within(narrow).getByRole('combobox', { name: 'Verdict' }), 'fail')
-    expect(address()).toBe('/backtests?verdict=fail')
+    expect(address()).toBe('/backtests?view=runs&verdict=fail')
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Stop at 10' })).toBeNull())
     expect(screen.getByRole('link', { name: 'Smoke EMA cross' })).toBeInTheDocument()
   })
@@ -593,10 +811,10 @@ describe('the list of backtests', () => {
   it('narrows the list to a tag from a row, the tag kept among the filters', async () => {
     const user = userEvent.setup()
     runs = { ...runs, [RUN_ID]: run({ tags: ['ema', 'october'] }) }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     await user.click(await screen.findByRole('link', { name: 'Only the runs tagged october' }))
-    expect(address()).toBe('/backtests?tag=october')
+    expect(address()).toBe('/backtests?view=runs&tag=october')
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Stop at 10' })).toBeNull())
     expect(within(screen.getByRole('group', { name: 'Narrow the list' })).getByRole('combobox', { name: 'Tag' })).toHaveValue('october')
   })
@@ -604,7 +822,7 @@ describe('the list of backtests', () => {
   it('offers to make the runs of older code again, follows them, and stops them when asked', async () => {
     const user = userEvent.setup()
     runs = { ...runs, [RUN_ID]: run({ stale: true }) }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     expect(await screen.findByText(/1 run was made with older code than today’s: what it found may come\s+out otherwise now\./)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Make it again' }))
@@ -628,7 +846,7 @@ describe('the list of backtests', () => {
       [remadeId]: run({ id: remadeId, remade_from: RUN_ID, status: { state: 'done', created_at: '2026-10-20T09:00:00Z' } }),
       [RUN_ID]: run({ remade_by: remadeId, stale: true, headline: { ...listedRun().headline!, total_percent: -2.5, trades: 7 } }),
     }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     const row = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
     expect(within(row).getByText('made again on today’s code')).toBeInTheDocument()
@@ -643,7 +861,7 @@ describe('the list of backtests', () => {
   it("marks Claude's runs, and leads to its experiments", async () => {
     const user = userEvent.setup()
     runs = { ...runs, [RUN_ID]: run({ made_by: 'claude', experiment: '1a2b3c' }) }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     const claudes = (await screen.findByRole('link', { name: 'Smoke EMA cross' })).closest('tr') as HTMLElement
     const operators = screen.getByRole('link', { name: 'Stop at 10' }).closest('tr') as HTMLElement
@@ -661,7 +879,7 @@ describe('the list of backtests', () => {
 
   it('switches on the files written each night for a research machine', async () => {
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     expect(await screen.findByText(/Each finished day can be written as files for a research machine/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Write them' }))
@@ -674,7 +892,7 @@ describe('the list of backtests', () => {
 
   it('measures the turbos made up from the index on the recorded days', async () => {
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     expect(await screen.findByText(/^Not measured yet/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Measure them' }))
@@ -688,7 +906,7 @@ describe('the list of backtests', () => {
 
   it('measures them on days chosen in two clicks, not before the last one is picked', async () => {
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     await screen.findByText(/^Not measured yet/)
     const field = screen.getByRole('button', { name: /^\d{1,2} \w{3} \d{4} – / })
@@ -708,7 +926,7 @@ describe('the list of backtests', () => {
 
   it('shows what the turbos were measured on and how well the model prices them', async () => {
     turboModel = { ...turboModel, state: 'done', measure: MEASURE }
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     const table = await screen.findByRole('table', { name: 'The measure of each direction' })
     expect(within(table).getByText('0.00860')).toBeInTheDocument()
@@ -718,7 +936,7 @@ describe('the list of backtests', () => {
 
   it('removes what the former backtester left, once asked', async () => {
     const user = userEvent.setup()
-    renderAt('/backtests')
+    renderAt('/backtests?view=runs')
 
     expect(await screen.findByText(/The former backtester left 7 runs \(3.4 MB\)/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove them' }))

@@ -21,6 +21,7 @@ import { collapseAttempts, comparable, failureLine, favouriteAction, isActive, s
 import { StateBadge } from './parts'
 import { useHiddenRuns, useRemoveRuns } from './pending-removals-context'
 import { useSetFavourites } from './useFavourites'
+import { VERDICT_RANK } from './verdict'
 import type { Judged } from './verdict'
 
 const VERDICT_BADGE: Record<CheckState, { tone: BadgeTone; label: (open: number) => string }> = {
@@ -29,8 +30,6 @@ const VERDICT_BADGE: Record<CheckState, { tone: BadgeTone; label: (open: number)
   fail: { tone: 'danger', label: () => 'Fails' },
 }
 
-/** The verdicts in an order to sort by: what passes first, what fails last. */
-const VERDICT_RANK: Record<CheckState, number> = { pass: 3, open: 2, fail: 1 }
 
 /** A run that waits or runs can neither be compared nor removed: it has no box. */
 const selectableRun = (run: BacktestRunListed) => !isActive(run.status.state)
@@ -38,7 +37,7 @@ const runName = (run: BacktestRunListed) => run.name
 
 
 /** Whether a listed run can be believed, check by check: the badge says it, its hint and its page say why. */
-function VerdictCell({ run, judged, judges }: { run: BacktestRunListed; judged: Judged | null; judges: BacktestRunListed | null }) {
+export function VerdictCell({ run, judged, judges }: { run: BacktestRunListed; judged: Judged | null; judges: BacktestRunListed | null }) {
   const judgedId = run.stress_of ?? run.noise_of ?? run.model_check_of
   if (judgedId) {
     // The run it judges is named when it is listed; a paper day is not, and its page says if it is gone.

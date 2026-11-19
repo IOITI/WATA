@@ -150,6 +150,16 @@ export function withRule(draft: BacktestDraft, rule: TaRule): BacktestDraft {
   }
 }
 
+/**
+ * A run's name without what "Run again with changes" added to it: " (again)" as often as it was, or what is left of one
+ * cut at the longest name (the server's ``base_name``, src/admin/backtest_configurations.py).
+ */
+export function withoutAgain(name: string, longest: number): string {
+  let text = name.trim()
+  if (text.length >= longest - 1) text = text.replace(/\s*\((?:a(?:g(?:a(?:i(?:n)?)?)?)?)?$/, '')
+  return text.replace(/(?:\s*\(again\))+\s*$/, '').trim() || name.trim()
+}
+
 /** A draft of a run made before: the same, to be changed and asked for again. */
 export function draftOfRun(run: BacktestRun, options: BacktestOptions): BacktestDraft {
   const request = run.request
@@ -157,7 +167,8 @@ export function draftOfRun(run: BacktestRun, options: BacktestOptions): Backtest
   const changes = Object.fromEntries(Object.entries(request.changes).map(([name, value]) => [name, String(value)]))
   const draft: BacktestDraft = {
     ...base,
-    name: `${request.name} (again)`.slice(0, options.limits.name_length),
+    // Once "(again)", however often it was asked again: its configuration groups its runs.
+    name: `${withoutAgain(request.name, options.limits.name_length)} (again)`.slice(0, options.limits.name_length),
     tags: request.tags.join(', '),
     indice: request.indice,
     changes,

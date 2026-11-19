@@ -522,9 +522,12 @@ export function tagOf(text: string, length: number): string | undefined {
   return tag || undefined
 }
 
-/** Whether a run is to be made again on today's code: finished, made with other code, not made again yet. */
+/**
+ * Whether a run is to be made again on today's code: finished, made with other code, not made again yet; never a
+ * nightly run whose configuration makes it again each evening (on the server's code), as the server refuses it.
+ */
 export function remakable(run: BacktestRunListed): boolean {
-  return run.status.state === 'done' && Boolean(run.stale) && !run.remade_by && !run.paper
+  return run.status.state === 'done' && Boolean(run.stale) && !run.remade_by && !run.paper && !run.nightly?.on
 }
 
 /** What makes two runs the same request, asked again after one failed: everything but when. */

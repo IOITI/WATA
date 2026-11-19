@@ -77,6 +77,10 @@ const PaperTradingPage = lazy(() =>
 const PaperReportPage = lazy(() =>
   import('@/features/backtests/PaperTradingPage').then((module) => ({ default: module.PaperReportPage })),
 )
+// A configuration's page: its latest result, its nightly re-run, its runs.
+const BacktestConfigurationPage = lazy(() =>
+  import('@/features/backtests/ConfigurationPage').then((module) => ({ default: module.ConfigurationPage })),
+)
 
 // The AI agent: its conversations, their activity and answers (a proposal's diff in CodeMirror), what it made.
 const AgentActivityPage = lazy(() =>
@@ -321,6 +325,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <PaperReportPage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="backtests/configurations/:configId"
+          element={
+            <ChartPage>
+              <BacktestConfigurationPage />
             </ChartPage>
           }
         />

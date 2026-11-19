@@ -56,9 +56,10 @@ describe('what the palette goes to', () => {
 
   it('opens each kind as a list of its own, its entries always given, the ones of a feature off left out', () => {
     const runs = runItems([run()])
-    const lists = listItems({ runs, rules: undefined, scripts: [], assets: [], conversations: null, memory: null })
+    const lists = listItems({ configurations: [], runs, rules: undefined, scripts: [], assets: [], conversations: null, memory: null })
 
     expect(lists.map((item) => [item.title, item.description])).toEqual([
+      ['Backtest configurations', '0 configurations'],
       ['Backtest runs', '1 run'],
       ['Signal rules', 'Being read…'],
       ['Scripts', '0 scripts'],
@@ -66,7 +67,7 @@ describe('what the palette goes to', () => {
     ])
     expect(lists.every((item) => item.category === 'Lists' && Array.isArray(item.items) && item.href === undefined)).toBe(true)
     // The same entries as at the top: one chosen in a list is found again among the ones chosen last.
-    expect(lists[0].items).toEqual(runs)
+    expect(lists[1].items).toEqual(runs)
   })
 
   it('offers the lists and the pages with nothing typed, and everything the lists hold once something is', () => {
@@ -74,8 +75,8 @@ describe('what the palette goes to', () => {
     const runs = runItems([run()])
 
     const empty = paletteItems({ query: '', pages, lists: { runs } })
-    expect(empty.slice(0, 6).map((item) => item.id)).toEqual(['list-runs', 'list-rules', 'list-scripts', 'list-assets',
-      'list-conversations', 'list-memory'])
+    expect(empty.slice(0, 7).map((item) => item.id)).toEqual(['list-configurations', 'list-runs', 'list-rules', 'list-scripts',
+      'list-assets', 'list-conversations', 'list-memory'])
     expect(empty.map((item) => item.id)).not.toContain(runs[0].id)
 
     const typed = paletteItems({ query: '5098', pages, lists: { runs } })

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, ButtonLink, formatBytes, formatDuration, PageHeader, QueryState, Select, SettleModal } from 'ioiti-ui'
+import { AnimatedTabs, Button, ButtonLink, formatBytes, formatDuration, PageHeader, QueryState, Select, SettleModal } from 'ioiti-ui'
+import { RouterLink } from 'ioiti-ui/react-router'
 import { FlaskConical, Newspaper, Plus } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
@@ -9,7 +10,10 @@ import { useSession } from '@/features/auth/auth-context'
 import { api } from '@/lib/api'
 import type { BacktestRemaking, BacktestRunListed, Experiment } from '@/lib/types'
 
-import { filterRuns, isActive, remakable, RUN_FILTER_NAMES, runFilterOf, tagsInUse } from './model'
+import { CONFIGURATION_FILTER_NAMES, configurationFilterOf, configurationJudged, filterConfigurations } from './configurations'
+import type { ConfigurationFilter } from './configurations'
+import { ConfigurationsTable } from './ConfigurationsTable'
+import { filterRuns, isActive, remakable, RUN_FILTER_NAMES, tagsInUse } from './model'
 import type { RunFilter } from './model'
 import { BacktestsDisabled } from './parts'
 import { useHiddenRuns } from './pending-removals-context'
@@ -17,6 +21,9 @@ import { ResearchFiles } from './ResearchFiles'
 import { RunsTable } from './RunsTable'
 import { TurboModelPanel } from './TurboModelPanel'
 import { judgedRuns } from './verdict'
+
+/** The page's two views, each at its address: the configurations (``/backtests``), every run (``?view=runs``). */
+type View = 'configurations' | 'runs'
 
 /** What each filter of the list offers: the first, empty, leaves the list whole. */
 const FILTERS: Record<Exclude<keyof RunFilter, 'experiment' | 'tag'>, { label: string; options: [string, string][] }> = {
@@ -35,17 +42,19 @@ const FILTERS: Record<Exclude<keyof RunFilter, 'experiment' | 'tag'>, { label: s
  */
 function RunFilters({
   filter,
+  view,
   experiments,
   tags,
   onChange,
 }: {
-  filter: RunFilter
+  filter: ConfigurationFilter
+  view: View
   experiments: { id: string; title: string }[]
   tags: string[]
-  onChange: (name: keyof RunFilter, value: string) => void
+  onChange: (name: keyof ConfigurationFilter, value: string) => void
 }) {
-  const narrowed = RUN_FILTER_NAMES.some((name) => filter[name] !== null)
-  const field = (name: keyof RunFilter, label: string, options: [string, string][]) => (
+  const narrowed = (view === 'runs' ? RUN_FILTER_NAMES : CONFIGURATION_FILTER_NAMES).some((name) => filter[name] !== null)
+  const field = (name: keyof ConfigurationFilter, label: string, options: [string, string][]) => (
     <label key={name} className="flex flex-col gap-1 text-xs">
       <span className="text-text-secondary">{label}</span>
       <Select
@@ -62,9 +71,10 @@ function RunFilters({
         field('experiment', 'Experiment', [['', 'Any'], ...experiments.map((entry): [string, string] => [entry.id, entry.title])])}
       {(tags.length > 0 || filter.tag) &&
         field('tag', 'Tag', [['', 'Any'], ...[...new Set([...tags, ...(filter.tag ? [filter.tag] : [])])].map((tag): [string, string] => [tag, tag])])}
+      {view === 'configurations' && field('nightly', 'Each evening', [['', 'Any'], ['on', 'Made again'], ['off', 'Not']])}
       {narrowed && (
-        <ButtonLink to="/backtests" variant="ghost" size="sm">
-          Every run
+        <ButtonLink to={view === 'runs' ? '/backtests?view=runs' : '/backtests'} variant="ghost" size="sm">
+          Clear filters
         </ButtonLink>
       )}
     </div>
@@ -199,10 +209,19 @@ export function BacktestsPage() {
   const { backtests_enabled: enabled } = useSession()
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
-  const filter = runFilterOf(params)
+  const view: View = params.get('view') === 'runs' ? 'runs' : 'configurations'
+  const filter = configurationFilterOf(params)
   // Changing what is shown starts the table over: its pages, sort and search were of another list.
-  const shownKey = RUN_FILTER_NAMES.map((name) => filter[name] ?? '').join('|')
-  const setFilter = (name: keyof RunFilter, value: string) =>
+  const shownKey = [view, ...CONFIGURATION_FILTER_NAMES.map((name) => filter[name] ?? '')].join('|')
+  // Each view at its address, the list narrowed as it is.
+  const viewHref = (shown: View) => {
+    const next = new URLSearchParams(params)
+    if (shown === 'runs') next.set('view', 'runs')
+    else next.delete('view')
+    const text = next.toString()
+    return text ? `/backtests?${text}` : '/backtests'
+  }
+  const setFilter = (name: keyof ConfigurationFilter, value: string) =>
     setParams(
       (current) => {
         const next = new URLSearchParams(current)
@@ -237,7 +256,33 @@ export function BacktestsPage() {
   const verdicts = useMemo(() => new Map([...judged].map(([id, found]) => [id, found.verdict.tone])), [judged])
   const byId = useMemo(() => new Map((runs ?? []).map((run) => [run.id, run])), [runs])
   const tags = useMemo(() => tagsInUse(runs ?? []), [runs])
-  const narrowed = useMemo(() => filterRuns(runs ?? [], filter, verdicts), [runs, shownKey, verdicts]) // eslint-disable-line react-hooks/exhaustive-deps
+  const narrowed = useMemo(() => filterRuns(runs ?? [], filter as RunFilter, verdicts), [runs, shownKey, verdicts]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const configurationsQuery = useQuery({
+    queryKey: ['backtests', 'configurations'],
+    queryFn: api.backtestConfigurations,
+    enabled: enabled && view === 'configurations',
+    // Read whole on the server each time: closely while one of their runs waits or runs, not every two seconds.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((item) => item.runs.some((run) => isActive(run.state))) ? 10_000 : 30_000,
+  })
+  // Without those whose every run waits for its removal's Undo.
+  const configurations = useMemo(
+    () =>
+      configurationsQuery.data?.items.filter(
+        (item) => !(item.removable.length === item.count && item.removable.every((id) => hidden.has(id))),
+      ),
+    [configurationsQuery.data, hidden],
+  )
+  const judgedConfigurations = useMemo(() => configurationJudged(configurations ?? []), [configurations])
+  const configurationVerdicts = useMemo(
+    () => new Map([...judgedConfigurations].map(([id, found]) => [id, found.verdict.tone])),
+    [judgedConfigurations],
+  )
+  const shownConfigurations = useMemo(
+    () => filterConfigurations(configurations ?? [], filter, configurationVerdicts),
+    [configurations, shownKey, configurationVerdicts], // eslint-disable-line react-hooks/exhaustive-deps
+  )
 
   // A tag of a row narrows the list to it, the rest of the address kept.
   const tagHref = useCallback(
@@ -287,22 +332,63 @@ export function BacktestsPage() {
           <QueryState isPending={runsQuery.isPending} error={runsQuery.error} hasData={!!runs}>
             {runs && (
               <div className="flex flex-col gap-2">
-                {runs.length > 0 && <RunFilters filter={filter} experiments={experiments} tags={tags} onChange={setFilter} />}
-                <RemakeLine stale={runs.filter(remakable).length} remaking={runsQuery.data?.remaking ?? null} byId={byId} />
-                <RunsTable
-                  rows={narrowed}
-                  all={runs}
-                  judged={judged}
-                  tableKey={shownKey}
-                  tagHref={tagHref}
-                  emptyTitle={runs.length > 0 ? 'No run of these' : 'No backtest yet'}
-                  emptyDescription={
-                    runs.length > 0
-                      ? 'No run is left once narrowed so: “Every run” shows them all again.'
-                      : 'Ask for one with “New backtest”: a Pine script or the signals WATA received, on days the price recorder kept turbos.'
+                <AnimatedTabs
+                  tabs={[
+                    { id: 'configurations', label: 'Configurations', href: viewHref('configurations') },
+                    { id: 'runs', label: 'Every run', href: viewHref('runs') },
+                  ]}
+                  activeTab={view}
+                  onChange={(tab) =>
+                    setParams(
+                      (current) => {
+                        const next = new URLSearchParams(current)
+                        if (tab === 'runs') next.set('view', 'runs')
+                        else next.delete('view')
+                        return next
+                      },
+                      { replace: true },
+                    )
                   }
+                  linkComponent={RouterLink}
+                  renderContent={false}
                 />
+                {runs.length > 0 && (
+                  <RunFilters filter={filter} view={view} experiments={experiments} tags={tags} onChange={setFilter} />
+                )}
+                <RemakeLine stale={runs.filter(remakable).length} remaking={runsQuery.data?.remaking ?? null} byId={byId} />
+                {view === 'configurations' ? (
+                  <QueryState isPending={configurationsQuery.isPending} error={configurationsQuery.error} hasData={!!configurations}>
+                    <ConfigurationsTable
+                      rows={shownConfigurations}
+                      judged={judgedConfigurations}
+                      tableKey={shownKey}
+                      tagHref={tagHref}
+                      emptyTitle={(configurations ?? []).length > 0 ? 'No configuration of these' : 'No backtest yet'}
+                      emptyDescription={
+                        (configurations ?? []).length > 0
+                          ? 'None is left once narrowed so: “Clear filters” shows them all again.'
+                          : 'Ask for one with “New backtest”: a Pine script or the signals WATA received, on days the price recorder kept turbos.'
+                      }
+                    />
+                  </QueryState>
+                ) : (
+                  <RunsTable
+                    rows={narrowed}
+                    all={runs}
+                    judged={judged}
+                    tableKey={shownKey}
+                    tagHref={tagHref}
+                    emptyTitle={runs.length > 0 ? 'No run of these' : 'No backtest yet'}
+                    emptyDescription={
+                      runs.length > 0
+                        ? 'No run is left once narrowed so: “Clear filters” shows them all again.'
+                        : 'Ask for one with “New backtest”: a Pine script or the signals WATA received, on days the price recorder kept turbos.'
+                    }
+                  />
+                )}
                 <p className="text-xs text-muted-foreground">
+                  {view === 'configurations' &&
+                    'A configuration is every run of the same strategy and settings, whatever its days; its latest run is what it shows, and switched on, it is made again after each trading day to the day just over. '}
                   Every trade buys a turbo the price recorder kept, at its recorded ask, and sells it at its recorded bid.
                   “Beats random” is the share of the same days traded with entries at random that did worse: near 50 %, the
                   entries have shown nothing. Two to {MAX_COMPARED} finished runs can be compared.

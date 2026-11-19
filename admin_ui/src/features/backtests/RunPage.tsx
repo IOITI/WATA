@@ -8,26 +8,22 @@ import {
   Button,
   ButtonLink,
   cn,
-  formatDateTime,
   formatDay,
   formatMoney,
-  formatNumber,
   formatPercent,
   Input,
-  KpiTile,
   PageHeader,
   Panel,
   QueryState,
   ScrollProgressNav,
   SettleModal,
-  SignedValue,
   SplitButton,
   useMainScroll,
   useToast,
 } from 'ioiti-ui'
 import type { SplitButtonOption } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
-import { Flag, Pencil, Radar, RotateCcw, SlidersHorizontal, Sparkles, Square, Star, Trash2 } from 'lucide-react'
+import { Flag, Moon, Pencil, Radar, RotateCcw, SlidersHorizontal, Sparkles, Square, Star, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
@@ -38,29 +34,26 @@ import { NEW, withAgent } from '@/features/agent/model'
 import { useSession } from '@/features/auth/auth-context'
 import { ApplyCard } from '@/features/config/ApplyCard'
 import { useLuxAlgoStatus } from '@/features/ta/luxalgo/useLuxAlgo'
-import { barsLabel } from '@/features/ta/signals/ruleModel'
-import { RulePeekName } from '@/features/ta/signals/RulePeek'
-import { api, isNotFound } from '@/lib/api'
+import { api, ApiError, isNotFound } from '@/lib/api'
 import type { BacktestRun, BacktestRunListed, ConfigSaved } from '@/lib/types'
 
 import {
-  assetLabel,
   daysSentence,
   isActive,
   progressSentence,
   remakable,
   RUN_NOT_FOUND,
-  settingChanges,
   sourceLabel,
   STATE_LABEL,
 } from './model'
 import { ApplyToLiveDialog } from './ApplyToLiveDialog'
+import { configurationHref, configurationKey, replacedOf } from './configurations'
 import { EdgePanel } from './EdgePanel'
-import { BacktestsDisabled, Measure, SettingChanges, StateBadge } from './parts'
+import { BacktestsDisabled, StateBadge } from './parts'
 import { useRemoveRuns } from './pending-removals-context'
 import { useSetFavourites } from './useFavourites'
 import { ReconciliationPanel } from './ReconciliationPanel'
-import { BreakdownsPanel, CurvesPanel, TrustPanel, WhyPanel } from './runPanels'
+import { BreakdownsPanel, CurvesPanel, RunKpis, TrustPanel, WhyPanel } from './runPanels'
 import { DaysTable, SignalsTable, TradesTable } from './runTables'
 import { ModelCheckPanel } from './ModelCheckPanel'
 import { paperRunLine, runParents } from './paperModel'
@@ -69,7 +62,7 @@ import { PropFirmPanel } from './PropFirmPanel'
 import { StressPanel } from './StressPanel'
 import { ChoicePanel, SweepPanel } from './SweepPanel'
 import { TagsField } from './TagsField'
-import { underlyingLabel } from './turboModel'
+import { RunFacts } from './RunFacts'
 import { VerdictPanel } from './VerdictPanel'
 import type { PageSection } from './VerdictPanel'
 import { RunPeekLink } from './RunPeek'
@@ -132,96 +125,6 @@ function Progress({ run }: { run: BacktestRun }) {
         {run.lines.length > 0 && (
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">{run.lines.join('\n')}</pre>
         )}
-      </div>
-    </Panel>
-  )
-}
-
-/** What a run was asked: its signals, its asset, its days, and what it changed of WATA's settings. */
-function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters<typeof settingChanges>[2] }) {
-  const request = run.request
-  const source = request.source
-  const engine = run.summary?.made_with.engine
-  const turbos = run.summary?.made_with.turbos
-  const modelled = turbos && turbos.kind === 'modelled' ? turbos : null
-  const execution = run.summary?.made_with.execution
-  const drawn = execution && execution.kind === 'measured' ? execution : null
-  return (
-    <Panel title="What it ran">
-      <div className="grid gap-8 lg:grid-cols-2">
-        <dl className="flex flex-col gap-1.5">
-          <Measure label="Signals">
-            {source.kind === 'pine' ? (
-              <>
-                <Link to={`/ta/indicators/${source.rule.script.id}`} className="underline-offset-4 hover:underline">
-                  {source.rule.name}
-                </Link>{' '}
-                v{source.rule.script.version}
-                {source.from_rule && (
-                  <>
-                    {' '}
-                    (the rule <RulePeekName id={source.from_rule.id} name={source.from_rule.name} />)
-                  </>
-                )}
-              </>
-            ) : source.kind === 'ta_signals' ? (
-              <>
-                The {formatNumber(source.signals)} signal{source.signals === 1 ? '' : 's'}{' '}
-                <RulePeekName id={source.rule.id} name={source.rule.name} /> raised
-                {source.versions && source.versions.length > 0 && (
-                  <span className="block text-xs text-muted-foreground">
-                    as the engine journaled them, by {source.versions.map((version) => `v${version}`).join(' and ')} of its script
-                  </span>
-                )}
-              </>
-            ) : (
-              `The ${source.signals} signal${source.signals === 1 ? '' : 's'} WATA received`
-            )}
-          </Measure>
-          <Measure label="Asset">
-            {assetLabel(request.chart.asset)} · {barsLabel(request.chart.bars)} · {request.chart.side}
-          </Measure>
-          <Measure label="Turbos of">{request.indice}</Measure>
-          {modelled && (
-            <Measure label="Model">
-              <span className="text-xs text-warning">
-                Turbos made up from {underlyingLabel(modelled.underlying)}, measured on {modelled.days} recorded day{modelled.days === 1 ? '' : 's'}
-                {modelled.few_days ? ': few, a rough guess' : ''}. Check it against the recorded days.
-              </span>
-            </Measure>
-          )}
-          <Measure label="Period">
-            {formatDay(request.from)} to {formatDay(request.to)}
-          </Measure>
-          {source.kind === 'pine' && source.rule.inputs.length > 0 && (
-            <Measure label="Inputs">{source.rule.inputs.map((entry) => `${entry.title ?? entry.id} ${String(entry.value)}`).join(', ')}</Measure>
-          )}
-          {source.kind === 'pine' && (
-            <Measure label="Alerts">{source.rule.alerts.map((entry) => `“${entry.title}” → ${entry.action}`).join('; ') || 'alert() calls'}</Measure>
-          )}
-          <Measure label="Asked">{formatDateTime(run.status.created_at, 'UTC', false)} UTC</Measure>
-          {run.summary && (
-            <Measure label="Made with">
-              WATA {run.summary.made_with.version}
-              {engine ? `, PineTS ${engine.runner.pinets} (${formatNumber(engine.milliseconds / 1000, 1)} s of script)` : ''}
-              {drawn && (
-                <span className="block text-xs text-muted-foreground">
-                  Each order’s time and price drawn from {formatNumber(drawn.orders)} of WATA’s own, from {formatDay(drawn.from)} to{' '}
-                  {formatDay(drawn.to)}
-                </span>
-              )}
-              {run.stale && <span className="block text-xs text-warning">Other code than this admin’s: it could come out otherwise today.</span>}
-            </Measure>
-          )}
-        </dl>
-        <div className="flex flex-col gap-2">
-          <h3 className="text-xs font-medium text-muted-foreground">Changed from WATA’s settings</h3>
-          <SettingChanges
-            label="Changed from WATA’s settings"
-            changes={settingChanges(run.settings.changed, run.settings.live_before, labels)}
-            none="Nothing: the live settings of the day it was asked."
-          />
-        </div>
       </div>
     </Panel>
   )
@@ -302,6 +205,16 @@ export function RunPage() {
   // The run making this one again, while it waits or runs.
   const remaking = listQuery.data?.items.find((other) => other.remade_from === runId && isActive(other.status.state)) ?? null
 
+  // The configuration it is of (the runs of the same things but their days): its name, its page.
+  const configurationId = run && !run.paper ? (run.configuration ?? null) : null
+  const configurationQuery = useQuery({
+    queryKey: configurationKey(configurationId ?? ''),
+    queryFn: () => api.backtestConfiguration(configurationId ?? ''),
+    enabled: enabled && !!configurationId,
+    staleTime: 60_000,
+  })
+  const configuration = configurationQuery.data?.configuration ?? null
+
   const summary = run?.summary
   const figures = summary?.figures
   const money = summary?.money
@@ -322,7 +235,23 @@ export function RunPage() {
     if (drawn && hash) document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView?.()
   }, [drawn, hash])
 
-  if (isNotFound(runQuery.error)) return <NotFoundState {...RUN_NOT_FOUND} />
+  if (isNotFound(runQuery.error)) {
+    // A configuration's nightly run, replaced by the next: its address leads to the configuration.
+    const replaced = runQuery.error instanceof ApiError ? replacedOf(runQuery.error.body) : null
+    if (replaced) {
+      return (
+        <NotFoundState
+          title="Replaced by a newer nightly run"
+          description={`This run of ${replaced.name ?? 'a configuration'}${replaced.to ? `, to ${formatDay(replaced.to)}` : ''}, was made again since, over more days: its configuration shows the newest.`}
+          suggestions={[
+            { label: replaced.name ?? 'Its configuration', href: configurationHref(replaced.configuration), description: 'Its newest result and every run of it' },
+            ...RUN_NOT_FOUND.suggestions,
+          ]}
+        />
+      )
+    }
+    return <NotFoundState {...RUN_NOT_FOUND} />
+  }
 
   // What else can be done with the run, behind the chevron of "Run again with changes".
   const runActions = (shown: BacktestRun): SplitButtonOption[] => {
@@ -351,6 +280,16 @@ export function RunPage() {
         icon: <Flag />,
         disabled: reference.isSuccess || reference.isPending,
         onSelect: () => reference.mutate(),
+      })
+    }
+    // Its configuration made again after each trading day: switched on from the configuration's page.
+    if (shown.configuration && !shown.paper && shown.kind === 'run') {
+      options.push({
+        value: 'nightly',
+        label: 'Make it again each evening…',
+        description: 'Its configuration, its days stretched to the day just over after each trading day',
+        icon: <Moon />,
+        href: `${configurationHref(shown.configuration)}?nightly=open`,
       })
     }
     options.push({
@@ -385,7 +324,7 @@ export function RunPage() {
       <PageHeader
         title={run?.name ?? 'Backtest'}
         description={run ? `${sourceLabel(run)} · ${formatDay(run.from)} to ${formatDay(run.to)}` : undefined}
-        parents={runParents(run)}
+        parents={[...runParents(run), ...(configuration ? [{ label: configuration.name, href: configurationHref(configuration.id) }] : [])]}
         actions={
           run && (
             <>
@@ -494,6 +433,22 @@ export function RunPage() {
                   </Link>
                 ))}
               </div>
+              {configuration && (
+                <p className="text-sm text-muted-foreground">
+                  {run.nightly
+                    ? 'A nightly run of the configuration '
+                    : 'Of the configuration '}
+                  <Link to={configurationHref(configuration.id)} className="font-medium text-foreground underline-offset-4 hover:underline">
+                    {configuration.name}
+                  </Link>
+                  {` (${configuration.count} run${configuration.count === 1 ? '' : 's'})`}
+                  {run.nightly
+                    ? ': the next replaces it once done, unless something rests on it.'
+                    : configuration.nightly?.on
+                      ? ', made again each evening.'
+                      : '.'}
+                </p>
+              )}
               <AgentVerdict about={`run:${run.id}`} />
               <RemadeLine run={run} remaking={remaking} asking={remake} />
 
@@ -549,30 +504,7 @@ export function RunPage() {
 
               {single && summary && figures && money && (
                 <>
-                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-                    <KpiTile
-                      label="All days"
-                      value={<SignedValue value={figures.total_percent} kind="percent" />}
-                      hint={figures.total_range ? `${formatPercent(figures.total_range.low, true)} to ${formatPercent(figures.total_range.high, true)} with other days` : 'each trade as the whole stake'}
-                    />
-                    <KpiTile
-                      label="In money"
-                      value={<SignedValue value={money.profit_loss} kind="money" />}
-                      hint={`${formatMoney(money.capital, 'EUR')} to ${formatMoney(money.final, 'EUR')} (${formatPercent(money.return_percent, true)})`}
-                    />
-                    <KpiTile
-                      label="Trades"
-                      value={formatNumber(figures.trades)}
-                      hint={`${formatPercent(figures.win_rate, false, 0)} won, on ${figures.days_with_an_entry} of ${figures.days} days`}
-                    />
-                    <KpiTile label="Per trade" value={<SignedValue value={figures.expectancy} kind="percent" />} hint={`won ${formatPercent(figures.average_win, true)}, lost ${formatPercent(figures.average_loss, true)}`} />
-                    <KpiTile label="Worst drawdown" value={<SignedValue value={figures.worst_drawdown} kind="percent" />} hint={`${formatMoney(money.worst_drawdown, 'EUR')} of the account`} />
-                    <KpiTile
-                      label="Beats random"
-                      value={summary.against_random ? formatPercent(summary.against_random.beaten, false, 0) : '-'}
-                      hint={summary.against_random ? `of ${summary.against_random.repetitions} runs at random` : 'not asked'}
-                    />
-                  </div>
+                  <RunKpis summary={summary} />
                   <p className="text-sm text-muted-foreground">
                     {daysSentence(summary.days)} Average stake {formatMoney(money.average_stake, 'EUR')}, {formatPercent(money.average_scale_percent, false, 0)} of
                     what an order may use{money.commissions ? `; ${formatMoney(money.commissions, 'EUR')} of commissions` : ''}

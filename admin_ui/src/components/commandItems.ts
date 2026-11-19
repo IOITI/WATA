@@ -9,7 +9,15 @@ import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { instrumentLabel } from '@/features/prices/chartData'
 import { barsLabel, MODE_LABEL, rulePath } from '@/features/ta/signals/ruleModel'
 import { KIND_LABEL } from '@/features/ta/templates'
-import type { AgentConversationListed, AgentMemoryEntry, BacktestRunListed, DataAsset, TaRule, TaScriptSummary } from '@/lib/types'
+import type {
+  AgentConversationListed,
+  AgentMemoryEntry,
+  BacktestConfiguration,
+  BacktestRunListed,
+  DataAsset,
+  TaRule,
+  TaScriptSummary,
+} from '@/lib/types'
 
 /**
  * What the palette (⌘K) goes to, as entries: the pages of the menu and what
@@ -22,6 +30,18 @@ export function pageItems(): SpotlightSearchItem[] {
     { id: 'new-backtest', title: 'New backtest', category: 'Analysis', href: '/backtests/new', keywords: ['create', 'run'] },
     { id: 'new-script', title: 'New script', category: 'Technical Analysis', href: '/ta/indicators/new', keywords: ['create', 'indicator', 'strategy', 'library', 'pine'] },
   ]
+}
+
+/** The backtest configurations: their page outlives their runs, a nightly one replaced each evening. */
+export function configurationItems(configurations: readonly BacktestConfiguration[]): SpotlightSearchItem[] {
+  return configurations.map((configuration) => ({
+    id: `configuration-${configuration.id}`,
+    title: configuration.name,
+    category: 'Backtest configuration',
+    description: `${sourceLabel(configuration)} · ${configuration.count} run${configuration.count === 1 ? '' : 's'}${configuration.nightly?.on ? ' · each evening' : ''}`,
+    href: `/backtests/configurations/${configuration.id}`,
+    keywords: [configuration.id, ...configuration.tags],
+  }))
 }
 
 export function runItems(runs: readonly BacktestRunListed[]): SpotlightSearchItem[] {
@@ -101,6 +121,7 @@ export function assetItems(assets: readonly DataAsset[]): SpotlightSearchItem[] 
  * where there is none to list (backtests off, the AI agent off).
  */
 export interface PaletteLists {
+  configurations?: SpotlightSearchItem[] | null
   runs?: SpotlightSearchItem[] | null
   rules?: SpotlightSearchItem[] | null
   scripts?: SpotlightSearchItem[] | null
@@ -111,6 +132,7 @@ export interface PaletteLists {
 
 /** The lists the palette opens, in this order, each searched alone ("Backtest runs ›"). */
 const LISTS: { key: keyof PaletteLists; title: string; one: string; many: string; placeholder: string }[] = [
+  { key: 'configurations', title: 'Backtest configurations', one: 'configuration', many: 'configurations', placeholder: 'A configuration’s name or tag…' },
   { key: 'runs', title: 'Backtest runs', one: 'run', many: 'runs', placeholder: 'A run’s name, id or tag…' },
   { key: 'rules', title: 'Signal rules', one: 'rule', many: 'rules', placeholder: 'A rule’s name, its script or indice…' },
   { key: 'scripts', title: 'Scripts', one: 'script', many: 'scripts', placeholder: 'A script’s name…' },

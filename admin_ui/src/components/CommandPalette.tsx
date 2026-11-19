@@ -3,7 +3,17 @@ import { Hint, Kbd, SpotlightSearch } from 'ioiti-ui'
 import { Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
-import { assetItems, conversationItems, memoryItems, pageItems, paletteItems, ruleItems, runItems, scriptItems } from '@/components/commandItems'
+import {
+  assetItems,
+  configurationItems,
+  conversationItems,
+  memoryItems,
+  pageItems,
+  paletteItems,
+  ruleItems,
+  runItems,
+  scriptItems,
+} from '@/components/commandItems'
 import { useSession } from '@/features/auth/auth-context'
 import { useHiddenRuns } from '@/features/backtests/pending-removals-context'
 import { api } from '@/lib/api'
@@ -28,6 +38,11 @@ export function CommandPalette() {
   const hiddenRuns = useHiddenRuns()
 
   const runsQuery = useQuery({ queryKey: ['backtests'], queryFn: api.backtests, enabled: open && backtestsEnabled })
+  const configurationsQuery = useQuery({
+    queryKey: ['backtests', 'configurations'],
+    queryFn: api.backtestConfigurations,
+    enabled: open && backtestsEnabled,
+  })
   const rulesQuery = useQuery({ queryKey: ['ta-rules'], queryFn: api.taRules, enabled: open })
   const scriptsQuery = useQuery({ queryKey: ['ta-scripts'], queryFn: api.taScripts, enabled: open })
   const assetsQuery = useQuery({ queryKey: ['data-assets', 'all'], queryFn: () => api.dataAssets('all'), enabled: open, staleTime: 60_000 })
@@ -36,18 +51,19 @@ export function CommandPalette() {
   const memoryQuery = useQuery({ queryKey: ['agent-memory'], queryFn: api.agentMemory, enabled: open, retry: false })
 
   const lists = useMemo(() => ({
+    configurations: !backtestsEnabled ? null : configurationsQuery.data ? configurationItems(configurationsQuery.data.items) : undefined,
     runs: !backtestsEnabled ? null : runsQuery.data ? runItems(runsQuery.data.items.filter((run) => !hiddenRuns.has(run.id))) : undefined,
     rules: rulesQuery.data ? ruleItems(rulesQuery.data.rules) : undefined,
     scripts: scriptsQuery.data ? scriptItems(scriptsQuery.data.items) : undefined,
     assets: assetsQuery.data ? assetItems(assetsQuery.data.items) : undefined,
     conversations: conversationsQuery.isError ? null : conversationsQuery.data ? conversationItems(conversationsQuery.data.items) : undefined,
     memory: memoryQuery.isError ? null : memoryQuery.data ? memoryItems(memoryQuery.data.entries) : undefined,
-  }), [backtestsEnabled, runsQuery.data, hiddenRuns, rulesQuery.data, scriptsQuery.data, assetsQuery.data, conversationsQuery.data,
+  }), [backtestsEnabled, configurationsQuery.data, runsQuery.data, hiddenRuns, rulesQuery.data, scriptsQuery.data, assetsQuery.data, conversationsQuery.data,
     conversationsQuery.isError, memoryQuery.data, memoryQuery.isError])
   const items = useMemo(() => paletteItems({ query, pages: PAGES, lists }), [query, lists])
 
   // Said as the palette searches: a name typed before its list is read is not "No results".
-  const read = [runsQuery, rulesQuery, scriptsQuery, assetsQuery]
+  const read = [configurationsQuery, runsQuery, rulesQuery, scriptsQuery, assetsQuery]
   const loading = open && [...read, conversationsQuery, memoryQuery].some((entry) => entry.isFetching && entry.data === undefined)
   const failed = read.filter((entry) => entry.isError)
 

@@ -307,6 +307,9 @@ export function listedChecks(run: BacktestRunListed, runs: readonly BacktestRunL
   return isJudged(run) ? checksOf(evidenceOfListed(run), listedDerived(run, runs)) : []
 }
 
+/** The verdicts in an order to sort by: what passes first, what fails last. */
+export const VERDICT_RANK: Record<CheckState, number> = { pass: 3, open: 2, fail: 1 }
+
 export interface RunVerdict {
   tone: CheckState
   sentence: string

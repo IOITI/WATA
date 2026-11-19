@@ -20,6 +20,9 @@ import type {
   AssetDetails,
   BacktestBaseline,
   BacktestBreakdowns,
+  BacktestConfigurationChange,
+  BacktestConfigurationPage,
+  BacktestConfigurations,
   BacktestCoverage,
   BacktestDay,
   BacktestDayIndicator,
@@ -148,12 +151,15 @@ import type {
 export class ApiError extends Error {
   readonly status: number
   readonly retryAfter: number | null
+  /** What the server answered, beside its detail: a nightly run replaced says its configuration. */
+  readonly body: unknown
 
-  constructor(status: number, message: string, retryAfter: number | null = null) {
+  constructor(status: number, message: string, retryAfter: number | null = null, body: unknown = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.retryAfter = retryAfter
+    this.body = body
   }
 }
 
@@ -225,6 +231,7 @@ async function request<T>(method: string, path: string, options: RequestOptions 
     response.status,
     errorMessage(body, `Request failed (HTTP ${response.status})`),
     Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+    body,
   )
 }
 
@@ -432,6 +439,13 @@ export const api = {
     request<{ remaking: BacktestRemaking | null }>('POST', '/api/backtests/remake', { body }),
   stopRemaking: () => request<{ remaking: BacktestRemaking | null }>('DELETE', '/api/backtests/remake'),
   backtest: (runId: string) => request<BacktestRun>('GET', `/api/backtests/${encodeURIComponent(runId)}`),
+  backtestConfigurations: () => request<BacktestConfigurations>('GET', '/api/backtests/configurations'),
+  backtestConfiguration: (id: string) =>
+    request<BacktestConfigurationPage>('GET', `/api/backtests/configurations/${encodeURIComponent(id)}`),
+  changeBacktestConfiguration: (id: string, body: BacktestConfigurationChange) =>
+    request<BacktestConfigurationPage>('PATCH', `/api/backtests/configurations/${encodeURIComponent(id)}`, { body }),
+  extendBacktestConfiguration: (id: string) =>
+    request<BacktestConfigurationPage>('POST', `/api/backtests/configurations/${encodeURIComponent(id)}/extend`),
   /** What differs between a run's settings and WATA's now, setting by setting (the run page's "Apply to WATA"). */
   backtestToLive: (runId: string) => request<RunToLive>('GET', `/api/backtests/${encodeURIComponent(runId)}/to-live`),
   /** The chosen settings in config.json as a save of the Configuration page is previewed, with the revision read. */

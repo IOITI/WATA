@@ -1,7 +1,7 @@
 import { Alert, AlertDescription, AlertTitle, Badge, ChangeList, Hint } from 'ioiti-ui'
 import type { ReactNode } from 'react'
 
-import type { BacktestFate, BacktestStatus } from '@/lib/types'
+import type { BacktestFate, BacktestState, BacktestStatus } from '@/lib/types'
 
 import { FATE_LABEL, FATE_TONE, STATE_LABEL, STATE_TONE } from './model'
 import type { Change } from './model'
@@ -10,9 +10,14 @@ import { staleDayHint } from './paperModel'
 /** What the pages of this section share. */
 
 export function StateBadge({ status }: { status: BacktestStatus }) {
+  return <RunStateBadge state={status.state} />
+}
+
+/** A run's state alone: a configuration lists no more of its runs' status. */
+export function RunStateBadge({ state }: { state: BacktestState }) {
   return (
-    <Badge tone={STATE_TONE[status.state]} dot pulse={status.state === 'running'}>
-      {STATE_LABEL[status.state]}
+    <Badge tone={STATE_TONE[state]} dot pulse={state === 'running'}>
+      {STATE_LABEL[state]}
     </Badge>
   )
 }

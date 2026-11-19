@@ -2451,6 +2451,160 @@ export interface BacktestRunListed {
   remade_from?: string | null
   /** The run that made it again on today's code, once that one was done. */
   remade_by?: string | null
+  /** The runs of the same things but their days (src/admin/backtest_configurations.py); none for a paper run. */
+  configuration?: string | null
+  /** A configuration's nightly run, replaced by its next one; ``on``: its configuration is made again each evening still. */
+  nightly?: { configuration: string; on: boolean } | null
+}
+
+// ── configurations: the runs of the same things but their days, each made again each evening once switched on ──
+
+/** Why a run is kept when its configuration's next nightly run is done: what rests on it. */
+export type BacktestKeptReason = 'favourite' | 'reference' | 'judged' | 'verdict'
+
+/** A run of a configuration, as its row and its page list it. */
+export interface BacktestConfigurationRun {
+  id: string
+  kind: 'run' | 'sweep'
+  name: string
+  from: string
+  to: string
+  state: BacktestState
+  error: string | null
+  created_at: string | null
+  finished_at: string | null
+  /** How long it took, once it ended. */
+  seconds: number | null
+  position: number | null
+  total_percent: number | null
+  trades: number | null
+  days: number | null
+  beaten: number | null
+  profit_loss: number | null
+  /** One of its configuration's nightly runs. */
+  nightly: boolean
+  kept: BacktestKeptReason[]
+  /** A run made from another of the configuration: what it is of it. */
+  derived: 'stress' | 'noise' | 'model_check' | null
+  remade_by: string | null
+  remade_from: string | null
+  stale?: boolean | null
+  favourite: boolean
+  made_by: string | null
+  experiment: string | null
+  tags: string[]
+}
+
+/** What the next nightly run waits for: the day's trading hours, the operator's runs, its own run, the next day. */
+export type BacktestNightlyWait = 'market' | 'line' | 'under_way' | 'failed'
+
+export interface BacktestNightly {
+  on: boolean
+  /** Its first day, the anchor of its window. */
+  from: string
+  /** When it was switched on. */
+  since: string | null
+  /** A line on Telegram once each nightly run ends. */
+  telegram: boolean
+  /** The days a nightly run covers at most: a year, held to the runs' longest period. */
+  most_days: number
+  last: {
+    day: string
+    run: string | null
+    asked_at: string
+    state: BacktestState | null
+    error: string | null
+    seconds: number | null
+    by_hand: boolean
+  } | null
+  /** A run of it covers already the days one asked now would. */
+  up_to_date: boolean
+  next: { day: string; from: string; to: string; waits: BacktestNightlyWait | null }
+}
+
+export interface BacktestConfiguration {
+  id: string
+  /** What its runs share with those of other settings: "same strategy, other settings". */
+  strategy: string
+  name: string
+  /** Named by the operator, rather than after its runs. */
+  named: boolean
+  kind: 'run' | 'sweep'
+  indice: string
+  turbos?: BacktestTurbos
+  source: BacktestRunListed['source']
+  chart: BacktestChart
+  /** Its runs, newest first: the newest few in the list, every one on its page. */
+  runs: BacktestConfigurationRun[]
+  count: number
+  /** What it shows: its newest finished run made by itself. */
+  latest: BacktestRunListed | null
+  /** The runs that judge that one (a stress, a model check), for its verdict. */
+  judging: BacktestRunListed[]
+  tags: string[]
+  favourite: boolean
+  /** The agents that made runs of it ("claude"); ``mine``: the operator made one. */
+  made_by: string[]
+  mine: boolean
+  experiments: string[]
+  /** Its runs that removing it takes: neither waiting, running nor a reference. */
+  removable: string[]
+  updated_at: string | null
+  nightly: BacktestNightly | null
+  why_no_nightly: string | null
+  /** The settings it differs in from the configurations of its strategy, with its value. */
+  distinct: { name: string; value: BacktestValue }[]
+}
+
+export interface BacktestConfigurations {
+  items: BacktestConfiguration[]
+  /** The newest day whose trading hours are over. */
+  day: string
+  market_open: boolean
+  most_days: number
+  /** Whether a Telegram bot is set; null when it cannot be told. */
+  telegram: boolean | null
+}
+
+/** What a nightly run said once it ended: its run is replaced by the next, its figures stay. */
+export interface BacktestNightlyLine {
+  run: string
+  name: string | null
+  made_at: string | null
+  from: string
+  to: string
+  days: number | null
+  trades: number | null
+  total_percent: number | null
+  profit_loss: number | null
+  beaten: number | null
+  worst_drawdown: number | null
+  win_rate: number | null
+  seconds: number | null
+  version: string | null
+  by_hand: boolean
+}
+
+export interface BacktestConfigurationPage {
+  configuration: BacktestConfiguration
+  history: BacktestNightlyLine[]
+  /** The configurations of the same strategy, each with the settings it differs in. */
+  related: {
+    id: string
+    name: string
+    count: number
+    latest: BacktestRunListed | null
+    differences: { name: string; here: BacktestValue; there: BacktestValue }[]
+  }[]
+  day: string
+  market_open: boolean
+  telegram: boolean | null
+}
+
+export interface BacktestConfigurationChange {
+  /** null: named after its runs again. */
+  name?: string | null
+  nightly?: { on?: boolean; from?: string; telegram?: boolean }
 }
 
 export interface BacktestTotalRange {

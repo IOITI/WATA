@@ -4,6 +4,9 @@
  */
 
 import type {
+  BacktestConfiguration,
+  BacktestConfigurationPage,
+  BacktestConfigurationRun,
   BacktestDay,
   BacktestField,
   BacktestOptions,
@@ -124,6 +127,41 @@ export function listedRun(changes: Partial<BacktestRunListed> = {}): BacktestRun
     stale: false,
     ...changes,
   }
+}
+
+export const CONFIGURATION_ID = '0123456789ab'
+
+/** A run of a configuration as its row and its page list it. */
+export function configurationRun(changes: Partial<BacktestConfigurationRun> = {}): BacktestConfigurationRun {
+  return {
+    id: RUN_ID, kind: 'run', name: 'Smoke EMA cross', from: '2026-10-14', to: '2026-10-16', state: 'done', error: null,
+    created_at: '2026-10-19T20:33:49Z', finished_at: '2026-10-19T20:33:54Z', seconds: 5, position: null,
+    total_percent: 5.21, trades: 3, days: 3, beaten: 85, profit_loss: 532.93, nightly: false, kept: [], derived: null,
+    remade_by: null, remade_from: null, stale: false, favourite: false, made_by: null, experiment: null, tags: [],
+    ...changes,
+  }
+}
+
+/** The configuration of the EMA cross's run: that run alone, its nightly re-run off. */
+export function configuration(changes: Partial<BacktestConfiguration> = {}): BacktestConfiguration {
+  const base = listedRun()
+  const latest = listedRun({ configuration: CONFIGURATION_ID, headline: { ...base.headline!, days: 3, repetitions: 100 } })
+  return {
+    id: CONFIGURATION_ID, strategy: 'a1b2c3d4e5f6', name: 'Smoke EMA cross', named: false, kind: 'run', indice: 'us100',
+    turbos: 'recorded', source: latest.source, chart: latest.chart, runs: [configurationRun()], count: 1, latest,
+    judging: [], tags: [], favourite: false, made_by: [], mine: true, experiments: [], removable: [RUN_ID],
+    updated_at: '2026-10-19T20:33:49Z',
+    nightly: {
+      on: false, from: '2026-10-14', since: null, telegram: false, most_days: 365, last: null, up_to_date: false,
+      next: { day: '2026-10-20', from: '2026-10-14', to: '2026-10-20', waits: null },
+    },
+    why_no_nightly: null, distinct: [],
+    ...changes,
+  }
+}
+
+export function configurationPage(changes: Partial<BacktestConfigurationPage> = {}): BacktestConfigurationPage {
+  return { configuration: configuration(), history: [], related: [], day: '2026-10-20', market_open: false, telegram: true, ...changes }
 }
 
 export function run(changes: Partial<BacktestRun> = {}): BacktestRun {
