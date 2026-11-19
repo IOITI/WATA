@@ -2,7 +2,7 @@
 
 ## v0.97.0 - Keep the loop going: the research queue, the autopilot, the brief
 
-**Release date:** not yet released
+**Release date:** 2026-11-19
 
 Each research task started blank: the journal was never put before it, its next steps were never read again, and a routine repeated the same goal. Now the research works through a queue of its own hypotheses, each task told what was tried before it:
 
@@ -21,7 +21,7 @@ Each research task started blank: the journal was never put before it, its next 
 
 ## v0.96.0 - Why it wins or loses: the trade autopsy, plateaus, and the day's caps
 
-**Release date:** not yet released
+**Release date:** 2026-11-19
 
 The agent's research changed scripts and settings for the losses of a day or two, and kept values whose neighbours lost (in_23 20: +112 %; 22: +0.8 %). Three readings of a run, for the AI agent and the operator alike:
 
@@ -36,7 +36,7 @@ The agent's research changed scripts and settings for the losses of a day or two
 
 ## v0.95.0 - Did it hold? Kept conclusions judged on later days
 
-**Release date:** not yet released
+**Release date:** 2026-11-19
 
 The AI agent iterates a lot: by 19 Nov 2026 its journal held 28 experiments and about 490 trials, 225 on the kernel/VWAP rule and 251 on the day's targets, almost all on the same 22 recorded days. Its newest kept candidate made +112 % there; one input a step away made +0.8 %, and the idea came from two losing days inside the period it was tested on. Nothing ever looked at a kept conclusion again, and a single run carried no correction for the hundreds of tries before it.
 
