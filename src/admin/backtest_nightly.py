@@ -119,8 +119,12 @@ def _template(runs: list[dict]) -> dict | None:
 
 
 def _latest(runs: list[dict]) -> dict | None:
-    """What a configuration's row shows: its newest finished run made by itself (a sweep's own, for a sweep's)."""
-    return next((run for run in runs if (run.get("status") or {}).get("state") == DONE and not _derived_kind(run)), None)
+    """
+    What a configuration's row shows: its newest finished run made by itself (a sweep's own, for a sweep's); for one of
+    runs made from another alone (whose base is a paper run, or gone), its newest finished one.
+    """
+    finished = [run for run in runs if (run.get("status") or {}).get("state") == DONE]
+    return next((run for run in finished if not _derived_kind(run)), finished[0] if finished else None)
 
 
 def _covers(runs: list[dict], first: date, last: date) -> bool:
@@ -134,10 +138,10 @@ def why_no_nightly(runs: list[dict]) -> str | None:
     """Why a configuration cannot be made again each evening; None when it can."""
     if _template(runs) is not None:
         return None
+    if all(_derived_kind(run) for run in runs):
+        return "Its runs were made from another run (a day on paper, or one removed): ask for a run of its own first"
     if all(run["kind"] == "sweep" for run in runs):
         return "A sweep is not made again each evening: run one of its combinations as a run of its own"
-    if all(_derived_kind(run) for run in runs):
-        return "Its runs were made from another that is gone: ask for a run of its own first"
     return "It has no finished run to make again yet"
 
 

@@ -250,7 +250,7 @@ export function ConfigurationPage() {
               {latest ? (
                 <Panel
                   title={`Its latest result: ${formatDay(latest.from)} to ${formatDay(latest.to)}`}
-                  description={`${daysBetween(latest.from, latest.to)} days asked${latest.nightly ? ', made again each evening' : ''}.`}
+                  description={`${daysBetween(latest.from, latest.to)} days asked${latest.nightly ? (item.nightly?.on ? ', made again each evening' : ', its last nightly run') : ''}.`}
                   action={
                     <ButtonLink to={`/backtests/${latest.id}`} size="sm" variant="outline">
                       Open the run

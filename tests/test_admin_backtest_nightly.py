@@ -562,6 +562,24 @@ def test_a_named_configuration_keeps_its_name_and_takes_its_runs_again_once_unna
         setup.nightly.update("ba9876543210", name="x")
 
 
+def test_a_stress_whose_run_is_gone_shows_itself_and_cannot_be_made_again(tmp_path, scripts, setup):
+    base = made(tmp_path, setup.backtests, pine(scripts))
+
+    async def stress():
+        return setup.backtests.stress(base)
+
+    stressed = asyncio.run(stress())["id"]
+    setup.backtests._waiting.clear()
+    (folder_of(tmp_path, stressed) / "summary.json").write_text(json.dumps({"made_with": {"code": "x"}}))
+    (folder_of(tmp_path, stressed) / "status.json").write_text(json.dumps({"state": DONE}))
+    setup.backtests.delete(base)
+
+    shown = setup.nightly.page(setup.backtests.configuration_of(stressed))["configuration"]
+
+    assert shown["latest"]["id"] == stressed and shown["judging"] == []
+    assert "made from another run" in shown["why_no_nightly"]
+
+
 def test_a_sweep_is_not_made_again_each_evening(tmp_path, scripts, setup):
     sweep = made(tmp_path, setup.backtests, pine(scripts, sweep={"axes": [
         {"kind": "setting", "name": "stoploss_percent", "values": [-5, -10]}]}))

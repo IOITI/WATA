@@ -1800,6 +1800,10 @@ def build_dev_context(work_dir: str) -> AdminContext:
         script_details=ScriptDetails(ta_scripts),
     )
     ctx.restarts = RestartPlans(ctx.service_control, FakeReadiness(), lambda: situation_of(ctx), events, poll_seconds=1)
+    # The backtest configurations, each made again after each trading day once switched on: into the fake's backtests.
+    from src.admin.backtest_nightly import NightlyBacktests
+
+    ctx.nightly = NightlyBacktests(backtests=backtests, queries=queries, config_path=config_path, notify=notifier)
     # The disk's hourly samples, 14 days of them made up as watadisk writes them (fake_disk.py).
     from src.admin.disk import DiskWatch
 
