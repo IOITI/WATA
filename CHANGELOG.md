@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.93.0 - The Disk page's cleanup, as it really is
+
+**Release date:** not released yet
+
+On 2026-11-19 the Disk page's "Clean up" removed one release folder and said "0 B given back by Docker", while it had offered six releases and up to 1.6 GB. Read on the server, four causes:
+
+- **The server's own nightly prune deleted WATA's images.** `/etc/cron.d/docker-image-prune`, which no package and no WATA script made (16 Apr 2026), runs `docker image prune -af --filter "until=24h"` at 00:43 UTC: every image no container ran was gone the next night, the rollback images of 0.84.0, 0.87.0 and 0.88.0 included, and an installed image whose apply waited more than a day would have been too. Changed on the server (the operator's go-ahead): it now leaves the images labelled `wata.content`, every image `docker_build.sh` makes, to watadeploy; the old line is in `/root/docker-image-prune.cron.bak-20261119`. Nothing of the repository installs it.
+- **What Docker gave back was not read.** On Docker 29 `docker builder prune` is buildx's, whose words end `Total: 1.527GB`; watadeploy read only `Total reclaimed space:`. Both are read now, and the page says a figure Docker did not give as not said, never as 0 B.
+- **The build cache kept for two weeks what no image held.** Without `--all` Docker never prunes what an image shares, so the age only ever decided the layers of images removed, the build contexts and node's image: a day now (`until=24h`). Python and the libraries stay in the images, and a build stays as fast.
+- **The page's list of releases was its own guess.** watadeploy also keeps the releases the last five applies moved from (for a rollback) and the one Traefik, PostgreSQL and RabbitMQ were made from (0.59.1). Its status now says which releases it would remove and why it keeps the others (`kept`, `prunable`, refreshed after each cleanup: the page still offered 0.82.0 once removed), the page offers exactly those and says what stays ("Kept: … (in use); 0.59.1 (holds the compose files traefik, postgres and rabbitmq were made from); …"). A release kept for a rollback whose image is gone is no longer kept: a rollback recreates a container on the image, with the newest release's files.
+
+And the Disk page counted 4 GB twice: with the containerd image store, `docker system df`'s build cache (5.5 GB) includes the layers it shares with the images, which the images count already. The hourly sample now takes the build cache as what no image holds (`docker buildx du`, 1.5 GB), the total beside it; on disk Docker held 8.6 GB, not 10.1.
+
+**On the live path:** nothing. watadeploy and the disk sampler run on the host (the install brings them); the admin's Disk page changes (admin1).
+
+**Verification status:** the whole Python suite, 4,253 passed and 51 skipped (the Pine runner's among them, Node 24 not on the PATH), in an environment built from `requirements.txt`; the admin interface's 1,511 tests, lint and typecheck. The sampler's new measure was run read-only on the server (1.527 GB of build cache no image holds, 4.017 GB shared, 5.544 GB in all). buildx's prune words are read from its source (`Total:\t%s`), not yet from a prune on the server: the install's cleanup is the first.
+
 ## v0.92.1 - The open Dependabot alerts
 
 **Release date:** 2026-11-18
