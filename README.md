@@ -965,7 +965,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 2. **Strategy**: one of two sources, plus the indice whose turbos are traded:
    - a Pine script: its version, its inputs and what each alert becomes, as on the Signal rules page;
    - "The signals WATA received": the journal of the period.
-3. **Period**: up to 92 days, with what was recorded each day (turbos, bars of the asset); or up to two years on [turbos made up from the index](#turbos-made-up-from-the-index).
+3. **Period**: up to 365 days (`admin.backtests_max_period_days`, 92 until v0.94.0), with what was recorded each day (turbos, bars of the asset); or up to two years on [turbos made up from the index](#turbos-made-up-from-the-index).
 4. **Settings**, for this run only; the live configuration is not touched:
    - **WATA's settings**, each beside its live value: which signals are taken, the day's target and limits, the stop, take-profit and trailing stop, the price range of the turbo bought, how much is bought;
    - **what a backtest assumes**: see [What is replayed](#what-is-replayed). What WATA's own orders took and cost (the delay from a signal to the trader, from an order to Saxo, the price paid against the quote recorded) is shown there, measured on the last three months, with "Use the measured values". **Order times and prices** "measured" goes further: each order of the run takes its time and its price drawn from WATA's own orders of those months (kept with the run), a long tail included, where "fixed" gives every order the same;
@@ -983,7 +983,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 - where its result comes from, by hour, weekday, direction, exit, confidence, holding time, turbo price and issuer, its place against the US open, and the kind of day (volatility, gap, trend, US open, macro news);
 - its days, trades and signals, as tables with CSV export.
 
-"Run again with changes" opens the form already filled in.
+"Run again with changes" opens the form already filled in, named "… (again)" once, however often it was asked again.
 
 **A day** shows the strategy's asset as the strategy read it:
 - every signal is marked where it was raised, crossed out when nothing was bought;
@@ -1005,6 +1005,10 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 
 **Compare** sets up to four finished runs side by side: their figures, the settings and inputs they did not share, and their curves on one chart.
 
+**Configurations** (since v0.94.0): the page opens on them. A configuration is every run of the same strategy and settings, whatever its days: the same script, version, inputs, alerts, asset and bars (or the same signals received, or the same rule's), the same turbos, and every setting as the run resolved it, the starting capital included (a setting at its default and `2` against `2.0` change nothing). A run asked again over a longer period is one more run of the same configuration; with another capital, another configuration, which its page names among "Same strategy, other settings". Each row shows the configuration's latest result and its verdict, and opens on its newest runs; its name leads to its page: its latest result, its nightly re-run, what each evening's run found, what it runs and what differs from WATA's settings now, every run of it (with "Remove the N older runs"), and the configurations of its strategy. A run's page names its configuration, and so does its trail. "Every run" (`?view=runs`) is the table of runs as before.
+
+**Made again each evening**: on a configuration's page, "Switch on" (or "Make it again each evening…" in a run's menu) opens its dialog: from which day, and a line on Telegram once each run ends. Once the market is closed by the live rules, its latest run is asked again with the same settings, script, inputs, turbo model and measured fills, over its days stretched to the day just over (`debriefed_day`: today once its trading hours are over): 365 days at most, then its first day moves on, held to `admin.backtests_max_period_days`. The signals WATA received, or a rule's, are read again for the new days. It waits behind every run you ask for, one nightly run at a time. Once it is done, the nightly run before it is removed, unless it is a favourite, a reference, stressed or checked, or carries the AI agent's verdict; runs you asked for yourself are never removed. One that fails leaves the one before and is asked again the next day. Each evening's result stays in the configuration's history ("What each evening found"), and the old address of a replaced run leads to its configuration. "Bring it up to date" asks it at once, at any hour, switched on or not.
+
 **The list of runs** says of each whether it can be believed (since v0.74.0): its **Verdict**, "Passes", "N open" or "Fails", from the same checks as the run's own page, how many of them passed, and on hover which failed or are open. A stress test or a model check names the run it judges instead. The list can be narrowed to the favourites, to a verdict, and to a tag (a tag in a row narrows it to that tag), with the state, the maker, the experiment, the turbos and the code, all kept in the address.
 
 **Favourites** (since v0.78.0): a run's star in the list, "Add to favourites" on its page, or several runs chosen in the list and "Add N to favourites" ("Remove N from favourites" once all of them are). "Favourites only" narrows the list to them (`?favourite=yes`). A favourite is kept with the run, on the server, so a phone and a computer see the same; a run made again on today's code stays a favourite, while a stress test, a model check or a sweep's cell made from it does not. Paper runs are kept by paper trading and have no star.
@@ -1023,7 +1027,7 @@ What it does on the server:
 - **It only reads the database.** The run reads the recorded turbos itself, one day at a time, through a read-only connection to PostgreSQL. A replay of the journal reads the journal through the admin's own connection.
 - **Its results are files**, one folder per run under `/app/wata/var/lib/backtests/runs/`. "Remove" deletes the folder.
 - **It is on with the admin interface.** `"backtests_enabled": false` in the `admin` section of `config.json` switches it off.
-- **It is not an operator action**: it changes nothing that trades, and is neither in the audit trail nor announced on Telegram.
+- **It is not an operator action**: it changes nothing that trades, and is neither in the audit trail nor announced on Telegram, but for a configuration's nightly run whose line on Telegram was asked for.
 
 ### What is replayed
 
@@ -1103,7 +1107,7 @@ When a strategy loses, is it broken, or in a drawdown it was always going to hav
 
 ### Paper trading reports, in Backtests
 
-**Backtests › Paper trading** gathers it all (since v0.53.0): for each rule in shadow, and for the signals WATA received, its days on paper (each a run of its own, from an account of its own) and its **report**, one backtest of every day since it began (a rule since it was made, the signals received since their first day on paper) to the last finished trading day, its account carried from one day to the next, every trade on its page as on any backtest's. The report is made again after each finished day, once the market is closed, without random entries (it is made every night); **"Make it now"** asks for it at once. Its address, `/backtests/paper/<rule>`, always opens the newest one, and the Signal rules page leads to it ("Since 14 Oct: +1.18 % in 9 trades"). The report of the signals received sets each paper trade beside WATA's real one. **"Run again with changes"** on a report makes an ordinary backtest of the same signals: the New backtest form takes **"The signals a rule raised"** as its source, for any period, with random entries and changed settings. A report covers 92 days at most (`admin.backtests_max_period_days`), and the newest 20,000 signals of a rule.
+**Backtests › Paper trading** gathers it all (since v0.53.0): for each rule in shadow, and for the signals WATA received, its days on paper (each a run of its own, from an account of its own) and its **report**, one backtest of every day since it began (a rule since it was made, the signals received since their first day on paper) to the last finished trading day, its account carried from one day to the next, every trade on its page as on any backtest's. The report is made again after each finished day, once the market is closed, without random entries (it is made every night); **"Make it now"** asks for it at once. Its address, `/backtests/paper/<rule>`, always opens the newest one, and the Signal rules page leads to it ("Since 14 Oct: +1.18 % in 9 trades"). The report of the signals received sets each paper trade beside WATA's real one. **"Run again with changes"** on a report makes an ordinary backtest of the same signals: the New backtest form takes **"The signals a rule raised"** as its source, for any period, with random entries and changed settings. A report covers 365 days at most (`admin.backtests_max_period_days`), and the newest 20,000 signals of a rule.
 
 ### The research lab
 
