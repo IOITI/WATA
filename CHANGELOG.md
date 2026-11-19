@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.93.1 - The research journal, read whole
+
+**Release date:** not released yet
+
+CI failed on v0.93.0 once, on Python 3.12 alone: `test_writes_from_several_threads_are_whole_lines` counted 159 trials of 160.
+
+- **The experiment journal is read under the lock its writes take** (`ExperimentJournal._events`, `src/research/experiments.py`). It was read without it: a line another thread was appending could be read in part, the read then failed, and that thread's run was never recorded. A last line without its end, another process's (the lab and the admin write the same journal) still being written, is left for the next read.
+
+**On the live path:** nothing. The admin (its MCP endpoint and AI agent) and the lab write the journal: admin1 is recreated. No backtest's code digest holds the file.
+
+**Verification status:** the journal's, the lab's, the MCP endpoint's and the code digest's tests, 123 passed; the failing test passed 60 times of 60 on the Mac before the fix (it fails only when a read meets a write).
+
 ## v0.93.0 - The Disk page's cleanup, as it really is
 
 **Release date:** 2026-11-19
