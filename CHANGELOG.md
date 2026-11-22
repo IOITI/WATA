@@ -2,7 +2,7 @@
 
 ## v0.99.0 - After going live: a rule's real trades judged, and its protections
 
-**Release date:** not released yet
+**Release date:** 2026-11-22
 
 Once a signal rule goes live, Edge Watch judged WATA's real trades only against a replay of the signals WATA received, which holds TradingView's signals, or none since TradingView was dropped: the edge guard had nothing to judge the rule's real trades against, and an old TradingView replay would have judged them against another strategy. And nothing said, before or after going live, which of WATA's protections were on: the account guard, the day's breakers and the edge guard are off unless set, and at 21.82 € with one safety turbo, an order buys a turbo of 10.91 € at most while the rule's range goes to 15 €.
 
@@ -17,7 +17,7 @@ Once a signal rule goes live, Edge Watch judged WATA's real trades only against 
 
 ## v0.98.0 - A rule live: its real trades beside its paper days and its backtest
 
-**Release date:** not released yet
+**Release date:** 2026-11-22
 
 Once a signal rule goes live, nothing set what WATA really did beside what its paper days and its backtest said of the same days: its paper days stopped at go-live, its backtest was a configuration of its own, and the gap between them had no causes. Rule `f13986be5e9b` (Kernel VWAP resume guards, R60 on Capital.com's US100) is about to go live on an account of 21.82 €, its backtest configuration `2bb6f8514b16` at 100 € and its paper days at 1,000 €. Now each rule's days are set side by side, and the gap is said by its causes:
 
