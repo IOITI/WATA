@@ -197,3 +197,16 @@ def test_a_day_is_shared_with_how_it_traded_on_paper(agent):
     text = asyncio.run(_shared_trading(Session(), {"kind": "day", "id": "2026-10-28", "label": "the day"}, 0,
                                        "No entry signal that day."))
     assert text.endswith("traded on paper under the live settings:\nNo entry signal that day.")
+
+
+def test_a_day_shares_each_live_rule_s_real_trades_beside_its_paper_day_and_its_backtest():
+    rules = json.dumps({"rules": [{"id": "f13986be5e9b", "name": "Kernel R60", "mode": "live"},
+                                  {"id": "0123456789ab", "name": "EMA", "mode": "shadow"}]})
+    text, asked = shared({"kind": "day", "id": "2026-11-24", "label": "the day"}, {"rule_list": rules},
+                         offered=("rule_live_check",))
+
+    assert asked[3:] == [("rule_list", {}), ("rule_live_check", {"rule_id": "f13986be5e9b", "part": "day", "day": "2026-11-24"})]
+    assert "The live rule 'Kernel R60' (f13986be5e9b): its real trades beside its paper day and its backtest:" in text
+    # Without the tool (an agent of before), no rule is read.
+    _, asked = shared({"kind": "day", "id": "2026-11-24", "label": "the day"}, {"rule_list": rules}, offered=())
+    assert [name for name, _ in asked] == ["data_trades", "data_signals", "data_orders"]

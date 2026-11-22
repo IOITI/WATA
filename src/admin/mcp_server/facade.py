@@ -123,6 +123,22 @@ class ForwardReads:
     board: Callable[[], list] = lambda: []
 
 
+def _live_check_reads(service) -> "LiveCheckReads | None":
+    if service is None:
+        return None
+    return LiveCheckReads(summary=service.summary, day=service.day)
+
+
+@dataclass
+class LiveCheckReads:
+    """
+    What the tools may read of the live check (src/admin/live_check_service.py): a rule's days side by side, and one
+    day whole. Never the service itself, which links configurations and asks for runs.
+    """
+    summary: Callable[..., Any]
+    day: Callable[..., Any]
+
+
 @dataclass
 class ResearchServices:
     version: str
@@ -164,6 +180,8 @@ class ResearchServices:
     rule_checks: Any = None
     # The experiments' kept conclusions judged on the days after them: started by a conclusion, read here.
     forward: ForwardReads | None = None
+    # A rule's real trades, paper days and backtest side by side: read here, never linked nor asked.
+    live_check: LiveCheckReads | None = None
     clock: Callable[[], float] = field(default=time.time)
     # A request's idempotency key and the run it made: a request sent again is not queued twice.
     asked: dict = field(default_factory=dict)
@@ -197,6 +215,7 @@ class ResearchServices:
             details=getattr(ctx, "script_details", None),
             rule_checks=getattr(ctx, "rule_checks", None),
             forward=_forward_reads(getattr(ctx, "forward", None)) if ctx.settings.backtests_enabled else None,
+            live_check=_live_check_reads(getattr(ctx, "live_check", None)) if ctx.settings.backtests_enabled else None,
         )
 
     def service(self):

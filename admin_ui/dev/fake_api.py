@@ -55,6 +55,7 @@ import time
 import types
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
 # The database layer imports asyncpg, which this server never uses.
 if "asyncpg" not in sys.modules:
@@ -94,6 +95,7 @@ from src.admin.mcp_server.calls import CallLog
 from src.admin.mcp_server.pause import McpPause
 from src.admin.mcp_server.tokens import TokenStore
 from src.admin.order_requests import refusal_runs, requests_by_order
+from src.admin.live_check_service import LiveCheck
 from src.admin.paper import PaperTrading
 from src.admin.release import Release
 from src.admin.ta_rules import RuleStore
@@ -813,9 +815,46 @@ class FakeQueries:
 
     async def closed_positions(self, start=None, end=None):
         return [
-            position for position in self.positions
+            position for position in [*self.positions, *self.live_rule_positions(start, end)]
             if position["position_status"] == "Closed" and in_range(position["execution_time_open"], start, end)
         ]
+
+    def live_rule_positions(self, start=None, end=None) -> list[dict]:
+        """
+        The positions the made-up live rule's executed signals opened (fake_ta.py names them, never kept elsewhere): the
+        rule page's live check sets them beside its paper days, a little worse than paper would have done.
+        """
+        if self.ta_engine is None:
+            return []
+        found = []
+        for signal in self.ta_engine.signals(start, end, None, 2000):
+            trader = signal.get("trader") or {}
+            if trader.get("outcome") != "executed" or not trader.get("position_id"):
+                continue
+            rng = random.Random(trader["position_id"])
+            opened = signal["bar_closed_at"] + timedelta(seconds=rng.uniform(3, 9))
+            open_price = round(rng.uniform(4.5, 9.0), 2)
+            percent = round(rng.gauss(0.8, 4.0), 2)
+            close_price = round(open_price * (1 + percent / 100), 2)
+            found.append({
+                "action": signal["action"], "position_id": trader["position_id"], "position_status": "Closed",
+                "position_open_price": open_price, "position_close_price": close_price,
+                "position_total_performance_percent": percent, "position_max_performance_percent": max(percent, 0) + 1.2,
+                "position_min_performance_percent": min(percent, 0) - 0.8, "execution_time_open": opened,
+                "execution_time_close": opened + timedelta(minutes=rng.randint(4, 40)),
+                "position_close_reason": rng.choice(CLOSE_REASONS), "instrument_name": "NASDAQ 100 Turbo Long",
+                "instrument_uic": 62000000 + rng.randint(0, 3),
+            })
+        return found
+
+    async def balance_before(self, day):
+        """The account the morning of a day: what a live rule's paper day starts from (the same made-up account)."""
+        return await self.last_balance()
+
+    async def engine_starts(self, start, end):
+        """The engine started three hours ago, as its state says; its ticks are kept since then."""
+        started = datetime.now(timezone.utc) - timedelta(hours=3)
+        return {"starts": [started] if start <= started < end else [], "kept_since": started}
 
     async def execution_rows(self, start, end):
         """
@@ -1737,6 +1776,14 @@ class FakePaperTrading(PaperTrading):
         return False
 
 
+class FakeLiveCheck(LiveCheck):
+    """The live check's calibrated run at any hour: the fake's made-up market is closed whenever it is due."""
+
+    async def catch_up(self, now: float | None = None) -> int:
+        with patch("src.admin.live_check_service.market_is_open", lambda config, moment: False):
+            return await super().catch_up(now)
+
+
 class FakeSaxo:
     def __init__(self):
         self.expired = os.getenv("FAKE_SAXO_EXPIRED") == "1"
@@ -1962,6 +2009,9 @@ def build_dev_context(work_dir: str) -> AdminContext:
     ctx.nightly = NightlyBacktests(backtests=backtests, queries=queries, config_path=config_path, notify=notifier)
     # Each kept conclusion of the journal judged on later days: made up (FakeForwardChecks), one seeded.
     ctx.forward = FakeForwardChecks(backtests.journal)
+    # Each rule's real trades beside its paper days and its backtest; its calibrated run asked at any hour.
+    ctx.live_check = FakeLiveCheck(root=settings.backtests_path, backtests=backtests, queries=queries,
+                                   rules=RuleStore(ta_scripts), config_path=config_path, nightly=ctx.nightly)
     # The disk's hourly samples, 14 days of them made up as watadisk writes them (fake_disk.py).
     from src.admin.disk import DiskWatch
 

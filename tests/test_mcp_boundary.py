@@ -109,6 +109,7 @@ CALLS = {
     "backtest_compare": {"run_ids": ["20261019-200000-abcdef", "20261019-200001-abcdef"]},
     "turbo_model": {},
     "rule_list": {}, "edge_watch": {}, "rule_compare": {"rule_id": "0123456789ab", "day": "2026-10-13"},
+    "rule_live_check": {"rule_id": "0123456789ab"},
     "exp_new": {"title": "T", "hypothesis": "H", "family": "F"}, "exp_get": {},
     "exp_conclude": {"experiment_id": "nothere", "verdict": "kept", "notes": "n"},
     "exp_trials": {"experiment_id": "nothere", "trials": 1, "note": "n"},

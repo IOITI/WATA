@@ -182,6 +182,10 @@ def seed_details(details: ScriptDetails, store: ScriptStore) -> None:
 LET_GO = "the runner's heap would be 64 % full at its next check, past the 60 % it may be at holding runs"
 PAPER_RULE_ID = "00000000a1a1"
 PAPER_RULE_DAYS = 10
+# The live rule, made with the one in shadow and live for its last two days (the made-up engine sends those): the same
+# id at every start, its days on paper and its live check kept with the fake's backtests.
+LIVE_RULE_ID = "00000000b2b2"
+LIVE_RULE_DAYS = 2
 
 
 def seed_rule(store: ScriptStore) -> None:
@@ -208,6 +212,7 @@ def seed_rule(store: ScriptStore) -> None:
     }
     made = rules.create(fields, rules.load()["revision"])
     rules.set_mode(made["rule"]["id"], LIVE, made["revision"])
+    live = made["rule"]["id"]
     rules.create(
         {**fields, "name": "Claude · EMA cross 10 s", "bars": {"type": "time", "timeframe": "10S"}, "indice": "us500"},
         rules.load()["revision"], made_by="claude",
@@ -216,9 +221,12 @@ def seed_rule(store: ScriptStore) -> None:
     made = (datetime.now(timezone.utc) - timedelta(days=PAPER_RULE_DAYS)).isoformat()
     with open(rules.path, encoding="utf-8") as in_file:
         listed = json.load(in_file)
+    went_live = (datetime.now(timezone.utc) - timedelta(days=LIVE_RULE_DAYS)).isoformat()
     for rule in listed["rules"]:
         if rule["id"] == shadow["id"]:
             rule.update(id=PAPER_RULE_ID, created_at=made, updated_at=made, mode_changed_at=made)
+        elif rule["id"] == live:
+            rule.update(id=LIVE_RULE_ID, created_at=made, updated_at=made, mode_changed_at=went_live)
     with open(rules.path, "w", encoding="utf-8") as out_file:
         json.dump(listed, out_file, indent=2)
 

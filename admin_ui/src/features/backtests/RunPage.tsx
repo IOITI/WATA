@@ -76,7 +76,7 @@ const ANCHORED = 'scroll-mt-14'
 function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
   const summary = run.summary
   if (run.status.state !== 'done' || !summary) return []
-  const judged = !run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of
+  const judged = !run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of && !run.calibrated_of
   if (run.kind === 'sweep') {
     const choosing = !run.stress_of && !run.noise_of && (choiceTrust(summary).length > 0 || summary.walk_forward !== undefined)
     return [
@@ -431,6 +431,17 @@ export function RunPage() {
                     The candidate it judges on later days
                   </RunPeekLink>
                 )}
+                {run.calibrated_of && <Badge tone="neutral">Calibrated on live</Badge>}
+                {run.calibrated_of && (
+                  <RunPeekLink id={run.calibrated_of} className="text-sm font-medium underline-offset-4 hover:underline">
+                    The run it makes again with what live measured
+                  </RunPeekLink>
+                )}
+                {run.calibrated && (
+                  <Link to={`/ta/signals/${run.calibrated.rule}#live-check`} className="text-sm font-medium underline-offset-4 hover:underline">
+                    Its rule’s live check
+                  </Link>
+                )}
                 {run.forward && (
                   <Link
                     to={`/backtests/experiments/forward/${run.forward.check}`}
@@ -566,7 +577,7 @@ export function RunPage() {
                   <div id="breakdowns" className={ANCHORED}>
                     <BreakdownsPanel runId={run.id} />
                   </div>
-                  {!run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of && !run.paper && (
+                  {!run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of && !run.calibrated_of && !run.paper && (
                     <>
                       <div id="autopsy" className={ANCHORED}>
                         <AutopsyPanel runId={run.id} runName={run.name} family={run.research?.family?.name ?? null} />

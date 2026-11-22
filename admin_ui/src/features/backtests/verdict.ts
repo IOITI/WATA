@@ -369,11 +369,13 @@ function checksOf(evidence: Evidence | null, derived: Derived): RunCheck[] {
 }
 
 /**
- * Whether a run is judged at all: a stress sweep (of either kind), a model check or a forward check's run judges
- * another run; a run not done, nothing yet.
+ * Whether a run is judged at all: a stress sweep (of either kind), a model check, a forward check's run or a calibrated
+ * one judges another run (or live); a run not done, nothing yet.
  */
-export function isJudged(run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'noise_of' | 'model_check_of' | 'forward_of'>): boolean {
-  return run.status.state === 'done' && !run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of
+export function isJudged(
+  run: Pick<BacktestRunListed, 'status' | 'stress_of' | 'noise_of' | 'model_check_of' | 'forward_of' | 'calibrated_of'>,
+): boolean {
+  return run.status.state === 'done' && !run.stress_of && !run.noise_of && !run.model_check_of && !run.forward_of && !run.calibrated_of
 }
 
 /**

@@ -290,7 +290,9 @@ Write the debrief of this trading day for the operator, who reads it once the ma
 1. What happened: each trade (its direction, turbo, result and how it ended), the signals received and what \
 became of each, what Saxo refused and why, and how the day traded on paper compares, if it was.
 2. What stands out: a fill far from its quote, an exit on a stale quote, a refusal that cost an entry, a signal a \
-rule refused, a day far from its paper twin. Say when nothing does.
+rule refused, a day far from its paper twin. A live rule's real trades come beside its paper day and its backtest \
+(rule_live_check): say where the gap went by its bridge (signals the engine did not raise, a fate, another turbo, \
+the entry price, the exit's moment or fill), in points. Say when nothing does.
 3. What to look at next, if anything.
 Start with one sentence that says the day, and end by setting the day's verdict (set_verdict, day:<the day>): the \
 Report page shows it. Short, the figures as your tools give them; start no backtest and propose nothing: this is an \

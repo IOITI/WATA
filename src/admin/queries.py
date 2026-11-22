@@ -1591,6 +1591,31 @@ class AdminQueries:
         )
         return [_clean_row(row) for row in rows]
 
+    async def balance_before(self, day: date) -> float | None:
+        """
+        The account's value at the last daily report before ``day``: what it held that morning, which a live rule's
+        paper day starts from (src/admin/paper.py).
+        """
+        rows = await self._fetch_optional(
+            "SELECT total_value FROM account_balance_history WHERE total_value IS NOT NULL AND date_day < $1 "
+            "ORDER BY date_day DESC LIMIT 1",
+            day,
+        )
+        return float(rows[0]["total_value"]) if rows else None
+
+    async def engine_starts(self, start: datetime, end: datetime) -> dict:
+        """
+        When the TA engine started between two moments (the first tick after a start says so in its figures), and since
+        when its ticks are kept: a bar's alert it loaded as history was never sent (src/admin/live_check.py).
+        """
+        rows = await self._fetch_optional(
+            "SELECT tick_at FROM ta_engine_tick WHERE tick_at >= $1 AND tick_at < $2 AND figures->'first' IS NOT NULL "
+            "ORDER BY tick_at ASC LIMIT 500",
+            start, end,
+        )
+        kept = await self._fetch_optional("SELECT min(tick_at) AS kept_since FROM ta_engine_tick")
+        return {"starts": [row["tick_at"] for row in rows], "kept_since": kept[0]["kept_since"] if kept else None}
+
     # ── positions and orders ──
 
     def _date_range_conditions(self, column: str, start: date | None, end: date | None, args: list) -> list[str]:

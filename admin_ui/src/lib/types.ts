@@ -2460,6 +2460,12 @@ export interface BacktestRunListed {
   /** A run's twin without the day's caps: the run it decomposes. */
   decomposes?: string | null
   forward?: { check: string } | null
+  /**
+   * A run made again with what a live rule's trades measured (src/admin/live_check_service.py): the run it was made
+   * from, and the rule and values it was calibrated with. Not judged itself; absent before v0.98.0.
+   */
+  calibrated_of?: string | null
+  calibrated?: { rule: string; values: LiveCheckValues } | null
   /** What the experiment journal adds to a run of one of its experiments (src/admin/run_research.py), once worked out. */
   research?: BacktestResearch | null
 }
@@ -2519,7 +2525,7 @@ export interface BacktestConfigurationRun {
   nightly: boolean
   kept: BacktestKeptReason[]
   /** A run made from another of the configuration: what it is of it. */
-  derived: 'stress' | 'noise' | 'model_check' | 'forward' | null
+  derived: 'stress' | 'noise' | 'model_check' | 'forward' | 'calibrated' | null
   remade_by: string | null
   remade_from: string | null
   stale?: boolean | null
@@ -5271,4 +5277,241 @@ export interface DiskCleanupOffer {
 export interface DiskCleanups {
   items: DiskCleanupOffer[]
   actions_enabled: boolean
+}
+
+
+// ── A signal rule's days side by side: its real trades, its paper days, its backtest and the calibrated one ──
+// (src/admin/live_check.py, src/admin/live_check_service.py; GET /api/ta/rules/{id}/live-check)
+
+export type LiveCheckTrack = 'backtest' | 'calibrated' | 'paper' | 'live'
+
+export interface LiveCheckFigures {
+  trades: number
+  /** The trades' results summed, in points of the turbo: what the bridge adds up. */
+  sum: number
+  /** The same results compounded, as a day's result is. */
+  compounded: number
+  entry_signals: number
+  unkeyed: number
+}
+
+export interface LiveCheckBucket {
+  id: string
+  label: string
+  points: number
+  trades: number
+  /** The keys of its trades: a day's own answer only. */
+  keys?: string[]
+}
+
+export interface LiveCheckSegment {
+  from: LiveCheckTrack
+  to: LiveCheckTrack
+  /** The days summed: over several days only. */
+  days?: number
+  start: { trades: number; sum: number; compounded?: number }
+  end: { trades: number; sum: number; compounded?: number }
+  buckets: LiveCheckBucket[]
+}
+
+export interface LiveCheckBridge {
+  to_paper: LiveCheckSegment | null
+  to_live: LiveCheckSegment | null
+  calibrated: Record<'backtest' | 'calibrated' | 'live', { trades: number; sum: number; compounded: number }> | null
+}
+
+export interface LiveCheckAgreement {
+  same_bar: number
+  other_bar: number
+  not_replayed: number
+  not_raised: number
+}
+
+export interface LiveCheckDayLine {
+  day: string
+  present: LiveCheckTrack[]
+  figures: Partial<Record<LiveCheckTrack, LiveCheckFigures>>
+  agreement: LiveCheckAgreement | null
+  runs: Partial<Record<'backtest' | 'calibrated' | 'paper', string | null>>
+  gap: { against: LiveCheckTrack; points: number } | null
+  bridge: LiveCheckBridge
+}
+
+export interface LiveCheckStrategyCheck {
+  id: string
+  state: 'pass' | 'fail' | 'note'
+  detail: string
+}
+
+export interface LiveCheckStrategy {
+  same: boolean
+  checks: LiveCheckStrategyCheck[]
+}
+
+export interface LiveCheckMeasure {
+  count: number
+  median: number | null
+  p90: number | null
+}
+
+export interface LiveCheckValues {
+  signal_delay_seconds?: number
+  execution?: string
+  capital?: number
+}
+
+export interface LiveCheckCalibration {
+  values: LiveCheckValues
+  template: { signal_delay_seconds?: number | null; execution?: string | null; capital?: number | null }
+  measured: {
+    signal_delay_seconds: LiveCheckMeasure
+    entry_slippage_percent: LiveCheckMeasure
+    exit_slippage_percent: LiveCheckMeasure
+    trades: number
+  }
+  said: string[]
+  template_run: string
+  orders?: { from: string | null; to: string | null; measures: Record<string, number> }
+}
+
+export interface LiveCheckHistoryLine {
+  at: string
+  template: string
+  values: LiveCheckValues
+  template_values: LiveCheckCalibration['template']
+  measured: LiveCheckCalibration['measured']
+  said: string[]
+  run: string | null
+  error?: string | null
+}
+
+export interface LiveCheckTotals {
+  tracks: Partial<Record<LiveCheckTrack, { days: number; trades: number; sum: number; mean: number | null; compounded: number }>>
+  to_paper: LiveCheckSegment | null
+  to_live: LiveCheckSegment | null
+  calibrated:
+    | ({ days: number; closed_percent: number | null } & Record<'backtest' | 'calibrated' | 'live', { trades: number; sum: number }>)
+    | null
+  agreement: (LiveCheckAgreement & { days: number; raised: number; same_bar_percent: number | null }) | null
+}
+
+export interface LiveCheckRule {
+  id: string
+  name: string
+  mode: TaRule['mode']
+  live_since?: string | null
+  bars: TaRule['bars']
+}
+
+export interface LiveCheck {
+  rule: LiveCheckRule
+  link: { configuration: string; set_at: string; found: boolean; nightly: { on: boolean; from: string | null } } | null
+  strategy: LiveCheckStrategy | null
+  template: { id: string; name: string | null; from: string | null; to: string | null; headline: BacktestHeadline | null; stale?: boolean } | null
+  calibrated: {
+    run: string | null
+    template: string
+    values: LiveCheckValues
+    asked_at: string
+    day?: string
+    error: string | null
+    settled: boolean
+    state: BacktestState | null
+  } | null
+  period: { from: string; to: string }
+  /** False when the database could not be read: the live side is then unknown. */
+  database: boolean
+  tolerance_seconds: number
+  days: LiveCheckDayLine[]
+  summary: LiveCheckTotals
+  calibration: { now: LiveCheckCalibration | null; history: LiveCheckHistoryLine[] }
+}
+
+export interface LiveCheckSignalSide {
+  fate?: string
+  reason?: string | null
+  rule?: string | null
+  mode?: string
+  position_id?: string
+  engine?: { outcome: string | null; raised_seconds: number | null; sent_seconds: number | null }
+  trader?: { outcome: string | null; reason: string | null; decided_seconds: number | null } | null
+}
+
+export interface LiveCheckSignal {
+  key: string
+  at: string | null
+  closed_at: string | null
+  action: string | null
+  title: string | null
+  /** A signal the engine raised at another bar than the replay, paired within the tolerance. */
+  near: { key: string; seconds: number } | null
+  backtest?: LiveCheckSignalSide | null
+  calibrated?: LiveCheckSignalSide | null
+  paper?: LiveCheckSignalSide | null
+  live?: LiveCheckSignalSide | null
+  why_not_raised: string | null
+}
+
+export interface LiveCheckTrade {
+  key: string | null
+  id: string | number | null
+  direction: string | null
+  turbo: { uic: number | null; description: string | null }
+  decided_at: string | null
+  filled_at: string | null
+  entry_price: number | null
+  exit_at: string | null
+  exit_price: number | null
+  exit_reason: string | null
+  exit_group: string
+  result: number | null
+  best: number | null
+  worst: number | null
+  units: number | null
+  flags: string[]
+  /** A real trade's: the price its sale was decided on, the ask it was sized on, from its bar's close to its order. */
+  decided_price?: number | null
+  decided_on?: string | null
+  ask_decided?: number | null
+  order_seconds?: number | null
+  entry_slippage_percent?: number | null
+  exit_slippage_percent?: number | null
+  delay_percent?: number | null
+}
+
+export interface LiveCheckTradeRow {
+  key: string
+  at: string | null
+  action: string | null
+  title: string | null
+  near: { key: string; seconds: number } | null
+  same_turbo: boolean | null
+  backtest?: LiveCheckTrade | null
+  calibrated?: LiveCheckTrade | null
+  paper?: LiveCheckTrade | null
+  live?: LiveCheckTrade | null
+}
+
+export interface LiveCheckDay {
+  rule: LiveCheckRule
+  database: boolean
+  day: string
+  present: LiveCheckTrack[]
+  tolerance_seconds: number
+  figures: Partial<Record<LiveCheckTrack, LiveCheckFigures>>
+  signals: LiveCheckSignal[]
+  trades: LiveCheckTradeRow[]
+  bridge: LiveCheckBridge
+  agreement: LiveCheckAgreement | null
+  runs: Partial<Record<'backtest' | 'calibrated' | 'paper', string | null>>
+}
+
+export interface LiveCheckCandidate {
+  configuration: string
+  run: string
+  name: string | null
+  from: string | null
+  to: string | null
+  headline: BacktestHeadline | null
+  strategy: LiveCheckStrategy
 }

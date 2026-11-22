@@ -149,6 +149,10 @@ import type {
   TaSignal,
   TaVersion,
   LivePaper,
+  LiveCheck,
+  LiveCheckCandidate,
+  LiveCheckDay,
+  LiveCheckStrategy,
   EdgeOwner,
   EdgeWatchList,
   PositionChartRefs,
@@ -654,6 +658,21 @@ export const api = {
   /** A day of a rule with its script as the engine ran it, and its signals of that engine day. */
   taRuleDay: (id: string, day: string) =>
     request<RuleDayIndicator>('GET', `/api/ta/rules/${encodeURIComponent(id)}/days/${encodeURIComponent(day)}/indicator`),
+  /** A rule's real trades, paper days and linked backtest side by side over a period (the last 92 days by default). */
+  liveCheck: (id: string, period: DateRangeParams = {}) =>
+    request<LiveCheck>('GET', `/api/ta/rules/${encodeURIComponent(id)}/live-check${query({ from: period.from, to: period.to })}`),
+  /** One day of them whole: each signal and each trade of each track, and the day's bridge. */
+  liveCheckDay: (id: string, day: string) =>
+    request<LiveCheckDay>('GET', `/api/ta/rules/${encodeURIComponent(id)}/live-check/days/${encodeURIComponent(day)}`),
+  /** The configurations whose runs play the rule's strategy: what may be linked to it as its backtest. */
+  liveCheckCandidates: (id: string) =>
+    request<{ items: LiveCheckCandidate[] }>('GET', `/api/ta/rules/${encodeURIComponent(id)}/live-check/candidates`),
+  /** A configuration linked to the rule as its backtest (refused when its runs play another strategy). */
+  linkLiveCheck: (id: string, configuration: string) =>
+    request<{ configuration: string; strategy: LiveCheckStrategy }>(
+      'PUT', `/api/ta/rules/${encodeURIComponent(id)}/live-check/backtest`, { body: { configuration } },
+    ),
+  unlinkLiveCheck: (id: string) => request<{ ok: true }>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}/live-check/backtest`),
 
   // ── Claude's research through the MCP endpoint: watched, paused, its tokens revoked ──
   mcp: () => request<McpState>('GET', '/api/mcp'),

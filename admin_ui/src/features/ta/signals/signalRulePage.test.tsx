@@ -6,10 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
-import type { BacktestDayIndicator, BacktestPaper, RuleCheckSummary, RuleDayIndicator, Session, TaEngine, TaRule, TaRuleHistory, TaScriptSummary, TaSignal } from '@/lib/types'
+import type {
+  BacktestDayIndicator, BacktestPaper, LiveCheck, LiveCheckDay, LiveCheckSegment, RuleCheckSummary, RuleDayIndicator, Session, TaEngine, TaRule,
+  TaRuleHistory, TaScriptSummary, TaSignal,
+} from '@/lib/types'
 import { resetVela, velas } from '@/test/fakeVela'
 import { WithTrail } from '@/test/WithTrail'
 
+import { LiveCheckDayPage } from './LiveCheckDayPage'
 import { firstDay, openingDay, steps } from './rulePageModel'
 import { SignalRulePage } from './SignalRulePage'
 
@@ -109,8 +113,82 @@ function dayOf(day: string): RuleDayIndicator {
 const opening = openingDay(rule(), Date.now(), 'Europe/Paris')!
 const before = steps(opening, firstDay(rule(), 'Europe/Paris'), opening).before!
 
+const TO_PAPER: LiveCheckSegment = {
+  from: 'backtest', to: 'paper', days: 3, start: { trades: 4, sum: 12.1 }, end: { trades: 4, sum: 11.6 },
+  buckets: [{ id: 'same_signal', label: 'Same signal, other fills', points: -0.5, trades: 4 }],
+}
+const TO_LIVE: LiveCheckSegment = {
+  from: 'paper', to: 'live', days: 3, start: { trades: 4, sum: 11.6 }, end: { trades: 3, sum: 4.1 },
+  buckets: [
+    { id: 'not_traded_live', label: 'Not traded live', points: -3.04, trades: 1 },
+    { id: 'exit_fill', label: 'Exit fill', points: -4.46, trades: 3 },
+  ],
+}
+const FIGURES = { trades: 1, sum: 3.04, compounded: 3.04, entry_signals: 1, unkeyed: 0 }
+const CALIBRATED_RUN = '20261021-213000-abcdef'
+
+function liveCheck(changes: Partial<LiveCheck> = {}): LiveCheck {
+  return {
+    rule: { id: ID, name: 'Cross on US100', mode: 'live', live_since: '2026-10-21T08:00:00Z', bars: { type: 'time', timeframe: '1' } },
+    link: { configuration: '2bb6f8514b16', set_at: '2026-10-21T08:00:00Z', found: true, nightly: { on: false, from: null } },
+    strategy: { same: true, checks: [{ id: 'script', state: 'pass', detail: 'The same source' }] },
+    template: { id: '20261119-050828-c18c49', name: 'v4: room to the session extreme', from: '2026-10-15', to: '2026-10-21', headline: null },
+    calibrated: { run: CALIBRATED_RUN, template: '20261119-050828-c18c49', values: { capital: 21.82 }, asked_at: '2026-10-21T21:30:00Z',
+      error: null, settled: true, state: 'done' },
+    period: { from: '2026-10-19', to: '2026-10-21' }, database: true, tolerance_seconds: 120,
+    days: [{
+      day: '2026-10-21', present: ['backtest', 'paper', 'live'], agreement: { same_bar: 1, other_bar: 0, not_replayed: 0, not_raised: 0 },
+      runs: { backtest: '20261119-050828-c18c49', paper: '20261021-231000-aaaaaa' }, gap: { against: 'live', points: -1.61 },
+      figures: { backtest: FIGURES, paper: FIGURES, live: { ...FIGURES, sum: 1.43, compounded: 1.43 } },
+      bridge: { to_paper: TO_PAPER, to_live: TO_LIVE, calibrated: null },
+    }],
+    summary: {
+      tracks: { backtest: { days: 3, trades: 4, sum: 12.1, mean: 3.03, compounded: 12.6 }, paper: { days: 3, trades: 4, sum: 11.6, mean: 2.9, compounded: 12 },
+        live: { days: 3, trades: 3, sum: 4.1, mean: 1.37, compounded: 4.2 } },
+      to_paper: TO_PAPER, to_live: TO_LIVE, calibrated: null,
+      agreement: { days: 3, same_bar: 4, other_bar: 0, not_replayed: 0, not_raised: 1, raised: 4, same_bar_percent: 100 },
+    },
+    calibration: {
+      now: {
+        values: { execution: 'measured', capital: 21.82 }, template: { signal_delay_seconds: 3, execution: 'fixed', capital: 100 },
+        measured: { signal_delay_seconds: { count: 3, median: 4.2, p90: 6 }, entry_slippage_percent: { count: 3, median: 0.6, p90: 1 },
+          exit_slippage_percent: { count: 3, median: 0.3, p90: 0.4 }, trades: 3 },
+        said: ['The signal’s delay keeps the backtest’s 3 s: 3 of 10 live entries measured'], template_run: '20261119-050828-c18c49',
+        orders: { from: '2026-07-22', to: '2026-10-21', measures: { order_seconds: 40, slippage_buy: 22, slippage_sell: 20 } },
+      },
+      history: [],
+    },
+    ...changes,
+  }
+}
+
+function liveCheckDay(): LiveCheckDay {
+  const trade = { key: '1', id: 1, direction: 'long', turbo: { uic: 555, description: 'Turbo 555' }, decided_at: null,
+    filled_at: '2026-10-21T08:31:03Z', entry_price: 5, exit_at: '2026-10-21T09:00:00Z', exit_price: 5.15, exit_reason: 'Daily profit target',
+    exit_group: 'Daily profit target', result: 3, best: 3, worst: -1, units: 3, flags: [] }
+  return {
+    rule: liveCheck().rule, database: true, day: '2026-10-21', present: ['backtest', 'paper', 'live'], tolerance_seconds: 120,
+    figures: liveCheck().days[0].figures, bridge: { to_paper: TO_PAPER, to_live: TO_LIVE, calibrated: null }, agreement: null,
+    runs: { backtest: '20261119-050828-c18c49', paper: '20261021-231000-aaaaaa' },
+    signals: [
+      { key: '1', at: '2026-10-21T08:30:00Z', closed_at: '2026-10-21T08:31:00Z', action: 'long', title: 'Up', near: null,
+        backtest: { fate: 'executed' }, paper: { fate: 'executed' },
+        live: { fate: 'executed', engine: { outcome: 'sent', raised_seconds: 1, sent_seconds: 1.3 }, trader: { outcome: 'executed', reason: null, decided_seconds: 9 } },
+        why_not_raised: null },
+      { key: '2', at: '2026-10-21T10:00:00Z', closed_at: '2026-10-21T10:01:00Z', action: 'short', title: 'Down', near: null,
+        backtest: { fate: 'executed' }, paper: null, live: { fate: 'not_sent', reason: 'Not alone on us100' }, why_not_raised: null },
+    ],
+    trades: [{
+      key: '1', at: '2026-10-21T08:30:00Z', action: 'long', title: 'Up', near: null, same_turbo: false,
+      backtest: trade, paper: trade, live: { ...trade, id: '7712345', turbo: { uic: 556, description: 'Turbo 556' }, entry_price: 5.05,
+        result: 1.43, decided_price: 5.14 },
+    }],
+  }
+}
+
 let rules: TaRule[] = []
 let paper: BacktestPaper = { rules: {} }
+let checked: LiveCheck | null = null
 let refusedDay: string | null = null
 let sent: { method: string; path: string }[] = []
 // Its script as a rule (the server's rule check), as going live reads it.
@@ -158,6 +236,14 @@ function serve() {
       }
       if (url.pathname.startsWith('/api/data/assets/')) return json({ bars: [] })
       if (url.pathname === '/api/backtests/paper') return json(paper)
+      if (url.pathname === `/api/ta/rules/${ID}/live-check`) return checked ? json(checked) : json({ detail: 'off' }, 404)
+      if (url.pathname === `/api/ta/rules/${ID}/live-check/days/2026-10-21`) return json(liveCheckDay())
+      if (url.pathname === `/api/ta/rules/${ID}/live-check/candidates`) {
+        return json({ items: [{ configuration: '2bb6f8514b16', run: '20261119-050828-c18c49', name: 'v4 (again)', from: '2026-10-15',
+          to: '2026-10-21', headline: null, strategy: { same: true, checks: [] } }] })
+      }
+      if (url.pathname === `/api/ta/rules/${ID}/live-check/backtest`) return json({ configuration: '2bb6f8514b16', strategy: { same: true, checks: [] } })
+      if (url.pathname === '/api/backtests/configurations/2bb6f8514b16' && method === 'PATCH') return json({})
       if (url.pathname === '/api/agent') return json({ enabled: false, model: 'claude-opus-5-5' })
       return json({ detail: `Not served in this test: ${method} ${url.pathname}` }, 404)
     }),
@@ -174,6 +260,7 @@ function renderAt(address: string) {
   const router = createMemoryRouter(
     [
       { path: '/ta/signals/:id', element: <WithTrail><SignalRulePage /><Address /></WithTrail> },
+      { path: '/ta/signals/:id/live/:day', element: <WithTrail><LiveCheckDayPage /><Address /></WithTrail> },
       { path: '/ta/signals', element: <Address /> },
     ],
     { initialEntries: [address] },
@@ -194,6 +281,7 @@ function renderAt(address: string) {
 beforeEach(() => {
   rules = [rule()]
   paper = { rules: {} }
+  checked = null
   refusedDay = null
   asRule = null
   serve()
@@ -300,5 +388,53 @@ describe("a signal rule's page", () => {
     renderAt('/ta/signals/0123456789ab')
 
     expect(await screen.findByRole('heading', { name: 'No such signal rule' })).toBeInTheDocument()
+  })
+})
+
+describe("a rule's real trades beside its paper days and its backtest", () => {
+  it('sets each day of a live rule beside its paper day and its backtest, and says where the result went', async () => {
+    rules = [rule({ mode: 'live', mode_changed_at: '2026-10-21T08:00:00Z' })]
+    checked = liveCheck()
+    renderAt(`/ta/signals/${ID}`)
+
+    const panel = (await screen.findByRole('heading', { name: 'Live, paper and backtest' })).closest('section')!
+    expect(await within(panel).findByRole('link', { name: 'v4: room to the session extreme' })).toHaveAttribute('href', '/backtests/configurations/2bb6f8514b16')
+    expect(within(panel).getByText('Same strategy')).toBeInTheDocument()
+    expect(within(panel).getByText(/The backtest raised 4 of the engine’s 4 entry signals at the same bar \(100.0 %\)/)).toBeInTheDocument()
+    // The bridge: from paper to live, where most of it went.
+    expect(within(panel).getByText(/most of it exit fill, −4.46 pt over 3 trades/)).toBeInTheDocument()
+    // A day opens on its own page.
+    expect(within(panel).getByRole('link', { name: /21 Oct/ })).toHaveAttribute('href', `/ta/signals/${ID}/live/2026-10-21`)
+    // What live measured, taken or kept by the calibrated run, and a run made with them.
+    expect(within(panel).getByText('21.82 €')).toBeInTheDocument()
+    expect(within(panel).getByRole('link', { name: 'Make a run with them' })).toHaveAttribute('href', `/backtests/new?again=${CALIBRATED_RUN}`)
+    // Its nightly off: the days after its newest run have no backtest until it is switched on.
+    await userEvent.click(within(panel).getByRole('button', { name: 'Switch its nightly on' }))
+    await waitFor(() => expect(sent).toContainEqual({ method: 'PATCH', path: '/api/backtests/configurations/2bb6f8514b16' }))
+  })
+
+  it('links a configuration playing the rule’s strategy as its backtest', async () => {
+    checked = liveCheck({ link: null, strategy: null, template: null, calibrated: null, days: [],
+      summary: { tracks: {}, to_paper: null, to_live: null, calibrated: null, agreement: null }, calibration: { now: null, history: [] } })
+    renderAt(`/ta/signals/${ID}`)
+
+    const panel = (await screen.findByRole('heading', { name: 'Live, paper and backtest' })).closest('section')!
+    await userEvent.click(await within(panel).findByRole('button', { name: 'Link a backtest' }))
+    await userEvent.click(await within(panel).findByRole('button', { name: 'Link it' }))
+    await waitFor(() => expect(sent).toContainEqual({ method: 'PUT', path: `/api/ta/rules/${ID}/live-check/backtest` }))
+  })
+
+  it('opens a day: each signal and each trade on each track, under the rule in the trail', async () => {
+    rules = [rule({ mode: 'live' })]
+    renderAt(`/ta/signals/${ID}/live/2026-10-21`)
+
+    expect(await screen.findByRole('heading', { name: /live, paper and backtest/, level: 1 })).toBeInTheDocument()
+    expect(await screen.findByText('Not sent: Not alone on us100')).toBeInTheDocument()
+    // The rule read, its name stands between Signal rules and the day.
+    await waitFor(() => expect(screen.getAllByRole('navigation', { name: 'Breadcrumb' })[0]).toHaveTextContent(/Signal rules.*Cross on US100.*21 Oct/))
+    expect(screen.getByText('raised 1.0 s, sent 1.3 s, decided 9.0 s after the bar’s close')).toBeInTheDocument()
+    expect(screen.getByText('Another turbo live')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'The position' })).toHaveAttribute('href', '/positions?find=7712345')
+    expect(screen.getByRole('link', { name: 'Paper: its run’s day' })).toHaveAttribute('href', '/backtests/20261021-231000-aaaaaa/days/2026-10-21')
   })
 })

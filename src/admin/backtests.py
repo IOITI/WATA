@@ -158,8 +158,12 @@ RESEARCH_KEYS = ("made_by", "made_via", "experiment", "lockbox")
 NIGHTLY = "nightly"
 # A forward check's run says so (src/admin/forward_checks.py): {"check": <id>}, beside ``forward_of``, its candidate.
 FORWARD = "forward"
+# A run made again with what WATA's live trades measured says so (src/admin/live_check_service.py): {"rule": <id>,
+# "values": {...}}, beside ``calibrated_of``, the run it was made from.
+CALIBRATED = "calibrated"
 # What a run made from another never takes of it (``_derived``).
-DERIVED_DROPS = ("paper", "favourite", "remade_from", NIGHTLY, FORWARD, "forward_of", "decomposes")
+DERIVED_DROPS = ("paper", "favourite", "remade_from", NIGHTLY, FORWARD, "forward_of", CALIBRATED, "calibrated_of",
+                 "decomposes")
 # The runner's answers kept are pruned at most this often, oldest first.
 CACHE_PRUNE_SECONDS = 600
 # Days of a year of recorded turbos, at the lowest priority on a small machine, with the random repetitions.
@@ -932,6 +936,50 @@ class BacktestService:
         return self._queue_run(new_request, doc, [], kept_journal, copy_from=folder, copy_data=False,
                                positions=kept_positions, raised=kept_raised)
 
+    def calibrate(self, template: str, *, name: str, changes: dict, execution: dict | None, calibrated: dict) -> dict:
+        """
+        A finished Pine run made again over its own days with what WATA's live trades measured (src/admin/
+        live_check_service.py): its request, script, libraries and turbo model as they were, its settings changed by
+        ``changes`` (checked as a request's are), its fills drawn from ``execution`` (WATA's orders, read fresh) when
+        it asks for measured ones. A run of its template's configuration (``calibrated_of``): never a nightly run's
+        template, never made again by a remake, not a trial, without random entries.
+        """
+        folder = self._directory(template)
+        request = read_json(os.path.join(folder, "request.json"))
+        settings_doc = read_json(os.path.join(folder, "settings.json"))
+        if request is None or not isinstance(settings_doc, dict) or not isinstance(settings_doc.get("settings"), dict):
+            raise NotPossible("What was asked of this backtest cannot be read")
+        if request.get("kind") != "run" or request.get("paper") or base_of(request) or self._status(template).get("state") != DONE:
+            raise NotPossible("Only a finished run of one combination, made by itself, is calibrated")
+        if (request.get("source") or {}).get("kind") != PINE:
+            raise NotPossible("Only a replay of a Pine script is calibrated: the signals of the others are WATA's own")
+        try:
+            settings, kept, before = with_changes(BacktestSettings.from_dict(settings_doc["settings"]), changes)
+        except InvalidSettings as e:
+            raise InvalidRequest(str(e)) from None
+        doc = {"settings": settings.to_dict(), "changed": {**(settings_doc.get("changed") or {}), **kept},
+               "live_before": {**(settings_doc.get("live_before") or {}), **before}}
+        model = read_json(os.path.join(folder, MODEL_FILE))
+        if (request.get("turbos") or RECORDED) == MODELLED and model is None:
+            raise NotPossible("The turbo model this run was made with cannot be read")
+        if model is not None:
+            doc["turbo_model"] = model
+        if settings.execution == MEASURED:
+            short = missing((execution or {}).get("samples"))
+            if short:
+                raise NotPossible(f"Too few of WATA's orders were measured to draw fills from ({', '.join(short)})")
+            doc["execution"] = execution
+        self._check_room()
+        new_request = {
+            **{key: value for key, value in _derived(request).items() if key != "from_sweep"},
+            "name": _text((name or request.get("name") or template)[:MAX_NAME_LENGTH], "The name", MAX_NAME_LENGTH, required=True),
+            # Its changes said beside its template's: "Run again with changes" opens the form with both.
+            "changes": {**(request.get("changes") or {}), **kept},
+            "asked_at": utc(self._clock()),
+            CALIBRATED: calibrated, "calibrated_of": template, "baseline": {"repetitions": 0, "seed": 1},
+        }
+        return self._queue_run(new_request, doc, [], None, copy_from=folder, copy_data=False)
+
     def operator_waiting(self) -> int:
         """How many runs wait that no agent asked for: the operator's, paper days and reports, runs made again."""
         return sum(1 for run_id in self._waiting if run_id not in self._owners)
@@ -1692,6 +1740,10 @@ class BacktestService:
             # its check. Not judged itself.
             "forward_of": request.get("forward_of"),
             "forward": request.get(FORWARD) if isinstance(request.get(FORWARD), dict) else None,
+            # A run made again with what WATA's live trades measured (src/admin/live_check_service.py): the run it was
+            # made from, and the rule and values it was calibrated with. Not judged itself.
+            "calibrated_of": request.get("calibrated_of"),
+            "calibrated": request.get(CALIBRATED) if isinstance(request.get(CALIBRATED), dict) else None,
             # A run's twin without the day's caps (``without_caps``): the run it decomposes.
             "decomposes": request.get("decomposes"),
             # The run it makes again on today's code, and the run that made it again once that one was done.
@@ -1876,6 +1928,8 @@ class BacktestService:
             return "Its configuration makes it again each evening, on the server's code"
         if isinstance(request.get(FORWARD), dict):
             return "A forward check makes it again each evening, on the server's code"
+        if isinstance(request.get(CALIBRATED), dict):
+            return "The live check makes it again each evening, on the server's code"
         made_by = (read_json(self._file(run_id, REMADE_FILE)) or {}).get("by")
         if made_by:
             return f"Made again already, as {made_by}"
@@ -2357,13 +2411,16 @@ class BacktestService:
                 found.append((owner, day, run_id))
         return sorted(found, key=lambda stale: (stale[1], stale[0]), reverse=True)
 
-    def prune_paper(self, keep_days: int, today: date) -> int:
+    def prune_paper(self, keep_days: int, today: date, *, keep: set[str] | None = None) -> int:
         """
-        The paper runs of days older than ``keep_days`` removed, with their place in the index; and the reports
-        that end on such a day (a rule's last, once it left shadow), with theirs.
+        The paper runs of days older than ``keep_days`` removed, with their place in the index, but the days of the
+        owners in ``keep`` (a live rule's, kept while it is); and the reports that end on such a day (a rule's last,
+        once it was switched off), with theirs.
         """
         index, removed = self.paper_index(), 0
-        for days in index.values():
+        for owner, days in index.items():
+            if keep and owner in keep:
+                continue
             for day in [day for day in days if (today - date.fromisoformat(day)).days > keep_days]:
                 run_id = days.pop(day)
                 if run_id != NO_ENTRY:

@@ -25,8 +25,8 @@ from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, agent, backtests, config, credentials, data, disk, edge_watch, luxalgo, release, research, saxo, services,
-    session, system, ta, trading,
+    actions, agent, backtests, config, credentials, data, disk, edge_watch, live_check, luxalgo, release, research, saxo,
+    services, session, system, ta, trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -220,7 +220,7 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
             # Writes each finished day for a research machine, when switched on and the market is closed.
             background.append(asyncio.create_task(ctx.research.keep()))
         if ctx.paper is not None and ctx.settings.backtests_enabled:
-            # Trades each shadow rule's finished days on paper, the market closed.
+            # Trades each shadow or live rule's finished days on paper, the market closed.
             background.append(asyncio.create_task(ctx.paper.keep()))
         if getattr(ctx, "nightly", None) is not None and ctx.settings.backtests_enabled:
             # Makes the configurations switched on again after each trading day, the market closed.
@@ -228,6 +228,9 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         if getattr(ctx, "forward", None) is not None and ctx.settings.backtests_enabled:
             # Judges the experiments' kept conclusions on the days after them, the market closed.
             background.append(asyncio.create_task(ctx.forward.keep()))
+        if getattr(ctx, "live_check", None) is not None and ctx.settings.backtests_enabled:
+            # Makes each linked configuration again with what the live trades measured, the market closed.
+            background.append(asyncio.create_task(ctx.live_check.keep()))
         if ctx.edge_watch is not None and ctx.settings.backtests_enabled:
             # Judges the live trades and the rules' paper trades against their reference; the edge guard.
             background.append(asyncio.create_task(ctx.edge_watch.keep()))
@@ -351,7 +354,7 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
     for module in (session, saxo, trading, system, disk, services, release, actions, config, credentials, data,
-                   backtests, edge_watch, ta, research, agent, luxalgo):
+                   backtests, edge_watch, live_check, ta, research, agent, luxalgo):
         app.include_router(module.router)
     # LuxAlgo sends the browser back there from its own site: the state admits it (src/admin/routers/luxalgo.py).
     app.include_router(luxalgo.callback_router)

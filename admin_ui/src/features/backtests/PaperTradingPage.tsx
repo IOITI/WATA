@@ -78,11 +78,11 @@ export function PaperTradingPage() {
                 description={`${rule.indice} · ${rule.asset.key}, ${barsLabel(rule.bars)}`}
               >
                 <div className="flex flex-col gap-5">
-                  <PaperReport owner={rule.id} name={rule.name} entry={entry} inShadow={rule.mode === 'shadow'} canAsk={rule.mode === 'shadow'} />
+                  <PaperReport owner={rule.id} name={rule.name} entry={entry} inShadow={rule.mode !== 'off'} canAsk={rule.mode !== 'off'} />
                   <section aria-label={`Days on paper of ${rule.name}`} className="space-y-2">
                     <h3 className="text-sm font-medium">Its days on paper</h3>
                     <Reference reference={entry?.reference ?? null} ruleId={rule.id} />
-                    <PaperDays days={entry?.days ?? []} madeAgain={rule.mode === 'shadow'} />
+                    <PaperDays days={entry?.days ?? []} madeAgain={rule.mode !== 'off'} />
                   </section>
                 </div>
               </Panel>

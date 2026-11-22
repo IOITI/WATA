@@ -46,8 +46,8 @@ NIGHTLY_MOST_DAYS = 365
 # The longest name a run takes (src/admin/backtests.py MAX_NAME_LENGTH): "Run again with changes" cuts there.
 NAME_LENGTH = 120
 # A run made from another names it by one of these: a forward check's run is its candidate's
-# (src/admin/forward_checks.py).
-BASE_KEYS = ("stress_of", "noise_of", "model_check_of", "forward_of")
+# (src/admin/forward_checks.py), a calibrated run its template's (src/admin/live_check_service.py).
+BASE_KEYS = ("stress_of", "noise_of", "model_check_of", "forward_of", "calibrated_of")
 
 # What "Run again with changes" adds to a run's name (draftOfRun), once per run made again.
 _AGAIN_AT_END = re.compile(r"(?:\s*\(again\))+\s*$")

@@ -180,6 +180,7 @@ export const DERIVED_LABEL: Record<NonNullable<BacktestConfigurationRun['derived
   noise: 'Fill noise',
   model_check: 'Model check',
   forward: 'Forward check',
+  calibrated: 'Calibrated on live',
 }
 
 function valueSaid(value: BacktestValue): string {

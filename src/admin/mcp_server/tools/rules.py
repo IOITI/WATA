@@ -149,6 +149,43 @@ def register(server, research) -> None:
         })
 
 
+    @research_tool(server, calls, name="rule_live_check", title="A rule's real trades beside its paper trades and its backtest",
+                   read_only=True)
+    async def rule_live_check(rule_id: str, day: date | None = None, part: str = "summary") -> dict:
+        """A signal rule's days set side by side: its real trades once it is live, its paper days (while it is live,
+        each from the account's value that morning), the backtest configuration the operator linked to it, and that
+        configuration made again each evening with what the live trades measured (the calibrated run). part summary:
+        each day's results by track (trades and their results summed, in points of the turbo), the gap, how far the
+        replayed script raised the engine's signals at the same bar, and the bridge over the days: from the backtest
+        to paper (not raised by the engine, raised by it only, traded on one side only, another bar, other fills) and from paper
+        to live (not traded live, traded live only, another turbo, entry price, exit moment, exit fill), each trade in
+        one bucket so that it adds up. part day (with day): each signal on each track and what became of it (the
+        engine's outcome, the trader's, why the engine raised nothing), each trade on each track (turbo, prices, exit,
+        result) and the day's bridge. part calibration: what the live trades measure now (the signal's delay from the
+        bar's close to the purchase, the slippage, the account) against the backtest's settings, the calibrated run,
+        and what each evening measured. Per trade in percent of the turbo, never money."""
+        if research.live_check is None:
+            raise Refused("The live check is off: backtests are switched off in the configuration")
+        if part == "day":
+            if day is None:
+                raise Refused("part day needs the day: day=YYYY-MM-DD")
+            return compacted(await research.live_check.day(rule_id, day))
+        if part not in ("summary", "calibration"):
+            raise Refused("part is summary, day or calibration")
+        found = await research.live_check.summary(rule_id)
+        if part == "calibration":
+            return compacted({key: found.get(key) for key in ("rule", "link", "template", "calibrated", "calibration")})
+        calibration = found.get("calibration") or {}
+        return compacted({
+            **{key: found.get(key) for key in ("rule", "link", "strategy", "template", "calibrated", "period",
+                                                 "database", "tolerance_seconds", "summary")},
+            "calibration": {"now": calibration.get("now"), "last_evening": next(iter(calibration.get("history") or []), None)},
+            "days": [{"day": line["day"], "present": line["present"], "gap": line.get("gap"),
+                      "results": {name: [figures["trades"], figures["sum"]] for name, figures in line["figures"].items()}}
+                     for line in found.get("days") or []],
+        })
+
+
 SAVE_DESCRIPTION = """Make one of Claude's own shadow rules, or change one (rule_id): the TA engine runs it on the bars
 the Capital.com feed records and journals its signals, never sends them; each finished day is traded on paper
 (rule_list shows those days beside its reference run). A new rule needs name (Claude · is put first), script_id (an

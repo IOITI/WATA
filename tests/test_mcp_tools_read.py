@@ -551,3 +551,46 @@ def test_every_answer_stays_within_what_goes_into_claudes_context(tmp_path, rese
         text, error = call(research, tool, arguments)
         assert not error, (tool, text[:300])
         assert len(text) <= budget.CONTEXT_CHARS, (tool, len(text))
+
+
+# ── a rule's real trades beside its paper trades and its backtest ──
+
+
+class FakeLiveCheck:
+    """Stands for the live check's reads (src/admin/mcp_server/facade.py LiveCheckReads)."""
+
+    async def summary(self, rule_id, first=None, last=None):
+        figures = {"trades": 1, "sum": 1.39, "compounded": 1.39, "entry_signals": 1, "unkeyed": 0}
+        return {
+            "rule": {"id": rule_id, "name": "Kernel R60", "mode": "live"}, "link": {"configuration": "2bb6f8514b16"},
+            "strategy": {"same": True, "checks": []}, "template": {"id": "20261119-050828-c18c49"}, "calibrated": None,
+            "period": {"from": "2026-11-15", "to": "2026-11-24"}, "database": True, "tolerance_seconds": 300,
+            "summary": {"tracks": {"live": {"days": 1, "trades": 1, "sum": 1.39}}},
+            "calibration": {"now": {"values": {"capital": 21.82}}, "history": [{"at": "2026-11-24T21:30:00Z"}, {"at": "older"}]},
+            "days": [{"day": "2026-11-24", "present": ["backtest", "paper", "live"], "gap": {"against": "live", "points": -1.6},
+                      "figures": {"backtest": {**figures, "sum": 3.0}, "paper": figures, "live": figures},
+                      "agreement": None, "runs": {}, "bridge": {}}],
+        }
+
+    async def day(self, rule_id, day):
+        return {"day": day.isoformat(), "signals": [{"key": "1|Enter Long"}], "trades": [], "bridge": {}}
+
+
+def test_a_rule_s_live_check_is_read_by_part(research):
+    from src.admin.mcp_server.facade import LiveCheckReads
+
+    assert "backtests are switched off" in refusal(research, "rule_live_check", {"rule_id": "0123456789ab"})
+    fake = FakeLiveCheck()
+    research.live_check = LiveCheckReads(summary=fake.summary, day=fake.day)
+
+    found = answer(research, "rule_live_check", {"rule_id": "0123456789ab"})
+    assert found["days"] == [{"day": "2026-11-24", "present": ["backtest", "paper", "live"],
+                              "gap": {"against": "live", "points": -1.6},
+                              "results": {"backtest": [1, 3.0], "paper": [1, 1.39], "live": [1, 1.39]}}]
+    assert found["calibration"] == {"now": {"values": {"capital": 21.82}}, "last_evening": {"at": "2026-11-24T21:30:00Z"}}
+    assert found["link"] == {"configuration": "2bb6f8514b16"}
+    assert len(answer(research, "rule_live_check", {"rule_id": "0123456789ab", "part": "calibration"})["calibration"]["history"]) == 2
+    day = answer(research, "rule_live_check", {"rule_id": "0123456789ab", "part": "day", "day": "2026-11-24"})
+    assert day["signals"] == [{"key": "1|Enter Long"}]
+    assert "needs the day" in refusal(research, "rule_live_check", {"rule_id": "0123456789ab", "part": "day"})
+    assert "summary, day or calibration" in refusal(research, "rule_live_check", {"rule_id": "0123456789ab", "part": "x"})

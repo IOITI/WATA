@@ -24,7 +24,7 @@ EXPECTED_TOOLS = {
     "pine_delete", "chart_view",
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "turbo_model",
-    "rule_list", "edge_watch", "rule_compare",
+    "rule_list", "edge_watch", "rule_compare", "rule_live_check",
     "exp_new", "exp_get", "exp_trials", "exp_conclude", "lockbox_set",
     "backtest_start", "backtest_derive", "backtest_wait", "backtest_remove", "turbo_model_measure",
     "rule_shadow_save", "rule_shadow_remove", "rule_set_reference",

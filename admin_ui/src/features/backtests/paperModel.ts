@@ -32,12 +32,12 @@ export interface PaperRuleEntry {
   entry: BacktestPaperEntry | undefined
 }
 
-/** The rules the page shows: those in shadow first, then any other with days on paper or a report; by name. */
+/** The rules the page shows: those traded on paper (in shadow or live) first, then any other with days on paper or a report; by name. */
 export function paperRules(rules: readonly TaRule[], paper: BacktestPaper | undefined): PaperRuleEntry[] {
   const kept = rules
     .map((rule) => ({ rule, entry: paper?.rules[rule.id] }))
-    .filter(({ rule, entry }) => rule.mode === 'shadow' || (entry && (entry.days.length > 0 || entry.report || entry.next_report)))
-  return kept.sort((one, other) => Number(other.rule.mode === 'shadow') - Number(one.rule.mode === 'shadow') || one.rule.name.localeCompare(other.rule.name))
+    .filter(({ rule, entry }) => rule.mode !== 'off' || (entry && (entry.days.length > 0 || entry.report || entry.next_report)))
+  return kept.sort((one, other) => Number(other.rule.mode !== 'off') - Number(one.rule.mode !== 'off') || one.rule.name.localeCompare(other.rule.name))
 }
 
 /** "14 Oct to 19 Oct", or the year with each when it is not this one's. */
@@ -79,13 +79,13 @@ export function reportState(entry: BacktestPaperEntry | undefined, inShadow: boo
   }
   if (report) {
     return {
-      text: inShadow ? 'Made again after each finished day, once the market is closed.' : 'No longer made again: the rule left shadow.',
+      text: inShadow ? 'Made again after each finished day, once the market is closed.' : 'No longer made again: the rule is off.',
       tone: 'neutral',
       underWay: false,
     }
   }
   return {
-    text: inShadow ? 'None yet: the first is made after its first finished weekday, once the market is closed.' : 'None: it was never in shadow since reports were made.',
+    text: inShadow ? 'None yet: the first is made after its first finished weekday, once the market is closed.' : 'None: it was never traded on paper since reports were made.',
     tone: 'neutral',
     underWay: false,
   }

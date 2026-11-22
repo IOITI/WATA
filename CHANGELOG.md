@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.98.0 - A rule live: its real trades beside its paper days and its backtest
+
+**Release date:** not released yet
+
+Once a signal rule goes live, nothing set what WATA really did beside what its paper days and its backtest said of the same days: its paper days stopped at go-live, its backtest was a configuration of its own, and the gap between them had no causes. Rule `f13986be5e9b` (Kernel VWAP resume guards, R60 on Capital.com's US100) is about to go live on an account of 21.82 €, its backtest configuration `2bb6f8514b16` at 100 € and its paper days at 1,000 €. Now each rule's days are set side by side, and the gap is said by its causes:
+
+- **Four tracks a day** (the rule page's "Live, paper and backtest", a page per day `/ta/signals/<id>/live/<day>`): the backtest configuration linked to the rule, that configuration's calibrated run, the rule's paper day and its real trades. A configuration is linked only when its runs play the rule's strategy: the same script source and libraries (by their sha256, so a copy of a script under another name counts), chart, alerts and history, inputs said key by key.
+- **One key whatever the path**: a signal is known by its bar's open and its alert's title, which the engine, a Pine replay and a paper run all keep; a trade by its entry signal. A signal the engine raised at another bar is paired within the rule's tolerance and said so; one the backtest alerted on and the engine never raised says why when it is known (the engine started after the bar).
+- **A bridge that adds up**: the day's trade results summed, in points of the turbo, from the backtest to paper (not raised by the engine, raised by the engine only, traded on one side only, another bar, the same signal filled otherwise) and from paper to live (not traded live, traded live only, another turbo, and on the same turbo the entry price, the exit's moment against the price the live sale was decided on, and its fill). Each trade lands in one place; the compounded results are said beside it.
+- **Paper days go on while a rule is live**, each day it is live from the account's value that morning (the last daily report before it), so that paper makes the refusals for funds WATA makes; caught up from the day it went live and kept while it is. Its report goes on, from the backtests' own 1,000 €.
+- **The calibrated run**: each evening, once the market is closed and after the nightly runs, the linked configuration's newest run made again over its own days with what live measured: the signal's delay from the bar's close to the purchase (from ten live entries), fills drawn from WATA's own orders, the account WATA holds. The page says how much of the gap between the backtest and live it closes, what each evening measured, and "Make a run with them" opens the New backtest form with those values. A calibrated run belongs to its template's configuration, is never made again by a remake and is not judged by the bar.
+- **Claude reads it**: the MCP tool `rule_live_check` (summary, a day, the calibration), also given to the AI agent; the daily debrief is given each live rule's day and says where the gap went.
+
+**On the live path:** nothing. The admin alone changes (admin1). No file of a backtest's `_CODE` changed: no run turns stale (the code digest stays `0d6d1cdd41e3cc92`).
+
+**Verification status:** the Python suite (4,615 passed, 1 skipped, the live infrastructure's file left out as on this Mac), the interface's 1,623 tests, its lint, types and build; the release manifest names admin1 alone against v0.97.0's tree, and the code digest stays `0d6d1cdd41e3cc92`. The new SQL (`balance_before`, `engine_starts`) run on a PostgreSQL 16 (pgserver). On the development admin, at 1,440 and 375 px, light and dark: a live rule's paper days made from the account's value, a backtest made from the rule and linked from its page, the four tracks, the bridge, the days, a day's page with each track's trades drawn, and the calibrated run made and marked on its run page. Found and fixed there: a rule made after the last finished day answered "The period ends before it starts"; the bridge's bars vanished on a phone. Not seen on the server: no rule has been live since TradingView was dropped.
+
 ## v0.97.0 - Keep the loop going: the research queue, the autopilot, the brief
 
 **Release date:** 2026-11-19

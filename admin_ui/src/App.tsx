@@ -60,6 +60,9 @@ const SignalRulesPage = lazy(() =>
 const SignalRulePage = lazy(() =>
   import('@/features/ta/signals/SignalRulePage').then((module) => ({ default: module.SignalRulePage })),
 )
+const LiveCheckDayPage = lazy(() =>
+  import('@/features/ta/signals/LiveCheckDayPage').then((module) => ({ default: module.LiveCheckDayPage })),
+)
 const MonitorPage = lazy(() => import('@/features/ta/monitor/MonitorPage').then((module) => ({ default: module.MonitorPage })))
 
 // A run's pages: the performance charts, and a day's candles (Lightweight Charts).
@@ -247,6 +250,14 @@ const router = createBrowserRouter(
           element={
             <ChartPage>
               <SignalRulePage />
+            </ChartPage>
+          }
+        />
+        <Route
+          path="ta/signals/:id/live/:day"
+          element={
+            <ChartPage>
+              <LiveCheckDayPage />
             </ChartPage>
           }
         />

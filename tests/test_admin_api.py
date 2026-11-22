@@ -161,6 +161,11 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/backtests/paper/live"),
     ("GET", "/api/edge-watch"),
     ("GET", "/api/edge-watch/0123456789ab"),
+    ("GET", "/api/ta/rules/0123456789ab/live-check"),
+    ("GET", "/api/ta/rules/0123456789ab/live-check/days/2026-10-12"),
+    ("GET", "/api/ta/rules/0123456789ab/live-check/candidates"),
+    ("PUT", "/api/ta/rules/0123456789ab/live-check/backtest"),
+    ("DELETE", "/api/ta/rules/0123456789ab/live-check/backtest"),
     ("POST", "/api/backtests/paper/0123456789ab/report"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
     ("POST", "/api/backtests/turbo-model"),
@@ -3794,6 +3799,58 @@ def test_edge_watch_lists_its_owners_and_gives_one_whole(client, ctx, backtests)
     assert "No live reference" in client.get("/api/edge-watch/live").json()["detail"]
     ctx.settings.backtests_enabled = False
     assert client.get("/api/edge-watch").status_code == 403
+
+
+class FakeLiveCheck:
+    """Stands for the live check (src/admin/live_check_service.py): remembers what it was asked."""
+
+    def __init__(self):
+        self.asked = []
+
+    async def summary(self, rule_id, first, last):
+        self.asked.append(("summary", rule_id, first, last))
+        return {"rule": {"id": rule_id}, "days": []}
+
+    async def day(self, rule_id, day):
+        from src.admin.errors import NotPossible
+
+        if day.isoformat() == "2026-10-13":
+            raise NotPossible("Nothing of the rule that day: no backtest, no paper day, no live signal")
+        return {"day": day.isoformat(), "signals": [], "trades": []}
+
+    def candidates(self, rule_id):
+        return [{"configuration": "2bb6f8514b16"}]
+
+    def link(self, rule_id, configuration):
+        from src.admin.backtest_configurations import UnknownConfiguration
+
+        if configuration != "2bb6f8514b16":
+            raise UnknownConfiguration(configuration)
+        self.asked.append(("link", rule_id, configuration))
+        return {"configuration": configuration, "strategy": {"same": True}}
+
+    def unlink(self, rule_id):
+        self.asked.append(("unlink", rule_id))
+
+
+def test_a_rule_s_live_check_is_read_and_its_backtest_linked(client, ctx, backtests):
+    assert client.get("/api/ta/rules/0123456789ab/live-check").status_code == 503
+    ctx.live_check = FakeLiveCheck()
+
+    assert client.get("/api/ta/rules/0123456789ab/live-check?from=2026-10-01&to=2026-10-16").json()["rule"]["id"] == "0123456789ab"
+    assert ctx.live_check.asked[-1] == ("summary", "0123456789ab", date(2026, 10, 1), date(2026, 10, 16))
+    assert client.get("/api/ta/rules/0123456789ab/live-check/days/2026-10-12").json()["day"] == "2026-10-12"
+    assert client.get("/api/ta/rules/0123456789ab/live-check/days/2026-10-13").status_code == 409
+    assert client.get("/api/ta/rules/0123456789ab/live-check/candidates").json() == {"items": [{"configuration": "2bb6f8514b16"}]}
+    linked = client.put("/api/ta/rules/0123456789ab/live-check/backtest", json={"configuration": "2bb6f8514b16"},
+                        headers=SAME_ORIGIN)
+    assert linked.json()["strategy"] == {"same": True}
+    assert client.put("/api/ta/rules/0123456789ab/live-check/backtest", json={"configuration": "0123456789ab"},
+                      headers=SAME_ORIGIN).status_code == 404
+    assert client.delete("/api/ta/rules/0123456789ab/live-check/backtest", headers=SAME_ORIGIN).json() == {"ok": True}
+    assert ctx.live_check.asked[-1] == ("unlink", "0123456789ab")
+    ctx.settings.backtests_enabled = False
+    assert client.get("/api/ta/rules/0123456789ab/live-check").status_code == 403
 
 
 def test_a_paper_report_is_made_now_when_asked(client, ctx, backtests):

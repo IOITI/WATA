@@ -58,7 +58,8 @@ ROW_RUNS = 8
 SAID_ERROR = 200
 # The runs made from another: never a nightly run's template nor a run covering its days, and their base is kept. A
 # forward check's run (src/admin/forward_checks.py) is one: its candidate stays while it is judged.
-DERIVED = (("stress_of", "stress"), ("noise_of", "noise"), ("model_check_of", "model_check"), ("forward_of", "forward"))
+DERIVED = (("stress_of", "stress"), ("noise_of", "noise"), ("model_check_of", "model_check"), ("forward_of", "forward"),
+           ("calibrated_of", "calibrated"))
 
 
 def _day(text) -> date | None:

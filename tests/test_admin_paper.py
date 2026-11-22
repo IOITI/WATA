@@ -31,7 +31,7 @@ from tests.test_admin_backtests import config, finished, folder_of, scripts, ser
 # Tuesday 20 October 2026, 23:00 in Paris: the market closed by the example's hours (8 to 22).
 EVENING = datetime(2026, 10, 20, 21, 0, tzinfo=timezone.utc).timestamp()
 AFTERNOON = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc).timestamp()
-SHADOW, LIVE = "a00000000001", "a00000000002"
+SHADOW, OFF, LIVE_RULE = "a00000000001", "a00000000002", "a00000000003"
 
 RULE = {
     "id": SHADOW, "name": "EMA cross on US100", "mode": "shadow", "created_at": "2026-10-14T09:00:00+00:00",
@@ -47,6 +47,15 @@ class Queries:
         self.journal_reads = 0
         # The version of the script that raised a day's signal: none unless a test gives one.
         self.version_of = None
+        # The account's value at each daily report, by day: none unless a test gives some.
+        self.balances: dict[date, float] = {}
+
+    async def balance_before(self, day):
+        before = [found for found in self.balances if found < day]
+        return self.balances[max(before)] if before else None
+
+    async def last_balance(self):
+        return self.balances[max(self.balances)] if self.balances else None
 
     async def journal_between(self, start, end):
         self.journal_reads += 1
@@ -84,7 +93,7 @@ def paper(tmp_path, scripts, config):  # noqa: F811
     backtests = service(tmp_path, scripts, config)
     rules = RuleStore(scripts)
     with open(rules.path, "w", encoding="utf-8") as out_file:
-        json.dump({"rules": [RULE, {**RULE, "id": LIVE, "mode": "live"}]}, out_file)
+        json.dump({"rules": [RULE, {**RULE, "id": OFF, "mode": "off"}]}, out_file)
     queries = Queries()
     return backtests, queries, PaperTrading(backtests=backtests, queries=queries, rules=rules, config_path=config, clock=lambda: EVENING)
 
@@ -92,7 +101,7 @@ def paper(tmp_path, scripts, config):  # noqa: F811
 def test_each_finished_weekday_of_a_shadow_rule_is_traded_on_paper_once(tmp_path, paper):
     backtests, queries, trading = paper
 
-    # The last five days: Thursday 15 to Monday 19, the weekend left out; the live rule is WATA's own trading.
+    # The last five days: Thursday 15 to Monday 19, the weekend left out; the rule that is off is not traded.
     # Then the rule's report, of its days since it was made on Wednesday 14.
     assert asyncio.run(trading.catch_up()) == 4
     assert queries.asked == [*((date(2026, 10, day), date(2026, 10, day), SHADOW) for day in (15, 16, 19)),
@@ -427,8 +436,8 @@ def test_make_it_now_asks_a_shadow_rule_s_report_at_any_hour_and_once(tmp_path, 
     assert (request["from"], request["to"]) == ("2026-10-14", "2026-10-19")
     with pytest.raises(NotPossible, match="being made already"):
         asyncio.run(trading.ask_report(SHADOW))
-    with pytest.raises(NotPossible, match="not in shadow"):
-        asyncio.run(trading.ask_report(LIVE))
+    with pytest.raises(NotPossible, match="is off"):
+        asyncio.run(trading.ask_report(OFF))
     with pytest.raises(RuleNotFound):
         asyncio.run(trading.ask_report("0123456789ab"))
     with pytest.raises(NotPossible, match="no day on paper yet"):
@@ -717,3 +726,83 @@ def test_a_run_made_from_a_paper_run_is_an_ordinary_one(tmp_path, paper):
     assert [run["id"] for run in backtests.list_runs()] == [stressed["id"]]
     # Its signals go with it.
     assert (folder_of(tmp_path, stressed["id"]) / "ta_signals.json").exists()
+
+
+# ── a live rule: its days go on, each from the account's value that morning ──
+
+
+def _with_live_rule(scripts, went_live: str = "2026-10-16T07:30:00+00:00") -> None:  # noqa: F811
+    """The shadow rule beside a rule made on the 14th that went live on Friday the 16th."""
+    with open(RuleStore(scripts).path, "w", encoding="utf-8") as out_file:
+        json.dump({"rules": [RULE, {**RULE, "id": LIVE_RULE, "name": "Live R40", "mode": "live",
+                                    "mode_changed_at": went_live}]}, out_file)
+
+
+def _settings(tmp_path, run_id: str) -> dict:
+    return json.loads((folder_of(tmp_path, run_id) / "settings.json").read_text())["settings"]
+
+
+def test_a_live_rule_s_days_are_traded_on_paper_from_the_account_s_value_that_morning(tmp_path, paper, scripts):  # noqa: F811
+    backtests, queries, trading = paper
+    _with_live_rule(scripts)
+    queries.balances = {date(2026, 10, 15): 21.82, date(2026, 10, 16): 23.4}
+
+    asyncio.run(trading.catch_up())
+
+    days = backtests.paper_index()[LIVE_RULE]
+    assert sorted(days) == ["2026-10-15", "2026-10-16", "2026-10-19"]
+    # Thursday the 15th was in shadow: the backtests' own account. Live from the 16th: the account's value that
+    # morning, the last daily report before the day.
+    assert _settings(tmp_path, days["2026-10-15"])["capital"] == 1000.0
+    assert _settings(tmp_path, days["2026-10-16"])["capital"] == 21.82
+    assert _settings(tmp_path, days["2026-10-19"])["capital"] == 23.4
+    assert _request(tmp_path, days["2026-10-19"])["name"] == "Paper: Live R40, 2026-10-19, from the account's 23.40 €"
+    # Its report goes on too, the strategy's since it was made, from the backtests' own account.
+    report = _report_of(backtests, LIVE_RULE)
+    assert (_request(tmp_path, report)["from"], _settings(tmp_path, report)["capital"]) == ("2026-10-14", 1000.0)
+
+
+def test_a_live_rule_s_days_are_caught_up_since_it_went_live_and_kept_while_it_is(tmp_path, paper, scripts):  # noqa: F811
+    backtests, queries, trading = paper
+    # Live since the 1st of October, made the 14th of September: every weekday since the 1st, not only the last five.
+    with open(RuleStore(scripts).path, "w", encoding="utf-8") as out_file:
+        json.dump({"rules": [{**RULE, "id": LIVE_RULE, "mode": "live", "created_at": "2026-09-14T09:00:00+00:00",
+                              "mode_changed_at": "2026-10-01T06:00:00+00:00"}]}, out_file)
+    backtests.max_queued = 100
+
+    asyncio.run(trading.catch_up())
+
+    days = sorted(backtests.paper_index()[LIVE_RULE])
+    assert days[0] == "2026-10-01" and days[-1] == "2026-10-19" and len(days) == 13
+    # No balance known: the backtests' own account, said nowhere.
+    assert "from the account" not in _request(tmp_path, backtests.paper_index()[LIVE_RULE]["2026-10-19"])["name"]
+    backtests._waiting.clear()
+    # Kept while it is live, the others' let go.
+    assert backtests.prune_paper(3, date(2026, 10, 20), keep={LIVE_RULE}) == 2
+    assert len(backtests.paper_index()[LIVE_RULE]) == 13
+
+
+def test_make_it_now_asks_a_live_rule_s_report(tmp_path, paper, scripts):  # noqa: F811
+    backtests, _, trading = paper
+    _with_live_rule(scripts)
+    trading._clock = lambda: AFTERNOON
+
+    asyncio.run(trading.ask_report(LIVE_RULE))
+
+    assert _request(tmp_path, _report_of(backtests, LIVE_RULE))["to"] == "2026-10-19"
+
+
+def test_a_live_rule_s_days_made_with_older_code_are_made_again_from_the_account_of_their_morning(tmp_path, paper, scripts):  # noqa: F811
+    backtests, queries, trading = paper
+    _with_live_rule(scripts)
+    queries.balances = {date(2026, 10, 15): 21.82}
+    asyncio.run(trading.catch_up())
+    backtests._waiting.clear()
+    old = backtests.paper_index()[LIVE_RULE]["2026-10-16"]
+    _made_with(tmp_path, backtests, old, OLDER, "2026-10-16")
+
+    assert [(owner, day.isoformat()) for owner, _, day, _ in trading.remakes_due()] == [(LIVE_RULE, "2026-10-16")]
+    asyncio.run(trading.catch_up())
+
+    remade = backtests.paper_index()[LIVE_RULE]["2026-10-16"]
+    assert remade != old and _settings(tmp_path, remade)["capital"] == 21.82

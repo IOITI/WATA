@@ -1,10 +1,16 @@
 """
-Paper trading of the signal rules in shadow: each finished day, the signals
-a rule raised that day (``ta_signal``, journaled by the TA engine) traded by
-a one-day run, as WATA would have traded them. Judged against a run the
-operator chose as the rule's reference (on its page), they say
+Paper trading of the signal rules in shadow and live: each finished day, the
+signals a rule raised that day (``ta_signal``, journaled by the TA engine)
+traded by a one-day run, as WATA would have traded them. Judged against a run
+the operator chose as the rule's reference (on its page), they say
 whether the rule does live what its backtest said it would (Edge Watch,
 src/admin/edge_watch.py, trade by trade).
+
+A live rule's days go on being traded on paper, each from the account's value
+that morning (``account_balance_history``: the same refusals for funds as
+WATA's), its days caught up from the day it went live and kept while it is:
+they are what its real days are set beside (src/admin/live_check.py). A rule
+that is off keeps its days as they were made.
 
 The signals WATA receives (TradingView's alerts, the journal) are traded on
 paper the same way, under the live settings and with WATA's measured fills
@@ -56,9 +62,11 @@ from src.trade.index_estimate import index_epic
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 900
-# The finished days a rule is caught up on, and those its paper runs are kept for.
+# The finished days a rule is caught up on, and those its paper runs are kept for (a live rule's: as long as it is).
 CATCH_UP_DAYS = 5
 KEEP_DAYS = 60
+# The rules whose days are traded on paper; a live one's from the account's value each morning.
+TRADED_ON_PAPER = ("shadow", "live")
 # The real days set beside the live paper days: as many as the paper runs are kept.
 REAL_DAYS = KEEP_DAYS
 # A report waiting its turn or running: nothing more is asked for its owner meanwhile.
@@ -99,11 +107,17 @@ def debriefed_day(config: dict, now: float) -> date:
     return last_finished_day(local.date())
 
 
-def rule_body(rule: dict, first: date, last: date, *, report: bool) -> dict:
-    """A run of the signals a rule raised: one day of them on paper, or its report since it began."""
+def rule_body(rule: dict, first: date, last: date, *, report: bool, capital: float | None = None) -> dict:
+    """
+    A run of the signals a rule raised: one day of them on paper, or its report since it began. ``capital``: the
+    account a live rule's day starts from, said in its name.
+    """
+    name = f"Paper: {rule['name']}, {'since ' if report else ''}{first.isoformat()}"
+    if capital is not None:
+        name += f", from the account's {capital:,.2f} €"
     return {
         "from": first.isoformat(), "to": last.isoformat(), "indice": rule["indice"],
-        "name": f"Paper: {rule['name']}, {'since ' if report else ''}{first.isoformat()}", "tags": ["paper"],
+        "name": name[:120], "tags": ["paper"],
         "source": {"kind": "ta_signals", "rule": {"id": rule["id"], "name": rule["name"]}},
         "chart": {"asset": rule["asset"], "side": rule.get("side", "bid"), "bars": rule["bars"]},
         "baseline": {"repetitions": 0, "seed": 1},
@@ -140,27 +154,58 @@ class PaperTrading:
         return datetime.fromtimestamp(now, timezone.utc).astimezone(self._zone()).date()
 
     @staticmethod
-    def _made(rule: dict, zone) -> date | None:
+    def _day_of(moment, zone) -> date | None:
+        """The day a moment of a rule falls on, in the trading timezone."""
+        return datetime.fromisoformat(str(moment).replace("Z", "+00:00")).astimezone(zone).date() if moment else None
+
+    @classmethod
+    def _made(cls, rule: dict, zone) -> date | None:
         """The day a rule was made, in the trading timezone."""
-        created = rule.get("created_at")
-        return datetime.fromisoformat(str(created).replace("Z", "+00:00")).astimezone(zone).date() if created else None
+        return cls._day_of(rule.get("created_at"), zone)
+
+    def live_since(self, rule: dict, zone=None) -> date | None:
+        """The day a live rule went live (its last change of mode, in the trading timezone); None for one that is not."""
+        if rule.get("mode") != "live":
+            return None
+        return self._day_of(rule.get("mode_changed_at") or rule.get("created_at"), zone or self._zone())
 
     def due(self, now: float | None = None) -> list[tuple[dict, date]]:
-        """The rules in shadow and the finished days of theirs not traded on paper yet."""
+        """
+        The rules in shadow or live and the finished days of theirs not traded on paper yet: the last few, and every
+        day since a live rule went live, held to the days paper runs are kept.
+        """
         zone = self._zone()
         today = self._today(now)
         index = self._backtests.paper_index()
         found = []
         for rule in self._rules.load()["rules"]:
-            if rule.get("mode") != "shadow":
+            if rule.get("mode") not in TRADED_ON_PAPER:
                 continue
             made = self._made(rule, zone)
-            for back in range(CATCH_UP_DAYS, 0, -1):
-                day = today - timedelta(days=back)
+            since = self.live_since(rule, zone)
+            back = CATCH_UP_DAYS if since is None else max(CATCH_UP_DAYS, min(KEEP_DAYS, (today - since).days))
+            for days_back in range(back, 0, -1):
+                day = today - timedelta(days=days_back)
                 if day.weekday() >= 5 or (made is not None and day < made) or day.isoformat() in index.get(rule["id"], {}):
                     continue
                 found.append((rule, day))
         return found
+
+    async def capital_of(self, rule: dict, day: date) -> float | None:
+        """
+        The account a rule's day on paper starts from: for a day it was live, WATA's value that morning (its last daily
+        report before the day, else the last known); None, the backtests' own, for a day in shadow.
+        """
+        since = self.live_since(rule)
+        if since is None or day < since:
+            return None
+        try:
+            found = await self._queries.balance_before(day)
+            if found is None:
+                found = await self._queries.last_balance()
+        except DatabaseUnavailable:
+            return None
+        return round(float(found), 2) if found is not None and found > 0 else None
 
     def due_live(self, now: float | None = None) -> list[date]:
         """The finished weekdays whose signals were not traded on paper under the live settings yet."""
@@ -215,7 +260,10 @@ class PaperTrading:
         return self._backtests.paper_since(LIVE_PAPER) or min(self._backtests.paper_index().get(LIVE_PAPER) or {}, default=None)
 
     def _report_owners(self, today: date) -> list[tuple[str, dict | None, date, date]]:
-        """Whose report is kept (the signals received once they have a day on paper, each rule in shadow), and its period."""
+        """
+        Whose report is kept (the signals received once they have a day on paper, each rule in shadow or live), and its
+        period. A live rule's report stays the strategy's since it was made, from the backtests' own account.
+        """
         last = last_finished_day(today)
         owners: list[tuple[str, dict | None, date, date]] = []
         since = self._live_since()
@@ -223,7 +271,7 @@ class PaperTrading:
             owners.append((LIVE_PAPER, None, self._first_day(date.fromisoformat(since), last), last))
         zone = self._zone()
         for rule in self._rules.load()["rules"]:
-            if rule.get("mode") == "shadow":
+            if rule.get("mode") in TRADED_ON_PAPER:
                 owners.append((rule["id"], rule, self._first_day(self._made(rule, zone), last), last))
         return [owner for owner in owners if owner[2] <= owner[3]]
 
@@ -279,7 +327,7 @@ class PaperTrading:
 
     async def ask_report(self, owner: str) -> None:
         """
-        A report made now rather than after the next finished day: of a rule in shadow, or of the signals WATA
+        A report made now rather than after the next finished day: of a rule in shadow or live, or of the signals WATA
         received once they have a day on paper. At any hour: the operator's own run, in line with the others.
         """
         if owner == LIVE_PAPER:
@@ -289,8 +337,8 @@ class PaperTrading:
             rule, began = None, date.fromisoformat(since)
         else:
             rule = self._rules.rule(owner)
-            if rule.get("mode") != "shadow":
-                raise NotPossible(f"{rule['name']!r} is not in shadow: its days are not traded on paper")
+            if rule.get("mode") not in TRADED_ON_PAPER:
+                raise NotPossible(f"{rule['name']!r} is off: its days are not traded on paper")
             began = self._made(rule, self._zone())
         last = last_finished_day(self._today())
         first = self._first_day(began, last)
@@ -306,12 +354,12 @@ class PaperTrading:
     def remakes_due(self) -> list[tuple[str, dict | None, date, str]]:
         """
         The days on paper made with other backtest code than the server's, newest first, of those still traded on
-        paper (the rules in shadow, the signals received): each owner, its rule, the day and the run it has now.
-        A rule out of shadow keeps its days as they were made.
+        paper (the rules in shadow or live, the signals received): each owner, its rule, the day and the run it has
+        now. A rule that is off keeps its days as they were made.
         """
-        shadow = {rule["id"]: rule for rule in self._rules.load()["rules"] if rule.get("mode") == "shadow"}
-        return [(owner, shadow.get(owner), date.fromisoformat(day), run_id)
-                for owner, day, run_id in self._backtests.stale_paper_days() if owner == LIVE_PAPER or owner in shadow]
+        traded = {rule["id"]: rule for rule in self._rules.load()["rules"] if rule.get("mode") in TRADED_ON_PAPER}
+        return [(owner, traded.get(owner), date.fromisoformat(day), run_id)
+                for owner, day, run_id in self._backtests.stale_paper_days() if owner == LIVE_PAPER or owner in traded]
 
     async def _remake_stale(self) -> int:
         """
@@ -330,7 +378,9 @@ class PaperTrading:
                     asked += await self._live_paper(day)
                 else:
                     rows = await self._queries.rule_signals(rule["id"], day, day, limit=MAX_RAISED_SIGNALS)
-                    self._backtests.create(rule_body(rule, day, day, report=False), journal=rows)
+                    capital = await self.capital_of(rule, day)
+                    self._backtests.create(rule_body(rule, day, day, report=False, capital=capital), journal=rows,
+                                           capital=capital)
                     asked += 1
             except NotPossible as e:
                 logger.info(f"Paper days made with older code wait: {e}")
@@ -375,8 +425,10 @@ class PaperTrading:
                 break
         for rule, day in self.due(now):
             rows = await self._queries.rule_signals(rule["id"], day, day, limit=MAX_RAISED_SIGNALS)
+            capital = await self.capital_of(rule, day)
             try:
-                self._backtests.create(rule_body(rule, day, day, report=False), journal=rows)
+                self._backtests.create(rule_body(rule, day, day, report=False, capital=capital), journal=rows,
+                                       capital=capital)
             except NotPossible as e:
                 # The queue is full: the rest waits for the next tick.
                 logger.info(f"Paper trading waits: {e}")
@@ -396,7 +448,9 @@ class PaperTrading:
                 break
             except InvalidRequest as e:
                 logger.warning(f"The paper report of {repr(rule['name']) if rule else 'the signals received'} cannot be made: {e}")
-        self._backtests.prune_paper(KEEP_DAYS, self._today(now))
+        # A live rule's days are kept while it is: its real days are set beside them (src/admin/live_check.py).
+        live = {rule["id"] for rule in self._rules.load()["rules"] if rule.get("mode") == "live"}
+        self._backtests.prune_paper(KEEP_DAYS, self._today(now), keep=live)
         # Last, once the rest is asked and the oldest let go: the days made with older backtest code, made again.
         asked += await self._remake_stale()
         return asked

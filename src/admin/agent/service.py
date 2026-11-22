@@ -95,6 +95,8 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
 LUXALGO_WRITE_UP_CHARS = 6_000
 # What a conversation about a day or a signal reads of the day's signals and trades at most.
 SHARED_ROWS = 200
+# The live rules whose real trades a trading day shares beside their paper day and backtest (one per indice, in practice).
+LIVE_RULES_SHARED = 3
 # The rows a run's day is shared in (chart_view's table): the agent zooms on the hours that matter.
 RUN_DAY_ROWS = 120
 # What an incident is shared of the changes before its moment.
@@ -1314,6 +1316,21 @@ class AgentService:
                 for line in reversed(self.store.artefacts()) if line.get("conversation") in titles]
 
 
+async def _live_rules(session, request: int) -> list[tuple[str, str]]:
+    """The rules live now, as rule_list says them: whose real trades a day shares beside their paper day and backtest."""
+    if not session.offers("rule_live_check"):
+        return []
+    answer = await session.call("rule_list", {}, request)
+    if answer.is_error:
+        return []
+    try:
+        rules = json.loads(answer.text).get("rules") or []
+    except (TypeError, ValueError, AttributeError):
+        return []
+    return [(str(rule["id"]), str(rule.get("name") or rule["id"])) for rule in rules
+            if isinstance(rule, dict) and rule.get("mode") == "live" and rule.get("id")]
+
+
 async def _shared_trading(session, subject: dict, request: int, paper: str | None = None) -> str:
     """
     A position, a signal, a day or an incident, as the agent's tools read it at
@@ -1339,6 +1356,9 @@ async def _shared_trading(session, subject: dict, request: int, paper: str | Non
         ]
         if paper is not None:
             parts.append(("The signals it received, traded on paper under the live settings", paper))
+        for rule_id, name in (await _live_rules(session, request))[:LIVE_RULES_SHARED]:
+            parts.append((f"The live rule {name!r} ({rule_id}): its real trades beside its paper day and its backtest",
+                          await read("rule_live_check", {"rule_id": rule_id, "part": "day", "day": day})))
         return subject_text("the trading day", day, "\n\n".join(f"{name}:\n{text}" for name, text in parts))
     if kind == SIGNAL:
         listed = await session.call("data_signals", {"start_day": subject["day"], "kind": "received", "limit": 500},

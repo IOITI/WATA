@@ -64,11 +64,11 @@ def _check(check_id: str, label: str, state: str, detail: str) -> dict:
 
 def is_judged(run: dict) -> bool:
     """
-    Whether a run is judged at all: one not done, a stress sweep (of either kind), a model check or a forward check's
-    run (they judge another run) is not.
+    Whether a run is judged at all: one not done, a stress sweep (of either kind), a model check, a forward check's run
+    or a calibrated one (they judge another run, or live) is not.
     """
     return ((run.get("status") or {}).get("state") == DONE and not run.get("stress_of") and not run.get("noise_of")
-            and not run.get("model_check_of") and not run.get("forward_of"))
+            and not run.get("model_check_of") and not run.get("forward_of") and not run.get("calibrated_of"))
 
 
 def _evidence(run: dict) -> dict | None:

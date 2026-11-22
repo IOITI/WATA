@@ -43,12 +43,13 @@ describe('where paper trading is', () => {
     expect(paperReportHref('a00000000001')).toBe('/backtests/paper/a00000000001')
   })
 
-  it('lists the rules in shadow first, then those with something on paper, by name', () => {
-    const rules = [rule('c', 'Zeta', 'shadow'), rule('d', 'Off, never traded', 'off'), rule('b', 'Live now', 'live'), rule('a', 'Alpha', 'shadow')]
-    const paper = { rules: { b: entry({ report: REPORT }) } }
+  it('lists the rules traded on paper (in shadow or live) first, then those off with something on paper, by name', () => {
+    const rules = [rule('c', 'Zeta', 'shadow'), rule('d', 'Off, never traded', 'off'), rule('b', 'Live now', 'live'), rule('a', 'Alpha', 'shadow'),
+      rule('e', 'Beta, off since', 'off')]
+    const paper = { rules: { b: entry({ report: REPORT }), e: entry({ report: REPORT }) } }
 
-    expect(paperRules(rules, paper).map(({ rule: found }) => found.name)).toEqual(['Alpha', 'Zeta', 'Live now'])
-    expect(paperRules(rules, paper)[2].entry?.report).toBe(REPORT)
+    expect(paperRules(rules, paper).map(({ rule: found }) => found.name)).toEqual(['Alpha', 'Live now', 'Zeta', 'Beta, off since'])
+    expect(paperRules(rules, paper)[1].entry?.report).toBe(REPORT)
   })
 })
 
@@ -66,7 +67,7 @@ describe('a report', () => {
 
   it('says where it stands: made, being made, not finished, or none yet', () => {
     expect(reportState(entry({ report: REPORT }), true)).toEqual({ text: 'Made again after each finished day, once the market is closed.', tone: 'neutral', underWay: false })
-    expect(reportState(entry({ report: REPORT }), false).text).toBe('No longer made again: the rule left shadow.')
+    expect(reportState(entry({ report: REPORT }), false).text).toBe('No longer made again: the rule is off.')
     expect(reportState(undefined, true).text).toBe('None yet: the first is made after its first finished weekday, once the market is closed.')
 
     const waiting = { run_id: 'x', from: '2026-10-14', to: '2026-10-20', state: 'queued' as const, error: null, position: 3 }

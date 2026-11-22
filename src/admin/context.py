@@ -155,6 +155,9 @@ class AdminContext:
     nightly: Any = None
     # The experiments' kept conclusions judged on the days after them (src/admin/forward_checks.py).
     forward: Any = None
+    # Each signal rule's real trades, paper days and backtest set side by side, and the backtest calibrated on the live
+    # trades each evening (src/admin/live_check_service.py).
+    live_check: Any = None
     # The live trades and the rules' paper trades judged against their reference, and the edge guard
     # (src/admin/edge_watch_service.py).
     edge_watch: Any = None
@@ -500,6 +503,15 @@ def build_context(config_manager) -> AdminContext:
     ctx.forward = ForwardChecks(
         root=settings.backtests_path, backtests=backtests, queries=queries, config_path=settings.config_path,
         nightly=ctx.nightly, notify=telegram_sender.send, publish=events.publish,
+    )
+
+    from src.admin.live_check_service import LiveCheck
+
+    # Each signal rule's days side by side: its real trades, its paper days, the backtest configuration linked to it and
+    # that configuration made again each evening with what the live trades measured, after the nightly runs.
+    ctx.live_check = LiveCheck(
+        root=settings.backtests_path, backtests=backtests, queries=queries, rules=RuleStore(ta_scripts),
+        config_path=settings.config_path, nightly=ctx.nightly,
     )
 
     ctx.disk_cleanups = DiskCleanups(disk=ctx.disk, release=ctx.release, backtests=backtests, studies=studies)

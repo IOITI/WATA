@@ -77,7 +77,7 @@ AGENT_TOOLS = (
     "pine_list", "pine_get", "pine_check", "pine_rule_check", "pine_run", "pine_signals", "pine_compare", "pine_save",
     "backtest_options", "backtest_list", "backtest_result", "backtest_trades", "backtest_days", "backtest_signals",
     "backtest_compare", "backtest_start", "backtest_derive", "backtest_wait",
-    "turbo_model", "rule_list", "edge_watch", "rule_compare", "rule_shadow_save", "rule_shadow_remove",
+    "turbo_model", "rule_list", "edge_watch", "rule_compare", "rule_live_check", "rule_shadow_save", "rule_shadow_remove",
     "rule_set_reference", "exp_new", "exp_get", "exp_trials", "exp_conclude", *MEMORY_READS,
 )
 PROPOSE_SCRIPT = "propose_script_change"

@@ -1,9 +1,10 @@
 // A signal rule's own page (/ta/signals/<id>): what it runs, whether it is ready to go live, a day of it drawn as the
-// engine ran it with its signals, its days on paper, the signals it journaled, them beside TradingView's, how the
-// engine runs it, and what it ran over time; its mode, its edit and its deletion, as the Signal rules page has them
-// (useRuleActions). It reads what the pages of before read (the rules, the engine, paper trading, the journal, the
-// comparison) and two answers of its own: its history (GET /api/ta/rules/{id}/history) and a day of it
-// (GET /api/ta/rules/{id}/days/{day}/indicator).
+// engine ran it with its signals, its real trades beside its paper days and its backtest (LiveCheckPanel), its days on
+// paper, the signals it journaled, them beside TradingView's, how the engine runs it, and what it ran over time; its
+// mode, its edit and its deletion, as the Signal rules page has them (useRuleActions). It reads what the pages of before
+// read (the rules, the engine, paper trading, the journal, the comparison) and answers of its own: its history
+// (GET /api/ta/rules/{id}/history), a day of it (GET /api/ta/rules/{id}/days/{day}/indicator) and its live check
+// (GET /api/ta/rules/{id}/live-check).
 
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -55,6 +56,7 @@ import type { TaRule, TaRuleState } from '@/lib/types'
 import { chartsPath } from '../chartLinks'
 import { tickerText } from '../engine/tickers'
 import { ComparisonPanel } from './ComparisonPanel'
+import { LiveCheckPanel } from './LiveCheckPanel'
 import { DeleteRuleDialog } from './DeleteRuleDialog'
 import { edgeOf, liveReadiness } from './readiness'
 import { RuleDialog } from './RuleDialog'
@@ -72,6 +74,7 @@ const RunDayChart = lazy(() => import('@/features/ta/chart/RunDayChart').then((m
 const ANCHORED = 'scroll-mt-14'
 const SECTIONS = [
   { id: 'going-live', label: 'Going live' },
+  { id: 'live-check', label: 'Live, paper, backtest' },
   { id: 'day', label: 'Its day' },
   { id: 'paper', label: 'On paper' },
   { id: 'edge-watch', label: 'Edge Watch' },
@@ -368,6 +371,8 @@ export function SignalRulePage() {
               )}
             </Panel>
 
+            <LiveCheckPanel rule={rule} enabled={backtestsEnabled} className={ANCHORED} />
+
             <Panel
               id="day"
               className={ANCHORED}
@@ -439,11 +444,11 @@ export function SignalRulePage() {
               ) : (
                 <QueryState isPending={paperQuery.isPending} error={paperQuery.error} hasData={Boolean(paperQuery.data)}>
                   <div className="flex flex-col gap-5">
-                    <PaperReport owner={rule.id} name={rule.name} entry={paper} inShadow={rule.mode === 'shadow'} canAsk={rule.mode === 'shadow'} />
+                    <PaperReport owner={rule.id} name={rule.name} entry={paper} inShadow={rule.mode !== 'off'} canAsk={rule.mode !== 'off'} />
                     <section aria-label={`Days on paper of ${rule.name}`} className="space-y-2">
                       <h3 className="text-sm font-medium">Its days on paper</h3>
                       <Reference reference={paper?.reference ?? null} ruleId={rule.id} />
-                      <PaperDays days={paper?.days ?? []} madeAgain={rule.mode === 'shadow'} />
+                      <PaperDays days={paper?.days ?? []} madeAgain={rule.mode !== 'off'} />
                     </section>
                   </div>
                 </QueryState>
