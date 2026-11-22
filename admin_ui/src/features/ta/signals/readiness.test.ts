@@ -79,6 +79,18 @@ describe('whether a rule is ready to go live', () => {
     expect(detail(checks, 'edge_watch')).toBe('As expected after 24 trades, +1.20%: consistent with its reference, which is no proof of an edge.')
   })
 
+  it('reads a live rule’s paper trades for its readiness, not its real trades, whose verdict is its own', () => {
+    const live: EdgeOwner = {
+      ...edge(),
+      mode: 'live',
+      main: 'real',
+      verdict: 'broken',
+      tracks: { ...edge().tracks, real: { ...edge().tracks.paper!, verdict: 'broken', n: 22, cumulative: -14.2 } },
+    }
+    const checks = liveReadiness(rule({ mode: 'live' }), state({ last_alert_at: '2026-10-28T14:00:00Z' }), live, Date.parse('2026-10-29T09:00:00Z'), ZONE, READY)
+    expect(detail(checks, 'edge_watch')).toBe('As expected after 24 trades, +1.20%: consistent with its reference, which is no proof of an edge.')
+  })
+
   it('fails a rule the engine cannot run, whose paper trades look random, and says a newer version is saved', () => {
     const checks = liveReadiness(
       rule({ mode: 'off', latest: { script: 6, libraries: {} } }),

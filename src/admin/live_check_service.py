@@ -150,6 +150,11 @@ class LiveCheck:
         found = self.links().get(rule_id)
         return found if isinstance(found, dict) and found.get("configuration") else None
 
+    def linked_run(self, rule_id: str) -> dict | None:
+        """The run the rule's linked configuration is compared with (``template_of``); None without a link or a run."""
+        link = self.link_of(rule_id)
+        return template_of(self._runs_of(link["configuration"])) if link else None
+
     def _runs_of(self, configuration: str) -> list[dict]:
         """Every run of a configuration as the list describes it, newest first."""
         found = []

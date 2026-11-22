@@ -16,7 +16,7 @@ import {
   VERDICT_TONE,
   verdictLine,
 } from './edgeWatch'
-import { useEdgeWatchOwner } from './useEdgeWatch'
+import { useEdgeWatch, useEdgeWatchOwner } from './useEdgeWatch'
 
 const percent = (value: number) => formatPercent(value, true)
 
@@ -62,7 +62,7 @@ function Flags({ owner, track }: { owner: EdgeOwner; track: EdgeTrack }) {
   if (track.settings_differ.length > 0) {
     flags.push(
       `The live settings are not its reference’s (${track.settings_differ.slice(0, 4).join(', ')}): make the reference again under them${
-        owner.owner === 'live' ? '; the edge guard does not act meanwhile' : ''
+        owner.main === 'real' ? '; the edge guard does not act meanwhile' : ''
       }.`,
     )
   }
@@ -108,9 +108,9 @@ export function TrackCone({ cone, track, label }: { cone: EdgeOwner['cone']; tra
   )
 }
 
-/** The guard's state, for the live trades. */
+/** The guard's state, for real trades: the live trades', or a live rule's. */
 function Guard({ owner }: { owner: EdgeOwner }) {
-  if (owner.owner !== 'live' || !owner.guard) return null
+  if (!owner.tracks.real || !owner.guard) return null
   return (
     <p className="text-xs text-muted-foreground">
       {owner.guard.on
@@ -120,18 +120,54 @@ function Guard({ owner }: { owner: EdgeOwner }) {
   )
 }
 
+/** What a live rule without a reference of its own is told: how to get one, and who judges its real trades meanwhile. */
+function NoRuleReference({ ruleId, liveRule, liveJudges }: { ruleId: string; liveRule: boolean; liveJudges: boolean }) {
+  if (!liveRule) {
+    return (
+      <>
+        No reference run: once a run made from this rule is set as its reference (
+        <a className="font-medium text-foreground underline-offset-4 hover:underline" href="#paper">
+          On paper
+        </a>
+        ), Edge Watch judges its paper trades against it.
+      </>
+    )
+  }
+  return (
+    <>
+      No reference run: neither its real trades nor its paper trades are judged against a backtest of its own, and the
+      edge guard cannot act on them.{' '}
+      <Link className="font-medium text-foreground underline-offset-4 hover:underline" to={`/backtests/new?rule=${ruleId}`}>
+        Make a run from the rule
+      </Link>
+      , then “Set as the rule’s reference” on its page.
+      {liveJudges &&
+        ' Meanwhile its real trades are judged with WATA’s other real trades, against the live reference: a replay of the signals WATA received, maybe of another strategy.'}
+    </>
+  )
+}
+
 /**
- * Edge Watch of one owner: the live trades (``live``) or a signal rule on paper, against its reference run. Its
- * verdict and why, the figures that say how unusual its trades are, and the cone of its reference's paths with its
- * own path over it.
+ * Edge Watch of one owner: the live trades (``live``), or a signal rule: its paper trades and, live, its real trades,
+ * against its reference run. Its verdict and why, the figures that say how unusual its trades are, and the cone of
+ * its reference's paths with its own path over it.
  */
-export function EdgeWatchPanel({ owner: ownerId, enabled, className }: { owner: string; enabled: boolean; className?: string }) {
+export function EdgeWatchPanel({ owner: ownerId, enabled, className, liveRule = false }: {
+  owner: string
+  enabled: boolean
+  className?: string
+  /** The rule is live: its real trades are what is judged, once it has a reference. */
+  liveRule?: boolean
+}) {
   const query = useEdgeWatchOwner(ownerId, enabled)
+  // Whether the live reference judges a live rule's real trades while it has none of its own.
+  const list = useEdgeWatch(enabled && liveRule)
   if (!enabled) return null
   const owner = query.data
   const track = owner ? mainTrack(owner) : undefined
   const live = ownerId === 'live'
-  const label = live ? 'Real trades' : 'Paper trades'
+  const real = owner?.main === 'real'
+  const label = real ? 'Real trades' : 'Paper trades'
 
   return (
     <Panel
@@ -141,7 +177,9 @@ export function EdgeWatchPanel({ owner: ownerId, enabled, className }: { owner: 
       description={
         live
           ? 'WATA’s real trades since the live reference, set against where that backtest’s trades went when its days are drawn again, and against what random entries made of the same days.'
-          : 'Its paper trades since its reference, set against where that backtest’s trades went when its days are drawn again, and against what random entries made of the same days.'
+          : real || liveRule
+            ? 'Its real trades since it went live and since its reference, set against where that backtest’s trades went when its days are drawn again, and against what random entries made of the same days; its paper trades beside them.'
+            : 'Its paper trades since its reference, set against where that backtest’s trades went when its days are drawn again, and against what random entries made of the same days.'
       }
       action={track ? <Badge tone={VERDICT_TONE[track.verdict]}>{VERDICT_LABEL[track.verdict]}</Badge> : undefined}
     >
@@ -154,13 +192,7 @@ export function EdgeWatchPanel({ owner: ownerId, enabled, className }: { owner: 
                 makes it the backtest the live trades are judged against.
               </>
             ) : (
-              <>
-                No reference run: once a run made from this rule is set as its reference (
-                <a className="font-medium text-foreground underline-offset-4 hover:underline" href="#paper">
-                  On paper
-                </a>
-                ), Edge Watch judges its paper trades against it.
-              </>
+              <NoRuleReference ruleId={ownerId} liveRule={liveRule} liveJudges={Boolean(list.data?.live)} />
             )}
           </p>
         ) : (
@@ -182,7 +214,12 @@ export function EdgeWatchPanel({ owner: ownerId, enabled, className }: { owner: 
                 'its reference'
               )}
               {owner.model?.reference ? `, ${owner.model.reference.trades} trades over ${owner.model.reference.days} days` : ''}
-              {owner.since ? `; trades since ${formatDay(owner.since)}` : ''}.
+              {real && track.since
+                ? `; real trades since ${formatDay(track.since)}`
+                : owner.since
+                  ? `; trades since ${formatDay(owner.since)}`
+                  : ''}
+              .
             </p>
             {owner.model?.usable && <TrackFigures track={track} />}
             <TrackCone cone={owner.cone} track={track} label={label} />
@@ -191,6 +228,11 @@ export function EdgeWatchPanel({ owner: ownerId, enabled, className }: { owner: 
               <p className="text-xs text-muted-foreground">
                 The signals received, on paper: {verdictLine(owner.tracks.paper).toLowerCase()} — what the trader would have had
                 while entries are paused.
+              </p>
+            )}
+            {!live && real && owner.tracks.paper && (
+              <p className="text-xs text-muted-foreground">
+                On paper since {owner.since ? formatDay(owner.since) : 'its reference'}: {verdictLine(owner.tracks.paper).toLowerCase()}.
               </p>
             )}
             <Guard owner={owner} />

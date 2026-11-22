@@ -25,6 +25,10 @@ A close asked from the pages takes a few seconds, as the monitor's would: set
 FAKE_SELL_REFUSED=1 to have Saxo refuse the first sell (the card that follows
 a close shows each step). A signal sent by hand is decided two seconds later.
 
+Set FAKE_BALANCE to the account's value the pages read (10,250 € unless set):
+FAKE_BALANCE=21.82 shows a signal rule's Protections with turbos the account
+cannot buy.
+
 Set FAKE_MCP=1 for Claude's MCP endpoint, on http://127.0.0.1:8082/mcp: a
 token is printed at start, its Pine studies are real ones (the real Pine
 runner) on the made-up recorded days, and Claude's shadow rules are on.
@@ -696,7 +700,7 @@ class FakeQueries:
         return fake_recorded.asset_days(provider, instrument_id, first_day, last_day, datetime.now(timezone.utc))
 
     async def last_balance(self):
-        return 10_250.0
+        return float(os.getenv("FAKE_BALANCE") or 10_250.0)
 
     async def price_trades(self, instrument, start, end, limit=500):
         return fake_prices.trades(instrument, start, end, datetime.now(timezone.utc))
@@ -1554,7 +1558,7 @@ class FakeEdgeWatch:
     Edge Watch over made-up references (src/admin/edge_watch_service.py): the real model and verdicts
     (src/admin/edge_watch.py), its reference's days and the trades judged made up. The live trades are worth watching
     unless FAKE_EDGE=broken (broken, entries paused by the edge guard); each rule on paper as its reference led to
-    expect, the second one too early.
+    expect, the second one too early; a live rule's real trades judged beside its paper trades.
     """
 
     def __init__(self, rules):
@@ -1571,6 +1575,7 @@ class FakeEdgeWatch:
         broken = os.getenv("FAKE_EDGE") == "broken"
         self._live = [round(draw.gauss(-1.4 if broken else -0.2, 4.0), 3) for _ in range(44 if broken else 26)]
         self._paper = [round(draw.gauss(0.8, 4.0), 3) for _ in range(9)]
+        self._real = [round(draw.gauss(0.3, 4.0), 3) for _ in range(7)]
 
     @staticmethod
     def _path(results):
@@ -1589,6 +1594,11 @@ class FakeEdgeWatch:
         tracks = {main: track}
         if owner == "live":
             tracks["paper"] = {**ew.judge(self._model, self._paper), "path": self._path(self._paper), "stale_days": []}
+        elif main == "real":
+            # A live rule: its real trades from the day it went live, its paper trades beside them.
+            went_live = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
+            track.update({"since": went_live, "started_at": f"{went_live}T14:00:00+00:00", "test_since": f"{went_live}T14:00:00+00:00"})
+            tracks["paper"] = {**ew.judge(self._model, self._paper * 2), "path": self._path(self._paper * 2), "stale_days": []}
         model = {key: self._model.get(key) for key in ("usable", "why_not", "reference", "test", "horizon")}
         return {"owner": owner, "name": name, "mode": mode, "reference": reference, "since": "2026-10-15", "model": model,
                 "cone": self._model["cone"], "tracks": tracks, "verdict": track["verdict"], "main": main}
@@ -1596,9 +1606,12 @@ class FakeEdgeWatch:
     async def judgements(self, *, max_age=30):
         rules = {}
         for index, rule in enumerate(self._rules.load()["rules"]):
+            if rule.get("mode") == "live":
+                rules[rule["id"]] = self._owner(rule["id"], rule["name"], "live", self._real, "real")
+                continue
             rules[rule["id"]] = self._owner(rule["id"], rule["name"], rule.get("mode"),
                                             self._paper if index else self._paper * 3, "paper")
-        return {"live": self._owner("live", "the live trades", None, self._live, "real"), "rules": rules,
+        return {"live": self._owner("live", "the live trades", None, self._live, "real"), "rules": rules, "unwatched": [],
                 "judged_at": datetime.now(timezone.utc).isoformat(),
                 "guard": {"on": os.getenv("FAKE_EDGE") == "broken", "least_trades": self._ew.GUARD_LEAST_TRADES}}
 

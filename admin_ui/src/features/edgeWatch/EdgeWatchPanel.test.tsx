@@ -63,6 +63,28 @@ function renderPanel(owner: string, answer: { status: number; body: unknown }) {
   )
 }
 
+/** A rule's panel: its own answer, and the list's (whether the live reference judges its real trades meanwhile). */
+function renderRulePanel(rule: string, answer: { status: number; body: unknown }, list: unknown, liveRule: boolean) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const [status, body] = url.includes(`/api/edge-watch/${rule}`) ? [answer.status, answer.body] : [200, list]
+      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+    }),
+  )
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <EdgeWatchPanel owner={rule} enabled liveRule={liveRule} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+const RULE = '0123456789ab'
+
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Edge Watch’s panel', () => {
@@ -102,5 +124,42 @@ describe('Edge Watch’s panel', () => {
 
     expect(await screen.findByText(/fewer than 30 trades or 20 days: the edge guard pauses nothing on it/)).toBeInTheDocument()
     expect(screen.getByText(/The live settings are not its reference’s \(stoploss_percent\)/)).toBeInTheDocument()
+  })
+
+  it('judges a live rule’s real trades against its own reference, its paper trades beside them', async () => {
+    const rule: EdgeOwner = {
+      ...LIVE,
+      owner: RULE,
+      name: 'Kernel VWAP',
+      mode: 'live',
+      since: '2026-10-28',
+      tracks: { real: { ...LIVE.tracks.real!, since: '2026-11-03', started_at: '2026-11-03T14:00:00+00:00' }, paper: LIVE.tracks.paper },
+    }
+    renderRulePanel(RULE, { status: 200, body: rule }, { live: null, rules: {}, judged_at: '', guard: { on: true, least_trades: 20 } }, true)
+
+    expect(await screen.findByText('Broken after 40 trades, −24.60%')).toBeInTheDocument()
+    const panel = screen.getByRole('heading', { name: 'Edge Watch: broken, or just unlucky?' }).closest('section') as HTMLElement
+    expect(within(panel).getByText(/Its real trades since it went live and since its reference/)).toBeInTheDocument()
+    expect(within(panel).getByText(/Judged against/)).toHaveTextContent('; real trades since 03 Nov 2026.')
+    expect(within(panel).getByRole('table', { name: 'Real trades against where its reference’s paths went' })).toBeInTheDocument()
+    expect(within(panel).getByText(/On paper since .*: worth watching after 12 trades/)).toBeInTheDocument()
+    expect(within(panel).getByText(/The edge guard is on: a broken verdict on 20 real trades or more pauses/)).toBeInTheDocument()
+  })
+
+  it('tells a live rule without a reference how to get one, and who judges its real trades meanwhile', async () => {
+    const list = { live: { ...LIVE, cone: undefined }, rules: {}, unwatched: [{ id: RULE, name: 'Kernel VWAP' }], judged_at: '', guard: { on: false, least_trades: 20 } }
+    renderRulePanel(RULE, { status: 404, body: { detail: 'This rule has no reference run' } }, list, true)
+
+    const link = await screen.findByRole('link', { name: 'Make a run from the rule' })
+    expect(link).toHaveAttribute('href', `/backtests/new?rule=${RULE}`)
+    expect(screen.getByText(/the edge guard cannot act on them/)).toBeInTheDocument()
+    expect(await screen.findByText(/Meanwhile its real trades are judged with WATA’s other real trades/)).toBeInTheDocument()
+  })
+
+  it('tells a rule in shadow without a reference what one would judge, its paper trades', async () => {
+    renderRulePanel(RULE, { status: 404, body: { detail: 'This rule has no reference run' } }, {}, false)
+
+    expect(await screen.findByText(/Edge Watch judges its paper trades against it/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Make a run from the rule' })).not.toBeInTheDocument()
   })
 })

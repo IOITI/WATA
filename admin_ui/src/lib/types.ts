@@ -2067,6 +2067,10 @@ export interface EdgeTrack {
   settings_differ: string[]
   sample?: 'too_few' | 'few' | 'fair' | null
   stale_days?: string[]
+  /** A real track's: the day its trades are judged from (a live rule's: no earlier than when it went live). */
+  since?: string
+  /** A real track's: the moment its trades are judged from. */
+  started_at?: string
   test_since?: string
   /** Whole only: each trade's result and the compounded result after it. */
   path?: { n: number; at: string; result: number; cumulative: number }[]
@@ -2130,6 +2134,8 @@ export interface EdgeOwner {
 export interface EdgeWatchList {
   live: EdgeOwner | null
   rules: Record<string, EdgeOwner>
+  /** The live rules with no reference of their own: their real trades stay among the live trades'. */
+  unwatched?: { id: string; name: string | null }[]
   judged_at: string
   guard: { on: boolean; least_trades: number }
 }
@@ -5514,4 +5520,44 @@ export interface LiveCheckCandidate {
   to: string | null
   headline: BacktestHeadline | null
   strategy: LiveCheckStrategy
+}
+
+/** Where a protection is set: a key of config.json (its catalog group and path) or a page. */
+export type ProtectionLink = { config: { group: string; path: string; block?: string } } | { href: string }
+
+/**
+ * One of a rule's protections (src/admin/live_safety.py): ``pass`` on and able to act, ``open`` off (the operator's
+ * choice) or not known, ``fail`` something to see to.
+ */
+export interface Protection {
+  id: string
+  label: string
+  state: 'pass' | 'open' | 'fail'
+  detail: string
+  link: ProtectionLink | null
+}
+
+/** What the account buys under the live settings, against the entries of the rule's backtest or its days on paper. */
+export interface ProtectionFunds {
+  /** The account's value at the last daily report. */
+  value: number | null
+  share_percent: number
+  safety_units: number
+  /** The dearest ask an order at full scale pays. */
+  dearest_ask: number | null
+  entries: number
+  affordable: number | null
+  affordable_without_safety: number | null
+  needed_for_all: number | null
+  needed_for_most: number | null
+  most_percent: number
+  dearest_entry_ask: number | null
+  source: { kind: 'backtest' | 'paper'; run_id?: string; name?: string | null; first_day?: string | null; last_day?: string | null } | null
+}
+
+export interface RuleProtections {
+  rule: string
+  checks: Protection[]
+  funds: ProtectionFunds | null
+  read_at: string
 }

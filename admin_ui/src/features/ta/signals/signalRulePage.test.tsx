@@ -7,8 +7,8 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import type {
-  BacktestDayIndicator, BacktestPaper, LiveCheck, LiveCheckDay, LiveCheckSegment, RuleCheckSummary, RuleDayIndicator, Session, TaEngine, TaRule,
-  TaRuleHistory, TaScriptSummary, TaSignal,
+  BacktestDayIndicator, BacktestPaper, LiveCheck, LiveCheckDay, LiveCheckSegment, RuleCheckSummary, RuleDayIndicator, RuleProtections, Session,
+  TaEngine, TaRule, TaRuleHistory, TaScriptSummary, TaSignal,
 } from '@/lib/types'
 import { resetVela, velas } from '@/test/fakeVela'
 import { WithTrail } from '@/test/WithTrail'
@@ -186,6 +186,23 @@ function liveCheckDay(): LiveCheckDay {
   }
 }
 
+// What keeps the account safe once the rule trades live (GET /api/ta/rules/<id>/protections).
+const PROTECTIONS: RuleProtections = {
+  rule: ID,
+  read_at: '2026-10-22T09:00:00Z',
+  checks: [
+    { id: 'signal_source', label: 'Signal source', state: 'pass', detail: 'The web server takes us100’s signals from WATA’s engine.', link: { config: { group: 'signals', path: 'trade.config.signal_sources' } } },
+    { id: 'funds', label: 'What the account buys', state: 'fail', detail: 'At 21.82 €, an order at full scale buys a turbo of 10.91 € at most: 2 of the 5 entries.', link: { config: { group: 'sizing', path: 'trade.config.buying_power.safety_margins.bid_calculation' } } },
+    { id: 'breakers', label: 'The day’s breakers', state: 'open', detail: 'Off: a run of losing trades does not end the day’s entries.', link: { config: { group: 'day', path: 'trade.rules[risk_management].rule_config.max_consecutive_losses' } } },
+    { id: 'edge_guard', label: 'Edge guard', state: 'fail', detail: 'No reference run of the rule.', link: { href: `/backtests/new?rule=${ID}` } },
+  ],
+  funds: {
+    value: 21.82, share_percent: 100, safety_units: 1, dearest_ask: 10.91, entries: 5, affordable: 2, affordable_without_safety: 5,
+    needed_for_all: 28.6, needed_for_most: 28.6, most_percent: 90, dearest_entry_ask: 14.3,
+    source: { kind: 'backtest', run_id: '20261119-050828-c18c49', name: 'v4 (again)', first_day: '2026-10-15', last_day: '2026-10-21' },
+  },
+}
+
 let rules: TaRule[] = []
 let paper: BacktestPaper = { rules: {} }
 let checked: LiveCheck | null = null
@@ -245,6 +262,7 @@ function serve() {
       if (url.pathname === `/api/ta/rules/${ID}/live-check/backtest`) return json({ configuration: '2bb6f8514b16', strategy: { same: true, checks: [] } })
       if (url.pathname === '/api/backtests/configurations/2bb6f8514b16' && method === 'PATCH') return json({})
       if (url.pathname === '/api/agent') return json({ enabled: false, model: 'claude-opus-5-5' })
+      if (url.pathname === `/api/ta/rules/${ID}/protections`) return json(PROTECTIONS)
       return json({ detail: `Not served in this test: ${method} ${url.pathname}` }, 404)
     }),
   )
@@ -374,6 +392,12 @@ describe("a signal rule's page", () => {
     await user.selectOptions(await screen.findByRole('combobox', { name: 'Mode of Cross on US100' }), 'live')
     const confirmation = await screen.findByRole('dialog')
     expect(within(confirmation).getByText('Is it ready?')).toBeInTheDocument()
+    // WATA's protections beside its readiness: each opens where it is set in a new tab, none holds the switch back.
+    expect(within(confirmation).getByText('WATA’s protections')).toBeInTheDocument()
+    const funds = await within(confirmation).findByRole('link', { name: 'What the account buys' })
+    expect(funds).toHaveAttribute('href', '/config/sizing#p-trade-config-buying-power-safety-margins-bid-calculation')
+    expect(funds).toHaveAttribute('target', '_blank')
+    expect(within(confirmation).getByText(/2 to see to, 1 off or not known, 1 on: none of them holds the switch back/)).toBeInTheDocument()
     expect(sent.some((request) => request.path.endsWith('/mode'))).toBe(false)
     await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }))
 
@@ -382,6 +406,20 @@ describe("a signal rule's page", () => {
     await user.click(within(asked).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(screen.getByTestId('address')).toHaveTextContent(/^\/ta\/signals$/))
     expect(sent.some((request) => request.method === 'DELETE' && request.path === `/api/ta/rules/${ID}?revision=r1`)).toBe(true)
+  })
+
+  it('lists WATA’s protections, each leading to where it is set, and what the account buys', async () => {
+    renderAt(`/ta/signals/${ID}`)
+
+    const panel = (await screen.findByRole('heading', { name: 'Protections' })).closest('section')!
+    expect(await within(panel).findByText(/2 to see to, 1 off or not known, 1 on\. To see to before trusting it live: what the account buys, edge guard\./)).toBeInTheDocument()
+    expect(within(panel).getByRole('link', { name: 'Edge guard' })).toHaveAttribute('href', `/backtests/new?rule=${ID}`)
+    expect(within(panel).getByRole('link', { name: 'The day’s breakers' })).toHaveAttribute(
+      'href', '/config/day#p-trade-rules-risk-management-rule-config-max-consecutive-losses',
+    )
+    expect(within(panel).getByRole('link', { name: 'The day’s breakers' })).not.toHaveAttribute('target')
+    expect(within(panel).getByText('Entries it buys')).toBeInTheDocument()
+    expect(within(panel).getByText('2 of 5')).toBeInTheDocument()
   })
 
   it('shows the 404 for an address that names no rule', async () => {

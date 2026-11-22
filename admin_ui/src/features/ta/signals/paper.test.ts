@@ -39,6 +39,24 @@ describe('a rule traded on paper', () => {
     expect(paperLine(ENTRY, 'shadow', fine)?.tone).toBe('ok')
   })
 
+  it('says a live rule’s real trades first, then its paper trades, in the real trades’ tone', () => {
+    const paper = {
+      verdict: 'as_expected' as const, reasons: [], n: 9, cumulative: 2.4, rank: 60, drawdown: -2, drawdown_rank: 50, streak: 1, streak_rank: 70,
+      cusum: 0.2, h: 5, alarm_at: null, trades_to_tell: 80, progress: 0.1, settings_differ: [],
+    }
+    const edge: EdgeOwner = {
+      owner: 'r', name: 'Kernel VWAP', mode: 'live', reference: null, since: '2026-10-28', model: null, verdict: 'broken', main: 'real',
+      tracks: { paper, real: { ...paper, verdict: 'broken', n: 22, cumulative: -14.2, alarm_at: 19 } },
+    }
+    expect(paperLine(ENTRY, 'live', edge)).toMatchObject({
+      reference: 'Edge Watch, its real trades: broken after 22 trades, −14.20%; on paper: as expected after 9 trades, +2.40%.',
+      tone: 'warning',
+    })
+    expect(paperLine({ ...ENTRY, reference: null }, 'live')?.reference).toBe(
+      'No reference run: set one from a run made from this rule, for its real trades to be judged too.',
+    )
+  })
+
   it('without a reference, or before its first day', () => {
     expect(paperLine({ ...ENTRY, reference: null }, 'shadow')?.reference).toBe('No reference run: set one from a run made from this rule.')
     expect(paperLine(undefined, 'shadow')?.total).toBe('Each finished day, once the market is closed')

@@ -25,8 +25,8 @@ from src.admin.data import AssetNotFound, InvalidAsset
 from src.admin.errors import DatabaseUnavailable, InvalidRequest, NotPossible, ServiceUnavailable, UnknownRun
 from src.admin.events import StateWatcher
 from src.admin.routers import (
-    actions, agent, backtests, config, credentials, data, disk, edge_watch, live_check, luxalgo, release, research, saxo,
-    services, session, system, ta, trading,
+    actions, agent, backtests, config, credentials, data, disk, edge_watch, live_check, live_safety, luxalgo, release,
+    research, saxo, services, session, system, ta, trading,
 )
 from src.admin.ta_scripts import InvalidScript, ScriptConflict, ScriptNotFound
 
@@ -354,7 +354,7 @@ def create_app(ctx: AdminContext, static_dir: str = STATIC_DIR) -> FastAPI:
         return {"service": "admin", "totp": ctx.credentials.totp_enabled()}
 
     for module in (session, saxo, trading, system, disk, services, release, actions, config, credentials, data,
-                   backtests, edge_watch, live_check, ta, research, agent, luxalgo):
+                   backtests, edge_watch, live_check, live_safety, ta, research, agent, luxalgo):
         app.include_router(module.router)
     # LuxAlgo sends the browser back there from its own site: the state admits it (src/admin/routers/luxalgo.py).
     app.include_router(luxalgo.callback_router)

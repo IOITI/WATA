@@ -161,3 +161,10 @@ export function paperVerdict(owner: EdgeOwner | undefined): { text: string; tone
   if (!owner || !track) return null
   return { text: verdictLine(track), tone: VERDICT_TONE[track.verdict] }
 }
+
+/** Edge Watch's verdict on a live rule's real trades against its reference; null without a real track. */
+export function realVerdict(owner: EdgeOwner | undefined): { text: string; tone: BadgeTone } | null {
+  const track = owner?.tracks.real
+  if (!owner || !track) return null
+  return { text: verdictLine(track), tone: VERDICT_TONE[track.verdict] }
+}

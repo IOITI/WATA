@@ -153,6 +153,7 @@ import type {
   LiveCheckCandidate,
   LiveCheckDay,
   LiveCheckStrategy,
+  RuleProtections,
   EdgeOwner,
   EdgeWatchList,
   PositionChartRefs,
@@ -673,6 +674,8 @@ export const api = {
       'PUT', `/api/ta/rules/${encodeURIComponent(id)}/live-check/backtest`, { body: { configuration } },
     ),
   unlinkLiveCheck: (id: string) => request<{ ok: true }>('DELETE', `/api/ta/rules/${encodeURIComponent(id)}/live-check/backtest`),
+  /** What keeps the account safe while the rule trades live: each protection's state, and what the account buys. */
+  ruleProtections: (id: string) => request<RuleProtections>('GET', `/api/ta/rules/${encodeURIComponent(id)}/protections`),
 
   // ── Claude's research through the MCP endpoint: watched, paused, its tokens revoked ──
   mcp: () => request<McpState>('GET', '/api/mcp'),

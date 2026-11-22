@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -1567,23 +1568,62 @@ class AdminQueries:
         )
         return [_clean_row(row) for row in rows]
 
-    async def closed_results_since(self, moment: datetime) -> list[dict]:
+    async def closed_results_since(self, moment: datetime, leaving_out: Sequence[str] = ()) -> list[dict]:
         """
         The results of the positions closed from ``moment`` on, in the order they closed: what Edge Watch judges the
-        live trades on (src/admin/edge_watch.py).
+        live trades on (src/admin/edge_watch.py). ``leaving_out``: signal rules whose positions are left out (those
+        opened from one of their signals), each judged against its own reference.
         """
-        rows = await self.db.fetch(
+        args: list[Any] = [moment]
+        apart = ""
+        if leaving_out:
+            args.append(list(leaving_out))
+            apart = f"""
+              AND NOT EXISTS (
+                  SELECT 1 FROM signal_journal j JOIN ta_signal s ON s.signal_uuid = j.signal_uuid
+                  WHERE j.position_id = p.position_id AND s.rule_id = ANY($2::text[])
+              )"""
+        query = f"""
+            SELECT p.position_id, p.execution_time_close, p.position_total_performance_percent
+            FROM turbo_data_position p
+            WHERE p.position_status = 'Closed' AND p.execution_time_close >= $1
+              AND p.position_total_performance_percent IS NOT NULL{{apart}}
+            ORDER BY p.execution_time_close ASC, p.position_id ASC
+            LIMIT {MAX_REPLAYED_ROWS}
+            """
+        try:
+            rows = await self.db.fetch(query.format(apart=apart), *args)
+        except DatabaseUnavailable as e:
+            if not apart or not _is_missing_table(e):
+                raise
+            # The engine never ran: no position came from a rule's signal.
+            rows = await self.db.fetch(query.format(apart=""), moment)
+        return [_clean_row(row) for row in rows]
+
+    async def rule_closed_results_since(self, rule_ids: Sequence[str], moment: datetime) -> list[dict]:
+        """
+        The results of the positions opened from the signals of ``rule_ids`` and closed from ``moment`` on, each with
+        its rule, in the order they closed: a live rule's real trades, which Edge Watch judges against the rule's own
+        reference (src/admin/edge_watch_service.py). None of them before the engine ever ran.
+        """
+        if not rule_ids:
+            return []
+        rows = await self._fetch_optional(
             f"""
-            SELECT position_id, execution_time_close, position_total_performance_percent
-            FROM turbo_data_position
-            WHERE position_status = 'Closed' AND execution_time_close >= $1
-              AND position_total_performance_percent IS NOT NULL
-            ORDER BY execution_time_close ASC, position_id ASC
+            SELECT DISTINCT ON (p.position_id) s.rule_id, p.position_id, p.execution_time_close,
+                   p.position_total_performance_percent
+            FROM ta_signal s
+            JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            JOIN turbo_data_position p ON p.position_id = j.position_id
+            WHERE s.rule_id = ANY($1::text[]) AND p.position_status = 'Closed' AND p.execution_time_close >= $2
+              AND p.position_total_performance_percent IS NOT NULL
+            ORDER BY p.position_id ASC, s.raised_at ASC
             LIMIT {MAX_REPLAYED_ROWS}
             """,
-            moment,
+            list(rule_ids), moment,
         )
-        return [_clean_row(row) for row in rows]
+        found = [_clean_row(row) for row in rows]
+        return sorted(found, key=lambda row: (row["execution_time_close"], str(row["position_id"])))
 
     async def balance_history(self) -> list[dict]:
         rows = await self._fetch_optional(

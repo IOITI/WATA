@@ -6,14 +6,20 @@ run set against it, the verdicts said once on Telegram and to the pages, and the
   WATA received, chosen on its run's page), and beside them the live paper days' trades: while entries are paused,
   what the trader would have had. The live test restarts each time the operator resumes entries.
 - each signal rule with a reference: its paper days' trades since the day after its reference's last day, and not
-  before the last change of what it runs, nor before it went into shadow.
+  before the last change of what it runs, nor before it went into shadow. A live rule's real trades too (the positions
+  opened from its own signals: ``ta_signal`` → ``signal_journal`` → ``turbo_data_position``), from the latest of the
+  day after its reference's last day, the last change of what it runs and the moment it went live, their test
+  restarting at each resume as the live trades' does; its verdict is then theirs.
+
+Each real trade is judged once: a live rule with a reference judges its own positions, and ``live`` the others. A live
+rule without a reference of its own is listed (``unwatched``): its positions stay among ``live``'s.
 
 Nothing is stored but the models (one per reference run, under ``edge_watch/models``) and the verdicts said last
 (``edge_watch/said.json``): the start of each track is derived, so a restart judges the same trades again.
 
 The edge guard (``risk_management.pause_when_edge_broken``, off unless true) pauses new entries as the operator does,
-said to be its own, when the live trades are judged broken (``should_pause``). Only the operator resumes them. It is
-the admin's: it works while the admin runs, and health says when it cannot judge.
+said to be its own, when real trades are judged broken (``should_pause``): the live trades', or a live rule's. Only the
+operator resumes them. It is the admin's: it works while the admin runs, and health says when it cannot judge.
 
 A task of the admin application, every 30 s while the market is open and every 15 minutes otherwise.
 """
@@ -23,7 +29,7 @@ import json
 import logging
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as day_time, timedelta, timezone
 
 from src.admin import edge_watch as ew
 from src.admin.backtests import LIVE_PAPER, NO_ENTRY
@@ -56,15 +62,54 @@ def _day(moment) -> date | None:
 
 
 def _named(entry: dict, track: str) -> str:
-    """How Telegram names a track."""
+    """How Telegram (and the guard's pause) names a track."""
     if entry["owner"] != LIVE_PAPER:
-        return f"rule {entry['name']!r} on paper"
+        return f"the real trades of rule {entry['name']!r}" if track == REAL else f"rule {entry['name']!r} on paper"
     return LIVE_NAME if track == REAL else "the signals received, on paper"
 
 
 def _later(*days: date | None) -> date | None:
     known = [day for day in days if day is not None]
     return max(known) if known else None
+
+
+def _moment(value) -> datetime | None:
+    """A moment written by the services or the rules' store, made aware (UTC when it says no zone)."""
+    if not value:
+        return None
+    moment = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _day_start(day: date, zone) -> datetime:
+    """The start of a day of the trading timezone, in UTC (a pytz zone is localized, never given as tzinfo)."""
+    start = datetime.combine(day, day_time())
+    start = zone.localize(start) if hasattr(zone, "localize") else start.replace(tzinfo=zone)
+    return start.astimezone(timezone.utc)
+
+
+def went_live_at(rule: dict) -> datetime | None:
+    """The moment a live rule went live (its last change of mode); None for a rule that is not live."""
+    if rule.get("mode") != "live":
+        return None
+    return _moment(rule.get("mode_changed_at") or rule.get("created_at"))
+
+
+def real_start(rule: dict, since: date | None, zone) -> datetime | None:
+    """
+    Where a live rule's real track starts: the latest of the day after its reference's last day (``since``, None while
+    its reference has no tested day), the last change of what it runs and the moment it went live. Its trades before
+    are the reference's days, or another version's, or not its own.
+    """
+    moments = [_day_start(since, zone)] if since is not None else []
+    moments += [moment for moment in (_moment(rule.get("run_changed_at")), went_live_at(rule)) if moment is not None]
+    return max(moments) if moments else None
+
+
+def real_tracks(judgements: dict) -> list[tuple[dict, dict]]:
+    """Every real track judged, with its owner's entry: the live trades' first, then each live rule's."""
+    entries = [judgements.get("live")] + list((judgements.get("rules") or {}).values())
+    return [(entry, entry["tracks"][REAL]) for entry in entries if entry is not None and REAL in entry["tracks"]]
 
 
 class EdgeWatch:
@@ -179,20 +224,36 @@ class EdgeWatch:
         trades.sort()
         return [result for _, result in trades], [{"at": at, "result": result} for at, result in trades], stale
 
-    async def _real_results(self, since: datetime, test_since: datetime) -> tuple[list[float], list[float], list[dict]]:
-        rows = await self._queries.closed_results_since(since)
+    @staticmethod
+    def _results(rows: list[dict], start: datetime, test_since: datetime) -> tuple[list[float], list[float], list[dict]]:
+        """Closed positions' results from ``start`` on, in the order they closed; those the test reads; their path."""
         results, tested, path = [], [], []
         for row in rows:
-            result = float(row["position_total_performance_percent"])
             closed = row["execution_time_close"]
+            moment = _moment(closed)
+            if moment is None or moment < start:
+                continue
+            result = float(row["position_total_performance_percent"])
             results.append(result)
-            moment = datetime.fromisoformat(str(closed).replace("Z", "+00:00"))
-            if moment.tzinfo is None:
-                moment = moment.replace(tzinfo=timezone.utc)
             if moment >= test_since:
                 tested.append(result)
             path.append({"at": str(closed), "result": result})
         return results, tested, path
+
+    async def _rules_rows(self, rules: dict[str, dict]) -> dict[str, list[dict]] | None:
+        """The live rules' real positions closed since the earliest went live, by rule; None: the database is down."""
+        if not rules:
+            return {}
+        starts = [went_live_at(rule) for rule in rules.values()]
+        earliest = min((start for start in starts if start is not None), default=datetime(2000, 1, 1, tzinfo=timezone.utc))
+        try:
+            rows = await self._queries.rule_closed_results_since(sorted(rules), earliest)
+        except DatabaseUnavailable:
+            return None
+        found: dict[str, list[dict]] = {rule_id: [] for rule_id in rules}
+        for row in rows:
+            found.setdefault(str(row["rule_id"]), []).append(row)
+        return found
 
     # ── judging ──
 
@@ -207,11 +268,17 @@ class EdgeWatch:
         return {**judgement, "path": walked}
 
     async def _owner(self, owner: str, run_id: str, rule: dict | None, zone, live_settings: dict,
-                     resumed_at: datetime | None) -> dict:
+                     resumed_at: datetime | None, *, leaving_out: list[str] | None = None,
+                     real_rows: list[dict] | None = None) -> dict:
+        """
+        One owner's judgement. ``leaving_out``: for ``live``, the rules whose positions are judged on their own;
+        ``real_rows``: for a live rule, its real positions (None while they cannot be read).
+        """
         reference = self._backtests.reference_of(run_id)
         model = await self.model(run_id) if reference and reference.get("done") else None
         last_day = date.fromisoformat(reference["last_day"]) if reference and reference.get("last_day") else None
-        since = last_day + timedelta(days=1) if last_day else None
+        after_reference = last_day + timedelta(days=1) if last_day else None
+        since = after_reference
         if rule is not None:
             since = _later(since, _day(rule.get("run_changed_at")),
                            _day(rule.get("mode_changed_at")) if rule.get("mode") == "shadow" else None)
@@ -231,26 +298,35 @@ class EdgeWatch:
         judged = self._with_path(ew.judge(model, paper, settings_differ=differ), paper_path)
         judged["stale_days"] = stale
         entry["tracks"][PAPER] = judged
+        start, rows = None, None
         if owner == LIVE_PAPER and since is not None:
-            start = datetime.combine(since, datetime.min.time(), zone).astimezone(timezone.utc)
-            test_since = max(start, resumed_at) if resumed_at else start
+            start = _day_start(since, zone)
             try:
-                results, tested, path = await self._real_results(start, test_since)
+                rows = await self._queries.closed_results_since(start, leaving_out=leaving_out) if leaving_out \
+                    else await self._queries.closed_results_since(start)
             except DatabaseUnavailable:
-                results, tested, path = None, None, None
-            if results is not None:
-                real = self._with_path(ew.judge(model, results, tested=tested, settings_differ=differ), path)
-                real["test_since"] = test_since.isoformat()
-                entry["tracks"][REAL] = real
-        main = entry["tracks"].get(REAL) if owner == LIVE_PAPER else entry["tracks"][PAPER]
-        entry["verdict"] = (main or entry["tracks"][PAPER])["verdict"]
-        entry["main"] = REAL if owner == LIVE_PAPER and REAL in entry["tracks"] else PAPER
+                rows = None
+        elif rule is not None and rule.get("mode") == "live":
+            # Its positions are left out of the live trades': judged here, said not to be watched while its reference
+            # cannot be drawn from (not finished, gone).
+            start, rows = real_start(rule, after_reference, zone), real_rows
+        if start is not None and rows is not None:
+            test_since = max(start, resumed_at) if resumed_at else start
+            results, tested, path = self._results(rows, start, test_since)
+            real = self._with_path(ew.judge(model, results, tested=tested, settings_differ=differ), path)
+            real["since"] = start.astimezone(zone).date().isoformat()
+            real["started_at"] = start.isoformat()
+            real["test_since"] = test_since.isoformat()
+            entry["tracks"][REAL] = real
+        entry["main"] = REAL if REAL in entry["tracks"] else PAPER
+        entry["verdict"] = entry["tracks"][entry["main"]]["verdict"]
         return entry
 
     async def judgements(self, *, max_age: float = FRESH_SECONDS) -> dict:
         """
         Every owner's judgement: ``live`` (None without a live reference) and each rule with a reference
-        (``rules``), with the guard's state. Made again once older than ``max_age`` seconds.
+        (``rules``), with the guard's state and the live rules no reference of their own judges (``unwatched``, their
+        real trades left among ``live``'s). Made again once older than ``max_age`` seconds.
         """
         now = self._clock()
         if self._last is not None and self._judged_at is not None and now - self._judged_at < max_age:
@@ -263,16 +339,26 @@ class EdgeWatch:
             live_settings = self._live_settings(config)
             references = self._backtests.references()
             rules = {rule["id"]: rule for rule in self._rules.load()["rules"] if rule.get("id")}
+            live_rules = {rule_id: rule for rule_id, rule in rules.items() if rule.get("mode") == "live"}
+            # Each real trade is judged once: a live rule with a reference judges its own positions, ``live`` the others.
+            own = {rule_id: rule for rule_id, rule in live_rules.items() if rule_id in references}
+            unwatched = [{"id": rule_id, "name": rule.get("name")} for rule_id, rule in sorted(live_rules.items())
+                         if rule_id not in references]
             try:
                 resumed_at = await self._queries.entries_resumed_at()
             except DatabaseUnavailable:
                 resumed_at = None
+            rows = await self._rules_rows(own)
             live, judged_rules = None, {}
             for owner, run_id in sorted(references.items()):
                 if owner != LIVE_PAPER and owner not in rules:
                     continue
                 try:
-                    entry = await self._owner(owner, run_id, rules.get(owner), zone, live_settings, resumed_at)
+                    entry = await self._owner(
+                        owner, run_id, rules.get(owner), zone, live_settings, resumed_at,
+                        leaving_out=sorted(own) if owner == LIVE_PAPER else None,
+                        real_rows=None if rows is None else rows.get(owner),
+                    )
                 except Exception as e:
                     logger.warning(f"Edge Watch could not judge {owner}: {e}", exc_info=True)
                     continue
@@ -282,7 +368,8 @@ class EdgeWatch:
                     judged_rules[owner] = entry
             self._prune(set(references.values()))
             self._last = {
-                "live": live, "rules": judged_rules, "judged_at": datetime.fromtimestamp(self._clock(), timezone.utc).isoformat(),
+                "live": live, "rules": judged_rules, "unwatched": unwatched,
+                "judged_at": datetime.fromtimestamp(self._clock(), timezone.utc).isoformat(),
                 "guard": {"on": self.guard_on(config), "least_trades": ew.GUARD_LEAST_TRADES},
             }
             self._judged_at = self._clock()
@@ -340,11 +427,16 @@ class EdgeWatch:
             write_json(os.path.join(self._folder, SAID_FILE), said)
 
     async def _guard(self, judgements: dict) -> bool:
-        """The live trades broken and the guard on: new entries paused, said once. True when it paused them."""
-        live = judgements.get("live") or {}
-        real = (live.get("tracks") or {}).get(REAL)
-        if not judgements.get("guard", {}).get("on") or real is None or not ew.should_pause(real):
+        """
+        Real trades broken (the live trades', or a live rule's) and the guard on: new entries paused, said once. True
+        when it paused them.
+        """
+        if not judgements.get("guard", {}).get("on"):
             return False
+        broken = [(entry, real) for entry, real in real_tracks(judgements) if ew.should_pause(real)]
+        if not broken:
+            return False
+        entry, real = broken[0]
         judged_after = datetime.fromisoformat(real["test_since"])
         try:
             paused = await self._risk_state.pause_entries_by_edge_guard(datetime.now(timezone.utc), judged_after)
@@ -354,18 +446,19 @@ class EdgeWatch:
         if not paused:
             return False
         reason = "; ".join(real["reasons"][:2])
-        detail = f"the live trades since {live.get('since')}: {real['n']} trade(s), {real['cumulative']:+.2f} %; {reason}"
+        detail = (f"{_named(entry, REAL)} since {real.get('since') or entry.get('since')}: {real['n']} trade(s), "
+                  f"{real['cumulative']:+.2f} %; {reason}")
         logger.warning(f"The edge guard paused new entries: {detail}")
         if self._audit_log is not None:
             self._audit_log.append("edge-guard", "new entries paused by the edge guard", detail)
         if self._publish is not None:
             self._publish("entries_paused")
         if self._notify is not None:
+            page = "the Performance page" if entry["owner"] == LIVE_PAPER else "the rule's page"
             try:
                 await self._notify(
                     f"⏸️ WATA: new entries paused by the edge guard. {detail[:1].upper()}{detail[1:]}. They stay paused "
-                    f"until you resume them from the admin's dashboard; the Performance page shows the trades against "
-                    f"their reference."
+                    f"until you resume them from the admin's dashboard; {page} shows the trades against their reference."
                 )
             except Exception as e:
                 logger.warning(f"The edge guard's pause could not be said: {e}")

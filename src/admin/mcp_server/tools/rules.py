@@ -98,15 +98,16 @@ def register(server, research) -> None:
 
     @research_tool(server, calls, name="edge_watch", title="Broken, or just unlucky?", read_only=True)
     async def edge_watch(owner: str = "live") -> dict:
-        """Edge Watch: trades since a reference run set against it. owner "live": WATA's real trades since the
-        live reference (a replay of the signals WATA received), and the signals received traded on paper; or a
-        signal rule's id: its paper trades since its reference. Each track: its verdict (as_expected, watch, broken,
-        better_than_expected, too_early, no_model, no_edge_over_random) and why; rank, the share of the reference's
-        paths (whole days drawn again) at or below its result after as many trades (drawdown_rank, streak_rank: as
-        deep, as long or worse); the test (cusum against h, a CUSUM between the reference's trades and what random
-        entries made of the same days, at most 5 % false alarms within the horizon); trades_to_tell, the trades it
-        takes to tell a dead edge, 80 % of the time; settings_differ. Per-trade results in percent of the turbo,
-        never money. The cone: the reference's paths at levels of n."""
+        """Edge Watch: trades since a reference run set against it. owner "live": WATA's real trades since the live
+        reference (a replay of the signals WATA received), but a live rule's judged on their own, and the signals
+        received traded on paper; or a signal rule's id: its paper trades since its reference and, live, its real
+        trades (track real, from when it went live; its verdict then). Each track: its verdict (as_expected, watch,
+        broken, better_than_expected, too_early, no_model, no_edge_over_random) and why; rank, the share of the
+        reference's paths (whole days drawn again) at or below its result after as many trades (drawdown_rank,
+        streak_rank: as deep, as long or worse); the test (cusum against h, a CUSUM between the reference's trades and
+        what random entries made of the same days, at most 5 % false alarms within the horizon); trades_to_tell, the
+        trades it takes to tell a dead edge, 80 % of the time; settings_differ. Per-trade results in percent of the
+        turbo, never money. The cone: the reference's paths at levels of n."""
         if research.edge_watch is None:
             raise Refused("Edge Watch is off: backtests are switched off in the configuration")
         found = await research.edge_watch.judgements()

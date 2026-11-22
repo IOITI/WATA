@@ -9,7 +9,7 @@
 import { formatDateTime, formatDay } from 'ioiti-ui'
 import type { Check } from 'ioiti-ui'
 
-import { edgeUnmet, mainTrack, verdictLine } from '@/features/edgeWatch/edgeWatch'
+import { edgeUnmet, verdictLine } from '@/features/edgeWatch/edgeWatch'
 import type { EdgeOwner, EdgeWatchList, RuleCheckSummary, TaRule, TaRuleState } from '@/lib/types'
 
 import { addDays, dayIn } from '../data/wataBars'
@@ -44,7 +44,8 @@ export function edgeCheck(edge: EdgeOwner | null | undefined): Check {
     return { id: 'edge_watch', label, state: 'open', detail: 'Edge Watch is not read: it needs the backtests.' }
   }
   const unmet = edgeUnmet(edge)
-  const track = edge ? mainTrack(edge) : undefined
+  // Its paper trades: a live rule's own verdict is its real trades'.
+  const track = edge?.tracks.paper
   if (unmet.length === 0 && track) {
     return { id: 'edge_watch', label, state: 'pass', detail: `${verdictLine(track)}: consistent with its reference, which is no proof of an edge.` }
   }

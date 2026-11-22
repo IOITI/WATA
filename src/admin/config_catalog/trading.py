@@ -147,15 +147,19 @@ DAY = (
         path=rule("risk_management", "pause_when_edge_broken"), group="day",
         label="Pause entries when Edge Watch says the live trades are broken", kind="bool", optional=True,
         default=False,
-        help="When the live trades since the live reference look like random entries' rather than the reference's "
-             "(Edge Watch's test, at most 5 % of false alarms), new entries are paused until you resume them.",
+        help="When real trades look like random entries' rather than their reference's (Edge Watch's test, at "
+             "most 5 % of false alarms), new entries are paused until you resume them: a live signal rule's trades "
+             "against the rule's own reference, the other real trades against the live reference.",
         readers=(ADMIN,), consumers=("dashboard",), risk=TRADING,
-        effects=("The admin judges the live trades every 30 s while the market is open and, on a broken verdict "
-                 "with 20 real trades or more, pauses new entries as the dashboard's pause does, said on Telegram.",),
+        effects=("The admin judges the real trades every 30 s while the market is open and, on a broken verdict "
+                 "with 20 real trades or more, pauses new entries as the dashboard's pause does, said on Telegram "
+                 "with what was judged.",),
         related=(rule("risk_management", "pause_below_balance_eur"),),
-        caveats=("It needs a live reference (a replay of the signals WATA received, chosen on its run's page) that "
-                 "rests on 30 trades and 20 days at least, made under the live settings: otherwise it does nothing, "
-                 "and health says why.",
+        caveats=("It needs a reference that rests on 30 trades and 20 days at least, does better than random entries "
+                 "and was made under the live settings: for a live rule, a run made from the rule and set as its "
+                 "reference on the run's page; for the other real trades, a replay of the signals WATA received set "
+                 "as the live reference. Otherwise it does nothing, and health says why.",
+                 "A live rule's trades are judged from when it went live, and only after its reference's last day.",
                  "It is the admin's: while the admin is stopped, nothing is judged and nothing is paused.",
                  "Resuming entries starts the test afresh."),
     ),

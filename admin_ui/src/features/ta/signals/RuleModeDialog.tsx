@@ -16,6 +16,9 @@ import { api } from '@/lib/api'
 import type { TaRule, TaRuleMode } from '@/lib/types'
 
 import { goLiveSaid, licenceToCheck } from '../luxalgo/luxalgoModel'
+import { protectionsLine } from './protections'
+import { ProtectionList } from './ProtectionsPanel'
+import { useRuleProtections } from './useRuleProtections'
 import { holdingBack } from './readiness'
 import { barsLabel, conflictText, MODE_LABEL, mappedAlerts, notReadyRefusal } from './ruleModel'
 
@@ -81,6 +84,8 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
     staleTime: 60_000,
   })
   const origin = goingLive ? pinned.data?.origin : undefined
+  // What keeps the account safe once it trades: said beside its readiness, never holding the switch back.
+  const protections = useRuleProtections(change?.rule.id, goingLive)
   const licence = licenceToCheck(origin)
 
   return (
@@ -138,6 +143,21 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
                 </>
               ) : (
                 <p className="text-xs text-muted-foreground">What this page knows of it; the server checks the same before the switch.</p>
+              )}
+            </div>
+            <div className="space-y-2 pt-2">
+              <p className="font-medium">WATA’s protections</p>
+              {protections.data ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    {protectionsLine(protections.data.checks)}: none of them holds the switch back. Each opens where it is set in a new tab.
+                  </p>
+                  <ProtectionList checks={protections.data.checks} newTab />
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {protections.error ? `Not read: ${protections.error.message}` : 'Reading them…'}
+                </p>
               )}
             </div>
           </div>

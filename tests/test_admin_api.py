@@ -166,6 +166,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/ta/rules/0123456789ab/live-check/candidates"),
     ("PUT", "/api/ta/rules/0123456789ab/live-check/backtest"),
     ("DELETE", "/api/ta/rules/0123456789ab/live-check/backtest"),
+    ("GET", "/api/ta/rules/0123456789ab/protections"),
     ("POST", "/api/backtests/paper/0123456789ab/report"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/reference"),
     ("POST", "/api/backtests/turbo-model"),

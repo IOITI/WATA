@@ -90,7 +90,8 @@ def alert_of(event: dict, at: str, live_rules: bool) -> Alert | None:
         facts = {"status": status, "before": event.get("previous"), "the health says": event.get("detail"), "at": at}
         if service == "edge_watch" and status in ("warning", "down"):
             return Alert(key="service:edge_watch",
-                         what="Edge Watch says the live trades are not what their reference led to expect",
+                         what="Edge Watch says real trades (the live trades, or a live rule's) are not what their "
+                              "reference led to expect",
                          subject={"kind": "incident", "id": service, "at": at}, facts=facts)
         if status == "down" and (service in TRADING_PATH or (service in LIVE_RULES_NEED and live_rules)):
             return Alert(key=f"service:{service}", what=f"{name} is down",

@@ -48,8 +48,57 @@ def test_health_warns_when_the_guard_is_on_and_cannot_act():
     [differ] = edge_watch_entry(_state(AS_EXPECTED, differ=["stoploss_percent"]), guard_on=True)
     [silent] = edge_watch_entry(_state(AS_EXPECTED, age=600.0), guard_on=True)
 
-    assert no_reference["status"] == WARNING and "no live reference" in no_reference["detail"]
+    assert no_reference["status"] == WARNING and "no reference to judge real trades against" in no_reference["detail"]
     assert differ["status"] == WARNING and "stoploss_percent" in differ["detail"]
     assert silent["status"] == WARNING and "has not judged" in silent["detail"]
     # The guard off, settings that differ are said on the Performance page, not as a warning.
     assert edge_watch_entry(_state(AS_EXPECTED, differ=["stoploss_percent"]), guard_on=False)[0]["status"] == OK
+
+
+def _rule(verdict: str, *, differ: list[str] | None = None) -> dict:
+    return {"owner": "0123456789ab", "name": "Kernel VWAP", "tracks": {"paper": {"verdict": AS_EXPECTED, "n": 3}, "real": {
+        "verdict": verdict, "n": 22, "reasons": ["its trades look like random entries' rather than its reference's"],
+        "settings_differ": differ or [],
+    }}}
+
+
+def test_health_reads_a_live_rule_s_real_trades_beside_the_live_trades():
+    rules = {"0123456789ab": _rule(BROKEN)}
+    [broken] = edge_watch_entry(_state(AS_EXPECTED, rules=rules), guard_on=False)
+    assert broken["status"] == WARNING
+    assert broken["detail"].startswith("The real trades of rule 'Kernel VWAP': broken after 22 trades: its trades")
+
+    [calm] = edge_watch_entry(_state(None, rules={"0123456789ab": _rule(AS_EXPECTED)}), guard_on=True)
+    assert (calm["status"], calm["detail"]) == (OK, "The real trades of rule 'Kernel VWAP': as expected after 22 trades")
+
+    [differ] = edge_watch_entry(_state(None, rules={"0123456789ab": _rule(AS_EXPECTED, differ=["max_day_loss"])}),
+                                guard_on=True)
+    assert differ["status"] == WARNING
+    assert differ["detail"].startswith("The edge guard cannot act on the real trades of rule 'Kernel VWAP'")
+
+
+def test_health_warns_when_the_guard_is_on_and_a_reference_could_never_let_it_act():
+    no_model = _rule("no_model")
+    no_model["tracks"]["real"]["reasons"] = ["its reference rests on 8 days, of the 10 it takes"]
+    [warned] = edge_watch_entry(_state(None, rules={"0123456789ab": no_model}), guard_on=True)
+    assert warned["status"] == WARNING
+    assert warned["detail"] == ("The edge guard cannot act on the real trades of rule 'Kernel VWAP': its reference cannot "
+                                "be drawn from (its reference rests on 8 days, of the 10 it takes)")
+    thin = _rule(AS_EXPECTED)
+    thin["tracks"]["real"]["reference"] = {"sample": "too_few"}
+    [few] = edge_watch_entry(_state(None, rules={"0123456789ab": thin}), guard_on=True)
+    assert few["status"] == WARNING and "too few trades or days" in few["detail"]
+    # The guard off, what it could not act on is said on the pages, not as a warning.
+    assert edge_watch_entry(_state(None, rules={"0123456789ab": no_model}), guard_on=False)[0]["status"] == OK
+
+
+def test_health_warns_when_the_guard_is_on_and_a_live_rule_has_no_reference_of_its_own():
+    state = _state(AS_EXPECTED)
+    state["judgements"]["unwatched"] = [{"id": "0123456789ab", "name": "Kernel VWAP"}]
+
+    [warned] = edge_watch_entry(state, guard_on=True)
+    [calm] = edge_watch_entry(state, guard_on=False)
+
+    assert warned["status"] == WARNING and "live rule 'Kernel VWAP'" in warned["detail"]
+    assert "make a run from the rule" in warned["detail"]
+    assert calm["status"] == OK

@@ -57,6 +57,7 @@ import { chartsPath } from '../chartLinks'
 import { tickerText } from '../engine/tickers'
 import { ComparisonPanel } from './ComparisonPanel'
 import { LiveCheckPanel } from './LiveCheckPanel'
+import { ProtectionsPanel } from './ProtectionsPanel'
 import { DeleteRuleDialog } from './DeleteRuleDialog'
 import { edgeOf, liveReadiness } from './readiness'
 import { RuleDialog } from './RuleDialog'
@@ -74,6 +75,7 @@ const RunDayChart = lazy(() => import('@/features/ta/chart/RunDayChart').then((m
 const ANCHORED = 'scroll-mt-14'
 const SECTIONS = [
   { id: 'going-live', label: 'Going live' },
+  { id: 'protections', label: 'Protections' },
   { id: 'live-check', label: 'Live, paper, backtest' },
   { id: 'day', label: 'Its day' },
   { id: 'paper', label: 'On paper' },
@@ -371,6 +373,8 @@ export function SignalRulePage() {
               )}
             </Panel>
 
+            <ProtectionsPanel rule={rule} className={ANCHORED} />
+
             <LiveCheckPanel rule={rule} enabled={backtestsEnabled} className={ANCHORED} />
 
             <Panel
@@ -455,7 +459,7 @@ export function SignalRulePage() {
               )}
             </Panel>
 
-            <EdgeWatchPanel owner={rule.id} enabled={backtestsEnabled} className={ANCHORED} />
+            <EdgeWatchPanel owner={rule.id} enabled={backtestsEnabled} className={ANCHORED} liveRule={rule.mode === 'live'} />
 
             <div id="signals" className={ANCHORED}>
               <SignalJournal rules={[rule]} timeZone={timezone} fixed />

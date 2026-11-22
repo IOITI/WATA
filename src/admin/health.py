@@ -591,11 +591,12 @@ def with_heartbeats(services: list[dict], beats: dict[str, dict], now: datetime,
 
 def edge_watch_entry(state: dict, guard_on: bool) -> list[dict]:
     """
-    Edge Watch (src/admin/edge_watch.py): a warning when the live trades are judged broken or worth watching, when the
-    edge guard is on and cannot act (no live reference, settings not the reference's, nothing judged lately);
+    Edge Watch (src/admin/edge_watch.py): a warning when real trades (the live trades, or a live rule's against its
+    own reference) are judged broken or worth watching, and when the edge guard is on and cannot act (a live rule with
+    no reference of its own, settings not the reference's, no real trades judged at all, nothing judged lately);
     nothing while it watches nothing and the guard is off.
     """
-    from src.admin.edge_watch import BROKEN, LABELS, WATCH
+    from src.admin.edge_watch import BROKEN, LABELS, NO_EDGE, NO_MODEL, TOO_FEW, WATCH
     from src.admin.edge_watch_service import REAL, guard_silent
 
     name = "Edge Watch"
@@ -604,25 +605,58 @@ def edge_watch_entry(state: dict, guard_on: bool) -> list[dict]:
         return [_entry("edge_watch", name, WARNING, "The edge guard is on and Edge Watch has not judged the live trades lately")]
     if judgements is None:
         return []
-    live = judgements.get("live")
     rules = judgements.get("rules") or {}
-    real = ((live or {}).get("tracks") or {}).get(REAL)
-    if real is None:
+    reals = []
+    live = ((judgements.get("live") or {}).get("tracks") or {}).get(REAL)
+    if live is not None:
+        reals.append(("The live trades", live))
+    for entry in rules.values():
+        real = (entry.get("tracks") or {}).get(REAL)
+        if real is not None:
+            reals.append((f"The real trades of rule {entry.get('name')!r}", real))
+
+    def said(named: str, real: dict) -> str:
+        return f"{named}: {LABELS[real['verdict']].lower()} after {_count(real['n'], 'trade')}"
+
+    notable = sorted((pair for pair in reals if pair[1]["verdict"] in (BROKEN, WATCH)),
+                     key=lambda pair: pair[1]["verdict"] != BROKEN)
+    if notable:
+        named, real = notable[0]
+        return [_entry("edge_watch", name, WARNING, f"{said(named, real)}: {'; '.join(real['reasons'][:2])}")]
+    unwatched = judgements.get("unwatched") or []
+    if guard_on and unwatched:
+        names = ", ".join(repr(rule.get("name")) for rule in unwatched[:3])
+        return [_entry("edge_watch", name, WARNING,
+                       f"The edge guard cannot judge the real trades of live rule {names} against its own backtest: it "
+                       f"has no reference (make a run from the rule and set it as its reference on the run's page)")]
+
+    def unable(real: dict) -> str | None:
+        """Why the guard could never pause on this track, whatever its trades do (``guard_refusal`` but its verdict)."""
+        if real["verdict"] == NO_MODEL:
+            return f"its reference cannot be drawn from ({(real.get('reasons') or ['too few days or trades'])[0]})"
+        if real["verdict"] == NO_EDGE:
+            return "its reference does no better than random entries"
+        if (real.get("reference") or {}).get("sample") == TOO_FEW:
+            return "its reference rests on too few trades or days (30 trades and 20 days at least)"
+        if real.get("settings_differ"):
+            return (f"the live settings are not its reference's ({', '.join(real['settings_differ'][:4])}); make the "
+                    f"reference again under them")
+        return None
+
+    blocked = [(named, unable(real)) for named, real in reals if unable(real)]
+    if guard_on and blocked:
+        named, why = blocked[0]
+        return [_entry("edge_watch", name, WARNING, f"The edge guard cannot act on {named[:1].lower()}{named[1:]}: {why}")]
+    if not reals:
         if guard_on:
             return [_entry("edge_watch", name, WARNING,
-                           "The edge guard is on with no live reference to judge the live trades against: choose one "
-                           "(a replay of the signals WATA received) on its run's page")]
+                           "The edge guard is on with no reference to judge real trades against: set a live rule's "
+                           "reference (a run made from the rule), or the live reference (a replay of the signals WATA "
+                           "received), on the run's page")]
         if not rules:
             return []
         return [_entry("edge_watch", name, OK, f"{_count(len(rules), 'rule')} watched on paper; no live reference")]
-    said = f"The live trades: {LABELS[real['verdict']].lower()} after {_count(real['n'], 'trade')}"
-    if real["verdict"] in (BROKEN, WATCH):
-        return [_entry("edge_watch", name, WARNING, f"{said}: {'; '.join(real['reasons'][:2])}")]
-    if guard_on and real.get("settings_differ"):
-        return [_entry("edge_watch", name, WARNING,
-                       f"The edge guard cannot act: the live settings are not its reference's "
-                       f"({', '.join(real['settings_differ'][:4])}); make the live reference again under them")]
-    return [_entry("edge_watch", name, OK, said)]
+    return [_entry("edge_watch", name, OK, "; ".join(said(named, real) for named, real in reals[:2]))]
 
 
 async def _edge_watch(ctx) -> list[dict]:
