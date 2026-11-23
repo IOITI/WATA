@@ -231,7 +231,8 @@ async def execution(queries, timezone_name: str, first_day: date | None = None, 
     """
     What WATA's own orders took and cost (src/backtest/execution_calibration.py):
     the delays from a signal to the trader and from an order to Saxo, the price
-    paid against the recorded quote, the refusals; and the values a run would take from them.
+    paid against the recorded quote (the one standing when the order left, and the one a run prices it at), the
+    refusals; and the values a run would take from them.
     """
     from src.backtest.clock import TradingClock
     from src.backtest.execution_calibration import measure

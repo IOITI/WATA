@@ -1876,8 +1876,14 @@ export interface BacktestExecution {
   order_seconds: BacktestSpread
   /** Euros a turbo worse than the quote recorded when the order left. */
   slippage: Record<'buy' | 'sell' | 'all', BacktestSpread & { median_ticks: number | null }>
+  /**
+   * Euros a turbo worse than the quote a run prices the order at: Saxo's next one for a purchase and a sale sent
+   * between two quotes (together ``orders``), the bid that decided it for an exit of the monitor sent on a quote
+   * just received (in percent of it too). Absent from an admin of before v0.100.0.
+   */
+  slippage_at_fill?: Record<'buy' | 'sell' | 'exit' | 'orders', BacktestSpread & { median_ticks: number | null }> & { exit_percent: BacktestSpread }
   refusals: { share_percent: number | null; by_hour: { hour: number; requests: number; refused: number }[]; codes: Record<string, number> }
-  suggested: Partial<Record<'signal_delay_seconds' | 'order_seconds' | 'slippage', number>>
+  suggested: Partial<Record<'signal_delay_seconds' | 'order_seconds' | 'slippage' | 'exit_slippage_percent', number>>
   /** Measures of a kind needed before a value is suggested. */
   least: number
 }
@@ -2846,7 +2852,16 @@ export interface BacktestSummary {
     /** How its orders were filled: the settings' values, or drawn from WATA's own orders of a period. */
     execution?:
       | { kind: 'fixed' }
-      | { kind: 'measured'; from: string; to: string; orders: number; fills: { slippage_buy: number; slippage_sell: number } }
+      | {
+        kind: 'measured'
+        from: string
+        to: string
+        orders: number
+        fills: { slippage_buy: number; slippage_sell: number }
+        /** What each drawn price is added to: the quote the run fills the order at, or the one standing when it left (the runs of before v0.100.0, which do not say). */
+        priced_at?: 'fill' | 'departure'
+        beyond_fill?: { slippage_buy_next: number; slippage_sell_next: number; slippage_exit: number }
+      }
     turbos?:
       | { kind: 'recorded' }
       | {

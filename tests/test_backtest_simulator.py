@@ -15,6 +15,7 @@ sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
 
 from src.backtest.clock import TradingClock, ceil10  # noqa: E402
 from src.backtest.data import DayData, TurboRef, TurboSeries, sort_turbos  # noqa: E402
+from src.backtest.execution import fills_for  # noqa: E402
 from src.backtest.rules import compounded  # noqa: E402
 from src.backtest.selection import NotSelected, Selected, select_turbo  # noqa: E402
 from src.backtest.settings import from_config  # noqa: E402
@@ -81,9 +82,12 @@ def close_of_day(number: int = 99) -> SignalEvent:
     return SignalEvent(number, "schedule", "close-position", arrived_at=moment, alert_at=moment, indice="n/a")
 
 
-def run(day: DayData, events, settings=PLAIN) -> Simulator:
-    """One day traded, then the run's end (src/backtest/run.py): what is still to be sold is said unresolved."""
-    simulator = Simulator(settings, CLOCK)
+def run(day: DayData, events, settings=PLAIN, samples=None) -> Simulator:
+    """
+    One day traded, then the run's end (src/backtest/run.py): what is still to be sold is said unresolved.
+    ``samples``: WATA's orders a run on measured fills draws from.
+    """
+    simulator = Simulator(settings, CLOCK, fills=fills_for(settings, samples, "1:run") if samples is not None else None)
     simulator.run_day(day, events)
     simulator.finish()
     return simulator
@@ -570,10 +574,102 @@ def test_a_turbo_saxo_did_not_quote_again_is_priced_at_its_standing_quote():
     assert trade["exit"]["bid"] == 5.0
 
 
-def test_measured_fills_keep_the_quote_their_measure_compares():
+# What WATA's orders were measured to pay, each the same so that a test knows its draws. Against the quote standing
+# when the order left (before v0.100.0): the purchase of 19 October paid 5.055 on an ask of 4.636. Against the quote a
+# run prices the order at: 5.055 is 0.037 under the next ask, 5.092.
+MEASURED_BEFORE = {"order_seconds": [1.0] * 10, "slippage_buy": [0.419] * 10, "slippage_sell": [0.02] * 10}
+MEASURED_AT_FILL = {**MEASURED_BEFORE, "slippage_buy_next": [-0.037] * 10, "slippage_sell_next": [0.01] * 10,
+                    "slippage_exit": [0.02] * 10}
+NEXT_MEASURED = replace(NEXT_QUOTE, execution="measured")
+
+
+def test_measured_fills_are_priced_at_the_next_quote_but_those_measured_against_the_standing_one():
     turbo = requoted_turbo()
     boundary = ceil10(at("12:38:37"))
 
-    assert Simulator(NEXT_QUOTE, CLOCK)._next_quote(turbo, boundary) == (5.083, pytest.approx(5.092))
-    assert Simulator(replace(NEXT_QUOTE, execution="measured"), CLOCK)._next_quote(turbo, boundary) is None
-    assert Simulator(replace(NEXT_QUOTE, fill_price="standing"), CLOCK)._next_quote(turbo, boundary) is None
+    def next_quote(settings, samples=None):
+        fills = fills_for(settings, samples, "1:run") if samples is not None else None
+        return Simulator(settings, CLOCK, fills=fills)._next_quote(turbo, boundary)
+
+    assert next_quote(NEXT_QUOTE) == (5.083, pytest.approx(5.092))
+    assert next_quote(NEXT_MEASURED, MEASURED_AT_FILL) == (5.083, pytest.approx(5.092))
+    # Samples kept by a run made before hold no measure against the next quote: priced as that run was.
+    assert next_quote(NEXT_MEASURED, MEASURED_BEFORE) is None
+    assert next_quote(replace(NEXT_MEASURED, fill_price="standing"), MEASURED_AT_FILL) is None
+    assert next_quote(replace(NEXT_QUOTE, fill_price="standing")) is None
+
+
+def test_a_measured_purchase_pays_the_next_quote_and_what_wata_paid_beyond_it():
+    simulator = run(day_of(requoted_turbo()), [signal(1, "long", "12:38:36"), close_of_day()], NEXT_MEASURED, MEASURED_AT_FILL)
+
+    (trade,) = simulator.trades
+    # What WATA really paid that day, and a position that is worth it at Saxo's next quote: no stop.
+    assert trade["entry"]["price"] == pytest.approx(5.055)
+    assert trade["exit"]["reason"] == "Explicit Close (All)"
+    assert trade["min_performance_percent"] > -1
+
+
+def test_the_move_since_a_turbos_last_quote_is_not_a_cost_of_another_order():
+    # A turbo that hardly moves: bid 5.0 (ask 5.05) for an hour, then 5.01.
+    def quiet():
+        return day_of(series(2, "long", 24_800, flat(5.0, 61) + flat(5.01, 780)))
+
+    events = [signal(1, "long", "09:00"), close_of_day()]
+    settings = replace(NEXT_MEASURED, stoploss_percent=-7)
+
+    (before,) = run(quiet(), events, settings, MEASURED_BEFORE).trades
+    (now,) = run(quiet(), events, settings, MEASURED_AT_FILL).trades
+
+    # Measured against the quote standing when it left, the 9 % the turbo had moved on 19 October was paid again
+    # here, where nothing moved: a position 8.4 % under water at its first quote, and stopped there.
+    assert before["entry"]["price"] == pytest.approx(5.469)
+    assert before["exit"]["reason"] == "Performance (Stoploss (-7%) hit at -8.39%)"
+    # Against the quote the order is priced at (the next one, 5.06), what was paid beyond it is small: the day goes on.
+    assert now["entry"]["price"] == pytest.approx(5.023)
+    assert now["exit"]["reason"] == "Explicit Close (All)"
+
+
+def test_a_measured_sale_by_a_signal_and_an_exit_of_the_monitor_each_draw_from_their_own():
+    by_signal = run(day_of(requoted_turbo()), [signal(1, "long", "12:38:36"), signal(2, "close-position", "12:39:05")],
+                    NEXT_MEASURED, MEASURED_AT_FILL)
+    # The next bid after the sale's fill, 5.292, less what WATA's sales by a signal got under that one.
+    assert by_signal.trades[0]["exit"]["bid"] == pytest.approx(5.282)
+
+    # Bought on a quote Saxo did not change for five minutes, then 10 % lower.
+    falling = flat(5.0, 5) + [4.5] * 6000
+    stopped = run(day_of(series(2, "long", 24_800, falling)), [signal(1, "long", "08:00:30"), close_of_day()],
+                  replace(NEXT_MEASURED, stoploss_percent=-7, wait_for_fresh_quote=False), MEASURED_AT_FILL)
+    (trade,) = stopped.trades
+    # The bid that decided the stop, 4.5, less what the monitor's exits got under theirs; no percentage on top.
+    assert trade["exit"]["reason"].startswith("Performance (Stoploss (-7%)") and trade["exit"]["bid"] == pytest.approx(4.48)
+
+
+def test_the_sale_before_a_release_is_by_the_clock_and_draws_as_a_sale_between_two_quotes():
+    from src.backtest.simulator import DECIDED_ON_A_QUOTE, FLAT_BEFORE_RELEASE, MONITOR_EXITS
+
+    # Every exit of the monitor but that one is decided by a quote, and sold on it.
+    assert set(MONITOR_EXITS) - set(DECIDED_ON_A_QUOTE) == {FLAT_BEFORE_RELEASE}
+
+
+def test_too_few_of_one_kind_of_sale_and_both_kinds_are_drawn_as_one():
+    few_exits = {**MEASURED_AT_FILL, "slippage_sell_next": [0.01] * 10, "slippage_exit": [0.02] * 3}
+    fills = fills_for(NEXT_MEASURED, few_exits, "1:run")
+    fills.start_day("2026-10-14")
+
+    assert {round(fills.sale(5.0, 5.0), 2) for _ in range(100)} == {4.99}
+    assert {round(fills.sale(5.0, 5.0, decided=True), 2) for _ in range(200)} == {4.99, 4.98}
+
+
+def test_measured_fills_that_draw_the_settings_own_values_fill_as_fixed_ones():
+    # A purchase, a close by a signal, a purchase the other way, a stop: each priced where the fixed run prices it.
+    events = [signal(1, "long", "12:38:36"), signal(2, "close-position", "12:39:05"), signal(3, "long", "12:50"), close_of_day()]
+    fixed_settings = replace(NEXT_QUOTE, slippage=0.01, order_seconds=1.0)
+    same = {"order_seconds": [1.0] * 10, "slippage_buy": [9.0] * 10, "slippage_sell": [9.0] * 10,
+            "slippage_buy_next": [0.01] * 10, "slippage_sell_next": [0.01] * 10, "slippage_exit": [0.01] * 10}
+
+    fixed = run(day_of(requoted_turbo()), events, fixed_settings).trades
+    measured = run(day_of(requoted_turbo()), events, replace(fixed_settings, execution="measured"), same).trades
+
+    assert [(trade["entry"]["price"], trade["exit"]["bid"], trade["exit"]["reason"]) for trade in measured] == \
+           [(trade["entry"]["price"], trade["exit"]["bid"], trade["exit"]["reason"]) for trade in fixed]
+    assert len(fixed) == 2

@@ -8,6 +8,7 @@ import { barsLabel } from '@/features/ta/signals/ruleModel'
 import { RulePeekName } from '@/features/ta/signals/RulePeek'
 import type { BacktestRun } from '@/lib/types'
 
+import { drawnPricing } from './execution'
 import { assetLabel, settingChanges } from './model'
 import { Measure, SettingChanges } from './parts'
 import { underlyingLabel } from './turboModel'
@@ -82,7 +83,7 @@ export function RunFacts({ run, labels }: { run: BacktestRun; labels: Parameters
               {drawn && (
                 <span className="block text-xs text-muted-foreground">
                   Each order’s time and price drawn from {formatNumber(drawn.orders)} of WATA’s own, from {formatDay(drawn.from)} to{' '}
-                  {formatDay(drawn.to)}
+                  {formatDay(drawn.to)}: {drawnPricing(drawn.priced_at)}
                 </span>
               )}
               {run.stale && <span className="block text-xs text-warning">Other code than this admin’s: it could come out otherwise today.</span>}

@@ -48,7 +48,7 @@ from src.backtest.baseline import DEFAULT_SEED, Baseline, entry_hours
 from src.backtest.clock import TradingClock, days_between
 from src.backtest.rules import compounded
 from src.backtest.data import AssetSeries, DatabaseData, FileData, IndexSeries, index_series
-from src.backtest.execution import EXECUTION_FILE, MEASURED, fills_for
+from src.backtest.execution import AT_FILL, EXECUTION_FILE, MEASURED, fills_for, priced_at_fill
 from src.backtest.settings import BacktestSettings
 from src.backtest.signals import by_day, closing_signals, journal_signals, pine_signals, raised_signals
 from src.backtest.simulator import ENTRY_ACTIONS, Simulator, us_market_calendar
@@ -451,6 +451,10 @@ async def run(arguments) -> int:
                 "kind": MEASURED, "from": execution.get("from"), "to": execution.get("to"),
                 "orders": len((samples or {}).get("order_seconds") or []),
                 "fills": {kind: len((samples or {}).get(kind) or []) for kind in ("slippage_buy", "slippage_sell")},
+                # What each drawn price is added to: the quote the run fills the order at ("fill"), with the measures
+                # of what WATA's orders paid beyond that one; or the quote when it left, as the runs made before.
+                **({"priced_at": "fill", "beyond_fill": {kind: len(samples.get(kind) or []) for kind in AT_FILL}}
+                   if priced_at_fill(settings, samples) else {"priced_at": "departure"}),
             },
             "turbos": {"kind": "recorded"} if not isinstance(data, ModelData) else {
                 "kind": "modelled", "made_at": data.calibration.get("made_at"), "underlying": data.calibration.get("underlying"),

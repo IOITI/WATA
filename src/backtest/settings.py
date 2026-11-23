@@ -31,8 +31,9 @@ STOP_FILLS = ("worst", "level")
 # The quote an order is priced at: the one standing when it is filled, or the next one Saxo sends the turbo.
 # Saxo quotes a turbo about every 30 s, and fills an order at the live price: of WATA's 31 purchases of
 # 13-20 October 2026, the standing ask was 0.48 % under the price paid on average (8.3 % on 19 Oct), the next
-# one 0.04 % (src/backtest/data.py ``next_quote``). With measured fills, an order is priced at the quote when
-# it left plus a drawn slippage, as the measure compares, whatever this says.
+# one 0.04 % (src/backtest/data.py ``next_quote``). Measured fills price an order at the same quote, plus what
+# WATA's orders paid beyond that one (src/backtest/execution.py); until v0.100.0, at the quote when it left
+# plus a slippage measured against that quote, whatever this said.
 STANDING, NEXT = "standing", "next"
 FILL_PRICES = (STANDING, NEXT)
 # The position monitor's exits fill a little under the bid that decided them: of WATA's eight measured exits of

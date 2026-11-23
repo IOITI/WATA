@@ -200,8 +200,30 @@ def test_a_run_on_measured_fills_draws_each_order_from_wata_s_own(tmp_path, reco
     # A purchase is priced at the quote when its order left, two cents worse; about one order in ten takes a minute.
     assert all(round(trade["entry"]["price"] - trade["entry"]["selected_ask"], 4) == 0.02 for trade in trades)
     assert any(wait > 60 for wait in waits) and any(wait < 1 for wait in waits)
+    # Samples kept before v0.100.0 hold no measure against the quote of the fill: drawn as that run drew them.
     assert read(folder, "summary.json")["made_with"]["execution"] == {
         "kind": "measured", "from": "2026-07-14", "to": "2026-10-13", "orders": 10, "fills": {"slippage_buy": 10, "slippage_sell": 10},
+        "priced_at": "departure",
+    }
+
+
+def test_a_run_on_measured_fills_at_the_next_quote_says_what_its_prices_are_added_to(tmp_path, recorded):
+    folder = prepare(tmp_path, {"source": {"kind": "pine", "rule": rule_on()}, "baseline": {"repetitions": 0, "seed": 3}},
+                     settings_changes={"execution": "measured", "fill_price": "next"})
+    samples = {"order_seconds": [0.8] * 10, "slippage_buy": [0.5] * 10, "slippage_sell": [0.5] * 10,
+               "slippage_buy_next": [0.02] * 10, "slippage_sell_next": [0.01] * 6, "slippage_exit": [0.03] * 5,
+               "signal_delay_seconds": [3.0] * 10}
+    with open(os.path.join(folder, "execution.json"), "w", encoding="utf-8") as out_file:
+        json.dump({"from": "2026-07-14", "to": "2026-10-13", "samples": samples}, out_file)
+
+    assert run_command(tmp_path, folder, recorded) == 0
+
+    trades = read(folder, "trades.json")
+    # Never the half euro of the measure against the quote standing when an order left.
+    assert trades and all(trade["entry"]["price"] - trade["entry"]["selected_ask"] < 0.4 for trade in trades)
+    assert read(folder, "summary.json")["made_with"]["execution"] == {
+        "kind": "measured", "from": "2026-07-14", "to": "2026-10-13", "orders": 10, "fills": {"slippage_buy": 10, "slippage_sell": 10},
+        "priced_at": "fill", "beyond_fill": {"slippage_buy_next": 10, "slippage_sell_next": 6, "slippage_exit": 5},
     }
 
 

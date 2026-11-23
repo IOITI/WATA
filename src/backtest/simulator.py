@@ -124,6 +124,9 @@ REQUOTE_SECONDS = NEXT_QUOTE_SECONDS
 PARTIAL_SHARE = 0.95
 # The monitor's exits, charged ``exit_slippage_percent``.
 MONITOR_EXITS = (STOP_LOSS, TAKE_PROFIT, TRAILING, DAY_TARGET, FLAT_BEFORE_RELEASE)
+# Those of them a quote decided, which the monitor sells on at once: measured fills draw what WATA's own such
+# exits got under the bid that decided them (the sale before a release is by the clock, between two quotes).
+DECIDED_ON_A_QUOTE = (STOP_LOSS, TAKE_PROFIT, TRAILING, DAY_TARGET)
 
 # What a trade rested on beyond the recorded quotes, counted in the summary (src/backtest/figures.py ``rests_on``).
 FLAG_HOLE = "hole"                       # its turbo had no bar for a while it was held
@@ -906,8 +909,8 @@ class Simulator:
         said = f"{age:.0f} s" if age is not None else "over an hour"
         if FLAG_FROZEN not in flags:
             flags.append(FLAG_FROZEN)
-        if self.settings.execution != FIXED:
-            # Measured fills price from the quote when the order left, as their measure compares.
+        if not self.fills.at_fill:
+            # Measured fills of before price from the quote when the order left, as their measure compared.
             notes.append(f"Priced at a quote {said} old while the index moved: Saxo sent the turbo nothing since")
             return price
         unfrozen = round(estimate + spread, series.decimals)
@@ -995,18 +998,19 @@ class Simulator:
         if later is None:
             # No new quote by then: a frozen ask is priced from the index, as Saxo fills at its live price.
             fill_ask = self._unfrozen(choice.series, fill_boundary, ask, ask - bid, notes, flags, "ask")
-        # Fixed: the ask at the fill (or the next one Saxo sent), a slippage worse; measured: the quote when the order
-        # left, a drawn slippage worse.
+        # The ask at the fill (or the next one Saxo sent), a slippage worse: the settings' own, or with measured fills
+        # what WATA's purchases paid beyond that ask, drawn. Measured fills of before: the quote when the order left,
+        # a slippage measured against that one.
         price = round(self.fills.purchase(departure_ask, fill_ask), 6)
         return bid, ask, price, notes, flags
 
     def _next_quote(self, series: TurboSeries, boundary: int) -> tuple[float, float | None] | None:
         """
         The turbo's next quote after the one standing at ``boundary``, when orders
-        are priced at it (``fill_price``): not with measured fills, which price an
-        order at the quote when it left, as their measure compares.
+        are priced at it (``fill_price``): not with the measured fills of before,
+        which price an order at the quote when it left, as their measure compared.
         """
-        if self.settings.fill_price != NEXT or self.settings.execution != FIXED:
+        if self.settings.fill_price != NEXT or not self.fills.at_fill:
             return None
         return series.next_quote(boundary)
 
@@ -1029,7 +1033,7 @@ class Simulator:
             # The monitor's exits fill a little under the bid that decided them (EXIT_SLIPPAGE_PERCENT, measured).
             price = position.series.tick_at_or_below(price * (1 - self.settings.exit_slippage_percent / 100))
         if costs:
-            price = self.fills.sale(departure if departure is not None else price, price)
+            price = self.fills.sale(departure if departure is not None else price, price, decided=kind in DECIDED_ON_A_QUOTE)
         price = round(max(0.0, price), 6)
         gross = position.units * price
         commission = self._commission(gross) if costs else 0.0

@@ -864,11 +864,20 @@ class FakeQueries:
         """
         The rows the execution measure reads (src/backtest/execution_calibration.py):
         the tracked orders, each against a made-up quote of when it left, a cent
-        or two better than what it was filled at.
+        or two better than what it was filled at, and against made-up bars around
+        its fill, whose quote is within a cent of what it was filled at.
         """
         rng = random.Random(13)
         positions = {position["position_id"]: position for position in self.positions}
-        orders, quotes = [], []
+        orders, quotes, bars = [], [], []
+
+        def around(order, bid, ask):
+            # Four bars of one quote from the ten seconds before the fill's boundary: the quote a run prices it at.
+            filled = (order.get("accepted_at") or order["sent_at"]).timestamp()
+            first = int(-(-filled // 10) * 10) - 10
+            return [{"order_id": order["order_id"], "instrument_id": 1, "ts": first + 10 * place, "bid_open": bid,
+                     "bid_high": bid, "bid_low": bid, "bid_close": bid, "ask_open": ask, "ask_close": ask}
+                    for place in range(4)]
         for order in self.orders:
             if order.get("sent_at") is None or order.get("purpose") not in ("open", "close") or not start <= order["sent_at"] < end:
                 continue
@@ -878,14 +887,20 @@ class FakeQueries:
                 "accepted_at": order["accepted_at"], "outcome": order["outcome"], "instrument_uic": order["instrument_uic"],
                 "position_open_price": position.get("position_open_price"),
                 "position_close_price": position.get("position_close_price"),
+                "position_close_reason": position.get("position_close_reason"),
             })
             worse = rng.choice((0.0, 0.01, 0.01, 0.02, 0.03))
+            beyond = rng.choice((-0.01, 0.0, 0.0, 0.0, 0.01))
             if order["purpose"] == "open" and position.get("position_open_price") is not None:
                 quotes.append({"order_id": order["order_id"], "bid_close": None,
                                "ask_close": round(position["position_open_price"] - worse, 2)})
+                ask = round(position["position_open_price"] - beyond, 2)
+                bars += around(order, round(ask - 0.01, 2), ask)
             elif order["purpose"] == "close" and position.get("position_close_price") is not None:
                 quotes.append({"order_id": order["order_id"], "ask_close": None,
                                "bid_close": round(position["position_close_price"] + worse, 2)})
+                bid = round(position["position_close_price"] + beyond, 2)
+                bars += around(order, bid, round(bid + 0.01, 2))
         signals = [
             {key: entry[key] for key in ("signal_timestamp", "received_timestamp", "decided_at", "outcome")}
             for entry in self.journal if entry["action"] in ("long", "short") and start <= entry["decided_at"] < end
@@ -894,7 +909,7 @@ class FakeQueries:
             {key: request[key] for key in ("requested_at", "purpose", "outcome", "error_code")}
             for request in self.requests if request["operation"] == "place" and start <= request["requested_at"] < end
         ]
-        return {"signals": signals, "orders": orders, "quotes": quotes, "requests": requests}
+        return {"signals": signals, "orders": orders, "quotes": quotes, "bars": bars, "requests": requests}
 
     async def execution_ledger_rows(self, start, end):
         """

@@ -231,17 +231,26 @@ def test_the_signals_received_each_day_are_traded_on_paper_under_the_live_settin
     assert [day["day"] for day in backtests.paper()["live"]["days"]] == ["2026-10-19", "2026-10-16", "2026-10-15"]
 
 
-def _measured_rows(count: int = 12) -> dict:
-    """WATA's orders as execution_rows gives them: count purchases and count sales, each with its quote."""
+def _measured_rows(count: int = 12, *, bars: bool = True) -> dict:
+    """
+    WATA's orders as execution_rows gives them: count purchases and count sales, each with the quote standing when it
+    left and, with ``bars``, its turbo's bars around its fill (the quote a run prices it at).
+    """
     sent = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
-    orders, quotes = [], []
+    orders, quotes, around = [], [], []
     for number in range(2 * count):
         purpose = "open" if number < count else "close"
         orders.append({"order_id": str(number), "purpose": purpose, "sent_at": sent, "accepted_at": sent, "outcome": "confirmed",
                        "instrument_uic": 7, "position_open_price": 5.05 if purpose == "open" else None,
-                       "position_close_price": 4.9 if purpose == "close" else None})
+                       "position_close_price": 4.9 if purpose == "close" else None,
+                       "position_close_reason": "Explicit Close (All)" if number % 2 else "Performance (Stoploss (-7%) hit at -7.2%)"})
         quotes.append({"order_id": str(number), "bid_close": 4.95, "ask_close": 5.0})
-    return {"signals": [], "orders": orders, "quotes": quotes, "requests": []}
+        # Saxo's quote came in the ten seconds before each order left: the monitor's stops left on it.
+        around += [{"order_id": str(number), "instrument_id": 1, "ts": int(sent.timestamp()) + 10 * place,
+                    "bid_open": 5.0 if place < 0 else 4.95, "bid_high": 5.0 if place < 0 else 4.95, "bid_low": 4.95,
+                    "bid_close": 4.95, "ask_open": 5.05 if place < 0 else 5.0, "ask_close": 5.0}
+                   for place in (-1, 0, 1)]
+    return {"signals": [], "orders": orders, "quotes": quotes, "bars": around if bars else [], "requests": []}
 
 
 def test_with_enough_orders_measured_the_live_paper_days_draw_their_fills_from_them(tmp_path, paper):
@@ -254,6 +263,23 @@ def test_with_enough_orders_measured_the_live_paper_days_draw_their_fills_from_t
     run_id = backtests.paper_index()[LIVE_PAPER]["2026-10-19"]
     request = json.loads((folder_of(tmp_path, run_id) / "request.json").read_text())
     assert request["changes"] == {"execution": "measured"}
+    # Kept with the run: what those orders paid beyond the quote a run prices them at, which it draws.
+    kept = json.loads((folder_of(tmp_path, run_id) / "execution.json").read_text())["samples"]
+    assert (len(kept["slippage_buy_next"]), len(kept["slippage_sell_next"]), len(kept["slippage_exit"])) == (12, 6, 6)
+
+
+def test_orders_measured_against_the_quote_standing_when_they_left_alone_are_not_drawn_from(tmp_path, paper):
+    backtests, queries, trading = paper
+    queries.journal = [_received(19)]
+    # No bar of their turbos around their fills: nothing says what they paid beyond the quote a run prices them at.
+    queries.execution = _measured_rows(bars=False)
+
+    asyncio.run(trading.catch_up())
+
+    run_id = backtests.paper_index()[LIVE_PAPER]["2026-10-19"]
+    request = json.loads((folder_of(tmp_path, run_id) / "request.json").read_text())
+    # The settings' fixed fills, never the turbo's move since its last quote drawn as a cost.
+    assert request["changes"] == {}
 
 
 def test_the_live_days_set_each_paper_day_beside_the_real_one(tmp_path, paper, scripts):  # noqa: F811

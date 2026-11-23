@@ -968,7 +968,7 @@ With the [Admin Interface](#️-admin-interface) enabled, the **Backtests** page
 3. **Period**: up to 365 days (`admin.backtests_max_period_days`, 92 until v0.94.0), with what was recorded each day (turbos, bars of the asset); or up to two years on [turbos made up from the index](#turbos-made-up-from-the-index).
 4. **Settings**, for this run only; the live configuration is not touched:
    - **WATA's settings**, each beside its live value: which signals are taken, the day's target and limits, the stop, take-profit and trailing stop, the price range of the turbo bought, how much is bought;
-   - **what a backtest assumes**: see [What is replayed](#what-is-replayed). What WATA's own orders took and cost (the delay from a signal to the trader, from an order to Saxo, the price paid against the quote recorded) is shown there, measured on the last three months, with "Use the measured values". **Order times and prices** "measured" goes further: each order of the run takes its time and its price drawn from WATA's own orders of those months (kept with the run), a long tail included, where "fixed" gives every order the same;
+   - **what a backtest assumes**: see [What is replayed](#what-is-replayed). What WATA's own orders took and cost (the delay from a signal to the trader, from an order to Saxo, the price paid against the quote a run prices the order at, and against the one standing when it left) is shown there, measured on the last three months, with "Use the measured values". **Order times and prices** "measured" goes further: each order of the run takes its time, and what it pays beyond the quote the run prices it at, drawn from WATA's own orders of those months (kept with the run), a long tail included, where "fixed" gives every order the same;
    - **random entries or a sweep**: how many times the same days are traded with entries at random, or a sweep instead.
 5. **Review**: what differs from live, a name and tags.
 
@@ -1062,10 +1062,10 @@ What it does on the server:
 | From an order to its fill | 1 s | The fill is the quote of the next ten seconds after that |
 | From a sale to the next purchase | 0.5 s | When the trader sells before it buys |
 | A stop crossed inside ten seconds sells at | the worst bid | `worst`: the bid that crossed it; `level`: the stop's own price, or the first tick under it |
-| An order is priced at | the next quote | `next`: the turbo's first quote after the one standing at the fill (within two minutes); `standing`: the one standing then, as runs did before. Measured fills price from the quote when the order left, whatever this says |
+| An order is priced at | the next quote | `next`: the turbo's first quote after the one standing at the fill (within two minutes); `standing`: the one standing then, as runs did before, which measured fills then price from too (the quote when the order left) |
 | Slippage, commissions | 0 | Taken from each fill; Saxo's commissions are not known here |
 | The Position Monitor's exits sell under the bid that decided them by | 0.1 % | As WATA's own exits sold (fixed fills; 0 for the runs made before) |
-| Order times and prices | fixed | `fixed`: the values above for every order; `measured`: each order's time to its fill and its price against the quote when it left, drawn from WATA's own orders of the last three months (10 of each at least), the same draws each time the run is made |
+| Order times and prices | fixed | `fixed`: the values above for every order; `measured`: each order's time to its fill, and what it paid beyond the quote the run prices it at (the bid that decided it for an exit of the Position Monitor a quote decided, the turbo's next quote for a purchase and any other sale), drawn from WATA's own orders of the last three months (10 of each at least), the same draws each time the run is made. Until v0.100.0 the price was drawn against the quote standing when the order left: mostly the turbo's move since Saxo's last quote, which is no cost, and which a run priced at the standing quote still draws |
 
 ### Reading the result
 

@@ -176,9 +176,13 @@ def register(server, research) -> None:
     async def data_execution(start_day: date | None = None, end_day: date | None = None, part: str = "orders",
                              offset: int = 0, limit: int = DEFAULT_PAGE) -> dict:
         """Measured on WATA's own orders (the last three months by default). part="orders": delays from a signal to
-        the trader's decision and from an order to Saxo's acceptance, the price paid against the recorded quote
-        (slippage), the refusals by hour, and the values a backtest would take from them (signal_delay_seconds,
-        order_seconds, slippage), suggested only from 10 measures. part="ledger": what the real trades lost between
+        the trader's decision and from an order to Saxo's acceptance, the price paid against the quote standing
+        when the order left (slippage: mostly the turbo's move since Saxo's last quote, no cost of the order) and
+        against the quote a backtest prices it at (slippage_at_fill: the bid that decided it for an exit of the
+        monitor sent on a quote just received, Saxo's next quote for a purchase and any other sale), the refusals
+        by hour, and the values a backtest
+        would take from them (signal_delay_seconds, order_seconds, slippage and exit_slippage_percent, both from
+        slippage_at_fill), suggested only from 10 measures. part="ledger": what the real trades lost between
         their signal and their fills, in points of their result (delay, entry slippage against the ask the order
         was sized on, exit slippage against the price the sale was decided on, the spread apart), with the signal's
         way to WATA and Saxo's times, in all, by exit, by what an exit was decided on and by signal source.

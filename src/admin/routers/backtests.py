@@ -145,7 +145,8 @@ async def execution(
     """
     What WATA's own orders took and cost (src/backtest/execution_calibration.py):
     the delays from a signal to the trader and from an order to Saxo, the price
-    paid against the recorded quote, the refusals; and the values a run would take from them.
+    paid against the recorded quote (the one standing when the order left, and the one a run prices it at), the
+    refusals; and the values a run would take from them.
     """
     ctx = request.app.state.ctx
     return await backtest_requests.execution(ctx.queries, ctx.settings.timezone, first_day, last_day)

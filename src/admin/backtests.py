@@ -73,7 +73,7 @@ from src.admin.ta_scripts import ScriptNotFound, ScriptStore
 from src.admin.weekday_hour import stats_by_weekday_hour
 from src.price_history.process import cgroup_memory, exit_said, oom_kills
 from src.backtest.baseline import DEFAULT_REPETITIONS, DEFAULT_SEED, MAX_REPETITIONS
-from src.backtest.execution import EXECUTION_FILE, MEASURED, missing
+from src.backtest.execution import EXECUTION_FILE, MEASURED, missing, priced_at_fill
 from src.backtest.figures import code_digest
 from src.backtest.regimes import DAY_TYPES, GAP_LABELS, MACRO_LABELS, OPEN_LABELS, SESSION_PARTS, VOLATILITY_LABELS
 from src.backtest.settings import (
@@ -805,7 +805,8 @@ class BacktestService:
             settings_doc["turbo_model"] = model
         if wants_measured(request, settings):
             # So do WATA's orders it draws its fills from.
-            short = missing((execution or {}).get("samples"))
+            samples = (execution or {}).get("samples")
+            short = missing(samples, at_fill=priced_at_fill(settings, samples))
             if short:
                 raise NotPossible(
                     f"A run on measured fills draws each order from WATA's own, and too few were measured "
@@ -965,7 +966,8 @@ class BacktestService:
         if model is not None:
             doc["turbo_model"] = model
         if settings.execution == MEASURED:
-            short = missing((execution or {}).get("samples"))
+            samples = (execution or {}).get("samples")
+            short = missing(samples, at_fill=priced_at_fill(settings, samples))
             if short:
                 raise NotPossible(f"Too few of WATA's orders were measured to draw fills from ({', '.join(short)})")
             doc["execution"] = execution
