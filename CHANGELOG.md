@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.100.0 - Measured fills that cost what orders cost, and the engine's signals sooner and never lost
+
+**Release date:** not released yet
+
+Two things read on the server's record of 23 November 2026, the rule's first live day.
+
+**The calibrated run said +11 % where the run it is made of said +163 %.** Same script, same days (15 Oct to 23 Nov), the only difference its fills, "drawn from WATA's own orders": 57 trades against 41, a worst drawdown of -42 % against none, stops "hit at -7 %" filled at -15.7 %, -11.7 %, -9.7 %. The measure it drew from set each real fill against the quote standing when its order left. Saxo sends a turbo a new quote about every 30 s and fills at its live price: that measure is mostly how far the turbo had moved since its last quote (0.48 % on average, 9 % on a quote a minute old, 2.74 % on the live entry of 23 Nov), which is no cost, since the position is worth what was paid for it. Drawn at random for another order, it became one: paid on a turbo that had not moved, and its largest a stop-loss at the position's first quote. The purchase of 19 Oct paid 9 % above a stale ask and was sold 9 % above a stale bid, +0.5 % in all; drawn apart, they are two losses of 9 %. On the one real trade of 23 Nov, both runs were within a point of what WATA made (3.85 % and 3.27 % against 2.82 %): the gap of 150 points was the model's.
+
+- **Each order is also measured against the quote a run prices it at** (`src/backtest/execution_calibration.py`): for an exit of the position monitor that left on a quote Saxo had just sent, that quote, the bid that decided it; for a purchase and any other sale (the trader's, the monitor's by the clock), Saxo's next quote from the fill, read on the turbo's recorded bars by the run's own code. The stop of 19 Oct, "hit" on a bid older than its purchase (before the monitor waited for a fresh quote) and sold 9 % above it, is among the second: set against that bid it would be drawn as a windfall. The measure against the quote standing when the order left stays beside it (`slippage`, and the ledger's entry slippage), said for what it is.
+- **A run on measured fills prices each order where a fixed run prices it, then adds what WATA's orders paid beyond that quote**, drawn; an exit a quote decided and any other sale each from its own measures. The order times are drawn as before. A run priced at the standing quote, or made from the orders kept by a run of before, draws as before. The live paper days, the calibrated run and the form's "measured" all take the new measure; with fewer than 10 orders measured that way they keep fixed fills, never the measure of before.
+- **"Use the measured values"** suggests the slippage a run has left to add (the median beyond the quote it prices orders at), no longer the 0.02 € of the old measure, which a run priced at the next quote counted a second time; and the percentage the monitor's exits got under the bid that decided them.
+- The Backtests form says both measures; a run's page says what its drawn prices were added to; `data_execution` gives `slippage_at_fill`.
+
+**A live signal left the engine 1.5 s after its bar closed at best, 2.4 s for the first live entry, and was sent once.**
+
+- **A tick begins as soon as the feed has written its ten seconds**: the engine asks for their coverage row from 0.15 s after the boundary, every 0.1 s, and begins at 1.5 s at the latest, when every tick began before. The feed writes a bucket's bars, then that row, about 0.1 s after its end: a signal leaves about 1.3 s sooner. A feed that was not writing at the last tick is waited for as before.
+- **The web server's token is read before a live rule raises anything**: the first signal of a start paid for it (PostgreSQL, the key unsealed).
+- **A signal that got no answer is sent again**, after 0.25, 0.75, 1.5 and 2.5 s, never past the age a signal may have, and its journal row says at which attempt it went. Until now a web server restarted during a deploy lost the signal of that moment, a close as well as an entry. An answer stays final, and a timeout.
+- **A signal is stored once, however often it is sent**: it goes under its key (its rule and its row of the engine's journal), and the web server answers a key it has taken with the signal it stored then. The scheduler's and the admin's signals, which have no key, are stored as before.
+
+**On the live path:** the TA engine (when its ticks begin, how a signal is sent) and the web server (`/internal/signal` reads a key). The trader, the position monitor and every rule they apply are untouched. A backtest's `signal_delay_seconds` stays what it was given: the calibrated run measures the new delay from ten live entries.
+
+**Every run turns stale** (`src/backtest` changed, the code digest with it): a run on fixed fills comes out the same when made again, a run on measured fills does not, which is the point. The nightly runs are made again by themselves; the calibrated run and the paper days follow.
+
+**Verification status:** the Python suite (4,693 passed, 1 skipped, the live infrastructure's file left out as on this Mac, the Pine runner built and Node 24 on the PATH), the interface's 1,636 tests, its lint, types and build. The release manifest names admin1, ta_engine1 and web_server1 against v0.99.1's tree; the trader, the position monitor and the six others are unchanged. The new SQL (`BARS_SQL`) run on a PostgreSQL 16 (pgserver) through `read_rows`, read from the bars' key. Not seen in a browser: the interface's changes are two sentences and their types.
+
+**Not verified:** nothing here was run against the server's data. The new measure is tested on made-up orders and on the purchase of 19 Oct as recorded (0.419 € against the standing ask, -0.037 € against the next quote), its SQL on a PostgreSQL 16 (pgserver). What the calibrated run becomes is known once the admin runs this code: it should land near its template, and the Live check will say how near to the real trades. The engine's earlier tick was tested against a made-up feed on the real clock, not against Capital.com's.
+
 ## v0.99.1 - A position Saxo sold is no longer sold again
 
 **Release date:** 2026-11-23
