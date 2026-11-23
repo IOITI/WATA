@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 PositionUpdateCallback = Callable[[dict[str, dict]], Coroutine[Any, Any, None]]
 InfoPriceSubscriptionUpdateCallback = Callable[[dict, list[dict], str | None], Coroutine[Any, Any, None]]
 
+# How Saxo says an item left a list subscription (a position sold): a delta with the item's key and this
+# property, true. Its own client library names it so (openapi-clientlib-js, ``OPENAPI_DELETE_PROPERTY``).
+# Until v0.99.1 it was merged as a plain field: a sold position stayed in the snapshot with its last values,
+# and the position monitor tried to sell it again for hours (2026-11-23).
+SAXO_DELETED = "__meta_deleted"
+
 
 def _deep_merge(base: dict, delta: dict) -> dict:
     """
@@ -205,6 +211,20 @@ class SaxoStreamClient:
     def positions(self) -> dict[str, dict]:
         """Return a **deep copy** of the current position snapshot cache."""
         return copy.deepcopy(self._positions)
+
+    def forget_positions(self, position_ids) -> list[str]:
+        """
+        Drop positions that Saxo sold although the stream never said so (the
+        position monitor's reconciliation found their closure), and deliver the
+        snapshot without them. Returns the positions dropped.
+        """
+        gone = sorted(str(pid) for pid in position_ids if str(pid) in self._positions)
+        for pid in gone:
+            del self._positions[pid]
+        if gone:
+            logger.info("Positions %s dropped from the stream: Saxo sold them.", gone)
+            self._fire_callback()
+        return gone
 
     @property
     def context_id(self) -> str | None:
@@ -483,6 +503,14 @@ class SaxoStreamClient:
         for delta in updates:
             pid = delta.get("PositionId")
             if not pid:
+                continue
+
+            if delta.get(SAXO_DELETED):
+                # Saxo no longer lists it: sold, by WATA or by anyone else.
+                if pid in self._positions:
+                    logger.info("Position %s removed from the stream: Saxo deleted it.", pid)
+                    del self._positions[pid]
+                    changed = True
                 continue
 
             status = (

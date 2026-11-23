@@ -109,6 +109,85 @@ def test_callback_error_does_not_stop_later_deliveries():
     assert asyncio.run(scenario()) == [9.8, 9.7]
 
 
+# ── A position Saxo no longer lists (2026-11-23) ──
+#
+# Saxo removes an item from a list subscription with its key and "__meta_deleted": true (its own client
+# library, openapi-clientlib-js: OPENAPI_DELETE_PROPERTY). The client merged it as a plain field: position
+# 7829220002, sold at 08:42:53 UTC, stayed in the snapshot with its last values, and the position monitor
+# tried to sell it again 100 times (NotOwned) and "adopted" it every 90 s.
+
+
+def _deleted(position_id: str = "position-1") -> dict:
+    """What Saxo sends when a position leaves its list."""
+    return {"PositionId": position_id, "__meta_deleted": True}
+
+
+def test_a_position_saxo_deletes_leaves_the_snapshot():
+    async def scenario():
+        received = asyncio.Event()
+        delivered = []
+
+        async def callback(positions):
+            delivered.append(positions)
+            received.set()
+
+        client = _position_client(callback)
+        delivery = asyncio.create_task(client._deliver_position_updates())
+        await client._handle_position_update([_deleted()])
+        await asyncio.wait_for(received.wait(), timeout=1)
+        delivery.cancel()
+        return client, delivered
+
+    client, delivered = asyncio.run(scenario())
+
+    assert client.positions == {}
+    assert delivered == [{}]
+
+
+def test_a_deletion_is_read_in_saxo_s_data_wrapper_and_alone_too():
+    async def scenario(payload):
+        client = _position_client(AsyncMock())
+        await client._handle_position_update(payload)
+        return client.positions, client._positions_changed.is_set()
+
+    for payload in ({"Data": [_deleted()]}, _deleted()):
+        assert asyncio.run(scenario(payload)) == ({}, True)
+
+
+def test_a_deletion_of_a_position_the_snapshot_does_not_hold_changes_nothing():
+    async def scenario():
+        client = _position_client(AsyncMock())
+        await client._handle_position_update([_deleted("position-9")])
+        return client.positions, client._positions_changed.is_set()
+
+    positions, changed = asyncio.run(scenario())
+
+    assert set(positions) == {"position-1"}
+    assert changed is False
+
+
+def test_positions_saxo_sold_are_forgotten_on_the_monitor_s_word_and_delivered_without_them():
+    async def scenario():
+        client = _position_client(AsyncMock())
+        client._positions["position-2"] = {"PositionId": "position-2", "PositionBase": {"Status": "Open"}}
+        gone = client.forget_positions({"position-1", "position-9"})
+        return gone, client.positions, client._positions_changed.is_set()
+
+    gone, positions, changed = asyncio.run(scenario())
+
+    assert gone == ["position-1"]
+    assert set(positions) == {"position-2"}
+    assert changed is True
+
+
+def test_forgetting_positions_the_stream_does_not_list_delivers_nothing():
+    async def scenario():
+        client = _position_client(AsyncMock())
+        return client.forget_positions({"position-9"}), client._positions_changed.is_set()
+
+    assert asyncio.run(scenario()) == ([], False)
+
+
 def test_start_delivers_position_updates_and_stops_delivering_when_it_ends():
     delivered = []
 
@@ -374,6 +453,32 @@ def test_stream_connects_subscribes_and_delivers_what_saxo_sends():
     # The delta is merged into the snapshot the subscription gave.
     assert delivered[-1]["position-1"]["PositionBase"]["Status"] == "Open"
     assert client._last_message_id == 1
+
+
+def test_stream_delivers_the_removal_of_a_position_saxo_sold():
+    async def scenario():
+        delivered = []
+
+        async def callback(positions):
+            delivered.append(positions)
+
+        async def saxo(connection, number):
+            await connection.send(_frame(1, client._pos_ref_id, {"PositionId": "position-1", "PositionView": {"Bid": 9.8}}))
+            await connection.send(_frame(2, client._pos_ref_id, [_deleted()]))
+            await connection.wait_closed()
+
+        async with LocalSaxoStream(saxo) as stream:
+            client = _connected_client(stream, callback)
+            running = asyncio.create_task(client.start())
+            await _until(lambda: client._last_message_id == 2 and delivered and delivered[-1] == {})
+            await client.stop()
+            await _ends(running)
+        return client, delivered
+
+    client, delivered = _run(scenario)
+
+    assert client.positions == {}
+    assert delivered[-1] == {}
 
 
 def test_the_connection_is_opened_with_its_keepalive_and_size_limits():

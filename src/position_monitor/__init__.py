@@ -35,6 +35,7 @@ from src.configuration import ConfigurationManager
 from src.logging_helper import setup_logging
 from src.logging_helper.redaction import register_secret
 from src.trade.async_services import (
+    CLOSED_POSITION_STATUSES,
     AsyncSaxoApiClient,
     AsyncOrderService,
     AsyncPositionService,
@@ -157,14 +158,24 @@ class StoppableMonitor(AsyncPerformanceMonitor):
 #  Streaming callback
 # ─────────────────────────────────────────────────────
 
+def held_at_saxo(listed: dict[str, dict]) -> dict[str, dict]:
+    """The positions Saxo's REST answer lists that it still holds: not those it keeps listed as Closed or Closing."""
+    return {
+        pid: pos for pid, pos in listed.items()
+        if (pos.get("PositionBase") or {}).get("Status") not in CLOSED_POSITION_STATUSES
+    }
+
+
 class StreamPositionHandler:
     """
     Handles the position snapshots pushed by :class:`SaxoStreamClient`.
 
     Every snapshot goes through the SL/TP/trailing-stop checks, without any API
     polling. The DB is reconciled with Saxo (to catch closures done outside
-    WATA, e.g. a broker-side stop) only when a position leaves the stream, and
-    periodically as a safety net.
+    WATA, e.g. a broker-side stop) when a position leaves the stream, and
+    periodically as a safety net: the periodic reconciliation also checks the
+    stream's own list against Saxo's REST answer, and looks there for the
+    positions WATA bought but lost.
     """
 
     def __init__(
@@ -229,15 +240,29 @@ class StreamPositionHandler:
             # The stream already says what is open at Saxo: no API call needed for that.
             await self.reconcile(open_position_ids=self._last_position_ids)
 
-    async def reconcile(self, open_position_ids: set[str] | None = None):
+    async def reconcile(self, open_position_ids: set[str] | None = None, stream_client=None):
         """
         Mark as closed in the DB the positions that were closed at Saxo behind
         WATA's back, and give a row back to those WATA bought but lost.
+
+        Given what the stream says is open (a position just left it), only the
+        DB is reconciled. Without (the periodic reconciliation), Saxo's REST
+        answer is read once, unless the stream lists nothing (the night costs
+        no query): a position the stream still lists but Saxo sold is dropped
+        from the stream, the lost positions are looked for among those Saxo
+        holds, never in the stream's list, and the DB is reconciled against it.
+        Saxo's answer unreadable, the DB is reconciled as before and nothing is
+        adopted.
         """
-        try:
-            await self.performance_monitor.adopt_lost_positions(self._latest_positions)
-        except Exception as e:
-            logger.error("Looking for positions WATA lost failed: %s", e, exc_info=True)
+        if open_position_ids is None and (self._latest_positions is None or self._latest_positions):
+            listed = await self._listed_at_saxo()
+            if listed is not None:
+                await self._forget_sold(listed, stream_client)
+                try:
+                    await self.performance_monitor.adopt_lost_positions(held_at_saxo(listed))
+                except Exception as e:
+                    logger.error("Looking for positions WATA lost failed: %s", e, exc_info=True)
+                open_position_ids = set(listed)
         try:
             sync_result = await self.performance_monitor.sync_db_positions_with_api(open_position_ids)
         except Exception as e:
@@ -252,13 +277,52 @@ class StreamPositionHandler:
                 logger.critical("SYNC ERROR: Failed DB update for Pos %s: %s", position_id, e, exc_info=True)
                 await self.telegram.send(f"CRITICAL SYNC ERROR: Failed DB update for Pos {position_id}: {e}")
 
-    async def reconcile_periodically(self, interval_seconds: float):
+    async def _listed_at_saxo(self) -> dict[str, dict] | None:
+        """What Saxo's REST API lists, by position; None when it cannot be read."""
+        try:
+            answer = await self.performance_monitor.position_service.get_open_positions()
+            return {str(pos["PositionId"]): pos for pos in answer.get("Data", [])}
+        except Exception as e:
+            logger.warning("Could not read Saxo's positions for the reconciliation: %r", e)
+            return None
+
+    async def _forget_sold(self, listed: dict[str, dict], stream_client) -> None:
+        """
+        Drop from the stream the positions it still lists that Saxo sold: not
+        held in Saxo's REST answer, and named by its closed positions. One Saxo's
+        answer does not list yet but that no closure names (a position just
+        bought) is kept: dropped, it would be left without its exits.
+        """
+        held = held_at_saxo(listed)
+        unheld = {pid for pid in (self._latest_positions or {}) if pid not in held}
+        if not unheld:
+            return
+        try:
+            answer = await self.performance_monitor.position_service.get_closed_positions(top=len(unheld) + 50)
+            closed = {
+                str((item.get("ClosedPosition") or {}).get("OpeningPositionId"))
+                for item in (answer or {}).get("Data", []) if isinstance(item, dict)
+            }
+        except Exception as e:
+            logger.warning("Could not read Saxo's closed positions for the reconciliation: %r", e)
+            return
+        sold = unheld & closed
+        if not sold:
+            return
+        logger.warning("Positions %s are sold at Saxo but the stream still listed them: dropped from it.", sorted(sold))
+        if stream_client is not None:
+            stream_client.forget_positions(sold)
+        # At once, for the sales tried every second (keep_flat) until the stream delivers its list without them.
+        self._latest_positions = {pid: pos for pid, pos in (self._latest_positions or {}).items() if pid not in sold}
+
+    async def reconcile_periodically(self, interval_seconds: float, stream_client=None):
         """
         Reconcile at startup and then every ``interval_seconds``, asking Saxo's
-        REST API what is open so that it doesn't rely on the stream being healthy.
+        REST API what is open so that it doesn't rely on the stream being healthy
+        (the stream's own list included: ``stream_client`` drops what Saxo sold).
         """
         while True:
-            await self.reconcile()
+            await self.reconcile(stream_client=stream_client)
             await asyncio.sleep(interval_seconds)
 
     async def keep_flat_periodically(self, interval_seconds: float = KEEP_FLAT_INTERVAL_SECONDS):
@@ -740,7 +804,9 @@ async def main():
             environment,
         )
 
-        reconcile_task = asyncio.create_task(stream_handler.reconcile_periodically(reconcile_interval_seconds))
+        reconcile_task = asyncio.create_task(
+            stream_handler.reconcile_periodically(reconcile_interval_seconds, stream_client)
+        )
         keep_flat_task = asyncio.create_task(stream_handler.keep_flat_periodically())
         watch_stream_task = asyncio.create_task(
             stream_handler.watch_stream_periodically(stream_client, trading_rule.in_trading_hours)

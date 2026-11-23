@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.99.1 - A position Saxo sold is no longer sold again
+
+**Release date:** 2026-11-23
+
+The first live trade since 2026-10-24 showed it. Position 7829220002 was sold at 08:42:53 UTC on the day's target, and Saxo closed it at once. The position monitor then went on selling it: 100 sells were refused by 10:16 UTC ("Vous n'êtes pas en possession des contrats que vous vendez", `NotOwned`). It also "adopted" the position every 90 s ("had no record: WATA manages it again"). Saxo removes a sold position from the stream with its key and `"__meta_deleted": true`, which the stream client merged as a plain field. The position stayed in the monitor's list with its last values. Its sale, kept until Saxo no longer lists it, was tried again and again, and the reconciliation found it listed with no open row. The row was right all along (the adoption's insert does nothing on an existing row). But the sale names no position: it sells the turbo. A new position on the same turbo would have been sold by it.
+
+- **Saxo's deletion is read** (`src/saxo_streaming/client.py`): a position Saxo deletes leaves the stream's list at once, and the monitor reconciles it as it does any position that leaves. A deletion of a position the list does not hold no longer makes one up.
+- **The stream's list checked against Saxo** (`src/position_monitor/__init__.py`): the periodic reconciliation reads Saxo's positions once, while the stream lists any. A position the stream still lists, that Saxo does not hold and that its closed positions name, is dropped from the stream. A position Saxo's answer does not list yet is kept unless a closure names it, so a position just bought keeps its exits.
+- **Lost positions are looked for among those Saxo holds** (its REST answer, without the positions it keeps listed as Closed or Closing), never in the stream's list, and only by the periodic reconciliation.
+- The trading code every backtest's digest holds is untouched: no run turns stale.
+
 ## v0.99.0 - After going live: a rule's real trades judged, and its protections
 
 **Release date:** 2026-11-22

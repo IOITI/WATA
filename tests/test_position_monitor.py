@@ -185,6 +185,182 @@ def test_position_check_error_does_not_reach_the_stream_client():
     asyncio.run(handler.on_positions_update(_snapshot("p1")))
 
 
+# ── the stream's list checked against Saxo's REST answer ──
+#
+# 2026-11-23: position 7829220002, sold at 08:42:53 UTC, stayed in the stream's list (Saxo's deletion was merged
+# as a field). Its sale was tried again 100 times (NotOwned) and it was "adopted" every 90 s, from that list.
+
+
+def _saxo_answers(performance_monitor, *, listed=None, closed=()):
+    """Saxo's REST answers: the positions it lists ({id: status}) and those its closed positions name."""
+    performance_monitor.position_service.get_open_positions = AsyncMock(return_value={"Data": [
+        {"PositionId": pid, "PositionBase": {"Status": status}} for pid, status in (listed or {}).items()
+    ]})
+    performance_monitor.position_service.get_closed_positions = AsyncMock(return_value={"Data": [
+        {"ClosedPosition": {"OpeningPositionId": pid}} for pid in closed
+    ]})
+    performance_monitor.adopt_lost_positions = AsyncMock(return_value=[])
+
+
+def _adopted_from(performance_monitor) -> set:
+    (positions,) = performance_monitor.adopt_lost_positions.await_args.args
+    return set(positions)
+
+
+def test_a_position_saxo_sold_but_the_stream_still_lists_is_dropped_from_it():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={"p2": "Open"}, closed=["p1"])
+    stream_client = MagicMock()
+    handler._latest_positions = _snapshot("p1", "p2")
+
+    asyncio.run(handler.reconcile(stream_client=stream_client))
+
+    stream_client.forget_positions.assert_called_once_with({"p1"})
+    assert set(handler._latest_positions) == {"p2"}
+    # Lost positions are looked for among those Saxo holds, never in the stream's list.
+    assert _adopted_from(performance_monitor) == {"p2"}
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with({"p2"})
+    performance_monitor.position_service.get_open_positions.assert_awaited_once()
+
+
+def test_a_position_saxo_does_not_list_yet_stays_in_the_stream_until_a_closure_names_it():
+    # One just bought may be in the stream before Saxo's REST answer: dropped, it would be left without its exits.
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={}, closed=["p9"])
+    stream_client = MagicMock()
+    handler._latest_positions = _snapshot("p1")
+
+    asyncio.run(handler.reconcile(stream_client=stream_client))
+
+    stream_client.forget_positions.assert_not_called()
+    assert set(handler._latest_positions) == {"p1"}
+    assert _adopted_from(performance_monitor) == set()
+
+
+def test_positions_saxo_keeps_listed_as_closed_are_not_held_nor_adopted():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={"p1": "Closed", "p2": "Closing", "p3": "Open"}, closed=["p1", "p2"])
+    stream_client = MagicMock()
+    handler._latest_positions = _snapshot("p1", "p2", "p3")
+
+    asyncio.run(handler.reconcile(stream_client=stream_client))
+
+    stream_client.forget_positions.assert_called_once_with({"p1", "p2"})
+    assert _adopted_from(performance_monitor) == {"p3"}
+    # The DB is reconciled against all Saxo lists, as when the reconciliation read it itself.
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with({"p1", "p2", "p3"})
+
+
+def test_closed_positions_unreadable_nothing_is_dropped_and_the_rest_goes_on():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={"p2": "Open"})
+    performance_monitor.position_service.get_closed_positions.side_effect = RuntimeError("saxo unavailable")
+    stream_client = MagicMock()
+    handler._latest_positions = _snapshot("p1", "p2")
+
+    asyncio.run(handler.reconcile(stream_client=stream_client))
+
+    stream_client.forget_positions.assert_not_called()
+    assert set(handler._latest_positions) == {"p1", "p2"}
+    assert _adopted_from(performance_monitor) == {"p2"}
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with({"p2"})
+
+
+def test_the_reconciliation_after_a_position_left_the_stream_asks_saxo_nothing_and_adopts_nothing():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={"p2": "Open"})
+
+    async def scenario():
+        await handler.on_positions_update(_snapshot("p1", "p2"))
+        await handler.on_positions_update(_snapshot("p2"))
+        await _planned_reconciliation(handler)
+
+    asyncio.run(scenario())
+
+    performance_monitor.position_service.get_open_positions.assert_not_awaited()
+    performance_monitor.adopt_lost_positions.assert_not_awaited()
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with({"p2"})
+
+
+def test_nothing_in_the_stream_nothing_asked_of_saxo():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={"p1": "Open"})
+    handler._latest_positions = {}
+
+    asyncio.run(handler.reconcile(stream_client=MagicMock()))
+
+    performance_monitor.position_service.get_open_positions.assert_not_awaited()
+    performance_monitor.adopt_lost_positions.assert_not_awaited()
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with(None)
+
+
+def test_saxo_unreadable_the_db_is_reconciled_as_before_and_nothing_is_adopted():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor)
+    performance_monitor.position_service.get_open_positions.side_effect = RuntimeError("saxo unavailable")
+    stream_client = MagicMock()
+    handler._latest_positions = _snapshot("p1")
+
+    asyncio.run(handler.reconcile(stream_client=stream_client))
+
+    stream_client.forget_positions.assert_not_called()
+    performance_monitor.adopt_lost_positions.assert_not_awaited()
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with(None)
+
+
+def test_the_periodic_reconciliation_hands_the_stream_client_on():
+    handler, performance_monitor, _, _ = _handler()
+    _saxo_answers(performance_monitor, listed={}, closed=["p1"])
+    performance_monitor.sync_db_positions_with_api.side_effect = [{"updates_for_db": []}, asyncio.CancelledError]
+    stream_client = MagicMock()
+    handler._latest_positions = _snapshot("p1")
+
+    async def scenario():
+        try:
+            await handler.reconcile_periodically(0, stream_client)
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+    stream_client.forget_positions.assert_called_once_with({"p1"})
+
+
+def test_a_position_saxo_deletes_leaves_the_monitor_s_list_through_the_real_stream_client():
+    # The sequence of 2026-11-23, Saxo's own messages through the stream client the monitor runs.
+    from src.saxo_streaming.client import SaxoStreamClient
+
+    handler, performance_monitor, _, _ = _handler()
+
+    async def until(condition):
+        for _ in range(200):
+            if condition():
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError("never happened")
+
+    async def scenario():
+        client = SaxoStreamClient(MagicMock(), "account-key", "client-key", handler.on_positions_update)
+        delivery = asyncio.create_task(client._deliver_position_updates())
+        await client._handle_position_update({"Data": [{
+            "PositionId": "7829220002",
+            "PositionBase": {"Status": "Open", "CanBeClosed": True, "Uic": 57233990, "Amount": 13},
+            "PositionView": {"Bid": 8.87},
+        }]})
+        await until(lambda: handler._latest_positions)
+        await client._handle_position_update([{"PositionId": "7829220002", "__meta_deleted": True}])
+        await until(lambda: handler._latest_positions == {})
+        await _planned_reconciliation(handler)
+        delivery.cancel()
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert handler.figures(client)["positions_listed"] == 0
+    # It left the stream: the DB is reconciled against what is left, nothing.
+    performance_monitor.sync_db_positions_with_api.assert_awaited_once_with(set())
+
+
 # ── what the admin interface relies on ──
 
 
