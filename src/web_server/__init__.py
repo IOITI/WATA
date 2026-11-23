@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.web_server_token import INTERNAL, WEBHOOK, WebServerToken
 from src.web_server.ignored import IgnoredWebhooks
-from src.web_server.signal_store import SignalStore
+from src.web_server.signal_store import SIGNAL_KEY_HEADER, SignalStore, TakenKeys
 import logging
 from src.configuration import ConfigurationManager
 from src.trade.signal_sources import ENGINE, configured as configured_sources, source_of
@@ -37,6 +37,10 @@ web_server_token = WebServerToken(config_manager)
 # In-memory "latest signal per indice" store, polled by the async trader and fed
 # by both the public /webhook and the internal /internal/signal endpoints.
 SIGNAL_STORE = SignalStore()
+
+# The keys of the internal signals taken lately: one sent again under its key (a sender that got no answer) is
+# stored once.
+TAKEN_KEYS = TakenKeys()
 
 # Which source each index takes its signals from (read at the start): an index set to the TA engine takes
 # no webhook, so that TradingView's alerts and a live rule never trade it together.
@@ -114,13 +118,14 @@ def _format_timestamp_ms(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-async def _ingest_and_store_signal(data: dict, received_timestamp: str) -> str:
+async def _ingest_and_store_signal(data: dict, received_timestamp: str, signal_uuid: str | None = None) -> str:
     """Validate-agnostic signal ingestion shared by /webhook and /internal/signal.
 
     Builds the record stored in SIGNAL_STORE (keyed by indice, latest
-    signal_timestamp wins) and returns the generated signal_uuid.
+    signal_timestamp wins) and returns its signal_uuid: the one given (an
+    internal signal's, kept for its key), else one made here.
     """
-    signal_uuid = str(uuid.uuid4())
+    signal_uuid = signal_uuid or str(uuid.uuid4())
     record = {
         "action": data["action"],
         "indice": data["indice"],
@@ -186,6 +191,10 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
 
     Same payload shape and storage as /webhook, but authenticated with a Bearer
     token instead of a query-param token, and exempt from the IP allowlist.
+
+    A signal that comes with a key (the X-WATA-Signal-Key header, the TA
+    engine's) is stored once: sent again under the same key, by a sender that
+    got no answer the first time, it is answered with the signal stored then.
     """
     received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
     data = await request.json()
@@ -194,7 +203,21 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
     except jsonschema.exceptions.ValidationError as e:
         logging.warning(f"Invalid internal signal payload: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
-    signal_uuid = await _ingest_and_store_signal(data, received_timestamp)
+    signal_uuid = str(uuid.uuid4())
+    key = request.headers.get(SIGNAL_KEY_HEADER)
+    if TakenKeys.valid(key):
+        # Kept for its key before it is stored: a second request of the same key is never stored beside it.
+        first = TAKEN_KEYS.claim(key, signal_uuid)
+        if first != signal_uuid:
+            logging.info(f"Internal signal sent again under its key: taken once, as {first}: {data}")
+            return JSONResponse(content={"status": "success", "signal_uuid": first, "repeated": True}, status_code=200)
+    try:
+        signal_uuid = await _ingest_and_store_signal(data, received_timestamp, signal_uuid)
+    except Exception:
+        # Not stored: its key stands for nothing, and the sender's next attempt is taken as new.
+        if TakenKeys.valid(key):
+            TAKEN_KEYS.forget(key)
+        raise
     logging.info(f"Received internal signal: {data}")
     return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
 

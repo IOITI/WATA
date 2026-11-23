@@ -116,7 +116,7 @@ async def main():
         http = httpx.AsyncClient()
 
         async def internal_token() -> str:
-            # Read again from PostgreSQL at the first signal and after a refusal: rotated since the start.
+            # Read again from PostgreSQL before the first signal and after a refusal: rotated since the start.
             await vault.load(config_manager, "ta_engine", names={"internal.token"}, db=pg)
             return WebServerToken(config_manager).get_token()
 

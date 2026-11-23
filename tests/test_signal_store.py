@@ -4,7 +4,7 @@ import os
 # Importing anything under src.web_server loads the app, which needs a config
 os.environ["WATA_CONFIG_PATH"] = "tests/test_config.json"
 
-from src.web_server.signal_store import SignalStore
+from src.web_server.signal_store import SIGNAL_KEY_HEADER, SignalStore, TakenKeys
 
 
 def _signal(indice: str, signal_timestamp: str, action: str = "long") -> dict:
@@ -112,3 +112,27 @@ def test_get_newer_with_cursor_from_before_a_restart_returns_everything():
     signals = asyncio.run(scenario())
 
     assert [signal["seq"] for signal in signals] == [1]
+
+
+def test_a_key_stands_for_the_signal_it_was_first_taken_as():
+    keys = TakenKeys(most=3)
+
+    assert keys.claim("rule:794", "uuid-1") == "uuid-1"
+    # Sent again under its key: the signal of the first time, whatever it would be stored as now.
+    assert keys.claim("rule:794", "uuid-2") == "uuid-1"
+    assert keys.claim("rule:795", "uuid-3") == "uuid-3"
+
+    # Only the latest are kept, a key asked for again among them.
+    keys.claim("rule:796", "uuid-4")
+    keys.claim("rule:794", "uuid-5")
+    keys.claim("rule:797", "uuid-6")
+    assert keys.claim("rule:794", "uuid-7") == "uuid-1"
+    assert keys.claim("rule:795", "uuid-8") == "uuid-8"
+
+
+def test_a_key_is_a_short_text_and_the_engine_names_its_header_the_same():
+    from src.ta_engine import sender
+
+    assert TakenKeys.valid("f13986be5e9b:794")
+    assert not TakenKeys.valid(None) and not TakenKeys.valid("") and not TakenKeys.valid("k" * 201)
+    assert sender.SIGNAL_KEY_HEADER == SIGNAL_KEY_HEADER

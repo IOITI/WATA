@@ -4,7 +4,11 @@ Capital.com feed records, each bar evaluated by the Pine runner once it is
 final, and what the alerts of a bar become journaled in ta_signal, then sent to
 the trader when the rule is live.
 
-Every ten seconds, shortly after the feed has written its bars (``tick``):
+Every ten seconds, as soon as the feed has written its bars (``tick``, begun by
+``_wait_for_rows``: the feed writes a ten seconds' bars, then their coverage
+row, within a tenth of a second of their end, and the engine asks for that row
+from EARLIEST_SECONDS after it; SETTLE_SECONDS after it at the latest, which
+is when every tick began until v0.100.0, 1.3 s later):
 
 1. rules.json is read again if it changed. A rule switched on is loaded: its
    history (the days before, history_days, the rule's own when it has one) runs
@@ -37,6 +41,8 @@ its indice; the action is long, short or close-position; the bar closed less
 than max_signal_age_seconds ago; the feed is not stale. A signal is journaled
 before it is sent, under its rule, bar and alert: one evaluated again is
 journaled, and sent, once at most. A shadow rule's signals are only journaled.
+A signal the web server gave no answer to is sent again for a few seconds
+under the same key, which the web server stores once (src/ta_engine/sender.py).
 
 Live rules and shadow rules run on two runners (two Node processes), the live
 ones first in each tick: a shadow rule that fails, hangs or ends its runner
@@ -77,8 +83,13 @@ from src.trade.signal_sources import ENGINE, source_of
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 10
-# How long after a ten-second boundary the engine looks: the feed writes its bars just after it.
+# How long after a ten-second boundary the engine looks at the latest: the feed writes its bars just after it...
 SETTLE_SECONDS = 1.5
+# ...and from this long after it, the engine asks this often whether they are written (their coverage row, which the
+# feed writes after them): a tick begins as soon as they are. A signal left 1.5 s after its bar's close at best
+# until v0.100.0, the first live one 2.4 s (23 November 2026).
+EARLIEST_SECONDS = 0.15
+ASK_EVERY_SECONDS = 0.1
 # A rule that failed is tried again after this long, unless it changed meanwhile.
 RETRY_SECONDS = 300
 # A continued run is run whole and compared this often, the first time at the rule's first new bar...
@@ -109,6 +120,8 @@ TOO_OLD = "The bar closed {age:.0f} s ago, more than {limit} s"
 STALE_FEED = "The Capital.com feed is stale"
 NO_SENDER = "No way to send signals"
 NOT_TAKEN = "Not a signal the web server takes: {error}"
+# What the journal says of a signal the web server gave no answer to at first, or whose token it refused (src/ta_engine/sender.py).
+SENT_AGAIN = "Sent at attempt {attempts}: the web server had not taken it before"
 
 
 @dataclass
@@ -243,13 +256,49 @@ class Engine:
                 logger.error("TA engine tick failed: %s", e, exc_info=True)
                 await self._write_state("error", f"{type(e).__name__}: {e}")
             now = self._clock()
-            wait = TICK_SECONDS - (now % TICK_SECONDS) + SETTLE_SECONDS
             if now - started > TICK_SECONDS:
-                wait = SETTLE_SECONDS
-            try:
-                await asyncio.wait_for(self._stopping.wait(), wait)
-            except asyncio.TimeoutError:
-                pass
+                # A tick that took more than its ten seconds: the next one shortly, whatever the boundary.
+                await self._pause(SETTLE_SECONDS)
+            else:
+                await self._wait_for_rows(now - now % TICK_SECONDS + TICK_SECONDS)
+
+    async def _pause(self, seconds: float) -> bool:
+        """Wait ``seconds``; True when the engine was asked to stop meanwhile."""
+        if seconds <= 0:
+            return self._stopping.is_set()
+        try:
+            await asyncio.wait_for(self._stopping.wait(), seconds)
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    async def _wait_for_rows(self, boundary: float) -> None:
+        """
+        Until the feed has written the ten seconds that end at ``boundary``: their
+        coverage row, asked for from EARLIEST_SECONDS after it, every
+        ASK_EVERY_SECONDS; SETTLE_SECONDS after it at the latest, as every tick
+        waited before. A feed that was not writing at the last tick is not asked:
+        it is waited for as it always was. Never raises: what the database
+        refuses here, the tick says.
+        """
+        if await self._pause(boundary + EARLIEST_SECONDS - self._clock()):
+            return
+        latest = boundary + SETTLE_SECONDS
+        asking = self._covered is not None and self._covered >= boundary - 2 * TICK_SECONDS
+        # As many times as fit between the two, whatever the clock says meanwhile.
+        for _ in range(int((SETTLE_SECONDS - EARLIEST_SECONDS) / ASK_EVERY_SECONDS) + 1):
+            if self._clock() >= latest:
+                return
+            if asking:
+                try:
+                    covered = await self._source.covered_until()
+                except Exception:
+                    asking = False
+                else:
+                    if covered is not None and covered >= boundary:
+                        return
+            if await self._pause(min(ASK_EVERY_SECONDS, latest - self._clock())):
+                return
 
     async def tick(self) -> None:
         now = self._clock()
@@ -322,7 +371,25 @@ class Engine:
                 lost.add(slot.name)
         # Every signal of the tick is sent: a continued run may be checked with what is left of it.
         await self._check_one(now, ready, lost)
+        await self._prepare_sender(now)
         await self._write_states(now)
+
+    async def _prepare_sender(self, now: float) -> None:
+        """
+        While a rule is live, the sender holds what a signal needs before one is
+        raised (the web server's token, read from PostgreSQL): the first signal
+        of a start does not wait for it. Costs nothing once it is held.
+        """
+        prepare = getattr(self._sender, "prepare", None)
+        if prepare is None or not any(run.rule.mode == LIVE for run in self._runs.values()):
+            return
+        try:
+            trouble = await prepare()
+        except Exception as e:
+            trouble = f"{type(e).__name__}: {e}"
+        if trouble is not None:
+            logger.warning("TA engine: %s. Read again at the next signal.", trouble)
+            await self._say("sender:prepare", f"⚠️ WATA TA engine: {trouble}. A live rule's signal may not be sent.", now)
 
     # ── rules ──
 
@@ -825,17 +892,24 @@ class Engine:
             await self._journal.complete_signal(signal_id, "refused", detail=refusal)
             await self._say(f"{rule['id']}:refused", f"⚠️ WATA TA engine, rule {rule['name']!r}: {candidate.action} not sent. {refusal}.", now)
             return
-        sent = await self._sender.send(body)
+        # Under its key (the web server stores a key once), and sent again when it got no answer, never past the age
+        # a signal may have.
+        patience = self._settings.max_signal_age_seconds - (self._clock() - bar[6] / 1000)
+        sent = await self._sender.send(body, key=f"{rule['id']}:{signal_id}", patience=max(0.0, patience))
+        attempts = getattr(sent, "attempts", 1)
         if sent.ok:
             await self._journal.complete_signal(
                 signal_id, "sent", sent_at=_moment(self._clock()), http_status=sent.http_status, signal_uuid=sent.signal_uuid,
+                detail=SENT_AGAIN.format(attempts=attempts) if attempts > 1 else None,
             )
-            logger.info("Rule %s sent %s on %s (bar %s).", rule["id"], candidate.action, rule["indice"], body["signal_timestamp"])
+            logger.info("Rule %s sent %s on %s (bar %s)%s.", rule["id"], candidate.action, rule["indice"],
+                        body["signal_timestamp"], f", at attempt {attempts}" if attempts > 1 else "")
             return
         await self._journal.complete_signal(signal_id, "failed", http_status=sent.http_status, detail=sent.error)
+        tried = f" in {attempts} attempts" if attempts > 1 else ""
         await self._say(
             f"{rule['id']}:failed",
-            f"❌ WATA TA engine, rule {rule['name']!r}: {candidate.action} on {rule['indice']} could not be sent ({sent.error}).",
+            f"❌ WATA TA engine, rule {rule['name']!r}: {candidate.action} on {rule['indice']} could not be sent{tried} ({sent.error}).",
             now,
         )
 

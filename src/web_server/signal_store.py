@@ -11,12 +11,57 @@ a bar that raised both (src/ta_engine/signals.py, ``settled``).
 
 import asyncio
 import logging
+from collections import OrderedDict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 ENTRY_ACTIONS = ("long", "short")
 CLOSE_ACTION = "close-position"
+# The header an internal signal's key comes in (the TA engine's sender names it the same: held by a test).
+SIGNAL_KEY_HEADER = "X-WATA-Signal-Key"
+MAX_KEY_LENGTH = 200
+
+
+class TakenKeys:
+    """
+    The keys of the internal signals taken lately, each with the signal_uuid
+    it was stored under. A sender that got no answer cannot tell whether its
+    signal was taken, and sends it again under the same key
+    (src/ta_engine/sender.py): it is answered with the signal of the first
+    time, and stored once. Without it, the same signal stored twice has two
+    signal_uuids, and the trader takes it twice.
+
+    In memory, as the store is: a web server that starts again has forgotten
+    both, and takes the signal sent again as its first.
+    """
+
+    def __init__(self, most: int = 256):
+        self._most = most
+        self._taken: OrderedDict[str, str] = OrderedDict()
+
+    @staticmethod
+    def valid(key) -> bool:
+        return isinstance(key, str) and 0 < len(key) <= MAX_KEY_LENGTH
+
+    def claim(self, key: str, signal_uuid: str) -> str:
+        """
+        The signal_uuid ``key`` stands for: ``signal_uuid`` when it is new, which
+        is kept for it from now on (before the signal is stored: a second request
+        that comes meanwhile is told the same); the one kept when it was taken.
+        """
+        known = self._taken.get(key)
+        if known is not None:
+            self._taken.move_to_end(key)
+            return known
+        self._taken[key] = signal_uuid
+        if len(self._taken) > self._most:
+            self._taken.popitem(last=False)
+        return signal_uuid
+
+    def forget(self, key: str) -> None:
+        """``key`` was not stored after all: sent again, it is taken as new."""
+        self._taken.pop(key, None)
 
 
 class SignalStore:

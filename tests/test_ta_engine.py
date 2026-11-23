@@ -609,10 +609,21 @@ class Journal:
 class Sender:
     def __init__(self):
         self.sent = []
+        # The key each signal went under, and how long it could be tried again.
+        self.keys = []
+        self.patience = []
+        self.prepared = 0
+        self.trouble = None
         self.answer = Sent(True, 200, "5e1f2a3b-0000-4000-8000-000000000001")
 
-    async def send(self, body):
+    async def prepare(self):
+        self.prepared += 1
+        return self.trouble
+
+    async def send(self, body, key=None, patience=None):
         self.sent.append(body)
+        self.keys.append(key)
+        self.patience.append(patience)
         return self.answer
 
 
@@ -882,6 +893,169 @@ def test_a_signal_the_web_server_did_not_take_is_said_on_telegram(scripts):
 
     assert journal.completed[0][1] == "failed" and journal.completed[0][2]["http_status"] == 503
     assert any("could not be sent (unavailable)" in message for message in telegram.messages)
+
+
+def test_a_signal_goes_under_its_key_and_may_be_sent_again_while_it_is_not_too_old(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, mode="live")
+    run(engine.tick())
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 60.2
+
+    run(engine.tick())
+
+    # Its rule and its row of the journal: the web server stores a key once, however often it is sent.
+    [(signal_id, outcome, details)] = journal.completed
+    assert sender.keys == [f"{rule['id']}:{signal_id}"] and outcome == "sent" and details.get("detail") is None
+    # For as long as the bar is not older than a signal may be (60 s by default), 0.2 s after its close here.
+    assert sender.patience == [pytest.approx(engine._settings.max_signal_age_seconds - 0.2)]
+
+
+def test_a_signal_the_web_server_took_at_a_later_attempt_says_so_and_one_given_up_too(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts, mode="live")
+    run(engine.tick())
+    sender.answer = Sent(True, 200, "5e1f2a3b-0000-4000-8000-000000000001", attempts=3)
+    runner.alerting = {T0 * 1000, (T0 + 60) * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 60.2
+
+    run(engine.tick())
+
+    assert journal.completed[0][1] == "sent"
+    assert journal.completed[0][2]["detail"] == "Sent at attempt 3: the web server had not taken it before"
+    assert telegram.messages == []
+
+    sender.answer = Sent(False, None, None, "ConnectError: All connection attempts failed", attempts=5)
+    source.rows_by_time += ten_second_rows(T0 + 60, 6, seed=4)
+    source.covered, clock.at = T0 + 120, T0 + 120.2
+    run(engine.tick())
+
+    assert journal.completed[1][1] == "failed"
+    assert any("could not be sent in 5 attempts (ConnectError: All connection attempts failed)" in message
+               for message in telegram.messages)
+
+
+def test_the_token_is_read_before_a_live_rule_raises_anything_and_a_shadow_rule_needs_none(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts)
+    run(engine.tick())
+    assert sender.prepared == 0
+
+    rules = RuleStore(scripts)
+    rules.set_mode(rule["id"], "live", rules.load()["revision"])
+    run(engine.tick())
+    assert sender.prepared == 1 and telegram.messages == []
+
+    # One that cannot be read is said, once in ten minutes, and read again at each tick and at the signal itself.
+    sender.trouble = "The web server's token could not be read: PostgresError"
+    clock.at += 10
+    run(engine.tick())
+    clock.at += 10
+    run(engine.tick())
+    assert sender.prepared == 3
+    assert telegram.messages == [
+        "⚠️ WATA TA engine: The web server's token could not be read: PostgresError. A live rule's signal may not be sent.",
+    ]
+
+
+def _waiting(scripts, monkeypatch, *, covered_lag=0.0):
+    """An engine on the real clock, its waits a tenth of what they are: 20 ms, every 20 ms, 300 ms at the latest."""
+    import time
+
+    import src.ta_engine.engine as engine_module
+
+    monkeypatch.setattr(engine_module, "EARLIEST_SECONDS", 0.02)
+    monkeypatch.setattr(engine_module, "ASK_EVERY_SECONDS", 0.02)
+    monkeypatch.setattr(engine_module, "SETTLE_SECONDS", 0.3)
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    engine._clock = time.time
+    boundary = time.time() + 0.05
+    # What the last tick read: the ten seconds before this boundary's were written (a feed that is writing).
+    engine._covered = boundary - 10 - covered_lag
+    source.covered = engine._covered
+    asked = []
+    read = source.covered_until
+
+    async def covered_until():
+        asked.append(time.time() - boundary)
+        return await read()
+
+    source.covered_until = covered_until
+    return engine, source, boundary, asked
+
+
+def test_a_tick_begins_as_soon_as_the_feed_has_written_its_ten_seconds(scripts, monkeypatch):
+    import time
+
+    engine, source, boundary, asked = _waiting(scripts, monkeypatch)
+
+    async def wait():
+        async def feed():
+            # The feed writes its bars, then their coverage row, shortly after the boundary.
+            await asyncio.sleep(boundary + 0.06 - time.time())
+            source.covered = boundary
+
+        writing = asyncio.ensure_future(feed())
+        await engine._wait_for_rows(boundary)
+        await writing
+        return time.time() - boundary
+
+    waited = run(wait())
+
+    # Once the row is there, not at the wait every tick had before (0.3 s here): asked from 20 ms after the boundary.
+    assert 0.06 <= waited < 0.2
+    assert asked and asked[0] >= 0.02 and len(asked) >= 2
+
+
+def test_a_feed_that_does_not_write_is_waited_for_as_before(scripts, monkeypatch):
+    import time
+
+    engine, source, boundary, asked = _waiting(scripts, monkeypatch)
+
+    run(engine._wait_for_rows(boundary))
+
+    # Never written: the tick begins at the latest moment, and says what it finds.
+    assert 0.3 <= time.time() - boundary < 0.6 and len(asked) >= 5
+
+
+def test_a_feed_that_was_not_writing_at_the_last_tick_is_not_asked(scripts, monkeypatch):
+    import time
+
+    # Thirty seconds behind when the engine last looked.
+    engine, source, boundary, asked = _waiting(scripts, monkeypatch, covered_lag=30)
+
+    run(engine._wait_for_rows(boundary))
+
+    assert 0.3 <= time.time() - boundary < 0.6 and asked == []
+
+
+def test_waiting_for_the_feed_never_raises(scripts, monkeypatch):
+    import time
+
+    engine, source, boundary, asked = _waiting(scripts, monkeypatch)
+
+    async def refused():
+        raise RuntimeError("the database is away")
+
+    source.covered_until = refused
+
+    run(engine._wait_for_rows(boundary))
+
+    assert 0.3 <= time.time() - boundary < 0.6
+
+
+def test_waiting_for_the_feed_ends_at_once_on_a_stop(scripts, monkeypatch):
+    import time
+
+    engine, source, boundary, asked = _waiting(scripts, monkeypatch)
+
+    async def stopped():
+        engine.stop()
+        await engine._wait_for_rows(boundary + 30)
+
+    started = time.time()
+    run(stopped())
+
+    assert time.time() - started < 0.2 and asked == []
 
 
 def test_a_rule_switched_to_live_keeps_running_and_one_whose_inputs_changed_is_loaded_again(scripts):

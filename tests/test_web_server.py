@@ -176,6 +176,60 @@ def test_the_engines_index_still_takes_the_internal_signals(client):
     assert [signal["action"] for signal in stored] == ["close-position"]
 
 
+def test_an_internal_signal_sent_again_under_its_key_is_stored_once(client):
+    from src.web_server.signal_store import TakenKeys
+
+    signal = {"action": "long", "indice": "us100", "signal_timestamp": "2023-07-01T12:00:00Z",
+              "alert_timestamp": "2023-07-01T12:00:00Z"}
+
+    def post(key=None, body=signal):
+        headers = {**BEARER_HEADERS, **({"X-WATA-Signal-Key": key} if key else {})}
+        return client.post("/internal/signal", headers=headers, json=body).json()
+
+    with patch("src.web_server.SIGNAL_STORE", new=SignalStore()), patch("src.web_server.TAKEN_KEYS", new=TakenKeys()):
+        first = post("f13986be5e9b:794")
+        # The engine got no answer and sends it again: the web server had taken it.
+        again = post("f13986be5e9b:794")
+        stored = client.get("/latest-signals", headers=BEARER_HEADERS).json()
+        # Another signal of the rule, and signals without a key (the scheduler's, the admin's), are each their own.
+        other = post("f13986be5e9b:795", {**signal, "signal_timestamp": "2023-07-01T12:00:10Z"})
+        bare = [post(), post()]
+        invalid = client.post("/internal/signal", headers={**BEARER_HEADERS, "X-WATA-Signal-Key": "k:1"}, json={"action": "long"})
+        after_invalid = post("k:1")
+
+    assert first["status"] == "success" and "repeated" not in first
+    assert again == {"status": "success", "signal_uuid": first["signal_uuid"], "repeated": True}
+    # One signal, under the uuid the trader dedups on, stored at its first arrival.
+    assert [(entry["signal_uuid"], entry["seq"]) for entry in stored] == [(first["signal_uuid"], 1)]
+    assert other["signal_uuid"] != first["signal_uuid"] and "repeated" not in other
+    assert bare[0]["signal_uuid"] != bare[1]["signal_uuid"]
+    # A request that was refused took no key.
+    assert invalid.status_code == 400 and "repeated" not in after_invalid
+
+
+def test_a_key_whose_signal_could_not_be_stored_is_taken_as_new_when_sent_again(client):
+    from src.web_server.signal_store import TakenKeys
+
+    signal = {"action": "close-position", "indice": "us100", "signal_timestamp": "2023-07-01T12:00:00Z",
+              "alert_timestamp": "2023-07-01T12:00:00Z"}
+    headers = {**BEARER_HEADERS, "X-WATA-Signal-Key": "f13986be5e9b:801"}
+
+    class Failing(SignalStore):
+        async def upsert(self, record):
+            raise RuntimeError("no store")
+
+    keys = TakenKeys()
+    with patch("src.web_server.TAKEN_KEYS", new=keys):
+        with patch("src.web_server.SIGNAL_STORE", new=Failing()), pytest.raises(RuntimeError):
+            client.post("/internal/signal", headers=headers, json=signal)
+        with patch("src.web_server.SIGNAL_STORE", new=SignalStore()):
+            again = client.post("/internal/signal", headers=headers, json=signal).json()
+            stored = client.get("/latest-signals", headers=BEARER_HEADERS).json()
+
+    # Never answered "repeated" for a signal the trader would not find.
+    assert "repeated" not in again and [entry["signal_uuid"] for entry in stored] == [again["signal_uuid"]]
+
+
 def test_the_webhooks_state_needs_the_internal_token(client):
     response = client.get("/internal/webhook")
     assert response.status_code in (401, 403)
