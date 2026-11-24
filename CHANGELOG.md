@@ -2,7 +2,7 @@
 
 ## v0.100.0 - Measured fills that cost what orders cost, and the engine's signals sooner and never lost
 
-**Release date:** not released yet
+**Release date:** 2026-11-24
 
 Two things read on the server's record of 23 November 2026, the rule's first live day.
 
