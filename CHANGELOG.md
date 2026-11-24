@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.100.1 - An open position's live chart fits its page
+
+**Release date:** 2026-11-24
+
+On the Positions page, an open position's live chart was as wide as the whole table (about 1,300 px with every column), not as the part of it the page shows: it was read by scrolling the table sideways. A closed position's chart, and anything else drawn in an opened row, did the same.
+
+- **An opened row is as wide as its table's frame shows** (ioiti-ui 0.23.2, `AdvancedDataTable`): measured, and held at the frame's left edge while the table's columns scroll under it.
+- ioiti-ui 0.23.1 comes with it: a timeline's line no longer shows through a failed or a warning step.
+- Only the admin's interface changes.
+
 ## v0.100.0 - Measured fills that cost what orders cost, and the engine's signals sooner and never lost
 
 **Release date:** 2026-11-24
