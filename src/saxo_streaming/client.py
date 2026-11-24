@@ -16,7 +16,9 @@ Architecture
    ``saxo_openapi.contrib.ws.stream.decode_ws_msg``.
 3. Delta updates are merged into the cached snapshot (deep merge).
 4. Control messages (_heartbeat, _resetsubscriptions, _disconnect) are
-   handled according to the Saxo protocol.
+   handled according to the Saxo protocol. The price subscriptions Saxo asks
+   to have made again are made again in a task of their own, never in the
+   receive loop (``_reset_info_prices``).
 5. Re-authorisation happens automatically before the token expires.
 6. Reconnection preserves the ``last_message_id`` so the server can
    resume from where it left off.
@@ -157,6 +159,17 @@ class SaxoStreamClient:
         self._desired_info_price_subscriptions: dict[str, dict] = {}
         self._active_info_price_subscriptions: dict[str, dict] = {}
         self._info_price_subscriptions_lock = asyncio.Lock()
+        # The price subscriptions Saxo asked to have made again (_resetsubscriptions), in the order asked, and the
+        # task that makes them again one after the other (``_reset_info_prices``). Each is two requests to Saxo, and
+        # one Saxo refuses is waited for up to a minute: awaited in the receive loop, as until v0.100.0, no quote of
+        # any subscription was read meanwhile (the watchlist manager, a minute on 3, 5 and 9 November 2026).
+        self._resets_asked: dict[str, None] = {}
+        self._reset_task: asyncio.Task | None = None
+        # The one being made again now, whether its old subscription is removed yet, and what Saxo sent of the new
+        # one before its snapshot was read (applied after it, in the order received).
+        self._resetting: str | None = None
+        self._reset_removed = False
+        self._reset_held: list = []
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -197,6 +210,9 @@ class SaxoStreamClient:
             self._reauth_task.cancel()
         if self._receive_task and not self._receive_task.done():
             self._receive_task.cancel()
+        if self._reset_task and not self._reset_task.done():
+            self._reset_task.cancel()
+        self._resets_asked.clear()
         await self._cleanup_subscriptions()
         if self._has_connection():
             await self._ws.close()
@@ -393,7 +409,9 @@ class SaxoStreamClient:
                 await self._remove_info_price_subscription(reference_id)
 
         for reference_id, definition in desired_subscriptions.items():
-            if reference_id not in self._active_info_price_subscriptions:
+            # The one being made again at Saxo's request is made by that task, from what is desired then: made
+            # here too, Saxo would be asked for one reference twice.
+            if reference_id not in self._active_info_price_subscriptions and reference_id != self._resetting:
                 await self._create_info_price_subscription(definition)
 
     async def _remove_info_price_subscription(self, reference_id: str):
@@ -464,6 +482,11 @@ class SaxoStreamClient:
                         await self._handle_control_message(ref_id, payload)
                     elif ref_id == self._pos_ref_id:
                         await self._handle_position_update(payload)
+                    elif ref_id == self._resetting:
+                        # Being made again: what comes once the old one is removed is the new one's, kept for after
+                        # its snapshot; before that, the old one's last words, which the snapshot is newer than.
+                        if self._reset_removed:
+                            self._reset_held.append(payload)
                     elif ref_id in self._active_info_price_subscriptions:
                         await self._handle_info_price_subscription_update(ref_id, payload)
                     else:
@@ -645,6 +668,11 @@ class SaxoStreamClient:
         """
         Re-create subscriptions listed in TargetReferenceIds.
         If the list is empty, reset ALL subscriptions.
+
+        The position subscription is made again here, before anything else is
+        read: its snapshot replaces the positions held, and an update read
+        before it would be lost under it. The price subscriptions are only
+        noted here and made again by their own task.
         """
         target_refs = []
         if isinstance(payload, dict):
@@ -674,20 +702,72 @@ class SaxoStreamClient:
             await self._create_position_subscription()
             self._subscription_ready = True
 
-        refs_to_reset = list(self._active_info_price_subscriptions.keys())
+        self._ask_info_price_resets(target_refs)
+
+    def _ask_info_price_resets(self, target_refs: list) -> None:
+        """
+        Note the price subscriptions Saxo asks to have made again, and start
+        the task that makes them again if none runs. Nothing is awaited: the
+        receive loop goes on reading the others' quotes meanwhile.
+
+        Saxo often asks twice in a row. One that waits for its turn is made
+        again once. For the one being made again now, a request read before
+        its old subscription's removal was answered can only be about that old
+        one, which the task is replacing already; read later, the new one may
+        be meant, and it is made again once more.
+        """
+        named = list(self._active_info_price_subscriptions.keys())
+        if self._resetting is not None and self._resetting not in named:
+            named.append(self._resetting)
         if target_refs:
-            refs_to_reset = [ref_id for ref_id in refs_to_reset if ref_id in target_refs]
+            named = [ref_id for ref_id in named if ref_id in target_refs]
 
-        if refs_to_reset:
-            logger.warning("Resetting %d info-price subscription(s).", len(refs_to_reset))
-            async with self._info_price_subscriptions_lock:
-                desired_subscriptions = copy.deepcopy(self._desired_info_price_subscriptions)
+        added = 0
+        for ref_id in named:
+            if ref_id in self._resets_asked:
+                continue
+            if ref_id == self._resetting and not self._reset_removed:
+                continue
+            self._resets_asked[ref_id] = None
+            added += 1
+        if added:
+            logger.warning("Resetting %d info-price subscription(s).", added)
+        if len(named) > added:
+            logger.info("%d info-price subscription(s) asked again are being reset already.", len(named) - added)
+        if self._resets_asked and (self._reset_task is None or self._reset_task.done()):
+            self._reset_task = asyncio.create_task(self._reset_info_prices())
 
-            for ref_id in refs_to_reset:
+    async def _reset_info_prices(self) -> None:
+        """
+        Make again, one after the other, the price subscriptions Saxo asked
+        for: the old one removed, then the one desired now created. One that
+        cannot be made again is said and left to the next synchronisation
+        (``_sync_desired_info_price_subscriptions`` creates what is not
+        active); the others are still made.
+        """
+        while self._resets_asked:
+            ref_id = next(iter(self._resets_asked))
+            del self._resets_asked[ref_id]
+            self._resetting, self._reset_removed, self._reset_held = ref_id, False, []
+            try:
                 await self._remove_info_price_subscription(ref_id)
-                definition = desired_subscriptions.get(ref_id)
+                self._reset_removed = True
+                async with self._info_price_subscriptions_lock:
+                    definition = copy.deepcopy(self._desired_info_price_subscriptions.get(ref_id))
                 if definition is not None:
                     await self._create_info_price_subscription(definition)
+                    # What Saxo sent of the new one before its snapshot was read, in the order received. Emptied with
+                    # nothing awaited after the last look, so that the next message goes the usual way.
+                    while self._reset_held:
+                        payload = self._reset_held.pop(0)
+                        if ref_id in self._active_info_price_subscriptions:
+                            await self._handle_info_price_subscription_update(ref_id, payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("Info-price subscription %s could not be made again: %s", ref_id, exc)
+            finally:
+                self._resetting, self._reset_removed, self._reset_held = None, False, []
 
     # ── Re-authorisation loop ─────────────────────────────────────
 

@@ -763,3 +763,293 @@ def test_the_last_message_from_saxo_is_known():
         return connected, client.connected
 
     assert _run(scenario) == (True, False)
+
+
+# ── Price subscriptions Saxo asks to have made again ──
+#
+# Saxo sends _resetsubscriptions, often twice in a row. Each subscription made
+# again is two requests, and one Saxo refuses is waited for up to a minute:
+# awaited in the receive loop (until v0.100.0), no quote was read meanwhile.
+
+REFS = ["wlp-1", "wlp-2", "wlp-3", "wlp-4"]
+
+
+class SaxoRest:
+    """
+    What answers the client's REST requests, each noted as (endpoint, reference).
+    A request named in ``held`` waits until the test lets it go (Saxo's refusal,
+    waited for), and one named in ``refused`` raises.
+    """
+
+    def __init__(self):
+        self.asked = []
+        self.held: dict[tuple, asyncio.Event] = {}
+        self.arrived: dict[tuple, asyncio.Event] = {}
+        self.refused: set[tuple] = set()
+        self.bids: dict[str, float] = {}
+
+    def hold(self, endpoint: str, reference: str) -> asyncio.Event:
+        self.arrived[(endpoint, reference)] = asyncio.Event()
+        self.held[(endpoint, reference)] = asyncio.Event()
+        return self.held[(endpoint, reference)]
+
+    async def request(self, endpoint):
+        name = type(endpoint).__name__
+        if name == "CreateInfoPriceSubscription":
+            reference = endpoint.data["ReferenceId"]
+        else:
+            reference = str(endpoint).rsplit("/", 1)[-1]
+        key = (name.replace("InfoPriceSubscription", "").replace("ById", ""), reference)
+        self.asked.append(key)
+        if key in self.held:
+            self.arrived[key].set()
+            await self.held.pop(key).wait()
+        if key in self.refused:
+            raise RuntimeError("Saxo refused")
+        if key[0] == "Create":
+            return {"Snapshot": {"Data": [{"Uic": 101, "Quote": {"Bid": self.bids.get(reference, 10.0)}}]}}
+        return None
+
+
+def _price_client(rest: SaxoRest, updates: list | None = None) -> SaxoStreamClient:
+    """A client holding four price subscriptions, as the watchlist manager's does while it streams."""
+    async def on_update(definition, rows, context_id):
+        if updates is not None:
+            updates.append((definition["reference_id"], rows[0]["Quote"]["Bid"]))
+
+    api = MagicMock()
+    api.access_token = "token-1"
+    api.request = rest.request
+    client = SaxoStreamClient(
+        api_client=api, account_key="account-key", client_key="", on_positions_update=None,
+        access_token_getter=lambda: "token-1", on_info_price_subscription_update=on_update,
+    )
+    client._context_id = "ctx-1"
+    client._running = True
+    for reference in REFS:
+        definition = {"reference_id": reference, "asset_type": "WarrantKnockOut", "uics": [101], "field_groups": ["Quote"]}
+        client._desired_info_price_subscriptions[reference] = definition
+        client._active_info_price_subscriptions[reference] = {
+            "definition": dict(definition), "snapshot_by_uic": {101: {"Uic": 101, "Quote": {"Bid": 10.0}}},
+        }
+    return client
+
+
+async def _reset_asked(client: SaxoStreamClient, *references: str) -> None:
+    await asyncio.wait_for(
+        client._handle_control_message("_resetsubscriptions", {"TargetReferenceIds": list(references)}), timeout=0.5,
+    )
+
+
+async def _resets_done(client: SaxoStreamClient) -> None:
+    await asyncio.wait_for(client._reset_task, timeout=3)
+
+
+def test_a_reset_of_the_price_subscriptions_does_not_hold_the_reading_of_the_stream():
+    async def scenario():
+        rest, updates = SaxoRest(), []
+        client = _price_client(rest, updates)
+        refusal = rest.hold("Remove", "wlp-1")
+
+        # Answered at once, though Saxo keeps the first request waiting (a 429 is waited for up to a minute).
+        await _reset_asked(client)
+        await rest.arrived[("Remove", "wlp-1")].wait()
+        # Meanwhile the other subscriptions' quotes are read and delivered.
+        await client._handle_info_price_subscription_update("wlp-3", {"Uic": 101, "Quote": {"Bid": 9.7}})
+        read_meanwhile = list(updates)
+
+        refusal.set()
+        await _resets_done(client)
+        return read_meanwhile, rest.asked, client
+
+    read_meanwhile, asked, client = _run(scenario)
+
+    assert read_meanwhile == [("wlp-3", 9.7)]
+    # Each made again, one after the other: its old subscription removed, then the new one created.
+    assert asked == [(step, reference) for reference in REFS for step in ("Remove", "Create")]
+    assert sorted(client._active_info_price_subscriptions) == REFS and client._resetting is None
+
+
+def test_a_reset_saxo_asks_twice_in_a_row_is_made_once():
+    async def scenario():
+        rest = SaxoRest()
+        client = _price_client(rest)
+        waiting = rest.hold("Remove", "wlp-1")
+
+        await _reset_asked(client)
+        await rest.arrived[("Remove", "wlp-1")].wait()
+        # The second request, read while the first subscription's removal is not answered yet: it can only be about
+        # the subscriptions being replaced.
+        await _reset_asked(client)
+        waiting.set()
+        await _resets_done(client)
+        once = list(rest.asked)
+
+        # Asked again once they are made: made again.
+        await _reset_asked(client, "wlp-2")
+        await _resets_done(client)
+        return once, rest.asked[len(once):]
+
+    once, later = _run(scenario)
+
+    # Eight requests, where the client of before made sixteen in under a second and was refused one.
+    assert once == [(step, reference) for reference in REFS for step in ("Remove", "Create")]
+    assert later == [("Remove", "wlp-2"), ("Create", "wlp-2")]
+
+
+def test_a_reset_asked_while_the_new_subscription_is_being_created_makes_it_again():
+    async def scenario():
+        rest = SaxoRest()
+        client = _price_client(rest)
+        creating = rest.hold("Create", "wlp-1")
+
+        await _reset_asked(client, "wlp-1")
+        await rest.arrived[("Create", "wlp-1")].wait()
+        # Its old subscription is gone: this request may be about the new one.
+        await _reset_asked(client, "wlp-1")
+        creating.set()
+        await _resets_done(client)
+        return rest.asked
+
+    assert _run(scenario) == [("Remove", "wlp-1"), ("Create", "wlp-1")] * 2
+
+
+def test_what_saxo_sends_of_a_subscription_being_made_again_is_read_after_its_snapshot():
+    async def scenario():
+        rest, updates = SaxoRest(), []
+        client = _price_client(rest, updates)
+        rest.bids["wlp-1"] = 11.0
+        removing, creating = rest.hold("Remove", "wlp-1"), rest.hold("Create", "wlp-1")
+
+        async def received(reference, bid):
+            # As the receive loop dispatches a message.
+            payload = {"Uic": 101, "Quote": {"Bid": bid}}
+            if reference == client._resetting:
+                if client._reset_removed:
+                    client._reset_held.append(payload)
+            elif reference in client._active_info_price_subscriptions:
+                await client._handle_info_price_subscription_update(reference, payload)
+
+        await _reset_asked(client, "wlp-1")
+        await rest.arrived[("Remove", "wlp-1")].wait()
+        # The old subscription's last words: the snapshot to come is newer.
+        await received("wlp-1", 9.0)
+        removing.set()
+        await rest.arrived[("Create", "wlp-1")].wait()
+        # The new subscription's first changes, sent before its snapshot was read.
+        await received("wlp-1", 11.2)
+        await received("wlp-1", 11.4)
+        creating.set()
+        await _resets_done(client)
+        await received("wlp-1", 11.6)
+        return updates
+
+    # The snapshot, then what followed it, in the order Saxo sent it; never the old 9.0.
+    assert _run(scenario) == [("wlp-1", 11.0), ("wlp-1", 11.2), ("wlp-1", 11.4), ("wlp-1", 11.6)]
+
+
+def test_the_receive_loop_keeps_what_comes_for_a_subscription_being_made_again(caplog):
+    async def scenario():
+        rest, updates = SaxoRest(), []
+        client = _price_client(rest, updates)
+        rest.bids["wlp-2"] = 11.0
+        creating = rest.hold("Create", "wlp-2")
+
+        class Socket:
+            """Saxo's frames, read as the receive loop reads a WebSocket: a reset, then quotes while it is under way."""
+
+            def __aiter__(self):
+                return self.frames()
+
+            async def frames(self):
+                yield _frame(1, "_resetsubscriptions", {"TargetReferenceIds": ["wlp-2"]})
+                await rest.arrived[("Create", "wlp-2")].wait()
+                yield _frame(2, "wlp-2", {"Uic": 101, "Quote": {"Bid": 11.3}})
+                yield _frame(3, "wlp-4", {"Uic": 101, "Quote": {"Bid": 9.5}})
+                creating.set()
+
+        client._ws = Socket()
+        await asyncio.wait_for(client._receive_loop(), timeout=3)
+        await _resets_done(client)
+        return updates
+
+    # The other subscription's quote is delivered while Saxo is asked; the new one's change after its snapshot.
+    assert _run(scenario) == [("wlp-4", 9.5), ("wlp-2", 11.0), ("wlp-2", 11.3)]
+
+
+def test_a_subscription_being_made_again_is_not_created_a_second_time_by_a_change_of_subscriptions():
+    async def scenario():
+        rest = SaxoRest()
+        client = _price_client(rest)
+        client._ws = MagicMock()
+        client._ws.state = None  # open, as far as the client can tell
+        creating = rest.hold("Create", "wlp-1")
+
+        await _reset_asked(client, "wlp-1")
+        await rest.arrived[("Create", "wlp-1")].wait()
+        # The watchlist manager sets its subscriptions again meanwhile, the same ones.
+        await client.set_subscriptions([dict(client._desired_info_price_subscriptions[reference]) for reference in REFS])
+        creating.set()
+        await _resets_done(client)
+        return rest.asked, client
+
+    asked, client = _run(scenario)
+
+    assert asked == [("Remove", "wlp-1"), ("Create", "wlp-1")]
+    assert sorted(client._active_info_price_subscriptions) == REFS
+
+
+def test_a_subscription_that_cannot_be_made_again_is_said_and_the_others_still_are(caplog):
+    async def scenario():
+        rest = SaxoRest()
+        client = _price_client(rest)
+        rest.refused.add(("Create", "wlp-2"))
+
+        with caplog.at_level(logging.ERROR, logger="src.saxo_streaming.client"):
+            await _reset_asked(client)
+            await _resets_done(client)
+        return rest.asked, client
+
+    asked, client = _run(scenario)
+
+    assert asked == [(step, reference) for reference in REFS for step in ("Remove", "Create")]
+    # Left to the next synchronisation, which creates what is not active.
+    assert sorted(client._active_info_price_subscriptions) == ["wlp-1", "wlp-3", "wlp-4"]
+    assert "Info-price subscription wlp-2 could not be made again: Saxo refused" in caplog.text
+
+
+def test_stopping_ends_a_reset_under_way():
+    async def scenario():
+        rest = SaxoRest()
+        client = _price_client(rest)
+        rest.hold("Remove", "wlp-1")
+
+        await _reset_asked(client)
+        await rest.arrived[("Remove", "wlp-1")].wait()
+        task = client._reset_task
+        await client.stop()
+        await asyncio.wait({task}, timeout=1)
+        return task.cancelled(), client._resets_asked
+
+    assert _run(scenario) == (True, {})
+
+
+def test_the_position_subscription_is_still_made_again_before_anything_else_is_read():
+    async def scenario():
+        api = MagicMock()
+        api.access_token = "token-1"
+        api.request = AsyncMock(return_value={"Snapshot": {"Data": [json.loads(json.dumps(POSITION))]}})
+        client = SaxoStreamClient(
+            api_client=api, account_key="account-key", client_key="client-key", on_positions_update=AsyncMock(),
+            access_token_getter=lambda: "token-1",
+        )
+        client._context_id, client._pos_ref_id, client._running = "ctx-1", "pos-1", True
+
+        await client._handle_control_message("_resetsubscriptions", {})
+        return _requests(client), client
+
+    asked, client = _run(scenario)
+
+    # Done when the message's handling returns, as before: its snapshot replaces the positions held.
+    assert asked == ["PositionSubscriptionRemove", "PositionListSubscription"]
+    assert list(client._positions) == ["position-1"] and client._reset_task is None
