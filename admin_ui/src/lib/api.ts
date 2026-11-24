@@ -132,6 +132,7 @@ import type {
   ServicesState,
   Session,
   Signal,
+  SignalTrace,
   SignalSent,
   TaComparison,
   TaEngine,
@@ -316,6 +317,8 @@ export const api = {
     request<ExecutionLedger>('GET', `/api/execution${query({ ...params })}`),
   /** The daily report's figures: of today, or as of ``day`` (YYYY-MM-DD). */
   report: (day?: string) => request<Report>('GET', `/api/report${query({ day })}`),
+  /** One signal's way to WATA and what it gave: by its uuid, or `engine-<id>`. */
+  signalTrace: (ref: string) => request<SignalTrace>('GET', `/api/signals/${encodeURIComponent(ref)}`),
   journal: (params: DateRangeParams = {}) =>
     request<{ items: JournalEntry[] }>('GET', `/api/journal${query({ ...params, limit: 500 })}`),
   watchlist: () => request<Watchlist>('GET', '/api/watchlist'),

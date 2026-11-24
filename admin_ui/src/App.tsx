@@ -24,6 +24,7 @@ import { LogsPage } from '@/features/logs/LogsPage'
 import { NotFoundPage } from '@/features/NotFoundPage'
 import { OrdersPage } from '@/features/positions/OrdersPage'
 import { PositionsPage } from '@/features/positions/PositionsPage'
+import { SignalPage } from '@/features/signals/SignalPage'
 import { SignalsPage } from '@/features/signals/SignalsPage'
 import { SystemPage } from '@/features/system/SystemPage'
 import { TimingPage } from '@/features/timing/TimingPage'
@@ -387,6 +388,7 @@ const router = createBrowserRouter(
         />
         <Route path="timing" element={<TimingPage />} />
         <Route path="signals" element={<SignalsPage />} />
+        <Route path="signals/:ref" element={<SignalPage />} />
         <Route path="watchlist" element={<WatchlistPage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="system" element={<SystemPage />} />

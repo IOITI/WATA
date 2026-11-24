@@ -1,7 +1,7 @@
 // The parts of the Engine monitor that read a period: the rules' runs, the charts over time, the
 // delivery of the live signals and their results.
 
-import { AdvancedDataTable, Badge, formatDay, formatNumber, formatPercent, formatWait, Meter, Panel, SignedValue } from 'ioiti-ui'
+import { AdvancedDataTable, Badge, formatDateTime, formatDay, formatNumber, formatPercent, formatWait, Meter, Panel, SignedValue } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
@@ -11,10 +11,12 @@ import { CountBarsChart, SeriesLegend, TimeSeriesChart } from '@/components/char
 import type { SeriesLine } from '@/components/charts/PerformanceCharts'
 import { ClaudeBadge } from '@/components/status'
 import { paperTradingHref } from '@/features/backtests/paperModel'
+import { signalLink } from '@/features/positions/orderLife'
 import { madeByClaude } from '@/features/system/claude'
-import type { TaMonitor, TaMonitorCount, TaMonitorRule, TaMonitorStep } from '@/lib/types'
+import type { TaMonitor, TaMonitorCount, TaMonitorRule, TaMonitorSlowSignal, TaMonitorStep } from '@/lib/types'
 
 import { barsLabel, MODE_LABEL, MODE_TONE } from '../signals/ruleModel'
+import { RulePeekName } from '../signals/RulePeek'
 import {
   axisClock,
   axisTicks,
@@ -435,7 +437,39 @@ function Counts({ title, items }: { title: string; items: (TaMonitorCount & { de
   )
 }
 
-export function DeliveryPanel({ period }: { period: TaMonitor }) {
+/** The slowest live signals of the period, each a link to its own page: what a 95th percentile is made of. */
+function SlowestSignals({ signals, timeZone, oneRule }: { signals: TaMonitorSlowSignal[]; timeZone: string; oneRule: boolean }) {
+  if (signals.length === 0) return null
+  return (
+    <div className="mt-6">
+      <h3 className="text-sm font-medium">The slowest of them</h3>
+      <p className="mt-1 text-xs text-muted-foreground">From the bar's close to the position seen, or to the trader's outcome without one. Each opens its way, moment by moment.</p>
+      <ul className="mt-2 divide-y divide-border/40 text-xs">
+        {signals.map((signal) => (
+          <li key={signal.ref ?? `${signal.rule_id}-${signal.bar_closed_at}`} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
+            <span className="min-w-0">
+              {signal.ref ? (
+                <Link to={signalLink(signal.ref)} className="underline decoration-border underline-offset-2 hover:decoration-foreground">
+                  {signal.bar_closed_at ? formatDateTime(signal.bar_closed_at, timeZone) : 'Its page'}
+                </Link>
+              ) : (
+                formatDateTime(signal.bar_closed_at, timeZone)
+              )}
+              <span className="ml-2 text-muted-foreground">
+                {signal.action ?? ''}
+                {!oneRule && ` · ${signal.rule_name ?? signal.rule_id}`}
+                {` · ${signal.to_position ? 'to its position' : `to the trader's outcome (${signal.trader_outcome ?? 'none'})`}`}
+              </span>
+            </span>
+            <span className="tabular-nums">{signal.total_ms === null ? '—' : formatWait(signal.total_ms)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+export function DeliveryPanel({ period, timeZone }: { period: TaMonitor; timeZone: string }) {
   const { delivery } = period
   const shares = stepShares(delivery.steps)
   const steps = delivery.steps.filter((step) => step.signals > 0)
@@ -484,6 +518,7 @@ export function DeliveryPanel({ period }: { period: TaMonitor }) {
           items={delivery.trader.map((outcome) => ({ ...outcome, detail: outcome.reason }))}
         />
       </div>
+      <SlowestSignals signals={delivery.slowest ?? []} timeZone={timeZone} oneRule={Boolean(delivery.rule)} />
       {delivery.shadow_late > 0 && (
         <p className="mt-4 text-xs text-muted-foreground">
           {formatNumber(delivery.shadow_late)} signal{delivery.shadow_late === 1 ? '' : 's'} of the shadow rules came too late to be sent,
@@ -521,7 +556,9 @@ export function ResultsPanel({ rows, backtestsEnabled }: { rows: ResultRow[]; ba
               {rows.map((row) => (
                 <tr key={row.rule_id}>
                   <td className="py-2.5 pr-4">
-                    <span className="font-medium">{ruleName(row)}</span>
+                    <span className="font-medium">
+                      {row.name ? <RulePeekName id={row.rule_id} name={row.name} /> : ruleName(row)}
+                    </span>
                     {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
                     {row.mode && <p className="text-muted-foreground">{MODE_LABEL[row.mode]}</p>}
                   </td>

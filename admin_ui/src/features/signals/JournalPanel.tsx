@@ -1,24 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
 import { AdvancedDataTable, Badge, formatDateTime, formatNumber, FunnelChart, Panel, QueryState } from 'ioiti-ui'
-import type { BadgeTone, ColumnDef } from 'ioiti-ui'
+import type { ColumnDef } from 'ioiti-ui'
 import { useMemo } from 'react'
+import { Link } from 'react-router'
 
 import { ActionBadge } from '@/components/status'
 import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import { localDay } from '@/features/backtests/model'
+import { isSignalUuid, orderLink, signalLink } from '@/features/positions/orderLife'
 import { PositionPeekLink } from '@/features/positions/PositionPeek'
 import { api } from '@/lib/api'
 import type { JournalEntry } from '@/lib/types'
 
 import { journalFunnel } from './journalFunnel'
+import { TRADER_OUTCOMES } from './signalTrace'
 
-const OUTCOMES: Record<string, { label: string; tone: BadgeTone }> = {
-  executed: { label: 'Executed', tone: 'success' },
-  closed: { label: 'Positions closed', tone: 'success' },
-  refused: { label: 'Refused', tone: 'warning' },
-  failed: { label: 'Failed', tone: 'danger' },
-  ignored: { label: 'Nothing to do', tone: 'neutral' },
-}
+const OUTCOMES = TRADER_OUTCOMES
 
 const OUTCOME_FILTER = Object.entries(OUTCOMES).map(([value, { label }]) => ({ value, label }))
 
@@ -35,7 +32,15 @@ export function JournalPanel({ timeZone }: { timeZone: string }) {
         header: 'Decided',
         accessorKey: 'decided_at',
         sortable: true,
-        cell: ({ row }) => formatDateTime(row.decided_at, timeZone),
+        // Its own page: every moment of its way, from its bar or its alert to its position.
+        cell: ({ row }) =>
+          isSignalUuid(row.signal_uuid) ? (
+            <Link to={signalLink(row.signal_uuid)} className="underline decoration-border underline-offset-2 hover:decoration-foreground">
+              {formatDateTime(row.decided_at, timeZone)}
+            </Link>
+          ) : (
+            formatDateTime(row.decided_at, timeZone)
+          ),
       },
       {
         id: 'action',
@@ -63,17 +68,24 @@ export function JournalPanel({ timeZone }: { timeZone: string }) {
         accessorKey: 'reason',
         cell: ({ row }) => (
           <span className="block max-w-[32rem] whitespace-normal">
-            {row.reason ??
-              (row.position_id ? (
-                <>
-                  Position{' '}
-                  <PositionPeekLink id={row.position_id} className="font-mono underline decoration-border underline-offset-2">
-                    {row.position_id}
-                  </PositionPeekLink>
-                </>
-              ) : (
-                '—'
-              ))}
+            {row.reason}
+            {row.position_id && (
+              <span className="block">
+                Position{' '}
+                <PositionPeekLink id={row.position_id} className="font-mono underline decoration-border underline-offset-2">
+                  {row.position_id}
+                </PositionPeekLink>
+                {row.order_id && (
+                  <>
+                    {' '}by order{' '}
+                    <Link to={orderLink(row.order_id)} className="font-mono underline decoration-border underline-offset-2">
+                      {row.order_id}
+                    </Link>
+                  </>
+                )}
+              </span>
+            )}
+            {!row.reason && !row.position_id && '—'}
           </span>
         ),
       },

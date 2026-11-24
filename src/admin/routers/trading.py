@@ -236,6 +236,26 @@ async def get_position(position_id: str, request: Request):
     return position
 
 
+@router.get("/signals/{ref}")
+async def signal_trace(ref: str, request: Request):
+    """
+    One signal's way to WATA and what it gave (src/admin/signal_trace.py): by the signal_uuid the web server stored it
+    under, or ``engine-<id>`` for the engine's row of a signal the web server never answered.
+    """
+    from src.admin.signal_trace import ref_of, trace_answer
+
+    found = ref_of(ref)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    kind, value = found
+    queries = request.app.state.ctx.queries
+    parts = await (queries.signal_trace(ta_signal_id=value) if kind == "engine" else queries.signal_trace(signal_uuid=value))
+    answer = trace_answer(parts)
+    if answer is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    return answer
+
+
 @router.get("/orders")
 async def list_orders(
     request: Request,

@@ -8,10 +8,11 @@ import { orderLife, orderLink, RESULTS, stepToLookAt, timelineItems } from './or
 import type { OrderLife } from './orderLife'
 import { PositionPeekLink } from './PositionPeek'
 import { RequestList } from './RequestList'
+import { SignalLine } from './SignalLine'
 
 const LINK = 'font-mono text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground'
 
-function LinkedPosition({ position, currency, timeZone }: { position: OrderPosition; currency: string | null; timeZone: string }) {
+export function LinkedPosition({ position, currency, timeZone }: { position: OrderPosition; currency: string | null; timeZone: string }) {
   const closed = position.position_status === 'Closed'
   return (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
@@ -112,6 +113,17 @@ export function OrderTimeline({
   return (
     <div className="space-y-2 text-xs">
       <OrderHeading order={order} life={life} timeZone={timeZone} heading={heading} />
+      {life.purpose === 'open' && order.signal && (
+        <SignalLine
+          heading="For the signal of"
+          uuid={order.signal.signal_uuid}
+          taSignalId={order.signal.engine?.id}
+          ruleId={order.signal.engine?.rule_id}
+          ruleName={order.signal.engine?.rule_name}
+          at={order.signal.engine?.bar_closed_at ?? order.signal.received_timestamp}
+          timeZone={timeZone}
+        />
+      )}
       <MomentsTimeline items={timelineItems(life.steps, timeZone)} label={`The moments of order ${order.order_id}`} />
 
       {showRequests && order.requests && order.requests.length > 0 && (

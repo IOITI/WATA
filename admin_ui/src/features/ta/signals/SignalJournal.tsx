@@ -6,8 +6,12 @@ import { useQuery } from '@tanstack/react-query'
 import { AdvancedDataTable, Badge, DateRangeFilter, formatDateTime, formatNumber, lastDays, Panel, QueryState, rangeParams, Select } from 'ioiti-ui'
 import type { BadgeTone, ColumnDef, DateRange } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router'
 
 import { ActionBadge } from '@/components/status'
+import { signalLink, signalRef } from '@/features/positions/orderLife'
+import { PositionPeekLink } from '@/features/positions/PositionPeek'
+import { TRADER_OUTCOMES } from '@/features/signals/signalTrace'
 import { api } from '@/lib/api'
 import type { TaRule, TaSignal } from '@/lib/types'
 
@@ -19,13 +23,7 @@ const OUTCOMES: Record<TaSignal['outcome'], { label: string; tone: BadgeTone }> 
   failed: { label: 'Failed', tone: 'danger' },
 }
 
-const TRADER: Record<string, { label: string; tone: BadgeTone }> = {
-  executed: { label: 'Executed', tone: 'success' },
-  closed: { label: 'Positions closed', tone: 'success' },
-  refused: { label: 'Refused', tone: 'warning' },
-  failed: { label: 'Failed', tone: 'danger' },
-  ignored: { label: 'Nothing to do', tone: 'neutral' },
-}
+const TRADER = TRADER_OUTCOMES
 
 export function SignalJournal({ rules, timeZone, fixed = false }: {
   rules: TaRule[]
@@ -51,7 +49,9 @@ export function SignalJournal({ rules, timeZone, fixed = false }: {
         sortable: true,
         cell: ({ row }) => (
           <div className="whitespace-nowrap">
-            {formatDateTime(row.bar_time, timeZone)}
+            <Link to={signalLink(signalRef(row.signal_uuid, row.id) ?? '')} className="underline decoration-border underline-offset-2 hover:decoration-foreground">
+              {formatDateTime(row.bar_time, timeZone)}
+            </Link>
             <p className="text-xs text-muted-foreground">closed {formatDateTime(row.bar_closed_at, timeZone, false)}</p>
           </div>
         ),
@@ -121,6 +121,14 @@ export function SignalJournal({ rules, timeZone, fixed = false }: {
             <div className="min-w-0 max-w-64 whitespace-normal">
               <Badge tone={decision.tone}>{decision.label}</Badge>
               {row.trader.reason && <p className="text-xs text-muted-foreground">{row.trader.reason}</p>}
+              {row.trader.position_id && (
+                <p className="text-xs text-muted-foreground">
+                  Position{' '}
+                  <PositionPeekLink id={row.trader.position_id} className="font-mono underline decoration-border underline-offset-2">
+                    {row.trader.position_id}
+                  </PositionPeekLink>
+                </p>
+              )}
             </div>
           )
         },

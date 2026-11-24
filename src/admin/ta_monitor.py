@@ -23,6 +23,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from src.admin.signal_trace import ref_for
 from src.admin.ta_rules import RuleStore, timeframe_seconds
 from src.ta_engine.engine import (
     FOR_DIFFERENCE, FOR_HEAP, FOR_RUNNER, NO_SENDER, NOT_ALONE, NOT_SOURCE, NOT_TAKEN, STALE_FEED, TICK_SECONDS, TOO_OLD,
@@ -732,6 +733,17 @@ def _delivery(rows: dict, rule_id: str | None) -> dict:
         ),
         "shadow_late": shadow_late,
         "trader": sorted(trader.values(), key=lambda entry: -entry["count"]),
+        # The slowest of them, each with the address of its page.
+        "slowest": [
+            {
+                "ref": ref_for(row.get("signal_uuid"), row.get("ta_signal_id")),
+                "rule_id": row.get("rule_id"), "rule_name": row.get("rule_name"), "action": row.get("action"),
+                "bar_closed_at": _iso(row.get("bar_closed_at")), "total_ms": _ms(row.get("total_ms")),
+                "to_position": bool(row.get("to_position")), "trader_outcome": row.get("trader_outcome"),
+                "position_id": row.get("position_id"),
+            }
+            for row in rows.get("slowest") or []
+        ],
     }
 
 

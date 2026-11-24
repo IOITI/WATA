@@ -4,7 +4,7 @@ import { Link } from 'react-router'
 import { AskAgentLink } from '@/features/agent/AskAgentLink'
 import type { Refusal } from '@/lib/types'
 
-import { orderLink } from './orderLife'
+import { isSignalUuid, orderLink, signalLink } from './orderLife'
 import { REQUEST_RESULTS, answerText, refusalSummary, runLabel } from './orderRequests'
 import { PositionPeekLink } from './PositionPeek'
 import { RequestList } from './RequestList'
@@ -39,7 +39,14 @@ export function RefusalDetail({ run, timeZone }: { run: Refusal; timeZone: strin
         )}
         {run.signal_uuid && (
           <span className="text-muted-foreground">
-            Signal <span className="font-mono text-foreground/80">{run.signal_uuid}</span>
+            Signal{' '}
+            {isSignalUuid(run.signal_uuid) ? (
+              <Link to={signalLink(run.signal_uuid)} className={LINK}>
+                {run.signal_uuid}
+              </Link>
+            ) : (
+              <span className="font-mono text-foreground/80">{run.signal_uuid}</span>
+            )}
           </span>
         )}
       </div>

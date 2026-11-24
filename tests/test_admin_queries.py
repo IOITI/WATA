@@ -12,7 +12,9 @@ asyncpg_stub.create_pool = None
 sys.modules.setdefault("asyncpg", asyncpg_stub)
 
 from src.admin.errors import DatabaseUnavailable
-from src.admin.queries import _WORST as WORST, MAX_REPLAYED_ROWS, MAX_ROWS, AdminQueries, LazyDatabase, summarise_trades
+from src.admin.queries import (
+    _WORST as WORST, MAX_REPLAYED_ROWS, MAX_ROWS, SLOWEST_SIGNALS, AdminQueries, LazyDatabase, summarise_trades,
+)
 from src.admin.ta_monitor import DELIVERY_STEPS
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
 
@@ -267,7 +269,9 @@ def test_an_order_comes_with_what_became_of_it_its_position_and_its_signal():
         # Infinity cannot be serialised to JSON, in a linked row either.
         "position_profit_loss": None,
     }
-    assert order["signal"] == {"signal_uuid": "uuid-1", "received_timestamp": "received"}
+    # Nothing of the engine read for it here (FakeDb answers every query with the order's row).
+    assert order["signal"] == {"signal_uuid": "uuid-1", "received_timestamp": "received", "engine": None,
+                               "alert_timestamp": None}
     assert order["instrument_price"] is None
     assert not [key for key in order if "__" in key]
 
@@ -352,6 +356,168 @@ def test_position_detail_gives_its_orders_with_what_became_of_them():
     assert "ORDER BY o.order_time ASC" in orders_query
     assert [(order["order_id"], order["purpose"]) for order in result["orders"]] == [("7001", "open"), ("7002", "close")]
     assert result["orders"][0]["position"]["position_status"] == "Closed"
+
+
+class RoutedDb(FakeDb):
+    """Rows by the first of ``routes`` (a piece of SQL text, its rows) found in a query; none otherwise."""
+
+    def __init__(self, routes, value=0):
+        super().__init__(value=value)
+        self.routes = routes
+
+    def _rows(self, query):
+        return next((rows for needle, rows in self.routes if needle in query), [])
+
+    async def fetch(self, query, *args):
+        self.calls.append((query, args))
+        return self._rows(query)
+
+    async def fetchrow(self, query, *args):
+        self.calls.append((query, args))
+        rows = self._rows(query)
+        return rows[0] if rows else None
+
+
+BAR_CLOSED = datetime(2026, 11, 23, 14, 31, 0, tzinfo=timezone.utc)
+RAISED = BAR_CLOSED + timedelta(seconds=0.42)
+ENGINE_ROW = {
+    "signal_uuid": "uuid-1", "id": 9, "rule_id": "0123456789ab", "rule_name": "Kernel", "mode": "live",
+    "bar_time": BAR_CLOSED - timedelta(seconds=10), "bar_closed_at": BAR_CLOSED, "raised_at": RAISED,
+    "sent_at": RAISED + timedelta(seconds=0.3), "detail": None, "outcome": "sent", "action": "long", "indice": "us100",
+}
+
+
+def test_an_order_s_signal_comes_with_what_the_engine_kept_of_it_and_its_alert():
+    db = RoutedDb([
+        ("FROM ta_signal", [ENGINE_ROW, {**ENGINE_ROW, "signal_uuid": "uuid-other", "id": 10}]),
+        ("FROM signal_alert_time", [{"signal_uuid": "uuid-1", "alert_timestamp": RAISED}]),
+        ("turbo_data_order o", [LINKED_ORDER_ROW]),
+    ], value=1)
+
+    order = asyncio.run(AdminQueries(db, "Europe/Paris").list_orders())["items"][0]
+
+    engine = order["signal"]["engine"]
+    assert (engine["id"], engine["rule_name"], engine["bar_closed_at"], engine["raised_at"]) == (
+        9, "Kernel", BAR_CLOSED, RAISED)
+    assert "signal_uuid" not in engine
+    assert order["signal"]["alert_timestamp"] == RAISED
+    engine_query, engine_args = next(call for call in db.calls if "FROM ta_signal" in call[0])
+    # Its first row of the uuid, read apart from the orders.
+    assert "DISTINCT ON (signal_uuid)" in engine_query and "ORDER BY signal_uuid, id" in engine_query
+    assert engine_args == (["uuid-1"],)
+    assert "ta_signal" not in next(call for call in db.calls if "turbo_data_order o" in call[0])[0]
+
+
+def test_orders_keep_their_links_before_the_engine_ever_ran():
+    db = DbWithoutOrderLinks(rows=[LINKED_ORDER_ROW], missing="ta_signal")
+
+    order = asyncio.run(AdminQueries(db, "Europe/Paris").list_orders())["items"][0]
+
+    assert (order["sent_at"], order["position"]["position_id"]) == ("sent", "5001")
+    assert (order["signal"]["signal_uuid"], order["signal"]["engine"]) == ("uuid-1", None)
+
+
+JOURNAL_ROW = {
+    "signal_uuid": "uuid-1", "action": "long", "indice": "us100", "signal_timestamp": BAR_CLOSED,
+    "received_timestamp": RAISED + timedelta(seconds=0.25), "decided_at": RAISED + timedelta(seconds=3),
+    "outcome": "executed", "reason": None, "position_id": "5001", "order_id": "7001",
+}
+RUN_ROW = {"tick_at": RAISED, "started_at": RAISED + timedelta(seconds=0.01), "ended_at": RAISED + timedelta(seconds=0.2)}
+
+
+def _trace_db(**changes):
+    routes = {
+        "FROM ta_rule_run": [RUN_ROW],
+        "FROM ta_signal": [ENGINE_ROW],
+        "FROM signal_alert_time": [{"signal_uuid": "uuid-1", "alert_timestamp": RAISED}],
+        "turbo_data_order o": [LINKED_ORDER_ROW],
+        "FROM signal_journal WHERE": [JOURNAL_ROW],
+        "recorded_by = 'trader'": [],
+        "FROM order_request": [_sent(0, purpose="open", signal_uuid="uuid-1", outcome="accepted", order_id="7001")],
+    }
+    routes.update(changes)
+    return RoutedDb(list(routes.items()))
+
+
+@pytest.mark.parametrize("by", [{"ta_signal_id": 9}, {"signal_uuid": "uuid-1"}])
+def test_a_signal_is_traced_from_the_engine_s_bar_to_its_order(by):
+    db = _trace_db()
+
+    trace = asyncio.run(AdminQueries(db, "Europe/Paris").signal_trace(**by))
+
+    assert trace["engine"]["id"] == 9 and trace["run"] == RUN_ROW
+    assert trace["journal"]["received_timestamp"] == JOURNAL_ROW["received_timestamp"]
+    assert trace["journal"]["alert_timestamp"] == RAISED
+    [order] = trace["orders"]
+    assert (order["order_id"], order["signal"]["engine"]["rule_name"]) == ("7001", "Kernel")
+    assert [request["request_id"] for request in trace["requests"]] == ["request-0"]
+    assert trace["sold_for_it"] == []
+    run_query, run_args = next(call for call in db.calls if "FROM ta_rule_run" in call[0])
+    # The run that raised it: its rule's at the signal's tick.
+    assert "rule_id = $1 AND tick_at = $2" in run_query and run_args == ("0123456789ab", RAISED)
+    requests_query, requests_args = next(call for call in db.calls if "WHERE signal_uuid = $1 ORDER BY requested_at" in call[0])
+    assert "request_body" not in requests_query and requests_args == ("uuid-1",)
+
+
+def test_a_signal_the_web_server_never_answered_is_traced_by_the_engine_alone():
+    db = _trace_db(**{"FROM ta_signal": [{**ENGINE_ROW, "signal_uuid": None, "outcome": "failed"}]})
+
+    trace = asyncio.run(AdminQueries(db, "Europe/Paris").signal_trace(ta_signal_id=9))
+
+    assert trace["engine"]["outcome"] == "failed"
+    assert (trace["journal"], trace["orders"], trace["requests"], trace["sold_for_it"]) == (None, [], [], [])
+    assert not any("signal_journal WHERE" in query or "FROM order_request" in query for query, _ in db.calls)
+
+
+def test_a_signal_nobody_recorded_reads_as_nothing():
+    trace = asyncio.run(AdminQueries(RoutedDb([]), "Europe/Paris").signal_trace(signal_uuid="uuid-9"))
+
+    assert trace == {"engine": None, "run": None, "journal": None, "orders": [], "requests": [], "sold_for_it": []}
+
+
+def test_the_sales_the_trader_sent_while_it_handled_a_signal_come_with_their_orders():
+    refused = _sent(0, position_id="4001", order_id=None)
+    accepted = _sent(1, outcome="accepted", position_id="4001", order_id="7002")
+    other = _sent(2, outcome="accepted", position_id="4002", order_id="7003")
+    sale = {**LINKED_ORDER_ROW, "order_id": "7002", "buy_sell": "Sell", "purpose": "close", "position_id": "4001"}
+    db = _trace_db(**{"recorded_by = 'trader'": [refused, accepted, other], "turbo_data_order o": [sale]})
+
+    trace = asyncio.run(AdminQueries(db, "Europe/Paris").signal_trace(signal_uuid="uuid-1"))
+
+    first, second = trace["sold_for_it"]
+    assert (first["position_id"], [r["request_id"] for r in first["requests"]]) == ("4001", ["request-0", "request-1"])
+    assert first["order"]["order_id"] == "7002"
+    assert [r["request_id"] for r in first["order"]["requests"]] == ["request-1"]
+    # Saxo accepted its sale, but the order is not recorded (yet): the attempts alone.
+    assert (second["position_id"], second["order"]) == ("4002", None)
+    sold_query, sold_args = next(call for call in db.calls if "recorded_by = 'trader'" in call[0])
+    assert "purpose = 'close'" in sold_query and "requested_at BETWEEN $1 AND $2" in sold_query
+    assert sold_args == (JOURNAL_ROW["received_timestamp"], JOURNAL_ROW["decided_at"])
+
+
+def test_a_position_says_the_signal_the_trader_sold_it_for():
+    position = {"position_id": "4001", "order_id": "6001", "related_order_id": None}
+    db = RoutedDb([
+        ("FROM ta_signal", [ENGINE_ROW]),
+        ("JOIN order_request q", [JOURNAL_ROW]),
+        ("turbo_data_position WHERE", [position]),
+    ])
+
+    result = asyncio.run(AdminQueries(db, "Europe/Paris").get_position("4001"))
+
+    closing = result["closing_signal"]
+    assert (closing["signal_uuid"], closing["rule_id"], closing["rule_name"], closing["ta_signal_id"]) == (
+        "uuid-1", "0123456789ab", "Kernel", 9)
+    query, args = next(call for call in db.calls if "JOIN order_request q" in call[0])
+    assert "q.requested_at BETWEEN j.received_timestamp AND j.decided_at" in query
+    assert "q.recorded_by = 'trader'" in query and "q.outcome = 'accepted'" in query and args == ("4001",)
+
+
+def test_a_position_the_position_monitor_sold_names_no_signal():
+    position = {"position_id": "4001", "order_id": "6001", "related_order_id": None}
+    db = RoutedDb([("turbo_data_position WHERE", [position])])
+
+    assert asyncio.run(AdminQueries(db, "Europe/Paris").get_position("4001"))["closing_signal"] is None
 
 
 def test_unknown_position_detail_is_none():
@@ -611,12 +777,14 @@ def test_a_period_is_read_by_bar_of_time_and_narrowed_to_one_rule_in_every_state
         start, end, 600, "0123456789ab", signal_age_seconds=60, slow_tick_ms=10_000,
     ))
 
-    ticks, runs, signals_by_bucket, rules, deferred, checks, left_continued, signals, delivery, trader, results, kept = db.calls
+    (ticks, runs, signals_by_bucket, rules, deferred, checks, left_continued, signals, delivery, slowest, trader, results,
+     kept) = db.calls
     assert "date_bin($3::interval, tick_at, TIMESTAMPTZ '2000-01-01 00:00:00+00')" in ticks[0]
     assert ticks[1] == (start, end, timedelta(seconds=600), 10_000)
     assert "count(*) FILTER (WHERE kind = 'append' AND figures->>'continued' = 'true') AS continued" in rules[0]
     # Every statement but the ticks' (and the oldest tick's) is narrowed to the rule, as its last argument.
-    for query, args in (runs, signals_by_bucket, rules, deferred, checks, left_continued, signals, delivery, trader, results):
+    for query, args in (runs, signals_by_bucket, rules, deferred, checks, left_continued, signals, delivery, slowest, trader,
+                        results):
         assert args[-1] == "0123456789ab" and f"= ${len(args)}" in query
     # The moments a rule's run was let go, from its runs and from its checks: both narrowed to the rule.
     assert left_continued[1][2:] == ("0123456789ab", "0123456789ab")
@@ -627,6 +795,9 @@ def test_a_period_is_read_by_bar_of_time_and_narrowed_to_one_rule_in_every_state
     for key, _, _ in DELIVERY_STEPS:
         assert f"('{key}', " in delivery[0]
     assert "JOIN turbo_data_position p ON p.position_id = j.position_id" in results[0]
+    # The slowest live signals, from their bar's close to their position or to the trader's outcome.
+    assert "COALESCE(e.confirmed_at, j.decided_at) - s.bar_closed_at" in slowest[0]
+    assert "ORDER BY total_ms DESC" in slowest[0] and f"LIMIT {SLOWEST_SIGNALS}" in slowest[0]
     assert kept == ("SELECT min(tick_at) AS kept_since FROM ta_engine_tick", ())
 
 

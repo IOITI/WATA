@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest'
 
 import type { Order, OrderRequest, Refusal } from '@/lib/types'
 
-import { entryFigures, orderLife, orderResult, positionTimeline, purposeOf, stepToLookAt, timelineItems, tookMs } from './orderLife'
+import {
+  entryFigures,
+  orderLife,
+  orderResult,
+  positionTimeline,
+  purposeOf,
+  signalLink,
+  signalRef,
+  stepToLookAt,
+  timelineItems,
+  tookMs,
+} from './orderLife'
 
 const POSITION = {
   position_id: '5098',
@@ -106,6 +117,37 @@ describe('an order that gave a position', () => {
     expect(steps(early).slice(1, 3)).toEqual([
       ['Filled at Saxo', "Saxo's clock: 20 ms before the order left, so the two clocks differ by at least that"],
       ['Order sent', '170 ms after the signal'],
+    ])
+  })
+
+  it("starts at the bar's close and the engine's tick for a rule's signal", () => {
+    const engine = {
+      ...BUY,
+      signal: {
+        ...BUY.signal,
+        engine: {
+          id: 9, rule_id: '0123456789ab', rule_name: 'Kernel', mode: 'live', bar_time: '2026-10-13T07:30:50Z',
+          bar_closed_at: '2026-10-13T07:31:00Z', raised_at: '2026-10-13T07:31:00.420Z', sent_at: '2026-10-13T07:31:02.050Z',
+          detail: null,
+        },
+        alert_timestamp: '2026-10-13T07:31:00Z',
+      },
+    } as unknown as Order
+    expect(steps(engine).slice(0, 4)).toEqual([
+      ['Bar closed', 'Rule “Kernel”'],
+      ['Raised by the engine', "420 ms after the bar's close"],
+      ['Signal received', "1.9 s after the bar's close"],
+      ['Order sent', '170 ms after the signal'],
+    ])
+    // The engine's own alert moment is its tick, to the second: not said twice.
+    expect(orderLife(engine).steps.map((step) => step.key)).not.toContain('alert')
+  })
+
+  it("puts TradingView's alert before the reception, to the second and on its own clock", () => {
+    const alerted = { ...BUY, signal: { ...BUY.signal, engine: null, alert_timestamp: '2026-10-13T07:31:00Z' } } as unknown as Order
+    const [alert, received] = orderLife(alerted).steps
+    expect([alert.label, alert.clock, alert.toTheSecond, received.label, received.note]).toEqual([
+      'Alert fired', 'tradingview', true, 'Signal received', '',
     ])
   })
 
@@ -450,5 +492,15 @@ describe('the timeline of a position', () => {
     })
     // Still open, Saxo refusing its sale: what a reader looks at first.
     expect(stepToLookAt(items)).toBe('sells-refused')
+  })
+})
+
+describe('the address of a signal', () => {
+  it('is its uuid once the web server gave one, else the engine’s row of it', () => {
+    expect(signalRef('0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b', 9)).toBe('0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b')
+    expect(signalRef(null, 9)).toBe('engine-9')
+    expect(signalRef('uuid-1', 9)).toBe('engine-9')
+    expect(signalRef(undefined)).toBeNull()
+    expect(signalLink('engine-9')).toBe('/signals/engine-9')
   })
 })

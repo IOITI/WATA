@@ -1,7 +1,7 @@
 import { formatClock, formatNumber, formatTime, formatWait } from 'ioiti-ui'
 import type { TimelineItem, TimelineStatus } from 'ioiti-ui'
 
-import type { Order, Refusal, SellRefusals } from '@/lib/types'
+import type { Order, OrderSignal, Refusal, SellRefusals } from '@/lib/types'
 
 import { answerText, sellRefusalLabel } from './orderRequests'
 
@@ -42,8 +42,8 @@ export interface LifeStep {
   label: string
   /** The moment, or null for a step that has none of its own. */
   at: string | null
-  /** Whose clock the moment was read on. */
-  clock: 'wata' | 'saxo'
+  /** Whose clock the moment was read on: the server's (the engine's too), Saxo's, or TradingView's for its alert. */
+  clock: 'wata' | 'saxo' | 'tradingview'
   /** The moment was kept to the second alone: shown so, and put in order as the end of its second. */
   toTheSecond?: boolean
   note: string
@@ -71,6 +71,24 @@ export function orderLink(orderId: string): string {
   return `/orders?find=${encodeURIComponent(orderId)}`
 }
 
+/** A signal's own page, by its ref: the uuid the web server stored it under, or `engine-<id>` (src/admin/signal_trace.py). */
+export function signalLink(ref: string): string {
+  return `/signals/${encodeURIComponent(ref)}`
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** True for what the web server stores a signal under (a uuid in lower case), as the page's address takes it. */
+export function isSignalUuid(value: string | null | undefined): value is string {
+  return !!value && UUID.test(value)
+}
+
+/** The ref of a signal: its uuid once the web server gave one, else the engine's row of it; null when neither is known. */
+export function signalRef(signalUuid: string | null | undefined, taSignalId?: number | null): string | null {
+  if (isSignalUuid(signalUuid)) return signalUuid
+  return taSignalId != null ? `engine-${taSignalId}` : null
+}
+
 /** What the order was for: as recorded, or read from its side for the orders placed before. */
 export function purposeOf(order: Order): Purpose {
   return order.purpose ?? (order.buy_sell === 'Sell' ? 'close' : 'open')
@@ -81,7 +99,7 @@ function isTracked(order: Order): boolean {
 }
 
 /** Milliseconds from one moment to the next, null when either is missing or unreadable. */
-function between(from: string | null | undefined, to: string | null | undefined): number | null {
+export function between(from: string | null | undefined, to: string | null | undefined): number | null {
   if (!from || !to) return null
   const span = Date.parse(to) - Date.parse(from)
   return Number.isFinite(span) ? span : null
@@ -130,12 +148,58 @@ function saxoStep(order: Order, purpose: Purpose): LifeStep | null {
   return { key: 'saxo', label: purpose === 'open' ? 'Filled at Saxo' : 'Closed at Saxo', at, clock: 'saxo', note }
 }
 
-function sentAndAccepted(order: Order, purpose: Purpose): LifeStep[] {
+/** "420 ms after the bar's close", empty when either moment is missing; "before" when the second came first. */
+function afterNote(from: string | null | undefined, to: string | null | undefined, what: string): string {
+  const span = between(from, to)
+  if (span == null) return ''
+  return span >= 0 ? `${formatWait(span)} after ${what}` : `${formatWait(-span)} before ${what}`
+}
+
+/**
+ * The moments of a signal before an order left for it: its bar's close and the engine's tick that raised it (a rule's
+ * signal), or its alert where it was raised (TradingView's, to the second, on its own clock), then the web server
+ * receiving it. Empty without a signal.
+ */
+export function signalSteps(signal: OrderSignal | null | undefined): LifeStep[] {
+  if (!signal) return []
   const steps: LifeStep[] = []
-  const received = order.signal?.received_timestamp
-  if (purpose === 'open' && received) {
-    steps.push({ key: 'signal', label: 'Signal received', at: received, clock: 'wata', note: '' })
+  const engine = signal.engine ?? null
+  const bar = engine?.bar_closed_at ?? null
+  if (engine && bar) {
+    const rule = engine.rule_name ? `Rule “${engine.rule_name}”` : 'A rule of the TA engine'
+    steps.push({ key: 'bar', label: 'Bar closed', at: bar, clock: 'wata', note: rule })
   }
+  if (engine?.raised_at) {
+    steps.push({
+      key: 'raised',
+      label: 'Raised by the engine',
+      at: engine.raised_at,
+      clock: 'wata',
+      note: afterNote(bar, engine.raised_at, "the bar's close"),
+    })
+  }
+  const alert = !engine ? (signal.alert_timestamp ?? null) : null
+  if (alert) {
+    steps.push({
+      key: 'alert',
+      label: 'Alert fired',
+      at: alert,
+      clock: 'tradingview',
+      toTheSecond: true,
+      note: "Where it was raised (TradingView's clock), to the second",
+    })
+  }
+  const received = signal.received_timestamp
+  if (received) {
+    const note = bar ? afterNote(bar, received, "the bar's close") : ''
+    steps.push({ key: 'signal', label: 'Signal received', at: received, clock: 'wata', note })
+  }
+  return steps
+}
+
+function sentAndAccepted(order: Order, purpose: Purpose): LifeStep[] {
+  const steps: LifeStep[] = purpose === 'open' ? signalSteps(order.signal) : []
+  const received = order.signal?.received_timestamp
   const afterSignal = purpose === 'open' ? between(received, order.sent_at) : null
   steps.push({
     key: 'sent',
@@ -387,7 +451,7 @@ function orderedAt(step: LifeStep): number | null {
  * may date a fill before its answer reached WATA. A step without a moment of its own stays after the step before it,
  * and steps of the same moment keep the order they were given in.
  */
-function inTimeOrder<T>(entries: T[], stepOf: (entry: T) => LifeStep): T[] {
+export function inTimeOrder<T>(entries: T[], stepOf: (entry: T) => LifeStep): T[] {
   let before = -Infinity
   return entries
     .map((entry, index) => {
@@ -405,7 +469,7 @@ function statusOf(step: LifeStep): TimelineStatus {
   return 'completed'
 }
 
-function timelineItem(step: LifeStep, timeZone: string, prefix: string, tag: string | undefined): TimelineItem {
+export function timelineItem(step: LifeStep, timeZone: string, prefix: string, tag: string | undefined): TimelineItem {
   return {
     id: `${prefix}${step.key}`,
     title: step.label,

@@ -5,7 +5,7 @@ import { MENU } from '@/components/navigation'
 import { KIND_LABEL as MEMORY_KIND_LABEL, memoryLink } from '@/features/agent/memoryModel'
 import { sourceLabel, STATE_LABEL } from '@/features/backtests/model'
 import { assetHref, assetKeywords, PROVIDER_LABELS } from '@/features/data/assets'
-import { orderLink, positionLink } from '@/features/positions/orderLife'
+import { isSignalUuid, orderLink, positionLink, signalLink } from '@/features/positions/orderLife'
 import { instrumentLabel } from '@/features/prices/chartData'
 import { barsLabel, MODE_LABEL, rulePath } from '@/features/ta/signals/ruleModel'
 import { KIND_LABEL } from '@/features/ta/templates'
@@ -171,9 +171,13 @@ export function paletteItems({ query, pages, lists }: { query: string; pages: Sp
   return [...idItems(query), ...pages, ...listed, ...LISTS.flatMap(({ key }) => lists[key] ?? [])]
 }
 
-/** A number typed may be a position's or an order's: their pages find it. */
+/** A number typed may be a position's or an order's: their pages find it. A signal's uuid (pasted) opens its page. */
 export function idItems(query: string): SpotlightSearchItem[] {
   const id = query.trim()
+  const uuid = id.toLowerCase()
+  if (isSignalUuid(uuid)) {
+    return [{ id: `signal-${uuid}`, title: `Signal ${uuid.slice(0, 8)}…`, category: 'Trading', href: signalLink(uuid), keywords: [uuid] }]
+  }
   if (!/^\d{4,}$/.test(id)) return []
   return [
     { id: `position-${id}`, title: `Position ${id}`, category: 'Trading', href: positionLink(id), keywords: [id] },

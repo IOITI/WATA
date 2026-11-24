@@ -156,7 +156,7 @@ export function MonitorPage() {
           <div className={cn('flex flex-col gap-6 transition-opacity', periodQuery.isPlaceholderData && 'opacity-60')}>
             <RulesPanel period={period} timeZone={timezone} />
             <ChartsPanel period={period} timeZone={timezone} />
-            <DeliveryPanel period={period} />
+            <DeliveryPanel period={period} timeZone={timezone} />
             <ResultsPanel
               rows={resultRows(period.rules, period.results, paperQuery.data, period.start, timezone)}
               backtestsEnabled={backtestsEnabled}

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.101.0 - A signal's way to its position, moment by moment
+
+**Release date:** 2026-11-24
+
+A position and its orders said when the signal was received, never when its bar closed or when the engine raised it, and nothing led from a position or an order back to the signal and the rule it came from, nor from a signal to what it bought. Everything needed was recorded already: the engine's row of each signal, the run that raised it, the trader's journal, each order and each request to Saxo.
+
+- **Each signal has its own page** (`/signals/<uuid>`, or `/signals/engine-<id>` for one the web server never answered): where it came from (its rule, alert and script version, or TradingView, the scheduler or by hand), what became of it and why, how long each stretch took (bar close → received, received → order left, order left → Saxo accepted, bar close → position seen), and every moment to the millisecond in the order it happened: the bar's close, the engine's tick, its rule's run, the web server receiving it and the engine getting its answer (at which attempt), Saxo's refusals for funds, the order leaving, Saxo accepting it, Saxo's fill on its own clock, WATA seeing the position, the sales the trader sent while handling it, and the trader's journal row. Each moment of the server's clock says how long after the bar and after the step before it came. It leads to its rule, its live day, the Engine monitor, its script, its orders and positions.
+- **The order and position timelines start at the bar**: "Bar closed" and "Raised by the engine" (or TradingView's alert, to the second, on its own clock) come before "Signal received", on the Orders page and in each position.
+- **Links everywhere**: a position names the signal and rule it came from, and the signal it was sold for when the trader sold it; an order names its signal; both journals, Saxo's requests and refusals, a live rule's day and the Engine monitor's new list of the slowest live signals lead to each signal's page; ⌘K opens a pasted signal uuid.
+- What the trader does between receiving a signal and its order leaving (its checks, the other side sold, the turbo chosen and sized) is not recorded apart: one stretch. A sale counts as made for a signal when the trader sent it between receiving that signal and journaling it (it handles one at a time, and the position monitor's sales are its own). The rule's run is kept a week, as the engine keeps its measures.
+- Only the admin changes.
+
 ## v0.100.1 - An open position's live chart fits its page
 
 **Release date:** 2026-11-24

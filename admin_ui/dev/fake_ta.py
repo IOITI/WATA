@@ -17,6 +17,7 @@ import math
 import os
 import random
 import struct
+import uuid
 import zlib
 from datetime import datetime, timedelta, timezone
 
@@ -273,7 +274,8 @@ class FakeEngine:
                 "outcome": ("refused" if refused else "sent") if live else "shadow",
                 "sent_at": closed + timedelta(seconds=1.6) if live and not refused else None,
                 "http_status": 200 if live and not refused else None,
-                "signal_uuid": f"{rule['id']}-{int(moment.timestamp())}" if live and not refused else None,
+                # As the web server makes them (uuid4), the same for the same signal: its page's address.
+                "signal_uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{rule['id']}-{int(moment.timestamp())}")) if live and not refused else None,
                 "detail": "The bar closed 75 s ago, more than 60 s" if refused else None,
                 "trader": None,
             }
@@ -542,7 +544,7 @@ class FakeEngine:
             "signals_by_bucket": [by_bucket[key] for key in sorted(by_bucket)], "rules": rules, "deferred": deferred, "checks": checks,
             "signals": [{"rule_id": rule_id_, "mode": mode, "outcome": outcome, "detail": detail, "signals": count, "late": 0}
                         for (rule_id_, mode, outcome, detail), count in signals.items()],
-            "steps": _steps(live_sent), "trader": _trader(live_sent), "results": _results(live_sent),
+            "steps": _steps(live_sent), "slowest": _slowest(live_sent), "trader": _trader(live_sent), "results": _results(live_sent),
             "left_continued": [
                 {"rule_id": rule["id"], "at": at, "why": LET_GO, "cause": "heap"}
                 for rule in on if (at := self._let_go(rule, now)) is not None and start <= at < end
@@ -563,23 +565,44 @@ def _spread(values: list[float]) -> dict:
     return {"signals": len(ordered), "p50": at(0.5), "p95": at(0.95), "max": ordered[-1]}
 
 
+def _drawn(signal: dict) -> dict[str, float]:
+    """The delivery steps of one live signal sent, drawn the same way each time."""
+    rng = _rng("steps", signal["signal_uuid"])
+    tick = 1400 + rng.uniform(0, 300)
+    wait, run, send = rng.uniform(1, 4), rng.uniform(30, 90), rng.uniform(25, 160)
+    drawn = {"close_to_tick": tick, "tick_to_run": wait, "run": run, "run_to_sent": send, "close_to_sent": tick + wait + run + send}
+    if (signal.get("trader") or {}).get("outcome") == "executed":
+        order, saxo, position = rng.uniform(700, 1400), rng.uniform(180, 420), rng.uniform(800, 1900)
+        drawn |= {"sent_to_order": order, "order_to_saxo": saxo, "saxo_to_position": position,
+                  "close_to_position": drawn["close_to_sent"] + order + saxo + position}
+    elif signal.get("trader"):
+        drawn["sent_to_decided"] = rng.uniform(400, 900)
+    return drawn
+
+
 def _steps(sent: list[dict]) -> list[dict]:
     """The delivery steps of the live signals sent, each drawn the same way for the same signal."""
     samples: dict[str, list[float]] = {}
     for signal in sent:
-        rng = _rng("steps", signal["signal_uuid"])
-        tick = 1400 + rng.uniform(0, 300)
-        wait, run, send = rng.uniform(1, 4), rng.uniform(30, 90), rng.uniform(25, 160)
-        drawn = {"close_to_tick": tick, "tick_to_run": wait, "run": run, "run_to_sent": send, "close_to_sent": tick + wait + run + send}
-        if (signal.get("trader") or {}).get("outcome") == "executed":
-            order, saxo, position = rng.uniform(700, 1400), rng.uniform(180, 420), rng.uniform(800, 1900)
-            drawn |= {"sent_to_order": order, "order_to_saxo": saxo, "saxo_to_position": position,
-                      "close_to_position": drawn["close_to_sent"] + order + saxo + position}
-        elif signal.get("trader"):
-            drawn["sent_to_decided"] = rng.uniform(400, 900)
-        for step, value in drawn.items():
+        for step, value in _drawn(signal).items():
             samples.setdefault(step, []).append(value)
     return [{"step": step, **_spread(values)} for step, values in samples.items()]
+
+
+def _slowest(sent: list[dict]) -> list[dict]:
+    """The ten slowest of them, from their bar's close to their position or to the trader's outcome (AdminQueries)."""
+    rows = []
+    for signal in sent:
+        drawn = _drawn(signal)
+        to_position = "close_to_position" in drawn
+        total = drawn.get("close_to_position") or drawn["close_to_sent"] + drawn.get("sent_to_decided", 0)
+        rows.append({
+            "ta_signal_id": signal["id"], "signal_uuid": signal["signal_uuid"], "rule_id": signal["rule_id"],
+            "rule_name": signal["rule_name"], "action": signal["action"], "bar_closed_at": signal["bar_closed_at"],
+            "trader_outcome": (signal.get("trader") or {}).get("outcome"),
+            "position_id": (signal.get("trader") or {}).get("position_id"), "to_position": to_position, "total_ms": total,
+        })
+    return sorted(rows, key=lambda row: -row["total_ms"])[:10]
 
 
 def _trader(sent: list[dict]) -> list[dict]:

@@ -339,6 +339,14 @@ def test_a_period_lists_the_rules_on_with_what_they_did_and_every_step_of_the_de
         "steps": [{"step": "close_to_sent", "signals": 4, "p50": 1550.0, "p95": 1720.0, "max": 3200.0}],
         "trader": [{"outcome": "executed", "reason": None, "signals": 3}, {"outcome": "refused", "reason": "Outside trading hours", "signals": 1}],
         "results": [{"rule_id": LIVE_RULE, "positions": 3, "open": 1, "won": 1, "lost": 1, "profit_loss": 12.456, "average_percent": 0.81234}],
+        "slowest": [
+            {"ta_signal_id": 12, "signal_uuid": "0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b", "rule_id": LIVE_RULE, "rule_name": "Live cross",
+             "action": "long", "bar_closed_at": NOW - timedelta(hours=1), "trader_outcome": "executed", "position_id": "5001",
+             "to_position": True, "total_ms": 4123.456},
+            {"ta_signal_id": 13, "signal_uuid": None, "rule_id": LIVE_RULE, "rule_name": "Live cross", "action": "short",
+             "bar_closed_at": NOW - timedelta(hours=2), "trader_outcome": "refused", "position_id": None,
+             "to_position": False, "total_ms": 2000.0},
+        ],
     }
 
     answer = period_answer(hours=24, days=7, bucket=600, start=NOW - timedelta(hours=24), end=NOW, rule_id=None, state=None,
@@ -359,6 +367,11 @@ def test_a_period_lists_the_rules_on_with_what_they_did_and_every_step_of_the_de
     assert {entry["key"]: entry["count"] for entry in delivery["engine"]} == {"sent": 4, "not_sent": 1, "sending": 0, "close_with_entry": 2, "shadow": 3}
     assert delivery["refusals"] == [{"key": "stale_feed", "count": 1, "example": "The Capital.com feed is stale", "label": "The Capital.com feed was stale"}]
     assert (delivery["shadow_late"], [entry["count"] for entry in delivery["trader"]]) == (1, [3, 1])
+    # The slowest signals, each with the address of its page: its uuid, else the engine's row of it.
+    first, second = delivery["slowest"]
+    assert (first["ref"], first["total_ms"], first["to_position"]) == ("0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b", 4123.5, True)
+    assert first["bar_closed_at"] == (NOW - timedelta(hours=1)).isoformat()
+    assert (second["ref"], second["to_position"], second["trader_outcome"]) == ("engine-13", False, "refused")
     assert answer["results"] == [{"rule_id": LIVE_RULE, "positions": 3, "open": 1, "won": 1, "lost": 1, "profit_loss": 12.46, "average_percent": 0.812}]
     assert answer["recording"]["since"] == (NOW - timedelta(days=2)).isoformat()
 

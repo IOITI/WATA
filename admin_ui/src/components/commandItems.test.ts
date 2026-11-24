@@ -52,6 +52,10 @@ describe('what the palette goes to', () => {
       ['Order 5098', '/orders?find=5098'],
     ])
     expect(idItems('ab')).toEqual([])
+    // A signal's uuid, pasted from a log or a request, opens its own page.
+    expect(idItems(' 0B8F6A52-6C1E-4D55-9A8E-3F1C2D4E5A6B ').map((item) => [item.title, item.href])).toEqual([
+      ['Signal 0b8f6a52…', '/signals/0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b'],
+    ])
   })
 
   it('opens each kind as a list of its own, its entries always given, the ones of a feature off left out', () => {

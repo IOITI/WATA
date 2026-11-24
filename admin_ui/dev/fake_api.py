@@ -112,6 +112,7 @@ from src.admin.service_restart import ORDER, RestartPlans, situation_of
 from src.admin.queries import (
     _ORDER_POSITION_COLUMNS,
     _ORDER_SIGNAL_COLUMNS,
+    _ENGINE_MOMENT_COLUMNS as ENGINE_MOMENT_COLUMNS,
     _REFUSED_SIGNAL_COLUMNS,
     json_safe,
     summarise_trades,
@@ -1089,7 +1090,18 @@ class FakeQueries:
         attached = requests_by_order(requests, [order["order_id"] for order in linked])
         for order in linked:
             order["requests"] = attached.get(order["order_id"], [])
-        return {"position": position, "orders": linked, "requests": requests, "requests_total": len(requests)}
+        closing = next((
+            entry for entry in self.journal
+            for order in linked if order["buy_sell"] == "Sell" and order.get("sent_at")
+            and entry["received_timestamp"] <= order["sent_at"] <= entry["decided_at"]
+        ), None)
+        engine = closing and next((row for row in self._engine_signals() if row.get("signal_uuid") == closing["signal_uuid"]), None)
+        closing_signal = closing and {
+            **closing, "rule_id": engine and engine["rule_id"], "rule_name": engine and engine["rule_name"],
+            "ta_signal_id": engine and engine["id"],
+        }
+        return {"position": position, "orders": linked, "requests": requests, "requests_total": len(requests),
+                "closing_signal": closing_signal}
 
     async def position_record(self, position_id):
         """What AdminQueries.position_record gives the research tools: get_position, its requests without bodies."""
@@ -1137,13 +1149,105 @@ class FakeQueries:
                               "answered_at": now + timedelta(milliseconds=130)})
 
     def _linked(self, order: dict) -> dict:
-        """An order as the admin's query gives it: with the position it gave or closed and its signal."""
+        """An order as the admin's query gives it: with the position it gave or closed, its signal and the engine's row of it."""
         position = next((p for p in self.positions if p["position_id"] == order["position_id"]), None)
         signal = next((entry for entry in self.journal if entry["order_id"] == order["order_id"]), None)
+        if signal is not None:
+            engine = next((row for row in self._engine_signals() if row.get("signal_uuid") == signal["signal_uuid"]), None)
+            signal = {
+                **{column: signal[column] for column in _ORDER_SIGNAL_COLUMNS},
+                "engine": engine and {key: engine[key] for key in ENGINE_MOMENT_COLUMNS},
+                "alert_timestamp": engine["raised_at"].replace(microsecond=0) if engine else None,
+            }
         return {
             **order,
             "position": position and {column: position[column] for column in _ORDER_POSITION_COLUMNS},
-            "signal": signal and {column: signal[column] for column in _ORDER_SIGNAL_COLUMNS},
+            "signal": signal,
+        }
+
+    def _journal_engine_rows(self) -> list[dict]:
+        """
+        The made-up live rule's rows of the journal's tracked entries: each bought for a signal of the TA engine, its
+        bar closed under two seconds before the web server received it (AdminQueries.signal_trace reads ta_signal).
+        """
+        rule = next((r for r in (self.ta_engine._rules_now() if self.ta_engine else []) if r["id"] == fake_ta.LIVE_RULE_ID), None)
+        rows = []
+        for number, entry in enumerate(sorted(self.journal, key=lambda found: found["decided_at"])):
+            if not entry.get("order_id") or entry["action"] not in ("long", "short"):
+                continue
+            rng = random.Random(entry["signal_uuid"])
+            received = entry["received_timestamp"]
+            closed = received - timedelta(seconds=rng.uniform(1.5, 2.1))
+            raised = closed + timedelta(seconds=rng.uniform(1.2, 1.45))
+            rows.append({
+                "id": 9_000_000 + number, "rule_id": rule["id"] if rule else fake_ta.LIVE_RULE_ID,
+                "rule_name": rule["name"] if rule else "A live rule", "script_id": rule["script"]["id"] if rule else "000000000000",
+                "script_version": rule["script"]["version"] if rule else 1, "asset": "capital/US100", "side": "mid",
+                "bars": fake_ta.bars_label(rule["bars"]) if rule else "R60", "bar_time": closed - timedelta(seconds=10),
+                "bar_closed_at": closed, "alert_key": f"alertcondition:Enter {entry['action'].title()}",
+                "alert_title": f"Enter {entry['action'].title()}", "alert_message": None, "action": entry["action"],
+                "indice": "us100", "confidence": entry.get("confidence"), "mode": "live", "raised_at": raised, "outcome": "sent",
+                "sent_at": received + timedelta(milliseconds=rng.randint(20, 60)), "http_status": 200,
+                "signal_uuid": entry["signal_uuid"],
+                "detail": "Sent at attempt 2: the web server had not taken it before" if number % 5 == 0 else None,
+                "trader": None,
+            })
+        return rows
+
+    def _engine_signals(self) -> list[dict]:
+        """Every row of the made-up ta_signal: the made-up rules' own, and those of the journal's tracked entries."""
+        found = self.ta_engine.signals(None, None, None, 5000) if self.ta_engine else []
+        return [*found, *self._journal_engine_rows()]
+
+    @staticmethod
+    def _run_of(engine: dict | None) -> dict | None:
+        """The run that raised a signal, kept a week as the engine keeps them."""
+        if engine is None or engine["raised_at"] < datetime.now(timezone.utc) - timedelta(days=7):
+            return None
+        rng = random.Random(f"run-{engine['id']}")
+        started = engine["raised_at"] + timedelta(milliseconds=rng.randint(2, 9))
+        ended = started + timedelta(milliseconds=rng.randint(30, 140))
+        return {"tick_at": engine["raised_at"], "started_at": started, "ended_at": ended,
+                "done_at": ended + timedelta(milliseconds=rng.randint(150, 300)), "bar_closed_at": engine["bar_closed_at"],
+                "outcome": "ok", "milliseconds": int((ended - started).total_seconds() * 1000)}
+
+    async def signal_trace(self, signal_uuid=None, ta_signal_id=None):
+        """What AdminQueries.signal_trace reads of one signal, from the made-up journals."""
+        engine = next((
+            row for row in self._engine_signals()
+            if (ta_signal_id is not None and row["id"] == ta_signal_id) or (signal_uuid and row.get("signal_uuid") == signal_uuid)
+        ), None)
+        if ta_signal_id is not None:
+            signal_uuid = (engine or {}).get("signal_uuid")
+        journal = next((entry for entry in self.journal if signal_uuid and entry["signal_uuid"] == signal_uuid), None)
+        decided = (engine or {}).get("trader")
+        if journal is None and decided:
+            # The made-up rules' trader decisions are kept on their rows (fake_ta.py), not in the journal.
+            journal = {"signal_uuid": signal_uuid, "action": engine["action"], "indice": engine["indice"], "confidence": None,
+                       "signal_timestamp": engine["bar_closed_at"], "received_timestamp": engine["sent_at"],
+                       "decided_at": decided["decided_at"], "outcome": decided["outcome"], "reason": decided["reason"],
+                       "position_id": decided["position_id"], "order_id": None}
+        if journal is not None:
+            journal = {**journal, "alert_timestamp": engine["raised_at"].replace(microsecond=0) if engine else None}
+        bare = lambda request: {key: value for key, value in request.items() if key not in ("request_body", "response_body")}  # noqa: E731
+        orders = [self._linked(order) for order in self.orders if journal and journal.get("order_id") == order["order_id"]]
+        requests = [bare(request) for request in self.requests if signal_uuid and request.get("signal_uuid") == signal_uuid]
+        sold = []
+        if journal and journal.get("received_timestamp") and journal.get("decided_at"):
+            sales = [bare(request) for request in self.requests
+                     if request["purpose"] == "close" and journal["received_timestamp"] <= request["requested_at"] <= journal["decided_at"]]
+            for position_id in dict.fromkeys(request["position_id"] for request in sales):
+                attempts = [request for request in sales if request["position_id"] == position_id]
+                taken = {request.get("order_id") for request in attempts if request.get("order_id")}
+                order = next((self._linked(order) for order in self.orders if order["order_id"] in taken), None)
+                sold.append({"position_id": position_id, "requests": attempts, "order": order})
+        return {
+            "engine": engine and {key: value for key, value in engine.items() if key != "trader"},
+            "run": self._run_of(engine),
+            "journal": journal,
+            "orders": orders,
+            "requests": requests,
+            "sold_for_it": sold,
         }
 
     async def list_orders(self, start=None, end=None, limit=500):

@@ -10,7 +10,8 @@ import { Link, useParams } from 'react-router'
 
 import { NotFoundState } from '@/components/NotFoundState'
 import { useSession } from '@/features/auth/auth-context'
-import { positionLink } from '@/features/positions/orderLife'
+import { positionLink, signalLink } from '@/features/positions/orderLife'
+import { PositionPeekLink } from '@/features/positions/PositionPeek'
 import { api, isNotFound } from '@/lib/api'
 import type { LiveCheckDay, LiveCheckTrack } from '@/lib/types'
 
@@ -89,6 +90,21 @@ function Signals({ found, timeZone }: { found: LiveCheckDay; timeZone: string })
                   <td key={track} className="py-2 pr-4">
                     {fateSaid(side)}
                     {times && <div className="text-muted-foreground">{times}</div>}
+                    {track === 'live' && side?.ref && (
+                      <div className="flex flex-wrap gap-x-3 text-muted-foreground">
+                        <Link to={signalLink(side.ref)} className="underline underline-offset-2 hover:text-foreground">
+                          Its way, moment by moment
+                        </Link>
+                        {side.position_id && (
+                          <span>
+                            Position{' '}
+                            <PositionPeekLink id={side.position_id} className="font-mono underline underline-offset-2">
+                              {side.position_id}
+                            </PositionPeekLink>
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {!side && signal.why_not_raised && (track === 'paper' || track === 'live') && (
                       <div className="text-muted-foreground">{signal.why_not_raised}</div>
                     )}

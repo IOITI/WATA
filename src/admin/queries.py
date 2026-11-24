@@ -26,6 +26,7 @@ from src.admin.prices import INTERVALS as PRICE_INTERVALS
 from src.admin.prices import Run as PriceRun
 from src.admin.prices import Silent as PriceSilent
 from src.admin.prices import interval_served
+from src.admin import signal_trace
 from src.admin.ta_monitor import DELIVERY_STEPS
 from src.admin.weekday_hour import opened_weekday_hour, stats_by_weekday_hour
 from src.ta_engine.signals import CLOSE_WITH_ENTRY
@@ -36,6 +37,8 @@ from src.message_helper import DEFAULT_MILESTONES_EUR, build_daily_trading_repor
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 2000
+# The slowest live signals of a period the Engine monitor lists, each a link to its own page.
+SLOWEST_SIGNALS = 10
 # What a backtest of real signals, or the measure of the turbo, may read at once: years of trading.
 MAX_REPLAYED_ROWS = 20000
 
@@ -100,6 +103,16 @@ _CHECKS = f"""c->>'rule_id' AS rule_id, c->>'mode' AS mode, c->>'runner' AS runn
 
 # The signal an order came from.
 _ORDER_SIGNAL_COLUMNS = ("signal_uuid", "signal_timestamp", "received_timestamp", "decided_at")
+# What the TA engine kept of an order's signal (its first row of the signal_uuid), read apart from the orders: its
+# table exists only once the engine ran, and a missing table must not cost the orders their links.
+_ENGINE_MOMENT_COLUMNS = ("id", "rule_id", "rule_name", "mode", "bar_time", "bar_closed_at", "raised_at", "sent_at", "detail")
+# The whole journal row of one signal, and what the trader's sales made while it handled a signal say of themselves.
+_JOURNAL_COLUMNS = (
+    "signal_uuid", "action", "indice", "confidence", "signal_timestamp", "received_timestamp", "decided_at", "outcome",
+    "reason", "position_id", "order_id",
+)
+# The run of the engine that raised a signal (src/ta_engine/monitoring.py): its rule's at the signal's tick.
+_RUN_COLUMNS = ("tick_at", "started_at", "ended_at", "done_at", "bar_closed_at", "outcome", "milliseconds")
 # The signal behind a buy Saxo refused: what the trader made of it too.
 _REFUSED_SIGNAL_COLUMNS = (*_ORDER_SIGNAL_COLUMNS, "outcome", "reason")
 # The requests about one position a page shows at most (a sell Saxo kept refusing is retried about once a second).
@@ -1405,6 +1418,25 @@ class AdminQueries:
             """,
             *args,
         )
+        # The live signals of the period that took longest from their bar's close to their position (to the trader's
+        # outcome without one): what a step's 95th percentile is made of, each to be opened (src/admin/signal_trace.py).
+        args = [start, end]
+        slowest = await self._fetch_optional(
+            f"""
+            SELECT s.id AS ta_signal_id, s.signal_uuid, s.rule_id, s.rule_name, s.action, s.bar_closed_at,
+                   j.outcome AS trader_outcome, j.position_id,
+                   e.confirmed_at IS NOT NULL AS to_position,
+                   {_MS.format("COALESCE(e.confirmed_at, j.decided_at) - s.bar_closed_at")} AS total_ms
+            FROM ta_signal s
+            JOIN signal_journal j ON j.signal_uuid = s.signal_uuid
+            LEFT JOIN order_execution e ON e.order_id = j.order_id
+            WHERE s.mode = 'live' AND s.outcome = 'sent' AND s.raised_at >= $1 AND s.raised_at < $2{rule("s.rule_id", args)}
+              AND COALESCE(e.confirmed_at, j.decided_at) IS NOT NULL
+            ORDER BY total_ms DESC, s.id DESC
+            LIMIT {SLOWEST_SIGNALS}
+            """,
+            *args,
+        )
         args = [start, end]
         trader = await self._fetch_optional(
             f"""
@@ -1449,6 +1481,7 @@ class AdminQueries:
             "left_continued": [_clean_row(row) for row in left_continued],
             "signals": [_clean_row(row) for row in signals],
             "steps": [_clean_row(row) for row in delivery],
+            "slowest": [_clean_row(row) for row in slowest],
             "trader": [_clean_row(row) for row in trader],
             "results": [_clean_row(row) for row in results],
         }
@@ -1743,6 +1776,8 @@ class AdminQueries:
             position["order_id"],
             position["related_order_id"] or [],
         )
+        # The signal the trader sold it for, when it did.
+        closing = await self.closing_signal(position_id)
         # Every request about it: its sells, the stops and cancellations on it, and the buy that opened it.
         where = "WHERE position_id = $1 OR order_id = $2"
         rows = await self._fetch_optional(
@@ -1766,7 +1801,168 @@ class AdminQueries:
             "orders": orders,
             "requests": requests,
             "requests_total": total or 0,
+            "closing_signal": closing,
         }
+
+    async def closing_signal(self, position_id: str) -> dict | None:
+        """
+        The signal the trader sold a position for, when it sold it: the journal row whose handling (from the web
+        server's reception to the trader's journal row) holds the trader's sale Saxo accepted. The trader handles one
+        signal at a time, and the position monitor's sales are its own (``recorded_by``). None for a sale of the
+        position monitor or the admin.
+        """
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(f"j.{column}" for column in _JOURNAL_COLUMNS)}
+            FROM signal_journal j
+            JOIN order_request q ON q.requested_at BETWEEN j.received_timestamp AND j.decided_at
+            WHERE q.position_id = $1 AND q.recorded_by = '{signal_trace.TRADER}' AND q.purpose = 'close'
+              AND q.outcome = 'accepted'
+            ORDER BY q.requested_at DESC, j.decided_at ASC
+            LIMIT 1
+            """,
+            position_id,
+        )
+        signal = _clean_row(rows[0]) if rows else None
+        if not signal or not signal.get("signal_uuid"):
+            return None
+        engine = (await self._engine_rows([signal["signal_uuid"]])).get(signal["signal_uuid"])
+        signal["rule_id"] = (engine or {}).get("rule_id")
+        signal["rule_name"] = (engine or {}).get("rule_name")
+        signal["ta_signal_id"] = (engine or {}).get("id")
+        return signal
+
+    async def _engine_rows(self, signal_uuids: Sequence[str]) -> dict[str, dict]:
+        """The TA engine's row of each signal_uuid (its first), none for a signal the engine did not raise."""
+        uuids = sorted({str(uuid) for uuid in signal_uuids if uuid})
+        if not uuids:
+            return {}
+        rows = await self._fetch_optional(
+            f"""
+            SELECT DISTINCT ON (signal_uuid) signal_uuid, {", ".join(_ENGINE_MOMENT_COLUMNS)}
+            FROM ta_signal
+            WHERE signal_uuid = ANY($1::text[])
+            ORDER BY signal_uuid, id
+            """,
+            uuids,
+        )
+        return {row["signal_uuid"]: _clean_row(row) for row in rows if dict(row).get("signal_uuid") in uuids}
+
+    async def _alert_times(self, signal_uuids: Sequence[str]) -> dict[str, Any]:
+        """When each signal's alert fired where it was raised (TradingView's {{timenow}}, the engine's sending)."""
+        uuids = sorted({str(uuid) for uuid in signal_uuids if uuid})
+        if not uuids:
+            return {}
+        rows = await self._fetch_optional(
+            "SELECT signal_uuid, alert_timestamp FROM signal_alert_time WHERE signal_uuid = ANY($1::text[])",
+            uuids,
+        )
+        return {row["signal_uuid"]: row["alert_timestamp"] for row in rows if dict(row).get("signal_uuid") in uuids}
+
+    async def _with_engine_moments(self, orders: list[dict]) -> list[dict]:
+        """
+        Each order's signal with what the TA engine kept of it (``engine``: its rule, its bar, the tick that raised it,
+        the web server's answer; None for a signal it did not raise) and when its alert fired (``alert_timestamp``).
+        """
+        signals = [order["signal"] for order in orders if order.get("signal")]
+        uuids = [signal.get("signal_uuid") for signal in signals]
+        engine = await self._engine_rows(uuids)
+        alerts = await self._alert_times(uuids)
+        for signal in signals:
+            found = engine.get(signal.get("signal_uuid"))
+            signal["engine"] = {key: value for key, value in found.items() if key != "signal_uuid"} if found else None
+            signal["alert_timestamp"] = alerts.get(signal.get("signal_uuid"))
+        return orders
+
+    async def signal_trace(self, signal_uuid: str | None = None, ta_signal_id: int | None = None) -> dict:
+        """
+        What was recorded of one signal, by its signal_uuid or by its row of the engine (src/admin/signal_trace.py
+        shapes it): the engine's row and the run that raised it, the trader's journal row with its alert's moment,
+        the order it gave with what became of it, the requests sent to Saxo for it, and the trader's sales while it
+        handled it. Every part reads as absent while its table does not exist.
+        """
+        engine = None
+        if ta_signal_id is not None:
+            rows = await self._fetch_optional(f"SELECT {', '.join(_TA_SIGNAL_COLUMNS)} FROM ta_signal WHERE id = $1", ta_signal_id)
+            engine = _clean_row(rows[0]) if rows else None
+            signal_uuid = (engine or {}).get("signal_uuid")
+        elif signal_uuid:
+            rows = await self._fetch_optional(
+                f"SELECT {', '.join(_TA_SIGNAL_COLUMNS)} FROM ta_signal WHERE signal_uuid = $1 ORDER BY id LIMIT 1",
+                signal_uuid,
+            )
+            engine = _clean_row(rows[0]) if rows else None
+        run = None
+        if engine is not None and engine.get("raised_at") is not None:
+            rows = await self._fetch_optional(
+                f"SELECT {', '.join(_RUN_COLUMNS)} FROM ta_rule_run WHERE rule_id = $1 AND tick_at = $2",
+                engine["rule_id"], engine["raised_at"],
+            )
+            run = _clean_row(rows[0]) if rows else None
+        journal = None
+        if signal_uuid:
+            rows = await self._fetch_optional(
+                f"SELECT {', '.join(_JOURNAL_COLUMNS)} FROM signal_journal WHERE signal_uuid = $1",
+                signal_uuid,
+            )
+            journal = _clean_row(rows[0]) if rows else None
+        if journal is not None:
+            journal["alert_timestamp"] = (await self._alert_times([signal_uuid])).get(signal_uuid)
+        orders: list[dict] = []
+        if journal is not None and journal.get("order_id"):
+            orders = await self._linked_orders("WHERE o.order_id = $1", journal["order_id"])
+        requests = []
+        if signal_uuid:
+            rows = await self._fetch_optional(
+                f"""
+                SELECT {", ".join(_ATTEMPT_COLUMNS)} FROM order_request
+                WHERE signal_uuid = $1 ORDER BY requested_at ASC NULLS LAST, request_id ASC LIMIT {MAX_POSITION_REQUESTS}
+                """,
+                signal_uuid,
+            )
+            requests = [_clean_row(row) for row in rows]
+        return {
+            "engine": engine,
+            "run": run,
+            "journal": journal,
+            "orders": orders,
+            "requests": requests,
+            "sold_for_it": await self._sold_while_handling(journal),
+        }
+
+    async def _sold_while_handling(self, journal: dict | None) -> list[dict]:
+        """
+        The sales the trader asked of Saxo while it handled a signal (from the web server's reception to its journal
+        row: the other side sold before an entry, or a close-position's), each with its order once Saxo accepted it.
+        """
+        if not journal or journal.get("received_timestamp") is None or journal.get("decided_at") is None:
+            return []
+        rows = await self._fetch_optional(
+            f"""
+            SELECT {", ".join(_ATTEMPT_COLUMNS)} FROM order_request
+            WHERE recorded_by = '{signal_trace.TRADER}' AND purpose = 'close'
+              AND requested_at BETWEEN $1 AND $2
+            ORDER BY requested_at ASC, request_id ASC
+            LIMIT {MAX_POSITION_REQUESTS}
+            """,
+            journal["received_timestamp"], journal["decided_at"],
+        )
+        requests = [_clean_row(row) for row in rows]
+        order_ids = sorted({request["order_id"] for request in requests if request.get("order_id")})
+        orders = await self._linked_orders(
+            "WHERE o.order_id = ANY($1::text[]) ORDER BY o.order_time ASC NULLS LAST, o.order_id ASC", order_ids,
+        ) if order_ids else []
+        by_position: dict[Any, list[dict]] = {}
+        for request in requests:
+            by_position.setdefault(request.get("position_id"), []).append(request)
+        sales = []
+        for position_id, attempts in by_position.items():
+            accepted = {request.get("order_id") for request in attempts if request.get("order_id")}
+            order = next((order for order in orders if order.get("order_id") in accepted), None)
+            if order is not None:
+                order["requests"] = [request for request in attempts if request.get("order_id") == order["order_id"]]
+            sales.append({"position_id": position_id, "requests": attempts, "order": order})
+        return sales
 
     async def _linked_orders(self, selection: str, *args) -> list[dict]:
         """
@@ -1785,7 +1981,7 @@ class AdminQueries:
                 raise
             rows = await self.db.fetch(f"SELECT {_ORDER_COLUMNS} FROM turbo_data_order o {selection}", *args)
             return [_unlinked_order(row) for row in rows]
-        return [_linked_order(row) for row in rows]
+        return await self._with_engine_moments([_linked_order(row) for row in rows])
 
     async def list_orders(self, start: date | None = None, end: date | None = None, limit: int = 500) -> dict:
         args: list[Any] = []

@@ -44,12 +44,15 @@ POSITION = {
     "related_order_id": [],
 }
 
+SIGNAL_UUID = "0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b"
+
 AUTHENTICATED_ROUTES = [
     ("GET", "/api/session"),
     ("DELETE", "/api/session"),
     ("GET", "/api/overview"),
     ("GET", "/api/positions"),
     ("GET", "/api/positions/5001"),
+    ("GET", "/api/signals/0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b"),
     ("GET", "/api/positions/5001/chart"),
     ("GET", "/api/orders"),
     ("GET", "/api/performance"),
@@ -397,6 +400,17 @@ class FakeQueries:
             if position_id == position["position_id"]:
                 return {"position": position, "orders": [], "requests": [], "requests_total": 0}
         return None
+
+    async def signal_trace(self, signal_uuid=None, ta_signal_id=None):
+        self.calls.append(("signal_trace", signal_uuid, ta_signal_id))
+        engine = {"id": 9, "rule_id": "0123456789ab", "rule_name": "Kernel", "mode": "live", "outcome": "sent",
+                  "signal_uuid": SIGNAL_UUID, "action": "long", "indice": "us100",
+                  "detail": "Sent at attempt 2: the web server had not taken it before"}
+        if ta_signal_id == 9 or signal_uuid == SIGNAL_UUID:
+            journal = {"signal_uuid": SIGNAL_UUID, "action": "long", "indice": "us100", "outcome": "executed",
+                       "reason": None, "position_id": "5001", "order_id": "7001"}
+            return {"engine": engine, "run": None, "journal": journal, "orders": [], "requests": [], "sold_for_it": []}
+        return {"engine": None, "run": None, "journal": None, "orders": [], "requests": [], "sold_for_it": []}
 
     async def open_positions(self):
         self._check()
@@ -862,7 +876,8 @@ def test_every_api_route_is_covered_by_the_session_test(ctx, tmp_path):
             .replace("{file_id}", "f0123456789")
             .replace("{slug}", "tri-star")
             .replace("{check_id}", "f0a1b2c3d")
-            .replace("{item_id}", "q0a1b2c3d"),
+            .replace("{item_id}", "q0a1b2c3d")
+            .replace("{ref}", "0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b"),
         )
         for route in app.routes
         if route.path.startswith("/api")
@@ -1113,6 +1128,28 @@ def test_invalid_position_filters_are_refused(client, query):
 def test_unknown_position_is_not_found(client):
     assert client.get("/api/positions/5001").status_code == 200
     assert client.get("/api/positions/nope").status_code == 404
+
+
+def test_a_signal_is_traced_by_its_uuid_or_by_the_engine_s_row_of_it(client, ctx):
+    by_uuid = client.get(f"/api/signals/{SIGNAL_UUID}")
+    by_engine = client.get("/api/signals/engine-9")
+
+    assert by_uuid.status_code == by_engine.status_code == 200
+    assert by_uuid.json() == by_engine.json()
+    answer = by_uuid.json()
+    # Its address is its uuid once the web server gave one, whichever way it was asked for.
+    assert (answer["ref"], answer["fate"]["key"], answer["engine"]["attempts"]) == (SIGNAL_UUID, "executed", 2)
+    assert answer["source"] == {"kind": "engine", "label": "Rule: Kernel", "rule_id": "0123456789ab",
+                                "rule_name": "Kernel", "mode": "live"}
+    assert answer["run_missing"]
+    assert ("signal_trace", SIGNAL_UUID, None) in ctx.queries.calls
+    assert ("signal_trace", None, 9) in ctx.queries.calls
+
+
+@pytest.mark.parametrize("ref", ["nope", "engine-0", "engine-x", "ENGINE-9", "0B8F6A52-6C1E-4D55-9A8E-3F1C2D4E5A6B",
+                                 "1a2b3c4d-0000-0000-0000-000000000000"])
+def test_a_signal_nobody_knows_or_a_ref_of_no_form_is_not_found(client, ref):
+    assert client.get(f"/api/signals/{ref}").status_code == 404
 
 
 def test_performance_passes_the_date_range(client, ctx):

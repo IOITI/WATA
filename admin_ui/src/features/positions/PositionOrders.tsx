@@ -9,6 +9,7 @@ import { MomentsTimeline, OrderHeading } from './OrderTimeline'
 import { closureWithoutOrder, orderLife, orderLink, positionTimeline, purposeOf } from './orderLife'
 import { sellRefusalSentence, sellRefusalsOf } from './orderRequests'
 import { RequestList } from './RequestList'
+import { SignalLine } from './SignalLine'
 
 /**
  * The orders behind a position, shown when its row is expanded: the one that opened it, the one that closed it,
@@ -33,6 +34,7 @@ export function PositionOrders({ positionId }: { positionId: string }) {
   const noSellOrder = closureWithoutOrder(position, orders)
   const stillOpen = position.position_status === 'Open'
   const refusals = sellRefusalsOf(requests)
+  const closingSignal = detailQuery.data.closing_signal ?? null
 
   return (
     <div className="space-y-4 text-xs">
@@ -70,11 +72,35 @@ export function PositionOrders({ positionId }: { positionId: string }) {
 
       {opening.length === 0 && <p className="text-muted-foreground">No order recorded for this position.</p>}
       {opening.map((order) => (
-        <OrderHeading key={order.order_id} order={order} life={orderLife(order)} timeZone={timezone} heading="Opened by order" />
+        <div key={order.order_id} className="space-y-1">
+          <OrderHeading order={order} life={orderLife(order)} timeZone={timezone} heading="Opened by order" />
+          {order.signal && (
+            <SignalLine
+              heading="From the signal of"
+              uuid={order.signal.signal_uuid}
+              taSignalId={order.signal.engine?.id}
+              ruleId={order.signal.engine?.rule_id}
+              ruleName={order.signal.engine?.rule_name}
+              at={order.signal.engine?.bar_closed_at ?? order.signal.received_timestamp}
+              timeZone={timezone}
+            />
+          )}
+        </div>
       ))}
       {closing.map((order) => (
         <OrderHeading key={order.order_id} order={order} life={orderLife(order)} timeZone={timezone} heading="Closed by order" />
       ))}
+      {closingSignal && (
+        <SignalLine
+          heading="Sold for the signal of"
+          uuid={closingSignal.signal_uuid}
+          taSignalId={closingSignal.ta_signal_id}
+          ruleId={closingSignal.rule_id}
+          ruleName={closingSignal.rule_name}
+          at={closingSignal.received_timestamp}
+          timeZone={timezone}
+        />
+      )}
       <MomentsTimeline
         items={positionTimeline(opening, closing, refusals, timezone)}
         label={`The events of position ${position.position_id}`}

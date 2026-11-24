@@ -222,6 +222,76 @@ export interface OrderSignal {
   signal_timestamp: string | null
   received_timestamp: string | null
   decided_at: string | null
+  /** What the TA engine kept of it, null for a signal it did not raise (TradingView's, one sent by hand). */
+  engine?: SignalEngineMoments | null
+  /** When its alert fired where it was raised: TradingView's {{timenow}}, the engine's sending (to the second). */
+  alert_timestamp?: string | null
+}
+
+/** The TA engine's row of a signal (`ta_signal`): its rule, its bar, the tick that raised it and the web server's answer. */
+export interface SignalEngineMoments {
+  id: number
+  rule_id: string
+  rule_name: string | null
+  mode: 'shadow' | 'live'
+  bar_time: string | null
+  bar_closed_at: string | null
+  /** The engine's tick that raised it. */
+  raised_at: string | null
+  /** When the web server's answer came back to the engine (it received the signal before). */
+  sent_at: string | null
+  detail: string | null
+}
+
+/** The signal the trader sold a position for: the one it was handling when it sent the sale. */
+export interface ClosingSignal {
+  signal_uuid: string
+  action: string | null
+  indice: string | null
+  signal_timestamp: string | null
+  received_timestamp: string | null
+  decided_at: string | null
+  outcome: string | null
+  reason: string | null
+  rule_id: string | null
+  rule_name: string | null
+  ta_signal_id: number | null
+}
+
+/** One signal's way to WATA and what it gave (`GET /api/signals/{ref}`). */
+export interface SignalTrace {
+  /** Its address: its signal_uuid, or `engine-<id>` for one the web server never answered. */
+  ref: string
+  signal_uuid: string | null
+  action: string | null
+  indice: string | null
+  source: {
+    kind: 'engine' | 'received'
+    label: string
+    rule_id: string | null
+    rule_name: string | null
+    mode: 'shadow' | 'live' | null
+  }
+  /** What became of it: the trader's outcome once it journaled it, else why it never did. */
+  fate: { key: string; reason: string | null }
+  engine: (TaSignalRow & { attempts: number }) | null
+  /** The engine's run that raised it, null once no longer kept (`run_missing` says so). */
+  run: {
+    tick_at: string
+    started_at: string | null
+    ended_at: string | null
+    done_at: string | null
+    bar_closed_at: string | null
+    outcome: string | null
+    milliseconds: number | null
+  } | null
+  run_missing: string | null
+  journal: (JournalEntry & { alert_timestamp: string | null }) | null
+  orders: Order[]
+  /** The requests sent to Saxo for it, oldest first: its buy's attempts, those refused for funds included. */
+  requests: OrderRequest[]
+  /** The sales the trader sent while it handled it, by position: the other side before an entry, a close's. */
+  sold_for_it: { position_id: string | null; requests: OrderRequest[]; order: Order | null }[]
 }
 
 export interface Page<T> {
@@ -235,6 +305,8 @@ export interface PositionDetail {
   /** Every request about it, oldest first: the latest ones when there are more than `requests_total` shows. */
   requests?: OrderRequest[]
   requests_total?: number
+  /** The signal the trader sold it for; null when the position monitor or the admin sold it. */
+  closing_signal?: ClosingSignal | null
 }
 
 export interface DailyPerformance {
@@ -3801,6 +3873,22 @@ export interface TaMonitorDelivery {
   /** Shadow signals whose bar was older than a live one may be. */
   shadow_late: number
   trader: (TaMonitorCount & { reason: string | null })[]
+  /** The slowest live signals of the period, from their bar's close to their position (or the trader's outcome). */
+  slowest?: TaMonitorSlowSignal[]
+}
+
+export interface TaMonitorSlowSignal {
+  /** The address of its page. */
+  ref: string | null
+  rule_id: string
+  rule_name: string | null
+  action: string | null
+  bar_closed_at: string | null
+  total_ms: number | null
+  /** True when it ends at its position confirmed, false at the trader's outcome. */
+  to_position: boolean
+  trader_outcome: string | null
+  position_id: string | null
 }
 
 export interface TaMonitorResult {
@@ -3840,6 +3928,9 @@ export interface TaTraderDecision {
   reason: string | null
   position_id: string | null
 }
+
+/** A row of the engine's journal of signals (`ta_signal`), without what the trader made of it. */
+export type TaSignalRow = Omit<TaSignal, 'trader'>
 
 export interface TaSignal {
   id: number
@@ -5454,6 +5545,8 @@ export interface LiveCheckSignalSide {
   rule?: string | null
   mode?: string
   position_id?: string
+  /** The address of the signal's own page (live): its uuid, or `engine-<id>`. */
+  ref?: string | null
   engine?: { outcome: string | null; raised_seconds: number | null; sent_seconds: number | null }
   trader?: { outcome: string | null; reason: string | null; decided_seconds: number | null } | null
 }

@@ -112,6 +112,11 @@ def test_a_live_track_reads_the_position_and_what_the_ledger_measured_of_it():
     key = key_of(utc(9, 0), "Enter Long")
     assert track["signals"][key]["fate"] == "executed"
     assert track["signals"][key]["engine"]["raised_seconds"] == 1.0
+    # Each live signal leads to its own page: by its uuid once the web server gave one, else the engine's row of it.
+    answered = {**engine_row(6, utc(9, 15), "Enter Long", "long"), "signal_uuid": "0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b"}
+    assert live_track([answered], [], [])["signals"][key_of(utc(9, 15), "Enter Long")]["ref"] == answered["signal_uuid"]
+    unanswered = live_track([engine_row(7, utc(9, 30), "Enter Short", "short", outcome="failed")], [], [])
+    assert unanswered["signals"][key_of(utc(9, 30), "Enter Short")]["ref"] == "engine-7"
     trade = track["trades"][key]
     assert trade["decided_price"] == 7.2 and trade["order_seconds"] == 3.5 and trade["entry_price"] == 7.05
 

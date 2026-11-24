@@ -1,7 +1,9 @@
 import { Badge, cn, formatClock, formatNumber, formatWait } from 'ioiti-ui'
+import { Link } from 'react-router'
 
 import type { OrderRequest } from '@/lib/types'
 
+import { isSignalUuid, signalLink } from './orderLife'
 import { REQUEST_RESULTS, requestLabel, requestTookMs, saxoAnswer } from './orderRequests'
 
 // Time and request side by side, the result and Saxo's answer under them on a phone; one line from a tablet up.
@@ -33,7 +35,15 @@ function Sent({ request }: { request: OrderRequest }) {
         {request.signal_uuid && (
           <>
             <dt>Signal</dt>
-            <dd className="font-mono text-foreground/80">{request.signal_uuid}</dd>
+            <dd className="font-mono text-foreground/80">
+              {isSignalUuid(request.signal_uuid) ? (
+                <Link to={signalLink(request.signal_uuid)} className="underline decoration-border underline-offset-2 hover:decoration-foreground">
+                  {request.signal_uuid}
+                </Link>
+              ) : (
+                request.signal_uuid
+              )}
+            </dd>
           </>
         )}
         <dt>Sent to Saxo</dt>

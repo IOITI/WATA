@@ -26,6 +26,7 @@ from datetime import date, datetime, timezone
 from statistics import median
 
 from src.admin.analysis import exit_group
+from src.admin.signal_trace import ref_for
 from src.admin.ta_compare import compare
 
 ENTRY_ACTIONS = ("long", "short")
@@ -273,6 +274,8 @@ def live_track(rows: list[dict], positions: list[dict], ledger_trades: list[dict
             "trader": {"outcome": trader.get("outcome"), "reason": trader.get("reason"),
                        "decided_seconds": _seconds(trader.get("decided_at"), row.get("bar_closed_at"))} if trader else None,
             "position_id": position_id,
+            # The address of its own page (src/admin/signal_trace.py).
+            "ref": ref_for(row.get("signal_uuid"), row.get("id")),
         }
         if row.get("action") in ENTRY_ACTIONS and position_id in by_position:
             trades[key] = real_trade(by_position[position_id], ledger.get(position_id), key)
