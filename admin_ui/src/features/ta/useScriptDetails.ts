@@ -30,7 +30,7 @@ export function useFavouriteScripts() {
       )
       for (const id of ids) queryClient.setQueryData<TaScript>(['ta-script', id], (script) => (script ? { ...script, favourite } : script))
     },
-    onError: (error) => toast({ title: 'The favourites were not changed', description: said(error), variant: 'error' }),
+    onError: (error) => toast({ title: 'The favourites were not changed', description: said(error), tone: 'danger' }),
     onSettled: (_answer, _error, { ids }) => {
       void queryClient.invalidateQueries({ queryKey: ['ta-scripts'] })
       for (const id of ids) void queryClient.invalidateQueries({ queryKey: ['ta-script', id] })
@@ -44,7 +44,7 @@ export function useScriptFamily() {
   return useMutation({
     mutationFn: ({ id, family }: { id: string; family: string | null }) => api.setTaScriptFamily(id, family),
     onSuccess: (script) => shownEverywhere(queryClient, script),
-    onError: (error) => toast({ title: 'The family was not changed', description: said(error), variant: 'error' }),
+    onError: (error) => toast({ title: 'The family was not changed', description: said(error), tone: 'danger' }),
   })
 }
 
@@ -56,9 +56,9 @@ export function useScriptPicture() {
     mutationFn: ({ id, picture, name }: { id: string; picture: Blob; name?: string }) => api.setTaScriptPicture(id, picture, name),
     onSuccess: (script) => {
       shownEverywhere(queryClient, script)
-      toast({ title: `The picture of ${script.name} was kept`, variant: 'success' })
+      toast({ title: `The picture of ${script.name} was kept`, tone: 'success' })
     },
-    onError: (error) => toast({ title: 'The picture was not kept', description: said(error), variant: 'error' }),
+    onError: (error) => toast({ title: 'The picture was not kept', description: said(error), tone: 'danger' }),
   })
   const drop = useMutation({
     mutationFn: (id: string) => api.dropTaScriptPicture(id),
@@ -66,7 +66,7 @@ export function useScriptPicture() {
       void queryClient.invalidateQueries({ queryKey: ['ta-scripts'] })
       void queryClient.invalidateQueries({ queryKey: ['ta-script', id] })
     },
-    onError: (error) => toast({ title: 'The picture was not removed', description: said(error), variant: 'error' }),
+    onError: (error) => toast({ title: 'The picture was not removed', description: said(error), tone: 'danger' }),
   })
   return { set, drop }
 }

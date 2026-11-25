@@ -70,14 +70,14 @@ export function PaperReport({
                 size="sm"
                 leftIcon={<RotateCcw className="size-3.5" />}
                 disabled={state.underWay}
-                isLoading={ask.isPending}
+                pending={ask.isPending}
                 onClick={() => ask.mutate()}
               >
                 Make it now
               </Button>
             </Hint>
           )}
-          <ButtonLink to={report ? paperReportHref(owner) : null} size="sm" leftIcon={<FileText className="size-3.5" />}>
+          <ButtonLink href={report ? paperReportHref(owner) : null} size="sm" leftIcon={<FileText className="size-3.5" />}>
             Open the report
           </ButtonLink>
         </div>

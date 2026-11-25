@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { cn, DynamicIsland, SignedValue, toneOf, useNow } from 'ioiti-ui'
-import type { DynamicIslandState } from 'ioiti-ui'
+import { cn, StatusIsland, SignedValue, toneOf, useNow } from 'ioiti-ui'
+import type { StatusIslandState } from 'ioiti-ui'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
@@ -31,7 +31,7 @@ function Dot({ tone }: { tone: keyof typeof DOT }) {
  */
 export function LivePill() {
   const { actions_enabled: actionsEnabled, timezone } = useSession()
-  const [state, setState] = useState<DynamicIslandState>('collapsed')
+  const [state, setState] = useState<StatusIslandState>('collapsed')
   const expanded = state === 'expanded'
   // What depends on the time: an entry window opening or closing.
   const now = useNow(expanded ? 1_000 : 15_000)
@@ -87,7 +87,7 @@ export function LivePill() {
   }
 
   return (
-    <DynamicIsland
+    <StatusIsland
       label="Live trading"
       state={state}
       onStateChange={setState}
@@ -127,6 +127,6 @@ export function LivePill() {
           {paused ? 'Resume entries on the dashboard' : 'The dashboard'}
         </Link>
       </div>
-    </DynamicIsland>
+    </StatusIsland>
   )
 }

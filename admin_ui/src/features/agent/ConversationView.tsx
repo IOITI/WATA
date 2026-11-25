@@ -171,7 +171,7 @@ function RequestView({ conversation, request, last, open, onOpenChange, blockedF
         </p>
       )}
       {last && request.status === 'failed' && conversation.status === 'failed' && (
-        <Button size="sm" variant="outline" leftIcon={<RotateCw className="size-3.5" />} isLoading={retry.isPending} onClick={() => retry.mutate()}>
+        <Button size="sm" variant="outline" leftIcon={<RotateCw className="size-3.5" />} pending={retry.isPending} onClick={() => retry.mutate()}>
           Take it up again
         </Button>
       )}

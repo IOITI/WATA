@@ -4,10 +4,11 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import require_session, session_cookie_name
+from src.admin.client_errors import ClientError, ClientErrorLog
 from src.admin.errors import ServiceUnavailable
 from src.admin.health import collect_health
 from src.admin.logs import LEVELS, LOG_SERVICES, MAX_LINES, read_log
@@ -37,6 +38,16 @@ async def latest_signals(request: Request):
 @router.get("/system/health")
 async def health(request: Request):
     return await collect_health(request.app.state.ctx)
+
+
+@router.post("/client-errors", status_code=204)
+async def client_error(error: ClientError, request: Request):
+    """What failed in the interface, in the admin's log alone (src/admin/client_errors.py)."""
+    log = getattr(request.app.state, "client_errors", None)
+    if log is None:
+        log = request.app.state.client_errors = ClientErrorLog()
+    log.record(error)
+    return Response(status_code=204)
 
 
 @router.get("/system/saxo")

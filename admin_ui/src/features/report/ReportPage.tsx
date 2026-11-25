@@ -253,7 +253,7 @@ export function ReportPage() {
         }
         actions={report ? (
           <>
-            {day && <ButtonLink to="/report" size="sm" variant="ghost">Today&apos;s report</ButtonLink>}
+            {day && <ButtonLink href="/report" size="sm" variant="ghost">Today&apos;s report</ButtonLink>}
             <AskAgentLink subject={{ kind: 'day', id: report.report_date.slice(0, 10) }} label="Ask about the day" />
           </>
         ) : undefined}

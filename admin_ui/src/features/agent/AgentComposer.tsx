@@ -126,10 +126,10 @@ export function AgentComposer({ conversation, subject, initialFiles, onStarted, 
         label={conversation ? 'Ask the agent again' : 'Ask the AI agent'}
         hideLabel
         value={value}
-        onValueChange={setValue}
+        onChange={setValue}
         onSubmit={(prompt) => send.mutate(prompt)}
         onStop={busy && !stop.isPending ? () => stop.mutate() : undefined}
-        busy={busy || send.isPending || !!blocked}
+        pending={busy || send.isPending || !!blocked}
         disabled={!!refusal}
         disabledReason={refusal}
         placeholder={placeholder}

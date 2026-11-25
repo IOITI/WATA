@@ -127,7 +127,7 @@ export function LoginPage() {
           <Button
             type="submit"
             fullWidth
-            isLoading={submitting}
+            pending={submitting}
             loadingText="Signing in"
             disabled={!password || (needsCode && code.length < CODE_LENGTH)}
           >

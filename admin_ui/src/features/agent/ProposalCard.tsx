@@ -259,7 +259,7 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
     onSuccess: async (saved) => {
       setReviewing(false)
       settled(saved)
-      toast({ title: 'Configuration saved', description: `From the agent's proposal: ${proposal.title}.`, variant: 'success' })
+      toast({ title: 'Configuration saved', description: `From the agent's proposal: ${proposal.title}.`, tone: 'success' })
       await Promise.all(
         ['config', 'config-backups', 'config-history', 'session'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
       )
@@ -358,13 +358,13 @@ export function ProposalCard({ conversationId, proposal, proposals, blockedReaso
             </Hint>
           ) : (
             <Hint content={blockedReason ?? undefined} wrap={!!blockedReason}>
-              <Button size="sm" leftIcon={<Check className="size-3.5" />} disabled={!!blockedReason} isLoading={settle.isPending && settle.variables === true}
+              <Button size="sm" leftIcon={<Check className="size-3.5" />} disabled={!!blockedReason} pending={settle.isPending && settle.variables === true}
                 onClick={() => settle.mutate(true)}>
                 {applyLabel}
               </Button>
             </Hint>
           )}
-          <Button size="sm" variant="ghost" leftIcon={<X className="size-3.5" />} isLoading={settle.isPending && settle.variables === false}
+          <Button size="sm" variant="ghost" leftIcon={<X className="size-3.5" />} pending={settle.isPending && settle.variables === false}
             onClick={() => settle.mutate(false)}>
             Dismiss
           </Button>

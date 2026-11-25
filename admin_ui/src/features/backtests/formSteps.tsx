@@ -123,7 +123,7 @@ export function AssetStep({
               id={assetFieldId}
               className="w-full"
               value={draft.asset || null}
-              onValueChange={(value) => value && update({ asset: value })}
+              onChange={(value) => value && update({ asset: value })}
               options={offered.some((option) => option.value === draft.asset) || !chosen ? offered : [{ value: draft.asset, label: assetLabel(chosen) }, ...offered]}
               placeholder="Choose an asset"
               searchPlaceholder="A name or a symbol…"
@@ -659,7 +659,7 @@ function SweepAxes({
                 id={`${fieldId}-${index}`}
                 className="w-full"
                 value={axis.name || null}
-                onValueChange={(value) => setAxis(index, { name: value ?? '' })}
+                onChange={(value) => setAxis(index, { name: value ?? '' })}
                 options={names}
                 placeholder="Choose…"
                 searchPlaceholder="A setting or an input…"

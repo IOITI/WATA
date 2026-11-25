@@ -116,7 +116,7 @@ export function JournalPanel({ timeZone }: { timeZone: string }) {
             formatValue={(value) => formatNumber(value)}
             summaryLabel="of the entry signals bought"
             noun="Signals"
-            ariaLabel="Where the entry signals the trader decided went, stage by stage"
+            aria-label="Where the entry signals the trader decided went, stage by stage"
           />
         </Panel>
       )}

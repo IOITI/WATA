@@ -74,7 +74,7 @@ function FileHypothesis({ held, autopsy, run }: {
   }
   return (
     <Hint content={file.error ? file.error.message : 'A hypothesis to test on other days, in an experiment of its own: the research autopilot takes it in its turn'}>
-      <Button variant="ghost" size="sm" isLoading={file.isPending} leftIcon={<ListPlus className="size-3.5" />}
+      <Button variant="ghost" size="sm" pending={file.isPending} leftIcon={<ListPlus className="size-3.5" />}
         aria-label={`Add “${held.said}” to the research queue`} onClick={() => file.mutate()}>
         Add to the research queue
       </Button>

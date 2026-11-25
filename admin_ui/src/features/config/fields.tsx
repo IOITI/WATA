@@ -1,4 +1,4 @@
-import { Combobox, FormControl, FormDescription, FormItem, FormLabel, FormMessage, Input, SpringSelect, StretchSwitch } from 'ioiti-ui'
+import { Combobox, FormControl, FormDescription, FormItem, FormLabel, FormMessage, Input, SelectMenu, Switch } from 'ioiti-ui'
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -109,7 +109,7 @@ export function SwitchField({ label, path, hint, whenAbsent = false }: FieldProp
   const current = path ? getAt(draft, path) : undefined
 
   return (
-    <StretchSwitch
+    <Switch
       label={label}
       description={hint}
       checked={current === undefined || current === null ? whenAbsent : current === true}
@@ -169,7 +169,7 @@ export function SelectField({ label, path, hint, choices }: FieldProps & { choic
 
   return (
     <FormItem>
-      <SpringSelect
+      <SelectMenu
         label={label}
         options={choices.map((choice) => ({ value: choice, label: choice }))}
         value={typeof current === 'string' ? current : undefined}
@@ -208,7 +208,7 @@ export function TimezoneField({ label, path, hint, unsetLabel }: FieldProps & { 
         placeholder="Choose a timezone"
         searchPlaceholder="A city or a zone…"
         emptyText="No timezone of that name."
-        onValueChange={(value) => {
+        onChange={(value) => {
           if (!path || !value) return
           update(path, value === unset ? null : value)
         }}
@@ -229,7 +229,7 @@ export function ChoicesField({ label, path, hint, choices }: FieldProps & { choi
       <p className="text-xs text-text-secondary">{label}</p>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
         {choices.map((choice) => (
-          <StretchSwitch
+          <Switch
             key={choice}
             label={choice}
             checked={chosen.includes(choice)}

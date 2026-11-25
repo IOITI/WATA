@@ -1,4 +1,4 @@
-import { Badge, Button, cn, Hint, StretchSwitch } from 'ioiti-ui'
+import { Badge, Button, cn, Hint, Switch } from 'ioiti-ui'
 import { AlertTriangle, ChevronDown, Lock, RotateCcw } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Link } from 'react-router'
@@ -366,7 +366,7 @@ export function RuleBlock({ ruleType, params }: { ruleType: string; params: Cata
           </p>
         </div>
         {ruleParam?.optional && (
-          <StretchSwitch
+          <Switch
             label={present ? 'On' : 'Off'}
             checked={present}
             disabled={disabled}

@@ -15,6 +15,7 @@ import type {
   SaxoProviderDetails,
   Session,
 } from '@/lib/types'
+import { findAlert } from '@/test/alerts'
 import { WithTrail } from '@/test/WithTrail'
 
 import { ProviderPage } from './ProviderPage'
@@ -397,7 +398,7 @@ describe('the Saxo provider’s page', () => {
     serve({ saxoDetails: saxo({ status: 'down', detail: 'No sign of it for 12 min' }) })
     renderPage('/data/providers/saxo')
 
-    const alert = await screen.findByRole('alert')
+    const alert = await findAlert()
     expect(alert).toHaveTextContent('COMPOSE_PROFILES')
     expect(within(alert).getByRole('link', { name: 'System' })).toHaveAttribute('href', '/system')
   })
@@ -520,7 +521,7 @@ describe('the Capital.com provider’s page', () => {
     })
     renderPage('/data/providers/capital')
 
-    const alert = await screen.findByRole('alert')
+    const alert = await findAlert()
     expect(alert).toHaveTextContent("No Capital.com login: set it from the admin's Credentials")
     expect(within(alert).getByRole('link', { name: 'Configuration, Credentials' })).toHaveAttribute('href', '/config/credentials')
     expect(within(alert).getByRole('link', { name: 'System' })).toHaveAttribute('href', '/system')

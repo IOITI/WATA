@@ -153,11 +153,11 @@ export function AgentActivityPage() {
           <>
             {data?.enabled && (
               <Button size="sm" variant="outline" leftIcon={data.pause ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
-                isLoading={pause.isPending} onClick={() => pause.mutate(!data.pause)}>
+                pending={pause.isPending} onClick={() => pause.mutate(!data.pause)}>
                 {data.pause ? 'Resume' : 'Pause'}
               </Button>
             )}
-            <ButtonLink to="/config/agent" size="sm" variant="outline" leftIcon={<Settings className="size-3.5" />}>
+            <ButtonLink href="/config/agent" size="sm" variant="outline" leftIcon={<Settings className="size-3.5" />}>
               Settings
             </ButtonLink>
           </>
@@ -188,7 +188,7 @@ export function AgentActivityPage() {
               <KpiTile label="This month" value={costText(month?.spent_usd)} hint={`of ${costText(month?.budget_usd)}, estimated`}>
                 {month && (
                   <Meter ratio={Math.min(1, month.spent_usd / month.budget_usd)} label="This month's budget used"
-                    tone={month.spent_usd >= month.budget_usd ? 'negative' : month.spent_usd >= 0.8 * month.budget_usd ? 'warning' : 'neutral'} />
+                    tone={month.spent_usd >= month.budget_usd ? 'danger' : month.spent_usd >= 0.8 * month.budget_usd ? 'warning' : 'neutral'} />
                 )}
               </KpiTile>
               <KpiTile label="Working on" value={data.under_way?.length ?? 0} hint={`${data.limits?.running ?? 1} at once at most`} />

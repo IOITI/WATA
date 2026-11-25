@@ -34,7 +34,7 @@ export function CapsPanel({ runId }: { runId: string }) {
           <div className="flex flex-col gap-4">
             {!found && !answer.making && (
               <div className="flex flex-wrap items-center gap-3">
-                <Button size="sm" isLoading={make.isPending} onClick={() => make.mutate()}>
+                <Button size="sm" pending={make.isPending} onClick={() => make.mutate()}>
                   Make it again without the day&apos;s caps
                 </Button>
                 <span className="text-xs text-muted-foreground">The same days and signals, its random entries as they were.</span>

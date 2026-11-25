@@ -95,8 +95,11 @@ describe('the dashboard', () => {
     renderDashboard()
 
     await screen.findByText('No open position.')
-    const boards = screen.getAllByRole('region', { name: /^World times: \d\d:\d\d New York, \d\d:\d\d Paris$/ })
+    // The board is named as ioiti-ui names it, each row read as its time and its city.
+    const boards = screen.getAllByRole('region', { name: 'World times' })
     expect(boards.length).toBeGreaterThan(0)
+    expect(within(boards[0]).getByText(/^\d\d:\d\d, New York$/)).toBeInTheDocument()
+    expect(within(boards[0]).getByText(/^\d\d:\d\d, Paris$/)).toBeInTheDocument()
     expect(within(boards[0]).getByText(/^US OPEN \d\d:\d\d PARIS · [56] H APART$/)).toBeInTheDocument()
   })
 

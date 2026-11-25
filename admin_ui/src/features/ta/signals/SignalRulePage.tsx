@@ -158,7 +158,7 @@ function TestAsItRuns({ rule }: { rule: TaRule }) {
   return (
     <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
       <Button size="sm" variant="outline" disabled={testing !== null || checked.data?.state.available === false}
-        isLoading={ask.isPending} onClick={() => ask.mutate({})}>
+        pending={ask.isPending} onClick={() => ask.mutate({})}>
         {testing ? TESTING_SAID[testing] : 'Test its script as it runs it'}
       </Button>
       <span>
@@ -436,7 +436,7 @@ export function SignalRulePage() {
               title="On paper"
               description="Each finished weekday, the signals it raised traded as WATA would have traded them, and its report since it was made."
               action={
-                <ButtonLink to={paperTradingHref(rule.id)} variant="outline" size="sm">
+                <ButtonLink href={paperTradingHref(rule.id)} variant="outline" size="sm">
                   Paper trading
                 </ButtonLink>
               }
@@ -475,7 +475,7 @@ export function SignalRulePage() {
               title="Engine"
               description="How the TA engine runs it, as it last said."
               action={
-                <ButtonLink to={monitorHref({ rule: rule.id })} variant="outline" size="sm">
+                <ButtonLink href={monitorHref({ rule: rule.id })} variant="outline" size="sm">
                   Engine monitor
                 </ButtonLink>
               }

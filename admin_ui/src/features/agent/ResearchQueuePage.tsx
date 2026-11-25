@@ -20,7 +20,7 @@ import {
   PageHeader,
   Panel,
   QueryState,
-  SettleModal,
+  Dialog,
   Textarea,
   UndoToast,
 } from 'ioiti-ui'
@@ -73,7 +73,7 @@ function NewHypothesisDialog({ onClose }: { onClose: () => void }) {
   })
   const change = (part: Partial<QueueDraft>) => setDraft((before) => ({ ...before, ...part }))
   return (
-    <SettleModal
+    <Dialog
       open
       onClose={save.isPending ? () => {} : onClose}
       title="A hypothesis to try"
@@ -83,7 +83,7 @@ function NewHypothesisDialog({ onClose }: { onClose: () => void }) {
           <Button variant="ghost" size="sm" onClick={onClose} disabled={save.isPending}>
             Cancel
           </Button>
-          <Button size="sm" isLoading={save.isPending} disabled={!!problem} onClick={() => save.mutate()}>
+          <Button size="sm" pending={save.isPending} disabled={!!problem} onClick={() => save.mutate()}>
             File it
           </Button>
         </>
@@ -133,7 +133,7 @@ function NewHypothesisDialog({ onClose }: { onClose: () => void }) {
           </Alert>
         )}
       </form>
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -257,7 +257,7 @@ export function ResearchQueuePage() {
               <Alert tone="neutral">
                 <AlertDescription>
                   <span>No research autopilot yet: make it from a template on Routines. Each trading day once the market is closed, it takes the next hypothesis here.</span>{' '}
-                  <ButtonLink to="/agent/routines" size="sm" variant="outline" className="ml-1">Routines</ButtonLink>
+                  <ButtonLink href="/agent/routines" size="sm" variant="outline" className="ml-1">Routines</ButtonLink>
                 </AlertDescription>
               </Alert>
             ) : !autopilot.enabled ? (

@@ -12,8 +12,8 @@ import {
   FormLabel,
   Input,
   SegmentedControl,
-  SettleModal,
-  StretchSwitch,
+  Dialog,
+  Switch,
   Textarea,
 } from 'ioiti-ui'
 import { useId, useState } from 'react'
@@ -58,7 +58,7 @@ export function MemoryEntryDialog({ entry, limits, open, onClose, onSaved }: {
   const nameSaid = draft.name ? nameProblem(draft.name) : null
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={save.isPending ? () => {} : onClose}
       title={entry ? `Change ${entry.name}` : 'A new entry of its memory'}
@@ -68,7 +68,7 @@ export function MemoryEntryDialog({ entry, limits, open, onClose, onSaved }: {
           <Button variant="ghost" size="sm" onClick={onClose} disabled={save.isPending}>
             Cancel
           </Button>
-          <Button size="sm" isLoading={save.isPending} disabled={!!problem} onClick={() => save.mutate()}>
+          <Button size="sm" pending={save.isPending} disabled={!!problem} onClick={() => save.mutate()}>
             {entry ? 'Save the change' : 'Save the entry'}
           </Button>
         </>
@@ -118,7 +118,7 @@ export function MemoryEntryDialog({ entry, limits, open, onClose, onSaved }: {
         <FormItem>
           <FormLabel id={`${id}-kind`}>Kind</FormLabel>
           <SegmentedControl<AgentMemoryKind>
-            labelledBy={`${id}-kind`}
+            aria-labelledby={`${id}-kind`}
             size="sm"
             options={KINDS.map((kind) => ({ value: kind, label: KIND_LABEL[kind] }))}
             value={draft.kind}
@@ -141,7 +141,7 @@ export function MemoryEntryDialog({ entry, limits, open, onClose, onSaved }: {
             Anthropic with every conversation: never a key, a token or a password.
           </FormDescription>
         </FormItem>
-        <StretchSwitch
+        <Switch
           label="The agent may only read it"
           description="Locked, it is read at each conversation and never changed or forgotten by the agent."
           checked={draft.locked}
@@ -153,6 +153,6 @@ export function MemoryEntryDialog({ entry, limits, open, onClose, onSaved }: {
           </Alert>
         )}
       </form>
-    </SettleModal>
+    </Dialog>
   )
 }

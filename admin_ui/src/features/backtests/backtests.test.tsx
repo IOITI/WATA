@@ -1170,8 +1170,9 @@ describe('a new backtest', () => {
     expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.textContent)).toEqual(['Saxo · NASDAQ 100'])
     await user.keyboard('{Enter}')
 
-    expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveTextContent('Saxo · NASDAQ 100')
+    // Closed first: while open, its search is named after the field too (ioiti-ui 0.25).
     await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument())
+    expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveTextContent('Saxo · NASDAQ 100')
   })
 })
 
@@ -1722,13 +1723,14 @@ describe('runs compared', () => {
     expect(within(table).getByRole('columnheader', { name: /Smoke EMA cross/ })).toBeInTheDocument()
     expect(within(table).getByRole('row', { name: /^Asset/ })).toBeInTheDocument()
 
-    await user.click(within(table).getByRole('button', { name: 'Only what differs' }))
+    // Its toggle and its search stand above the table (ioiti-ui 0.25), the table holding the rows alone.
+    await user.click(screen.getByRole('button', { name: 'Only what differs' }))
     // The same asset for both: gone; the stop-loss they did not share stays.
     await waitFor(() => expect(within(table).queryByRole('row', { name: /^Asset/ })).not.toBeInTheDocument())
     expect(within(table).getByRole('row', { name: /Stop-loss/ })).toBeInTheDocument()
 
-    await user.click(within(table).getByRole('button', { name: 'Only what differs' }))
-    await user.type(within(table).getByRole('textbox', { name: 'Find a row…' }), 'drawdown')
+    await user.click(screen.getByRole('button', { name: 'Only what differs' }))
+    await user.type(screen.getByRole('textbox', { name: 'Find a row…' }), 'drawdown')
     await waitFor(() => expect(within(table).getAllByRole('row').filter((row) => row.getAttribute('role') === 'row' && row.textContent?.includes('Worst drawdown'))).toHaveLength(1))
     expect(within(table).queryByRole('row', { name: /^Trades/ })).not.toBeInTheDocument()
   })

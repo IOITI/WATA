@@ -136,7 +136,7 @@ function Authorisation({ status, actionsEnabled }: { status: SaxoStatus; actions
               size="sm"
               rightIcon={<ExternalLink className="size-3.5" aria-hidden />}
               disabled={!actionsEnabled}
-              isLoading={authorize.isPending}
+              pending={authorize.isPending}
               onClick={() => authorize.mutate()}
             >
               Open Saxo&apos;s login
@@ -190,7 +190,7 @@ function Authorisation({ status, actionsEnabled }: { status: SaxoStatus; actions
               </AlertDescription>
             </Alert>
           )}
-          <Button size="sm" disabled={!code || !actionsEnabled} isLoading={submit.isPending} onClick={() => submit.mutate()}>
+          <Button size="sm" disabled={!code || !actionsEnabled} pending={submit.isPending} onClick={() => submit.mutate()}>
             Hand the code over
           </Button>
         </div>

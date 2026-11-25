@@ -3,7 +3,7 @@
 // effort, whether its end is told on Telegram, and whether it is on. Saved at the revision the page read.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, Button, Field, Hint, Input, NumberInput, Select, SettleModal, StretchSwitch, Textarea } from 'ioiti-ui'
+import { Alert, AlertDescription, Button, Field, Hint, Input, NumberInput, Select, Dialog, Switch, Textarea } from 'ioiti-ui'
 import { useState } from 'react'
 
 import { ApiError, api } from '@/lib/api'
@@ -43,7 +43,7 @@ export function RoutineDialog({ open, routine, template = null, revision, state,
   const schedule = draft.schedule
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={save.isPending ? () => {} : onClose}
       title={routine ? `Change ${routine.name}` : template ? `Add the ${template.name}` : 'A new routine'}
@@ -53,7 +53,7 @@ export function RoutineDialog({ open, routine, template = null, revision, state,
         <>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={save.isPending}>Cancel</Button>
           <Hint content={problem ?? undefined} wrap={!!problem}>
-            <Button size="sm" disabled={!!problem} isLoading={save.isPending} onClick={() => save.mutate()}>
+            <Button size="sm" disabled={!!problem} pending={save.isPending} onClick={() => save.mutate()}>
               {routine ? 'Save' : 'Make the routine'}
             </Button>
           </Hint>
@@ -114,9 +114,9 @@ export function RoutineDialog({ open, routine, template = null, revision, state,
             <ChoiceMenus state={state} choice={choice} onChoose={(chosen) => change({ model: chosen.model, effort: chosen.effort })} />
           </div>
         )}
-        <StretchSwitch label="Its end said on Telegram" checked={draft.telegram} onChange={(telegram) => change({ telegram })}
+        <Switch label="Its end said on Telegram" checked={draft.telegram} onChange={(telegram) => change({ telegram })}
           description="Its conclusion's first lines, once its task ends." />
-        <StretchSwitch label="On" checked={draft.enabled} onChange={(enabled) => change({ enabled })}
+        <Switch label="On" checked={draft.enabled} onChange={(enabled) => change({ enabled })}
           description="Off, it waits: Run now still starts it." />
         {save.error && (
           <Alert tone="danger" role="alert">
@@ -128,6 +128,6 @@ export function RoutineDialog({ open, routine, template = null, revision, state,
           </Alert>
         )}
       </form>
-    </SettleModal>
+    </Dialog>
   )
 }

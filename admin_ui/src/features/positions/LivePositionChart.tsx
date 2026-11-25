@@ -46,7 +46,7 @@ export function LivePositionChart({ position }: { position: Position }) {
         formatValue={formatValue}
         formatTick={formatTick}
         formatChange={formatChange}
-        ariaLabel={`Performance of ${name} over the last 15 minutes`}
+        aria-label={`Performance of ${name} over the last 15 minutes`}
       />
       <p className="mt-2 text-xs text-muted-foreground">
         From when this tab first read it: the server keeps only the latest value.

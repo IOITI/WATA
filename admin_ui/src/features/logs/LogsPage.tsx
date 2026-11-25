@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Badge, Button, cn, formatDateTime, Input, PageHeader, QueryState, SpringSelect } from 'ioiti-ui'
+import { Badge, Button, cn, formatDateTime, Input, PageHeader, QueryState, SelectMenu } from 'ioiti-ui'
 import type { BadgeTone } from 'ioiti-ui'
 import { Pause, Play, Search } from 'lucide-react'
 import { useDeferredValue, useState } from 'react'
@@ -70,8 +70,8 @@ export function LogsPage() {
       />
 
       <div className="flex flex-wrap items-end gap-3">
-        <SpringSelect className="w-56" label="Service" options={serviceOptions} value={service} onChange={setService} />
-        <SpringSelect className="w-48" label="Level" options={levelOptions} value={level} onChange={setLevel} />
+        <SelectMenu className="w-56" label="Service" options={serviceOptions} value={service} onChange={setService} />
+        <SelectMenu className="w-48" label="Level" options={levelOptions} value={level} onChange={setLevel} />
         <div className="min-w-[14rem] flex-1">
           <Input
             aria-label="Search the log"

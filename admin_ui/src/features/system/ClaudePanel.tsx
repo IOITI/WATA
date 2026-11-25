@@ -13,7 +13,7 @@ import {
   Input,
   Panel,
   QueryState,
-  SettleModal,
+  Dialog,
   useToast,
 } from 'ioiti-ui'
 import { useState } from 'react'
@@ -146,7 +146,7 @@ function NewTokenDialog({ open, onClose }: { open: boolean; onClose: () => void 
   }
   const made = mutation.data
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={mutation.isPending ? () => {} : close}
       title={made ? `Token ${made.entry.name}` : 'Make a token for Claude'}
@@ -161,7 +161,7 @@ function NewTokenDialog({ open, onClose }: { open: boolean; onClose: () => void 
             <Button variant="ghost" size="sm" onClick={close} disabled={mutation.isPending}>
               Cancel
             </Button>
-            <Button size="sm" isLoading={mutation.isPending} disabled={!name.trim()} onClick={() => mutation.mutate()}>
+            <Button size="sm" pending={mutation.isPending} disabled={!name.trim()} onClick={() => mutation.mutate()}>
               Make it
             </Button>
           </>
@@ -210,7 +210,7 @@ function NewTokenDialog({ open, onClose }: { open: boolean; onClose: () => void 
           )}
         </form>
       )}
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -231,7 +231,7 @@ export function ClaudePanel() {
       toast({
         title: paused.paused ? 'Claude’s endpoint paused' : 'Claude’s endpoint resumed',
         description: paused.paused ? 'Every call is refused until you resume it.' : 'Claude’s calls are answered again.',
-        variant: 'success',
+        tone: 'success',
       })
     },
   })
@@ -258,7 +258,7 @@ export function ClaudePanel() {
           <Button
             variant={state.paused.paused ? 'primary' : 'outline'}
             size="sm"
-            isLoading={pauseMutation.isPending}
+            pending={pauseMutation.isPending}
             onClick={() => pauseMutation.mutate(!state.paused.paused)}
           >
             {state.paused.paused ? 'Resume' : 'Pause Claude'}
@@ -314,7 +314,7 @@ export function ClaudePanel() {
       </QueryState>
 
       <NewTokenDialog open={making} onClose={() => setMaking(false)} />
-      <SettleModal
+      <Dialog
         open={revoking !== null}
         onClose={() => setRevoking(null)}
         title={`Revoke ${revoking?.name ?? ''}?`}
@@ -325,9 +325,9 @@ export function ClaudePanel() {
               Keep it
             </Button>
             <Button
-              variant="destructive"
+              variant="danger"
               size="sm"
-              isLoading={revokeMutation.isPending}
+              pending={revokeMutation.isPending}
               onClick={() => revoking && revokeMutation.mutate(revoking)}
             >
               Revoke
@@ -343,7 +343,7 @@ export function ClaudePanel() {
             {revokeMutation.error.message}
           </p>
         )}
-      </SettleModal>
+      </Dialog>
     </Panel>
   )
 }

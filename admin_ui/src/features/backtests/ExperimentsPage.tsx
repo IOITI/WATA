@@ -3,7 +3,7 @@ import {
   AdvancedDataTable,
   Alert,
   AlertDescription,
-  AnimatedTabs,
+  Tabs,
   Badge,
   Button,
   formatDateTime,
@@ -243,7 +243,7 @@ function LockboxPanel({ box }: { box: ResearchLockbox | null }) {
           <Button
             size="sm"
             disabled={!start}
-            isLoading={saveMutation.isPending}
+            pending={saveMutation.isPending}
             onClick={() => saveMutation.mutate({ start, end: end || null })}
           >
             Save the lock box
@@ -292,7 +292,7 @@ export function ExperimentsPage() {
         title="Experiments"
         description="The journal of the research: each idea with its hypothesis, the runs that tried it, how many configurations they tried, what was concluded, and how what was kept held on the days after it. Nothing here trades."
       />
-      <AnimatedTabs
+      <Tabs
         tabs={EXPERIMENTS_TABS.map((entry) => ({
           id: entry.id,
           label: entry.label,
@@ -300,7 +300,7 @@ export function ExperimentsPage() {
           // The checks running, said only when there are some.
           badge: entry.id === 'forward' && found?.forward?.active ? found.forward.active : undefined,
         }))}
-        activeTab={tab}
+        value={tab}
         onChange={setTab}
         linkComponent={RouterLink}
         renderContent={false}

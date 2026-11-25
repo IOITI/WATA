@@ -68,7 +68,7 @@ export function BackupsPanel({ configDoc, timeZone }: BackupsPanelProps) {
       toast({
         title: 'Trading parameters restored',
         description: `The version it replaced is kept as ${restored.backup}.`,
-        variant: 'success',
+        tone: 'success',
       })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['config'] }),

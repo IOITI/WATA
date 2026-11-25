@@ -31,7 +31,7 @@ export function WeekdayHourHeatmap({ rows, label }: { rows: WeekdayHourStats[]; 
         emptyText="No trade opened"
         legend={['Loss', 'Profit']}
         summary={`${money(grid.total)} over ${formatNumber(grid.trades)} trade${grid.trades === 1 ? '' : 's'}`}
-        ariaLabel={`${label}. ${KEYS} The figures are also in the table under it.`}
+        aria-label={`${label}. ${KEYS} The figures are also in the table under it.`}
       />
       <details className="text-xs">
         <summary className="w-fit cursor-pointer rounded-md text-muted-foreground hover:text-foreground">
@@ -89,7 +89,7 @@ export function DayCalendar({ daily, from, to, label }: { daily: DailyPerformanc
       emptyText="No trade closed"
       legend={['Loss', 'Profit']}
       summary={`${formatNumber(won)} day${won === 1 ? '' : 's'} won, ${formatNumber(lost)} lost`}
-      ariaLabel={`${label}. ${KEYS} The days are also in the Days table.`}
+      aria-label={`${label}. ${KEYS} The days are also in the Days table.`}
     />
   )
 }

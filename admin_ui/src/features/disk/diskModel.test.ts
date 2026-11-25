@@ -101,7 +101,7 @@ describe('the charts', () => {
     expect(freePoints(series).map((point) => point.free)).toEqual([80, 79.5, 79])
     expect(levelReferences(96 * GB, { warning_free_percent: 15, critical_free_percent: 5 })).toEqual([
       { value: 14.4, label: 'Low (15 %)', tone: 'warning' },
-      { value: 4.8, label: 'Critical (5 %)', tone: 'negative' },
+      { value: 4.8, label: 'Critical (5 %)', tone: 'danger' },
     ])
   })
 

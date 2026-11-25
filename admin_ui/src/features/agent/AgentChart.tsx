@@ -17,7 +17,7 @@ export function AgentChart({ chart }: { chart: Chart }) {
       <figcaption className="text-sm font-medium">{chart.title}</figcaption>
       {chart.kind === 'line' ? (
         <LineChart
-          ariaLabel={chart.title}
+          aria-label={chart.title}
           data={chartPoints(chart)}
           series={chart.series.map((series) => ({ key: series.key, label: series.label }))}
           references={chart.references.map((reference) => ({ value: reference.value, label: reference.label ?? undefined }))}
@@ -30,10 +30,10 @@ export function AgentChart({ chart }: { chart: Chart }) {
         />
       ) : (
         <BarChart
-          ariaLabel={chart.title}
+          aria-label={chart.title}
           data={(chart.categories ?? []).map((category) => ({ ...category }))}
           series={chart.series.map((series) => ({ key: series.key, label: series.label }))}
-          tone={chart.tone ?? 'series'}
+          colorBy={chart.tone ?? 'series'}
           height={HEIGHT}
           formatValue={format}
           showLegend={chart.series.length > 1}

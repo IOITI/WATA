@@ -4,7 +4,7 @@
 // (src/admin/ta_monitor.py); monitorModel.ts says them, monitorPanels.tsx draws a period of them.
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, AnimatedTabs, CheckList, cn, KpiTile, Meter, PageHeader, Panel, QueryState, Select, StatusBadge } from 'ioiti-ui'
+import { Alert, AlertDescription, Tabs, CheckList, cn, KpiTile, Meter, PageHeader, Panel, QueryState, Select, StatusBadge } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { Link, useSearchParams } from 'react-router'
 
@@ -119,13 +119,13 @@ export function MonitorPage() {
       {engineQuery.data && <EngineLine engine={engineQuery.data} />}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <AnimatedTabs
+        <Tabs
           tabs={(period?.periods ?? [hours]).map((offered) => ({
             id: String(offered),
             label: periodLabel(offered),
             href: monitorHref({ hours: offered, rule: address.rule }),
           }))}
-          activeTab={String(hours)}
+          value={String(hours)}
           onChange={(id) => go({ hours: Number(id) })}
           linkComponent={RouterLink}
           renderContent={false}

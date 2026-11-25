@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Button, ChangeList, DragToConfirm, QueryState, SettleModal, useToast } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Button, ChangeList, DragToConfirm, QueryState, Dialog, useToast } from 'ioiti-ui'
 import { useCallback, useMemo, useState } from 'react'
 
 import { diffConfigs, setAt } from '@/features/config/configModel'
@@ -46,7 +46,7 @@ export function RecorderSettingsDialog({ open, start = 'edit', onClose }: Record
   const config = configQuery.data
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title={start === 'add-instrument' ? 'Record another instrument' : 'Price recorder settings'}
@@ -58,7 +58,7 @@ export function RecorderSettingsDialog({ open, start = 'edit', onClose }: Record
         {/* Another revision read, another draft: what was typed against the old one is not kept. */}
         {config && open && <RecorderForm key={`${config.revision}|${start}`} config={config} start={start} onClose={onClose} />}
       </QueryState>
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -97,7 +97,7 @@ function RecorderForm({ config, start, onClose }: { config: RecorderConfig; star
       toast({
         title: 'Price recorder settings saved',
         description: `Previous version kept as ${saved.backup}. The recorder applies them at its next start.`,
-        variant: 'success',
+        tone: 'success',
       })
       await Promise.all(
         // The configuration page holds the file's revision: it must read the new one, or its next save is refused.
@@ -149,7 +149,7 @@ function RecorderForm({ config, start, onClose }: { config: RecorderConfig; star
           key={save.error?.message ?? 'first'}
           label="Slide to save"
           confirmedLabel={save.isPending ? 'Saving…' : 'Saved'}
-          variant="warning"
+          tone="warning"
           autoResetDelay={0}
           haptic={false}
           disabled={save.isPending}

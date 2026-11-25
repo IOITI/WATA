@@ -159,7 +159,7 @@ function StartCheck({ experiments, checks, full }: { experiments: Experiment[]; 
         <Button
           size="sm"
           disabled={!experimentId || !candidate || full}
-          isLoading={start.isPending}
+          pending={start.isPending}
           onClick={() => start.mutate({ experiment: experimentId, candidate })}
         >
           Start its forward check

@@ -70,7 +70,7 @@ function ConfigEditor({ catalog, doc, history, lastSaved, onSaved, dismissSaved 
     onSuccess: async (saved) => {
       setReviewing(false)
       onSaved(saved)
-      toast({ title: 'Configuration saved', description: `Previous version kept as ${saved.backup}.`, variant: 'success' })
+      toast({ title: 'Configuration saved', description: `Previous version kept as ${saved.backup}.`, tone: 'success' })
       await Promise.all(
         ['config', 'config-backups', 'config-history', 'session'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
       )
@@ -163,7 +163,7 @@ function ConfigEditor({ catalog, doc, history, lastSaved, onSaved, dismissSaved 
           variant="outline"
           size="sm"
           disabled={invalidCount > 0}
-          isLoading={preview.isPending && !reviewing}
+          pending={preview.isPending && !reviewing}
           onClick={() => preview.mutate(draft)}
         >
           Check
@@ -212,7 +212,7 @@ function ConfigEditor({ catalog, doc, history, lastSaved, onSaved, dismissSaved 
               <ReviewChanges catalog={catalog} preview={preview.data} />
               {agentOn && (
                 <div className="space-y-1">
-                  <Button variant="outline" size="sm" isLoading={askAgent.isPending} onClick={() => askAgent.mutate()}>
+                  <Button variant="outline" size="sm" pending={askAgent.isPending} onClick={() => askAgent.mutate()}>
                     Ask the AI agent first
                   </Button>
                   <p className="text-xs text-muted-foreground">

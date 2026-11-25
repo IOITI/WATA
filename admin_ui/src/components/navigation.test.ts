@@ -1,4 +1,5 @@
-import { menuEntry, PAGE_NOT_FOUND, sidebarSections, trailFor, UNNAMED } from 'ioiti-ui'
+import { menuEntry, sidebarSections, trailFor, UNNAMED } from 'ioiti-ui'
+import { en } from 'ioiti-ui/locales/en'
 import { describe, expect, it } from 'vitest'
 
 import { ADMIN_MENU, isWidePage, MENU, MENU_SECTIONS } from './navigation'
@@ -120,6 +121,7 @@ describe('where a page is', () => {
   })
 
   it('says of an address that is no page that it is none', () => {
+    const PAGE_NOT_FOUND = en.shell.pageNotFound
     expect(trailFor(ADMIN_MENU, '/nothing')).toEqual([{ label: PAGE_NOT_FOUND }])
     expect(trailFor(ADMIN_MENU, '/positions/nothing', { title: PAGE_NOT_FOUND })).toEqual([
       { label: 'Trading' }, { label: 'Positions', href: '/positions' }, { label: PAGE_NOT_FOUND },

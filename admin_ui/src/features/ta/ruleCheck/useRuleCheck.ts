@@ -61,6 +61,6 @@ export function useAskRuleTest(ask: (body: RuleTestAsked) => Promise<RuleChecksS
       void queryClient.invalidateQueries({ queryKey: ['rule-checks'] })
     },
     onError: (error) =>
-      toast({ title: 'The run test was not asked', description: error instanceof Error ? error.message : String(error), variant: 'error' }),
+      toast({ title: 'The run test was not asked', description: error instanceof Error ? error.message : String(error), tone: 'danger' }),
   })
 }

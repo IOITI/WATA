@@ -43,14 +43,14 @@ export function PendingRemovalsProvider({ children, duration = UNDO_MS }: { chil
         .then((result) => {
           if (result.kept.length > 0) {
             const what = result.kept.length === 1 ? '1 backtest was kept' : `${result.kept.length} backtests were kept`
-            toast({ title: what, description: result.kept[0].reason, variant: 'warning' })
+            toast({ title: what, description: result.kept[0].reason, tone: 'warning' })
           }
         })
         .catch((error: unknown) => {
           toast({
             title: 'The backtests could not be removed',
             description: error instanceof Error ? error.message : String(error),
-            variant: 'error',
+            tone: 'danger',
           })
         })
         .finally(async () => {

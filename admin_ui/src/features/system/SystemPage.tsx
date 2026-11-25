@@ -138,7 +138,7 @@ function DailyReport() {
     mutationFn: api.requestDailyStats,
     onSuccess: () => {
       setConfirming(false)
-      toast({ title: 'Daily report requested', description: 'It arrives on Telegram.', variant: 'success' })
+      toast({ title: 'Daily report requested', description: 'It arrives on Telegram.', tone: 'success' })
     },
   })
 

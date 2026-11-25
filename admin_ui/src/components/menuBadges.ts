@@ -20,7 +20,7 @@ export interface MenuFacts {
   agent?: AgentState
 }
 
-const DOWN: MenuBadge = { badge: 'Down', badgeTone: 'negative' }
+const DOWN: MenuBadge = { badge: 'Down', badgeTone: 'danger' }
 const WARNING: MenuBadge = { badge: 'Warning', badgeTone: 'warning' }
 
 /** The worst of some entries of the health, as a badge: nothing while they are well (or unknown, or off). */
@@ -45,7 +45,7 @@ export function menuBadges({ health, overview, session, agent }: MenuFacts): Rec
   const open = overview?.open_positions ?? []
   if (open.length > 0) badges.positions = { badge: open.length }
   const refused = open.filter((position) => (position.sell_refusals?.count ?? 0) > 0).length
-  if (refused > 0) badges.orders = { badge: `${refused} refused`, badgeTone: 'negative' }
+  if (refused > 0) badges.orders = { badge: `${refused} refused`, badgeTone: 'danger' }
 
   // The services a page is about, as the health judges them.
   badges.watchlist = healthBadge(services, ['watchlist_manager'])
@@ -53,7 +53,7 @@ export function menuBadges({ health, overview, session, agent }: MenuFacts): Rec
   badges['ta-monitor'] = healthBadge(services, ['ta_engine'])
   // Edge Watch says a warning for live trades judged broken or worth watching, and for a guard that cannot act.
   badges.performance = healthBadge(services, ['edge_watch'], DOWN, { badge: 'Watch', badgeTone: 'warning' })
-  badges.disk = healthBadge(services, ['disk'], { badge: 'Critical', badgeTone: 'negative' })
+  badges.disk = healthBadge(services, ['disk'], { badge: 'Critical', badgeTone: 'danger' })
 
   // The AI agent: a research task's question waits for the operator, then its pause, then what it is doing.
   if (agent?.enabled) {
@@ -67,7 +67,7 @@ export function menuBadges({ health, overview, session, agent }: MenuFacts): Rec
   // The System: Saxo's login first (nothing trades without it), the services, then a release and restarts.
   const saxoDown = services.some((service) => service.id === SAXO_SERVICE_ID && service.status === 'down')
   const release = session.release
-  if (saxoDown) badges.system = { badge: 'Authorise', badgeTone: 'negative' }
+  if (saxoDown) badges.system = { badge: 'Authorise', badgeTone: 'danger' }
   else if (health?.status === 'down') badges.system = DOWN
   else if (health?.status === 'warning') badges.system = WARNING
   else if (release?.applying) badges.system = { badge: 'Deploying', badgeTone: 'warning' }

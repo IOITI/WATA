@@ -86,7 +86,7 @@ export function TrackCone({ cone, track, label }: { cone: EdgeOwner['cone']; tra
   if (!cone || data.length < 2) return null
   return (
     <FanChart
-      ariaLabel={`${label} against where its reference’s paths went`}
+      aria-label={`${label} against where its reference’s paths went`}
       data={data}
       bands={[
         { lower: 'p5', upper: 'p95', label: '90 % of the paths' },

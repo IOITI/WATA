@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
   AlertDescription,
-  AnimatedTabs,
+  Tabs,
   Badge,
   Button,
   ButtonLink,
@@ -77,7 +77,7 @@ function CheckPage({ slugs }: { slugs: string[] }) {
     },
   })
   const button = (
-    <Button variant="outline" size="sm" disabled={!available || slugs.length === 0} isLoading={ask.isPending} onClick={() => ask.mutate()}>
+    <Button variant="outline" size="sm" disabled={!available || slugs.length === 0} pending={ask.isPending} onClick={() => ask.mutate()}>
       Check this page
     </Button>
   )
@@ -117,7 +117,7 @@ function Catalog({ families, family, concept, page, onPage, known }: {
           <CheckPage slugs={(listed.data?.indicators ?? []).map((indicator) => indicator.slug)} />
         </div>
       }
-      dense
+      density="compact"
     >
       <QueryState isPending={listed.isPending} error={listed.error} hasData={!!listed.data}>
         {listed.data && listed.data.indicators.length === 0 && <EmptyText>No indicator here.</EmptyText>}
@@ -157,7 +157,7 @@ function SearchResults({ query, family, families, known }: {
   const results = found.data?.results ?? []
   const group = (kind: LuxAlgoSearchResult['kind']) => results.filter((result) => result.kind === kind)
   return (
-    <Panel title={`Found for “${query}”`} description="Concepts explain an idea; indicators carry a Pine script." dense>
+    <Panel title={`Found for “${query}”`} description="Concepts explain an idea; indicators carry a Pine script." density="compact">
       <QueryState isPending={found.isPending} error={found.error} hasData={!!found.data}>
         {results.length === 0 && <EmptyText>Nothing in LuxAlgo&apos;s Library: try other words.</EmptyText>}
         {group('concept').length > 0 && (
@@ -216,7 +216,7 @@ function Checked() {
           </label>
         </div>
       }
-      dense
+      density="compact"
     >
       <QueryState isPending={listed.isPending} error={listed.error} hasData={!!listed.data}>
         {items.length === 0 && <EmptyText>None yet: an indicator is checked once WATA reads it whole, or when asked.</EmptyText>}
@@ -342,7 +342,7 @@ export function LuxAlgoPage() {
               LuxAlgo&apos;s Library, market trackers and prop-firm tools through the admin. It applies at the admin&apos;s next start.
             </p>
             <div className="mt-3">
-              <ButtonLink to="/config" variant="outline" size="sm">
+              <ButtonLink href="/config" variant="outline" size="sm">
                 Configuration
               </ButtonLink>
             </div>
@@ -351,9 +351,9 @@ export function LuxAlgoPage() {
         {status.data?.enabled && (
           <div className="space-y-6">
             <SignInPanel status={status.data} editable={editable} />
-            <AnimatedTabs
+            <Tabs
               tabs={VIEWS}
-              activeTab={view}
+              value={view}
               onChange={(next) => setParams(next === 'checked' ? { view: 'checked' } : {})}
               linkComponent={RouterLink}
               renderContent={false}

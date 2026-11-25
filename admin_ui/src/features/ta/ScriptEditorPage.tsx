@@ -6,7 +6,7 @@
 // in the header, as the Indicators list shows them.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertTitle, AnimatedTabs, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
+import { Alert, AlertTitle, Tabs, Button, ButtonLink, formatDateTime, Hint, Input, PageHeader, QueryState } from 'ioiti-ui'
 import { RouterLeaveGuard, RouterLink } from 'ioiti-ui/react-router'
 import { ChartSpline, FlaskConical, History, Radar, Save, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -207,7 +207,7 @@ function ScriptEditor({ id }: { id: string | undefined }) {
   const errors = check.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length
 
   const saveButton = (
-    <Button size="sm" leftIcon={<Save className="size-3.5" />} isLoading={saveMutation.isPending} disabled={!dirty} onClick={save}>
+    <Button size="sm" leftIcon={<Save className="size-3.5" />} pending={saveMutation.isPending} disabled={!dirty} onClick={save}>
       {dirty ? 'Save' : 'Saved'}
     </Button>
   )
@@ -265,13 +265,13 @@ function ScriptEditor({ id }: { id: string | undefined }) {
             {/* The next steps of a script that runs, each a page of its own: as saved, not as being edited. */}
             {script && kind !== 'library' && (
               <>
-                <ButtonLink to={chartsPath({ script: script.id })} variant="outline" size="sm" leftIcon={<ChartSpline className="size-3.5" />}>
+                <ButtonLink href={chartsPath({ script: script.id })} variant="outline" size="sm" leftIcon={<ChartSpline className="size-3.5" />}>
                   Open in Charts
                 </ButtonLink>
                 {backtestsEnabled && (
                   <Hint content={`Backtest version ${script.version}, the one saved last`}>
                     <ButtonLink
-                      to={`/backtests/new?script=${script.id}&version=${script.version}`}
+                      href={`/backtests/new?script=${script.id}&version=${script.version}`}
                       variant="outline"
                       size="sm"
                       leftIcon={<FlaskConical className="size-3.5" />}
@@ -280,15 +280,15 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                     </ButtonLink>
                   </Hint>
                 )}
-                <ButtonLink to={`/ta/signals?new=${script.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
+                <ButtonLink href={`/ta/signals?new=${script.id}`} variant="outline" size="sm" leftIcon={<Radar className="size-3.5" />}>
                   New signal rule
                 </ButtonLink>
-                <ButtonLink to={withAgent(searchParams, NEW)} variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />}>
+                <ButtonLink href={withAgent(searchParams, NEW)} variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />}>
                   Ask the AI agent
                 </ButtonLink>
                 {dirty && agentOn && (
                   <Hint content="The agent reads your changes, unsaved, checks them and proposes a fix you put in here, or not">
-                    <Button variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />} isLoading={review.isPending}
+                    <Button variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />} pending={review.isPending}
                       onClick={() => draft && review.mutate(draft)}>
                       Ask about this draft
                     </Button>
@@ -332,10 +332,10 @@ function ScriptEditor({ id }: { id: string | undefined }) {
         {draft && (
           <>
             {script && (
-              <AnimatedTabs
+              <Tabs
                 label="Views of the script"
                 tabs={tabs.map((entry: ScriptTab) => ({ id: entry, label: TAB_LABEL[entry], href: scriptTabHref(entry) }))}
-                activeTab={tab}
+                value={tab}
                 onChange={setTab}
                 linkComponent={RouterLink}
                 renderContent={false}
@@ -349,7 +349,7 @@ function ScriptEditor({ id }: { id: string | undefined }) {
                   <Button size="sm" variant="outline" onClick={() => void reload()}>
                     Reload it (drop these changes)
                   </Button>
-                  <Button size="sm" isLoading={copyMutation.isPending} onClick={() => copyMutation.mutate()}>
+                  <Button size="sm" pending={copyMutation.isPending} onClick={() => copyMutation.mutate()}>
                     Save these changes as a copy
                   </Button>
                 </div>

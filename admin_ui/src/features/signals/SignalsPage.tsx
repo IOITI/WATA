@@ -12,7 +12,7 @@ import {
   PageHeader,
   Panel,
   QueryState,
-  SpringSelect,
+  SelectMenu,
   useToast,
 } from 'ioiti-ui'
 import { Send } from 'lucide-react'
@@ -93,7 +93,7 @@ function SendSignal() {
         toast({
           title: `${actionLabel(sent.signal.action)} signal sent`,
           description: `The trader takes it on its next poll. Reference ${sent.signal_uuid.slice(0, 8)}.`,
-          variant: 'success',
+          tone: 'success',
         })
       }
       void queryClient.invalidateQueries({ queryKey: ['signals'] })
@@ -102,7 +102,7 @@ function SendSignal() {
 
   return (
     <div className="grid max-w-xl gap-4">
-      <SpringSelect label="Signal" options={ACTION_OPTIONS} value={action} onChange={setAction} />
+      <SelectMenu label="Signal" options={ACTION_OPTIONS} value={action} onChange={setAction} />
 
       {opens && (
         <>
@@ -113,7 +113,7 @@ function SendSignal() {
               </AlertDescription>
             </Alert>
           ) : (
-            <SpringSelect
+            <SelectMenu
               label="Indice"
               options={indices.map((name) => ({ value: name, label: name }))}
               value={selectedIndice}

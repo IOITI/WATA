@@ -113,7 +113,7 @@ export function TurboModelPanel() {
           <Button
             size="sm"
             leftIcon={<Ruler className="size-3.5" />}
-            isLoading={measure.isPending}
+            pending={measure.isPending}
             disabled={model.state === 'running' || !period.to}
             onClick={() => measure.mutate()}
           >

@@ -63,7 +63,7 @@ export function PendingChips({ fixed, pending, onRemove }: {
           onRemove={() => onRemove(entry.key)} />
       ) : (
         <AttachmentChip key={entry.key} label={entry.name} detail={fileDetail(entry)} icon={fileIcon(entry.name, entry.type)}
-          thumbnail={entry.preview} busy={entry.state === 'uploading'} tone={entry.state === 'error' ? 'danger' : 'neutral'}
+          thumbnail={entry.preview} pending={entry.state === 'uploading'} tone={entry.state === 'error' ? 'danger' : 'neutral'}
           onRemove={() => onRemove(entry.key)} />
       ))}
     </>

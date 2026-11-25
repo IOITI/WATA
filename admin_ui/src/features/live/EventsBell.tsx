@@ -1,21 +1,11 @@
 import { formatDateTime, NotificationBell } from 'ioiti-ui'
-import type { NotificationTone } from 'ioiti-ui'
 
 import { HoverPeekRouterLink } from '@/components/PeekRouterLink'
 import { useSession } from '@/features/auth/auth-context'
 
 import { useEventLog } from './eventLog'
-import type { LoggedEvent } from './eventLog'
 import { NotificationToggle } from './NotificationToggle'
 import { notificationsSupported } from './notifications'
-
-const TONE: Record<LoggedEvent['variant'], NotificationTone> = {
-  default: 'neutral',
-  info: 'info',
-  success: 'success',
-  warning: 'warning',
-  error: 'danger',
-}
 
 /**
  * What the live events told this tab, kept once their toasts are gone: each
@@ -34,7 +24,7 @@ export function EventsBell() {
         timestamp: formatDateTime(event.at, timezone),
         read: event.read,
         href: event.href ?? undefined,
-        tone: TONE[event.variant],
+        tone: event.tone,
       }))}
       onMarkAsRead={log.markRead}
       onMarkAllAsRead={log.markAllRead}

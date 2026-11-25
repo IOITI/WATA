@@ -9,7 +9,7 @@ import {
   AIResponseContent,
   Alert,
   AlertDescription,
-  AnimatedTabs,
+  Tabs,
   Badge,
   Button,
   ButtonLink,
@@ -114,12 +114,12 @@ function EntryDetails({ entry, timezone, onEdit, onForget }: {
         <Button size="sm" variant="outline" leftIcon={<Pencil className="size-3.5" />} onClick={onEdit}>
           Change
         </Button>
-        <Button size="sm" variant="outline" isLoading={lock.isPending}
+        <Button size="sm" variant="outline" pending={lock.isPending}
           leftIcon={entry.locked ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
           onClick={() => lock.mutate(!entry.locked)}>
           {entry.locked ? 'Let the agent change it' : 'Lock: the agent only reads it'}
         </Button>
-        <ButtonLink to={`?tab=history&find=${encodeURIComponent(entry.name)}`} size="sm" variant="outline"
+        <ButtonLink href={`?tab=history&find=${encodeURIComponent(entry.name)}`} size="sm" variant="outline"
           leftIcon={<History className="size-3.5" />}>
           Its history
         </ButtonLink>
@@ -224,7 +224,7 @@ function ChangeDetails({ line, onRestore, restoring }: {
         </div>
       )}
       {restorable(line) && (
-        <Button size="sm" variant="outline" leftIcon={<RotateCcw className="size-3.5" />} isLoading={restoring} onClick={onRestore}>
+        <Button size="sm" variant="outline" leftIcon={<RotateCcw className="size-3.5" />} pending={restoring} onClick={onRestore}>
           {line.action === 'forgotten' ? 'Bring it back' : 'Bring back this version'}
         </Button>
       )}
@@ -354,7 +354,7 @@ export function MemoryPage() {
                 disabled={figures.entries >= data.limits.entries}>
                 New entry
               </Button>
-              <Button size="sm" variant="outline" isLoading={pause.isPending}
+              <Button size="sm" variant="outline" pending={pause.isPending}
                 leftIcon={data.pause ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
                 onClick={() => pause.mutate(!data.pause)}>
                 {data.pause ? "Resume its changes" : 'Pause its changes'}
@@ -385,9 +385,9 @@ export function MemoryPage() {
               <KpiTile label="Locked" value={figures.locked} hint="the agent only reads them" />
               <KpiTile label="Last change" value={figures.last ? formatDateTime(figures.last, timezone, false) : 'None yet'} />
             </KpiGrid>
-            <AnimatedTabs
+            <Tabs
               tabs={tabs}
-              activeTab={tab}
+              value={tab}
               onChange={(next) => setSearchParams({ tab: parseTab(next) })}
               linkComponent={RouterLink}
               renderContent={false}

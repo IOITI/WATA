@@ -10,7 +10,7 @@ import {
   Panel,
   QueryState,
   SignedValue,
-  SmartComparison,
+  ComparisonTable,
 } from 'ioiti-ui'
 import type { ComparisonCategory, ComparisonFeature, ComparisonPlan } from 'ioiti-ui'
 import type { ReactNode } from 'react'
@@ -109,7 +109,7 @@ function Comparison({ runs }: { runs: BacktestRun[] }) {
   return (
     <>
       <Panel title="Side by side" bodyClassName="pt-2">
-        <SmartComparison
+        <ComparisonTable
           plans={plans}
           categories={categories}
           label="The runs side by side"

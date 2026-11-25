@@ -63,7 +63,7 @@ function HowHistory({ script, current, onRestore, restoring }: {
   const history = useQuery({ queryKey: historyKey(script.id), queryFn: () => api.taScriptHowHistory(script.id) })
   const [open, setOpen] = useState<number | null>(null)
   return (
-    <Panel title="Its revisions" description="Every save is kept: one put back becomes the newest." dense>
+    <Panel title="Its revisions" description="Every save is kept: one put back becomes the newest." density="compact">
       <QueryState isPending={history.isPending} error={history.error} hasData={!!history.data}>
         <ul aria-label="Its revisions" className="divide-y divide-border/60">
           {(history.data?.items ?? []).map((entry) => (
@@ -85,7 +85,7 @@ function HowHistory({ script, current, onRestore, restoring }: {
                     </Button>
                   )}
                   {entry.revision !== current && (
-                    <Button variant="outline" size="sm" leftIcon={<RotateCcw className="size-3.5" />} isLoading={restoring}
+                    <Button variant="outline" size="sm" leftIcon={<RotateCcw className="size-3.5" />} pending={restoring}
                       onClick={() => onRestore(entry)}>
                       Put this one back
                     </Button>
@@ -153,9 +153,9 @@ export function ScriptHowTab({ script, draft, onDraft }: {
     mutationFn: (entry: TaScriptHow) => api.saveTaScriptHow(script.id, entry.text, how.data?.revision ?? 0),
     onSuccess: (answer, entry) => {
       saved(answer)
-      toast({ title: `Revision ${entry.revision} put back, as revision ${answer.revision}`, variant: 'success' })
+      toast({ title: `Revision ${entry.revision} put back, as revision ${answer.revision}`, tone: 'success' })
     },
-    onError: (error) => toast({ title: 'It was not put back', description: error.message, variant: 'error' }),
+    onError: (error) => toast({ title: 'It was not put back', description: error.message, tone: 'danger' }),
   })
 
   const take = useMutation({
@@ -167,10 +167,10 @@ export function ScriptHowTab({ script, draft, onDraft }: {
       queryClient.setQueryData<TaScript>(['ta-script', script.id], (before) => (before ? { ...before, ...answer.script } : before))
       toast({
         title: answer.filled.includes('how') ? "LuxAlgo's write-up taken" : 'LuxAlgo gave no write-up of it',
-        variant: answer.filled.includes('how') ? 'success' : 'default',
+        tone: answer.filled.includes('how') ? 'success' : 'neutral',
       })
     },
-    onError: (error) => toast({ title: "LuxAlgo's write-up was not taken", description: error.message, variant: 'error' }),
+    onError: (error) => toast({ title: "LuxAlgo's write-up was not taken", description: error.message, tone: 'danger' }),
   })
 
   const edit = () => {
@@ -188,14 +188,14 @@ export function ScriptHowTab({ script, draft, onDraft }: {
     <div className="flex flex-wrap gap-2">
       {agentOn && (
         <Hint content="Its requests include “Write its How it works”: what it writes is kept here, every revision too">
-          <ButtonLink to={withAgent(params, NEW)} variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />}>
+          <ButtonLink href={withAgent(params, NEW)} variant="outline" size="sm" leftIcon={<Sparkles className="size-3.5" />}>
             Ask the AI agent
           </ButtonLink>
         </Hint>
       )}
       {fromLuxAlgo && luxalgoOn && (
         <Hint content="LuxAlgo's write-up of the indicator it was taken from, as a new revision: this one stays in the history">
-          <Button variant="outline" size="sm" leftIcon={<BookOpen className="size-3.5" />} isLoading={take.isPending} onClick={() => take.mutate()}>
+          <Button variant="outline" size="sm" leftIcon={<BookOpen className="size-3.5" />} pending={take.isPending} onClick={() => take.mutate()}>
             Take LuxAlgo&apos;s
           </Button>
         </Hint>
@@ -220,7 +220,7 @@ export function ScriptHowTab({ script, draft, onDraft }: {
             <Button variant="ghost" size="sm" onClick={() => { setConflict(null); onDraft(null) }}>
               {changed ? 'Drop the changes' : 'Cancel'}
             </Button>
-            <Button size="sm" leftIcon={<Save className="size-3.5" />} isLoading={save.isPending} disabled={!changed}
+            <Button size="sm" leftIcon={<Save className="size-3.5" />} pending={save.isPending} disabled={!changed}
               onClick={() => save.mutate({ text: draft.text, revision: draft.revision })}>
               Save
             </Button>
@@ -236,7 +236,7 @@ export function ScriptHowTab({ script, draft, onDraft }: {
                 <Button size="sm" variant="outline" onClick={() => { setConflict(null); onDraft(null); void how.refetch() }}>
                   Read theirs (drop mine)
                 </Button>
-                <Button size="sm" isLoading={save.isPending} onClick={() => void overIt()}>
+                <Button size="sm" pending={save.isPending} onClick={() => void overIt()}>
                   Save mine over it
                 </Button>
               </div>

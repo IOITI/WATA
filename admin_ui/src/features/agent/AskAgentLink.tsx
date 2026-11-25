@@ -24,14 +24,14 @@ export function AskAgentLink({ subject, label = 'Ask the AI agent', compact = fa
   if (compact) {
     return (
       <Hint content={label}>
-        <ButtonLink to={to} size="sm" variant="ghost" aria-label={label}>
+        <ButtonLink href={to} size="sm" variant="ghost" aria-label={label}>
           <Sparkles aria-hidden className="size-3.5" />
         </ButtonLink>
       </Hint>
     )
   }
   return (
-    <ButtonLink to={to} size="sm" variant="outline" leftIcon={<Sparkles aria-hidden className="size-3.5" />}>
+    <ButtonLink href={to} size="sm" variant="outline" leftIcon={<Sparkles aria-hidden className="size-3.5" />}>
       {label}
     </ButtonLink>
   )

@@ -135,7 +135,7 @@ function LinkedBacktest({ rule, check }: { rule: TaRule; check: LiveCheck }) {
                     }))}
                   />
                 </div>
-                <Button size="sm" isLoading={link.isPending} onClick={() => link.mutate(chosen || items[0].configuration)}>
+                <Button size="sm" pending={link.isPending} onClick={() => link.mutate(chosen || items[0].configuration)}>
                   Link it
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setChoosing(false)}>
@@ -182,7 +182,7 @@ function LinkedBacktest({ rule, check }: { rule: TaRule; check: LiveCheck }) {
         ) : (
           <>
             <span>Its nightly is off: the days after its newest run have no backtest.</span>
-            <Button size="sm" variant="outline" isLoading={nightly.isPending} onClick={() => nightly.mutate(check.link!.configuration)}>
+            <Button size="sm" variant="outline" pending={nightly.isPending} onClick={() => nightly.mutate(check.link!.configuration)}>
               Switch its nightly on
             </Button>
           </>
@@ -190,7 +190,7 @@ function LinkedBacktest({ rule, check }: { rule: TaRule; check: LiveCheck }) {
         <Button size="sm" variant="ghost" onClick={() => setChoosing(true)}>
           Another
         </Button>
-        <Button size="sm" variant="ghost" isLoading={unlink.isPending} onClick={() => unlink.mutate()}>
+        <Button size="sm" variant="ghost" pending={unlink.isPending} onClick={() => unlink.mutate()}>
           Unlink
         </Button>
       </div>
@@ -249,7 +249,7 @@ function Calibration({ check, timeZone }: { check: LiveCheck; timeZone: string }
           </RunPeekLink>
         )}
         {run && check.calibrated?.state === 'done' && (
-          <ButtonLink to={`/backtests/new?again=${run}`} variant="outline" size="sm">
+          <ButtonLink href={`/backtests/new?again=${run}`} variant="outline" size="sm">
             Make a run with them
           </ButtonLink>
         )}

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.102.0 - The console on ioiti-ui 1.0, and a page that fails says why
+
+**Release date:** 2026-11-25
+
+The admin's interface moves from ioiti-ui 0.23.2 to 1.0.0-rc.2, which removes the names its versions 0.29 to 0.31 had deprecated: EasyUI's names by motion (`SettleModal`, `AnimatedTabs`, `Flysheet`, `SpringSelect`, `StretchSwitch`, `DynamicIsland`…) give way to names by role (`Dialog`, `Tabs`, `Sheet`, `SelectMenu`, `Switch`, `StatusIsland`…), and props to one convention (`href`, `pending`, `tone`, `aria-label`). ioiti-ui's codemod rewrote 106 files; the rest was WATA's own tones (the engine monitor's, the agent's meters, the disk's levels, the live events' toasts) moved to the package's `success` and `danger`.
+
+- **What the versions bring to the pages**: dialogs, the phone's drawer, the selects, the bell and the sheets keep and give back the focus as they should, and are read whole by a screen reader; toasts are said as they come, an error at once; a frame that scrolls is reached with Tab; a count of one is said in the singular and counts of a thousand are grouped; the date pickers' weeks start on Monday; a chart's compact ticks read "1.2k".
+- **A page that fails shows why inside the shell** (ioiti-ui's `RouterErrorPage`): a page that throws as it draws says "Something went wrong" in place of itself, the menu kept, with Try again; a page whose file a deploy replaced while its tab was open says it could not be loaded and offers Reload. Before, the whole interface went blank.
+- **And it is reported to the admin's log**: each such error once a minute on a page (`POST /api/client-errors`, ten lines a minute at most), shown on the Logs page under Admin, its name, message and first lines of stack, the page's path but never its query, cleaned of secrets as every line is. Nothing else is kept or sent.
+- The bell keeps the events a tab was told of before the deploy.
+- Only the admin changes (its interface and one route).
+
 ## v0.101.0 - A signal's way to its position, moment by moment
 
 **Release date:** 2026-11-24

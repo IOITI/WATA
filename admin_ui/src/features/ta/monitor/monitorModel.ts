@@ -2,7 +2,7 @@
 // minutes, the charts' lines and gaps, the bars of the delivery steps, the results beside the days on
 // paper. The figures and the checks are the server's (src/admin/ta_monitor.py): this only reads them.
 
-import { formatDateTime, formatNumber, formatSpan, formatWait } from 'ioiti-ui'
+import { formatDateTime, formatNumber, formatSpan, formatWait, type MeterTone } from 'ioiti-ui'
 
 import type {
   BacktestPaper,
@@ -62,13 +62,14 @@ export function limitText(milliseconds: number): string {
   return milliseconds < 1000 ? formatWait(milliseconds) : formatSpan(milliseconds / 1000)
 }
 
-export type MonitorTone = 'neutral' | 'positive' | 'warning' | 'negative'
+/** A figure's tone against its limit, as the page's meters draw it. */
+export type MonitorTone = MeterTone
 
 /** A figure against its limit: within the share the checks fail past, past it, past the limit itself. */
 export function toneOf(value: number | null | undefined, limit: number | null | undefined, share: number): MonitorTone {
   if (value === null || value === undefined || !limit) return 'neutral'
   const ratio = value / limit
-  return ratio >= 1 ? 'negative' : ratio > share ? 'warning' : 'positive'
+  return ratio >= 1 ? 'danger' : ratio > share ? 'warning' : 'success'
 }
 
 function ratioOf(value: number | null | undefined, limit: number | null | undefined): number | null {

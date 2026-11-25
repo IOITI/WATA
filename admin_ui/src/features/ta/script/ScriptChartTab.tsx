@@ -105,14 +105,14 @@ export function ScriptChartTab({ script, value, onChange, prepared, diagnostics,
           <div className="flex flex-wrap gap-2">
             {script.own_picture && (
               <Hint content="The list shows LuxAlgo's picture of it again, or none">
-                <Button variant="ghost" size="sm" leftIcon={<ImageOff className="size-3.5" />} isLoading={picture.drop.isPending}
+                <Button variant="ghost" size="sm" leftIcon={<ImageOff className="size-3.5" />} pending={picture.drop.isPending}
                   onClick={() => picture.drop.mutate(script.id)}>
                   Remove the picture
                 </Button>
               </Hint>
             )}
             <Hint content="What the chart shows now becomes the script's picture in the Indicators list">
-              <Button variant="outline" size="sm" leftIcon={<Camera className="size-3.5" />} isLoading={taking || picture.set.isPending}
+              <Button variant="outline" size="sm" leftIcon={<Camera className="size-3.5" />} pending={taking || picture.set.isPending}
                 disabled={!known} onClick={() => void take()}>
                 Take as picture
               </Button>

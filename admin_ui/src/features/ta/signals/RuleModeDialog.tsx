@@ -59,7 +59,7 @@ export function RuleModeDialog({ change, revision, readiness, onClose, proposal,
             : saved.rule.mode === 'shadow'
               ? 'Its signals are journaled, never sent.'
               : 'The engine stops running it.',
-        variant: 'success',
+        tone: 'success',
       })
       await refresh()
     },

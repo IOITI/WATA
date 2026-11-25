@@ -95,7 +95,7 @@ export function PropFirmPanel({ run }: { run: BacktestRun }) {
   const figures = state.data?.figures
   const kept = state.data?.kept
   const button = (
-    <Button size="sm" variant="outline" leftIcon={<Scale className="size-3.5" aria-hidden />} isLoading={check.isPending}
+    <Button size="sm" variant="outline" leftIcon={<Scale className="size-3.5" aria-hidden />} pending={check.isPending}
       disabled={!figures || typeof asked === 'string'} onClick={() => typeof asked !== 'string' && check.mutate(asked)}>
       {kept ? 'Check again' : 'Check with LuxAlgo'}
     </Button>

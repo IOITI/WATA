@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AnimatedTabs, Button, ButtonLink, formatBytes, formatDuration, PageHeader, QueryState, Select, SettleModal } from 'ioiti-ui'
+import { Tabs, Button, ButtonLink, formatBytes, formatDuration, PageHeader, QueryState, Select, Dialog } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { FlaskConical, Newspaper, Plus } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
@@ -73,7 +73,7 @@ function RunFilters({
         field('tag', 'Tag', [['', 'Any'], ...[...new Set([...tags, ...(filter.tag ? [filter.tag] : [])])].map((tag): [string, string] => [tag, tag])])}
       {view === 'configurations' && field('nightly', 'Each evening', [['', 'Any'], ['on', 'Made again'], ['off', 'Not']])}
       {narrowed && (
-        <ButtonLink to={view === 'runs' ? '/backtests?view=runs' : '/backtests'} variant="ghost" size="sm">
+        <ButtonLink href={view === 'runs' ? '/backtests?view=runs' : '/backtests'} variant="ghost" size="sm">
           Clear filters
         </ButtonLink>
       )}
@@ -123,7 +123,7 @@ function RemakeLine({
             {run.name}
           </Link>
         ))}
-        <Button variant="ghost" size="sm" isLoading={stop.isPending} onClick={() => stop.mutate()}>
+        <Button variant="ghost" size="sm" pending={stop.isPending} onClick={() => stop.mutate()}>
           Stop
         </Button>
       </>
@@ -137,7 +137,7 @@ function RemakeLine({
             `; ${remaking.failed.length} could not be, each said under the run it was to make again`}
           {remaking.stopped > 0 && `; ${remaking.stopped} stopped`}.
         </span>
-        <Button variant="ghost" size="sm" isLoading={stop.isPending} onClick={() => stop.mutate()}>
+        <Button variant="ghost" size="sm" pending={stop.isPending} onClick={() => stop.mutate()}>
           Dismiss
         </Button>
       </>
@@ -163,7 +163,7 @@ function RemakeLine({
           {line}
         </div>
       )}
-      <SettleModal
+      <Dialog
         open={asking}
         onClose={() => setAsking(false)}
         title="Make the runs made with older code again?"
@@ -173,7 +173,7 @@ function RemakeLine({
             <Button variant="ghost" size="sm" onClick={() => setAsking(false)}>
               Not now
             </Button>
-            <Button size="sm" isLoading={ask.isPending} disabled={!found || found.runs === 0} onClick={() => ask.mutate()}>
+            <Button size="sm" pending={ask.isPending} disabled={!found || found.runs === 0} onClick={() => ask.mutate()}>
               Make {found?.runs === 1 ? 'it' : 'them'} again
             </Button>
           </>
@@ -200,7 +200,7 @@ function RemakeLine({
             {ask.error.message}
           </p>
         )}
-      </SettleModal>
+      </Dialog>
     </>
   )
 }
@@ -311,13 +311,13 @@ export function BacktestsPage() {
         actions={
           enabled && (
             <>
-              <ButtonLink to="/backtests/paper" variant="outline" size="sm" leftIcon={<Newspaper className="size-3.5" />}>
+              <ButtonLink href="/backtests/paper" variant="outline" size="sm" leftIcon={<Newspaper className="size-3.5" />}>
                 Paper trading
               </ButtonLink>
-              <ButtonLink to="/backtests/experiments" variant="outline" size="sm" leftIcon={<FlaskConical className="size-3.5" />}>
+              <ButtonLink href="/backtests/experiments" variant="outline" size="sm" leftIcon={<FlaskConical className="size-3.5" />}>
                 Experiments
               </ButtonLink>
-              <ButtonLink to="/backtests/new" size="sm" leftIcon={<Plus className="size-3.5" />}>
+              <ButtonLink href="/backtests/new" size="sm" leftIcon={<Plus className="size-3.5" />}>
                 New backtest
               </ButtonLink>
             </>
@@ -332,12 +332,12 @@ export function BacktestsPage() {
           <QueryState isPending={runsQuery.isPending} error={runsQuery.error} hasData={!!runs}>
             {runs && (
               <div className="flex flex-col gap-2">
-                <AnimatedTabs
+                <Tabs
                   tabs={[
                     { id: 'configurations', label: 'Configurations', href: viewHref('configurations') },
                     { id: 'runs', label: 'Every run', href: viewHref('runs') },
                   ]}
-                  activeTab={view}
+                  value={view}
                   onChange={(tab) =>
                     setParams(
                       (current) => {
@@ -420,7 +420,7 @@ export function BacktestsPage() {
         </div>
       )}
 
-      <SettleModal
+      <Dialog
         open={clearing}
         onClose={() => setClearing(false)}
         title="Remove the former backtester's runs?"
@@ -430,7 +430,7 @@ export function BacktestsPage() {
             <Button variant="ghost" size="sm" onClick={() => setClearing(false)}>
               Keep them
             </Button>
-            <Button variant="destructive" size="sm" isLoading={clearMutation.isPending} onClick={() => clearMutation.mutate()}>
+            <Button variant="danger" size="sm" pending={clearMutation.isPending} onClick={() => clearMutation.mutate()}>
               Remove
             </Button>
           </>
@@ -445,7 +445,7 @@ export function BacktestsPage() {
             {clearMutation.error.message}
           </p>
         )}
-      </SettleModal>
+      </Dialog>
     </>
   )
 }

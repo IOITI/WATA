@@ -72,7 +72,7 @@ export function StressPanel({ run }: { run: BacktestRun }) {
             size="sm"
             variant="outline"
             leftIcon={<Gauge className="size-3.5" />}
-            isLoading={ask.isPending && ask.variables === 'fills'}
+            pending={ask.isPending && ask.variables === 'fills'}
             disabled={Boolean(latest && isActive(latest.status.state))}
             onClick={() => ask.mutate('fills')}
           >
@@ -82,7 +82,7 @@ export function StressPanel({ run }: { run: BacktestRun }) {
             size="sm"
             variant="outline"
             leftIcon={<Dices className="size-3.5" />}
-            isLoading={ask.isPending && ask.variables === 'noise'}
+            pending={ask.isPending && ask.variables === 'noise'}
             disabled={Boolean(noisy && isActive(noisy.status.state))}
             onClick={() => ask.mutate('noise')}
           >

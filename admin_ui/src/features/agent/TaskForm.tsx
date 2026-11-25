@@ -84,7 +84,7 @@ export function TaskForm({ onStarted }: { onStarted: (id: string) => void }) {
           <TellToggle state={state.data} tell={tell} onChange={setTell} task />
         </div>
         <Hint content={why ?? undefined} wrap={!!why}>
-          <Button type="submit" size="sm" leftIcon={<FlaskConical className="size-3.5" />} disabled={!!why} isLoading={start.isPending}>
+          <Button type="submit" size="sm" leftIcon={<FlaskConical className="size-3.5" />} disabled={!!why} pending={start.isPending}>
             Start the task
           </Button>
         </Hint>

@@ -117,7 +117,7 @@ export function ActionProposal({ conversationId, proposal }: { conversationId: s
       <Seen action={action} />
       {proposal.status === 'proposed' && (fresh && actionsEnabled ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant={action.kind === 'close_position' ? 'destructive' : 'primary'} leftIcon={<Zap className="size-3.5" />}
+          <Button size="sm" variant={action.kind === 'close_position' ? 'danger' : 'primary'} leftIcon={<Zap className="size-3.5" />}
             onClick={() => setOpen(true)}>
             {actionSaid(action)}…
           </Button>
@@ -132,7 +132,7 @@ export function ActionProposal({ conversationId, proposal }: { conversationId: s
           {actionsEnabled
             ? 'Proposed over 30 minutes ago: the situation may have changed. '
             : 'Operator actions are disabled in the configuration (admin.actions_enabled). '}
-          <ButtonLink to={page.to} size="sm" variant="ghost">Go to {page.label}</ButtonLink>
+          <ButtonLink href={page.to} size="sm" variant="ghost">Go to {page.label}</ButtonLink>
         </p>
       ))}
       {refused && proposal.status === 'proposed' && (

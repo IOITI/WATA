@@ -3,7 +3,7 @@
 // (saving it then makes a new version: nothing is lost).
 
 import { useQuery } from '@tanstack/react-query'
-import { Button, cn, formatDateTime, SettleModal } from 'ioiti-ui'
+import { Button, cn, formatDateTime, Dialog } from 'ioiti-ui'
 import { useState } from 'react'
 
 import { ClaudeBadge } from '@/components/status'
@@ -39,7 +39,7 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
   })
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title={`History of ${script.name}`}
@@ -108,6 +108,6 @@ export function HistoryDialog({ open, onClose, script, current, onRestore }: His
           )}
         </div>
       </div>
-    </SettleModal>
+    </Dialog>
   )
 }

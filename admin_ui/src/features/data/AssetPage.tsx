@@ -1,5 +1,5 @@
 import { keepPreviousData, skipToken, useQuery } from '@tanstack/react-query'
-import { AnimatedTabs, Button, DateRangePicker, formatDay, PageHeader, Panel, QueryState, toIsoDay } from 'ioiti-ui'
+import { Tabs, Button, DateRangePicker, formatDay, PageHeader, Panel, QueryState, toIsoDay } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { useCallback, useMemo, useState } from 'react'
@@ -224,9 +224,9 @@ function AssetView({ details }: { details: AssetDetails }) {
         )}
       </p>
 
-      <AnimatedTabs
+      <Tabs
         tabs={tabs}
-        activeTab={tab}
+        value={tab}
         onChange={(next) => show(view, parseTab(next))}
         linkComponent={RouterLink}
         renderContent={false}

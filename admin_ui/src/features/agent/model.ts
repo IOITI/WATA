@@ -873,8 +873,8 @@ export function tokensText(tokens: number): string {
 }
 
 /** How full a window is, as a meter's tone: past three quarters it is worth watching, past nine tenths near its end. */
-export function contextTone(ratio: number): 'neutral' | 'warning' | 'negative' {
-  return ratio >= 0.9 ? 'negative' : ratio >= 0.75 ? 'warning' : 'neutral'
+export function contextTone(ratio: number): 'neutral' | 'warning' | 'danger' {
+  return ratio >= 0.9 ? 'danger' : ratio >= 0.75 ? 'warning' : 'neutral'
 }
 
 export const PART_LABEL: Record<AgentContextPart, string> = {

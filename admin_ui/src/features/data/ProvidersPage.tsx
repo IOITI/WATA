@@ -12,7 +12,7 @@ import {
   PageHeader,
   Panel,
   QueryState,
-  SettleModal,
+  Dialog,
   StatusBadge,
 } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
@@ -147,7 +147,7 @@ function CatalogDialog({
   onSetUp: (item: CatalogItem) => void
 }) {
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title="Add a provider"
@@ -184,7 +184,7 @@ function CatalogDialog({
                 ) : (
                   // Set up on its own page: a link, which can be opened in another tab.
                   <ButtonLink
-                    to={`${PROVIDERS_PATH}/${item.entry.id}`}
+                    href={`${PROVIDERS_PATH}/${item.entry.id}`}
                     size="sm"
                     onClick={(event) => {
                       if (isPlainClick(event)) onClose()
@@ -216,7 +216,7 @@ function CatalogDialog({
           </li>
         ))}
       </ul>
-    </SettleModal>
+    </Dialog>
   )
 }
 

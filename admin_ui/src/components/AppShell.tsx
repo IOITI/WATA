@@ -99,7 +99,7 @@ function Shell() {
           <StateSummary
             label="Status"
             items={states}
-            footer={<TextLink to="/system" variant="quiet">Every service, on the System page</TextLink>}
+            footer={<TextLink href="/system" variant="quiet">Every service, on the System page</TextLink>}
           />
         }
         topBarEnd={

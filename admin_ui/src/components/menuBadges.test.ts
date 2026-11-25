@@ -40,7 +40,7 @@ describe("the sidebar's badges", () => {
       overview: overview([{ position_id: '1' }, { position_id: '2', sell_refusals: { count: 3 } as Position['sell_refusals'] }], '2026-11-19T08:00:00Z'),
     })
     expect(badges.positions).toEqual({ badge: 2 })
-    expect(badges.orders).toEqual({ badge: '1 refused', badgeTone: 'negative' })
+    expect(badges.orders).toEqual({ badge: '1 refused', badgeTone: 'danger' })
     expect(badges.dashboard).toEqual({ badge: 'Paused', badgeTone: 'warning' })
   })
 
@@ -56,16 +56,16 @@ describe("the sidebar's badges", () => {
       ]),
     })
     expect(badges.providers).toEqual({ badge: 'Warning', badgeTone: 'warning' })
-    expect(badges['ta-monitor']).toEqual({ badge: 'Down', badgeTone: 'negative' })
-    expect(badges.disk).toEqual({ badge: 'Critical', badgeTone: 'negative' })
+    expect(badges['ta-monitor']).toEqual({ badge: 'Down', badgeTone: 'danger' })
+    expect(badges.disk).toEqual({ badge: 'Critical', badgeTone: 'danger' })
     expect(badges.performance).toEqual({ badge: 'Watch', badgeTone: 'warning' })
     expect(badges.watchlist).toEqual({ badge: 'Warning', badgeTone: 'warning' })
-    expect(badges.system).toEqual({ badge: 'Down', badgeTone: 'negative' })
+    expect(badges.system).toEqual({ badge: 'Down', badgeTone: 'danger' })
   })
 
   it("say Saxo's login first on the System, then a release, then a restart", () => {
     const saxo = health('down', [service('saxo', 'down')])
-    expect(menuBadges({ session: SESSION, health: saxo }).system).toEqual({ badge: 'Authorise', badgeTone: 'negative' })
+    expect(menuBadges({ session: SESSION, health: saxo }).system).toEqual({ badge: 'Authorise', badgeTone: 'danger' })
 
     const waiting = { ...SESSION, release: { newest: '0.95.0', containers: {}, waiting: ['admin1'], applying: false } }
     expect(menuBadges({ session: waiting, health: health('ok', []) }).system).toEqual({ badge: 'Release', badgeTone: 'warning' })

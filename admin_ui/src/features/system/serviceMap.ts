@@ -4,10 +4,19 @@
  * changed here too. A link goes from the caller to what it calls or writes to.
  */
 
-import { HEALTH_STATUS_LABEL } from 'ioiti-ui'
 import type { TraceConnection, TraceNode } from 'ioiti-ui'
+import { en } from 'ioiti-ui/locales/en'
 
-import type { ServiceHealth } from '@/lib/types'
+import type { ServiceHealth, ServiceStatus } from '@/lib/types'
+
+/** A health in a word, as ioiti-ui's StatusBadge says it in English (its catalogue's `status`). */
+const HEALTH_LABEL: Record<ServiceStatus, string> = {
+  ok: en.status.healthOk,
+  warning: en.status.healthWarning,
+  down: en.status.healthDown,
+  unknown: en.status.healthUnknown,
+  disabled: en.status.healthDisabled,
+}
 
 export interface MapNode {
   id: string
@@ -83,7 +92,7 @@ export function serviceMap(services: ServiceHealth[]): TraceNode[] {
       x: node.x,
       y: node.y,
       status,
-      statusLabel: HEALTH_STATUS_LABEL[status],
+      statusLabel: HEALTH_LABEL[status],
       detail: service ? service.detail : 'Not in the health summary',
     }
   })

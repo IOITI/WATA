@@ -62,7 +62,7 @@ export function SignInPanel({ status, editable }: { status: LuxAlgoStatus; edita
           </Badge>
           {status.signed_in
             ? control(
-                <Button variant="ghost" size="sm" disabled={!!locked} isLoading={signOut.isPending} onClick={() => signOut.mutate()}>
+                <Button variant="ghost" size="sm" disabled={!!locked} pending={signOut.isPending} onClick={() => signOut.mutate()}>
                   Sign out
                 </Button>,
               )
@@ -72,7 +72,7 @@ export function SignInPanel({ status, editable }: { status: LuxAlgoStatus; edita
                   size="sm"
                   rightIcon={<ExternalLink className="size-3.5" aria-hidden />}
                   disabled={!!locked}
-                  isLoading={begin.isPending}
+                  pending={begin.isPending}
                   onClick={() => begin.mutate()}
                 >
                   Sign in to LuxAlgo
@@ -106,7 +106,7 @@ export function SignInPanel({ status, editable }: { status: LuxAlgoStatus; edita
               </FormControl>
               <FormDescription>The whole address: its state shows it comes from the sign-in begun here, ten minutes at most.</FormDescription>
             </FormItem>
-            <Button size="sm" disabled={!address.trim()} isLoading={paste.isPending} onClick={() => paste.mutate()}>
+            <Button size="sm" disabled={!address.trim()} pending={paste.isPending} onClick={() => paste.mutate()}>
               Finish the sign-in
             </Button>
           </div>

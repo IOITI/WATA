@@ -66,6 +66,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/audit"),
     ("GET", "/api/events"),
     ("GET", "/api/system/health"),
+    ("POST", "/api/client-errors"),
     ("GET", "/api/system/disk"),
     ("POST", "/api/system/disk/projection"),
     ("GET", "/api/system/disk/cleanups"),

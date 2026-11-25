@@ -160,6 +160,7 @@ import type {
   PositionChartRefs,
   Watchlist,
   WebhookState,
+  ClientErrorBody,
 } from './types'
 
 export class ApiError extends Error {
@@ -298,6 +299,12 @@ export const api = {
       expectUnauthorized: true,
     }),
   logout: () => request<void>('DELETE', '/api/session'),
+  /**
+   * What failed in the interface, for the admin's log (`src/lib/clientErrors.ts`): a session that ended answers 401,
+   * which must not send the page to the sign-in on its own.
+   */
+  reportClientError: (body: ClientErrorBody) =>
+    request<void>('POST', '/api/client-errors', { body, expectUnauthorized: true }),
 
   overview: () => request<Overview>('GET', '/api/overview'),
   positions: (params: DateRangeParams & { status?: 'open' | 'closed' } = {}) =>

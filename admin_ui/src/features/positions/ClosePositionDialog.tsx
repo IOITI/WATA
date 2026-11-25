@@ -41,7 +41,7 @@ export function ClosePositionDialog({ position, open, onClose, proposal, onDone,
         toast({
           title: 'Close requested',
           description: 'The position monitor sells it now; the result shows here and on Telegram.',
-          variant: 'success',
+          tone: 'success',
         })
       }
       void queryClient.invalidateQueries({ queryKey: ['overview'] })

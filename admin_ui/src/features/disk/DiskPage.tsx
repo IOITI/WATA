@@ -6,7 +6,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   Alert,
   AlertDescription,
-  AnimatedTabs,
+  Tabs,
   BarChart,
   Button,
   Disclosure,
@@ -76,7 +76,7 @@ function NowTiles({ overview }: { overview: DiskOverview }) {
   const system = sample?.filesystems.find((one) => one.wata) ?? sample?.filesystems[0]
   if (!system || judged.level === 'none') return null
   const usedRatio = (system.total - system.available) / system.total
-  const tone = judged.level === 'critical' ? 'negative' : judged.level === 'ok' ? 'neutral' : 'warning'
+  const tone = judged.level === 'critical' ? 'danger' : judged.level === 'ok' ? 'neutral' : 'warning'
   const over = samplesOver(sample?.first_at, sample?.at)
   const meter = (
     <Meter
@@ -96,7 +96,7 @@ function NowTiles({ overview }: { overview: DiskOverview }) {
       {judged.level === 'ok' ? (
         <KpiTile {...free}>{meter}</KpiTile>
       ) : (
-        <KpiTile {...free} tone={tone === 'negative' ? 'negative' : 'warning'} toneLabel={LEVEL_LABEL[judged.level]}>
+        <KpiTile {...free} tone={tone === 'danger' ? 'danger' : 'warning'} toneLabel={LEVEL_LABEL[judged.level]}>
           {meter}
         </KpiTile>
       )}
@@ -210,7 +210,7 @@ function DaysPanel({ overview }: { overview: DiskOverview }) {
           timeZone={timezone}
           formatValue={gb}
           formatTick={gbTick}
-          ariaLabel="Free space of the disk at each sample"
+          aria-label="Free space of the disk at each sample"
         />
         <BarChart
           data={dailyStacks(overview.series)}
@@ -218,7 +218,7 @@ function DaysPanel({ overview }: { overview: DiskOverview }) {
           variant="stacked"
           formatValue={gb}
           formatTick={gbTick}
-          ariaLabel="What each group took at the end of each day"
+          aria-label="What each group took at the end of each day"
         />
       </div>
     </Panel>
@@ -314,10 +314,10 @@ function ProjectionPanel({ overview }: { overview: DiskOverview }) {
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         {/* Held to the panel (a flex item grows to its content): on a phone its tabs scroll, as ioiti-ui's do. */}
-        <AnimatedTabs
+        <Tabs
           className="min-w-0 max-w-full"
           tabs={overview.horizons.map((days) => ({ id: String(days), label: HORIZON_LABEL[days] ?? `${days} days` }))}
-          activeTab={String(horizon)}
+          value={String(horizon)}
           onChange={(id) => setHorizon(Number(id))}
           renderContent={false}
         />
@@ -344,7 +344,7 @@ function ProjectionPanel({ overview }: { overview: DiskOverview }) {
               formatValue={gb}
               formatTick={gbTick}
               showLegend={Boolean(withAsked)}
-              ariaLabel="Free space projected day by day"
+              aria-label="Free space projected day by day"
             />
             <div>
               <p className="mb-2 text-sm">

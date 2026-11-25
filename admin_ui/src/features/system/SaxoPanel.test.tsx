@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import type { SaxoStatus, Session } from '@/lib/types'
+import { findAlert, queryAlert } from '@/test/alerts'
 
 import { SaxoCallbackOutcome, SaxoPanel } from './SaxoPanel'
 
@@ -170,13 +171,13 @@ describe('the Saxo panel', () => {
     const user = userEvent.setup()
     const router = renderPanel('/system?saxo=refused&why=This%20login%27s%20link%20is%20unknown')
 
-    const said = await screen.findByRole('alert')
+    const said = await findAlert()
     expect(said).toHaveTextContent('did not come back as expected')
     expect(said).toHaveTextContent("This login's link is unknown. A new link is made under Saxo connection")
     await user.click(screen.getByRole('button', { name: 'Dismiss' }))
 
     await waitFor(() => expect(router.state.location.search).toBe(''))
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(queryAlert()).toBeNull()
   })
 
   it('says when the login has no row yet, and offers no link the services would not read', async () => {

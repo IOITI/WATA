@@ -27,12 +27,12 @@ export function useSetFavourites() {
         toast({
           title: `${answer.kept.length} run${answer.kept.length === 1 ? ' was' : 's were'} left as ${answer.kept.length === 1 ? 'it was' : 'they were'}`,
           description: answer.kept[0].reason,
-          variant: 'error',
+          tone: 'danger',
         })
       }
     },
     onError: (error) =>
-      toast({ title: 'The favourites were not changed', description: error instanceof Error ? error.message : String(error), variant: 'error' }),
+      toast({ title: 'The favourites were not changed', description: error instanceof Error ? error.message : String(error), tone: 'danger' }),
     onSettled: (_answer, _error, { ids }) => {
       void queryClient.invalidateQueries({ queryKey: ['backtests'] })
       for (const id of ids) void queryClient.invalidateQueries({ queryKey: ['backtest', id] })

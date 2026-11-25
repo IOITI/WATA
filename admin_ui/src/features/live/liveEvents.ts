@@ -1,4 +1,4 @@
-import { formatMoney, formatPercent } from 'ioiti-ui'
+import { formatMoney, formatPercent, type StatusTone } from 'ioiti-ui'
 
 import { orderLink, positionLink } from '@/features/positions/orderLife'
 import { actionLabel } from '@/lib/labels'
@@ -29,7 +29,8 @@ export const LIVE_EVENT_TYPES = [
 export interface EventNotice {
   title: string
   body?: string
-  variant: 'default' | 'success' | 'warning' | 'error' | 'info'
+  /** How the toast and the bell draw it. */
+  tone: StatusTone
 }
 
 function text(value: unknown): string | undefined {
@@ -72,7 +73,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: 'Position opened',
         body: [actionLabel(text(event.action)), text(event.instrument_name)].filter(Boolean).join(' · '),
-        variant: 'info',
+        tone: 'info',
       }
     case 'position_closed': {
       const profit = number(event.profit_loss)
@@ -82,7 +83,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: 'Position closed',
         body: [text(event.instrument_name), result].filter(Boolean).join(' · '),
-        variant: profit === null ? 'info' : profit >= 0 ? 'success' : 'warning',
+        tone: profit === null ? 'info' : profit >= 0 ? 'success' : 'warning',
       }
     }
     case 'order_refused': {
@@ -97,7 +98,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: count > 1 ? `${what} (×${count})` : what,
         body: [text(event.instrument_name), position && `position ${position}`, answer].filter(Boolean).join(' · '),
-        variant: 'error',
+        tone: 'danger',
       }
     }
     case 'edge_watch_changed': {
@@ -108,7 +109,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: `Edge Watch: ${owner.toLowerCase()} ${verdict === 'broken' ? 'look broken' : verdict === 'watch' ? 'are worth watching' : 'are as expected again'}`,
         body: verdict === 'broken' ? 'They look like random entries’ rather than their reference’s.' : undefined,
-        variant: verdict === 'broken' ? 'error' : verdict === 'watch' ? 'warning' : 'success',
+        tone: verdict === 'broken' ? 'danger' : verdict === 'watch' ? 'warning' : 'success',
       }
     }
     case 'signal_decided': {
@@ -116,7 +117,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: `${actionLabel(text(event.action))} signal: ${OUTCOME_TEXT[outcome] ?? outcome}`,
         body: text(event.reason),
-        variant: outcome === 'failed' ? 'error' : outcome === 'refused' ? 'warning' : 'info',
+        tone: outcome === 'failed' ? 'danger' : outcome === 'refused' ? 'warning' : 'info',
       }
     }
     case 'service_status': {
@@ -124,17 +125,17 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: `${text(event.name) ?? 'A service'} ${SERVICE_STATE_TEXT[status] ?? status}`,
         body: text(event.detail),
-        variant: status === 'down' ? 'error' : status === 'ok' ? 'success' : 'warning',
+        tone: status === 'down' ? 'danger' : status === 'ok' ? 'success' : 'warning',
       }
     }
     case 'saxo_authorisation_required':
       return {
         title: 'Saxo authorisation required',
         body: 'The refresh token expired: hand over a new code on the System page.',
-        variant: 'error',
+        tone: 'danger',
       }
     case 'saxo_authorised':
-      return { title: 'Saxo is authorised again', variant: 'success' }
+      return { title: 'Saxo is authorised again', tone: 'success' }
     case 'backtest_finished': {
       const state = text(event.state) ?? ''
       // Stopped by the operator: they know.
@@ -142,7 +143,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: state === 'done' ? 'Backtest finished' : 'Backtest failed',
         body: text(event.name),
-        variant: state === 'done' ? 'success' : 'error',
+        tone: state === 'done' ? 'success' : 'danger',
       }
     }
     case 'agent_finished': {
@@ -156,7 +157,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         return {
           title: task === 'done' ? 'The research task is done' : 'The research task ended',
           body: [text(event.title), task === 'ended' ? text(event.task_detail) : undefined].filter(Boolean).join(' · '),
-          variant: task === 'done' ? 'success' : 'warning',
+          tone: task === 'done' ? 'success' : 'warning',
         }
       }
       const cost = number(event.cost_usd)
@@ -165,7 +166,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
         title,
         body: [text(event.title), outcome === 'done' ? undefined : text(event.detail),
           cost !== null ? `$${cost.toFixed(2)}` : undefined].filter(Boolean).join(' · '),
-        variant: outcome === 'done' ? 'success' : outcome === 'failed' || outcome === 'declined' ? 'error' : 'warning',
+        tone: outcome === 'done' ? 'success' : outcome === 'failed' || outcome === 'declined' ? 'danger' : 'warning',
       }
     }
     case 'agent_question':
@@ -173,7 +174,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: 'The research task asks you',
         body: [text(event.title), text(event.question)].filter(Boolean).join(' · '),
-        variant: 'info',
+        tone: 'info',
       }
     case 'prices_fetch_finished': {
       const state = text(event.state) ?? ''
@@ -190,7 +191,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
             : state === 'failed'
               ? 'It failed.'
               : undefined,
-        variant: state === 'done' ? 'success' : 'warning',
+        tone: state === 'done' ? 'success' : 'warning',
       }
     }
     case 'restart_plan': {
@@ -200,7 +201,7 @@ export function describeEvent(event: LiveEvent): EventNotice | null {
       return {
         title: planSucceeded(plan) ? 'Restart done' : 'Restart stopped',
         body: planOutcome(plan, plan.names ?? {}),
-        variant: planSucceeded(plan) ? 'success' : 'warning',
+        tone: planSucceeded(plan) ? 'success' : 'warning',
       }
     }
     default:

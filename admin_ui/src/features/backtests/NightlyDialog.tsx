@@ -2,7 +2,7 @@
 // covers tonight, what replaces what, and whether its result is said on Telegram. Not audited: nothing here trades.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Button, Checkbox, Hint, Input, SettleModal } from 'ioiti-ui'
+import { Button, Checkbox, Hint, Input, Dialog } from 'ioiti-ui'
 import { useState } from 'react'
 
 import { api } from '@/lib/api'
@@ -56,7 +56,7 @@ export function NightlyDialog({
   )
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title="Make it again each evening"
@@ -66,7 +66,7 @@ export function NightlyDialog({
           <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
           </Button>
-          <Button size="sm" isLoading={save.isPending} disabled={!first} onClick={() => save.mutate()}>
+          <Button size="sm" pending={save.isPending} disabled={!first} onClick={() => save.mutate()}>
             Save
           </Button>
         </>
@@ -113,6 +113,6 @@ export function NightlyDialog({
           </p>
         )}
       </div>
-    </SettleModal>
+    </Dialog>
   )
 }

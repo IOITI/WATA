@@ -69,7 +69,7 @@ export function ConversationPage() {
         actions={
           data?.subject && (
             <Hint content="Its page, with this conversation beside it">
-              <ButtonLink to={`${subjectLink(data.subject)}${withAgent(new URLSearchParams(), data.id)}`}
+              <ButtonLink href={`${subjectLink(data.subject)}${withAgent(new URLSearchParams(), data.id)}`}
                 size="sm" variant="outline" leftIcon={<ExternalLink className="size-3.5" />}>
                 Beside the {data.subject.kind}
               </ButtonLink>

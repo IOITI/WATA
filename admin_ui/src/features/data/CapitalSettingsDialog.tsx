@@ -10,7 +10,7 @@ import {
   FormItem,
   FormLabel,
   QueryState,
-  SettleModal,
+  Dialog,
   useToast,
 } from 'ioiti-ui'
 import { useCallback, useMemo, useState } from 'react'
@@ -95,7 +95,7 @@ export function CapitalSettingsDialog({ open, start = 'edit', onClose }: Capital
   const config = configQuery.data
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title="Capital.com feed settings"
@@ -106,7 +106,7 @@ export function CapitalSettingsDialog({ open, start = 'edit', onClose }: Capital
       <QueryState isPending={configQuery.isPending} error={configQuery.error} hasData={!!config}>
         {config && open && <CapitalForm key={`${config.revision}|${start}`} config={config} start={start} onClose={onClose} />}
       </QueryState>
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -139,7 +139,7 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
       toast({
         title: 'Capital.com feed settings saved',
         description: `Previous version kept as ${saved.backup}. The feed applies them at its next start.`,
-        variant: 'success',
+        tone: 'success',
       })
       await Promise.all(
         ['config', 'config-backups', 'session', 'data-capital-config', 'data-providers', 'data-provider'].map((key) =>
@@ -185,7 +185,7 @@ function CapitalForm({ config, start, onClose }: { config: CapitalConfig; start:
           key={save.error?.message ?? 'first'}
           label="Slide to save"
           confirmedLabel={save.isPending ? 'Saving…' : 'Saved'}
-          variant="warning"
+          tone="warning"
           autoResetDelay={0}
           haptic={false}
           disabled={save.isPending}

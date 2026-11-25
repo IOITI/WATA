@@ -36,7 +36,7 @@ export function ResearchFiles() {
           />
         </label>
       )}
-      <Button variant="ghost" size="sm" isLoading={change.isPending} onClick={() => change.mutate({ enabled: !status.enabled })}>
+      <Button variant="ghost" size="sm" pending={change.isPending} onClick={() => change.mutate({ enabled: !status.enabled })}>
         {status.enabled ? 'Stop writing them' : 'Write them'}
       </Button>
       {(status.error || change.error) && (

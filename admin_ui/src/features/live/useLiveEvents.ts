@@ -41,7 +41,7 @@ export function useLiveEvents(): boolean {
 
       const notice = describeEvent(event)
       if (!notice) return
-      toast({ title: notice.title, description: notice.body, variant: notice.variant })
+      toast({ title: notice.title, description: notice.body, tone: notice.tone })
       add?.(notice, eventLink(event))
       if (document.visibilityState !== 'visible' && notificationsEnabled()) {
         new Notification(`WATA: ${notice.title}`, { body: notice.body, tag: event.type })

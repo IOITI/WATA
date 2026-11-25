@@ -41,7 +41,7 @@ export function CumulativeProfitChart({ days, currency = 'EUR', unit = 'money' }
   const show = amountOf(unit, currency)
   return (
     <LineChart
-      ariaLabel="Cumulative profit and loss, day by day"
+      aria-label="Cumulative profit and loss, day by day"
       data={days.map((day) => ({ t: dayMoment(day.day_date), cumulative: day.cumulative_profit_loss }))}
       series={[{ key: 'cumulative', label: 'Cumulative' }]}
       area
@@ -61,10 +61,10 @@ export function DailyProfitChart({ days, currency = 'EUR', unit = 'money' }: Cha
   const show = amountOf(unit, currency)
   return (
     <BarChart
-      ariaLabel="Profit and loss of each day"
+      aria-label="Profit and loss of each day"
       data={days.map((day) => ({ label: formatDay(day.day_date, false), profit_loss: day.profit_loss }))}
       series={[{ key: 'profit_loss', label: 'Result' }]}
-      tone="sign"
+      colorBy="sign"
       height={CHART_HEIGHT}
       formatValue={show}
       formatTick={unit === 'percent' ? percentTick : formatMoneyCompact}
@@ -119,10 +119,10 @@ export function ProfitByGroupChart<T extends ProfitGroup>({ groups, label, unit 
   const show = amountOf(unit, 'EUR')
   return (
     <BarChart
-      ariaLabel="Profit and loss by group"
+      aria-label="Profit and loss by group"
       data={groups.map((group) => ({ label: label(group), profit_loss: group.profit_loss }))}
       series={[{ key: 'profit_loss', label: 'Result' }]}
-      tone="sign"
+      colorBy="sign"
       height={CHART_HEIGHT}
       formatValue={show}
       formatTick={unit === 'percent' ? percentTick : formatMoneyCompact}
@@ -167,7 +167,7 @@ export function DistributionChart({ bins, counted, own, ownLabel }: Distribution
   const range = (bin: DistributionBin) => `${formatPercent(bin.from, true, 1)} to ${formatPercent(bin.to, true, 1)}`
   return (
     <BarChart
-      ariaLabel={`${counted}, by result`}
+      aria-label={`${counted}, by result`}
       data={bins.map((bin) => ({ label: formatPercent(bin.from, true, 1), count: bin.count }))}
       series={[{ key: 'count', label: counted }]}
       marked={markedAt >= 0 ? { index: markedAt, label: ownLabel } : undefined}
@@ -189,7 +189,7 @@ export function DistributionChart({ bins, counted, own, ownLabel }: Distribution
 export function BalanceChart({ points, currency = 'EUR' }: { points: BalancePoint[]; currency?: string }) {
   return (
     <LineChart
-      ariaLabel="Account value, day by day"
+      aria-label="Account value, day by day"
       data={points.map((point) => ({ t: dayMoment(point.date_day), value: point.total_value }))}
       series={[{ key: 'value', label: 'Account value' }]}
       height={CHART_HEIGHT}
@@ -236,7 +236,7 @@ export function CompareCurvesChart({ curves }: { curves: NamedCurve[] }) {
   }))
   return (
     <LineChart
-      ariaLabel="Results compared, day by day"
+      aria-label="Results compared, day by day"
       data={data}
       series={curves.map((curve, index) => ({ key: `c${index}`, label: curve.name, color: compareColor(index) }))}
       zero
@@ -270,7 +270,7 @@ export function SpreadByTimeChart({ slots, decimals }: { slots: SpreadSlot[]; de
   const show = (value: number | null) => (value === null ? '—' : value.toFixed(decimals))
   return (
     <BarChart
-      ariaLabel="Average spread by time of day"
+      aria-label="Average spread by time of day"
       data={slots.map((slot) => ({ label: slot.slot, spread: slot.spread_average }))}
       series={[{ key: 'spread', label: 'Average spread' }]}
       height={CHART_HEIGHT}
@@ -336,10 +336,10 @@ function linePoints(points: SeriesPoint[], lines: SeriesLine[]): LinePoint[] {
 export function TimeSeriesChart({ points, lines, format, title, timeZone, limit, marks = [] }: TimeSeriesChartProps) {
   return (
     <LineChart
-      ariaLabel={lines.map((line) => line.label).join(', ')}
+      aria-label={lines.map((line) => line.label).join(', ')}
       data={linePoints(points, lines)}
       series={lines.map((line) => ({ key: line.key, label: line.label, color: line.color, dashed: line.dashed }))}
-      references={limit ? [{ value: limit.value, label: limit.label, tone: 'negative' }] : []}
+      references={limit ? [{ value: limit.value, label: limit.label, tone: 'danger' }] : []}
       markers={marks.map((mark) => ({ t: mark.t * 1000, label: mark.label }))}
       height={CHART_HEIGHT}
       timeZone={timeZone}
@@ -385,7 +385,7 @@ export function CountBarsChart({
   }))
   return (
     <BarChart
-      ariaLabel={bars.map((bar) => bar.label).join(', ')}
+      aria-label={bars.map((bar) => bar.label).join(', ')}
       data={data}
       series={bars.map((bar) => ({ key: bar.key, label: bar.label, color: bar.color }))}
       variant="stacked"

@@ -208,7 +208,7 @@ export function LiveCheckDayPage() {
         description="Each signal and each trade of the day on each track, and where the day’s result went between them."
         parents={rule ? [{ label: rule.name, href: `/ta/signals/${id}` }] : []}
         actions={
-          <ButtonLink to={`/ta/signals/${id}#live-check`} variant="outline" size="sm">
+          <ButtonLink href={`/ta/signals/${id}#live-check`} variant="outline" size="sm">
             All its days
           </ButtonLink>
         }

@@ -7,13 +7,13 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   ButtonLink,
-  Flysheet,
-  FlysheetBody,
-  FlysheetContent,
-  FlysheetDescription,
-  FlysheetFooter,
-  FlysheetHeader,
-  FlysheetTitle,
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
   QueryState,
 } from 'ioiti-ui'
 import { ExternalLink, Plus } from 'lucide-react'
@@ -74,15 +74,15 @@ export function AgentSheet({ subject: given, initialFiles, blockedFor, onApplied
   if (!subject && !chosen) return null
 
   return (
-    <Flysheet open={open !== null} onOpenChange={(value) => { if (!value) close() }}>
-      <FlysheetContent side="right" type="push" size="lg" resizable>
-        <FlysheetHeader>
-          <FlysheetTitle>AI agent</FlysheetTitle>
-          <FlysheetDescription>
+    <Sheet open={open !== null} onOpenChange={(value) => { if (!value) close() }}>
+      <SheetContent side="right" type="push" size="lg" resizable>
+        <SheetHeader>
+          <SheetTitle>AI agent</SheetTitle>
+          <SheetDescription>
             {subject ? `${subjectSaid(subject)}: ` : ''}it reads it, runs backtests within its limits and proposes changes you apply.
-          </FlysheetDescription>
-        </FlysheetHeader>
-        <FlysheetBody ref={body} className="space-y-4">
+          </SheetDescription>
+        </SheetHeader>
+        <SheetBody ref={body} className="space-y-4">
           <nav aria-label="Conversations about it" className="flex flex-wrap gap-1.5">
             <Link to={withAgent(params, NEW)} replace aria-current={open === NEW ? 'page' : undefined} className={CHIP}>
               <Plus aria-hidden className="size-3" /> New
@@ -108,18 +108,18 @@ export function AgentSheet({ subject: given, initialFiles, blockedFor, onApplied
               the bell says when it is done.
             </p>
           )}
-        </FlysheetBody>
-        <FlysheetFooter className="relative block space-y-2">
+        </SheetBody>
+        <SheetFooter className="relative block space-y-2">
           {follow.away && <LatestButton onClick={follow.jump} />}
           <AgentComposer conversation={chosen ? conversation.data : null} subject={chosen ? null : subject}
             initialFiles={chosen ? null : initialFiles} onStarted={choose} onSent={follow.follow} />
           {chosen && (
-            <ButtonLink to={`/agent/${encodeURIComponent(chosen)}`} size="sm" variant="ghost" leftIcon={<ExternalLink className="size-3.5" />}>
+            <ButtonLink href={`/agent/${encodeURIComponent(chosen)}`} size="sm" variant="ghost" leftIcon={<ExternalLink className="size-3.5" />}>
               On its own page
             </ButtonLink>
           )}
-        </FlysheetFooter>
-      </FlysheetContent>
-    </Flysheet>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   )
 }

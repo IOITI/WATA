@@ -22,7 +22,7 @@ function Spent({ label, said, share }: { label: string; said: string; share: num
         <span className="text-muted-foreground">{label}</span>
         <span className="tabular-nums text-foreground">{said}</span>
       </p>
-      <Meter ratio={share} label={`${label}: ${said}`} tone={share >= 1 ? 'negative' : share >= 0.8 ? 'warning' : 'neutral'} />
+      <Meter ratio={share} label={`${label}: ${said}`} tone={share >= 1 ? 'danger' : share >= 0.8 ? 'warning' : 'neutral'} />
     </div>
   )
 }
@@ -60,7 +60,7 @@ function Question({ conversation, question }: { conversation: AgentConversation;
         <Field label={question.choices.length > 0 ? 'Or in your own words' : 'Your answer'}>
           <Textarea value={own} rows={2} maxLength={2000} onChange={(event) => setOwn(event.target.value)} />
         </Field>
-        <Button type="submit" size="sm" disabled={!own.trim()} isLoading={answer.isPending}>Answer</Button>
+        <Button type="submit" size="sm" disabled={!own.trim()} pending={answer.isPending}>Answer</Button>
       </form>
       <p className="text-xs text-muted-foreground">
         Asked {formatDateTime(question.asked_at, timezone, false)}. Its hours do not count while it waits; unanswered for
@@ -95,7 +95,7 @@ export function TaskPanel({ conversation, task }: { conversation: AgentConversat
         <span className="flex items-center gap-2">
           <Badge variant="soft" tone={taskTone(task)}>{TASK_LABEL[task.state]}</Badge>
           {task.state === 'working' && (
-            <Button size="sm" variant="outline" leftIcon={<Square className="size-3.5" />} isLoading={stop.isPending}
+            <Button size="sm" variant="outline" leftIcon={<Square className="size-3.5" />} pending={stop.isPending}
               onClick={() => stop.mutate()}>
               Stop the task
             </Button>

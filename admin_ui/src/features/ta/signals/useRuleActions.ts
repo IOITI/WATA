@@ -38,7 +38,7 @@ export function useRuleActions(revision: string | undefined, { onDeleted }: { on
             : saved.rule.mode === 'shadow'
               ? 'Its signals are journaled, never sent.'
               : 'The engine stops running it.',
-        variant: 'success',
+        tone: 'success',
       })
       await refresh()
     },
@@ -48,7 +48,7 @@ export function useRuleActions(revision: string | undefined, { onDeleted }: { on
     mutationFn: (rule: TaRule) => api.deleteTaRule(rule.id, revision!),
     onSuccess: async (_, rule) => {
       setDeleting(null)
-      toast({ title: 'Signal rule deleted', variant: 'success' })
+      toast({ title: 'Signal rule deleted', tone: 'success' })
       onDeleted?.(rule)
       await refresh()
     },

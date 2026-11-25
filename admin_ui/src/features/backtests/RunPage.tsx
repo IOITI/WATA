@@ -3,7 +3,7 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
-  AnimatedTabs,
+  Tabs,
   Badge,
   Button,
   ButtonLink,
@@ -16,7 +16,7 @@ import {
   Panel,
   QueryState,
   ScrollProgressNav,
-  SettleModal,
+  Dialog,
   SplitButton,
   useMainScroll,
   useToast,
@@ -344,7 +344,7 @@ export function RunPage() {
                   {run.favourite ? 'Remove from favourites' : 'Add to favourites'}
                 </Button>
               )}
-              <ButtonLink to={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}>
+              <ButtonLink href={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}>
                 Ask the AI agent
               </ButtonLink>
               {/* A finished run of one combination, not a day on paper: its settings may become WATA's. */}
@@ -355,7 +355,7 @@ export function RunPage() {
               )}
               {/* Urgent, so never in a menu. */}
               {isActive(run.status.state) && (
-                <Button variant="outline" size="sm" leftIcon={<Square className="size-3.5" />} isLoading={cancel.isPending} onClick={() => cancel.mutate()}>
+                <Button variant="outline" size="sm" leftIcon={<Square className="size-3.5" />} pending={cancel.isPending} onClick={() => cancel.mutate()}>
                   Stop
                 </Button>
               )}
@@ -385,7 +385,7 @@ export function RunPage() {
             toast({
               title: 'Saved in config.json',
               description: `Previous version kept as ${saved.backup}. Each service named applies it at its next start.`,
-              variant: 'success',
+              tone: 'success',
             })
             // The Configuration page holds the file's revision: it must read the new one, or its next save is refused.
             for (const key of ['config', 'config-backups', 'config-history', 'session', 'backtest-options', 'backtest-to-live']) {
@@ -593,13 +593,13 @@ export function RunPage() {
                     </div>
                   )}
                   <Panel id="tables" className={ANCHORED}>
-                    <AnimatedTabs
+                    <Tabs
                       tabs={[
                         { id: 'trades', label: 'Trades', badge: tradesQuery.data?.items.length, href: tableHref('trades') },
                         { id: 'signals', label: 'Signals', badge: signalsQuery.data?.items.length, href: tableHref('signals') },
                         { id: 'days', label: 'Days', badge: daysQuery.data?.items.length, href: tableHref('days') },
                       ]}
-                      activeTab={tab}
+                      value={tab}
                       onChange={setTab}
                       linkComponent={RouterLink}
                       renderContent={false}
@@ -633,7 +633,7 @@ export function RunPage() {
         </QueryState>
       )}
 
-      <SettleModal
+      <Dialog
         open={renaming}
         onClose={() => setRenaming(false)}
         title="Name and tags"
@@ -643,7 +643,7 @@ export function RunPage() {
             <Button variant="ghost" size="sm" onClick={() => setRenaming(false)}>
               Cancel
             </Button>
-            <Button size="sm" isLoading={rename.isPending} disabled={!name.trim()} onClick={() => rename.mutate()}>
+            <Button size="sm" pending={rename.isPending} disabled={!name.trim()} onClick={() => rename.mutate()}>
               Save
             </Button>
           </>
@@ -664,7 +664,7 @@ export function RunPage() {
             </p>
           )}
         </div>
-      </SettleModal>
+      </Dialog>
     </>
   )
 }
@@ -711,7 +711,7 @@ function RemadeLine({
         remakable(run) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
             <span>Made with older code than today’s: what it found may come out otherwise now.</span>
-            <Button variant="outline" size="sm" leftIcon={<RotateCcw className="size-3.5" />} isLoading={asking.isPending} onClick={() => asking.mutate()}>
+            <Button variant="outline" size="sm" leftIcon={<RotateCcw className="size-3.5" />} pending={asking.isPending} onClick={() => asking.mutate()}>
               Make it again
             </Button>
             {asking.error && (

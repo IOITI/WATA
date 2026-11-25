@@ -1,6 +1,6 @@
 // A rule's deletion, asked first: the Signal rules page's and a rule's own page's (useRuleActions' `deleting`).
 
-import { Alert, AlertDescription, Button, SettleModal } from 'ioiti-ui'
+import { Alert, AlertDescription, Button, Dialog } from 'ioiti-ui'
 
 import type { TaRule } from '@/lib/types'
 
@@ -15,7 +15,7 @@ export function DeleteRuleDialog({ rule, pending, error, onCancel, onDelete }: {
   onDelete: (rule: TaRule) => void
 }) {
   return (
-    <SettleModal
+    <Dialog
       open={rule !== null}
       onClose={onCancel}
       title={`Delete ${rule?.name ?? ''}`}
@@ -25,7 +25,7 @@ export function DeleteRuleDialog({ rule, pending, error, onCancel, onDelete }: {
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
             Cancel
           </Button>
-          <Button variant="destructive" size="sm" isLoading={pending} onClick={() => rule && onDelete(rule)}>
+          <Button variant="danger" size="sm" pending={pending} onClick={() => rule && onDelete(rule)}>
             Delete
           </Button>
         </>
@@ -39,6 +39,6 @@ export function DeleteRuleDialog({ rule, pending, error, onCancel, onDelete }: {
           <AlertDescription>{conflictText(error)}</AlertDescription>
         </Alert>
       )}
-    </SettleModal>
+    </Dialog>
   )
 }

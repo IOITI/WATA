@@ -39,7 +39,7 @@ export function LuxAlgoConceptPage() {
             : undefined
         }
         actions={found && (
-          <ButtonLink to={conceptIndicatorsPath(found.slug)} variant="outline" size="sm">
+          <ButtonLink href={conceptIndicatorsPath(found.slug)} variant="outline" size="sm">
             Its indicators
           </ButtonLink>
         )}

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Checkbox, DragToConfirm, Hint, QueryState, SettleModal } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Checkbox, DragToConfirm, Hint, QueryState, Dialog } from 'ioiti-ui'
 import { ArrowRight } from 'lucide-react'
 import { useState } from 'react'
 
@@ -26,7 +26,7 @@ export function ApplyToLiveDialog({ runId, open, onClose, onSaved }: {
   const options = useQuery({ queryKey: ['backtest-options'], queryFn: api.backtestOptions, enabled: open, staleTime: 60_000 })
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title="Apply this run’s settings to WATA"
@@ -41,7 +41,7 @@ export function ApplyToLiveDialog({ runId, open, onClose, onSaved }: {
             onClose={onClose} onSaved={onSaved} onReread={() => void toLive.refetch()} />
         )}
       </QueryState>
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -108,7 +108,7 @@ function ApplyForm({ runId, found, fields, onClose, onSaved, onReread }: {
             key={save.error?.message ?? 'first'}
             label="Slide to save"
             confirmedLabel={save.isPending ? 'Saving…' : 'Saved'}
-            variant="warning"
+            tone="warning"
             autoResetDelay={0}
             haptic={false}
             disabled={save.isPending || !preview.isSuccess || !catalog.data}

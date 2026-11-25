@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, AnimatedTabs, Badge, cn, formatDateTime, Input, PageHeader, Panel } from 'ioiti-ui'
+import { Alert, AlertDescription, Tabs, Badge, cn, formatDateTime, Input, PageHeader, Panel } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -52,9 +52,9 @@ function ConfigFrame({ title, description, view, children }: { title: string; de
         </Alert>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <AnimatedTabs
+        <Tabs
           tabs={VIEWS}
-          activeTab={view}
+          value={view}
           renderContent={false}
           linkComponent={RouterLink}
           // A plain click is the page's to follow; a click with a modifier opens the link where the browser says.

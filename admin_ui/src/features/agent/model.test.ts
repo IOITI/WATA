@@ -317,7 +317,7 @@ describe('the model, the effort and the context window', () => {
     expect(contextUsed(84_213, 1_000_000)).toEqual({ text: '84.2k · 8%', ratio: 0.084213 })
     expect(contextUsed(2_000, 1_000_000)?.text).toBe('2k · <1%')
     expect(contextUsed(null, 1_000_000)).toBeNull()
-    expect([contextTone(0.5), contextTone(0.8), contextTone(0.95)]).toEqual(['neutral', 'warning', 'negative'])
+    expect([contextTone(0.5), contextTone(0.8), contextTone(0.95)]).toEqual(['neutral', 'warning', 'danger'])
   })
 
   it("lists a window's parts largest first, the tools with their number, the empty ones left out", () => {

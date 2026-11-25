@@ -67,7 +67,7 @@ export function PositionPeekLink({
   'aria-label'?: string
 }) {
   return (
-    <PeekLink to={positionLink(id)} content={() => <PositionPeek id={id} />} className={className} aria-label={label}>
+    <PeekLink href={positionLink(id)} content={() => <PositionPeek id={id} />} className={className} aria-label={label}>
       {children}
     </PeekLink>
   )

@@ -41,7 +41,7 @@ export function InWataPanel({ slug, known }: { slug: string; known: LuxAlgoKnown
     },
   })
   const checkButton = (
-    <Button variant="outline" size="sm" disabled={!available || queued} isLoading={check.isPending} onClick={() => check.mutate()}>
+    <Button variant="outline" size="sm" disabled={!available || queued} pending={check.isPending} onClick={() => check.mutate()}>
       {queued ? 'Waiting for its check' : compat ? 'Check it again' : 'Check it'}
     </Button>
   )

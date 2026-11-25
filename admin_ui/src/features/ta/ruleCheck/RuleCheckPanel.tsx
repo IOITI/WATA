@@ -45,7 +45,7 @@ export function RuleCheckPanel({
   const notes = notesOf(report)
   const test = onTest ? (
     <Hint content={testRefusal ?? 'Runs it on the days WATA recorded, as a backtest does, then ended at chosen bars, as live had them'} wrap={Boolean(testRefusal)}>
-      <Button variant="outline" size="sm" disabled={Boolean(testRefusal) || testing !== null} isLoading={testPending} onClick={onTest}>
+      <Button variant="outline" size="sm" disabled={Boolean(testRefusal) || testing !== null} pending={testPending} onClick={onTest}>
         {testing ? TESTING_SAID[testing] : testLabel}
       </Button>
     </Hint>

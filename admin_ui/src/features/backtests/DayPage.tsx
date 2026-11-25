@@ -393,14 +393,14 @@ export function DayPage() {
         parents={run ? [...runParents(run), { label: run.name, href: `/backtests/${runId}` }] : []}
         actions={
           <>
-            <ButtonLink to={previous && `/backtests/${runId}/days/${previous}`} variant="outline" size="sm" leftIcon={<ChevronLeft className="size-3.5" />}>
+            <ButtonLink href={previous && `/backtests/${runId}/days/${previous}`} variant="outline" size="sm" leftIcon={<ChevronLeft className="size-3.5" />}>
               Day before
             </ButtonLink>
-            <ButtonLink to={next && `/backtests/${runId}/days/${next}`} variant="outline" size="sm" leftIcon={<ChevronRight className="size-3.5" />}>
+            <ButtonLink href={next && `/backtests/${runId}/days/${next}`} variant="outline" size="sm" leftIcon={<ChevronRight className="size-3.5" />}>
               Day after
             </ButtonLink>
             {done && record && (
-              <ButtonLink to={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}
+              <ButtonLink href={withAgent(params, NEW)} size="sm" variant="outline" leftIcon={<Sparkles className="size-3.5" />}
                 onClick={askAgent}>
                 Ask the AI agent about this day
               </ButtonLink>

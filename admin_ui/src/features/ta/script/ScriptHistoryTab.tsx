@@ -133,7 +133,7 @@ function VersionEntry({
               {showing ? 'Hide the changes' : `Changes from v${number - 1}`}
             </Button>
           )}
-          <Button variant="outline" size="sm" isLoading={taking} onClick={() => void restore()}>
+          <Button variant="outline" size="sm" pending={taking} onClick={() => void restore()}>
             Into the editor
           </Button>
         </div>

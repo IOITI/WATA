@@ -178,7 +178,7 @@ export function NewBacktestPage() {
                         Next
                       </Button>
                     ) : (
-                      <Button size="sm" disabled={problems.length > 0} isLoading={create.isPending} onClick={() => create.mutate()}>
+                      <Button size="sm" disabled={problems.length > 0} pending={create.isPending} onClick={() => create.mutate()}>
                         {draft.sweep ? 'Start the sweep' : 'Start the backtest'}
                       </Button>
                     )}

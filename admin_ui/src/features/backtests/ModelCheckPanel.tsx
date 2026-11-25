@@ -66,7 +66,7 @@ function CheckAction({ run }: { run: BacktestRun }) {
           size="sm"
           variant="outline"
           leftIcon={<Scale className="size-3.5" />}
-          isLoading={ask.isPending}
+          pending={ask.isPending}
           disabled={!measured || Boolean(asking)}
           onClick={() => ask.mutate()}
         >

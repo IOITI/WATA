@@ -11,8 +11,8 @@ import {
   Panel,
   QueryState,
   rangeParams,
-  SpringSelect,
-  StretchSwitch,
+  SelectMenu,
+  Switch,
 } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
 import { Download, Square } from 'lucide-react'
@@ -164,7 +164,7 @@ export function HistoryPanel({ label, title = 'Prices', name = 'the index' }: Hi
 
             {keep && (
               <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
-                <StretchSwitch
+                <Switch
                   label="Keep the prices up to date"
                   description={keepSentence(keep, (moment) => formatDateTime(moment, timezone, false))}
                   checked={keep.enabled}
@@ -172,7 +172,7 @@ export function HistoryPanel({ label, title = 'Prices', name = 'the index' }: Hi
                   onChange={(enabled) => keepMutation.mutate({ enabled, days: keep.days })}
                 />
                 <div className="max-w-56">
-                  <SpringSelect
+                  <SelectMenu
                     label="How far back"
                     options={keepDays.map((days) => ({ value: String(days), label: `${days} days` }))}
                     value={String(keep.days)}
@@ -203,7 +203,7 @@ export function HistoryPanel({ label, title = 'Prices', name = 'the index' }: Hi
                     variant="outline"
                     size="sm"
                     leftIcon={<Square className="size-3.5" />}
-                    isLoading={stopMutation.isPending}
+                    pending={stopMutation.isPending}
                     onClick={() => stopMutation.mutate()}
                   >
                     Stop the download
@@ -213,7 +213,7 @@ export function HistoryPanel({ label, title = 'Prices', name = 'the index' }: Hi
                     size="sm"
                     leftIcon={<Download className="size-3.5" />}
                     disabled={!period.from || !period.to}
-                    isLoading={fetchMutation.isPending}
+                    pending={fetchMutation.isPending}
                     onClick={() => fetchMutation.mutate()}
                   >
                     Fetch these days

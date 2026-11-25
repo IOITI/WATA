@@ -11,16 +11,16 @@ describe('describeEvent', () => {
       type: 'position_closed', instrument_name: 'TURBO LONG', profit_loss: -102.4, performance_percent: -9.5,
     })
 
-    expect(won).toEqual({ title: 'Position closed', body: 'TURBO LONG · +€69.40 (+2.60%)', variant: 'success' })
+    expect(won).toEqual({ title: 'Position closed', body: 'TURBO LONG · +€69.40 (+2.60%)', tone: 'success' })
     expect(lost?.body).toBe('TURBO LONG · −€102.40 (−9.50%)')
-    expect(lost?.variant).toBe('warning')
+    expect(lost?.tone).toBe('warning')
   })
 
   it('does not invent a result that is not recorded yet', () => {
     const notice = describeEvent({ type: 'position_closed', instrument_name: 'TURBO LONG', profit_loss: null })
 
     expect(notice?.body).toBe('TURBO LONG · result not recorded yet')
-    expect(notice?.variant).toBe('info')
+    expect(notice?.tone).toBe('info')
   })
 
   it('says what was done with a signal and why', () => {
@@ -29,9 +29,9 @@ describe('describeEvent', () => {
     })
     const failed = describeEvent({ type: 'signal_decided', action: 'close-position', outcome: 'failed' })
 
-    expect(refused).toEqual({ title: 'Long signal: refused', body: 'Cooldown active', variant: 'warning' })
+    expect(refused).toEqual({ title: 'Long signal: refused', body: 'Cooldown active', tone: 'warning' })
     expect(failed?.title).toBe('Close all signal: failed')
-    expect(failed?.variant).toBe('error')
+    expect(failed?.tone).toBe('danger')
   })
 
   it("says Saxo refused to sell a position, how often since the last notice, and Saxo's answer", () => {
@@ -44,45 +44,45 @@ describe('describeEvent', () => {
     expect(refused).toEqual({
       title: 'Saxo refused a sell (×5)',
       body: 'TURBO LONG · position 7779123400 · “À ce stade, seuls des ordres limites sont autorisés” (OtherError, HTTP 400)',
-      variant: 'error',
+      tone: 'danger',
     })
-    expect(unanswered).toEqual({ title: 'Saxo did not answer a sell', body: 'position 7779123400', variant: 'error' })
+    expect(unanswered).toEqual({ title: 'Saxo did not answer a sell', body: 'position 7779123400', tone: 'danger' })
   })
 
   it('distinguishes a service going down from one coming back', () => {
     const down = describeEvent({ type: 'service_status', name: 'Position monitor', status: 'down', detail: 'No consumer' })
     const up = describeEvent({ type: 'service_status', name: 'Position monitor', status: 'ok' })
 
-    expect(down).toEqual({ title: 'Position monitor is down', body: 'No consumer', variant: 'error' })
-    expect(up).toEqual({ title: 'Position monitor is back up', body: undefined, variant: 'success' })
+    expect(down).toEqual({ title: 'Position monitor is down', body: 'No consumer', tone: 'danger' })
+    expect(up).toEqual({ title: 'Position monitor is back up', body: undefined, tone: 'success' })
   })
 
   it('says when a backtest ended, and nothing when the operator stopped it', () => {
     expect(describeEvent({ type: 'backtest_finished', state: 'done', name: 'higher target' })).toEqual({
-      title: 'Backtest finished', body: 'higher target', variant: 'success',
+      title: 'Backtest finished', body: 'higher target', tone: 'success',
     })
     expect(describeEvent({ type: 'backtest_finished', state: 'failed', name: '' })).toEqual({
-      title: 'Backtest failed', body: undefined, variant: 'error',
+      title: 'Backtest failed', body: undefined, tone: 'danger',
     })
     expect(describeEvent({ type: 'backtest_finished', state: 'cancelled' })).toBeNull()
   })
 
   it("says how the AI agent's request ended, what it cost, and nothing when the operator stopped it", () => {
     expect(describeEvent({ type: 'agent_finished', outcome: 'done', title: 'Analyse this run', cost_usd: 0.4182 })).toEqual({
-      title: 'The AI agent answered', body: 'Analyse this run · $0.42', variant: 'success',
+      title: 'The AI agent answered', body: 'Analyse this run · $0.42', tone: 'success',
     })
     expect(describeEvent({ type: 'agent_finished', outcome: 'failed', title: 'Analyse', detail: 'No key', cost_usd: 0 }))
-      .toEqual({ title: 'The AI agent failed', body: 'Analyse · No key · $0.00', variant: 'error' })
-    expect(describeEvent({ type: 'agent_finished', outcome: 'limit', title: 'Tune' })?.variant).toBe('warning')
+      .toEqual({ title: 'The AI agent failed', body: 'Analyse · No key · $0.00', tone: 'danger' })
+    expect(describeEvent({ type: 'agent_finished', outcome: 'limit', title: 'Tune' })?.tone).toBe('warning')
     expect(describeEvent({ type: 'agent_finished', outcome: 'stopped' })).toBeNull()
     // A research task: said when it ends, not at each of its requests.
     expect(describeEvent({ type: 'agent_finished', outcome: 'done', task: 'working', title: 'Tune' })).toBeNull()
     expect(describeEvent({ type: 'agent_finished', outcome: 'done', task: 'done', title: 'Tune' })).toEqual({
-      title: 'The research task is done', body: 'Tune', variant: 'success' })
+      title: 'The research task is done', body: 'Tune', tone: 'success' })
     expect(describeEvent({ type: 'agent_finished', outcome: 'stopped', task: 'ended', title: 'Tune' })).toBeNull()
     expect(describeEvent({ type: 'agent_finished', outcome: 'limit', task: 'ended', title: 'Tune',
       task_detail: 'its budget of $5.00 is spent' })).toEqual({
-      title: 'The research task ended', body: 'Tune · its budget of $5.00 is spent', variant: 'warning' })
+      title: 'The research task ended', body: 'Tune · its budget of $5.00 is spent', tone: 'warning' })
     expect(eventLink({ type: 'agent_finished', conversation_id: '20261028-080000-a1b2c3' })).toBe('/agent/20261028-080000-a1b2c3')
     expect(staleQueries({ type: 'agent_finished' })).toContain('agent-conversation')
     // What it wrote of a script, on its page and in the list.
@@ -91,13 +91,13 @@ describe('describeEvent', () => {
 
   it('says a research task asks the operator, and leads to it', () => {
     expect(describeEvent({ type: 'agent_question', title: 'Find a line', question: 'Fast or slow first?' })).toEqual({
-      title: 'The research task asks you', body: 'Find a line · Fast or slow first?', variant: 'info' })
+      title: 'The research task asks you', body: 'Find a line · Fast or slow first?', tone: 'info' })
     expect(eventLink({ type: 'agent_question', conversation_id: '20261028-080000-a1b2c3' })).toBe('/agent/20261028-080000-a1b2c3')
   })
 
   it('says Edge Watch’s verdicts worth a look, leads to their panel, and refreshes it', () => {
     expect(describeEvent({ type: 'edge_watch_changed', owner: 'live', track: 'real', verdict: 'broken' })).toEqual({
-      title: 'Edge Watch: the live trades look broken', body: 'They look like random entries’ rather than their reference’s.', variant: 'error' })
+      title: 'Edge Watch: the live trades look broken', body: 'They look like random entries’ rather than their reference’s.', tone: 'danger' })
     expect(describeEvent({ type: 'edge_watch_changed', owner: 'live', track: 'paper', verdict: 'watch' })?.title).toBe(
       'Edge Watch: the signals received, on paper are worth watching')
     expect(describeEvent({ type: 'edge_watch_changed', owner: '0123456789ab', track: 'paper', verdict: 'too_early' })).toBeNull()
@@ -109,12 +109,12 @@ describe('describeEvent', () => {
 
   it('says how a download of prices ended, and that days are usually still missing', () => {
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'done' })).toEqual({
-      title: 'Prices downloaded', body: undefined, variant: 'success',
+      title: 'Prices downloaded', body: undefined, tone: 'success',
     })
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'incomplete' })).toEqual({
       title: 'The download of prices ended',
       body: 'Some days are still missing: run the same period again.',
-      variant: 'warning',
+      tone: 'warning',
     })
     expect(describeEvent({ type: 'prices_fetch_finished', state: 'stopped' })).toBeNull()
   })
@@ -152,7 +152,7 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'restart_plan', plan: { ...plan, done: true } })).toEqual({
       title: 'Restart stopped',
       body: 'Telegram is at work again; Trader: Not running again 180 s after the restart.',
-      variant: 'warning',
+      tone: 'warning',
     })
     expect(eventLink({ type: 'restart_plan' })).toBe('/system')
     expect(staleQueries({ type: 'restart_plan' })).toEqual(['services', 'session', 'health', 'config', 'data-provider'])

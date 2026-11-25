@@ -6,8 +6,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AdvancedDataTable,
-  AnimatedFileUpload,
-  AnimatedTabs,
+  FileUpload,
+  Tabs,
   Badge,
   Button,
   ButtonLink,
@@ -17,7 +17,7 @@ import {
   PageHeader,
   QueryState,
   Select,
-  SettleModal,
+  Dialog,
 } from 'ioiti-ui'
 import type { ColumnDef, UploadFileItem, UploadResult } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
@@ -339,7 +339,7 @@ function ScriptFilters({ address, families }: { address: IndicatorsAddress; fami
         </label>
       )}
       {narrowed(address) && (
-        <ButtonLink to={indicatorsHref({ ...address, favourite: null, family: null })} variant="ghost" size="sm">
+        <ButtonLink href={indicatorsHref({ ...address, favourite: null, family: null })} variant="ghost" size="sm">
           Every script
         </ButtonLink>
       )}
@@ -523,18 +523,18 @@ export function IndicatorsPage() {
               variant="outline"
               size="sm"
               leftIcon={<FileUp className="size-3.5" />}
-              isLoading={importMutation.isPending}
+              pending={importMutation.isPending}
               onClick={() => fileInput.current?.click()}
             >
               Import .pine
             </Button>
-            <ButtonLink to="/ta/indicators/new?kind=library" variant="outline" size="sm">
+            <ButtonLink href="/ta/indicators/new?kind=library" variant="outline" size="sm">
               New library
             </ButtonLink>
-            <ButtonLink to="/ta/indicators/new?kind=strategy" variant="outline" size="sm">
+            <ButtonLink href="/ta/indicators/new?kind=strategy" variant="outline" size="sm">
               New strategy
             </ButtonLink>
-            <ButtonLink to="/ta/indicators/new?kind=indicator" size="sm" leftIcon={<Plus className="size-3.5" />}>
+            <ButtonLink href="/ta/indicators/new?kind=indicator" size="sm" leftIcon={<Plus className="size-3.5" />}>
               New indicator
             </ButtonLink>
           </>
@@ -547,8 +547,8 @@ export function IndicatorsPage() {
         </p>
       )}
 
-      <AnimatedFileUpload
-        variant="compact"
+      <FileUpload
+        density="compact"
         multiple
         accept=".pine,.txt"
         maxSize={MAX_SCRIPT_BYTES}
@@ -571,10 +571,10 @@ export function IndicatorsPage() {
           <div className="flex flex-col gap-3 [&_td]:align-top">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <ScriptFilters address={address} families={families} />
-              <AnimatedTabs
+              <Tabs
                 label="How the list is shown"
                 tabs={(['table', 'cards'] as const).map((view) => ({ id: view, label: VIEW_LABEL[view], href: indicatorsHref({ ...address, view }) }))}
-                activeTab={address.view}
+                value={address.view}
                 onChange={(view) => navigate(indicatorsHref({ ...address, view: view as IndicatorsView }), { replace: true })}
                 linkComponent={RouterLink}
                 renderContent={false}
@@ -609,7 +609,7 @@ export function IndicatorsPage() {
         )}
       </QueryState>
 
-      <SettleModal
+      <Dialog
         open={deleting !== null}
         onClose={() => setDeleting(null)}
         title={`Delete ${deleting?.name ?? ''}?`}
@@ -620,9 +620,9 @@ export function IndicatorsPage() {
               Keep it
             </Button>
             <Button
-              variant="destructive"
+              variant="danger"
               size="sm"
-              isLoading={deleteMutation.isPending}
+              pending={deleteMutation.isPending}
               onClick={() => deleting && deleteMutation.mutate(deleting)}
             >
               Delete
@@ -641,9 +641,9 @@ export function IndicatorsPage() {
               : deleteMutation.error.message}
           </p>
         )}
-      </SettleModal>
+      </Dialog>
 
-      <SettleModal
+      <Dialog
         open={copying !== null}
         onClose={() => setCopying(null)}
         title={`Duplicate ${copying?.name ?? ''}`}
@@ -655,7 +655,7 @@ export function IndicatorsPage() {
             </Button>
             <Button
               size="sm"
-              isLoading={copyMutation.isPending}
+              pending={copyMutation.isPending}
               disabled={!copyName.trim()}
               onClick={() => copying && copyMutation.mutate({ script: copying, name: copyName })}
             >
@@ -673,7 +673,7 @@ export function IndicatorsPage() {
             {copyMutation.error.message}
           </p>
         )}
-      </SettleModal>
+      </Dialog>
     </>
   )
 }

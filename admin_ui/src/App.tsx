@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { IoitiProvider, Skeleton } from 'ioiti-ui'
-import { RouterRoot } from 'ioiti-ui/react-router'
+import { RouterErrorPage, RouterRoot } from 'ioiti-ui/react-router'
 import { lazy, Suspense, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterProvider, useLocation } from 'react-router'
@@ -30,6 +30,7 @@ import { SystemPage } from '@/features/system/SystemPage'
 import { TimingPage } from '@/features/timing/TimingPage'
 import { WatchlistPage } from '@/features/watchlist/WatchlistPage'
 import { ApiError } from '@/lib/api'
+import { errorReporter } from '@/lib/clientErrors'
 
 // Pages of charts, loaded when they are opened.
 const PerformancePage = lazy(() =>
@@ -145,10 +146,17 @@ function Root() {
   )
 }
 
+/** Where a session that ended signs in again, from the router's error page (a 401 a route answers). */
+const SIGN_IN = { href: '/login' }
+
+/** What failed in a page, said in the admin's log (the Logs page, Admin): src/lib/clientErrors.ts. */
+const reportError = errorReporter()
+
 // A data router: the configuration page can then ask before unsaved changes are left behind.
 const router = createBrowserRouter(
   createRoutesFromElements(
-    <Route element={<Root />}>
+    // The last resort, outside the shell: what failed around every page (the session, the shell itself).
+    <Route element={<Root />} errorElement={<RouterErrorPage signIn={SIGN_IN} />}>
       <Route path="/login" element={<LoginPage />} />
       <Route
         element={
@@ -157,249 +165,252 @@ const router = createBrowserRouter(
           </RequireAuth>
         }
       >
-        <Route index element={<DashboardPage />} />
-        <Route path="positions" element={<PositionsPage />} />
-        <Route path="orders" element={<OrdersPage />} />
-        <Route
-          path="performance"
-          element={
-            <ChartPage>
-              <PerformancePage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="report"
-          element={
-            <ChartPage>
-              <ReportPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="exits"
-          element={
-            <ChartPage>
-              <ExitsPage />
-            </ChartPage>
-          }
-        />
-        <Route path="data" element={<Navigate to="/data/assets" replace />} />
-        <Route
-          path="data/assets"
-          element={
-            <ChartPage>
-              <AssetsPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="data/assets/:provider/:key"
-          element={
-            <ChartPage>
-              <AssetPage />
-            </ChartPage>
-          }
-        />
-        <Route path="data/providers" element={<ProvidersPage />} />
-        <Route path="ta" element={<Navigate to="/ta/indicators" replace />} />
-        <Route
-          path="ta/indicators"
-          element={
-            <ChartPage>
-              <IndicatorsPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="ta/indicators/new"
-          element={
-            <ChartPage>
-              <ScriptEditorPage key="new" />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="ta/indicators/:id"
-          element={
-            <ChartPage>
-              <ScriptEditorPage />
-            </ChartPage>
-          }
-        />
-        <Route path="ta/luxalgo" element={<LuxAlgoPage />} />
-        <Route path="ta/luxalgo/indicators/:slug" element={<LuxAlgoIndicatorPage />} />
-        <Route path="ta/luxalgo/concepts/:slug" element={<LuxAlgoConceptPage />} />
-        <Route
-          path="ta/charts"
-          element={
-            <ChartPage>
-              <ChartsPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="ta/signals"
-          element={
-            <ChartPage>
-              <SignalRulesPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="ta/signals/:id"
-          element={
-            <ChartPage>
-              <SignalRulePage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="ta/signals/:id/live/:day"
-          element={
-            <ChartPage>
-              <LiveCheckDayPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="ta/monitor"
-          element={
-            <ChartPage>
-              <MonitorPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="agent"
-          element={
-            <ChartPage>
-              <AgentActivityPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="agent/memory"
-          element={
-            <ChartPage>
-              <AgentMemoryPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="agent/artefacts"
-          element={
-            <ChartPage>
-              <AgentArtefactsPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="agent/routines"
-          element={
-            <ChartPage>
-              <AgentRoutinesPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="agent/queue"
-          element={
-            <ChartPage>
-              <ResearchQueuePage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="agent/:conversationId"
-          element={
-            <ChartPage>
-              <AgentConversationPage />
-            </ChartPage>
-          }
-        />
-        <Route path="data/providers/:providerId" element={<ProviderPage />} />
-        <Route path="prices" element={<PricesRedirect />} />
-        <Route path="backtests" element={<BacktestsPage />} />
-        <Route path="backtests/new" element={<NewBacktestPage />} />
-        <Route
-          path="backtests/compare"
-          element={
-            <ChartPage>
-              <BacktestComparePage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/experiments"
-          element={
-            <ChartPage>
-              <ExperimentsPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/experiments/forward/:checkId"
-          element={
-            <ChartPage>
-              <ForwardCheckPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/paper"
-          element={
-            <ChartPage>
-              <PaperTradingPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/paper/:owner"
-          element={
-            <ChartPage>
-              <PaperReportPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/configurations/:configId"
-          element={
-            <ChartPage>
-              <BacktestConfigurationPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/:runId"
-          element={
-            <ChartPage>
-              <BacktestRunPage />
-            </ChartPage>
-          }
-        />
-        <Route
-          path="backtests/:runId/days/:day"
-          element={
-            <ChartPage>
-              <BacktestDayPage />
-            </ChartPage>
-          }
-        />
-        <Route path="timing" element={<TimingPage />} />
-        <Route path="signals" element={<SignalsPage />} />
-        <Route path="signals/:ref" element={<SignalPage />} />
-        <Route path="watchlist" element={<WatchlistPage />} />
-        <Route path="audit" element={<AuditPage />} />
-        <Route path="system" element={<SystemPage />} />
-        <Route path="system/disk" element={<DiskPage />} />
-        <Route path="logs" element={<LogsPage />} />
-        <Route path="config" element={<ConfigPage />}>
-          <Route index element={<ConfigOverview />} />
-          <Route path="versions" element={<ConfigVersionsView />} />
-          <Route path=":group" element={<ConfigGroupPage />} />
+        {/* A page that fails shows why inside the shell, and is reported (ioiti-ui's RouterErrorPage). */}
+        <Route errorElement={<RouterErrorPage signIn={SIGN_IN} />}>
+          <Route index element={<DashboardPage />} />
+          <Route path="positions" element={<PositionsPage />} />
+          <Route path="orders" element={<OrdersPage />} />
+          <Route
+            path="performance"
+            element={
+              <ChartPage>
+                <PerformancePage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="report"
+            element={
+              <ChartPage>
+                <ReportPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="exits"
+            element={
+              <ChartPage>
+                <ExitsPage />
+              </ChartPage>
+            }
+          />
+          <Route path="data" element={<Navigate to="/data/assets" replace />} />
+          <Route
+            path="data/assets"
+            element={
+              <ChartPage>
+                <AssetsPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="data/assets/:provider/:key"
+            element={
+              <ChartPage>
+                <AssetPage />
+              </ChartPage>
+            }
+          />
+          <Route path="data/providers" element={<ProvidersPage />} />
+          <Route path="ta" element={<Navigate to="/ta/indicators" replace />} />
+          <Route
+            path="ta/indicators"
+            element={
+              <ChartPage>
+                <IndicatorsPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="ta/indicators/new"
+            element={
+              <ChartPage>
+                <ScriptEditorPage key="new" />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="ta/indicators/:id"
+            element={
+              <ChartPage>
+                <ScriptEditorPage />
+              </ChartPage>
+            }
+          />
+          <Route path="ta/luxalgo" element={<LuxAlgoPage />} />
+          <Route path="ta/luxalgo/indicators/:slug" element={<LuxAlgoIndicatorPage />} />
+          <Route path="ta/luxalgo/concepts/:slug" element={<LuxAlgoConceptPage />} />
+          <Route
+            path="ta/charts"
+            element={
+              <ChartPage>
+                <ChartsPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="ta/signals"
+            element={
+              <ChartPage>
+                <SignalRulesPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="ta/signals/:id"
+            element={
+              <ChartPage>
+                <SignalRulePage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="ta/signals/:id/live/:day"
+            element={
+              <ChartPage>
+                <LiveCheckDayPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="ta/monitor"
+            element={
+              <ChartPage>
+                <MonitorPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="agent"
+            element={
+              <ChartPage>
+                <AgentActivityPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="agent/memory"
+            element={
+              <ChartPage>
+                <AgentMemoryPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="agent/artefacts"
+            element={
+              <ChartPage>
+                <AgentArtefactsPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="agent/routines"
+            element={
+              <ChartPage>
+                <AgentRoutinesPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="agent/queue"
+            element={
+              <ChartPage>
+                <ResearchQueuePage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="agent/:conversationId"
+            element={
+              <ChartPage>
+                <AgentConversationPage />
+              </ChartPage>
+            }
+          />
+          <Route path="data/providers/:providerId" element={<ProviderPage />} />
+          <Route path="prices" element={<PricesRedirect />} />
+          <Route path="backtests" element={<BacktestsPage />} />
+          <Route path="backtests/new" element={<NewBacktestPage />} />
+          <Route
+            path="backtests/compare"
+            element={
+              <ChartPage>
+                <BacktestComparePage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/experiments"
+            element={
+              <ChartPage>
+                <ExperimentsPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/experiments/forward/:checkId"
+            element={
+              <ChartPage>
+                <ForwardCheckPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/paper"
+            element={
+              <ChartPage>
+                <PaperTradingPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/paper/:owner"
+            element={
+              <ChartPage>
+                <PaperReportPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/configurations/:configId"
+            element={
+              <ChartPage>
+                <BacktestConfigurationPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/:runId"
+            element={
+              <ChartPage>
+                <BacktestRunPage />
+              </ChartPage>
+            }
+          />
+          <Route
+            path="backtests/:runId/days/:day"
+            element={
+              <ChartPage>
+                <BacktestDayPage />
+              </ChartPage>
+            }
+          />
+          <Route path="timing" element={<TimingPage />} />
+          <Route path="signals" element={<SignalsPage />} />
+          <Route path="signals/:ref" element={<SignalPage />} />
+          <Route path="watchlist" element={<WatchlistPage />} />
+          <Route path="audit" element={<AuditPage />} />
+          <Route path="system" element={<SystemPage />} />
+          <Route path="system/disk" element={<DiskPage />} />
+          <Route path="logs" element={<LogsPage />} />
+          <Route path="config" element={<ConfigPage />}>
+            <Route index element={<ConfigOverview />} />
+            <Route path="versions" element={<ConfigVersionsView />} />
+            <Route path=":group" element={<ConfigGroupPage />} />
+          </Route>
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
-        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Route>,
   ),
@@ -412,8 +423,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       {/* Light or dark for every page, the login included, kept under the key of the pre-paint
           script (`ioiti({ themeStorageKey })` in vite.config.ts); animations as the system's
-          "reduce motion" setting says; the name ending every tab's title. */}
-      <IoitiProvider appName={APP_NAME}>
+          "reduce motion" setting says; the name ending every tab's title; what a page failed
+          with, to the admin's log. */}
+      <IoitiProvider appName={APP_NAME} onError={reportError}>
         <RouterProvider router={router} />
       </IoitiProvider>
     </QueryClientProvider>

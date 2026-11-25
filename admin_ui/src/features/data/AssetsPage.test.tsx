@@ -6,6 +6,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import type { DataAsset, DataAssets, InstrumentAvailability, Session } from '@/lib/types'
+import { getAlert } from '@/test/alerts'
 import { resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
 import { WithTrail } from '@/test/WithTrail'
 
@@ -267,7 +268,7 @@ describe('the assets stored', () => {
     renderPage()
     await listed()
 
-    expect(screen.getByRole('alert')).toHaveTextContent('The database is unavailable')
+    expect(getAlert()).toHaveTextContent('The database is unavailable')
     expect(names()).toEqual(['US Tech 100 (Dukascopy)'])
   })
 

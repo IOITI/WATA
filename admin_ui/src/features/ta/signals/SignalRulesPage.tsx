@@ -18,7 +18,7 @@ import {
   Panel,
   QueryState,
   Select,
-  SettleModal,
+  Dialog,
   StatusBadge,
   useToast,
 } from 'ioiti-ui'
@@ -62,7 +62,7 @@ function EnginePanel({ engine, timeZone }: { engine: TaEngine; timeZone: string 
       title="TA engine"
       description="The service that runs the rules on each bar of the Capital.com feed."
       action={
-        <ButtonLink to={monitorHref({})} variant="outline" size="sm">
+        <ButtonLink href={monitorHref({})} variant="outline" size="sm">
           Engine monitor
         </ButtonLink>
       }
@@ -227,7 +227,7 @@ export function SignalRulesPage() {
       }
       if (!outcome.error) {
         setSelected(new Set())
-        toast({ title: `${rulesCounted(outcome.done)} ${BULK_DONE[outcome.action].verb}`, description: BULK_DONE[outcome.action].description, variant: 'success' })
+        toast({ title: `${rulesCounted(outcome.done)} ${BULK_DONE[outcome.action].verb}`, description: BULK_DONE[outcome.action].description, tone: 'success' })
       }
       await refresh()
     },
@@ -538,7 +538,7 @@ export function SignalRulesPage() {
         verdict={change ? <AgentVerdict about={`rule:${change.rule.id}`} changedAt={change.rule.run_changed_at} /> : null} />
       <AgentSheet subject={about && aboutRule ? { ...about, label: aboutRule.name } : undefined} />
 
-      <SettleModal
+      <Dialog
         open={deletingMany !== null}
         onClose={() => setDeletingMany(null)}
         title={`Delete ${rulesCounted(deletingMany?.length ?? 0)}?`}
@@ -549,9 +549,9 @@ export function SignalRulesPage() {
               Cancel
             </Button>
             <Button
-              variant="destructive"
+              variant="danger"
               size="sm"
-              isLoading={bulkMutation.isPending}
+              pending={bulkMutation.isPending}
               onClick={() => deletingMany && bulkMutation.mutate({ action: 'delete', targets: deletingMany })}
             >
               Delete
@@ -574,7 +574,7 @@ export function SignalRulesPage() {
             <AlertDescription>{bulkError}</AlertDescription>
           </Alert>
         )}
-      </SettleModal>
+      </Dialog>
 
       <DeleteRuleDialog
         rule={deleting}

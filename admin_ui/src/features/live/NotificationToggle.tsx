@@ -18,7 +18,7 @@ export function NotificationToggle() {
       toast({
         title: 'Notifications are blocked',
         description: 'Allow them for this site in the browser settings, then try again.',
-        variant: 'warning',
+        tone: 'warning',
       })
     }
   }

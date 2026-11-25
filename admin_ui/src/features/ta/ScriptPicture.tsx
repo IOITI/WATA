@@ -130,7 +130,7 @@ export function PictureChooser({ script, className }: { script: Pictured; classN
           variant="outline"
           size="icon"
           aria-label={chooser.label}
-          isLoading={chooser.busy}
+          pending={chooser.busy}
           onClick={chooser.choose}
           {...chooser.drop}
           className={cn('size-8 bg-surface/90 backdrop-blur', chooser.over && 'ring-2 ring-brand')}

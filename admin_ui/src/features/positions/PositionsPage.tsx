@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { AdvancedDataTable, ALL_TIME, AnimatedTabs, cn, DateRangeFilter, ExportButton, PageHeader, QueryState, rangeParams } from 'ioiti-ui'
+import { AdvancedDataTable, ALL_TIME, Tabs, cn, DateRangeFilter, ExportButton, PageHeader, QueryState, rangeParams } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
 import { useMemo, useState } from 'react'
@@ -70,9 +70,9 @@ export function PositionsPage() {
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <AnimatedTabs
+        <Tabs
           tabs={TABS}
-          activeTab={status}
+          value={status}
           // The position that was looked for has been seen: the other tabs start unsearched.
           onChange={(tab) => setSearchParams(tab === 'open' ? {} : { status: tab }, { replace: true })}
           linkComponent={RouterLink}

@@ -124,21 +124,21 @@ function WhereNext({ trace, timeZone }: { trace: SignalTrace; timeZone: string }
   return (
     <>
       {rule && (
-        <ButtonLink to={rulePath(rule)} variant="outline" size="sm">
+        <ButtonLink href={rulePath(rule)} variant="outline" size="sm">
           Its rule
         </ButtonLink>
       )}
       {rule && day && trace.source.mode === 'live' && (
-        <ButtonLink to={liveCheckDayHref(rule, day)} variant="outline" size="sm">
+        <ButtonLink href={liveCheckDayHref(rule, day)} variant="outline" size="sm">
           Its day: live, paper, backtest
         </ButtonLink>
       )}
       {rule && (
-        <ButtonLink to={monitorHref({ rule })} variant="outline" size="sm">
+        <ButtonLink href={monitorHref({ rule })} variant="outline" size="sm">
           Engine monitor
         </ButtonLink>
       )}
-      <ButtonLink to="/signals" variant="outline" size="sm">
+      <ButtonLink href="/signals" variant="outline" size="sm">
         All signals
       </ButtonLink>
       {trace.signal_uuid && (

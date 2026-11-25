@@ -143,7 +143,7 @@ export function PaperReportPage() {
           <Panel>
             <div className="space-y-3 text-sm">
               <p>{reportState(entry ?? undefined, owner === LIVE_OWNER || rule?.mode === 'shadow').text}</p>
-              <ButtonLink to={paperTradingHref(owner)} variant="outline" size="sm">
+              <ButtonLink href={paperTradingHref(owner)} variant="outline" size="sm">
                 Back to paper trading
               </ButtonLink>
             </div>

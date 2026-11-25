@@ -211,7 +211,7 @@ function OpenedConfiguration({ item, timezone }: { item: BacktestConfiguration; 
         ))}
       </ul>
       <div className="flex flex-wrap items-center gap-3">
-        <ButtonLink to={configurationHref(item.id)} size="sm" variant="outline">
+        <ButtonLink href={configurationHref(item.id)} size="sm" variant="outline">
           Open the configuration
         </ButtonLink>
         {item.count > item.runs.length && (

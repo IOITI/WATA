@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
   AlertDescription,
-  AnimatedTabs,
+  Tabs,
   Badge,
   Button,
   CopyButton,
@@ -24,7 +24,7 @@ import {
   Panel,
   QueryState,
   Select,
-  SettleModal,
+  Dialog,
   useToast,
 } from 'ioiti-ui'
 import { RouterLink } from 'ioiti-ui/react-router'
@@ -96,7 +96,7 @@ function TakeDialog({ indicator, source, onClose }: { indicator: LuxAlgoIndicato
     },
   })
   return (
-    <SettleModal
+    <Dialog
       open
       onClose={onClose}
       title={`Take ${indicator.name} as your script`}
@@ -106,7 +106,7 @@ function TakeDialog({ indicator, source, onClose }: { indicator: LuxAlgoIndicato
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!name.trim()} isLoading={take.isPending} onClick={() => take.mutate()}>
+          <Button disabled={!name.trim()} pending={take.isPending} onClick={() => take.mutate()}>
             Take it
           </Button>
         </>
@@ -132,7 +132,7 @@ function TakeDialog({ indicator, source, onClose }: { indicator: LuxAlgoIndicato
           </Alert>
         )}
       </div>
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -462,9 +462,9 @@ export function LuxAlgoIndicatorPage() {
             <OnAChart indicator={found} source={source} signedIn={signedIn} />
             <div className="grid gap-6 lg:grid-cols-3">
               <div className="min-w-0 space-y-4 lg:col-span-2">
-                <AnimatedTabs
+                <Tabs
                   tabs={tabs}
-                  activeTab={tab}
+                  value={tab}
                   onChange={(next) => setParams((before) => {
                     const after = new URLSearchParams(before)
                     after.set('tab', next)

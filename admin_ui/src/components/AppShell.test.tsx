@@ -220,7 +220,8 @@ describe('the states not to miss, in the top bar', () => {
     const user = userEvent.setup()
     renderShell({ restartRequired: true, restartServices: [{ id: 'trader', name: 'Trader' }], release: { newest: '0.95.0', containers: {}, waiting: ['admin1'], applying: false } })
 
-    expect(await screen.findByRole('button', { name: 'Status: 2 to watch' })).toHaveTextContent('+1')
+    // Named by the gravest state's words, then how many of each tone stand out (ioiti-ui 0.27).
+    expect(await screen.findByRole('button', { name: /^Status: .+ \(2 to watch\)$/ })).toHaveTextContent('+1')
     const panel = await openStatus(user)
     expect(panel.getByRole('link', { name: /Release waiting/ })).toHaveAttribute('href', '/system#release')
     expect(panel.getByRole('link', { name: /Restart needed/ })).toHaveAttribute('href', '/system')
@@ -491,7 +492,7 @@ describe('the bell', () => {
         position_id: '5098', instrument_name: 'TURBO LONG', profit_loss: 25.2, performance_percent: 2.26,
       }),
     )
-    await user.click(await screen.findByRole('button', { name: '1 unread notifications' }))
+    await user.click(await screen.findByRole('button', { name: '1 unread notification' }))
 
     const panel = within(screen.getByRole('dialog', { name: 'Notifications' }))
     expect(panel.getByRole('link', { name: 'Position closed' })).toHaveAttribute('href', '/positions?find=5098')

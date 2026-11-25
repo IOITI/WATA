@@ -265,7 +265,7 @@ export function WhyPanel({ summary }: { summary: BacktestSummary }) {
             formatValue={(value) => formatNumber(value)}
             summaryLabel={funnel[funnel.length - 1].label === 'Won' ? 'of the entry signals won' : 'of the entry signals bought'}
             noun="Signals"
-            ariaLabel="Where the run's entry signals went, stage by stage"
+            aria-label="Where the run's entry signals went, stage by stage"
           />
         </section>
       )}

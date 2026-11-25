@@ -148,7 +148,7 @@ export function familyRows(kinds: DiskKind[], families: { name: string; bytes: n
 export function levelReferences(total: number, thresholds: { warning_free_percent: number; critical_free_percent: number }): LineReference[] {
   return [
     { value: (total * thresholds.warning_free_percent) / 100 / GB, label: `Low (${thresholds.warning_free_percent} %)`, tone: 'warning' },
-    { value: (total * thresholds.critical_free_percent) / 100 / GB, label: `Critical (${thresholds.critical_free_percent} %)`, tone: 'negative' },
+    { value: (total * thresholds.critical_free_percent) / 100 / GB, label: `Critical (${thresholds.critical_free_percent} %)`, tone: 'danger' },
   ]
 }
 

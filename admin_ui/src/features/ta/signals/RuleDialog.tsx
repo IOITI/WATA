@@ -4,7 +4,7 @@
 // reviewed before it is made.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Button, DragToConfirm, Input, Select, SettleModal, StepPanels, Stepper, useToast } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Button, DragToConfirm, Input, Select, Dialog, StepPanels, Stepper, useToast } from 'ioiti-ui'
 import { useMemo, useState } from 'react'
 
 import { useAgentState } from '@/features/agent/useConversation'
@@ -56,7 +56,7 @@ interface RuleDialogProps {
 
 export function RuleDialog({ open, rule, draft, start = 'edit', rules, scripts, onClose }: RuleDialogProps) {
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title={rule ? `Signal rule: ${rule.name}` : 'New signal rule'}
@@ -76,7 +76,7 @@ export function RuleDialog({ open, rule, draft, start = 'edit', rules, scripts, 
           onClose={onClose}
         />
       )}
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -150,7 +150,7 @@ function RuleForm({
         description: rule
           ? `${saved.rule.name} runs ${scriptName(saved.rule.script.id)} v${saved.rule.script.version}.`
           : 'Its signals are journaled, never sent, until it is switched to live.',
-        variant: 'success',
+        tone: 'success',
       })
       await queryClient.invalidateQueries({ queryKey: ['ta-rules'] })
       onClose()
@@ -294,7 +294,7 @@ function RuleForm({
               key={save.error?.message ?? 'first'}
               label="Slide to change the live rule"
               confirmedLabel={save.isPending ? 'Saving…' : 'Saved'}
-              variant="warning"
+              tone="warning"
               autoResetDelay={0}
               haptic={false}
               disabled={save.isPending}
@@ -313,7 +313,7 @@ function RuleForm({
               </a>; this dialog keeps your change.</>
           ) : (
             <>
-              <Button variant="outline" size="sm" isLoading={askAgent.isPending} onClick={() => askAgent.mutate()}>
+              <Button variant="outline" size="sm" pending={askAgent.isPending} onClick={() => askAgent.mutate()}>
                 Ask the AI agent first
               </Button>{' '}
               It tests the change against the rule as it runs. Nothing is saved.
@@ -339,7 +339,7 @@ function RuleForm({
           </Button>
         ) : (
           !live && (
-            <Button size="sm" disabled={!ready} isLoading={save.isPending} onClick={() => save.mutate()}>
+            <Button size="sm" disabled={!ready} pending={save.isPending} onClick={() => save.mutate()}>
               {rule ? 'Save' : 'Make the rule'}
             </Button>
           )

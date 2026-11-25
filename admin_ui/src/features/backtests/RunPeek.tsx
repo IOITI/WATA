@@ -51,7 +51,7 @@ export function RunPeek({ id }: { id: string }) {
 /** A link to a run, its figures shown on hover, keyboard focus or a first tap. */
 export function RunPeekLink({ id, className, children }: { id: string; className?: string; children: ReactNode }) {
   return (
-    <PeekLink to={`/backtests/${id}`} content={() => <RunPeek id={id} />} className={className}>
+    <PeekLink href={`/backtests/${id}`} content={() => <RunPeek id={id} />} className={className}>
       {children}
     </PeekLink>
   )

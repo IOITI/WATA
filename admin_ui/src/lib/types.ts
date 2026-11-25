@@ -5669,3 +5669,17 @@ export interface RuleProtections {
   funds: ProtectionFunds | null
   read_at: string
 }
+
+/**
+ * What failed in the interface, as `POST /api/client-errors` takes it (`src/admin/client_errors.py`): the error in
+ * words, where ioiti-ui caught it (the shell's boundary or the router's error page), and the page's path.
+ */
+export interface ClientErrorBody {
+  source: 'boundary' | 'route'
+  /** The page's path, never its query. */
+  path: string
+  name: string
+  message: string
+  stack?: string
+  component_stack?: string
+}

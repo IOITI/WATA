@@ -202,14 +202,14 @@ export function ConfigurationPage() {
                   variant="outline"
                   leftIcon={<CalendarClock className="size-3.5" />}
                   disabled={!bring.can}
-                  isLoading={extend.isPending}
+                  pending={extend.isPending}
                   onClick={() => extend.mutate()}
                 >
                   Bring it up to date
                 </Button>
               </Hint>
               {latest && (
-                <ButtonLink to={`/backtests/new?again=${latest.id}`} size="sm" leftIcon={<RotateCcw className="size-3.5" />}>
+                <ButtonLink href={`/backtests/new?again=${latest.id}`} size="sm" leftIcon={<RotateCcw className="size-3.5" />}>
                   Run again with changes
                 </ButtonLink>
               )}
@@ -252,7 +252,7 @@ export function ConfigurationPage() {
                   title={`Its latest result: ${formatDay(latest.from)} to ${formatDay(latest.to)}`}
                   description={`${daysBetween(latest.from, latest.to)} days asked${latest.nightly ? (item.nightly?.on ? ', made again each evening' : ', its last nightly run') : ''}.`}
                   action={
-                    <ButtonLink to={`/backtests/${latest.id}`} size="sm" variant="outline">
+                    <ButtonLink href={`/backtests/${latest.id}`} size="sm" variant="outline">
                       Open the run
                     </ButtonLink>
                   }

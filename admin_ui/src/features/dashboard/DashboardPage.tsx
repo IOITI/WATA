@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  AirportMatrixClock,
+  WorldClock,
   formatDateTime,
   formatDay,
   formatMoney,
@@ -73,7 +73,7 @@ function MarketClocks({ timeZone, now, className }: { timeZone: string; now: num
   )
   const { openHere, hoursApart } = marketClock(now, timeZone)
   return (
-    <AirportMatrixClock
+    <WorldClock
       cities={cities}
       size="sm"
       title={null}
@@ -93,7 +93,7 @@ function DayPerformanceTile({ overview }: { overview: Overview }) {
     meter = (
       <Meter
         ratio={performance / target}
-        tone="positive"
+        tone="success"
         label="Day performance against the target"
         scale={['0%', `target ${formatPercent(target, true)}`]}
       />
@@ -102,7 +102,7 @@ function DayPerformanceTile({ overview }: { overview: Overview }) {
     meter = (
       <Meter
         ratio={performance / maxLoss}
-        tone="negative"
+        tone="danger"
         label="Day loss against the maximum loss"
         scale={['0%', `stop ${formatPercent(maxLoss, true)}`]}
       />

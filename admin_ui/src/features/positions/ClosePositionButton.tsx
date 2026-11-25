@@ -13,7 +13,7 @@ export function ClosePositionButton({ position }: { position: Position }) {
     <>
       <Button
         // It sells at market: it must not look like the neutral buttons around it.
-        variant="destructive"
+        variant="danger"
         size="sm"
         onClick={() => setConfirming(true)}
       >

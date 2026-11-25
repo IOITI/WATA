@@ -12,7 +12,7 @@ import {
   Input,
   Panel,
   QueryState,
-  SettleModal,
+  Dialog,
   Textarea,
 } from 'ioiti-ui'
 import { Check, Copy, KeyRound, PlugZap, RotateCw, Send, Trash2 } from 'lucide-react'
@@ -134,7 +134,7 @@ function SetDialog({ credential, open, onClose, onSaved }: {
   const saxoEnvironment = saxoAppEnvironment(credential.name)
 
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={mutation.isPending ? () => {} : close}
       title={`${credential.where === 'database' ? 'Replace' : 'Set'} the ${inSentence(credential)}`}
@@ -144,7 +144,7 @@ function SetDialog({ credential, open, onClose, onSaved }: {
           <Button variant="ghost" size="sm" onClick={close} disabled={mutation.isPending}>
             Cancel
           </Button>
-          <Button size="sm" isLoading={mutation.isPending} disabled={!complete} onClick={() => mutation.mutate()}>
+          <Button size="sm" pending={mutation.isPending} disabled={!complete} onClick={() => mutation.mutate()}>
             Seal and save
           </Button>
         </>
@@ -193,7 +193,7 @@ function SetDialog({ credential, open, onClose, onSaved }: {
           </Alert>
         )}
       </form>
-    </SettleModal>
+    </Dialog>
   )
 }
 
@@ -304,7 +304,7 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
       )}
       <div className="flex flex-wrap gap-2">
         {credential.signed_in ? (
-          <ButtonLink to={SIGNED_IN_FROM[credential.name] ?? '/'} size="sm" variant="outline">
+          <ButtonLink href={SIGNED_IN_FROM[credential.name] ?? '/'} size="sm" variant="outline">
             Sign in or out on its page
           </ButtonLink>
         ) : credential.generated ? (
@@ -317,17 +317,17 @@ function CredentialCard({ credential, names, timeZone, keysMissing }: {
           </Button>
         )}
         {credential.name === 'webhook.token' && (
-          <Button size="sm" variant="ghost" disabled={!canAct} isLoading={show.isPending} onClick={() => show.mutate()}>
+          <Button size="sm" variant="ghost" disabled={!canAct} pending={show.isPending} onClick={() => show.mutate()}>
             Show the address
           </Button>
         )}
         {credential.name === 'telegram.bot' && credential.where !== 'missing' && (
-          <Button size="sm" variant="ghost" leftIcon={<Send className="size-3.5" />} disabled={!canAct} isLoading={tryBot.isPending} onClick={() => tryBot.mutate()}>
+          <Button size="sm" variant="ghost" leftIcon={<Send className="size-3.5" />} disabled={!canAct} pending={tryBot.isPending} onClick={() => tryBot.mutate()}>
             Send a test message
           </Button>
         )}
         {credential.name === 'anthropic.api' && credential.where === 'database' && (
-          <Button size="sm" variant="ghost" leftIcon={<PlugZap className="size-3.5" />} isLoading={tryKey.isPending} onClick={() => tryKey.mutate()}>
+          <Button size="sm" variant="ghost" leftIcon={<PlugZap className="size-3.5" />} pending={tryKey.isPending} onClick={() => tryKey.mutate()}>
             Test the connection
           </Button>
         )}

@@ -87,7 +87,7 @@ export function ScriptRuleTab({
             aside={
               agentOn && report.verdict !== 'ready' ? (
                 <div>
-                  <ButtonLink to={withAgent(searchParams, NEW)} variant="outline" size="sm">
+                  <ButtonLink href={withAgent(searchParams, NEW)} variant="outline" size="sm">
                     Ask the AI agent to make it ready
                   </ButtonLink>
                 </div>

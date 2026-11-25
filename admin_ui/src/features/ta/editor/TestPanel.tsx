@@ -150,7 +150,7 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName, onRe
           id={assetFieldId}
           className="w-full"
           value={asset?.ref ?? null}
-          onValueChange={(value) => value && setChosenRef(value)}
+          onChange={(value) => value && setChosenRef(value)}
           options={assets.map((candidate) => ({ value: candidate.ref, label: assetLabel(candidate), keywords: assetKeywords(candidate) }))}
           disabled={assets.length === 0}
           placeholder="No asset"
@@ -262,7 +262,7 @@ export function TestPanel({ prepared, inputs, worker, scriptId, scriptName, onRe
         <Button
           size="sm"
           leftIcon={<Play className="size-3.5" />}
-          isLoading={runMutation.isPending}
+          pending={runMutation.isPending}
           disabled={!prepared || !worker || !ticker}
           onClick={() => runMutation.mutate()}
         >

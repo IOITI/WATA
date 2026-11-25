@@ -8,9 +8,9 @@ import {
   formatNumber,
   Input,
   QueryState,
-  SettleModal,
-  SpringSelect,
-  StretchSwitch,
+  Dialog,
+  SelectMenu,
+  Switch,
 } from 'ioiti-ui'
 import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -40,7 +40,7 @@ function AddInstrument({ offered, onAdded }: { offered: HistoryOffer[]; onAdded:
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] sm:items-end">
-        <SpringSelect
+        <SelectMenu
           label="Instrument"
           options={offered.map((entry) => ({ value: entry.symbol, label: `${entry.name} (${entry.symbol})` }))}
           value={symbol}
@@ -53,7 +53,7 @@ function AddInstrument({ offered, onAdded }: { offered: HistoryOffer[]; onAdded:
           <span className="block font-medium">Label</span>
           <Input value={label} onChange={(event) => setLabel(event.target.value)} aria-label="Label" />
         </label>
-        <Button size="sm" leftIcon={<Plus className="size-3.5" />} isLoading={add.isPending} onClick={() => add.mutate()}>
+        <Button size="sm" leftIcon={<Plus className="size-3.5" />} pending={add.isPending} onClick={() => add.mutate()}>
           Add
         </Button>
       </div>
@@ -98,7 +98,7 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
       {keep && (
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">Kept up to date</h3>
-          <StretchSwitch
+          <Switch
             label="Keep the Nasdaq history up to date"
             description={keepSentence(keep, (moment) => formatDateTime(moment, timezone, false))}
             checked={keep.enabled}
@@ -106,7 +106,7 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
             onChange={(enabled) => keepMutation.mutate({ enabled, days: keep.days })}
           />
           <div className="max-w-56">
-            <SpringSelect
+            <SelectMenu
               label="How far back"
               options={keepDays.map((days) => ({ value: String(days), label: `${days} days` }))}
               value={String(keep.days)}
@@ -125,7 +125,7 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">Kept on the disk</h3>
           <div className="max-w-56">
-            <SpringSelect
+            <SelectMenu
               label="Days kept"
               options={retainChoices(keep)}
               value={String(keep.retain_days)}
@@ -196,7 +196,7 @@ function Settings({ provider }: { provider: DukascopyProviderDetails }) {
 export function HistorySettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const providerQuery = useQuery({ queryKey: ['data-provider', 'dukascopy'], queryFn: api.dukascopyProvider, enabled: open })
   return (
-    <SettleModal
+    <Dialog
       open={open}
       onClose={onClose}
       title="Dukascopy settings"
@@ -211,6 +211,6 @@ export function HistorySettingsDialog({ open, onClose }: { open: boolean; onClos
       <QueryState isPending={providerQuery.isPending} error={providerQuery.error} hasData={!!providerQuery.data}>
         {providerQuery.data && <Settings provider={providerQuery.data} />}
       </QueryState>
-    </SettleModal>
+    </Dialog>
   )
 }

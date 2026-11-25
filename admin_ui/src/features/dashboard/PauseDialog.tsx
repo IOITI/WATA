@@ -28,7 +28,7 @@ export function PauseDialog({ paused, open, onClose, proposal, onDone, onRefused
       toast({
         title: paused ? 'New entries resumed' : 'New entries paused',
         description: paused ? 'Signals open positions again.' : 'The trader refuses signals that would open a position.',
-        variant: 'success',
+        tone: 'success',
       })
       void queryClient.invalidateQueries({ queryKey: ['overview'] })
     },

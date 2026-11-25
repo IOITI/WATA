@@ -56,7 +56,7 @@ describe('the address of the Engine monitor', () => {
 describe('a figure against its limit', () => {
   it('is within the share a check fails past, past it, or past the limit itself', () => {
     expect([toneOf(10, 100, 0.5), toneOf(50, 100, 0.5), toneOf(51, 100, 0.5), toneOf(100, 100, 0.5)]).toEqual([
-      'positive', 'positive', 'warning', 'negative',
+      'success', 'success', 'warning', 'danger',
     ])
     expect([toneOf(null, 100, 0.5), toneOf(10, null, 0.5)]).toEqual(['neutral', 'neutral'])
   })
@@ -67,11 +67,11 @@ describe('the tiles of the last minutes', () => {
     const tiles = tilesOf(NOW)
 
     expect(tiles.map((tile) => [tile.key, tile.value, tile.tone])).toEqual([
-      ['delay', '1.6 s', 'positive'],
-      ['run', '312 ms', 'positive'],
-      ['tick', '820 ms', 'positive'],
-      ['feed', '12.5 s', 'positive'],
-      ['memory', '522 MB', 'positive'],
+      ['delay', '1.6 s', 'success'],
+      ['run', '312 ms', 'success'],
+      ['tick', '820 ms', 'success'],
+      ['feed', '12.5 s', 'success'],
+      ['memory', '522 MB', 'success'],
     ])
     expect(tiles[0].hint).toBe('The slowest of 15 min; a signal is refused past 1 min')
     expect(tiles[1].hint).toBe('EMA cross, on the live runner; its limit 30 s')

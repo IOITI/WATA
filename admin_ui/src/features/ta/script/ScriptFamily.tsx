@@ -3,7 +3,7 @@
 // with its family.
 
 import { useQuery } from '@tanstack/react-query'
-import { Button, Hint, Input, SettleModal } from 'ioiti-ui'
+import { Button, Hint, Input, Dialog } from 'ioiti-ui'
 import { Tag } from 'lucide-react'
 import { useState } from 'react'
 
@@ -43,7 +43,7 @@ export function ScriptFamily({ script }: { script: Pick<TaScriptSummary, 'id' | 
           {script.family ? `Family: ${script.family}` : 'No family yet'}
         </button>
       </Hint>
-      <SettleModal
+      <Dialog
         open={open}
         onClose={() => setOpen(false)}
         title={`The family of ${script.name}`}
@@ -51,11 +51,11 @@ export function ScriptFamily({ script }: { script: Pick<TaScriptSummary, 'id' | 
         footer={
           <>
             {script.family && (
-              <Button variant="ghost" size="sm" isLoading={change.isPending && change.variables?.family === null} onClick={() => set(null)}>
+              <Button variant="ghost" size="sm" pending={change.isPending && change.variables?.family === null} onClick={() => set(null)}>
                 Remove it
               </Button>
             )}
-            <Button size="sm" isLoading={change.isPending && change.variables?.family !== null}
+            <Button size="sm" pending={change.isPending && change.variables?.family !== null}
               disabled={!chosen || chosen === script.family} onClick={() => set(chosen)}>
               Keep it
             </Button>
@@ -90,7 +90,7 @@ export function ScriptFamily({ script }: { script: Pick<TaScriptSummary, 'id' | 
             {luxalgo ? 'Those in use first, then the families of LuxAlgo’s Library.' : 'Those in use, or a name of your own.'}
           </p>
         </div>
-      </SettleModal>
+      </Dialog>
     </>
   )
 }

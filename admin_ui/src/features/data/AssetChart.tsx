@@ -1,4 +1,4 @@
-import { Button, cn, ExportButton, Hint, Panel, QueryState, Skeleton, StretchSwitch, useTheme } from 'ioiti-ui'
+import { Button, cn, ExportButton, Hint, Panel, QueryState, Skeleton, Switch, useTheme } from 'ioiti-ui'
 import { Maximize2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -378,9 +378,9 @@ export function AssetChart({
             {full && (
               <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                 {chart.kind === 'time' && (
-                  <StretchSwitch label="Volume" checked={volumeShown} onChange={setVolumeShown} className="gap-2" />
+                  <Switch label="Volume" checked={volumeShown} onChange={setVolumeShown} className="gap-2" />
                 )}
-                <StretchSwitch
+                <Switch
                   label="Signal marks"
                   checked={signalsShown}
                   onChange={(shown) => {

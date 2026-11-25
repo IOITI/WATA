@@ -17,6 +17,7 @@ import type {
   PriceRangeRow,
   Session,
 } from '@/lib/types'
+import { findAlert } from '@/test/alerts'
 import { charts, resetCharts, seriesOf, theChart } from '@/test/fakeCharts'
 import { stubSystemTheme } from '@/test/systemTheme'
 import { WithTrail } from '@/test/WithTrail'
@@ -893,7 +894,7 @@ describe('range bars', () => {
     await user.type(ticksField(), '1{Enter}')
 
     // Said beside the fields, in the server's words: an answer about what was typed, not a breakdown.
-    expect(await screen.findByRole('alert')).toHaveTextContent('More than 12000 range bars in this period: choose a larger range or a shorter period')
+    expect(await findAlert()).toHaveTextContent('More than 12000 range bars in this period: choose a larger range or a shorter period')
     expect(screen.queryByText(/Could not/)).not.toBeInTheDocument()
     await waitFor(() => expect(ticksField().value).toBe('1'))
     expect(ticksField()).toBeEnabled()
@@ -1026,7 +1027,7 @@ describe('what was not recorded', () => {
     serve({ barsError: { status: 422, detail: 'More than 12000 bars in this period at 10 seconds: choose a longer interval or a shorter period' } })
     renderPage()
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('More than 12000 bars in this period at 10 seconds')
+    expect(await findAlert()).toHaveTextContent('More than 12000 bars in this period at 10 seconds')
     expect(() => theChart()).toThrow()
   })
 })
