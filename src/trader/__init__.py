@@ -65,7 +65,9 @@ from src.trade.order_tracker import OrderTracker
 from src.trade.ops_queue import AsyncOpsPublisher
 from src.trade.trader_watch import TraderWatch
 from src.heartbeat import beat_periodically
-from src.schema import SchemaLoader
+from src.schema.validators import check_trading_action
+from src.trade.flat_balance import FlatBalance
+from src.trade.rehearsal import quiet_while_rehearsing, rehearse
 from src.message_helper import (
     TelegramMessageComposer,
     build_daily_trading_report_message,
@@ -170,6 +172,14 @@ def closure_summary(close_result: dict, unsold: str | None) -> str:
     return summary if unsold is None else f"{summary}\n{unsold}"
 
 
+def nothing_closed(close_result: dict) -> bool:
+    """A close that found nothing to sell: no sale sent, none failed, no position that Saxo did not list."""
+    return not any(
+        close_result.get(what)
+        for what in ("closed_initiated_count", "errors_count", "closed_position_ids", "not_closed", "not_listed")
+    )
+
+
 # ─────────────────────────────────────────────────────
 #  Signal handler (long / short)
 # ─────────────────────────────────────────────────────
@@ -185,11 +195,13 @@ async def handle_trading_signal(
     journal: SignalJournal | None = None,
     hand_over=None,
     watch: TraderWatch | None = None,
+    flat_balance: FlatBalance | None = None,
 ):
     """
     Process a long/short signal end-to-end. ``hand_over(position_id, reason)``
     gives the position monitor a sale that did not go through; ``watch`` says
-    whether Saxo still renews the login.
+    whether Saxo still renews the login; ``flat_balance`` whether the balance
+    last read may size the order (without one it is read again, as always).
     """
     action = data["action"]
     indice = data["indice"]
@@ -234,11 +246,60 @@ async def handle_trading_signal(
         rule_check_end_dt = datetime.now(pytz.utc)
 
         reserve_cash_pct = trading_orchestrator.reserve_cash_percent
+        nothing_open = not open_positions
 
         # 2. Execute based on mode
-        if reserve_cash_pct > 0:
-            # Decoupled: new trade first, then close old positions
-            try:
+        try:
+            if reserve_cash_pct > 0:
+                # Decoupled: new trade first, then close old positions
+                if flat_balance is not None and not flat_balance.usable(nothing_open):
+                    # The balance last read is not known to be the cash there is now: this order reads it again.
+                    trading_orchestrator.invalidate_spending_power()
+                try:
+                    result = await trading_orchestrator.execute_trade_signal(
+                        exchange_id=trade_turbo_exchange_id,
+                        underlying_uics=indice_id,
+                        keywords=action,
+                        confidence=confidence,
+                        signal_uuid=data.get("signal_uuid"),
+                    )
+                except Exception:
+                    # The signal turned the other way: what is held is sold though nothing could be bought,
+                    # as the classic mode sells it before buying.
+                    try:
+                        close_result = await performance_monitor.close_managed_positions_by_criteria(
+                            action_filter=None,
+                            defer_bookkeeping=True,
+                        )
+                        trading_orchestrator.invalidate_spending_power()
+                        unsold = await hand_over_unsold(close_result, hand_over)
+                        composer.add_text_section("Closure Without Entry", closure_summary(close_result, unsold))
+                    except Exception as close_error:
+                        logger.error("The positions held could not be sold after the entry failed: %s", close_error)
+                        composer.add_text_section("Closure Without Entry", f"FAILED: {type(close_error).__name__}: {close_error}")
+                    raise
+                close_result = await performance_monitor.close_managed_positions_by_criteria(
+                    action_filter=None,
+                    exclude_position_id=result["position_details"]["position_id"],
+                    defer_bookkeeping=True,
+                )
+                trading_orchestrator.invalidate_spending_power()
+                unsold = await hand_over_unsold(close_result, hand_over)
+                composer.add_text_section("Post-Trade Closure", closure_summary(close_result, unsold))
+            else:
+                # Classic: close old first, then open new
+                close_result = await performance_monitor.close_managed_positions_by_criteria(
+                    action_filter=None,
+                    defer_bookkeeping=True,
+                )
+                # The new order is sized on the proceeds of what was just sold: the balance is read again for it,
+                # unless nothing was held, nothing was sold, and the balance last read is known to be the cash
+                # there is now (src/trade/flat_balance.py).
+                await performance_monitor.wait_for_positions_closed(close_result["closed_position_ids"])
+                if flat_balance is None or not flat_balance.usable(nothing_open and nothing_closed(close_result)):
+                    trading_orchestrator.invalidate_spending_power()
+                unsold = await hand_over_unsold(close_result, hand_over)
+                composer.add_text_section("Pre-Trade Closure", closure_summary(close_result, unsold))
                 result = await trading_orchestrator.execute_trade_signal(
                     exchange_id=trade_turbo_exchange_id,
                     underlying_uics=indice_id,
@@ -246,47 +307,10 @@ async def handle_trading_signal(
                     confidence=confidence,
                     signal_uuid=data.get("signal_uuid"),
                 )
-            except Exception:
-                # The signal turned the other way: what is held is sold though nothing could be bought,
-                # as the classic mode sells it before buying.
-                try:
-                    close_result = await performance_monitor.close_managed_positions_by_criteria(
-                        action_filter=None,
-                        defer_bookkeeping=True,
-                    )
-                    trading_orchestrator.invalidate_spending_power()
-                    unsold = await hand_over_unsold(close_result, hand_over)
-                    composer.add_text_section("Closure Without Entry", closure_summary(close_result, unsold))
-                except Exception as close_error:
-                    logger.error("The positions held could not be sold after the entry failed: %s", close_error)
-                    composer.add_text_section("Closure Without Entry", f"FAILED: {type(close_error).__name__}: {close_error}")
-                raise
-            close_result = await performance_monitor.close_managed_positions_by_criteria(
-                action_filter=None,
-                exclude_position_id=result["position_details"]["position_id"],
-                defer_bookkeeping=True,
-            )
-            trading_orchestrator.invalidate_spending_power()
-            unsold = await hand_over_unsold(close_result, hand_over)
-            composer.add_text_section("Post-Trade Closure", closure_summary(close_result, unsold))
-        else:
-            # Classic: close old first, then open new
-            close_result = await performance_monitor.close_managed_positions_by_criteria(
-                action_filter=None,
-                defer_bookkeeping=True,
-            )
-            # The new order is sized on the proceeds of what was just sold.
-            await performance_monitor.wait_for_positions_closed(close_result["closed_position_ids"])
-            trading_orchestrator.invalidate_spending_power()
-            unsold = await hand_over_unsold(close_result, hand_over)
-            composer.add_text_section("Pre-Trade Closure", closure_summary(close_result, unsold))
-            result = await trading_orchestrator.execute_trade_signal(
-                exchange_id=trade_turbo_exchange_id,
-                underlying_uics=indice_id,
-                keywords=action,
-                confidence=confidence,
-                signal_uuid=data.get("signal_uuid"),
-            )
+        finally:
+            # Whatever was sent, cash may have moved: no balance read before this moment stands.
+            if flat_balance is not None:
+                flat_balance.moved()
 
         # 3. Broker-side stop, when enabled (the entry and closes above come first)
         protective_stop = await trading_orchestrator.place_protective_stop(result)
@@ -495,10 +519,11 @@ async def dispatch_message(
     db_balance_manager: AsyncDbBalanceHistoryManager | None = None,
     hand_over=None,
     watch: TraderWatch | None = None,
+    flat_balance: FlatBalance | None = None,
 ):
     # Validate schema
     try:
-        jsonschema.validate(instance=body, schema=SchemaLoader.get_trading_action_schema())
+        check_trading_action(body)
     except jsonschema.exceptions.ValidationError as e:
         logger.error("Schema validation failed: %s", e.message)
         journal_signal(journal, body, FAILED, f"Schema validation failed: {e.message}")
@@ -518,10 +543,16 @@ async def dispatch_message(
                 journal=journal,
                 hand_over=hand_over,
                 watch=watch,
+                flat_balance=flat_balance,
             )
         elif action in CLOSE_ACTIONS:
-            await handle_close_signal(body, performance_monitor, telegram, journal=journal, hand_over=hand_over)
-            trading_orchestrator.invalidate_spending_power()
+            try:
+                await handle_close_signal(body, performance_monitor, telegram, journal=journal, hand_over=hand_over)
+            finally:
+                # Sold or not, cash may have moved: the balance is read again, and none read before stands.
+                trading_orchestrator.invalidate_spending_power()
+                if flat_balance is not None:
+                    flat_balance.moved()
         elif action == "daily_stats":
             uuid = body.get("signal_uuid")
             if uuid:
@@ -704,9 +735,87 @@ async def poll_and_dispatch_signals(
             await _unless_stopped(asyncio.sleep(poll_interval_seconds), stopping)
 
 
+class SignalInHand:
+    """Whether the trader is handling a signal now: a rehearsal of a signal's way stands aside while it is."""
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    def __enter__(self) -> "SignalInHand":
+        self._count += 1
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._count -= 1
+
+    def __call__(self) -> bool:
+        return self._count > 0
+
+
+def rehearsal_steps(
+    trading_rule: TradingRule,
+    db_position_manager: AsyncDbPositionManager,
+    trading_orchestrator: AsyncTradingOrchestrator,
+    watchlist_client: AsyncWatchlistClient | None,
+    spending_power: float | None,
+) -> list[tuple[str, object]]:
+    """
+    What an entry signal runs through before its order leaves, as steps for
+    ``rehearse`` (src/trade/rehearsal.py): the message's form, the trader's
+    checks and their reads in ``handle_trading_signal``'s order, the turbo the
+    watchlist would give for each direction, and the order's size on it.
+    Everything that reads or computes, nothing that acts: not the account
+    guard, which can pause entries and say so, and no request to Saxo.
+    """
+    now = datetime.now(pytz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    indices = dict((trading_rule.allowed_indices_rule_config or {}).get("indice_ids") or {})
+    entry = {
+        "action": "long", "indice": next(iter(indices), "n/a"), "signal_timestamp": now, "alert_timestamp": now,
+        "received_timestamp": now, "signal_uuid": "00000000-0000-4000-8000-000000000000",
+    }
+
+    def forms():
+        check_trading_action(entry)
+        check_trading_action({**entry, "action": "close-position"})
+
+    async def turbo(indice_id, direction):
+        found = await watchlist_client.get_best_turbo(underlying_uic=indice_id, direction=direction)
+        if found is not None and spending_power:
+            trading_orchestrator._calculate_bid_amount(found, spending_power, 1.0)
+
+    steps = [
+        ("the message's form", forms),
+        ("the trade's message", lambda: TelegramMessageComposer(entry)),
+        ("the signal's age", lambda: trading_rule.check_signal_timestamp("long", now)),
+        ("market hours", lambda: trading_rule.check_market_hours(now)),
+        ("US releases", trading_rule.check_macro_news),
+        ("the pause", trading_rule.check_entries_paused),
+        ("open positions", db_position_manager.get_open_positions_ids_actions),
+        ("the day's result", trading_rule.check_profit_per_day),
+        ("the cooldown after a loss", trading_rule.check_cooldown_after_loss),
+        ("the day's trades", trading_rule.check_max_trades_per_day),
+        ("the day's breakers", trading_rule.check_day_breakers),
+        ("the position's scale", lambda: trading_orchestrator._calculate_position_scale(None)),
+    ]
+    if watchlist_client is not None:
+        for name, indice_id in indices.items():
+            for direction in ("long", "short"):
+                steps.append((f"the {direction} turbo of {name}", lambda i=indice_id, d=direction: turbo(i, d)))
+    return steps
+
+
+async def _nothing_open(db_position_manager) -> bool:
+    """Whether WATA's records hold no open position; False when they cannot be read."""
+    try:
+        return not await db_position_manager.get_open_positions_ids_actions()
+    except Exception:
+        return False
+
+
 async def keep_saxo_session_warm(
     trading_orchestrator: AsyncTradingOrchestrator, interval_seconds: float,
     watch: TraderWatch | None = None, api_client=None, trading_rule: TradingRule | None = None, notify=None,
+    *, flat_balance: FlatBalance | None = None, db_position_manager=None, rehearsal=None, busy=None,
 ) -> None:
     """
     Call Saxo on a timer between signals.
@@ -718,13 +827,38 @@ async def keep_saxo_session_warm(
     the account guard, which pauses entries between signals when it trips, and
     the trader's watch is checked after it: the signals' silence, Saxo's login
     and the level of WATA's session.
+
+    With ``flat_balance`` and ``db_position_manager``, a balance read while
+    nothing was open, before and after, is marked as one an entry may size its
+    order on (src/trade/flat_balance.py). With ``rehearsal`` (a function of the
+    balance just read, giving the steps), a signal's way to an order is then
+    rehearsed, unless ``busy()`` says a signal is in hand: what a signal every
+    few hours runs through is kept from going cold (src/trade/rehearsal.py).
     """
+    if rehearsal is not None:
+        quiet_while_rehearsing()
     while True:
         await asyncio.sleep(interval_seconds)
+        proving = flat_balance is not None and db_position_manager is not None
+        token = flat_balance.reading() if proving else None
+        flat_before = await _nothing_open(db_position_manager) if proving else False
+        spending_power = None
         try:
-            await trading_orchestrator.refresh_spending_power()
+            spending_power = await trading_orchestrator.refresh_spending_power()
         except Exception as e:
             logger.warning("Saxo keep-warm call failed: %s", e)
+        if proving:
+            flat_balance.read(
+                token, flat_before, spending_power is not None and await _nothing_open(db_position_manager),
+            )
+        if rehearsal is not None and not (busy is not None and busy()):
+            try:
+                took = await rehearse(rehearsal(spending_power), busy)
+            except Exception as e:
+                logger.warning("A signal's way could not be rehearsed: %s", e)
+            else:
+                if took.slow:
+                    logger.info("Rehearsing a signal's way to an order took %s.", took.said())
         if trading_rule is not None and trading_rule.account_guard.on:
             try:
                 seen = trading_orchestrator.position_service.last_total_value
@@ -878,10 +1012,21 @@ async def main():
         keep_warm_interval_seconds = config_manager.get_config_value(
             "trade.config.general.keep_warm_interval_seconds", 30
         )
+        # Whether the balance that timer reads may size an entry's order (src/trade/flat_balance.py), and whether
+        # a signal is in hand, while which the timer's rehearsal of a signal's way stands aside.
+        flat_balance = FlatBalance()
+        in_hand = SignalInHand()
         if keep_warm_interval_seconds > 0:
             keep_warm_task = asyncio.create_task(
-                keep_saxo_session_warm(trading_orchestrator, keep_warm_interval_seconds, watch, api_client,
-                                       trading_rule=trading_rule, notify=telegram.send)
+                keep_saxo_session_warm(
+                    trading_orchestrator, keep_warm_interval_seconds, watch, api_client,
+                    trading_rule=trading_rule, notify=telegram.send,
+                    flat_balance=flat_balance, db_position_manager=db_position_manager,
+                    rehearsal=lambda spending_power: rehearsal_steps(
+                        trading_rule, db_position_manager, trading_orchestrator, watchlist_client, spending_power,
+                    ),
+                    busy=in_hand,
+                )
             )
 
         # 10. The position monitor takes over the sales that did not go through
@@ -903,22 +1048,24 @@ async def main():
         logger.info("Trader startup complete. Waiting for signals (%s)...", polling_mode)
 
         async def _dispatch(signal: dict):
-            await dispatch_message(
-                signal,
-                trading_orchestrator=trading_orchestrator,
-                performance_monitor=performance_monitor,
-                trading_rule=trading_rule,
-                db_position_manager=db_position_manager,
-                db_perf_manager=db_perf_manager,
-                trade_turbo_exchange_id=trade_turbo_exchange_id,
-                telegram=telegram,
-                position_service=position_service,
-                milestones_eur=milestones_eur,
-                journal=journal,
-                db_balance_manager=db_balance_manager,
-                hand_over=ops_publisher.hand_over,
-                watch=watch,
-            )
+            with in_hand:
+                await dispatch_message(
+                    signal,
+                    trading_orchestrator=trading_orchestrator,
+                    performance_monitor=performance_monitor,
+                    trading_rule=trading_rule,
+                    db_position_manager=db_position_manager,
+                    db_perf_manager=db_perf_manager,
+                    trade_turbo_exchange_id=trade_turbo_exchange_id,
+                    telegram=telegram,
+                    position_service=position_service,
+                    milestones_eur=milestones_eur,
+                    journal=journal,
+                    db_balance_manager=db_balance_manager,
+                    hand_over=ops_publisher.hand_over,
+                    watch=watch,
+                    flat_balance=flat_balance,
+                )
 
         # Keep polling until Docker's stop (SIGTERM): the signal in hand is finished, then the cleanup below.
         stopping = asyncio.Event()

@@ -169,7 +169,9 @@ if __name__ == "__main__":
     import uvicorn
 
     from src.logging_helper.redaction import uvicorn_log_config
+    from src.trade.watchlist_client import KEEP_ALIVE_SECONDS
 
     host, port = get_server_bind()
-    # uvicorn runs on uvloop by itself when it is installed.
-    uvicorn.run(app, host=host, port=port, log_config=uvicorn_log_config())
+    # uvicorn runs on uvloop by itself when it is installed. An idle connection is kept (5 s unless said) from one
+    # of the trader's lookups to the next: it asks every 30 s between signals, so a trade's lookup opens none.
+    uvicorn.run(app, host=host, port=port, log_config=uvicorn_log_config(), timeout_keep_alive=KEEP_ALIVE_SECONDS)

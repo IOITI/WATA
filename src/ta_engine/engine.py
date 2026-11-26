@@ -43,6 +43,9 @@ before it is sent, under its rule, bar and alert: one evaluated again is
 journaled, and sent, once at most. A shadow rule's signals are only journaled.
 A signal the web server gave no answer to is sent again for a few seconds
 under the same key, which the web server stores once (src/ta_engine/sender.py).
+Between signals, while a rule is live, a signal's way is rehearsed every
+REHEARSE_EVERY_SECONDS with a made-up one that is stored nowhere, so that a
+real one does not find it cold (``_rehearse_sending``).
 
 Live rules and shadow rules run on two runners (two Node processes), the live
 ones first in each tick: a shadow rule that fails, hangs or ends its runner
@@ -87,9 +90,20 @@ TICK_SECONDS = 10
 SETTLE_SECONDS = 1.5
 # ...and from this long after it, the engine asks this often whether they are written (their coverage row, which the
 # feed writes after them): a tick begins as soon as they are. A signal left 1.5 s after its bar's close at best
-# until v0.100.0, the first live one 2.4 s (23 November 2026).
-EARLIEST_SECONDS = 0.15
-ASK_EVERY_SECONDS = 0.1
+# until v0.100.0, the first live one 2.4 s (23 November 2026). The feed writes 0.01 s after the boundary since
+# v0.103.0 (CLOSE_AFTER_SECONDS in src/capital_feed/recorder.py; 0.05 s before, when the engine asked from 0.15 s,
+# every 0.1 s): a tick began 0.15 to 0.18 s after the boundary, about 0.04 s now.
+EARLIEST_SECONDS = 0.03
+ASK_EVERY_SECONDS = 0.02
+# Asked that often for this long after the boundary, a feed that writes being done by then; then less often, up to
+# SETTLE_SECONDS.
+ASK_OFTEN_FOR_SECONDS = 0.25
+ASK_LATER_EVERY_SECONDS = 0.1
+# While a rule is live, a signal's way is rehearsed this often (``_rehearse_sending``): the engine's sending, the
+# web server's reception and the trader's waiting poll, which a signal every few hours finds cold. The made-up
+# signal is of the kind the web server takes; its /internal/warm stores nothing, whatever it says.
+REHEARSE_EVERY_SECONDS = 20
+REHEARSED = Candidate("rehearsal", None, "", "daily_stats", None)
 # A rule that failed is tried again after this long, unless it changed meanwhile.
 RETRY_SECONDS = 300
 # A continued run is run whole and compared this often, the first time at the rule's first new bar...
@@ -241,6 +255,8 @@ class Engine:
         self.monitoring = monitoring or Monitoring(journal, days=settings.monitoring_days, clock=clock)
         self._mark: TickMark | None = None
         self._ticked = False
+        # When a signal's way was last rehearsed (``_rehearse_sending``).
+        self._rehearsed_at = float("-inf")
 
     # ── the loop ──
 
@@ -276,17 +292,20 @@ class Engine:
         """
         Until the feed has written the ten seconds that end at ``boundary``: their
         coverage row, asked for from EARLIEST_SECONDS after it, every
-        ASK_EVERY_SECONDS; SETTLE_SECONDS after it at the latest, as every tick
-        waited before. A feed that was not writing at the last tick is not asked:
-        it is waited for as it always was. Never raises: what the database
-        refuses here, the tick says.
+        ASK_EVERY_SECONDS for ASK_OFTEN_FOR_SECONDS then every
+        ASK_LATER_EVERY_SECONDS; SETTLE_SECONDS after it at the latest, as every
+        tick waited before. A feed that was not writing at the last tick is not
+        asked: it is waited for as it always was. Never raises: what the
+        database refuses here, the tick says.
         """
         if await self._pause(boundary + EARLIEST_SECONDS - self._clock()):
             return
         latest = boundary + SETTLE_SECONDS
+        often_until = boundary + ASK_OFTEN_FOR_SECONDS
         asking = self._covered is not None and self._covered >= boundary - 2 * TICK_SECONDS
         # As many times as fit between the two, whatever the clock says meanwhile.
-        for _ in range(int((SETTLE_SECONDS - EARLIEST_SECONDS) / ASK_EVERY_SECONDS) + 1):
+        turns = int(ASK_OFTEN_FOR_SECONDS / ASK_EVERY_SECONDS) + int(SETTLE_SECONDS / ASK_LATER_EVERY_SECONDS) + 2
+        for _ in range(turns):
             if self._clock() >= latest:
                 return
             if asking:
@@ -297,7 +316,8 @@ class Engine:
                 else:
                     if covered is not None and covered >= boundary:
                         return
-            if await self._pause(min(ASK_EVERY_SECONDS, latest - self._clock())):
+            every = ASK_EVERY_SECONDS if self._clock() < often_until else ASK_LATER_EVERY_SECONDS
+            if await self._pause(min(every, latest - self._clock())):
                 return
 
     async def tick(self) -> None:
@@ -372,7 +392,30 @@ class Engine:
         # Every signal of the tick is sent: a continued run may be checked with what is left of it.
         await self._check_one(now, ready, lost)
         await self._prepare_sender(now)
+        await self._rehearse_sending(now)
         await self._write_states(now)
+
+    async def _rehearse_sending(self, now: float) -> None:
+        """
+        While a rule is live, a signal's way is rehearsed every
+        REHEARSE_EVERY_SECONDS, once the tick's own signals are sent: a body
+        made as a signal's is made (``payload``, which checks it), posted to the
+        web server's /internal/warm, which stores nothing. A live rule raises a
+        signal every few hours, and what one goes through had gone cold by
+        then, here and in the web server. Never raises; a failure is the next
+        signal's to say.
+        """
+        warm = getattr(self._sender, "warm", None)
+        if warm is None or now - self._rehearsed_at < REHEARSE_EVERY_SECONDS:
+            return
+        live = next((run for run in self._runs.values() if run.rule.mode == LIVE), None)
+        if live is None:
+            return
+        self._rehearsed_at = now
+        try:
+            await warm(payload(live.rule.rule, REHEARSED, bar_closed_at=now - now % TICK_SECONDS, now=now))
+        except Exception as e:
+            logger.debug("TA engine: a signal's way could not be rehearsed: %s", e)
 
     async def _prepare_sender(self, now: float) -> None:
         """

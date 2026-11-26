@@ -1909,3 +1909,122 @@ def test_one_check_a_tick_the_live_rules_first(scripts):
     assert [[entry["rule_id"] for entry in tick["figures"].get("checks", [])] for tick in journal.ticks] == [
         [], [live_rule["id"]], [shadow_rule["id"]],
     ]
+
+
+# ── a signal's way rehearsed between signals ──
+
+def _rehearsed(sender, order=None):
+    """``sender`` given the real sender's ``warm``: what it was asked to post, in order with the signals sent."""
+    sender.warmed = []
+
+    async def warm(body):
+        sender.warmed.append(body)
+        if order is not None:
+            order.append("rehearsal")
+        return True
+
+    sender.warm = warm
+    return sender
+
+
+def test_a_live_rule_s_way_is_rehearsed_every_twenty_seconds_and_a_shadow_rule_s_never(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts)
+    _rehearsed(sender)
+    run(engine.tick())
+    clock.at += 30
+    run(engine.tick())
+    assert sender.warmed == []
+
+    rules = RuleStore(scripts)
+    rules.set_mode(rule["id"], "live", rules.load()["revision"])
+    clock.at += 10
+    run(engine.tick())
+    [body] = sender.warmed
+    # Made as a signal is made and of a kind the web server's form takes; which it is matters to nothing: the
+    # web server stores no rehearsal.
+    assert body == {
+        "action": "daily_stats", "indice": "us100",
+        "signal_timestamp": moment(clock.at - clock.at % 10).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "alert_timestamp": moment(clock.at).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    clock.at += 10
+    run(engine.tick())
+    assert len(sender.warmed) == 1
+    clock.at += 10
+    run(engine.tick())
+    assert len(sender.warmed) == 2
+    # Never a signal: nothing was sent, journaled or said.
+    assert sender.sent == [] and journal.signals == [] and telegram.messages == []
+
+
+def test_a_rehearsal_comes_after_the_signals_of_its_tick(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts, mode="live")
+    order = []
+    _rehearsed(sender, order)
+    send = sender.send
+
+    async def sent(body, key=None, patience=None):
+        order.append("signal")
+        return await send(body, key=key, patience=patience)
+
+    sender.send = sent
+    run(engine.tick())
+    assert order == ["rehearsal"]
+
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 60.1
+    run(engine.tick())
+
+    assert order == ["rehearsal", "signal", "rehearsal"]
+
+
+def test_a_rehearsal_that_fails_costs_the_tick_nothing(scripts):
+    engine, rule, clock, source, runner, journal, sender, telegram = engine_with(scripts, mode="live")
+
+    async def warm(body):
+        raise RuntimeError("the web server is starting again")
+
+    sender.warm = warm
+    run(engine.tick())
+    runner.alerting = {T0 * 1000}
+    source.rows_by_time += ten_second_rows(T0, 6, seed=3)
+    source.covered, clock.at = T0 + 60, T0 + 60.1
+    run(engine.tick())
+
+    assert len(sender.sent) == 1 and telegram.messages == []
+    assert journal.rule_states[-1][0]["state"] == "running"
+
+
+def test_the_coverage_row_is_asked_for_often_at_first_then_less(scripts, monkeypatch):
+    import time
+
+    import src.ta_engine.engine as engine_module
+
+    # A tenth of the real pace: every 5 ms for 60 ms, then every 40 ms, 200 ms at the latest.
+    monkeypatch.setattr(engine_module, "ASK_OFTEN_FOR_SECONDS", 0.06)
+    monkeypatch.setattr(engine_module, "ASK_LATER_EVERY_SECONDS", 0.04)
+    engine, source, boundary, asked = _waiting(scripts, monkeypatch)
+    monkeypatch.setattr(engine_module, "EARLIEST_SECONDS", 0.005)
+    monkeypatch.setattr(engine_module, "ASK_EVERY_SECONDS", 0.005)
+    monkeypatch.setattr(engine_module, "SETTLE_SECONDS", 0.2)
+
+    run(engine._wait_for_rows(boundary))
+
+    waited = time.time() - boundary
+    early = [at for at in asked if at < 0.06]
+    late = [at for at in asked if at >= 0.07]
+    assert 0.2 <= waited < 0.5
+    # Several times in the first 60 ms, a handful afterwards: never the early pace to the end.
+    assert len(early) >= 4 and 1 <= len(late) <= 5
+
+
+def test_a_tick_begins_within_hundredths_of_a_second_of_the_feed_s_row():
+    import src.ta_engine.engine as engine_module
+    from src.capital_feed.recorder import CLOSE_AFTER_SECONDS
+
+    # The feed writes its row this long after the boundary; the engine first asks a little later, then often.
+    assert CLOSE_AFTER_SECONDS < engine_module.EARLIEST_SECONDS <= 0.05
+    assert engine_module.ASK_EVERY_SECONDS <= 0.02 < engine_module.ASK_OFTEN_FOR_SECONDS
+    assert engine_module.SETTLE_SECONDS == 1.5

@@ -17,6 +17,13 @@ out is not sent again either: it has already waited ``timeout_seconds``.
 ``prepare`` reads the token before a signal needs it: until v0.100.0 the first
 signal of a start paid for it (PostgreSQL, the key unsealed), 0.9 s on the
 first live entry of 23 November 2026.
+
+``warm`` rehearses a signal's way between signals: a made-up body posted to
+the web server's /internal/warm, which stores nothing, on the connection the
+signals use. A live rule's signals are hours apart, and what a signal runs
+through had gone cold by then, here and in the web server: 0.30 to 0.50 s from
+a bar's close to the web server after a quiet hour, 0.18 to 0.21 s when a
+signal had gone minutes before (23 to 26 November 2026).
 """
 
 import asyncio
@@ -35,6 +42,18 @@ RETRY_PAUSES = (0.25, 0.75, 1.5, 2.5)
 # What is no answer: no connection, or one that broke before the answer. Whether the web server took the signal is
 # not known then, which its key settles when it is sent again.
 NO_ANSWER = (httpx.NetworkError, httpx.RemoteProtocolError)
+# A rehearsal waits this long for its answer and is never sent again: the next one comes soon enough.
+WARM_TIMEOUT_SECONDS = 1.0
+# How long the client keeps an idle connection (httpx's 5 s unless said): longer than the rehearsals are apart, so
+# that a signal goes out on the connection the last rehearsal used, with no name to look up and no connection to open.
+KEEP_ALIVE_SECONDS = 60.0
+
+
+def client() -> httpx.AsyncClient:
+    """The client the signals are sent with: its idle connection kept from one rehearsal to the next."""
+    return httpx.AsyncClient(limits=httpx.Limits(
+        max_connections=10, max_keepalive_connections=2, keepalive_expiry=KEEP_ALIVE_SECONDS,
+    ))
 
 
 @dataclass(frozen=True)
@@ -53,6 +72,7 @@ class SignalSender:
     def __init__(self, service_url: str, token_getter: Callable, http: httpx.AsyncClient, timeout_seconds: float,
                  sleep: Callable = asyncio.sleep):
         self._url = f"{service_url.rstrip('/')}/internal/signal"
+        self._warm_url = f"{service_url.rstrip('/')}/internal/warm"
         self._token_getter = token_getter
         self._http = http
         self._timeout = timeout_seconds
@@ -79,6 +99,27 @@ class SignalSender:
         itself; None when it is held.
         """
         return await self._read_token()
+
+    async def warm(self, body: dict) -> bool:
+        """
+        A signal's way, rehearsed: ``body`` posted to /internal/warm, which
+        checks it as a signal and stores nothing. True when the web server
+        answered it. Never raises, never sent again, and never reads the token
+        (``prepare`` does): without one, nothing is sent. A token refused is
+        forgotten, so that ``prepare`` reads the new one before a signal needs it.
+        """
+        if self._token is None:
+            return False
+        try:
+            response = await self._http.post(
+                self._warm_url, json=body, headers={"Authorization": f"Bearer {self._token}"}, timeout=WARM_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logger.debug("A rehearsal of the signals' way got no answer: %s", type(e).__name__)
+            return False
+        if response.status_code == 401:
+            self._token = None
+        return response.status_code == 200
 
     async def send(self, body: dict, key: str | None = None, patience: float | None = None) -> Sent:
         """

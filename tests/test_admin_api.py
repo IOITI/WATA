@@ -1083,7 +1083,15 @@ def test_overview_gives_what_decides_whether_a_signal_would_be_traded(config_pat
 
 
 def test_overview_says_the_market_is_open_on_an_ordinary_day(client):
-    assert client.get("/api/overview").json()["market_closed_today"] is False
+    from unittest.mock import patch
+
+    from src.admin.routers import trading
+
+    # A Tuesday of no holiday: read on the day's own date, this test failed each US holiday (Thanksgiving 2026).
+    with patch.object(trading, "datetime") as clock:
+        clock.now.side_effect = lambda tz=None: datetime(2026, 11, 24, 14, 0, tzinfo=timezone.utc).astimezone(tz)
+        clock.fromtimestamp.side_effect = datetime.fromtimestamp
+        assert client.get("/api/overview").json()["market_closed_today"] is False
 
 
 def test_overview_says_a_us_holiday_and_an_early_close_as_the_trader_reads_them(client):

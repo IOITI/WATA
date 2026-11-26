@@ -169,3 +169,72 @@ def test_a_signal_without_a_token_is_not_sent():
 
     assert (sent.ok, sent.error) == (False, "The web server's token could not be read: RuntimeError")
     assert server.requests == []
+
+
+# ── warm: a signal's way rehearsed between signals ──
+
+def test_a_rehearsal_is_posted_to_the_web_server_s_warm_endpoint_with_the_token():
+    server = WebServer((200, {"status": "warm"}))
+    sender, read, paused = sender_for(server)
+    asyncio.run(sender.prepare())
+
+    assert asyncio.run(sender.warm(BODY)) is True
+
+    [request] = server.requests
+    assert (request.method, request.url.host, request.url.path) == ("POST", "web_server1", "/internal/warm")
+    assert json.loads(request.content) == BODY and request.headers["Authorization"] == "Bearer t1"
+    # Never under a key: nothing of it is to be stored.
+    assert SIGNAL_KEY_HEADER not in request.headers and paused == []
+
+
+def test_a_rehearsal_never_reads_the_token_and_is_not_sent_without_one():
+    server = WebServer((200, {"status": "warm"}))
+    sender, read, paused = sender_for(server)
+
+    assert asyncio.run(sender.warm(BODY)) is False
+    assert server.requests == [] and read == []
+
+
+@pytest.mark.parametrize("answer", [
+    httpx.ConnectError("All connection attempts failed"),
+    httpx.RemoteProtocolError("Server disconnected without sending a response."),
+    httpx.ReadTimeout("timed out"),
+    RuntimeError("anything else"),
+    (500, "Internal Server Error"),
+    (404, "Not Found"),
+])
+def test_a_rehearsal_that_fails_is_neither_raised_nor_sent_again(answer):
+    server = WebServer(answer)
+    sender, read, paused = sender_for(server)
+    asyncio.run(sender.prepare())
+
+    assert asyncio.run(sender.warm(BODY)) is False
+    assert len(server.requests) == 1 and paused == []
+    # The signal after it goes as any other: the token is still held.
+    assert len(read) == 1
+
+
+def test_a_rehearsal_refused_for_its_token_has_it_read_again_before_a_signal_needs_it():
+    server = WebServer((401, "Unauthorized"), (200, {"status": "warm"}))
+    sender, read, paused = sender_for(server, tokens=("rotated-away", "t2"))
+    asyncio.run(sender.prepare())
+
+    assert asyncio.run(sender.warm(BODY)) is False
+    # The engine prepares at the end of each tick while a rule is live.
+    asyncio.run(sender.prepare())
+    assert asyncio.run(sender.warm(BODY)) is True
+
+    assert len(read) == 2 and server.requests[-1].headers["Authorization"] == "Bearer t2"
+
+
+def test_the_signals_client_keeps_its_connection_from_one_rehearsal_to_the_next():
+    from src.ta_engine.engine import REHEARSE_EVERY_SECONDS
+    from src.ta_engine.sender import KEEP_ALIVE_SECONDS, client
+
+    http = client()
+    try:
+        kept = http._transport._pool._keepalive_expiry
+    finally:
+        asyncio.run(http.aclose())
+
+    assert kept == KEEP_ALIVE_SECONDS > REHEARSE_EVERY_SECONDS

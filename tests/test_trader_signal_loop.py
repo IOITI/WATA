@@ -508,3 +508,291 @@ def test_the_polling_loop_tells_the_watch_what_it_polled_and_received():
     # The scheduler's close (indice n/a) says nothing of TradingView's alerts.
     watch.signal_received.assert_called_once_with()
     assert dispatch.await_count == 2
+
+
+# ── the balance an entry is sized on: read again, unless the last reading is known to be the cash there is ──
+
+from src.trade.flat_balance import FlatBalance  # noqa: E402
+from src.trader import SignalInHand, dispatch_message, nothing_closed, rehearsal_steps  # noqa: E402
+
+NOTHING_TO_CLOSE = {"closed_initiated_count": 0, "errors_count": 0, "closed_position_ids": [], "not_closed": [], "not_listed": []}
+
+
+def _proven() -> FlatBalance:
+    flat = FlatBalance()
+    flat.read(flat.reading(), True, True)
+    return flat
+
+
+def _run_handler_with(flat, *, reserve_cash_percent=0, close_result=NOTHING_TO_CLOSE, open_positions=(), execute=None):
+    calls, orchestrator, monitor, trading_rule, db_position_manager, telegram = _handler_dependencies(reserve_cash_percent)
+    monitor.close_managed_positions_by_criteria.return_value = close_result
+    db_position_manager.get_open_positions_ids_actions.return_value = list(open_positions)
+    if execute is not None:
+        orchestrator.execute_trade_signal.side_effect = execute
+    with patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(
+            handle_trading_signal(
+                _signal("uuid-1", action="short"),
+                orchestrator, monitor, trading_rule, db_position_manager, "exchange1", telegram,
+                flat_balance=flat,
+            )
+        )
+    return [call[0] for call in calls.mock_calls]
+
+
+def test_an_entry_while_nothing_is_held_is_sized_on_the_balance_last_read_when_it_stands():
+    flat = _proven()
+
+    order = _run_handler_with(flat)
+
+    # No balance forgotten before the order: the orchestrator may use the one it holds.
+    assert order == ["close", "wait_closed", "execute", "protective_stop"]
+    # And once the order went, that reading stands no more.
+    assert not flat.usable(True)
+
+
+def test_an_entry_reads_the_balance_again_when_no_reading_stands():
+    order = _run_handler_with(FlatBalance())
+
+    assert order == ["close", "wait_closed", "invalidate_balance", "execute", "protective_stop"]
+
+
+@pytest.mark.parametrize("close_result", [
+    {**NOTHING_TO_CLOSE, "closed_initiated_count": 1, "closed_position_ids": ["old-position"]},
+    {**NOTHING_TO_CLOSE, "errors_count": 1, "not_closed": [{"position_id": "old", "reason": "r", "why": "refused"}]},
+    {**NOTHING_TO_CLOSE, "not_listed": ["old-position"]},
+])
+def test_an_entry_that_sold_or_tried_to_sell_something_reads_the_balance_again(close_result):
+    flat = _proven()
+
+    order = _run_handler_with(flat, close_result=close_result)
+
+    assert order[:4] == ["close", "wait_closed", "invalidate_balance", "execute"]
+    assert not nothing_closed(close_result) and nothing_closed(NOTHING_TO_CLOSE)
+
+
+def test_an_entry_against_an_open_position_reads_the_balance_again_whatever_the_close_says():
+    flat = _proven()
+
+    order = _run_handler_with(flat, open_positions=[{"position_id": "old-position", "action": "long"}])
+
+    assert order[:4] == ["close", "wait_closed", "invalidate_balance", "execute"]
+
+
+def test_with_a_cash_reserve_the_entry_reads_the_balance_again_unless_the_last_reading_stands():
+    assert _run_handler_with(FlatBalance(), reserve_cash_percent=20) == [
+        "invalidate_balance", "execute", "close", "invalidate_balance", "protective_stop",
+    ]
+    assert _run_handler_with(_proven(), reserve_cash_percent=20) == [
+        "execute", "close", "invalidate_balance", "protective_stop",
+    ]
+
+
+def test_no_reading_stands_after_an_entry_that_failed():
+    from src.trade.exceptions import InsufficientFundsException
+
+    flat = _proven()
+
+    _run_handler_with(flat, execute=InsufficientFundsException("Insufficient funds @ 9.7"))
+
+    assert not flat.usable(True)
+
+
+def test_without_the_rule_an_entry_reads_the_balance_again_as_it_always_did():
+    order = _run_handler_with(None)
+
+    assert order == ["close", "wait_closed", "invalidate_balance", "execute", "protective_stop"]
+
+
+def test_a_close_signal_leaves_no_reading_standing():
+    flat = _proven()
+    orchestrator, monitor, telegram = MagicMock(), MagicMock(), MagicMock()
+    monitor.close_managed_positions_by_criteria = AsyncMock(
+        return_value={**NOTHING_TO_CLOSE, "closed_initiated_count": 1, "closed_position_ids": ["old-position"]}
+    )
+    telegram.send = AsyncMock()
+
+    with patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(dispatch_message(
+            _signal("uuid-2", action="close-position"),
+            trading_orchestrator=orchestrator, performance_monitor=monitor, trading_rule=MagicMock(),
+            db_position_manager=MagicMock(), db_perf_manager=MagicMock(), trade_turbo_exchange_id="exchange1",
+            telegram=telegram, position_service=MagicMock(), milestones_eur=[], flat_balance=flat,
+        ))
+
+    orchestrator.invalidate_spending_power.assert_called_once_with()
+    assert not flat.usable(True)
+
+
+# ── the keep-warm timer: the reading that may stand, and a signal's way rehearsed ──
+
+def _keep_warm(orchestrator, balances, **more):
+    """The timer run once per balance: each is what Saxo answers (an exception is raised, a function called)."""
+    answers = iter(balances)
+
+    async def read():
+        try:
+            answer = next(answers)
+        except StopIteration:
+            raise asyncio.CancelledError from None
+        if callable(answer):
+            answer = answer()
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    orchestrator.refresh_spending_power = AsyncMock(side_effect=read)
+
+    async def scenario():
+        try:
+            await keep_saxo_session_warm(orchestrator, 0, **more)
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+
+def _positions(*answers):
+    manager = MagicMock()
+    manager.get_open_positions_ids_actions = AsyncMock(side_effect=list(answers))
+    return manager
+
+
+@pytest.mark.parametrize("before, after, balance, stands", [
+    ([], [], 128.61, True),
+    ([{"position_id": "p", "action": "long"}], [], 3.02, False),      # read while a position was open
+    ([], [{"position_id": "p", "action": "long"}], 3.02, False),      # one was bought meanwhile
+    ([], [], RuntimeError("Saxo unavailable"), False),                # no balance was read
+    (RuntimeError("the database is away"), [], 128.61, False),        # what is open is not known
+])
+def test_the_timer_s_reading_stands_only_when_nothing_was_open_before_and_after_it(before, after, balance, stands):
+    flat = FlatBalance()
+
+    _keep_warm(MagicMock(), [balance], flat_balance=flat, db_position_manager=_positions(before, after))
+
+    assert flat.usable(True) is stands
+
+
+def test_a_reading_begun_before_a_signal_s_order_does_not_stand():
+    flat = FlatBalance()
+
+    def read():
+        # A signal is handled while Saxo answers: its order goes.
+        flat.moved()
+        return 128.61
+
+    _keep_warm(MagicMock(), [read], flat_balance=flat, db_position_manager=_positions([], []))
+
+    assert not flat.usable(True)
+
+
+def test_the_timer_rehearses_a_signal_s_way_with_the_balance_it_read_unless_a_signal_is_in_hand():
+    orchestrator = MagicMock()
+    in_hand = SignalInHand()
+    ran, given = [], []
+
+    def rehearsal(spending_power):
+        given.append(spending_power)
+        return [("a check", lambda: ran.append("check")), ("a read", AsyncMock(side_effect=lambda: ran.append("read")))]
+
+    _keep_warm(orchestrator, [128.61], rehearsal=rehearsal, busy=in_hand)
+    assert (given, ran) == ([128.61], ["check", "read"])
+
+    with in_hand:
+        assert in_hand()
+        _keep_warm(orchestrator, [131.0], rehearsal=rehearsal, busy=in_hand)
+    assert not in_hand() and given == [128.61]
+
+    _keep_warm(orchestrator, [131.0], rehearsal=rehearsal, busy=in_hand)
+    assert given == [128.61, 131.0]
+
+
+def test_a_rehearsal_that_cannot_be_made_does_not_stop_the_timer():
+    orchestrator = MagicMock()
+
+    def rehearsal(_spending_power):
+        raise RuntimeError("no rule to read")
+
+    _keep_warm(orchestrator, [1.0, 2.0], rehearsal=rehearsal)
+
+    # Both balances were read, and the timer went on to the turn that ended the test.
+    assert orchestrator.refresh_spending_power.await_count == 3
+
+
+def _rehearsed_trader(spending_power=128.61, turbo=None):
+    trading_rule = MagicMock()
+    trading_rule.allowed_indices_rule_config = {"indice_ids": {"us100": "1909050"}}
+    for check in ("check_entries_paused", "check_profit_per_day", "check_cooldown_after_loss",
+                  "check_max_trades_per_day", "check_day_breakers", "check_account_guard", "guard_account"):
+        setattr(trading_rule, check, AsyncMock())
+    db_position_manager = MagicMock()
+    db_position_manager.get_open_positions_ids_actions = AsyncMock(return_value=[])
+    orchestrator = MagicMock()
+    orchestrator.execute_trade_signal = AsyncMock()
+    orchestrator.refresh_spending_power = AsyncMock()
+    watchlist = MagicMock()
+    watchlist.get_best_turbo = AsyncMock(return_value=turbo)
+    steps = rehearsal_steps(trading_rule, db_position_manager, orchestrator, watchlist, spending_power)
+    return steps, trading_rule, db_position_manager, orchestrator, watchlist
+
+
+def test_a_rehearsal_runs_what_an_entry_runs_before_its_order_and_nothing_that_acts():
+    from src.trade.rehearsal import rehearse
+
+    turbo = {"selected_instrument": {"uic": 62423559, "latest_ask": 9.733}}
+    steps, trading_rule, db_position_manager, orchestrator, watchlist = _rehearsed_trader(turbo=turbo)
+
+    with patch.object(trader, "TelegramMessageComposer") as composer:
+        took = asyncio.run(rehearse(steps))
+
+    assert took.steps == len(steps) == 14
+    # The trader's checks, in the handler's order.
+    checks = [call[0] for call in trading_rule.mock_calls if call[0].startswith("check_")]
+    assert checks == [
+        "check_signal_timestamp", "check_market_hours", "check_macro_news", "check_entries_paused",
+        "check_profit_per_day", "check_cooldown_after_loss", "check_max_trades_per_day", "check_day_breakers",
+    ]
+    db_position_manager.get_open_positions_ids_actions.assert_awaited_once_with()
+    composer.assert_called_once()
+    # The turbo the watchlist would give each way, and the order's size on it with the balance just read.
+    assert [call.kwargs for call in watchlist.get_best_turbo.await_args_list] == [
+        {"underlying_uic": "1909050", "direction": "long"}, {"underlying_uic": "1909050", "direction": "short"},
+    ]
+    orchestrator._calculate_position_scale.assert_called_once_with(None)
+    assert [call.args for call in orchestrator._calculate_bid_amount.call_args_list] == [(turbo, 128.61, 1.0)] * 2
+    # Nothing that acts: no order, no balance read of its own, and never the account guard, which can pause entries.
+    orchestrator.execute_trade_signal.assert_not_called()
+    orchestrator.refresh_spending_power.assert_not_called()
+    orchestrator.invalidate_spending_power.assert_not_called()
+    trading_rule.check_account_guard.assert_not_called()
+    trading_rule.guard_account.assert_not_called()
+
+
+def test_a_rehearsal_sizes_no_order_without_a_turbo_or_a_balance_and_asks_no_watchlist_that_is_not_there():
+    from src.trade.rehearsal import rehearse
+
+    steps, _, _, orchestrator, _ = _rehearsed_trader(turbo=None)
+    with patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(rehearse(steps))
+    orchestrator._calculate_bid_amount.assert_not_called()
+
+    steps, _, _, orchestrator, _ = _rehearsed_trader(spending_power=None, turbo={"selected_instrument": {"latest_ask": 9.7}})
+    with patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(rehearse(steps))
+    orchestrator._calculate_bid_amount.assert_not_called()
+
+    trading_rule = MagicMock()
+    trading_rule.allowed_indices_rule_config = {"indice_ids": {"us100": "1909050"}}
+    assert len(rehearsal_steps(trading_rule, MagicMock(), MagicMock(), None, 128.61)) == 12
+
+
+def test_the_message_a_rehearsal_checks_is_one_the_trader_takes():
+    from src.schema.validators import check_trading_action
+
+    seen = []
+    with patch.object(trader, "check_trading_action", side_effect=lambda body: (seen.append(body), check_trading_action(body))):
+        steps, *_ = _rehearsed_trader()
+        dict(steps)["the message's form"]()
+
+    assert [body["action"] for body in seen] == ["long", "close-position"] and seen[0]["indice"] == "us100"

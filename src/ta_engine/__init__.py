@@ -52,8 +52,6 @@ async def _idle(journal, version: str, state: str, detail: str) -> None:
 
 
 async def main():
-    import httpx
-
     from src.configuration import ConfigurationManager
     from src.database.postgres import AsyncDbTaManager, PostgresConnectionManager, init_ta_schema
     from src.logging_helper import setup_logging
@@ -63,7 +61,7 @@ async def main():
     from src.ta_engine.monitoring import Monitoring
     from src.ta_engine.rules import RulesFile
     from src.ta_engine.runner import RUNNER_PATH, NodeRunner, find_node, runner_command
-    from src.ta_engine.sender import SignalSender
+    from src.ta_engine.sender import SignalSender, client as sender_client
     from src.ta_engine.settings import SECTION, TaEngineSettings
     from src.ta_engine.source import CapitalTables
     from src.vault import loader as vault
@@ -113,7 +111,8 @@ async def main():
         # fallback), sealed for it in PostgreSQL.
         await vault.load(config_manager, "ta_engine", db=pg)
         telegram = AsyncTelegramSender(config_manager)
-        http = httpx.AsyncClient()
+        # Its idle connection kept from one rehearsal of a signal's way to the next (src/ta_engine/sender.py).
+        http = sender_client()
 
         async def internal_token() -> str:
             # Read again from PostgreSQL before the first signal and after a refusal: rotated since the start.

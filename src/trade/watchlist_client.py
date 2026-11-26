@@ -6,6 +6,10 @@ from src.configuration import ConfigurationManager
 
 logger = logging.getLogger(__name__)
 
+# How long an idle connection to the watchlist manager is kept, on both sides (its server keeps it as long: its
+# ``uvicorn.run``): longer than the trader's rehearsals of a signal's way are apart (30 s).
+KEEP_ALIVE_SECONDS = 75.0
+
 
 class AsyncWatchlistClient:
     """Fetch best-turbo cache entries from the background watchlist manager."""
@@ -39,7 +43,12 @@ class AsyncWatchlistClient:
 
         try:
             if self._client is None:
-                self._client = httpx.AsyncClient(timeout=self.request_timeout_seconds)
+                # Its idle connection kept longer than the trader's rehearsals are apart (httpx's 5 s unless said):
+                # a trade's lookup then goes on an open connection, where it opened one each time (14 to 16 ms).
+                self._client = httpx.AsyncClient(
+                    timeout=self.request_timeout_seconds,
+                    limits=httpx.Limits(max_connections=10, max_keepalive_connections=2, keepalive_expiry=KEEP_ALIVE_SECONDS),
+                )
             response = await self._client.get(f"{self.service_url}/watchlist/best", params=params)
             if response.status_code == 404:
                 return None

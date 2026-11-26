@@ -115,6 +115,23 @@ class SignalStore:
             self._changed.notify_all()
             return True
 
+    async def rehearse(self, signal: dict) -> bool:
+        """
+        ``upsert``'s steps without what it does: ``signal`` is read and set
+        against the one kept for its indice, and the waiting polls are woken.
+        Nothing is kept and the counter stays where it is, so a woken poll
+        finds nothing newer than it had and goes on waiting. For
+        /internal/warm, which keeps a signal's way warm between signals. True
+        when ``upsert`` would not have passed it over for an older moment.
+        """
+        indice = signal["indice"]
+        new_ts = self._parse_signal_timestamp(signal["signal_timestamp"])
+        async with self._lock:
+            existing = self._signals.get(indice)
+            newer = existing is None or new_ts >= self._parse_signal_timestamp(existing["signal_timestamp"])
+            self._changed.notify_all()
+            return newer
+
     async def get_all(self) -> list[dict]:
         """Return a snapshot list of the latest signal for each indice."""
         async with self._lock:

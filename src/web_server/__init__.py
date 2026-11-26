@@ -9,7 +9,7 @@ from src.web_server.signal_store import SIGNAL_KEY_HEADER, SignalStore, TakenKey
 import logging
 from src.configuration import ConfigurationManager
 from src.trade.signal_sources import ENGINE, configured as configured_sources, source_of
-from src.schema import SchemaLoader
+from src.schema.validators import check_webhook
 import jsonschema
 from datetime import datetime
 import pytz
@@ -50,7 +50,11 @@ WEBHOOKS_IGNORED = IgnoredWebhooks()
 # Paths that are only ever called by other WATA containers on the internal Docker
 # network (trader polling, scheduler EOD close). They are exempt from the IP
 # allowlist below but still require the Bearer token (see verify_bearer_token).
-INTERNAL_ONLY_PATHS = {"/latest-signals", "/internal/signal", "/internal/webhook"}
+INTERNAL_ONLY_PATHS = {"/latest-signals", "/internal/signal", "/internal/warm", "/internal/webhook"}
+
+# How long an idle connection is kept (uvicorn's 5 s unless said): the TA engine rehearses a signal's way every
+# 20 s on the connection its signals use, which then stays open, so that a signal needs no new one.
+KEEP_ALIVE_SECONDS = 75
 
 # Upper bound on how long /latest-signals holds a long-poll request open.
 MAX_LONG_POLL_WAIT_MS = 30000
@@ -118,14 +122,8 @@ def _format_timestamp_ms(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-async def _ingest_and_store_signal(data: dict, received_timestamp: str, signal_uuid: str | None = None) -> str:
-    """Validate-agnostic signal ingestion shared by /webhook and /internal/signal.
-
-    Builds the record stored in SIGNAL_STORE (keyed by indice, latest
-    signal_timestamp wins) and returns its signal_uuid: the one given (an
-    internal signal's, kept for its key), else one made here.
-    """
-    signal_uuid = signal_uuid or str(uuid.uuid4())
+def _record(data: dict, received_timestamp: str, signal_uuid: str) -> dict:
+    """A signal as SIGNAL_STORE keeps it."""
     record = {
         "action": data["action"],
         "indice": data["indice"],
@@ -136,6 +134,18 @@ async def _ingest_and_store_signal(data: dict, received_timestamp: str, signal_u
     }
     if data.get("confidence") is not None:
         record["confidence"] = data["confidence"]
+    return record
+
+
+async def _ingest_and_store_signal(data: dict, received_timestamp: str, signal_uuid: str | None = None) -> str:
+    """Validate-agnostic signal ingestion shared by /webhook and /internal/signal.
+
+    Builds the record stored in SIGNAL_STORE (keyed by indice, latest
+    signal_timestamp wins) and returns its signal_uuid: the one given (an
+    internal signal's, kept for its key), else one made here.
+    """
+    signal_uuid = signal_uuid or str(uuid.uuid4())
+    record = _record(data, received_timestamp, signal_uuid)
 
     if await SIGNAL_STORE.upsert(record):
         logging.info(f"Stored signal for indice={data['indice']}: {record}")
@@ -164,7 +174,7 @@ async def webhook(request: Request):
     data = await request.json()
     try:
         # Validate the data against the schema
-        jsonschema.validate(instance=data, schema=SchemaLoader.get_webhook_schema())
+        check_webhook(data)
     except jsonschema.exceptions.ValidationError as e:
         logging.warning(f"Invalid data received from from {request.client.host}: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
@@ -199,7 +209,7 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
     received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
     data = await request.json()
     try:
-        jsonschema.validate(instance=data, schema=SchemaLoader.get_webhook_schema())
+        check_webhook(data)
     except jsonschema.exceptions.ValidationError as e:
         logging.warning(f"Invalid internal signal payload: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
@@ -220,6 +230,31 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
         raise
     logging.info(f"Received internal signal: {data}")
     return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+
+
+@app.post("/internal/warm", include_in_schema=False)
+async def internal_warm(request: Request, _: None = Depends(verify_bearer_token)):
+    """A signal's way through this service, rehearsed: nothing is stored.
+
+    Measured on the server (23 to 26 November 2026): a signal that came after a
+    quiet hour took 86 to 234 ms here and 58 to 171 ms more to reach the
+    trader, where one that followed another within minutes took 3 to 9 ms and
+    5 to 9 ms. The TA engine therefore sends a made-up signal here every 20 s
+    while a rule is live. It is read and checked as /internal/signal reads and
+    checks one, then brought to the store, which sets it against the signal
+    kept and wakes the trader's waiting poll without keeping or counting it:
+    the poll finds nothing new and waits again. No key is taken, nothing is
+    logged, and no poll ever returns it.
+    """
+    received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
+    data = await request.json()
+    try:
+        check_webhook(data)
+    except jsonschema.exceptions.ValidationError:
+        return JSONResponse(content={"error": "Bad Request"}, status_code=400)
+    TakenKeys.valid(request.headers.get(SIGNAL_KEY_HEADER))
+    await SIGNAL_STORE.rehearse(_record(data, received_timestamp, str(uuid.uuid4())))
+    return JSONResponse(content={"status": "warm"}, status_code=200)
 
 
 @app.get("/internal/webhook", include_in_schema=False)
@@ -261,4 +296,4 @@ if __name__ == "__main__":
         if not web_server_token.accepted(name):
             logging.error(f"No token for {label}: every request of theirs is refused until one is set (admin's Credentials)")
     # Its access log names each path, and TradingView's carries the token in its query.
-    uvicorn.run(app, host="0.0.0.0", port=80, log_config=uvicorn_log_config())
+    uvicorn.run(app, host="0.0.0.0", port=80, log_config=uvicorn_log_config(), timeout_keep_alive=KEEP_ALIVE_SECONDS)

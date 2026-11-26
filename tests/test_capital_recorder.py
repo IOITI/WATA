@@ -688,3 +688,59 @@ def test_the_figures_say_what_the_quote_files_do():
     s.quote(1, "US100", 25000.0)
     figures = s.recorder.state()["figures"]["quote_files"]
     assert figures == {"enabled": True, "written_today": 1, "error": None, "failed": 0}
+
+
+# ── the write loop: a row is closed just after its boundary, never ten seconds late ──
+
+def _write_loop_with_timers(s, timers):
+    """The write loop on the test's clock: each wait asked is noted, and lasts what ``timers`` says of it."""
+    waits = []
+
+    async def sleep_or_stop(seconds):
+        waits.append(round(seconds, 4))
+        if len(waits) > len(timers):
+            s.recorder.stop()
+            return True
+        s.clock.at += timers[len(waits) - 1](seconds)
+        return False
+
+    s.recorder._sleep_or_stop = sleep_or_stop
+    return waits
+
+
+def test_a_row_is_closed_and_written_a_hundredth_of_a_second_after_its_boundary():
+    from src.capital_feed.recorder import CLOSE_AFTER_SECONDS
+
+    async def scenario(s):
+        await s.recorder.refresh_markets()
+        s.quote(1, "US100", 25000.0)
+        s.quote(9.999, "US100", 25004.0)
+        s.clock.at = T0 + 3
+        s.waits = _write_loop_with_timers(s, [lambda asked: asked])
+        await s.recorder._write_loop()
+
+    s = _run(scenario)
+
+    assert CLOSE_AFTER_SECONDS == 0.01
+    # Waited to ten milliseconds past the boundary, wrote the row, then waited for the next one.
+    assert s.waits[0] == 7.01 and s.waits[1] == 10.0
+    (rows,) = s.store.inserts
+    assert rows[0][0] == _ts(0) and rows[0][2:6] == (25000.0, 25004.0, 25000.0, 25004.0)
+    assert [coverage[0] for coverage in s.store.coverage] == [_ts(0)]
+
+
+def test_a_timer_that_fires_early_does_not_leave_the_row_for_ten_seconds():
+    async def scenario(s):
+        await s.recorder.refresh_markets()
+        s.quote(1, "US100", 25000.0)
+        s.clock.at = T0 + 3
+        # The first timer fires 15 ms early, before the boundary: nothing is closed yet.
+        s.waits = _write_loop_with_timers(s, [lambda asked: asked - 0.015, lambda asked: asked])
+        await s.recorder._write_loop()
+
+    s = _run(scenario)
+
+    # Waited the rest of the way to the same boundary, then wrote: one row, of the right ten seconds.
+    assert s.waits[:2] == [7.01, 0.015]
+    assert [coverage[0] for coverage in s.store.coverage] == [_ts(0)]
+    assert len(s.store.inserts) == 1

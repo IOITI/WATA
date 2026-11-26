@@ -444,8 +444,16 @@ SIZE = (
     Param(
         path=f"{BUYING_POWER}.balance_cache_max_age_seconds", group="sizing", label="Spending power reused for",
         kind="number", unit="s", minimum=0, optional=True, default=0,
-        help="How long the trader reuses Saxo's spending power before asking again. 0: asked each time.",
+        help="How long an entry may be sized on the balance the trader last read (it reads it every 30 s between "
+             "signals), instead of asking Saxo again. 0: asked at each entry.",
         readers=(TRADER,), risk=TRADING,
+        effects=("Above 0, an entry leaves about 0.03 to 0.045 s sooner: it does not wait for Saxo's balance. 40 "
+                 "covers the 30 s between two readings.",
+                 "The reading is used only when it was made while nothing was held, no order of the trader's went "
+                 "since, and nothing is held now. Otherwise the balance is asked again, as at 0.",
+                 "Cash moved from outside WATA within those seconds (a deposit, a withdrawal, an order placed by "
+                 "hand) is not seen: the order is a little small, or refused for funds and sent again smaller."),
+        related=(f"{BUYING_POWER}.safety_margins.funds_retry_percent",),
     ),
     Param(
         path=f"{BUYING_POWER}.safety_margins.bid_calculation", group="sizing", label="Turbos left out of each order",

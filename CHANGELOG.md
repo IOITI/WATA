@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.103.0 - A signal reaches its order sooner, and as soon after a quiet hour
+
+**Release date:** not released yet
+
+Where the time went from a bar's close to Saxo's fill was read on the live rule's first entries and on the logs of 28 signals (23 to 26 November 2026). At best 0.55 s: 0.15 s of fixed waits before the engine's tick, about 0.13 s of WATA's own work, and Saxo's 0.27 s. But two of the three entries took 0.8 to 1.0 s. A signal that came after a quiet hour or more was slow at every step: the web server's reception 86 to 234 ms instead of 3 to 9, the trader's pick-up 58 to 171 ms instead of 5 to 9, its checks 35 to 94 ms instead of 3 to 12, the engine's own sending 0.1 to 0.3 s more. What a signal runs through had gone cold, in each service. The server has no swap and no memory pressure, so the cause is not proven (most likely its host taking back memory left alone); the remedy does not depend on it.
+
+- **A signal's way is rehearsed between signals.** While a rule is live, the engine posts a made-up signal every 20 s to a new address of the web server, which reads and checks it as a signal, wakes the trader's waiting poll, and stores nothing: the poll finds nothing new and waits on. The trader runs its own way to an order every 30 s with its balance read: the message's form, every check of an entry in its order, the turbo the watchlist would give each way, the order's size. Nothing that acts: no order, no request to Saxo, never the account guard. What the rehearsed checks log is left out of the log meanwhile (a day's target reached would be said every 30 s); a rehearsal that took over 50 ms is one line, with its processor time and the pages read back from the disk, which will say what goes cold if anything still does.
+- **A signal's form is checked against a validator built once.** `jsonschema.validate` checked the schema itself at every call: 0.81 ms on a Mac, 0.016 ms now, in the web server and the trader, with the same error on a signal refused.
+- **Connections stay open between signals**: the engine's to the web server and the trader's to the watchlist manager were opened anew for each signal (a name looked up, a connection made: 14 to 16 ms for the watchlist's turbo). Both servers keep an idle connection 75 s, and the rehearsals come sooner than that.
+- **The engine's tick begins about 0.04 s after the ten seconds end**, where it began 0.15 to 0.18 s after: the feed closes its row 0.01 s after the boundary (0.05 s before; a row is whole at its boundary, the margin only covers a timer, and one that fires early no longer leaves the row for ten seconds), and the engine asks for it from 0.03 s, every 0.02 s at first.
+- **An entry may be sized on the balance last read** (off unless `balance_cache_max_age_seconds` is set above 0, 40 for the 30 s between readings): the Saxo balance read took 44 to 49 ms of each entry. The reading the trader makes every 30 s stands in for it only when it was made while nothing was held, no order of the trader's went since, and nothing is held now; otherwise the balance is read again as always. With a cash reserve, where a reading was reused whatever the position monitor had sold since, the same rule now holds. Cash moved from outside WATA within those seconds is not seen: the order is then a little small, or refused for funds and sent again smaller.
+- Expected from a bar's close to the fill: about 0.40 s, whether or not the hour was quiet (0.36 s with the balance setting), 0.27 s of it Saxo's. Not measured on the server yet.
+- Go or Rust were looked at and left: Saxo's answer and the waits are most of the time, the Pine script already runs in Node, the event loop, the HTTP parser and the PostgreSQL driver are compiled, and a rewrite would not have kept the way warm.
+- A test read the day's own date and failed each US holiday (the market "open on an ordinary day", on Thanksgiving): it reads a fixed Tuesday.
+- Changes the web server, the trader, the TA engine, the Capital.com feed, the watchlist manager and the admin (one setting's description). No backtest turns stale.
+
 ## v0.102.0 - The console on ioiti-ui 1.0, and a page that fails says why
 
 **Release date:** 2026-11-25

@@ -35,6 +35,10 @@ from src.price_recorder.bars import BAR_SECONDS, Bar, BarBuilder, ClosedBucket, 
 
 logger = logging.getLogger(__name__)
 
+# How long after a ten-second boundary its row is closed and written. A quote is stamped and put in its row in one
+# step as it is read (client.py), so a row is whole at its boundary: the margin only covers the timer. It was 0.05 s
+# until v0.103.0, which every signal of the TA engine waited for (the engine reads the row once it is written).
+CLOSE_AFTER_SECONDS = 0.01
 # Buckets kept in memory while the database is unavailable: one hour.
 PENDING_BUCKETS_LIMIT = 3600 // BAR_SECONDS
 BUCKETS_PER_FLUSH = 60
@@ -589,10 +593,12 @@ class CapitalRecorder:
 
     async def _write_loop(self) -> None:
         while not self._stopping.is_set():
-            at = self._clock()
-            next_boundary = bucket_start(at) + BAR_SECONDS
-            if await self._sleep_or_stop(next_boundary - at + 0.05):
-                return
+            boundary = bucket_start(self._clock()) + BAR_SECONDS
+            # Until its own boundary is behind: a timer that fires early leaves the row to this turn, not to the next
+            # one ten seconds later.
+            while (wait := boundary + CLOSE_AFTER_SECONDS - self._clock()) > 0:
+                if await self._sleep_or_stop(wait):
+                    return
             await self.write_closed_buckets()
 
     async def run(self) -> None:
